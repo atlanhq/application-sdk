@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
@@ -19,6 +21,7 @@ from application_sdk.storage.ops import (
     download_file,
     download_file_chunked,
     exists,
+    get_file_meta,
     get_file_size,
     normalize_key,
     put_json,
@@ -623,6 +626,871 @@ class TestGetFileSize:
             await get_file_size("k", store, normalize=False)
 
 
+class TestGetFileMeta:
+    """get_file_meta returns (size, e_tag) in one HEAD (BLDX-1523)."""
+
+    async def test_returns_size_and_etag(self, store) -> None:
+        await _put("meta/f.bin", b"hello", store, normalize=False)
+        meta = await get_file_meta("meta/f.bin", store, normalize=False)
+        assert meta is not None
+        size, etag = meta
+        assert size == 5
+        assert etag  # MemoryStore supplies an etag; callers pin range GETs on it
+
+    async def test_missing_key_returns_none(self, store) -> None:
+        assert await get_file_meta("no/such.bin", store, normalize=False) is None
+
+    async def test_non_404_error_raises_storage_error(self) -> None:
+        store = MagicMock()
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.head_async",
+                new=AsyncMock(side_effect=RuntimeError("permission denied")),
+            ),
+            pytest.raises(StorageError),
+        ):
+            await get_file_meta("k", store, normalize=False)
+
+
+class TestClassifyTransferError:
+    """Failure classification drives the error_family metric label (BLDX-1513)."""
+
+    @pytest.mark.parametrize(
+        "error_class, family",
+        [
+            (None, "none"),
+            ("TimeoutError", "timeout"),
+            ("BodyTimedOut", "timeout"),
+            ("NotFoundError", "not_found"),
+            ("GenericError", "generic"),
+            ("PermissionError", "other"),
+        ],
+    )
+    def test_families(self, error_class, family) -> None:
+        from application_sdk.storage._telemetry import _classify_transfer_error
+
+        assert _classify_transfer_error(error_class, "") == family
+
+
+# ---------------------------------------------------------------------------
+# BLDX-1513: download_file_chunked file_size (skip-HEAD) + prefix chunking
+# ---------------------------------------------------------------------------
+
+
+class TestChunkedFileSizeSkipsHead:
+    """When the caller already knows the size, the chunked path must not HEAD —
+    that's what lets a prefix download chunk large files without a per-file HEAD.
+    """
+
+    async def test_file_size_provided_skips_head_and_round_trips(
+        self, store, tmp_path
+    ) -> None:
+        content = b"0123456789" * 5  # 50 bytes → 7 chunks at chunk_size=8
+        await _put("big/f.bin", content, store, normalize=False)
+        out = tmp_path / "f.bin"
+
+        # HEAD blows up: the download must succeed anyway, proving file_size
+        # short-circuited the HEAD.
+        with patch(
+            "application_sdk.storage.ops.obstore.head_async",
+            new=AsyncMock(side_effect=AssertionError("HEAD must not be called")),
+        ):
+            digest = await download_file_chunked(
+                "big/f.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                compute_hash=True,
+                normalize=False,
+                file_size=len(content),
+            )
+
+        assert out.read_bytes() == content
+        assert digest == hashlib.sha256(content).hexdigest()
+
+    async def test_head_still_used_when_file_size_omitted(
+        self, store, tmp_path
+    ) -> None:
+        content = b"z" * 40
+        await _put("big/g.bin", content, store, normalize=False)
+        out = tmp_path / "g.bin"
+        # No file_size → the HEAD path runs; a broken HEAD surfaces as an error.
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.head_async",
+                new=AsyncMock(side_effect=RuntimeError("permission denied")),
+            ),
+            pytest.raises(StorageError),
+        ):
+            await download_file_chunked(
+                "big/g.bin", out, store, chunk_size_bytes=8, normalize=False
+            )
+
+
+class TestResumableChunkedDownload:
+    """Resume + etag version pinning for chunked downloads (BLDX-1523).
+
+    Uses a real MemoryStore (which supports ``If-Match`` preconditions) with
+    ``chunk_size_bytes=8`` so multi-chunk behaviour is exercised with tiny
+    payloads. ``max_concurrent_chunks=1`` where determinism matters.
+    """
+
+    CONTENT = bytes(range(38))  # 5 chunks at chunk_size=8 (last chunk 6 bytes)
+
+    def _state_path(self, out: Path) -> Path:
+        return Path(str(out) + ".transfer-state")
+
+    async def test_fresh_download_pins_etag_and_removes_state(
+        self, store, tmp_path
+    ) -> None:
+        await _put("res/f.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "f.bin"
+
+        real_get = __import__("obstore").get_async
+        seen_options: list[dict] = []
+
+        async def counting_get(st, key, **kw):
+            seen_options.append(kw.get("options") or {})
+            return await real_get(st, key, **kw)
+
+        with patch("application_sdk.storage.ops.obstore.get_async", new=counting_get):
+            digest = await download_file_chunked(
+                "res/f.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                compute_hash=True,
+                normalize=False,
+            )
+
+        assert out.read_bytes() == self.CONTENT
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+        # every range GET carried the etag pin from the internal HEAD
+        assert len(seen_options) == 5
+        assert all(o.get("if_match") for o in seen_options)
+        # checkpoint removed on success — file is observably complete
+        assert not self._state_path(out).exists()
+
+    async def test_interrupted_download_keeps_partial_then_resumes(
+        self, store, tmp_path
+    ) -> None:
+        await _put("res/g.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "g.bin"
+        real_get = __import__("obstore").get_async
+
+        async def failing_get(st, key, **kw):
+            rng = (kw.get("options") or {}).get("range")
+            if rng and rng[0] == 16:  # chunk index 2
+                raise RuntimeError("simulated network drop")
+            return await real_get(st, key, **kw)
+
+        with (
+            patch("application_sdk.storage.ops.obstore.get_async", new=failing_get),
+            pytest.raises(StorageError),
+        ):
+            await download_file_chunked(
+                "res/g.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                max_concurrent_chunks=1,
+                normalize=False,
+            )
+
+        # Partial file + checkpoint survive the failure (chunks 0,1 done).
+        assert out.exists()
+        state = orjson.loads(self._state_path(out).read_bytes())
+        assert state["done"] == [0, 1]
+
+        # Retry fetches ONLY the missing chunks (2,3,4).
+        fetched_ranges: list[tuple] = []
+
+        async def counting_get(st, key, **kw):
+            fetched_ranges.append((kw.get("options") or {}).get("range"))
+            return await real_get(st, key, **kw)
+
+        with patch("application_sdk.storage.ops.obstore.get_async", new=counting_get):
+            digest = await download_file_chunked(
+                "res/g.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                max_concurrent_chunks=1,
+                compute_hash=True,
+                normalize=False,
+            )
+
+        assert sorted(r[0] for r in fetched_ranges) == [16, 24, 32]
+        assert out.read_bytes() == self.CONTENT
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+        assert not self._state_path(out).exists()
+
+    async def test_object_rewritten_mid_download_restarts_fresh_once(
+        self, store, tmp_path
+    ) -> None:
+        await _put("res/h.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "h.bin"
+        # Force a stale etag: every pinned GET 412s, the restart re-HEADs and
+        # succeeds against the current generation.
+        digest = await download_file_chunked(
+            "res/h.bin",
+            out,
+            store,
+            chunk_size_bytes=8,
+            compute_hash=True,
+            normalize=False,
+            file_size=len(self.CONTENT),
+            etag='"stale-etag"',
+        )
+        assert out.read_bytes() == self.CONTENT
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+        assert not self._state_path(out).exists()
+
+    async def test_persistent_precondition_failure_raises(
+        self, store, tmp_path
+    ) -> None:
+        from obstore.exceptions import PreconditionError
+
+        await _put("res/i.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "i.bin"
+
+        async def always_412(st, key, **kw):
+            raise PreconditionError("simulated: object keeps changing")
+
+        with (
+            patch("application_sdk.storage.ops.obstore.get_async", new=always_412),
+            pytest.raises(StorageError, match="kept changing"),
+        ):
+            await download_file_chunked(
+                "res/i.bin", out, store, chunk_size_bytes=8, normalize=False
+            )
+        # Mixed-generation partials are never left behind.
+        assert not out.exists()
+        assert not self._state_path(out).exists()
+
+    async def test_checkpoint_from_other_generation_is_discarded(
+        self, store, tmp_path
+    ) -> None:
+        await _put("res/j.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "j.bin"
+        # Plant a full-size file of zeros plus a checkpoint claiming all chunks
+        # done — but for a DIFFERENT etag. The download must not trust it.
+        out.write_bytes(b"\x00" * len(self.CONTENT))
+        self._state_path(out).write_bytes(
+            orjson.dumps(
+                {
+                    "key": "res/j.bin",
+                    "file_size": len(self.CONTENT),
+                    "chunk_size": 8,
+                    "etag": "some-old-generation",
+                    "done": [0, 1, 2, 3, 4],
+                }
+            )
+        )
+        digest = await download_file_chunked(
+            "res/j.bin",
+            out,
+            store,
+            chunk_size_bytes=8,
+            compute_hash=True,
+            normalize=False,
+        )
+        assert out.read_bytes() == self.CONTENT  # zeros were NOT trusted
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+
+    async def test_corrupt_checkpoint_falls_back_to_fresh(
+        self, store, tmp_path
+    ) -> None:
+        await _put("res/k.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "k.bin"
+        self._state_path(out).write_bytes(b"not json at all {{{")
+        digest = await download_file_chunked(
+            "res/k.bin",
+            out,
+            store,
+            chunk_size_bytes=8,
+            compute_hash=True,
+            normalize=False,
+        )
+        assert out.read_bytes() == self.CONTENT
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+        assert not self._state_path(out).exists()
+
+    async def test_resume_disabled_deletes_partial_on_failure(
+        self, store, tmp_path
+    ) -> None:
+        await _put("res/l.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "l.bin"
+        real_get = __import__("obstore").get_async
+
+        async def failing_get(st, key, **kw):
+            rng = (kw.get("options") or {}).get("range")
+            if rng and rng[0] == 16:
+                raise RuntimeError("boom")
+            return await real_get(st, key, **kw)
+
+        with (
+            patch("application_sdk.storage.ops.obstore.get_async", new=failing_get),
+            pytest.raises(StorageError),
+        ):
+            await download_file_chunked(
+                "res/l.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                max_concurrent_chunks=1,
+                normalize=False,
+                resume=False,
+            )
+        # Legacy behaviour: nothing left behind.
+        assert not out.exists()
+        assert not self._state_path(out).exists()
+
+    async def test_small_file_leaves_no_checkpoint(self, store, tmp_path) -> None:
+        await _put("res/small.bin", b"tiny", store, normalize=False)
+        out = tmp_path / "small.bin"
+        await download_file_chunked(
+            "res/small.bin", out, store, chunk_size_bytes=8, normalize=False
+        )
+        assert out.read_bytes() == b"tiny"
+        assert not self._state_path(out).exists()
+
+    async def test_env_kill_switch_disables_resume_by_default(
+        self, store, tmp_path
+    ) -> None:
+        # resume=None (the default every SDK call site uses) must follow
+        # ATLAN_STORAGE_RESUME_DOWNLOADS — the fleet-wide kill-switch.
+        await _put("res/m.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "m.bin"
+        real_get = __import__("obstore").get_async
+
+        async def failing_get(st, key, **kw):
+            rng = (kw.get("options") or {}).get("range")
+            if rng and rng[0] == 16:
+                raise RuntimeError("boom")
+            return await real_get(st, key, **kw)
+
+        with (
+            patch("application_sdk.constants.STORAGE_RESUME_DOWNLOADS", False),
+            patch("application_sdk.storage.ops.obstore.get_async", new=failing_get),
+            pytest.raises(StorageError),
+        ):
+            await download_file_chunked(
+                "res/m.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                max_concurrent_chunks=1,
+                normalize=False,
+            )
+        # Kill-switch active → legacy behaviour: no partial, no checkpoint.
+        assert not out.exists()
+        assert not self._state_path(out).exists()
+
+    @pytest.mark.parametrize(
+        "bad_field, bad_value",
+        [("file_size", 999), ("chunk_size", 4), ("key", "res/other.bin")],
+    )
+    async def test_checkpoint_generation_field_mismatch_is_discarded(
+        self, store, tmp_path, bad_field, bad_value
+    ) -> None:
+        # The resume guard matches on key + file_size + chunk_size + etag; a
+        # mismatch on ANY of them must discard the checkpoint, not resume.
+        await _put("res/n.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "n.bin"
+        meta = await get_file_meta("res/n.bin", store, normalize=False)
+        assert meta is not None
+        _, etag = meta
+        out.write_bytes(b"\x00" * len(self.CONTENT))
+        state = {
+            "key": "res/n.bin",
+            "file_size": len(self.CONTENT),
+            "chunk_size": 8,
+            "etag": etag,
+            "done": [0, 1, 2, 3, 4],
+        }
+        state[bad_field] = bad_value
+        self._state_path(out).write_bytes(orjson.dumps(state))
+
+        fetched: list = []
+        real_get = __import__("obstore").get_async
+
+        async def counting_get(st, key, **kw):
+            fetched.append((kw.get("options") or {}).get("range"))
+            return await real_get(st, key, **kw)
+
+        with patch("application_sdk.storage.ops.obstore.get_async", new=counting_get):
+            await download_file_chunked(
+                "res/n.bin", out, store, chunk_size_bytes=8, normalize=False
+            )
+        assert len(fetched) == 5  # checkpoint not trusted → all chunks re-fetched
+        assert out.read_bytes() == self.CONTENT
+
+    async def test_structurally_invalid_checkpoint_falls_back_to_fresh(
+        self, store, tmp_path
+    ) -> None:
+        # Valid JSON, wrong shape ("done" not a list of ints) → same fallback
+        # as unparseable JSON: fresh download, no crash.
+        await _put("res/o.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "o.bin"
+        self._state_path(out).write_bytes(
+            orjson.dumps({"key": "res/o.bin", "done": "not-a-list"})
+        )
+        digest = await download_file_chunked(
+            "res/o.bin",
+            out,
+            store,
+            chunk_size_bytes=8,
+            compute_hash=True,
+            normalize=False,
+        )
+        assert out.read_bytes() == self.CONTENT
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+        assert not self._state_path(out).exists()
+
+    async def test_unpinned_range_gets_when_etag_unavailable(
+        self, store, tmp_path
+    ) -> None:
+        # file_size provided without etag → the HEAD is skipped, so no etag is
+        # ever known: chunks must fetch via the unpinned get_range_async branch
+        # and never touch the pinned get_async path.
+        await _put("res/p.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "p.bin"
+        with patch(
+            "application_sdk.storage.ops.obstore.get_async",
+            new=AsyncMock(
+                side_effect=AssertionError("etag is None — must use get_range_async")
+            ),
+        ):
+            digest = await download_file_chunked(
+                "res/p.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                compute_hash=True,
+                normalize=False,
+                file_size=len(self.CONTENT),
+            )
+        assert out.read_bytes() == self.CONTENT
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+
+    async def test_head_without_etag_downloads_unpinned(self, store, tmp_path) -> None:
+        # A store whose HEAD carries no e_tag (allowed by the contract) must
+        # fall back to unpinned get_range_async — no if_match anywhere.
+        await _put("res/r.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "r.bin"
+        real_range = __import__("obstore").get_range_async
+        range_calls: list = []
+
+        async def counting_range(st, key, **kw):
+            range_calls.append(kw)
+            return await real_range(st, key, **kw)
+
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.head_async",
+                new=AsyncMock(return_value={"size": len(self.CONTENT)}),
+            ),
+            patch(
+                "application_sdk.storage.ops.obstore.get_async",
+                new=AsyncMock(
+                    side_effect=AssertionError("no etag — must not pin with if_match")
+                ),
+            ),
+            patch(
+                "application_sdk.storage.ops.obstore.get_range_async",
+                new=counting_range,
+            ),
+        ):
+            digest = await download_file_chunked(
+                "res/r.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                compute_hash=True,
+                normalize=False,
+            )
+        assert out.read_bytes() == self.CONTENT
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+        assert len(range_calls) == 5
+        assert all("if_match" not in kw and "options" not in kw for kw in range_calls)
+
+    async def test_sibling_chunks_cancelled_and_drained_on_failure(
+        self, store, tmp_path
+    ) -> None:
+        # gather() does not cancel siblings on first failure; the except path
+        # must cancel + drain them BEFORE closing the fd (BLDX-1523 orphan fix).
+        import asyncio
+
+        await _put("res/q.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "q.bin"
+        real_get = __import__("obstore").get_async
+        hang_started = asyncio.Event()
+        sibling_cancelled = asyncio.Event()
+
+        async def hanging_or_failing_get(st, key, **kw):
+            rng = (kw.get("options") or {}).get("range")
+            if rng and rng[0] == 0:
+                hang_started.set()
+                try:
+                    await asyncio.sleep(60)
+                except asyncio.CancelledError:
+                    sibling_cancelled.set()
+                    raise
+            if rng and rng[0] == 8:
+                await hang_started.wait()  # sibling is definitely in flight
+                raise RuntimeError("boom")
+            return await real_get(st, key, **kw)
+
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.get_async",
+                new=hanging_or_failing_get,
+            ),
+            pytest.raises(StorageError),
+        ):
+            await download_file_chunked(
+                "res/q.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                max_concurrent_chunks=2,
+                normalize=False,
+            )
+        # The hung sibling was cancelled (and drained) rather than orphaned.
+        assert sibling_cancelled.is_set()
+
+    async def test_cancellation_drains_siblings_and_closes_fd(
+        self, store, tmp_path
+    ) -> None:
+        # CancelledError is a BaseException: Temporal activity cancellation
+        # must get the same sibling-drain + fd close as a chunk failure —
+        # otherwise a long-lived worker leaks an fd (and an orphaned writer)
+        # per cancelled download.
+        import asyncio
+
+        await _put("res/s.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "s.bin"
+        real_get = __import__("obstore").get_async
+        real_open, real_close = os.open, os.close
+        hang_started = asyncio.Event()
+        sibling_cancelled = asyncio.Event()
+        opened_fds: list[int] = []
+        closed_fds: list[int] = []
+
+        def recording_open(p, *a, **kw):
+            fd = real_open(p, *a, **kw)
+            if str(p) == str(out):
+                opened_fds.append(fd)
+            return fd
+
+        def recording_close(fd):
+            closed_fds.append(fd)
+            real_close(fd)
+
+        async def hanging_get(st, key, **kw):
+            rng = (kw.get("options") or {}).get("range")
+            if rng and rng[0] == 0:
+                hang_started.set()
+                try:
+                    await asyncio.sleep(60)
+                except asyncio.CancelledError:
+                    sibling_cancelled.set()
+                    raise
+            return await real_get(st, key, **kw)
+
+        with (
+            patch("application_sdk.storage.ops.obstore.get_async", new=hanging_get),
+            patch("os.open", new=recording_open),
+            patch("os.close", new=recording_close),
+        ):
+            task = asyncio.create_task(
+                download_file_chunked(
+                    "res/s.bin",
+                    out,
+                    store,
+                    chunk_size_bytes=8,
+                    max_concurrent_chunks=2,
+                    normalize=False,
+                )
+            )
+            await hang_started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert sibling_cancelled.is_set()
+        assert opened_fds and all(fd in closed_fds for fd in opened_fds)
+        # Partial file stays on disk — a later retry resumes from checkpoint.
+        assert out.exists()
+
+    async def test_50gb_equivalent_chunk_count_mechanics(self, store, tmp_path) -> None:
+        # 50 GiB at the production 16 MiB chunk size is 3200 chunks. Validate
+        # the mechanics AT that chunk count — checkpoint growth, semaphore
+        # fan-out, interrupt + resume-only-missing — without moving 50 GiB,
+        # by shrinking the chunk to 8 bytes.
+        n_chunks = 3200
+        chunk = 8
+        content = os.urandom(n_chunks * chunk - 3)  # ragged final chunk
+        await _put("res/big50.bin", content, store, normalize=False)
+        out = tmp_path / "big50.bin"
+        real_get = __import__("obstore").get_async
+
+        calls = {"n": 0}
+        fail_after = 2000  # die at ~60% like a mid-transfer egress collapse
+
+        async def dying_get(st, key, **kw):
+            calls["n"] += 1
+            if calls["n"] > fail_after:
+                raise RuntimeError("simulated egress death")
+            return await real_get(st, key, **kw)
+
+        with (
+            patch("application_sdk.storage.ops.obstore.get_async", new=dying_get),
+            pytest.raises(StorageError),
+        ):
+            await download_file_chunked(
+                "res/big50.bin",
+                out,
+                store,
+                chunk_size_bytes=chunk,
+                max_concurrent_chunks=16,
+                normalize=False,
+            )
+
+        state = orjson.loads(self._state_path(out).read_bytes())
+        done_before = len(state["done"])
+        assert 0 < done_before <= fail_after
+
+        fetched: list[int] = []
+
+        async def counting_get(st, key, **kw):
+            fetched.append(1)
+            return await real_get(st, key, **kw)
+
+        with patch("application_sdk.storage.ops.obstore.get_async", new=counting_get):
+            digest = await download_file_chunked(
+                "res/big50.bin",
+                out,
+                store,
+                chunk_size_bytes=chunk,
+                max_concurrent_chunks=16,
+                compute_hash=True,
+                normalize=False,
+            )
+
+        # The retry fetched ONLY the ranges the checkpoint didn't cover.
+        assert len(fetched) == n_chunks - done_before
+        assert out.read_bytes() == content
+        assert digest == hashlib.sha256(content).hexdigest()
+        assert not self._state_path(out).exists()
+
+
+class TestTransferMetrics:
+    """Transfers emit metrics via the SDK metrics rail (BLDX-1513)."""
+
+    async def test_download_success_records_throughput_and_bytes(
+        self, store, tmp_path
+    ) -> None:
+        await _put("m/data.bin", b"x" * 4096, store, normalize=False)
+        mock_metrics = MagicMock()
+        with patch(
+            "application_sdk.observability.metrics_adaptor.get_metrics",
+            return_value=mock_metrics,
+        ):
+            await download_file(
+                "m/data.bin", tmp_path / "out.bin", store, normalize=False
+            )
+        names = {c.kwargs["name"] for c in mock_metrics.record_metric.call_args_list}
+        assert "storage_transfer_total" in names
+        assert "storage_transfer_bytes" in names
+        assert "storage_transfer_duration_ms" in names
+        # outcome=success on the total counter
+        total = next(
+            c
+            for c in mock_metrics.record_metric.call_args_list
+            if c.kwargs["name"] == "storage_transfer_total"
+        )
+        assert total.kwargs["labels"]["outcome"] == "success"
+        assert total.kwargs["labels"]["storage_op"] == "download"
+
+    async def test_failure_records_error_family(self, tmp_path) -> None:
+        mock_metrics = MagicMock()
+        with (
+            patch(
+                "application_sdk.observability.metrics_adaptor.get_metrics",
+                return_value=mock_metrics,
+            ),
+            patch(
+                "application_sdk.storage.ops.obstore.get_async",
+                new=AsyncMock(side_effect=RuntimeError("permission denied")),
+            ),
+            pytest.raises(StorageError),
+        ):
+            await download_file("k", tmp_path / "o.bin", MagicMock(), normalize=False)
+        total = next(
+            c
+            for c in mock_metrics.record_metric.call_args_list
+            if c.kwargs["name"] == "storage_transfer_total"
+        )
+        assert total.kwargs["labels"]["outcome"] == "failure"
+        assert total.kwargs["labels"]["error_family"] == "other"
+
+    async def test_metric_backend_failure_does_not_break_transfer(
+        self, store, tmp_path
+    ) -> None:
+        await _put("m/ok.bin", b"payload", store, normalize=False)
+        with patch(
+            "application_sdk.observability.metrics_adaptor.get_metrics",
+            side_effect=RuntimeError("metrics backend down"),
+        ):
+            # Transfer must still succeed despite the metrics backend blowing up.
+            out = tmp_path / "ok.bin"
+            await download_file("m/ok.bin", out, store, normalize=False)
+        assert out.read_bytes() == b"payload"
+
+    async def test_chunked_download_emits_terminal_metric(
+        self, store, tmp_path
+    ) -> None:
+        content = b"c" * 50
+        await _put("m/chunked.bin", content, store, normalize=False)
+        mock_metrics = MagicMock()
+        with patch(
+            "application_sdk.observability.metrics_adaptor.get_metrics",
+            return_value=mock_metrics,
+        ):
+            # chunk_size=8 forces the range-GET path (not the small-file delegate).
+            await download_file_chunked(
+                "m/chunked.bin",
+                tmp_path / "c.bin",
+                store,
+                chunk_size_bytes=8,
+                compute_hash=False,
+                normalize=False,
+                file_size=len(content),
+            )
+        names = {c.kwargs["name"] for c in mock_metrics.record_metric.call_args_list}
+        assert "storage_transfer_total" in names
+
+
+class TestTransferProgressHeartbeat:
+    def test_emits_info_with_structured_fields(self) -> None:
+        from application_sdk.storage._telemetry import _log_transfer_progress
+
+        with patch("application_sdk.storage._telemetry.logger") as mock_logger:
+            _log_transfer_progress(
+                "download",
+                "big/f.bin",
+                bytes_so_far=50 * 1024 * 1024,
+                elapsed_ms=50_000.0,
+                total_bytes=100 * 1024 * 1024,
+            )
+        mock_logger.log.assert_called_once()
+        args, kwargs = mock_logger.log.call_args
+        # Logged at INFO with an "in_progress" human message carrying the percentage.
+        assert args[0] == 20  # logging.INFO
+        assert "in_progress" in args[1]
+        assert "50%" in args[1]
+        # Structured fields promote to OTLP attributes (all in _KNOWN_EXTRA_KEYS).
+        assert kwargs["storage_op"] == "download"
+        assert kwargs["outcome"] == "in_progress"
+        assert kwargs["size_bytes"] == 50 * 1024 * 1024
+        assert kwargs["throughput_mibps"] == pytest.approx(1.0, rel=0.05)
+
+    def test_no_total_omits_percentage(self) -> None:
+        from application_sdk.storage._telemetry import _log_transfer_progress
+
+        with patch("application_sdk.storage._telemetry.logger") as mock_logger:
+            _log_transfer_progress("upload", "k", bytes_so_far=10, elapsed_ms=1000.0)
+        args, _ = mock_logger.log.call_args
+        assert "%" not in args[1]
+
+    async def test_heartbeat_fires_during_chunked_download(
+        self, store, tmp_path
+    ) -> None:
+        content = bytes(range(38))
+        await _put("hb/f.bin", content, store, normalize=False)
+        out = tmp_path / "f.bin"
+        with (
+            patch(
+                "application_sdk.constants.STORAGE_PROGRESS_LOG_INTERVAL_SECONDS",
+                1e-9,  # every chunk crosses the interval boundary
+            ),
+            patch("application_sdk.storage.chunked._log_transfer_progress") as mock_hb,
+        ):
+            await download_file_chunked(
+                "hb/f.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                max_concurrent_chunks=1,
+                normalize=False,
+            )
+        assert mock_hb.called
+
+    async def test_heartbeat_interval_zero_disables(self, store, tmp_path) -> None:
+        content = bytes(range(38))
+        await _put("hb/g.bin", content, store, normalize=False)
+        out = tmp_path / "g.bin"
+        with (
+            patch("application_sdk.constants.STORAGE_PROGRESS_LOG_INTERVAL_SECONDS", 0),
+            patch("application_sdk.storage.chunked._log_transfer_progress") as mock_hb,
+        ):
+            await download_file_chunked(
+                "hb/g.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                max_concurrent_chunks=1,
+                normalize=False,
+            )
+        assert not mock_hb.called
+
+
+class TestDownloadPrefixChunking:
+    async def test_prefix_download_does_not_head_per_file(
+        self, store, tmp_path
+    ) -> None:
+        # Sizes come from the listing, so a prefix download must never issue a
+        # per-file HEAD (BLDX-1513).
+        await _put("pre/a.txt", b"aaa", store, normalize=False)
+        await _put("pre/b.txt", b"bbbb", store, normalize=False)
+
+        with patch(
+            "application_sdk.storage.ops.obstore.head_async",
+            new=AsyncMock(
+                side_effect=AssertionError("prefix download must not HEAD per file")
+            ),
+        ):
+            dests = await download_prefix("pre/", tmp_path, store, normalize=False)
+
+        got = {Path(d).read_bytes() for d in dests}
+        assert got == {b"aaa", b"bbbb"}
+
+    async def test_prefix_download_threads_size_and_etag_from_listing(
+        self, store, tmp_path
+    ) -> None:
+        # The listing's per-object size AND etag must reach download_file_chunked
+        # so large files chunk without a HEAD and range GETs stay version-pinned.
+        await _put("pre2/a.bin", b"aaa", store, normalize=False)
+
+        import application_sdk.storage.batch as batch_mod
+
+        real = batch_mod.download_file_chunked
+        calls: list[dict] = []
+
+        async def spying(key, dest, st=None, **kw):
+            calls.append({"key": key, **kw})
+            return await real(key, dest, st, **kw)
+
+        with patch("application_sdk.storage.batch.download_file_chunked", new=spying):
+            await download_prefix("pre2/", tmp_path, store, normalize=False)
+
+        assert len(calls) == 1
+        assert calls[0]["file_size"] == 3
+        assert calls[0]["etag"]  # etag from the listing, not a per-file HEAD
+
+
 # ---------------------------------------------------------------------------
 # download_file_chunked (BLDX-1155: new public function)
 # ---------------------------------------------------------------------------
@@ -647,6 +1515,7 @@ class TestDownloadFileChunked:
                 dest,
                 store,
                 chunk_size_bytes=1024,
+                compute_hash=True,
                 normalize=False,
             )
 
@@ -669,6 +1538,7 @@ class TestDownloadFileChunked:
             store,
             chunk_size_bytes=3,
             max_concurrent_chunks=2,
+            compute_hash=True,
             normalize=False,
         )
 
@@ -722,27 +1592,30 @@ class TestDownloadFileChunked:
         assert result == hashlib.sha256(content).hexdigest()
 
     async def test_partial_file_cleaned_up_on_error(self, store, tmp_path) -> None:
-        """If a chunk fails mid-download, the partial output file is deleted."""
+        """With resume disabled, a chunk failure deletes the partial output file.
+
+        (With resume enabled — the default since BLDX-1523 — the partial file
+        and its checkpoint sidecar are intentionally KEPT; see
+        TestResumableChunkedDownload for that contract.) Chunk fetches are
+        version-pinned via ``get_async`` when the store provides an etag, so
+        the failure is injected there.
+        """
         content = b"ABCDEFGHIJ"
         await _put("chunked/boom.bin", content, store, normalize=False)
         dest = tmp_path / "out.bin"
 
-        import application_sdk.storage.ops as ops_mod
-
-        real_get_range = ops_mod.obstore.get_range_async
+        real_get = __import__("obstore").get_async
         call_count = 0
 
-        async def flaky_get_range(st, key, *, start, length):
+        async def flaky_get(st, key, **kw):
             nonlocal call_count
             call_count += 1
             if call_count == 2:
                 raise RuntimeError("transient chunk failure")
-            return await real_get_range(st, key, start=start, length=length)
+            return await real_get(st, key, **kw)
 
         with (
-            patch.object(
-                ops_mod.obstore, "get_range_async", side_effect=flaky_get_range
-            ),
+            patch("application_sdk.storage.ops.obstore.get_async", new=flaky_get),
             pytest.raises((StorageError, RuntimeError)),
         ):
             await download_file_chunked(
@@ -751,6 +1624,7 @@ class TestDownloadFileChunked:
                 store,
                 chunk_size_bytes=3,
                 normalize=False,
+                resume=False,
             )
 
         assert not dest.exists(), "partial file must be cleaned up after chunk failure"

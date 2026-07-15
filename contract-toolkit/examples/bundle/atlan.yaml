@@ -6,6 +6,9 @@ type: connector
 execution_mode: native
 icon_url: https://assets.atlan.com/assets/snowflake.svg
 visibility: public
+argo_package_names:
+- '@atlan/crawler'
+- '@atlan/miner'
 build_tag: v1
 self_deployed_runtime: true
 entrypoints:
@@ -21,19 +24,3 @@ entrypoints:
   type: connector
   source: snowflake
   source_category: database
-deploy:
-  execution_mode: native
-  splitDeploymentEnabled: true
-  dapr:
-    objectstore: false
-    secretstore: false
-    statestore: false
-    eventstore: false
-    subscription: false
-    configurationstore: false
-    lock: false
-  keda:
-    enabled: true
-    minReplicaCount: 0
-    temporal:
-      targetQueueSize: 5

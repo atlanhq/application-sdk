@@ -1,0 +1,47 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "extract": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Extract Scheduled Background Job Example Metadata",
+      "app_name": "scheduled",
+      "inputs": {
+        "workflow_type": "scheduled",
+        "app_name": "scheduled",
+        "app_id": "",
+        "argo_workflow_slug": "",
+        "task_queue": "atlan-scheduled-{deployment_name}",
+        "args": {
+          "credential": "{{credential}}",
+          "agent_json": "{{agent-json}}",
+          "target": "{{target}}"
+        }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
+      }
+    }
+  },
+  "triggers": {
+    "schedules": [
+      {
+        "name": "daily-midnight",
+        "cron_expression": "0 0 * * *",
+        "timezone": "UTC",
+        "status": "ACTIVE"
+      },
+      {
+        "name": "weekday-noon-et",
+        "cron_expression": "0 12 * * 1-5",
+        "timezone": "America/New_York",
+        "status": "ACTIVE"
+      },
+      {
+        "name": "six-hourly-disabled",
+        "cron_expression": "0 */6 * * *",
+        "timezone": "UTC",
+        "status": "PAUSED"
+      }
+    ]
+  }
+}

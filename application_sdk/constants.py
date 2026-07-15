@@ -62,6 +62,7 @@ load_dotenv(dotenv_path=".env")
 
 # Static Constants
 LOCAL_ENVIRONMENT = "local"
+LOCAL_WORKFLOW_ID = "local-no-temporal"
 
 # Application Constants
 #: Name of the application, used for identification
@@ -232,6 +233,23 @@ FILE_REF_CHUNK_SIZE_BYTES = int(
 )
 #: Maximum concurrent range-GET chunks per file (default 4)
 FILE_REF_CHUNK_CONCURRENCY = int(os.getenv("ATLAN_FILE_REF_CHUNK_CONCURRENCY", "4"))
+
+#: Interval (seconds) between in-progress heartbeat logs during a long upload or
+#: download. A GB-class transfer at slow egress can run for minutes; without a
+#: heartbeat the only signals are start + finish, so a hung transfer is
+#: indistinguishable from a slow one. 0 disables heartbeats. (BLDX-1513)
+STORAGE_PROGRESS_LOG_INTERVAL_SECONDS = float(
+    os.getenv("ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS", "30")
+)
+
+#: Kill-switch for resumable chunked downloads (BLDX-1523). When enabled
+#: (default), an interrupted chunked download leaves its partial file plus a
+#: ``.transfer-state`` sidecar on disk, and a retry fetches only the missing
+#: ranges — valid only while the remote object's etag is unchanged. Set to
+#: "false" to restore delete-partial-on-failure behaviour fleet-wide.
+STORAGE_RESUME_DOWNLOADS = (
+    os.getenv("ATLAN_STORAGE_RESUME_DOWNLOADS", "true").strip().lower() != "false"
+)
 
 #: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
 #: When set, workers identify themselves with this build ID so the Temporal server can
@@ -463,6 +481,11 @@ LOG_RETENTION_DAYS = int(os.environ.get("ATLAN_LOG_RETENTION_DAYS", 30))
 LOG_CLEANUP_ENABLED = os.getenv("ATLAN_LOG_CLEANUP_ENABLED", "false").lower() == "true"
 
 # Log Location configuration
+# NOTE: Despite the ".parquet" default value, LOG_FILE_NAME is used purely as a
+# signal-type discriminator in AtlanObservability._get_signal_type() to route records
+# to the correct observability sub-path (logs / metrics / traces).  The actual output
+# format is gzip-compressed NDJSON (.json.gz) — not parquet.  Do not change the
+# default value; doing so would silently reroute log records to the "other" sub-path.
 LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
 # REMOVED: ENABLE_HIVE_PARTITIONING — unused.
 
@@ -475,6 +498,7 @@ METRICS_RETENTION_DAYS = int(os.environ.get("ATLAN_METRICS_RETENTION_DAYS", 30))
 METRICS_CLEANUP_ENABLED = (
     os.getenv("ATLAN_METRICS_CLEANUP_ENABLED", "false").lower() == "true"
 )
+# Same signal-discriminator convention as LOG_FILE_NAME above — not a real file name.
 METRICS_FILE_NAME = os.environ.get("ATLAN_METRICS_FILE_NAME", "metrics.parquet")
 TRACES_FILE_NAME = os.environ.get("ATLAN_TRACES_FILE_NAME", "traces.parquet")
 
@@ -518,7 +542,6 @@ ENABLE_OBSERVABILITY_STORE_SINK: bool = (
     ).lower()
     == "true"
 )
-
 # REMOVED: ATLAN_API_TOKEN_GUID, ATLAN_API_KEY, ATLAN_CLIENT_ID, ATLAN_CLIENT_SECRET — unused.
 # ATLAN_BASE_URL is still used by events interceptor (deferred import).
 ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL")

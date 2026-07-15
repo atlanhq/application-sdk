@@ -93,4 +93,14 @@ jobs:
       run-e2e: ${{ inputs.run_e2e }}
       base-image-ref: ${{ inputs.base_image_ref }}
       agent-name-override: ${{ inputs.agent_name_override }}
+      # ADR-0014 two-store SDR posture (docs/adr/0014-two-store-storage-
+      # architecture.md in application-sdk): the e2e job's `objectstore`
+      # is forced to the SDK-default CI-local binding and
+      # ENABLE_ATLAN_UPLOAD=true is set on the worker, so a connector
+      # code path that forgets to bridge an artifact via App.upload()
+      # from `objectstore` to `atlan-objectstore` shows up as zero
+      # downstream assets/lineage in Atlas. See atlan-mysql-app#381 for
+      # the first adopter + confirmed end-to-end proof of the boundary
+      # crossing.
+      two-store: true
     secrets: inherit

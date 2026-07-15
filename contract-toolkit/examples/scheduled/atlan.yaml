@@ -1,0 +1,17 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: scheduled
+display_name: Scheduled Background Job Example
+type: connector
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: true
+entrypoints:
+- name: scheduled
+  display_name: Scheduled Background Job Example
+  icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
+  type: connector
+  package_id: '@atlan/scheduled'
+  marketplace_card: true

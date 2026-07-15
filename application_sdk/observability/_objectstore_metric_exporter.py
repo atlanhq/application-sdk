@@ -225,6 +225,7 @@ class ObjectStoreMetricExporter(MetricExporter):
             if ENABLE_OBSERVABILITY_STORE_SINK and ENABLE_ATLAN_UPLOAD
             else None
         )
+        self._writer_seq = 0
 
     def _resolve_store(self, name: str) -> ObjectStore | None:
         from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
@@ -267,7 +268,8 @@ class ObjectStoreMetricExporter(MetricExporter):
 
             now = datetime.now()
             ts_ns = int(now.timestamp() * 1e9)
-            filename = f"{ts_ns}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
+            self._writer_seq += 1
+            filename = f"{ts_ns}_{self._writer_seq:06d}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
 
             local_dir = os.path.join(
                 self._data_dir,

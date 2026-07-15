@@ -19,8 +19,12 @@ Rules in this check module:
   Hatchling.
 * **D008 WeakenedTypeChecking** — ``[tool.pyright].typeCheckingMode`` must not
   be weaker than the SDK baseline ``standard``.
+* **D009 RemoteDaprComponentFetch** — no ``[tool.poe.tasks.*]`` entry may fetch
+  Dapr component YAMLs from ``raw.githubusercontent.com`` or the GitHub
+  contents API for ``atlanhq/application-sdk``; the installed SDK wheel
+  bundles them at ``application_sdk/components/``.
 
-D004/D005 are metadata-based (need the SDK importable) like D002; D006/D007/D008
+D004/D005 are metadata-based (need the SDK importable) like D002; D006/D007/D008/D009
 are pure-text.
 
 Self-check exemption: any pyproject whose ``[project].name`` starts with
@@ -40,8 +44,13 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
+from conformance.suite.checks._ast_common import _is_suppressed
 from conformance.suite.checks._ast_common import discover as _discover_sources
-from conformance.suite.checks._ast_common import is_sdk_package_name, make_cli_main
+from conformance.suite.checks._ast_common import (
+    is_sdk_package_name,
+    make_cli_main,
+    parse_toml_suppressions,
+)
 from conformance.suite.schema.findings import Finding
 
 SERIES = "D"
@@ -53,6 +62,7 @@ RULE_D005 = "D005"
 RULE_D006 = "D006"
 RULE_D007 = "D007"
 RULE_D008 = "D008"
+RULE_D009 = "D009"
 
 SDK_PACKAGE = "atlan-application-sdk"
 
@@ -62,20 +72,24 @@ HATCHLING_BACKEND = "hatchling.build"
 # pyright type-checking modes weaker than the SDK baseline ``standard`` (D008).
 PYRIGHT_WEAK_MODES = frozenset({"off", "basic"})
 
+# Matches a poe task fetching Dapr component YAMLs straight from GitHub
+# (raw.githubusercontent.com or the contents API) for atlanhq/application-sdk,
+# instead of copying them from the installed wheel, which bundles them at
+# application_sdk/components/ (D009). Unauthenticated GitHub requests hit rate
+# limits under CI concurrency, and a hardcoded ref drifts from whatever SDK
+# version is actually locked in the app's uv.lock.
+_REMOTE_COMPONENT_FETCH_RE = re.compile(
+    r"(?:raw\.githubusercontent\.com|api\.github\.com)[^\s\"'\\]*"
+    r"/atlanhq/application-sdk(?![\w-])",
+    re.IGNORECASE,
+)
+
 # The SDK's own ``[project].requires-python`` lower bound, as ``(major, minor)``.
 # Hardcoded (not read from metadata) so D006 stays a pure-text check that works
 # under the isolated ``uvx`` CI leg without the SDK being importable. Kept honest
 # by ``test_d006_sdk_python_floor_matches_sdk_pyproject``, which re-reads the
 # SDK's real pyproject.toml and fails if this constant drifts.
 SDK_PYTHON_FLOOR: tuple[int, int] = (3, 11)
-
-# Inline suppression directive; identical regex to the E-series so the docs
-# remain consistent (``# conformance: ignore[D00x] reason``). TOML uses ``#``
-# for comments, so this slots in naturally.
-_SUPPRESS_RE = re.compile(
-    r"^#\s*conformance\s*:\s*ignore\s*(?:\[([^\]]*)\])?\s*(.*)",
-    re.IGNORECASE,
-)
 
 # A PEP 508 / requirement-string fragment. Captures the package *name*; the
 # rest of the line is treated as the version-specifier blob.
@@ -463,62 +477,6 @@ def _iter_dependency_group_entries(
 
 
 # ---------------------------------------------------------------------------
-# Suppression
-# ---------------------------------------------------------------------------
-
-
-def _parse_suppressions(text: str) -> dict[int, tuple[frozenset[str] | None, str]]:
-    """Return ``{lineno: (rule_ids_or_None, justification)}`` for every
-    ``# conformance: ignore[...]`` directive in *text*.
-
-    ``rule_ids_or_None`` is ``None`` for a rule-id-less directive (matches any
-    rule on that line). Framed from the violation's side to match
-    ``_is_suppressed``: a directive at line N suppresses findings on lines N and
-    N+1 (its own line and the one immediately below — the E-series convention,
-    so users only have to learn one form).
-    """
-    out: dict[int, tuple[frozenset[str] | None, str]] = {}
-    for lineno, raw in enumerate(text.splitlines(), start=1):
-        stripped = raw.lstrip()
-        # A suppression must be on a comment-only line *or* trail an entry as
-        # ``"req-spec",  # conformance: ignore[D002] reason``.
-        idx = stripped.find("#")
-        if idx == -1:
-            continue
-        comment = stripped[idx:]
-        m = _SUPPRESS_RE.match(comment)
-        if m is None:
-            continue
-        ids_blob = (m.group(1) or "").strip()
-        ids: frozenset[str] | None = (
-            None
-            if not ids_blob
-            else frozenset(s.strip() for s in ids_blob.split(",") if s.strip())
-        )
-        out[lineno] = (ids, m.group(2).strip())
-    return out
-
-
-def _is_suppressed(
-    suppressions: dict[int, tuple[frozenset[str] | None, str]],
-    rule_id: str,
-    line: int,
-) -> tuple[bool, str | None]:
-    """Return ``(suppressed, justification)`` for a finding at *line*.
-
-    A directive on the same line or on the line immediately above suppresses
-    the finding when its rule-id list is empty *or* contains *rule_id*.
-    """
-    for cand in (line, line - 1):
-        if cand not in suppressions:
-            continue
-        ids, just = suppressions[cand]
-        if ids is None or rule_id in ids:
-            return True, just
-    return False, None
-
-
-# ---------------------------------------------------------------------------
 # SDK-managed-deps lookup
 # ---------------------------------------------------------------------------
 
@@ -689,6 +647,31 @@ def _pyright_mode(
     return mode, _line_of(text, "typeCheckingMode", section="tool.pyright")
 
 
+def _poe_tasks(data: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Return ``[tool.poe.tasks]`` as a mapping, or ``None`` when absent."""
+    tool = data.get("tool")
+    poe = tool.get("poe") if isinstance(tool, dict) else None
+    tasks = poe.get("tasks") if isinstance(poe, dict) else None
+    return tasks if isinstance(tasks, dict) else None
+
+
+def _iter_strings(value: Any) -> Iterator[str]:
+    """Recursively yield every string leaf under a poe task definition.
+
+    A task may be a bare string, a ``{shell = "..."}``/``{cmd = "..."}``/
+    ``{interpreter = "python", shell = "..."}`` table, or a sequence-task list
+    of steps — this walks all of those shapes uniformly.
+    """
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _iter_strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _iter_strings(v)
+
+
 def _is_self_check(name: str | None) -> bool:
     """Return True for the SDK and its sibling packages (exempt from D-series).
 
@@ -732,7 +715,7 @@ def scan_text(
         return []
 
     findings: list[Finding] = []
-    suppressions = _parse_suppressions(text)
+    suppressions = parse_toml_suppressions(text)
 
     entries = list(_iter_dep_entries(text, data=data))
 
@@ -848,6 +831,44 @@ def scan_text(
                 suppressions=suppressions,
             )
         )
+
+    # ── D009 (pure-text) ────────────────────────────────────────────────────
+    # Structural check (via `data`) just decides whether any poe task fetches
+    # components remotely; the actual findings are anchored by a single
+    # line-based scan of the raw text so a violation is never mis-attributed
+    # to the wrong task name when more than one task matches.
+    tasks = _poe_tasks(data)
+    if tasks is not None and any(
+        _REMOTE_COMPONENT_FETCH_RE.search(s)
+        for task_def in tasks.values()
+        for s in _iter_strings(task_def)
+    ):
+        for ln, line in enumerate(text.splitlines(), start=1):
+            if not _REMOTE_COMPONENT_FETCH_RE.search(line):
+                continue
+            findings.append(
+                _make_finding(
+                    rule_id=RULE_D009,
+                    file=file,
+                    line=ln,
+                    column=1,
+                    message=(
+                        "A poe task fetches Dapr component YAMLs from GitHub "
+                        f"over the network instead of reading them from the "
+                        f"installed '{SDK_PACKAGE}' wheel, which bundles them "
+                        f"at application_sdk/components/. Unauthenticated "
+                        f"GitHub requests hit rate limits under CI "
+                        f"concurrency, and a hardcoded ref drifts from "
+                        f"whatever SDK version is actually locked in "
+                        f"uv.lock. Copy from the installed package instead, "
+                        f'e.g. `python -c "import application_sdk, pathlib, '
+                        f"shutil; shutil.copytree(pathlib.Path("
+                        f"application_sdk.__file__).parent / 'components', "
+                        f"'components', dirs_exist_ok=True)\"`."
+                    ),
+                    suppressions=suppressions,
+                )
+            )
 
     # ── D002 / D004: redeclaration of SDK-managed core deps (metadata) ──────
     if sdk_managed_packages is None:
@@ -1015,6 +1036,41 @@ def _collect_top_level_imports(py_files: Iterable[Path]) -> set[str]:
     return modules
 
 
+# A SQLAlchemy dialect string encodes the DBAPI driver as ``dialect+driver`` —
+# in a URL (``mysql+aiomysql://…``) or a ``drivername`` value
+# (``URL.create(drivername="mysql+aiomysql", …)``). SQLAlchemy imports that
+# driver package at runtime from the string, so it never appears as a Python
+# ``import`` — yet the package is genuinely used. Capture the ``driver`` half.
+_SQLALCHEMY_DIALECT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+([A-Za-z_][A-Za-z0-9_]+)")
+
+
+def _collect_dialect_drivers(py_files: Iterable[Path]) -> set[str]:
+    """Return DBAPI driver names referenced in SQLAlchemy ``dialect+driver`` strings.
+
+    Scans string literals across *py_files* for the ``dialect+driver`` form and
+    keeps the ``driver`` component (``mysql+aiomysql`` -> ``aiomysql``). Used to
+    mark a dependency loaded dynamically by SQLAlchemy as used, so D003 does not
+    flag it as unimported. Deliberately biased toward matching (WARN-tier, zero
+    false positives): an over-captured token only ever suppresses a D003 finding
+    for a dependency literally named like that token.
+    """
+    drivers: set[str] = set()
+    for path in py_files:
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            continue
+        try:
+            tree = ast.parse(raw)
+        except (SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                for match in _SQLALCHEMY_DIALECT_RE.finditer(node.value):
+                    drivers.add(match.group(1))
+    return drivers
+
+
 def _dist_import_names(dist_name: str) -> set[str] | None:
     """Return the top-level import names a distribution provides, or ``None``.
 
@@ -1067,13 +1123,16 @@ def _scan_unused_dependencies(
     file: str,
     *,
     dist_import_map: Mapping[str, set[str] | None],
+    dialect_drivers: set[str],
 ) -> tuple[list[Finding], list[str]]:
     """Return (D003 findings, names of dependencies skipped as unresolvable).
 
     A dependency is flagged when the import names it provides are all absent
-    from *imported_modules*.  A dependency whose ``dist_import_map`` value is
-    ``None`` (not importable in this environment) is skipped and returned in the
-    second list so the caller can surface it — never silently dropped.
+    from *imported_modules* AND it is not referenced as a SQLAlchemy
+    ``dialect+driver`` (``dialect_drivers``).  A dependency whose
+    ``dist_import_map`` value is ``None`` (not importable in this environment) is
+    skipped and returned in the second list so the caller can surface it — never
+    silently dropped.
     """
     findings: list[Finding] = []
     unresolved: list[str] = []
@@ -1089,6 +1148,8 @@ def _scan_unused_dependencies(
             continue
         if provided & imported_modules:
             continue  # at least one provided module is imported -> used
+        if entry.name in dialect_drivers or provided & dialect_drivers:
+            continue  # loaded dynamically by SQLAlchemy via a dialect+driver string
         provided_list = ", ".join(sorted(provided))
         findings.append(
             _make_finding(
@@ -1118,6 +1179,7 @@ def scan_all(
     *,
     dist_import_map: Mapping[str, set[str] | None] | None = None,
     imported_modules: set[str] | None = None,
+    dialect_drivers: set[str] | None = None,
 ) -> list[Finding]:
     """Run the full D-series over *paths*: per-file D001/D002 + cross-file D003.
 
@@ -1164,6 +1226,8 @@ def scan_all(
         imported_modules = _collect_top_level_imports(py_files)
     if dist_import_map is None:
         dist_import_map = {e.name: _dist_import_names(e.name) for e in dep_entries}
+    if dialect_drivers is None:
+        dialect_drivers = _collect_dialect_drivers(py_files)
 
     try:
         rel = root_pyproject.relative_to(root)
@@ -1173,9 +1237,10 @@ def scan_all(
     d003_findings, unresolved = _scan_unused_dependencies(
         dep_entries,
         imported_modules,
-        _parse_suppressions(text),
+        parse_toml_suppressions(text),
         str(rel),
         dist_import_map=dist_import_map,
+        dialect_drivers=dialect_drivers,
     )
     findings.extend(d003_findings)
 

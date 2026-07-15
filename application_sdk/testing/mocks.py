@@ -1,9 +1,10 @@
 """Mock wrappers with call-tracking for unit tests."""
 
-import json
 import uuid
 from collections.abc import Awaitable
 from typing import Any, Callable
+
+import orjson
 
 from application_sdk.credentials.ref import (
     CredentialRef,
@@ -500,6 +501,6 @@ class MockCredentialStore:
     def _store_and_ref(
         self, name: str, data: dict[str, Any], ref: CredentialRef
     ) -> CredentialRef:
-        self._store.set(name, json.dumps(data))
+        self._store.set(name, orjson.dumps(data).decode())
         self._refs[name] = ref
         return ref

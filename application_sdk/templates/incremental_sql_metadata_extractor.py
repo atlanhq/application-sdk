@@ -443,7 +443,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         Returns counts of batches, changed tables, and backfill tables.
         Zero batches means no incremental column extraction is needed.
         """
-        import json  # noqa: PLC0415 — stdlib json; lazy use only
+        import orjson  # noqa: PLC0415 — orjson; lazy use only
 
         from application_sdk.common.incremental.column_extraction import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             get_backfill_tables,
@@ -527,8 +527,8 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         backfill_count_for_log = len(backfill_qns) if backfill_qns else 0
         logger.info("Found %d tables needing backfill", backfill_count_for_log)
 
-        # Step 4: Get tables needing column extraction using Daft
-        filtered_df, changed_count, backfill_count, _no_change_count = (
+        # Step 4: Get tables needing column extraction using DuckDB
+        filtered_rows, changed_count, backfill_count, _no_change_count = (
             get_tables_needing_column_extraction(transformed_dir, backfill_qns)
         )
 
@@ -554,19 +554,19 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         total_tables_batched = 0
         current_batch: list[str] = []
 
-        for row in filtered_df.select("table_id").iter_rows():
+        for row in filtered_rows:
             current_batch.append(row["table_id"])
 
             if len(current_batch) >= batch_size:
                 batch_file = batches_dir / f"batch-{batch_idx}.json"
-                batch_file.write_text(json.dumps(current_batch), encoding="utf-8")
+                batch_file.write_bytes(orjson.dumps(current_batch))
                 batch_idx += 1
                 total_tables_batched += len(current_batch)
                 current_batch = []
 
         if current_batch:
             batch_file = batches_dir / f"batch-{batch_idx}.json"
-            batch_file.write_text(json.dumps(current_batch), encoding="utf-8")
+            batch_file.write_bytes(orjson.dumps(current_batch))
             batch_idx += 1
             total_tables_batched += len(current_batch)
 
@@ -608,8 +608,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         The SDK handles all orchestration; the connector only needs to implement
         ``build_incremental_column_sql()``.
         """
-        import json  # noqa: PLC0415 — stdlib json; lazy use only
         import pathlib  # noqa: PLC0415 — stdlib pathlib; lazy use only
+
+        import orjson  # noqa: PLC0415 — orjson; lazy use only
 
         from application_sdk.execution import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             get_object_store_prefix,
@@ -659,7 +660,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 status="not_found",
             )
 
-        table_ids = json.loads(batch_file.read_text(encoding="utf-8"))
+        table_ids = orjson.loads(batch_file.read_bytes())
 
         logger.info(
             "Executing column batch %d/%d: %d tables",

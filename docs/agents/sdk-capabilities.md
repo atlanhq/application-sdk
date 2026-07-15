@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.17.3
-source-sha:    378ae8cf9c74ef573a49601d9f76bd2b185a3066
-source-date:   2026-06-18T16:23:50+01:00
+sdk-version:   3.21.2
+source-sha:    e8aa593940749e0ff3c76a52690ccbfcaf34e20a
+source-date:   2026-07-10T16:41:00+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,17 +20,17 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 26 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 11 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 53 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 56 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 37 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 26 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 29 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -326,6 +326,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Enumeration of dataframe types.
 - **Defined in:** `application_sdk/common/types.py`
 
+#### `FilterPattern`
+
+- **Import:** `from application_sdk.common import FilterPattern`
+- **Signature:** `class FilterPattern(include: list[re.Pattern[str]], exclude: list[re.Pattern[str]])`
+- **Summary:** A compiled include/exclude filter with uniform regex-or-exact semantics.
+- **Defined in:** `application_sdk/common/filter_matching.py`
+
 #### `TaskResult`
 
 - **Import:** `from application_sdk.common import TaskResult`
@@ -341,6 +348,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Defined in:** `application_sdk/common/models.py`
 
 ### Functions
+
+#### `filter_matches`
+
+- **Import:** `from application_sdk.common import filter_matches`
+- **Signature:** `filter_matches(candidate: str, ...)`
+- **Summary:** Convenience one-shot: compile ``include``/``exclude`` and test ``candidate``.
+- **Defined in:** `application_sdk/common/filter_matching.py`
 
 #### `get_actual_cpu_count`
 
@@ -940,6 +954,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
 
+#### `ColdStartRaceError`
+
+- **Import:** `from application_sdk.errors import ColdStartRaceError`
+- **Signature:** `class ColdStartRaceError`
+- **Summary:** Marker for a :class:`DependencyUnavailableError` that specifically means
+- **Defined in:** `application_sdk/errors/leaves.py`
+
 #### `DataIntegrityError`
 
 - **Import:** `from application_sdk.errors import DataIntegrityError`
@@ -951,7 +972,7 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import DependencyUnavailableError`
 - **Signature:** `class DependencyUnavailableError(*, ...)`
-- **Summary:** Required platform service is temporarily down or degraded.
+- **Summary:** Required Atlan-internal platform service is temporarily down or degraded.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `ErrorCode`
@@ -1017,6 +1038,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
 
+#### `SourceUnavailableError`
+
+- **Import:** `from application_sdk.errors import SourceUnavailableError`
+- **Signature:** `class SourceUnavailableError(*, ...)`
+- **Summary:** Customer-controlled source system is temporarily unreachable.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
 #### `UnimplementedError`
 
 - **Import:** `from application_sdk.errors import UnimplementedError`
@@ -1031,6 +1059,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import redact_secrets`
 - **Signature:** `redact_secrets(text: str)`
 - **Summary:** Redact URL userinfo and known secret query-params from a string.
+- **Defined in:** `application_sdk/errors/base.py`
+
+#### `safe_traceback`
+
+- **Import:** `from application_sdk.errors import safe_traceback`
+- **Signature:** `safe_traceback(exc: BaseException | None, max_len: int = _TRACEBACK_MAX_LEN)`
+- **Summary:** Return a secret-redacted, length-capped full-frame traceback.
 - **Defined in:** `application_sdk/errors/base.py`
 
 #### `sanitize_cause_repr`
@@ -1286,6 +1321,19 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Wraps Temporal Worker to emit worker_start on startup and to push
 - **Defined in:** `application_sdk/execution/_temporal/worker.py`
 
+#### `RetryPolicy`
+
+- **Import:** `from application_sdk.execution import RetryPolicy`
+- **Signature:** `class RetryPolicy(max_attempts: int = 3, ...)`
+- **Summary:** Configuration for retry behavior.
+- **Defined in:** `application_sdk/execution/retry.py`
+
+#### `TemporalActivityError`
+
+- **Import:** `from application_sdk.execution import TemporalActivityError`
+- **Signature:** `class TemporalActivityError(message: str, ...)`
+- **Summary:** Error raised on activity failure. _(re-exported from `temporalio.exceptions.ActivityError`)_
+
 #### `TemporalAuthConfig`
 
 - **Import:** `from application_sdk.execution import TemporalAuthConfig`
@@ -1299,6 +1347,49 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Signature:** `class TemporalAuthManager(config: TemporalAuthConfig, ...)`
 - **Summary:** Manages OAuth token lifecycle for Temporal client connections.
 - **Defined in:** `application_sdk/execution/_temporal/auth.py`
+
+#### `TemporalCancelledError`
+
+- **Import:** `from application_sdk.execution import TemporalCancelledError`
+- **Signature:** `class TemporalCancelledError(message: str = 'Cancelled', *details: Any)`
+- **Summary:** Error raised on workflow/activity cancellation. _(re-exported from `temporalio.exceptions.CancelledError`)_
+
+#### `TemporalChildWorkflowError`
+
+- **Import:** `from application_sdk.execution import TemporalChildWorkflowError`
+- **Signature:** `class TemporalChildWorkflowError(message: str, ...)`
+- **Summary:** Error raised on child workflow failure. _(re-exported from `temporalio.exceptions.ChildWorkflowError`)_
+
+#### `TemporalClient`
+
+- **Import:** `from application_sdk.execution import TemporalClient`
+- **Signature:** `class TemporalClient(service_client: 'temporalio.service.ServiceClient', ...)`
+- **Summary:** Client for accessing Temporal. _(re-exported from `temporalio.client.Client`)_
+
+#### `TemporalExecutorBackend`
+
+- **Import:** `from application_sdk.execution import TemporalExecutorBackend`
+- **Signature:** `class TemporalExecutorBackend(client: Client, task_queue: str = 'application-sdk')`
+- **Summary:** Temporal-based executor backend for running Apps as workflows.
+- **Defined in:** `application_sdk/execution/_temporal/backend.py`
+
+#### `TemporalTerminatedError`
+
+- **Import:** `from application_sdk.execution import TemporalTerminatedError`
+- **Signature:** `class TemporalTerminatedError(message: str, *details: Any)`
+- **Summary:** Error raised on workflow cancellation. _(re-exported from `temporalio.exceptions.TerminatedError`)_
+
+#### `TemporalTimeoutError`
+
+- **Import:** `from application_sdk.execution import TemporalTimeoutError`
+- **Signature:** `class TemporalTimeoutError(message: str, ...)`
+- **Summary:** Error raised on workflow/activity timeout. _(re-exported from `temporalio.exceptions.TimeoutError`)_
+
+#### `TemporalWorkflowFailureError`
+
+- **Import:** `from application_sdk.execution import TemporalWorkflowFailureError`
+- **Signature:** `class TemporalWorkflowFailureError(*, cause: 'BaseException')`
+- **Summary:** Error that occurs when a workflow is unsuccessful. _(re-exported from `temporalio.client.WorkflowFailureError`)_
 
 ### Functions
 
@@ -1314,6 +1405,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Import:** `from application_sdk.execution import create_data_converter`
 - **Signature:** `create_data_converter(additional_converters: list[EncodingPayloadConverter] | None = None)`
 - **Summary:** Create a data converter with Pydantic support.
+- **Defined in:** `application_sdk/execution/_temporal/converter.py`
+
+#### `create_data_converter_for_app`
+
+- **Import:** `from application_sdk.execution import create_data_converter_for_app`
+- **Signature:** `create_data_converter_for_app(app_class: type[App])`
+- **Summary:** Create a data converter for a specific app, including any app-specific converters.
 - **Defined in:** `application_sdk/execution/_temporal/converter.py`
 
 #### `create_temporal_client`
@@ -1473,7 +1571,7 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 
 - **Import:** `from application_sdk.handler import PreflightStatus`
 - **Signature:** `class PreflightStatus`
-- **Summary:** Overall result of a preflight check.
+- **Summary:** Overall preflight verdict — decides the gate.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`
@@ -1680,6 +1778,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Summary:** Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
+#### `SecretStoreUnavailableError`
+
+- **Import:** `from application_sdk.infrastructure import SecretStoreUnavailableError`
+- **Signature:** `class SecretStoreUnavailableError(secret_name: str, *, cause: Exception | None = None)`
+- **Summary:** The secret store / Dapr sidecar was *unreachable* — a transport failure
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
+
 #### `StateStore`
 
 - **Import:** `from application_sdk.infrastructure import StateStore`
@@ -1738,6 +1843,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Summary:** Get the current infrastructure context.
 - **Defined in:** `application_sdk/infrastructure/context.py`
 
+#### `retry_past_dapr_cold_start`
+
+- **Import:** `from application_sdk.infrastructure import retry_past_dapr_cold_start`
+- **Signature:** `retry_past_dapr_cold_start(call: Callable[[], Awaitable[_T]], *, description: str, component: str)`
+- **Summary:** Retry an idempotent Dapr-backed call past a cold sidecar.
+- **Defined in:** `application_sdk/infrastructure/_dapr/http.py`
+
 #### `set_infrastructure`
 
 - **Import:** `from application_sdk.infrastructure import set_infrastructure`
@@ -1746,6 +1858,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Defined in:** `application_sdk/infrastructure/context.py`
 
 ### Constants and Enums
+
+#### `DAPR_SECRET_STORE_COMPONENT`
+
+- **Import:** `from application_sdk.infrastructure import DAPR_SECRET_STORE_COMPONENT`
+- **Signature:** `DAPR_SECRET_STORE_COMPONENT`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/infrastructure/_dapr/http.py`
 
 #### `MessageHandler`
 
@@ -2025,6 +2144,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Stream-download *key* from the store to a local file.
 - **Defined in:** `application_sdk/storage/ops.py`
 
+#### `download_file_chunked`
+
+- **Import:** `from application_sdk.storage import download_file_chunked`
+- **Signature:** `download_file_chunked(key: str, ...)`
+- **Summary:** Download *key* using parallel range GETs, writing chunks at fixed offsets.
+- **Defined in:** `application_sdk/storage/chunked.py`
+
 #### `download_prefix`
 
 - **Import:** `from application_sdk.storage import download_prefix`
@@ -2039,11 +2165,25 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Return ``True`` if *key* exists in the store.
 - **Defined in:** `application_sdk/storage/ops.py`
 
+#### `get_file_meta`
+
+- **Import:** `from application_sdk.storage import get_file_meta`
+- **Signature:** `get_file_meta(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
+- **Summary:** Return ``(size_bytes, e_tag)`` for *key*, or ``None`` if not found.
+- **Defined in:** `application_sdk/storage/ops.py`
+
 #### `list_keys`
 
 - **Import:** `from application_sdk.storage import list_keys`
 - **Signature:** `list_keys(prefix: str = '', ...)`
 - **Summary:** List all object keys under *prefix*.
+- **Defined in:** `application_sdk/storage/batch.py`
+
+#### `list_keys_with_meta`
+
+- **Import:** `from application_sdk.storage import list_keys_with_meta`
+- **Signature:** `list_keys_with_meta(prefix: str = '', ...)`
+- **Summary:** Like :func:`list_keys`, but return ``(key, size_bytes, e_tag)`` tuples.
 - **Defined in:** `application_sdk/storage/batch.py`
 
 #### `normalize_key`
@@ -2483,6 +2623,23 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `event_filters: list[EventFilterRule]` `= []` — Additional CEL filter rules applied to the event.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
+#### `FailureDetails`
+
+- **Import:** `from application_sdk.handler.contracts import FailureDetails`
+- **Summary:** Pydantic envelope serialized into ``ApplicationError.details=[…]``.
+- **Fields:**
+  - `category: FailureCategory`
+  - `code: str`
+  - `retryable: bool`
+  - `audience: Audience` `= Audience.APP_OWNER`
+  - `message: str`
+  - `suggested_action: str | None`
+  - `evidence: dict[str, Any]` `= Field(default_factory=dict)`
+  - `app_name: str | None`
+  - `run_id: str | None`
+  - `cause_repr: str | None`
+- **Defined in:** `application_sdk/errors/wire.py`
+
 #### `FileUploadResponse`
 
 - **Import:** `from application_sdk.handler.contracts import FileUploadResponse`
@@ -2543,8 +2700,11 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `name: str` `= Field(..., min_length=1)` — Check name (e.g., 'connectivity', 'permissions').
   - `passed: bool` `= False` — Whether the check passed.
-  - `message: str` `= ''` — Details about the check result.
+  - `message: str` `= ''` — Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
+  - `error: FailureDetails | None` — Typed failure for a failed check — set only on failed checks.
   - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.
+  - `resolved_message: str` — Message under the precedence rule: a failed check's ``error`` wins.
+  - `resolved_suggested_action: str` — Suggested action from a failed check's ``error``; empty otherwise.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `PreflightInput`
@@ -2566,9 +2726,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import PreflightOutput`
 - **Summary:** Output from the preflight_check handler operation.
 - **Fields:**
-  - `status: PreflightStatus` — Overall preflight result.
-  - `checks: list[PreflightCheck]` `= []` — Individual check results.
-  - `message: str` `= ''` — Human-readable summary.
+  - `status: PreflightStatus` — Overall verdict — decides the gate. ``NOT_READY`` blocks the run;
+  - `checks: list[PreflightCheck]` `= []` — Individual check results (display + failure attribution).
+  - `message: str` `= ''` — Human-readable summary. Seeds the gate's abort reason when set.
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.
 - **Defined in:** `application_sdk/handler/contracts.py`
 

@@ -34,12 +34,12 @@ from application_sdk.common.aws_utils import (
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 from application_sdk.credentials.utils import parse_credentials_extra
 from application_sdk.errors import AppError, sanitize_cause_repr
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    import daft
     import pandas as pd
     from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
     from sqlalchemy.orm import Session
@@ -121,9 +121,11 @@ class BaseSQLClient(ClientInterface):
             install_tolerant_text_decoder_hook(self.engine)
 
             # Test connection briefly to validate credentials.
-            # Wrapped in asyncio.to_thread because SQLAlchemy's synchronous
+            # Wrapped in run_in_thread because SQLAlchemy's synchronous
             # engine.connect() blocks the event loop — critical for Temporal
-            # activities where blocking starves the auto-heartbeat.
+            # activities where blocking starves the auto-heartbeat. run_in_thread
+            # dispatches onto the SDK's dedicated pool rather than asyncio's
+            # shared default executor, which Temporal's own scheduling also uses.
             # Capture engine in a local variable so the closure doesn't need to
             # re-read self.engine (which is typed Optional) and pyright can narrow it.
             _engine = self.engine
@@ -132,7 +134,7 @@ class BaseSQLClient(ClientInterface):
                 with _engine.connect() as _:
                     pass  # Connection test successful
 
-            await asyncio.to_thread(_ping)
+            await run_in_thread(_ping)
 
             # Don't store persistent connection
             self.connection = None
@@ -142,7 +144,7 @@ class BaseSQLClient(ClientInterface):
             # No exc_info here: SQLAlchemy errors embed the full connection
             # string (including the password) in their message, and the
             # traceback would print it verbatim into logs.
-            logger.error(  # conformance: ignore[E005,L004] exc_info would expose SQLAlchemy password in traceback; cause sanitized above
+            logger.error(  # conformance: ignore[E005,L004,L009] exc_info would expose SQLAlchemy password; logs sanitized cause at failure site — raised typed error wraps only the raw unsanitized cause
                 "Error loading SQL client: %s", sanitize_cause_repr(e)
             )
             if self.engine:
@@ -455,29 +457,6 @@ class BaseSQLClient(ClientInterface):
         conn = session.connection()
         return self._execute_pandas_query(conn, query, chunksize=chunksize)
 
-    def _execute_query_daft(
-        self, query: str, chunksize: int | None
-    ) -> Union["daft.DataFrame", Iterator["daft.DataFrame"]]:
-        """Execute SQL query using the provided engine and daft.
-
-        Returns:
-            Union["daft.DataFrame", Iterator["daft.DataFrame"]]: Query results as DataFrame
-                or iterator of DataFrames if chunked.
-        """
-        # Guard must come before the daft import: daft's Rust OTel extension can
-        # raise BaseException at import time, which would prevent this check from running.
-        if not self.engine:
-            raise EngineNotInitializedError()
-
-        # Daft uses ConnectorX to read data from SQL by default for supported connectors
-        # If a connection string is passed, it will use ConnectorX to read data
-        # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
-        import daft  # noqa: PLC0415 — optional dep: daft
-
-        if isinstance(self.engine, str):
-            return daft.read_sql(query, self.engine, infer_schema_length=chunksize)
-        return daft.read_sql(query, self.engine.connect, infer_schema_length=chunksize)
-
     def _execute_query(
         self, query: str, chunksize: int | None
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
@@ -641,7 +620,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             # No exc_info here: SQLAlchemy errors embed the full connection
             # string (including the password) in their message, and the
             # traceback would print it verbatim into logs.
-            logger.error(  # conformance: ignore[E005,L004] exc_info would expose SQLAlchemy password in traceback; cause sanitized above
+            logger.error(  # conformance: ignore[E005,L004,L009] exc_info would expose SQLAlchemy password; logs sanitized cause at failure site — raised typed error wraps only the raw unsanitized cause
                 "Error establishing database connection: %s", sanitize_cause_repr(e)
             )
             if self.engine:

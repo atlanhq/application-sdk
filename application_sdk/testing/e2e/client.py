@@ -41,16 +41,21 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import orjson
+
+if TYPE_CHECKING:
+    from pyatlan.client.aio.client import AsyncAtlanClient
 
 from application_sdk.errors.base import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
+    AtlanAEWorkflowAlreadyActiveError,
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
     AtlanApiTimeoutError,
+    NoWorkerOnTaskQueueError,
 )
 
 logger = get_logger(__name__)
@@ -73,6 +78,13 @@ _HTTP_TIMEOUT = 60
 # existing 5xx retry loop handles) rather than a raw TimeoutError.
 _SUBMIT_TIMEOUT = 120
 
+# Transient network-layer errors (DNS blips, read timeouts, connection resets)
+# are common during multi-minute polls over a VPN/loft tunnel to a tenant. Retry
+# each HTTP call a few times before surfacing the failure, so a single blip in a
+# 10-15 min poll doesn't fail the whole run.
+_REQUEST_MAX_ATTEMPTS = 4
+_REQUEST_BACKOFF_SECONDS = 3
+
 # Cadence for "still polling" heartbeat log lines in
 # ``poll_native_status`` — lineage stages take 2-5 min on small
 # datasets and the status string doesn't change during that time, so
@@ -93,6 +105,7 @@ _NODE_GLYPHS = {
     "Pending": "🟡",
     "Cancelled": "🚫",
     "TimedOut": "⏰",
+    "Skipped": "⏭️",
 }
 _RUN_GLYPHS = {
     "Succeeded": "✅",
@@ -101,6 +114,7 @@ _RUN_GLYPHS = {
     "Pending": "🟡",
     "Cancelled": "🚫",
     "TimedOut": "⏰",
+    "Skipped": "⏭️",
 }
 
 
@@ -117,6 +131,31 @@ def _node_glyph(node) -> str:
     return f"{g} {name}"
 
 
+# AE returns "a run for workflow '<slug>' is already active" (code AE-WF-409-03)
+# when a submit collides with an in-flight run. Heracles (the tenant-facing
+# proxy in front of Automation Engine) masks that 409 as an HTTP 500 with the
+# original 409 text embedded in the message, so we detect the conflict by its
+# stable error code regardless of the outer status. We match on the code alone
+# (not the generic "already active" prose): the code is unambiguous, whereas the
+# phrase could appear in an unrelated, genuinely-transient 5xx and wrongly mark
+# it terminal.
+_ALREADY_ACTIVE_CODE = "AE-WF-409-03"
+
+
+def _is_already_active_run(status: int, body: Any) -> bool:
+    """True when a submit response signals an already-active run (masked or not).
+
+    A submit is not idempotent: retrying one that AE already accepted spawns a
+    duplicate run AE marks ``Skipped``. This conflict is therefore terminal, not
+    transient — callers use it to stop retrying even when AE surfaces it as a
+    5xx.
+    """
+    if status < 400:
+        return False
+    haystack = body if isinstance(body, str) else repr(body)
+    return _ALREADY_ACTIVE_CODE.casefold() in haystack.casefold()
+
+
 class DAGNodeStatus(str, Enum):
     """Status values returned by ``native-status`` per DAG node."""
 
@@ -127,6 +166,10 @@ class DAGNodeStatus(str, Enum):
     FAILED = "Failed"
     ERROR = "Error"
     CANCELLED = "Cancelled"
+    # AE emits this when a node is bypassed (e.g. an opted-out DAG leg, or
+    # every downstream node once an upstream one fails). Terminal but not a
+    # success — a skipped node will not run without re-submission.
+    SKIPPED = "Skipped"
 
     @property
     def is_terminal(self) -> bool:
@@ -136,6 +179,7 @@ class DAGNodeStatus(str, Enum):
             DAGNodeStatus.FAILED,
             DAGNodeStatus.ERROR,
             DAGNodeStatus.CANCELLED,
+            DAGNodeStatus.SKIPPED,
         }
 
     @property
@@ -153,6 +197,12 @@ class DAGRunStatus(str, Enum):
     FAILED = "Failed"
     ERROR = "Error"
     CANCELLED = "Cancelled"
+    # A run AE never executed — e.g. deduplicated against an in-flight run, or
+    # every node opted out. Terminal: recognising it lets poll_native_status
+    # return the true outcome immediately instead of mapping the unknown value
+    # to PENDING and waiting out the full stall grace, which surfaces as a
+    # misleading NoWorkerOnTaskQueueError.
+    SKIPPED = "Skipped"
 
     @property
     def is_terminal(self) -> bool:
@@ -161,6 +211,7 @@ class DAGRunStatus(str, Enum):
             DAGRunStatus.FAILED,
             DAGRunStatus.ERROR,
             DAGRunStatus.CANCELLED,
+            DAGRunStatus.SKIPPED,
         }
 
 
@@ -245,8 +296,15 @@ class AEWorkflowClient:
         *,
         body: dict[str, Any] | None = None,
         timeout: int = _HTTP_TIMEOUT,
+        retry_network_errors: bool = True,
     ) -> tuple[int, dict[str, Any] | str]:
-        """HTTP request returning ``(status_code, parsed_body_or_text)``."""
+        """HTTP request returning ``(status_code, parsed_body_or_text)``.
+
+        ``retry_network_errors=False`` disables the network-layer retry: a
+        read-timeout on a non-idempotent write (submit) is ambiguous — the
+        server may already have processed it — so re-POSTing would spawn a
+        duplicate. Such callers surface the first timeout instead.
+        """
         url = f"{self.tenant_url}{path}"
         data = orjson.dumps(body) if body is not None else None
         req = urllib.request.Request(url, data=data, method=method)
@@ -255,25 +313,65 @@ class AEWorkflowClient:
         req.add_header("User-Agent", _USER_AGENT)
         if body is not None:
             req.add_header("Content-Type", "application/json")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read()
+        last_exc: Exception | None = None
+        for attempt in range(1, _REQUEST_MAX_ATTEMPTS + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    raw = resp.read()
+                    try:
+                        return resp.status, orjson.loads(raw)
+                    except orjson.JSONDecodeError:
+                        logger.warning(
+                            "Response body is not JSON; returning raw text",
+                            exc_info=True,
+                        )
+                        return resp.status, raw.decode(errors="replace")
+            except urllib.error.HTTPError as e:
+                # A real HTTP response (4xx/5xx), NOT a transient network error —
+                # return it so the caller's status-based retry/handling applies.
+                raw = e.read()
                 try:
-                    return resp.status, orjson.loads(raw)
+                    return e.code, orjson.loads(raw)
                 except orjson.JSONDecodeError:
                     logger.warning(
-                        "Response body is not JSON; returning raw text", exc_info=True
+                        "HTTP error body is not JSON; returning raw text",
+                        exc_info=True,
                     )
-                    return resp.status, raw.decode(errors="replace")
-        except urllib.error.HTTPError as e:
-            raw = e.read()
-            try:
-                return e.code, orjson.loads(raw)
-            except orjson.JSONDecodeError:
-                logger.warning(
-                    "HTTP error body is not JSON; returning raw text", exc_info=True
-                )
-                return e.code, raw.decode(errors="replace")
+                    return e.code, raw.decode(errors="replace")
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                # Transient network-layer error (DNS blip / read timeout / conn
+                # reset) — common on multi-minute polls over a VPN/loft tunnel.
+                # Retry a few times; if it persists, surface as AtlanApiTimeoutError
+                # (an AppError) so callers' transient-tolerance (e.g. the poll loop)
+                # handles it instead of a raw crash. NOTE: HTTPError is a URLError
+                # subclass but is caught above, so it never reaches here.
+                last_exc = e
+                if not retry_network_errors:
+                    # Non-idempotent caller (submit): do not re-issue — the
+                    # server may have accepted the first request. Surface it.
+                    break
+                if attempt < _REQUEST_MAX_ATTEMPTS:
+                    logger.warning(
+                        "transient network error on %s %s (attempt %d/%d): %s — "
+                        "retrying in %ds",
+                        method,
+                        path,
+                        attempt,
+                        _REQUEST_MAX_ATTEMPTS,
+                        e,
+                        _REQUEST_BACKOFF_SECONDS,
+                        exc_info=True,
+                    )
+                    time.sleep(_REQUEST_BACKOFF_SECONDS)
+        raise AtlanApiTimeoutError(
+            message=(
+                # `attempt` is the actual count made — 1 when retries are
+                # disabled (submit), up to _REQUEST_MAX_ATTEMPTS otherwise — so
+                # a submit timeout doesn't misreport 4 tries when it made 1.
+                f"{method} {path} failed after {attempt} attempt(s): " f"{last_exc!r}"
+            ),
+            operation=path,
+        )
 
     # ------------------------------------------------------------------
     # Endpoints
@@ -288,6 +386,7 @@ class AEWorkflowClient:
         sleep_seconds: int,
         retryable: Callable[[int, dict[str, Any] | str], bool],
         op_name: str,
+        retry_network_errors: bool = True,
     ) -> tuple[int, dict[str, Any] | str]:
         """POST *path* with unified timeout + retry, returning ``(status, body)``.
 
@@ -306,15 +405,23 @@ class AEWorkflowClient:
                 and 2xx responses with an unexpected body shape.  Return
                 False to accept the response and return it to the caller.
             op_name: Human-readable label used in log / error messages.
+            retry_network_errors: When False, a network timeout is never
+                re-POSTed (nor re-issued at the ``_request`` layer) — required
+                for non-idempotent writes like submit, where a retry after the
+                server already accepted the request spawns a duplicate run.
         """
         last: tuple[int, dict[str, Any] | str] = (0, {})
         for attempt in range(1, total_attempts + 1):
             try:
                 status, resp_body = self._request(
-                    "POST", path, body=body, timeout=_SUBMIT_TIMEOUT
+                    "POST",
+                    path,
+                    body=body,
+                    timeout=_SUBMIT_TIMEOUT,
+                    retry_network_errors=retry_network_errors,
                 )
-            except (TimeoutError, OSError) as exc:
-                if attempt < total_attempts:
+            except (TimeoutError, OSError, AtlanApiTimeoutError) as exc:
+                if retry_network_errors and attempt < total_attempts:
                     logger.warning(
                         "%s attempt %d/%d: timeout (%s) — retrying in %ds",
                         op_name,
@@ -327,13 +434,17 @@ class AEWorkflowClient:
                     time.sleep(sleep_seconds)
                     continue
                 raise AtlanApiTimeoutError(
-                    message=f"{op_name} timed out after {total_attempts} attempts",
+                    # `attempt` is the actual count made — 1 when retries are
+                    # disabled (submit), up to total_attempts otherwise — so a
+                    # no-retry submit timeout doesn't misreport total_attempts.
+                    message=f"{op_name} timed out after {attempt} attempt(s)",
                     operation=path,
                 ) from exc
             last = (status, resp_body)
             is_retry = retryable(status, resp_body)
             if not is_retry and status < 300:
                 if attempt > 1:
+                    # conformance: ignore[L006] fires at most once per call (guarded by attempt>1, then returns), not per-iteration volume — a meaningful success-after-retry event
                     logger.info(
                         "%s succeeded on attempt %d/%d",
                         op_name,
@@ -459,8 +570,9 @@ class AEWorkflowClient:
             f"/automation/api/v1/workflows/{slug}/versions/{version}/publish",
             total_attempts=retries,
             sleep_seconds=retry_sleep_seconds,
-            retryable=lambda s, b: s >= 300
-            or not (isinstance(b, dict) and b.get("status") == "success"),
+            retryable=lambda s, b: (
+                s >= 300 or not (isinstance(b, dict) and b.get("status") == "success")
+            ),
             op_name="publish_version",
         )
         if status < 300 and isinstance(body, dict) and body.get("status") == "success":
@@ -483,18 +595,43 @@ class AEWorkflowClient:
         response shape is not officially documented; we look for
         ``run_id`` under either the top level or a nested ``data`` key.
 
-        Retries on HTTP 5xx and timeout. 4 retries at 5s intervals covers
-        the longest indexing lag we've observed (~15s) without sitting on
-        a hard failure.
+        Unlike the other write endpoints, a submit is **not idempotent**:
+        re-issuing one AE already accepted spawns a duplicate run that AE marks
+        ``Skipped`` and returns as a *fresh* run_id — so a blind retry makes the
+        harness poll a phantom skipped run while the real one runs to
+        completion under a different id. Two guards prevent that:
+
+        * ``retry_network_errors=False`` — a read-timeout is ambiguous (the
+          server may have accepted the submit), so we never re-POST on timeout.
+        * the ``already active`` conflict (AE-WF-409-03, which Heracles masks
+          as a 500 — see :func:`_is_already_active_run`) is treated as terminal,
+          not a retryable 5xx, and surfaced as
+          :class:`AtlanAEWorkflowAlreadyActiveError`.
+
+        Genuine 5xx that are *not* the already-active conflict remain retryable.
         """
         status, body = self._post_with_retry(
             "/api/service/package-workflows?submit=true",
             body=payload,
             total_attempts=retries + 1,
             sleep_seconds=retry_sleep_seconds,
-            retryable=lambda s, b: s >= 500,
+            retryable=lambda s, b: s >= 500 and not _is_already_active_run(s, b),
             op_name="submit_workflow",
+            retry_network_errors=False,
         )
+        if _is_already_active_run(status, body):
+            raise AtlanAEWorkflowAlreadyActiveError(
+                message=(
+                    "AE rejected the submit to "
+                    "POST /api/service/package-workflows?submit=true: a run for "
+                    "this workflow is already active (AE-WF-409-03) — AE returned "
+                    "409 directly, or Heracles masked it as HTTP 500 "
+                    f"(status={status}). A run IS executing, but its run_id is "
+                    "unrecoverable via native-status (keyed by run_id). Not "
+                    "retrying — a retry would spawn a duplicate Skipped run.\n"
+                    f"response={body!r}"
+                ),
+            )
         if status < 300 and isinstance(body, dict):
             data = body.get("data") if isinstance(body.get("data"), dict) else body
             run_id = data.get("run_id") if isinstance(data, dict) else None
@@ -550,6 +687,8 @@ class AEWorkflowClient:
         interval_seconds: int = 10,
         timeout_seconds: int = 600,
         max_transient_failures: int = 5,
+        stall_grace_seconds: int | None = None,
+        stall_task_queue: str = "",
     ) -> DAGRunResult:
         """Poll until the run reaches a terminal top-level status.
 
@@ -565,18 +704,31 @@ class AEWorkflowClient:
         on a single bad response. After ``max_transient_failures``
         consecutive errors we give up and re-raise — that's a
         sustained outage, not a blip, and there's no point waiting.
+
+        Fail-fast stall guard: when ``stall_grace_seconds`` is a positive int
+        (``None`` or any value ``<= 0`` disables it) and NO DAG node has left the
+        not-started set (``Pending`` / ``Scheduled``) within that window, raise
+        :class:`NoWorkerOnTaskQueueError` instead of hanging
+        for the full ``timeout_seconds``. The parent AE workflow runs on the
+        always-on automation-engine queue, so the top-level run flips to
+        ``Running`` even when the connector's ``extract`` node is stuck because
+        no worker polls its task queue — hence the check is on node-level start,
+        not the run status. ``stall_task_queue`` is included in the error
+        message so the operator can see which queue had no worker.
         """
         elapsed = 0
         last_summary: str | None = None
         last_result: DAGRunResult | None = None
         transient_streak = 0
         last_log_elapsed = 0  # seconds since the last info log fired
+        any_node_started = False  # any node reached Running/terminal (stall guard)
         while elapsed < timeout_seconds:
             try:
                 result = self.get_native_status(run_id)
             except AppError as e:
                 transient_streak += 1
                 if transient_streak >= max_transient_failures:
+                    # conformance: ignore[L009] adds caller-invisible loop state (consecutive-failure streak count) not carried by the re-raised exception; not a duplicate of the raise site
                     logger.error(
                         "native-status failed %d times in a row — giving up: %s",
                         transient_streak,
@@ -597,6 +749,14 @@ class AEWorkflowClient:
                 continue
             transient_streak = 0
             last_result = result
+            # Stall guard: a node has "started" once it leaves the not-started
+            # set. Tracked as a latch so a node that starts and finishes between
+            # polls still counts.
+            if any(
+                n.status not in (DAGNodeStatus.PENDING, DAGNodeStatus.SCHEDULED)
+                for n in result.nodes
+            ):
+                any_node_started = True
             summary = " ".join(_node_glyph(n) for n in result.nodes)
             run_glyph = _RUN_GLYPHS.get(result.status.value, "•")
             # Log on every status change. Also emit a heartbeat every
@@ -609,6 +769,7 @@ class AEWorkflowClient:
                 or (elapsed - last_log_elapsed) >= _HEARTBEAT_SECONDS
             )
             if should_log:
+                # conformance: ignore[L006] throttled to status-changes plus a heartbeat every _HEARTBEAT_SECONDS (see comment above), not per-iteration; demoting to DEBUG would hide long-running-stage progress in CI
                 logger.info(
                     "%s AE run [%3ds] %s — %s",
                     run_glyph,
@@ -620,6 +781,34 @@ class AEWorkflowClient:
                 last_log_elapsed = elapsed
             if result.status.is_terminal:
                 return result
+            # Fail fast when nothing has started within the grace window: the
+            # run is live (parent on the AE queue) but no node has begun, which
+            # almost always means no worker is polling the extract task queue.
+            if (
+                # only a positive grace arms the guard; None or any value <= 0
+                # disables it (a negative would otherwise fire on the first poll)
+                stall_grace_seconds is not None
+                and stall_grace_seconds > 0
+                and not any_node_started
+                and elapsed >= stall_grace_seconds
+            ):
+                queue_hint = (
+                    f" task queue '{stall_task_queue}'"
+                    if stall_task_queue
+                    else " the extract task queue"
+                )
+                raise NoWorkerOnTaskQueueError(
+                    message=(
+                        f"No DAG node started within {stall_grace_seconds}s for run "
+                        f"{run_id} (top-level status={result.status.value}). This "
+                        f"almost always means no worker is polling{queue_hint}. "
+                        "Verify the test's agent_spec().agent_name resolves to the "
+                        "queue the deployed worker polls "
+                        "(atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}); a "
+                        "common cause is a second e2e test class using a different "
+                        "agent_name than the single worker the CI job started."
+                    ),
+                )
             time.sleep(interval_seconds)
             elapsed += interval_seconds
         # Timeout: return the last observation so callers can include
@@ -665,9 +854,10 @@ class AEWorkflowClient:
                 request.dsl.size = 0
                 return int((await client.asset.search(request)).count) > 0
         except Exception:
-            logger.exception(
+            logger.error(
                 "Connection search for %s failed (treating as not-yet-visible)",
                 qualified_name,
+                exc_info=True,
             )
             return False
 
@@ -730,6 +920,7 @@ class AEWorkflowClient:
         del max_forbidden_attempts
         while elapsed < timeout_seconds:
             found = self.connection_exists_in_atlas_via_search(qualified_name)
+            # conformance: ignore[L006] short, bounded poll (timeout_seconds) with modest iteration count, not a hot loop; the per-iteration probe result is the primary diagnostic signal when an E2E run fails to converge
             logger.info(
                 "Atlas Connection probe [%ds] qn=%s exists=%s",
                 elapsed,
@@ -812,7 +1003,7 @@ class AEWorkflowClient:
                 request.dsl.size = 0  # cheap response: only .count matters
                 return int((await client.asset.search(request)).count)
         except Exception:
-            logger.exception("Total-asset count under %s failed", prefix)
+            logger.error("Total-asset count under %s failed", prefix, exc_info=True)
             return 0
 
     def count_lineage_under_connection(
@@ -878,8 +1069,11 @@ class AEWorkflowClient:
                 request.dsl.size = 0  # cheap response: we only want .count
                 return int((await client.asset.search(request)).count)
             except Exception:
-                logger.exception(
-                    "FluentSearch for %s under %s failed", type_name, prefix
+                logger.error(
+                    "FluentSearch for %s under %s failed",
+                    type_name,
+                    prefix,
+                    exc_info=True,
                 )
                 return 0
 
@@ -894,6 +1088,87 @@ class AEWorkflowClient:
         async with self._build_async_atlan_client() as client:
             return list(
                 await asyncio.gather(*(_count_one(client, tn) for tn in type_names))
+            )
+
+    def sample_asset_qualified_names_under_connection(
+        self,
+        connection_qualified_name: str,
+        *,
+        type_names: tuple[str, ...],
+        per_type: int = 3,
+    ) -> dict[str, list[str]]:
+        """Sample up to *per_type* qualifiedNames per type under the connection.
+
+        Backs the location/hierarchy assertion: the harness checks the *shape*
+        (nesting depth) of a few landed assets per type, not just their counts.
+        Returns ``{typeName: [qualifiedName, ...]}`` with an empty list for
+        types that produced no hits (or on search error).
+        """
+        if not type_names:
+            return {}
+        prefix = f"{connection_qualified_name}/"
+        results = asyncio.run(self._sample_qns_async(prefix, type_names, per_type))
+        return dict(zip(type_names, results))
+
+    async def _sample_qns_async(
+        self, prefix: str, type_names: tuple[str, ...], per_type: int
+    ) -> list[list[str]]:
+        """Parallel per-type searches returning a few qualifiedNames each.
+
+        Mirrors :meth:`_search_counts_async` (same shared async client /
+        connection pool, same OAuth-vs-API-key identity handling) but requests a
+        small page and reads ``qualifiedName`` off the hits instead of ``.count``.
+        """
+        from pyatlan.model.assets import Asset  # noqa: PLC0415
+        from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
+
+        # connectionQualifiedName is the canonical "which connection owns this
+        # asset" field the Atlan UI filters on, and is required to be populated
+        # on every asset — so match on it directly (not just the QN path prefix)
+        # to sample the assets exactly as the product surfaces them.
+        connection_qn = prefix.rstrip("/")
+
+        async def _sample_one(client: "AsyncAtlanClient", type_name: str) -> list[str]:
+            try:
+                request = (
+                    FluentSearch()
+                    .where(Asset.QUALIFIED_NAME.startswith(prefix))
+                    .where(Asset.CONNECTION_QUALIFIED_NAME.eq(connection_qn))
+                    .where(Asset.TYPE_NAME.eq(type_name))
+                    .include_on_results(Asset.QUALIFIED_NAME)
+                    .include_on_results(Asset.CONNECTION_QUALIFIED_NAME)
+                ).to_request()
+                request.dsl.size = per_type
+                results = await client.asset.search(request)
+                page = results.current_page() or []
+                # Asset.qualified_name is str | None; the `if qn` narrows it to
+                # str so the return stays list[str], and the len cap enforces
+                # per_type without a trailing slice.
+                qns: list[str] = []
+                for asset in page:
+                    qn = asset.qualified_name
+                    if qn:
+                        qns.append(qn)
+                    if len(qns) >= per_type:
+                        break
+                return qns
+            except Exception:
+                # Fails OPEN: an empty result makes the location check skip this
+                # type (a silent pass), unlike the count path where 0 can trip a
+                # floor. Hence the location assertion must be validated against a
+                # real tenant before adopters rely on it. Logged at exception
+                # level so the fault is at least visible in CI output.
+                logger.error(
+                    "qualifiedName sample for %s under %s failed",
+                    type_name,
+                    prefix,
+                    exc_info=True,
+                )
+                return []
+
+        async with self._build_async_atlan_client() as client:
+            return list(
+                await asyncio.gather(*(_sample_one(client, tn) for tn in type_names))
             )
 
 

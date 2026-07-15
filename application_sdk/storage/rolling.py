@@ -468,6 +468,7 @@ class RollingFileWriter(Generic[T]):
             if inspect.isawaitable(result):
                 await result
         except Exception:
+            # conformance: ignore[L009] flush failure log carries chunk_index/path and buffered batch/byte/record counts not present on the re-raised exception
             logger.error(
                 "RollingFileWriter flush failed: chunk_index=%d chunk_path=%s buffered_batches=%d buffered_bytes=%d buffered_records=%d",
                 self._chunk_index,

@@ -1,0 +1,69 @@
+# Auto-approve + auto-merge for vuln-triage PRs.
+#
+# Once required CI is green on a vuln-triage PR, post an atlan-ci code-owner
+# approval and put it on GitHub auto-merge — but ONLY for the two safe shapes
+# the rover produces (an allowlist-only PR, or a dependency-bump-only PR),
+# carrying the `vuln-auto-merge` label, from a trusted rover identity.
+#
+# ALL of the gating logic — author check, label check, race guard, and the
+# strict changed-files path-allowlist that is the real safety boundary — lives
+# in .github/scripts/vuln_auto_merge_gate.py (unit-tested), per
+# docs/standards/ci.md. This workflow only wires the trigger and runs it.
+#
+# Why atlan-ci: atlan-ci is a CODEOWNER (via the `*` rule in .github/CODEOWNERS,
+# which already covers .security/) and a bypass actor on the main ruleset, so its
+# approval satisfies require_code_owner_review and `--auto` merges once checks pass.
+# GitHub auto-merge enforces "merge only when required checks pass", so a red
+# PR is never merged here.
+
+name: Vuln triage — auto-merge allowlist/bump PRs
+
+on:
+  workflow_run:
+    # The workflows that produce this repo's required status checks (kept in
+    # sync with renovate-auto-approve.yml). We re-evaluate when any completes.
+    workflows: [SDK Gate, PR Checks, Conformance, Capability Manifest Check, CodeQL Advanced]
+    types: [completed]
+    # Only the rover's branch prefixes — avoids spending a runner on every
+    # workflow completion across the repo. Branch naming that drifts simply
+    # fails closed (no auto-merge), which is the safe direction.
+    branches:
+      - 'chore/allowlist-**'
+      - 'fix/bump-**'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to evaluate (manual testing / re-approval)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    # Skip failed/cancelled upstream runs; workflow_dispatch always runs.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Serialize runs for the same SHA so the idempotency guard is reliable.
+    concurrency:
+      group: vuln-auto-merge-${{ github.event.workflow_run.head_sha || inputs.pr_number }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout (for the gate script)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Evaluate + approve + auto-merge
+        env:
+          # atlan-ci identity: its approval satisfies code-owner review and it
+          # is a main-ruleset bypass actor (see check-dapr-version.yaml).
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          DISPATCH_PR: ${{ inputs.pr_number }}
+        run: python3 .github/scripts/vuln_auto_merge_gate.py

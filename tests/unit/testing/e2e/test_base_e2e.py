@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -19,7 +20,7 @@ from application_sdk.testing.e2e._errors import (
     ManifestFileNotFoundError,
 )
 from application_sdk.testing.e2e.base import BaseE2ETest
-from application_sdk.testing.e2e.payload import RunMode
+from application_sdk.testing.e2e.payload import AgentSpec, RunMode
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 
 
@@ -272,3 +273,322 @@ class TestSeedDagFromManifest:
         self.harness.manifest_path = str(_write_manifest(tmp_path, dag))  # type: ignore[attr-defined]
         result = self.harness._seed_dag_from_manifest("atlan-openapi-agent-1")
         assert set(result.keys()) == {"extract", "publish"}
+
+
+# ---------------------------------------------------------------------------
+# setup_method — two-store / RunMode.DIRECT warning
+# ---------------------------------------------------------------------------
+
+
+class _AgentModeE2ETest(_ConcreteE2ETest):
+    """Same as _ConcreteE2ETest but RunMode.AGENT — two-store is meaningful here."""
+
+    mode = RunMode.AGENT
+    # Skips the $admin-role AtlanClient network lookup in setup_method, which
+    # is irrelevant to this test and would otherwise also log a (harmless)
+    # warning against the fake tenant URL, muddying the assertion.
+    connection_admin_roles = ("test-admin-role-guid",)
+
+
+class TestTwoStoreDirectModeWarning:
+    """ADR-0014 two-store CI wiring only has an effect under RunMode.AGENT —
+    see the comment in BaseE2ETest.setup_method(). These tests exercise the
+    warning-vs-silent behavior without a real tenant (the $admin-role lookup
+    network call fails against the fake URL and is caught + logged
+    separately by setup_method(), so admin-role attrs are set here to keep
+    each test isolated to the one warning under test).
+    """
+
+    def _bootstrap_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
+        monkeypatch.setenv("ATLAN_API_KEY", "test-token")
+        monkeypatch.setenv("GITHUB_RUN_ID", "9999999")
+
+    def test_warns_when_two_store_enabled_and_mode_is_direct(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._bootstrap_env(monkeypatch)
+        monkeypatch.setenv("TWO_STORE", "true")
+        mock_logger = MagicMock()
+        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+
+        class _DirectModeTest(_ConcreteE2ETest):
+            connection_admin_roles = ("test-admin-role-guid",)
+            # Isolate this test to the two-store warning (disable the stall-guard
+            # DIRECT warning, covered separately below).
+            ae_stall_grace_seconds = 0
+
+        _DirectModeTest().setup_method()
+
+        assert mock_logger.warning.called
+        message = mock_logger.warning.call_args[0][0]
+        assert "RunMode.DIRECT" in message
+
+    def test_no_warning_when_mode_is_agent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._bootstrap_env(monkeypatch)
+        monkeypatch.setenv("TWO_STORE", "true")
+        mock_logger = MagicMock()
+        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+
+        _AgentModeE2ETest().setup_method()
+
+        mock_logger.warning.assert_not_called()
+
+    def test_no_warning_when_two_store_not_enabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._bootstrap_env(monkeypatch)
+        monkeypatch.delenv("TWO_STORE", raising=False)
+        mock_logger = MagicMock()
+        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+
+        class _DirectModeTest(_ConcreteE2ETest):
+            connection_admin_roles = ("test-admin-role-guid",)
+            # Disable the stall-guard DIRECT warning so this test isolates the
+            # two-store path (covered separately below).
+            ae_stall_grace_seconds = 0
+
+        _DirectModeTest().setup_method()
+
+        mock_logger.warning.assert_not_called()
+
+
+class TestStallGuardDirectModeWarning:
+    """setup_method nudges toward the =0 opt-out when the stall guard is armed
+    under RunMode.DIRECT, where a KEDA-idle pod can cold-start past the grace.
+    """
+
+    def _bootstrap_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
+        monkeypatch.setenv("ATLAN_API_KEY", "test-token")
+        monkeypatch.setenv("GITHUB_RUN_ID", "9999999")
+        monkeypatch.delenv("TWO_STORE", raising=False)
+
+    def _warn_messages(self, mock_logger: MagicMock) -> list[str]:
+        return [c.args[0] for c in mock_logger.warning.call_args_list]
+
+    def test_warns_when_direct_and_guard_armed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._bootstrap_env(monkeypatch)
+        mock_logger = MagicMock()
+        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+
+        class _DirectGuarded(_ConcreteE2ETest):  # DIRECT + default grace 180
+            connection_admin_roles = ("test-admin-role-guid",)
+
+        _DirectGuarded().setup_method()
+
+        assert any(
+            "ae_stall_grace_seconds" in m for m in self._warn_messages(mock_logger)
+        )
+
+    def test_no_warning_when_guard_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._bootstrap_env(monkeypatch)
+        mock_logger = MagicMock()
+        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+
+        class _DirectUnguarded(_ConcreteE2ETest):
+            connection_admin_roles = ("test-admin-role-guid",)
+            ae_stall_grace_seconds = 0
+
+        _DirectUnguarded().setup_method()
+
+        mock_logger.warning.assert_not_called()
+
+    def test_no_warning_when_mode_is_agent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._bootstrap_env(monkeypatch)
+        mock_logger = MagicMock()
+        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+
+        # AGENT + default grace 180 → the stall guard is fine (dedicated worker).
+        _AgentModeE2ETest().setup_method()
+
+        assert not any(
+            "ae_stall_grace_seconds" in m for m in self._warn_messages(mock_logger)
+        )
+
+
+# ---------------------------------------------------------------------------
+# _extract_task_queue
+# ---------------------------------------------------------------------------
+
+
+class TestExtractTaskQueue:
+    """The extract task queue is the single source of truth shared by the seed
+    DAG and the stall-guard diagnostic (must match the deployed worker's queue).
+    """
+
+    def test_agent_mode_uses_agent_name(self) -> None:
+        class _AgentModeTest(_ConcreteE2ETest):
+            mode = RunMode.AGENT
+
+            def agent_spec(self) -> AgentSpec:
+                return AgentSpec(agent_name="openapi-e2e-full-ci-42")
+
+        assert _AgentModeTest()._extract_task_queue() == "atlan-openapi-e2e-full-ci-42"
+
+    def test_direct_mode_falls_back_to_connector_default(self) -> None:
+        # _ConcreteE2ETest is RunMode.DIRECT → agent_spec() is None.
+        assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-default"
+
+
+class TestAgentSpecDerivation:
+    """AGENT mode derives the agent identity — and therefore the extract queue —
+    from the worker's ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME env, so a
+    per-leg ATLAN_DEPLOYMENT_NAME (set by the CI action) isolates each matrix
+    leg's queue with no per-connector hard-coding. Mirrors
+    application_sdk.main._derive_task_queue's atlan-{app}-{deployment} shape.
+    """
+
+    def test_derives_agent_name_and_queue_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42-connection-create")
+
+        class _T(_ConcreteE2ETest):
+            mode = RunMode.AGENT
+
+        spec = _T().agent_spec()
+        assert spec is not None
+        assert spec.agent_name == "openapi-e2e-full-ci-42-connection-create"
+        # The extract node lands on exactly the worker's atlan-{app}-{deployment}
+        # queue (see _derive_task_queue), byte-for-byte.
+        assert (
+            _T()._extract_task_queue()
+            == "atlan-openapi-e2e-full-ci-42-connection-create"
+        )
+
+    def test_distinct_deployment_yields_distinct_queues(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
+
+        class _T(_ConcreteE2ETest):
+            mode = RunMode.AGENT
+
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42-connection-create")
+        create_q = _T()._extract_task_queue()
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42-connection-reuse")
+        reuse_q = _T()._extract_task_queue()
+        assert create_q != reuse_q
+
+    def test_subclass_override_still_wins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42")
+
+        class _T(_ConcreteE2ETest):
+            mode = RunMode.AGENT
+
+            def agent_spec(self) -> AgentSpec:
+                return AgentSpec(agent_name="pinned-name")
+
+        assert _T().agent_spec().agent_name == "pinned-name"
+
+    # The fallback branch fires under three env conditions — deployment-only,
+    # application-only, and both-absent — all resolving to the same run-id-keyed
+    # name. Each is asserted separately so a future split of the branch can't
+    # silently regress one. run_id is normally set by setup_method() from
+    # GITHUB_RUN_ID; these minimal instances deliberately bypass setup_method
+    # (see _ConcreteE2ETest), so they pin run_id as a class attribute rather than
+    # mutating the instance post-construction. run_id must be an int — production
+    # sets it via int(GITHUB_RUN_ID) (setup_method), so 42 matches that type.
+    class _AgentModeFixed(_ConcreteE2ETest):
+        mode = RunMode.AGENT
+        run_id = 42
+
+    def test_agent_mode_without_deployment_env_falls_back_to_run_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # APP set, DEPLOYMENT absent (a local run without the CI action) → the
+        # two-var shape isn't derivable, so fall back to the run-id-keyed name
+        # {connector}-{connection_name_prefix}-{run_id} rather than raising. This
+        # is what lets connectors drop their agent_spec override entirely (T017).
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+
+        spec = self._AgentModeFixed().agent_spec()
+        assert spec is not None
+        assert spec.agent_name == "openapi-e2e-full-ci-42"
+
+    def test_agent_mode_without_application_env_falls_back_to_run_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Symmetric branch: DEPLOYMENT set, APP absent → still not the two-var
+        # shape, so the same run-id fallback applies.
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42-connection-create")
+
+        spec = self._AgentModeFixed().agent_spec()
+        assert spec is not None
+        assert spec.agent_name == "openapi-e2e-full-ci-42"
+
+    def test_agent_mode_without_any_env_falls_back_to_run_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Both vars absent — a fully local run with no CI context at all. The
+        # third and last trigger of the fallback branch; asserted explicitly so
+        # the branch's coverage is complete, not just the two one-var cases.
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+
+        spec = self._AgentModeFixed().agent_spec()
+        assert spec is not None
+        assert spec.agent_name == "openapi-e2e-full-ci-42"
+
+
+class TestStallGuardDefault:
+    """The stall guard is on by default (test-harness only), and a suite that
+    runs against shared / autoscaled infra can disable it by setting 0.
+    """
+
+    def test_enabled_by_default(self) -> None:
+        assert _ConcreteE2ETest.ae_stall_grace_seconds == 180
+
+    def test_subclass_can_opt_out(self) -> None:
+        class _OptedOut(_ConcreteE2ETest):
+            ae_stall_grace_seconds = 0
+
+        assert _OptedOut.ae_stall_grace_seconds == 0
+
+
+class TestConnectionQnUniqueness:
+    """The connection QN must be unique per test instance so parallel matrix
+    legs (and overlapping same-ref runs) don't collide on one connection."""
+
+    def _bootstrap_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
+        monkeypatch.setenv("ATLAN_API_KEY", "test-token")
+        monkeypatch.setenv("GITHUB_RUN_ID", "9999999")
+
+    def test_same_second_instances_get_distinct_numeric_qns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._bootstrap_env(monkeypatch)
+        # Freeze the clock so both instances share an epoch — the exact
+        # same-second race two parallel matrix legs can hit. The random suffix
+        # must still make them distinct.
+        monkeypatch.setattr("time.time", lambda: 1783979480.0)
+
+        class _T(_ConcreteE2ETest):
+            connection_admin_roles = ("test-admin-role-guid",)  # skip net lookup
+
+        a = _T()
+        a.setup_method()
+        b = _T()
+        b.setup_method()
+
+        assert a.connection_qualified_name != b.connection_qualified_name
+        for qn in (a.connection_qualified_name, b.connection_qualified_name):
+            assert qn.startswith("default/openapi/")
+            # Pure-numeric trailing segment so Atlas never rejects the name.
+            assert qn.rsplit("/", 1)[-1].isdigit()

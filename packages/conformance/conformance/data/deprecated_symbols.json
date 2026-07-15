@@ -147,7 +147,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "ParquetFileReader is deprecated and will be removed in v4.0. Migrate now: declare the upstream artifact as a FileReference field on your task's typed Input \u2014 the SDK's activity interceptor auto-materialises it to a local path before the task runs (with sha256 sidecar verification + parallel transfers), then read it directly with pandas.read_parquet / daft.read_parquet. See docs/agents/coding-standards.md.",
+      "message": "ParquetFileReader is deprecated and will be removed in v4.0. Migrate now: declare the upstream artifact as a FileReference field on your task's typed Input \u2014 the SDK's activity interceptor auto-materialises it to a local path before the task runs (with sha256 sidecar verification + parallel transfers), then read it directly with pandas.read_parquet. See docs/agents/coding-standards.md.",
       "migration_target": true,
       "module": "application_sdk.storage.formats.parquet",
       "removal_version": "4.0",
@@ -174,10 +174,10 @@
     {
       "kind": "method",
       "marker_via": "decorator",
-      "message": "upload_to_atlan is deprecated and will be removed in the next major SDK release. Migrate to App.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED)). See docs/concepts/file-reference.md for migration guidance.",
+      "message": "upload_to_atlan is deprecated and will be removed in v4.0.0. Migrate to App.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED)). See docs/concepts/file-reference.md for migration guidance.",
       "migration_target": true,
       "module": "application_sdk.templates.base_metadata_extractor",
-      "removal_version": null,
+      "removal_version": "4.0.0",
       "symbol": "upload_to_atlan"
     },
     {
@@ -206,6 +206,33 @@
       "module": "application_sdk.templates.sql_query_extractor",
       "removal_version": "4.0.0",
       "symbol": "SqlQueryExtractor"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "TransformerInterface is deprecated; use the connector-side asset-mapper pattern (typed records \u2192 map_<entity>() \u2192 pyatlan_v9 Asset) instead \u2014 will be removed in v4.0. See docs/upgrade-guide-v3.md.",
+      "migration_target": true,
+      "module": "application_sdk.transformers",
+      "removal_version": "4.0",
+      "symbol": "TransformerInterface"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "AtlasTransformer is deprecated; use the connector-side asset-mapper pattern (typed records \u2192 map_<entity>() \u2192 pyatlan_v9 Asset) instead \u2014 will be removed in v4.0. See docs/upgrade-guide-v3.md.",
+      "migration_target": true,
+      "module": "application_sdk.transformers.atlas",
+      "removal_version": "4.0",
+      "symbol": "AtlasTransformer"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "QueryBasedTransformer is deprecated; use the connector-side asset-mapper pattern (typed records \u2192 map_<entity>() \u2192 pyatlan_v9 Asset) instead \u2014 will be removed in v4.0. See docs/upgrade-guide-v3.md.",
+      "migration_target": true,
+      "module": "application_sdk.transformers.query",
+      "removal_version": "4.0",
+      "symbol": "QueryBasedTransformer"
     }
   ]
 }

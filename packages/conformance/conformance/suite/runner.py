@@ -22,19 +22,37 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import conformance.suite.checks.entrypoint as entrypoint
 import conformance.suite.checks.logging as logging_checks
+import conformance.suite.checks.sdr as sdr_checks
+import conformance.suite.checks.sdr_test_checks as sdr_test_checks
 from conformance.suite.checks import (
     actions_pinning,
+    app_name_alignment,
     bootstrap_drift,
+    client_seam,
+    coverage_config,
     dependency_conformance,
     deprecation,
+    determinism,
+    dev_entrypoint,
     dockerfile_conformance,
+    e2e_agent_spec,
+    e2e_deployment_name,
+    entrypoint_alignment,
     error_handling,
+    generated_freshness,
     gitignore_entries,
     integration_marking,
+    legacy_contract,
+    manifest_contract,
     optimizations,
     orchestration,
+    preflight,
     prescriptions,
+    security,
+    test_quality,
+    test_structure,
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
@@ -71,6 +89,11 @@ _CHECKS: list[CheckRegistration] = [
         scan_path=bootstrap_drift.scan_path,
     ),
     CheckRegistration(
+        series=client_seam.SERIES,
+        discover=client_seam.discover,
+        scan_path=client_seam.scan_path,
+    ),
+    CheckRegistration(
         series=error_handling.SERIES,
         discover=error_handling.discover,
         scan_path=error_handling.scan_path,
@@ -104,6 +127,16 @@ _CHECKS: list[CheckRegistration] = [
         scan_all=orchestration.scan_all,
     ),
     CheckRegistration(
+        series=determinism.SERIES,
+        discover=determinism.discover,
+        scan_path=determinism.scan_path,
+    ),
+    CheckRegistration(
+        series=entrypoint.SERIES,
+        discover=entrypoint.discover,
+        scan_path=entrypoint.scan_path,
+    ),
+    CheckRegistration(
         series=logging_checks.SERIES,
         discover=logging_checks.discover,
         scan_path=logging_checks.scan_path,
@@ -115,6 +148,32 @@ _CHECKS: list[CheckRegistration] = [
         scan_path=integration_marking.scan_path,
     ),
     CheckRegistration(
+        series=test_quality.SERIES,
+        discover=test_quality.discover,
+        scan_path=test_quality.scan_path,
+    ),
+    CheckRegistration(
+        series=test_structure.SERIES,
+        discover=test_structure.discover,
+        scan_path=test_structure.scan_path,
+        scan_all=test_structure.scan_all,
+    ),
+    CheckRegistration(
+        series=coverage_config.SERIES,
+        discover=coverage_config.discover,
+        scan_path=coverage_config.scan_path,
+    ),
+    CheckRegistration(
+        series=e2e_deployment_name.SERIES,
+        discover=e2e_deployment_name.discover,
+        scan_path=e2e_deployment_name.scan_path,
+    ),
+    CheckRegistration(
+        series=e2e_agent_spec.SERIES,
+        discover=e2e_agent_spec.discover,
+        scan_path=e2e_agent_spec.scan_path,
+    ),
+    CheckRegistration(
         series=dockerfile_conformance.SERIES,
         discover=dockerfile_conformance.discover,
         scan_path=dockerfile_conformance.scan_path,
@@ -124,6 +183,63 @@ _CHECKS: list[CheckRegistration] = [
         discover=deprecation.discover,
         scan_path=deprecation.scan_path,
         scan_all=deprecation.scan_all,
+    ),
+    CheckRegistration(
+        series=entrypoint_alignment.SERIES,
+        discover=entrypoint_alignment.discover,
+        scan_path=entrypoint_alignment.scan_path,
+        scan_all=entrypoint_alignment.scan_all,
+    ),
+    CheckRegistration(
+        series=app_name_alignment.SERIES,
+        discover=app_name_alignment.discover,
+        scan_path=app_name_alignment.scan_path,
+        scan_all=app_name_alignment.scan_all,
+    ),
+    CheckRegistration(
+        series=preflight.SERIES,
+        discover=preflight.discover,
+        scan_path=preflight.scan_path,
+        scan_all=preflight.scan_all,
+    ),
+    CheckRegistration(
+        series=legacy_contract.SERIES,
+        discover=legacy_contract.discover,
+        scan_path=legacy_contract.scan_path,
+    ),
+    CheckRegistration(
+        series=generated_freshness.SERIES,
+        discover=generated_freshness.discover,
+        scan_path=generated_freshness.scan_path,
+        scan_all=generated_freshness.scan_all,
+    ),
+    CheckRegistration(
+        series=manifest_contract.SERIES,
+        discover=manifest_contract.discover,
+        scan_path=manifest_contract.scan_path,
+        scan_all=manifest_contract.scan_all,
+    ),
+    CheckRegistration(
+        series=sdr_checks.SERIES,
+        discover=sdr_checks.discover,
+        scan_path=sdr_checks.scan_path,
+        scan_all=sdr_checks.scan_all,
+    ),
+    CheckRegistration(
+        series=sdr_test_checks.SERIES,
+        discover=sdr_test_checks.discover,
+        scan_path=sdr_test_checks.scan_path,
+        scan_all=sdr_test_checks.scan_all,
+    ),
+    CheckRegistration(
+        series=dev_entrypoint.SERIES,
+        discover=dev_entrypoint.discover,
+        scan_path=dev_entrypoint.scan_path,
+    ),
+    CheckRegistration(
+        series=security.SERIES,
+        discover=security.discover,
+        scan_path=security.scan_path,
     ),
 ]
 
@@ -207,6 +323,8 @@ def _emit_github_summary_annotations(
     findings: list[Finding],
     series: str | None,
     excluded_prefixes: tuple[str, ...] = (),
+    *,
+    exit_zero: bool = False,
 ) -> None:
     """Emit at most four summary annotations to the GitHub Actions log.
 
@@ -218,6 +336,10 @@ def _emit_github_summary_annotations(
 
     A fourth ``::notice`` is emitted when paths were excluded from scanning,
     so the reduced scope is always visible alongside the finding counts.
+
+    When ``exit_zero=True`` (soft-enforcement mode), blocking violations are
+    downgraded from ``::error`` to ``::warning`` so the annotation severity
+    matches the job exit code — preventing red error banners on a green job.
 
     Emits nothing when there are no findings and no exclusions.
     """
@@ -247,8 +369,10 @@ def _emit_github_summary_annotations(
         msg = _pct(
             f"{n} blocking violation{'s' if n != 1 else ''} found by {label}. {detail}"
         )
+        # Soft mode: job exits 0, so downgrade annotation to ::warning to match.
+        level = "warning" if exit_zero else "error"
         print(
-            f"::error title=Conformance: {n} blocking violation{'s' if n != 1 else ''} ({label})::{msg}"
+            f"::{level} title=Conformance: {n} blocking violation{'s' if n != 1 else ''} ({label})::{msg}"
         )
 
     if warns:
@@ -310,6 +434,18 @@ def main(argv: list[str] | None = None) -> int:
             "if undetectable, every rule runs."
         ),
     )
+    parser.add_argument(
+        "--exit-zero",
+        action="store_true",
+        default=False,
+        help=(
+            "Always exit 0, even when blocking violations are found. "
+            "The SARIF invocation.exitCode still reflects the real result so "
+            "Security tab tracking is unaffected. "
+            "Use during soft-enforcement rollouts where violations should be "
+            "observed and tracked but must not block merges."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.series:
@@ -368,7 +504,9 @@ def main(argv: list[str] | None = None) -> int:
     _print_human_summary(all_findings, args.series, excluded_prefixes)
 
     if os.getenv("GITHUB_ACTIONS") == "true":
-        _emit_github_summary_annotations(all_findings, args.series, excluded_prefixes)
+        _emit_github_summary_annotations(
+            all_findings, args.series, excluded_prefixes, exit_zero=args.exit_zero
+        )
 
     report = findings_to_report(
         all_findings,
@@ -382,7 +520,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(payload)
 
-    return report.runs[0].invocations[0].exit_code  # type: ignore[return-value]
+    sarif_exit_code: int = report.runs[0].invocations[0].exit_code  # type: ignore[assignment]
+    return 0 if args.exit_zero else sarif_exit_code
 
 
 if __name__ == "__main__":

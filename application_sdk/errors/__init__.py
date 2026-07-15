@@ -12,7 +12,8 @@ Canonical API (v3.x+)::
         NotFoundError, AlreadyExistsError,
         InvalidInputError, PreconditionError,
         RateLimitedError, UnimplementedError,
-        DependencyUnavailableError, ResourceExhaustedError,
+        DependencyUnavailableError, SourceUnavailableError,
+        ResourceExhaustedError,
         DataIntegrityError, CancelledError, InternalError,
     )
 
@@ -24,7 +25,12 @@ Legacy constants (v3.x — deprecated, removed in v4.0)::
 from dataclasses import dataclass
 
 # ── New canonical hierarchy ──────────────────────────────────────────────────
-from application_sdk.errors.base import AppError, redact_secrets, sanitize_cause_repr
+from application_sdk.errors.base import (
+    AppError,
+    redact_secrets,
+    safe_traceback,
+    sanitize_cause_repr,
+)
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
     WORKER_EVICTED_TYPE,
@@ -33,6 +39,7 @@ from application_sdk.errors.leaves import (
     AppTimeoutError,
     AuthError,
     CancelledError,
+    ColdStartRaceError,
     DataIntegrityError,
     DependencyUnavailableError,
     InternalError,
@@ -41,6 +48,7 @@ from application_sdk.errors.leaves import (
     PreconditionError,
     RateLimitedError,
     ResourceExhaustedError,
+    SourceUnavailableError,
     UnimplementedError,
 )
 from application_sdk.errors.wire import FailureDetails
@@ -129,8 +137,10 @@ __all__ = [
     "AppTimeoutError",
     "AuthError",
     "CancelledError",
+    "ColdStartRaceError",
     "DataIntegrityError",
     "DependencyUnavailableError",
+    "SourceUnavailableError",
     "InternalError",
     "InvalidInputError",
     "NotFoundError",
@@ -173,5 +183,6 @@ __all__ = [
     "EVENT_BUS",
     "SEGMENT_ERROR",
     "redact_secrets",
+    "safe_traceback",
     "sanitize_cause_repr",
 ]

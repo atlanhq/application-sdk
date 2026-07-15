@@ -42,12 +42,12 @@ Credential format (standard ``csa-connectors-objectstore``)::
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from pathlib import Path
 from typing import Any
 
 import obstore as obs
+import orjson
 from obstore.store import ObjectStore
 
 from application_sdk.storage.errors import (
@@ -61,7 +61,7 @@ from application_sdk.storage.ops import (
     _is_azure_container_not_found,
     _list_items,
     _safe_join_under,
-    download_file,
+    download_file_chunked,
 )
 
 # Lazy import: direct get_logger() at module load would create a circular
@@ -137,8 +137,8 @@ class CloudStore:
             extra = {}
         if isinstance(extra, str):
             try:
-                extra = json.loads(extra) if extra else {}
-            except json.JSONDecodeError as exc:
+                extra = orjson.loads(extra) if extra else {}
+            except orjson.JSONDecodeError as exc:
                 raise StorageConfigError(
                     f"Invalid JSON in 'extra' field: {exc}"
                 ) from exc
@@ -239,9 +239,14 @@ class CloudStore:
         )
 
     async def _download_single(self, key: str, output: Path) -> list[Path]:
-        """Download a single file by streaming to disk without buffering."""
+        """Download a single file, chunking large objects into parallel range GETs."""
         local_path = output / Path(key).name
-        await download_file(key, local_path, store=self._store, normalize=False)
+        # Chunked path streams small objects in a single GET and fetches large
+        # ones via bounded parallel range GETs (each with its own timeout /
+        # retry budget) so a slow-egress GB-class file doesn't die on one long
+        # request. No hash — external stores skip the integrity sidecar
+        # protocol. (BLDX-1513)
+        await download_file_chunked(key, local_path, store=self._store, normalize=False)
         _log().info("Downloaded key=%s local_path=%s", key, str(local_path))
         return [local_path]
 
@@ -256,9 +261,9 @@ class CloudStore:
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""
         _log().info("Listing objects under prefix=%s", list_prefix)
 
-        keys = await self._list_keys(list_prefix, suffix_filter)
+        items = await self._list_keys_with_meta(list_prefix, suffix_filter)
 
-        if not keys:
+        if not items:
             raise StorageError(
                 f"No files found under prefix: {list_prefix!r}"
                 + (f" (filter: {suffix_filter})" if suffix_filter else "")
@@ -266,21 +271,34 @@ class CloudStore:
 
         sem = asyncio.Semaphore(max_concurrency)
 
-        async def _dl(obj_key: str) -> Path:
+        async def _dl(obj_key: str, size: int, etag: str | None) -> Path:
             async with sem:
+                # No `list_prefix and` guard here: when list_prefix == "" (a
+                # whole-bucket download), startswith("") is always True, so the
+                # full key is kept instead of falling through to the basename-only
+                # branch below, which would clobber same-named files from
+                # different subdirectories onto one path.
                 rel = (
                     obj_key[len(list_prefix) :]
-                    if list_prefix and obj_key.startswith(list_prefix)
+                    if obj_key.startswith(list_prefix)
                     else Path(obj_key).name
                 )
                 # Reject keys whose resolved path escapes output (e.g. via ".." segments).
                 local_path = _safe_join_under(output, rel)
-                await download_file(
-                    obj_key, local_path, store=self._store, normalize=False
+                # Pass the listing's size + etag so large objects chunk (with
+                # version-pinned range GETs) and small ones stream — no per-file
+                # HEAD (metadata already known). (BLDX-1513 / BLDX-1523)
+                await download_file_chunked(
+                    obj_key,
+                    local_path,
+                    store=self._store,
+                    normalize=False,
+                    file_size=size,
+                    etag=etag,
                 )
                 return local_path
 
-        results = await asyncio.gather(*[_dl(k) for k in keys])
+        results = await asyncio.gather(*[_dl(k, s, e) for k, s, e in items])
         downloaded = list(results)
         _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
         return downloaded
@@ -294,7 +312,27 @@ class CloudStore:
             items = await _list_items(self._store, list_prefix or None)
             return sorted(
                 path
-                for path, _ in items
+                for path, _, _ in items
+                if not lfilter or any(path.lower().endswith(s) for s in lfilter)
+            )
+        # conformance: ignore[E004] re-raise only; wraps obstore listing failure into StorageError
+        except Exception as exc:
+            raise StorageError(
+                f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
+            ) from exc
+
+    async def _list_keys_with_meta(
+        self, list_prefix: str, suffix_filter: set[str] | None = None
+    ) -> list[tuple[str, int, str | None]]:
+        """Like :meth:`_list_keys` but return ``(key, size_bytes, e_tag)``
+        tuples so a prefix download can decide per-file whether to chunk —
+        and version-pin the range GETs — without a HEAD."""
+        lfilter = {s.lower() for s in suffix_filter} if suffix_filter else None
+        try:
+            items = await _list_items(self._store, list_prefix or None)
+            return sorted(
+                (path, size, etag)
+                for path, size, etag in items
                 if not lfilter or any(path.lower().endswith(s) for s in lfilter)
             )
         # conformance: ignore[E004] re-raise only; wraps obstore listing failure into StorageError
@@ -496,7 +534,9 @@ def _create_s3_store(
             # two S3 auth paths are distinguishable in CloudTrail AssumeRole logs
             # (and preserves CloudStore's historical session name).
             session_name=extra.get("aws_role_session_name") or "cloud-store-session",
-            region=region or None,
+            # No region: scoping the STS session to the bucket's region breaks
+            # AssumeRole for opt-in regions (e.g. me-central-1); region belongs
+            # on the S3 store's own config below, not the STS call.
             base_access_key=base_access_key,
             base_secret_key=base_secret_key,
             base_session_token=(creds.get("token") or None)

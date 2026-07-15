@@ -7,17 +7,28 @@ transient_streak budget works correctly.
 
 from __future__ import annotations
 
+import io
+import urllib.error
 from unittest.mock import patch
 
 import pytest
 
-from application_sdk.testing.e2e._errors import AtlanApiHttpError, AtlanApiTimeoutError
+from application_sdk.testing.e2e._errors import (
+    AtlanAEWorkflowAlreadyActiveError,
+    AtlanApiHttpError,
+    AtlanApiTimeoutError,
+    NoWorkerOnTaskQueueError,
+)
 from application_sdk.testing.e2e.client import (
+    _REQUEST_MAX_ATTEMPTS,
     AEWorkflowClient,
     DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,
     DAGRunStatus,
+    _is_already_active_run,
+    _safe_node_status,
+    _safe_run_status,
 )
 
 _RUN_ID = "test-run-123"
@@ -52,6 +63,186 @@ def _http_error() -> AtlanApiHttpError:
         message="AE-COMMON-500-01: An unexpected error occurred",
         target="GET /api/service/package-workflows/native-status HTTP 500",
     )
+
+
+def _result(run_status: DAGRunStatus, node_status: DAGNodeStatus) -> DAGRunResult:
+    return DAGRunResult(
+        run_id=_RUN_ID,
+        workflow_slug="slug",
+        status=run_status,
+        nodes=[
+            DAGNodeResult(
+                name="extract",
+                status=node_status,
+                started_at_ms=None,
+                completed_at_ms=None,
+                error_message=None,
+            )
+        ],
+    )
+
+
+class TestPollNativeStatusStallGuard:
+    """poll_native_status must fail fast when no node starts (no worker)."""
+
+    def test_raises_when_no_node_starts_within_grace(self):
+        """Run is Running but the extract node stays Pending → the parent is on
+        the AE queue while no worker polls the extract queue. Must raise
+        NoWorkerOnTaskQueueError once the grace window elapses, not hang."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                with pytest.raises(NoWorkerOnTaskQueueError) as exc:
+                    client.poll_native_status(
+                        _RUN_ID,
+                        interval_seconds=10,
+                        timeout_seconds=600,
+                        stall_grace_seconds=30,
+                        stall_task_queue="atlan-openapi-e2e-full-ci-42",
+                    )
+        # Message names the queue so the operator can spot the mismatch.
+        assert "atlan-openapi-e2e-full-ci-42" in str(exc.value)
+
+    def test_raises_when_node_stuck_in_scheduled(self):
+        """Symmetric to the Pending case: production treats both Pending AND
+        Scheduled as 'not started' (client.py), so a node stuck in Scheduled
+        must keep the guard armed and raise. Guards against a regression that
+        drops SCHEDULED from the not-started set."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.SCHEDULED)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                with pytest.raises(NoWorkerOnTaskQueueError):
+                    client.poll_native_status(
+                        _RUN_ID,
+                        interval_seconds=10,
+                        timeout_seconds=600,
+                        stall_grace_seconds=30,
+                        stall_task_queue="atlan-openapi-e2e-full-ci-42",
+                    )
+
+    def test_generic_queue_hint_when_stall_task_queue_empty(self):
+        """With no stall_task_queue supplied, the error falls back to the
+        generic 'the extract task queue' phrasing."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                with pytest.raises(NoWorkerOnTaskQueueError) as exc:
+                    client.poll_native_status(
+                        _RUN_ID,
+                        interval_seconds=10,
+                        timeout_seconds=600,
+                        stall_grace_seconds=30,
+                        stall_task_queue="",
+                    )
+        assert "the extract task queue" in str(exc.value)
+
+    def test_no_raise_when_node_starts_before_grace(self):
+        """Once any node reaches Running the guard latches off — a long-running
+        node past the grace window must NOT trip it."""
+        client = _make_client()
+        running = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+        done = _succeeded_result()
+        # Node running for many polls (well past grace), then succeeds.
+        side_effects = [running] * 6 + [done]
+
+        with patch.object(client, "get_native_status", side_effect=side_effects):
+            with patch("time.sleep"):
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=600,
+                    stall_grace_seconds=5,
+                    stall_task_queue="atlan-openapi-e2e-full-ci-42",
+                )
+        assert result.status == DAGRunStatus.SUCCEEDED
+
+    def test_guard_disabled_when_grace_none(self):
+        """stall_grace_seconds=None disables the guard: a stuck run polls to the
+        timeout and returns the last observation instead of raising."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=30,
+                    stall_grace_seconds=None,
+                )
+        assert result.status == DAGRunStatus.RUNNING
+
+    def test_guard_disabled_when_grace_zero(self):
+        """stall_grace_seconds=0 also disables the guard (base passes the int
+        attr directly, so 0 must be treated as off, not 'grace of 0')."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=30,
+                    stall_grace_seconds=0,
+                )
+        assert result.status == DAGRunStatus.RUNNING
+
+    def test_negative_grace_does_not_fire_on_first_poll(self):
+        """A negative grace is non-positive → disabled, NOT 'fire immediately'
+        (elapsed 0 >= -1 would otherwise trip the guard on the first poll)."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=30,
+                    stall_grace_seconds=-1,
+                )
+        assert result.status == DAGRunStatus.RUNNING
+
+
+class TestSkippedStatus:
+    """AE emits 'Skipped' as a real status; it must parse as a terminal enum
+    value rather than being swallowed to PENDING (which masked a skipped run as
+    a stalled one and surfaced as a spurious NoWorkerOnTaskQueueError)."""
+
+    def test_run_skipped_parses_and_is_terminal(self):
+        assert _safe_run_status("Skipped") is DAGRunStatus.SKIPPED
+        assert DAGRunStatus.SKIPPED.is_terminal is True
+
+    def test_node_skipped_parses_terminal_but_not_success(self):
+        assert _safe_node_status("Skipped") is DAGNodeStatus.SKIPPED
+        assert DAGNodeStatus.SKIPPED.is_terminal is True
+        assert DAGNodeStatus.SKIPPED.is_success is False
+
+    def test_skipped_run_returns_fast_without_tripping_stall_guard(self):
+        """A Skipped run is terminal, so poll_native_status returns it
+        immediately — even though no node started, the stall guard (which would
+        otherwise raise NoWorkerOnTaskQueueError) must not fire on a terminal
+        status."""
+        client = _make_client()
+        skipped = _result(DAGRunStatus.SKIPPED, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=skipped):
+            with patch("time.sleep"):
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=600,
+                    stall_grace_seconds=5,
+                    stall_task_queue="atlan-openapi-e2e-full-ci-42",
+                )
+        assert result.status == DAGRunStatus.SKIPPED
 
 
 class TestPollNativeStatusTransientHandling:
@@ -238,3 +429,197 @@ class TestPostWithRetry:
         assert status == 200
         assert isinstance(body, dict) and body.get("status") == "success"
         mock_sleep.assert_called_once()
+
+
+class _FakeResponse:
+    """Minimal urlopen() return value usable as a context manager."""
+
+    def __init__(self, status: int, raw: bytes):
+        self.status = status
+        self._raw = raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self) -> bytes:
+        return self._raw
+
+
+class TestRequestNetworkRetry:
+    """_request: transient network errors retry; sustained ones surface as
+    AtlanApiTimeoutError (an AppError) so the poll loop tolerates them instead
+    of crashing on a raw URLError/TimeoutError mid-poll."""
+
+    def test_retries_transient_then_succeeds(self):
+        """URLError on attempt 1 → succeeds on attempt 2."""
+        client = _make_client()
+        ok = _FakeResponse(200, b'{"ok": true}')
+        with (
+            patch(
+                "application_sdk.testing.e2e.client.urllib.request.urlopen",
+                side_effect=[urllib.error.URLError("dns blip"), ok],
+            ),
+            patch("time.sleep"),
+        ):
+            status, body = client._request("GET", "/native-status")
+        assert status == 200
+        assert body == {"ok": True}
+
+    def test_sustained_network_error_raises_atlan_timeout(self):
+        """URLError on every attempt → AtlanApiTimeoutError after max attempts."""
+        client = _make_client()
+        with (
+            patch(
+                "application_sdk.testing.e2e.client.urllib.request.urlopen",
+                side_effect=urllib.error.URLError("name resolution"),
+            ) as mock_open,
+            patch("time.sleep"),
+            pytest.raises(AtlanApiTimeoutError),
+        ):
+            client._request("GET", "/native-status")
+        assert mock_open.call_count == _REQUEST_MAX_ATTEMPTS
+
+    def test_httperror_returns_immediately_without_retry(self):
+        """A real 5xx HTTP response is returned, not retried as a network error."""
+        client = _make_client()
+        http_err = urllib.error.HTTPError(
+            url="https://tenant.example.com/native-status",
+            code=500,
+            msg="server error",
+            hdrs=None,
+            fp=io.BytesIO(b'{"err": "boom"}'),
+        )
+        with (
+            patch(
+                "application_sdk.testing.e2e.client.urllib.request.urlopen",
+                side_effect=http_err,
+            ) as mock_open,
+            patch("time.sleep") as mock_sleep,
+        ):
+            status, body = client._request("GET", "/native-status")
+        assert status == 500
+        assert body == {"err": "boom"}
+        assert mock_open.call_count == 1
+        mock_sleep.assert_not_called()
+
+
+# The exact body observed in prod: AE's 409 "already active" masked as a 500 by
+# Heracles (the AE proxy; see application-sdk#2657 openapi e2e leg).
+_MASKED_409_BODY = {
+    "code": 500,
+    "error": "Internal Server Error",
+    "message": (
+        "ae: SubmitWorkflow returned HTTP 409: "
+        '{"code":"AE-WF-409-03","message":"A run for workflow '
+        "'openapi-e2e-full-ci-1' is already active\"}"
+    ),
+    "requestId": "oobbCDVUvlvIix5Sh9koKRCQASOtqSbf",
+}
+
+
+class TestSubmitWorkflowIdempotency:
+    """A submit is not idempotent: a blind retry after AE already accepted one
+    spawns a duplicate run AE marks Skipped, which the harness then mistracks.
+    submit_workflow must (a) never re-POST on a network timeout and (b) treat
+    the 'already active' conflict — even masked as a 500 — as terminal."""
+
+    def test_is_already_active_detects_masked_500(self):
+        assert _is_already_active_run(500, _MASKED_409_BODY) is True
+
+    def test_is_already_active_detects_bare_409(self):
+        assert _is_already_active_run(409, {"code": "AE-WF-409-03"}) is True
+        # matched by code even in free-form text, case-insensitively
+        assert _is_already_active_run(409, "conflict: ae-wf-409-03") is True
+
+    def test_is_already_active_ignores_plain_5xx_and_success(self):
+        assert _is_already_active_run(500, {"error": "Internal Server Error"}) is False
+        assert _is_already_active_run(503, {"err": "overloaded"}) is False
+        # the generic "already active" phrase WITHOUT the AE-WF-409-03 code must
+        # NOT match — a transient 5xx that happens to mention it stays retryable
+        assert _is_already_active_run(503, "broker already active on node 2") is False
+        # never match a 2xx body even if it carried the code
+        assert _is_already_active_run(200, {"code": "AE-WF-409-03"}) is False
+
+    def test_masked_409_raises_and_does_not_retry(self):
+        """The masked-500 conflict must raise AtlanAEWorkflowAlreadyActiveError
+        on the first response — not be retried as a transient 5xx."""
+        client = _make_client()
+        with (
+            patch.object(
+                client, "_request", return_value=(500, _MASKED_409_BODY)
+            ) as mock_req,
+            patch("time.sleep") as mock_sleep,
+            pytest.raises(AtlanAEWorkflowAlreadyActiveError),
+        ):
+            client.submit_workflow({"any": "payload"})
+        assert mock_req.call_count == 1
+        mock_sleep.assert_not_called()
+
+    def test_bare_409_raises_and_does_not_retry(self):
+        """An unmasked 409 carrying AE-WF-409-03 must also raise
+        AtlanAEWorkflowAlreadyActiveError without retrying — submit's retryable
+        predicate only covers 5xx, and this conflict is terminal regardless."""
+        client = _make_client()
+        bare_409 = (409, {"code": "AE-WF-409-03", "message": "already active"})
+        with (
+            patch.object(client, "_request", return_value=bare_409) as mock_req,
+            patch("time.sleep") as mock_sleep,
+            pytest.raises(AtlanAEWorkflowAlreadyActiveError),
+        ):
+            client.submit_workflow({"any": "payload"})
+        assert mock_req.call_count == 1
+        mock_sleep.assert_not_called()
+
+    def test_network_timeout_is_not_reposted(self):
+        """A read-timeout on submit is ambiguous (server may have accepted it),
+        so submit_workflow must surface it without re-POSTing — and report the
+        one attempt actually made, not total_attempts."""
+        client = _make_client()
+        with (
+            patch.object(
+                client, "_request", side_effect=TimeoutError("read timed out")
+            ) as mock_req,
+            patch("time.sleep"),
+            pytest.raises(AtlanApiTimeoutError, match=r"after 1 attempt"),
+        ):
+            client.submit_workflow({"any": "payload"})
+        assert mock_req.call_count == 1
+
+    def test_request_no_repost_on_timeout_when_disabled(self):
+        """_request(retry_network_errors=False) issues exactly one POST on a
+        TimeoutError instead of the usual _REQUEST_MAX_ATTEMPTS."""
+        client = _make_client()
+        with (
+            patch(
+                "application_sdk.testing.e2e.client.urllib.request.urlopen",
+                side_effect=TimeoutError("read timed out"),
+            ) as mock_open,
+            patch("time.sleep"),
+            pytest.raises(AtlanApiTimeoutError),
+        ):
+            client._request("POST", "/submit", body={}, retry_network_errors=False)
+        assert mock_open.call_count == 1
+
+    def test_genuine_5xx_still_retries_then_succeeds(self):
+        """A real 5xx that is NOT the already-active conflict remains retryable,
+        so a transient AE blip still recovers."""
+        client = _make_client()
+        with (
+            patch.object(
+                client,
+                "_request",
+                side_effect=[(503, {"err": "overloaded"}), (200, {"run_id": "r-ok"})],
+            ) as mock_req,
+            patch("time.sleep"),
+        ):
+            run_id = client.submit_workflow({"any": "payload"})
+        assert run_id == "r-ok"
+        assert mock_req.call_count == 2
+
+    def test_happy_path_returns_run_id(self):
+        client = _make_client()
+        with patch.object(client, "_request", return_value=(200, {"run_id": "r-1"})):
+            assert client.submit_workflow({"any": "payload"}) == "r-1"

@@ -22,6 +22,8 @@ SDK upgrades.  These rules enforce two invariants:
 * ``D007`` — the app builds with Hatchling.
 * ``D008`` — the app's pyright ``typeCheckingMode`` is not weaker than
   ``standard``.
+* ``D009`` — no ``[tool.poe.tasks.*]`` entry fetches Dapr component YAMLs
+  from GitHub over the network; the installed SDK wheel bundles them.
 """
 
 from __future__ import annotations
@@ -315,6 +317,50 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d003"
+        ),
+    ),
+    RuleDefinition(
+        id="D009",
+        scope=RuleScope.APP,
+        name="RemoteDaprComponentFetch",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="dapr-components",
+        autofixable=True,
+        since="0.12.0",
+        rationale=(
+            "Fetching Dapr component YAMLs from raw.githubusercontent.com or "
+            "the GitHub contents API at build time hits GitHub's unauthenticated "
+            "rate limit under CI concurrency, turning routine builds into flaky "
+            "429s across the fleet. The hardcoded SDK ref these fetches pin to "
+            "also drifts from whatever application-sdk version is actually "
+            "locked in the app's own uv.lock. The installed SDK wheel already "
+            "bundles these files at application_sdk/components/, so the "
+            "network round-trip is both fragile and redundant."
+        ),
+        short_description=(
+            "A poe task fetches Dapr component YAMLs from GitHub instead of "
+            "the installed application-sdk wheel"
+        ),
+        full_description=(
+            "No ``[tool.poe.tasks.*]`` entry (in either the shorthand "
+            '``task.shell = "..."`` form or the full ``[tool.poe.tasks.'
+            "task]`` table form) may reference ``raw.githubusercontent.com`` "
+            "or ``api.github.com`` for ``atlanhq/application-sdk``. Dapr "
+            "component YAMLs are bundled inside the ``atlan-application-sdk`` "
+            "wheel at ``application_sdk/components/`` — copy them from there "
+            "instead, e.g. ``shutil.copytree(pathlib.Path(application_sdk."
+            "__file__).parent / 'components', 'components', "
+            "dirs_exist_ok=True)``. This requires application-sdk to already "
+            "be installed into the venv before the task runs (true both "
+            "locally and in the Docker build, where ``uv sync`` precedes "
+            "``poe download-components``). Inline suppression: "
+            "``# conformance: ignore[D009] <reason>`` on the line above the "
+            "offending entry."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d009"
         ),
     ),
 )

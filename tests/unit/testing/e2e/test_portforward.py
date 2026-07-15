@@ -5,17 +5,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from application_sdk.testing.e2e.portforward import (
-    _find_free_port,
-    _wait_for_port,
-    kube_http_call,
-)
+from application_sdk.testing.e2e.portforward import _wait_for_port, kube_http_call
 
-
-def test_find_free_port_returns_integer():
-    port = _find_free_port()
-    assert isinstance(port, int)
-    assert 1024 <= port <= 65535
+# test_find_free_port_returns_integer moved to tests/integration/testing/test_portforward.py
+# (_find_free_port binds a real socket; not permitted in the hermetic unit suite)
 
 
 @pytest.mark.asyncio
@@ -39,6 +32,9 @@ async def test_wait_for_port_timeout():
             await _wait_for_port(9999, timeout=0.2)
 
 
+_STUB_PORT = "application_sdk.testing.e2e.portforward._find_free_port"
+
+
 @pytest.mark.asyncio
 async def test_kube_http_call_starts_port_forward():
     """kube_http_call starts kubectl port-forward and makes the HTTP request."""
@@ -51,6 +47,7 @@ async def test_kube_http_call_starts_port_forward():
     mock_response.status_code = 200
 
     with (
+        patch(_STUB_PORT, return_value=54321),
         patch("asyncio.create_subprocess_exec", return_value=pf_proc) as mock_exec,
         patch(
             "application_sdk.testing.e2e.portforward._wait_for_port",
@@ -90,6 +87,7 @@ async def test_kube_http_call_terminates_port_forward_on_success():
     mock_response = MagicMock(spec=httpx.Response)
 
     with (
+        patch(_STUB_PORT, return_value=54321),
         patch("asyncio.create_subprocess_exec", return_value=pf_proc),
         patch(
             "application_sdk.testing.e2e.portforward._wait_for_port", new=AsyncMock()
@@ -110,6 +108,7 @@ async def test_kube_http_call_terminates_port_forward_on_error():
     pf_proc.wait = AsyncMock()
 
     with (
+        patch(_STUB_PORT, return_value=54321),
         patch("asyncio.create_subprocess_exec", return_value=pf_proc),
         patch(
             "application_sdk.testing.e2e.portforward._wait_for_port", new=AsyncMock()
@@ -118,8 +117,8 @@ async def test_kube_http_call_terminates_port_forward_on_error():
             "httpx.AsyncClient.request",
             new=AsyncMock(side_effect=httpx.ConnectError("refused")),
         ),
+        pytest.raises(httpx.ConnectError),
     ):
-        with pytest.raises(httpx.ConnectError):
-            await kube_http_call("ns", "svc", 8080, "GET", "/")
+        await kube_http_call("ns", "svc", 8080, "GET", "/")
 
     pf_proc.terminate.assert_called_once()

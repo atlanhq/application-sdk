@@ -1,9 +1,10 @@
 """Internal env-var parsing helpers shared across SDK modules."""
 
-import logging
 import os
 
-logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 def env_int(key: str, default: int = 0) -> int:

@@ -95,6 +95,7 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `helpdeskLink` | String | `""` | Helpdesk link for credential form. |
 | `type` | String | `"connector"` | Marketplace type. |
 | `visibility` | String | `"public"` | Marketplace visibility. |
+| `argoPackageNames` | Listing\<String\> | `[]` | Argo WorkflowTemplate package names — the single knob for Argo package naming. Rendered into `atlan.yaml` as `argo_package_names` (between `visibility` and `build_tag`) when non-empty, consumed by the marketplace; the e2e harness's `argo_package_name` is taken from the first entry (falls back to `@atlan/{name}` when empty). |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
 | `selfDeployedRuntime` | Boolean | `true` | Emitted as `self_deployed_runtime`. |
 | `shortDescription` | String | `""` | One-line marketplace card description. Emitted as top-level `short_description` (omitted when empty). |
@@ -105,19 +106,83 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `workflowType` | String | `""` | Python App class name in PascalCase. Auto-converted to kebab-case. Either this or `workflowTypeOverride` must be set. |
-| `workflowTypeOverride` | String? | null | Explicit workflow type (used as-is, overrides `workflowType`). |
+| `workflowType` | String? | null | Workflow type emitted verbatim into `manifest.json` as `workflow_type`. When unset (the default), the toolkit kebab-cases `name` to derive the value. Set explicitly only when the runtime keys on a string that must not be transformed (e.g. `"NetSuiteMetadataExtractionWorkflow"` or `"teradata-app:crawler"`). |
 | `taskQueuePrefix` | String | `"atlan-{name}"` | Task queue prefix. Override for multi-entrypoint apps sharing a deployment. |
 
-### E2E Test Harness
+### Schedules (background jobs)
 
-These three fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
+For **cron-scheduled background jobs**, declare `schedules` on the entrypoint's
+contract. When non-empty, the toolkit renders a `triggers.schedules` block into the
+generated `manifest.json` (Automation Engine `ScheduleTrigger` shape). A reconciler
+(Local Marketplace) reads it from the served `/manifest` and creates the AE workflow
++ native Temporal schedule(s) — **the app never calls AE directly**. Default is empty
+(no `triggers` key emitted), so existing apps are unaffected. Only background/cron
+entrypoints set this; UI/event-triggered workflows leave it empty.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `argoPackageName` | String | `"@atlan/{name}"` | Argo WorkflowTemplate package name. Override when the app uses a scoped or non-standard Argo package. |
+| `schedules` | `Listing<ScheduleSpec>` | `new Listing {}` | Cron schedules for this entrypoint. Rendered into `manifest.json` `triggers.schedules` when non-empty. `name`s must be **unique within the entrypoint** (enforced at eval time — duplicates would collapse to one AE trigger). |
+
+**`ScheduleSpec`:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | String | — | Stable reconcile identity key → AE `trigger_id`. Never rename/reuse (a rename is a delete + recreate downstream); must be unique within the entrypoint. |
+| `cronExpression` | String | — | Standard 5-field cron, e.g. `"0 0 * * *"`. |
+| `timezone` | String (IANA, format-validated) | `"UTC"` | e.g. `"America/New_York"`. Validated for format at eval time. |
+| `status` | `"ACTIVE"\|"PAUSED"` | `"ACTIVE"` | Closed set. Ship a disabled job as `"PAUSED"` (don't omit it) — a free-string typo would otherwise silently pause a schedule downstream. |
+
+```pkl
+schedules {
+  new ScheduleSpec {
+    name = "daily-midnight"
+    cronExpression = "0 0 * * *"          // timezone defaults to UTC, status to ACTIVE
+  }
+  new ScheduleSpec {
+    name = "six-hourly-disabled"
+    cronExpression = "0 */6 * * *"
+    status = "PAUSED"
+  }
+}
+```
+→ generated `manifest.json`:
+```jsonc
+"triggers": {
+  "schedules": [
+    { "name": "daily-midnight",       "cron_expression": "0 0 * * *",   "timezone": "UTC", "status": "ACTIVE" },
+    { "name": "six-hourly-disabled",  "cron_expression": "0 */6 * * *", "timezone": "UTC", "status": "PAUSED" }
+  ]
+}
+```
+
+**Placement:** `schedules` is a single-entrypoint manifest-shaping property, exactly
+like `pipeline` / `uiConfig` / `extraNodes` — for a single-entrypoint app it feeds
+that app's manifest. For a **multi-entrypoint** app, declare `schedules` on each
+[entrypoint's `contract`](#multi-entrypoint-bundle) (per-entrypoint), since each
+entrypoint renders its own manifest.
+
+See [`examples/scheduled/`](../examples/scheduled/) for a full worked example.
+(Same field/behaviour exists on the legacy `NativeApp.pkl`.)
+
+### E2E Test Harness
+
+These fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
 | `argoTemplateName` | String | `"atlan-{name}"` | Argo WorkflowTemplate resource name as deployed in-cluster. Matches `taskQueuePrefix` by default. |
 | `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
+
+#### Credential bodies in `_e2e_credential.py` — direct + agent (both always emitted)
+
+Every credential-config app (`hasCredentialConfig` + non-empty `credentialAuthOptions`) gets **two** classes in `app/generated/_e2e_credential.py`. There is **no contract flag** — the credential mode is a per-test-run concern, so the e2e test imports whichever shape a given run needs (an app can be tested in both modes):
+
+- **`<Name>CredentialBody`** — the **direct** body: `name`, `auth_type`, and every typed field derived from `credentialCommonFields` / `credentialUrlGroup` / `credentialAuthOptions` (host, port, username, password, …) plus any nested `extra` model. This is the full body the AE submit needs to *create* a credential when the e2e connects directly from the Atlan tenant.
+- **`<Name>AgentCredentialBody`** — the **agent / self-deployed-runtime (SDR)** body: `name`, `auth_type`, `connector_config_name`, and an open `extra` dict, with **no** inline credential fields. In agent mode the real host/username/password live in the agent's secret store and are resolved at runtime via agent-json ref keys. The harness serialises the body with a plain `model_dump(by_alias=True)` (no `exclude_unset`), so an inline credential field would be sent on the wire and make the orchestrator treat the submit as a *direct* credential — skipping credential creation and leaving `{{credentialGuid}}` unsubstituted. That's why the agent body must omit them.
+
+Only `_e2e_credential.py` carries both classes; the credential configmap (`atlan-connectors-{name}.json`) and the workflow config are unaffected. See [`examples/agent-e2e/`](../examples/agent-e2e/).
+
+> **ConditionalInput value space:** when an `extraction-method` (or any radio `ConditionalInput`) exposes extra options via a condition's `overrideEnum`, the generated `_e2e_substitutions.py` types that field as the **union** of `baseEnum` and every `overrideEnum` (e.g. `Literal["direct", "agent"]`), so an agent-mode e2e run can submit `"agent"`.
 
 ### Pipeline Block
 
@@ -129,7 +194,9 @@ The typed `pipeline` block replaces per-flag properties. Each step is nullable t
 | `pipeline.parseQueries` | ParseQueriesStep? | null | Query Intelligence node (default-off). |
 | `pipeline.popularity` | PopularityStep? | null | Popularity node (default-off). |
 | `pipeline.lineage` | LineageStep? | null | Lineage app node (default-off). |
-| `pipeline.publish` | PublishStep? | `new PublishStep {}` | Publish node (default-on). `errorHandling` defaults to 72h `startToCloseTimeoutSeconds`. Set null for utility apps. |
+| `pipeline.publish` | PublishStep? | `new PublishStep {}` | Publish node (default-on). `errorHandling` defaults to 3-day (259200s) `startToCloseTimeoutSeconds`. Set null for utility apps. |
+
+`publish` and `lineage-publish` both default to a **3-day (259200s)** `startToCloseTimeoutSeconds` — both write to Atlas and can be heavy on large tenants. Every other node — `extract`, `qi`, `popularity`, `lineage-app`, `extraNodes`, and the `notifications` node — inherits a **1-day (86400s)** default from `DAGNode`. AE's own default for workflow nodes is 2h, which is too tight for non-trivial work. Override `errorHandling` on any node for a different value (up to the 10-day cap), or set it to `null` to fall back to AE's default.
 | `extraNodes` | Mapping<String, DAGNode> | `{}` | Custom nodes outside the typed pipeline. `"publish"` key replaces auto-generated publish. |
 
 **Pipeline step classes:**
@@ -138,7 +205,9 @@ The typed `pipeline` block replaces per-flag properties. Each step is nullable t
 class ExtractStep {
   name: String = "extract"               // override for non-extract apps (e.g. "apply")
   displayName: String = "Extract"        // compact AE step label
-  errorHandling: ErrorHandlingConfig?    // retry / timeout policy
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400   // 1-day default (base DAGNode default)
+  }
 }
 
 class ParseQueriesStep {                 // wraps QueryIntelligenceNode
@@ -147,7 +216,7 @@ class ParseQueriesStep {                 // wraps QueryIntelligenceNode
   vendorKey: String?
   sqlKey: String                         // required
   // ... (see QueryIntelligenceNode below for full field list)
-  errorHandling: ErrorHandlingConfig?
+  errorHandling: ErrorHandlingConfig?    // inherits DAGNode's 1-day default
 }
 
 class PopularityStep {                   // wraps PopularityNode
@@ -157,7 +226,7 @@ class PopularityStep {                   // wraps PopularityNode
   connectionCachePath: String            // required
   outputPrefix: String                   // required
   // ... (see PopularityNode below for full field list)
-  errorHandling: ErrorHandlingConfig?
+  errorHandling: ErrorHandlingConfig?    // inherits DAGNode's 1-day default
 }
 
 class LineageStep {                      // wraps LineageNode
@@ -165,7 +234,7 @@ class LineageStep {                      // wraps LineageNode
   sqlUnquotedCase: String                // required
   ignoreAllCase: Boolean                 // required
   // ... (see LineageNode below for full field list)
-  errorHandling: ErrorHandlingConfig?
+  errorHandling: ErrorHandlingConfig?    // inherits DAGNode's 1-day default
 }
 
 class PublishStep {
@@ -180,7 +249,9 @@ class PublishStep {
 
 class LineagePublishStep {               // wraps LineagePublishNode
   // ... (see LineagePublishNode below for full field list)
-  errorHandling: ErrorHandlingConfig?
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 259200  // 3-day default, matching publish
+  }
 }
 ```
 
@@ -227,20 +298,40 @@ The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.le
 |---|---|---|
 | `uiConfig` | UIConfig | Setup form definition with tasks, rules. |
 
-### Deploy Block
+### Deploy Configuration
 
-The typed `deploy` block replaces the legacy free-form mapping.
+`deploy: DeployConfig? = null` — leave unset (null, the default) to let Heracles apply platform defaults. Set to `new DeployConfig { … }` to emit a `deploy:` block (and `pools:` when pools are configured) in `atlan.yaml`.
+
+Singleton fields (`executionMode`, `splitDeployment`, `dapr`) apply to the whole deployment. Per-pool scaling (KEDA, resources, env) goes inside `deploy.pools`.
+
+All deployment classes (`DeployConfig`, `Pool`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Deployment.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `deploy.executionMode` | String | `"native"` | Execution mode. |
+| `deploy` | DeployConfig? | null | Deployment configuration. Null = Heracles defaults. Set to emit `deploy:` in `atlan.yaml`. |
+
+**DeployConfig class:**
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `deploy.executionMode` | String | `"native"` | Emitted as `execution_mode`. |
 | `deploy.splitDeployment` | Boolean | `true` | Emitted as `splitDeploymentEnabled`. |
-| `deploy.replicaCount` | Int? | null | Honoured only when `keda.enabled = false`. |
-| `deploy.dapr` | DaprComponents | `new DaprComponents {}` | Dapr sidecar toggles. |
-| `deploy.keda` | KedaConfig | `new KedaConfig {}` | KEDA autoscaling config. |
-| `deploy.resources` | ResourceConfig? | null | Kubernetes resource requests/limits. |
-| `deploy.env` | Mapping<String, String> | `{}` | Static container environment variables. |
-| `deployOverrides` | Mapping<String, Any> | `{}` | Deep-merged on top of the rendered deploy section (VPA, extraVolumes, securityContext, etc.). |
+| `deploy.dapr` | DaprComponents | `new DaprComponents {}` | Dapr sidecar toggles — app-wide, not per-pool. Emitted under `dapr:` when any component is enabled. |
+| `deploy.overrides` | Mapping<String, Any> | `{}` | Global escape hatch. Deep-merged on top of the rendered `deploy:` block after first-pool `overrides`. |
+| `deploy.pools` | Mapping<KebabCase, Pool> | `{}` | Named worker-pool map. Pool keys must be lowercase kebab-case and match `@task(pool="…")` in Python. When non-empty, emits `deploy:` (synthesised from the first pool's keda/resources/env) and `pools:`. |
+
+**Pool class:**
+
+```pkl
+class Pool {
+  replicaCount: Int? = null     // static replica count (ignored when keda.enabled = true)
+  keda: KedaConfig = new KedaConfig {}
+  resources: ResourceConfig? = null
+  env: Mapping<String, String> = new Mapping {}
+  envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
+  overrides: Mapping<String, Any> = new Mapping {}  // deep-merged last (escape hatch)
+}
+```
 
 **DaprComponents:**
 
@@ -253,6 +344,7 @@ class DaprComponents {
   subscription: Boolean = false
   configurationstore: Boolean = false
   lock: Boolean = false
+  customComponents: Mapping<String, Any> = new Mapping {}
 }
 ```
 
@@ -262,12 +354,13 @@ class DaprComponents {
 class KedaConfig {
   enabled: Boolean = true
   minReplicaCount: Int = 0
+  cooldownPeriod: Int? = null  // seconds to wait after queue drains before scaling to zero
   temporal: KedaTemporalConfig = new { targetQueueSize = 5 }
 }
 class KedaTemporalConfig { targetQueueSize: Int }
 ```
 
-Note: `targetQueueSize` must be set via `keda.temporal.targetQueueSize`, not `keda.targetQueueSize`.
+`targetQueueSize` must be set via `keda.temporal.targetQueueSize`. `cooldownPeriod` is omitted from the rendered output when not set (Helm chart default applies).
 
 **ResourceConfig:**
 
@@ -278,15 +371,54 @@ class ResourceConfig {
 }
 ```
 
+Example — two pools, hot always-on + cold scale-to-zero:
+
+```pkl
+deploy = new DeployConfig {
+  pools {
+    ["hot"] = new Pool {
+      keda { minReplicaCount = 1; cooldownPeriod = 300 }
+    }
+    ["cold"] = new Pool {
+      keda { minReplicaCount = 0; cooldownPeriod = 30 }
+    }
+  }
+}
+```
+
+Example — single pool with Dapr sidecars and a VPA override:
+
+```pkl
+deploy = new DeployConfig {
+  dapr { objectstore = true; secretstore = true }
+  pools {
+    ["default"] = new Pool {
+      keda { enabled = true; minReplicaCount = 1; temporal { targetQueueSize = 10 } }
+      resources = new ResourceConfig {
+        requests { ["cpu"] = "500m"; ["memory"] = "1Gi" }
+        limits { ["cpu"] = "2"; ["memory"] = "4Gi" }
+      }
+      env { ["LOG_LEVEL"] = "INFO" }
+      overrides {
+        ["verticalPodAutoscaler"] = new Mapping { ["enabled"] = true; ["updateMode"] = "Auto" }
+      }
+    }
+  }
+}
+```
+
+For the single-pool case use key `"default"`. See `examples/deploy/` for the full single-pool example and `examples/pools/` for the two-pool example.
+
 ### Multi-Entrypoint Bundle
 
 Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-entrypoint contracts are separate files that each `amend App.pkl`.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `entrypoints` | Listing<Entrypoint> | `[]` | Marketplace card / SDK entrypoint definitions. When non-empty, enables bundle mode. |
+| `entrypoints` | Listing<Entrypoint> | `[]` | SDK routing endpoints and (optionally) marketplace card definitions. When non-empty, enables bundle mode. All entrypoints are routable via `?entrypoint=`; only those with `packageId` set render as marketplace cards. |
+| `marketplaceCard` | Boolean | `true` | Whether this app appears in the marketplace. Single-entrypoint apps auto-derive `package_id: "@atlan/{name}"` from this default. Set to `false` for purely behind-the-scenes apps with no marketplace presence. Has no effect on multi-entrypoint apps; use `Entrypoint.packageId` per-entrypoint instead. |
 | `emitAtlanYaml` | Boolean | `true` | Emit `atlan.yaml`. |
-| `emitEntrypoints` | Boolean | `true` | Emit the `entrypoints:` block. |
+| `emitEntrypoints` | Boolean | `true` | **Deprecated** — use `Entrypoint.packageId` to control card presence. Emit the `entrypoints:` block. Will be removed in the next minor version. |
 | `emitGeneratedArtifacts` | Boolean | `true` | Re-export entrypoint contract files. |
 
 **Entrypoint class:**
@@ -295,11 +427,14 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 |---|---|---|---|
 | `name` | String | required | SDK entrypoint key and generated subfolder (`crawler`, `miner`). |
 | `displayName` | String | `name.capitalize()` | Card display name. |
-| `description` | String? | null | Card description. |
-| `icon` | String? | null | Card icon. |
+| `description` | String? | null | Card description. Falls back to the app-level `shortDescription` when null. |
+| `iconUrl` | String? | null | Card icon URL. Falls back to the app-level `iconUrl` when null. |
 | `type` | String | `"connector"` | Card type. |
 | `source` | String? | null | Source slug. |
 | `sourceCategory` | String? | null | Source category. |
+| `categories` | Listing\<String\> | `[]` | Marketplace category tags for this entrypoint. |
+| `docsUrl` | String? | null | Documentation URL. Falls back to the app-level `docsUrl` when null. |
+| `packageId` | String? | null | Stable marketplace package ID (e.g. `"@atlan/qlik-sense"`). When set, emits `package_id:` and `marketplace_card: true` in `atlan.yaml`. Required for multi-entrypoint apps to preserve backward compat with legacy Argo workflows that reference the app by its stable card ID. Entrypoints without a `packageId` are routable but do not appear as marketplace cards. |
 | `contract` | Typed? | null | The entrypoint's `App.pkl` contract whose `output.files` are emitted. |
 
 Bundle output layout:
@@ -380,6 +515,20 @@ To enable, set `notifications = true`. To retarget the alert (different
 
 > **Deprecated.** New contracts should amend `App.pkl`. `NativeApp.pkl` remains resolvable for existing apps during the v0.10.x transition period; the hard cutover is planned for v1.0.
 
+### Migrating `workflowType` / `workflowTypeOverride` to App.pkl
+
+The biggest mechanical difference when switching the `amends` line is how the
+manifest `workflow_type` is derived. NativeApp auto-converts PascalCase to
+kebab-case; App.pkl does not — it emits the value verbatim.
+
+| NativeApp.pkl | Manifest value | App.pkl equivalent |
+|---|---|---|
+| `workflowType = "SodaApp"` | `"soda-app"` | `workflowType = "soda-app"` |
+| `workflowType = "SodaApp"` and `name = "soda-app"` | `"soda-app"` | *(omit — App.pkl defaults to kebab-casing `name`)* |
+| `workflowTypeOverride = "teradata-app:crawler"` | `"teradata-app:crawler"` | `workflowType = "teradata-app:crawler"` |
+
+Rule of thumb: take whatever string the old contract would have written into the manifest and set that as `workflowType` in App.pkl. If that string is identical to `name`, omit `workflowType` entirely.
+
 Developers amend this module. It defines the app's identity, credentials, workflow form, and manifest.
 
 ### App Metadata
@@ -408,7 +557,7 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `publishTagAttachmentsPrefix` | String? | `$.extract.outputs.tag_attachments_prefix` when `publishTagPipelineEnabled` is not null; otherwise null | Value for `PublishNode`'s `tag_attachments_prefix` arg. The default matches native Databricks: extract returns the object-store prefix for connector-emitted `{output_path}/transformed/tag_attachments` payloads, and publish-app uses it for typedef resolution and classification enrichment. Override when the extract workflow emits a different output key. |
 | `extractActivityDisplayName` | String? | null | Optional override for the built-in extract node's `activity_display_name`. Defaults to `"Extract {displayName} Metadata"`. Use this for long app display names that need compact AE step labels. Only changes the human-readable step label; node id, workflow type, task queue, app name, and args are unchanged. |
 | `publishActivityDisplayName` | String? | null | Optional override for the built-in default publish node's `activity_display_name`. Defaults to `"Publish to Atlas"`. Applies only when the toolkit generates the default publish node; for `extraNodes["publish"]`, set `displayName` on that `PublishNode`. |
-| `extractNodeErrorHandling` | ErrorHandlingConfig? | null | Optional workflow-safe retry / timeout policy for the built-in extract node. Use `startToCloseTimeoutSeconds` to raise AE's child workflow execution timeout. `heartbeatTimeoutSeconds` is invalid because the built-in extract node renders `activity_name = "execute_workflow"` and AE treats it as a workflow node. |
+| `extractNodeErrorHandling` | ErrorHandlingConfig? | `startToCloseTimeoutSeconds = 86400` (1 day) | Workflow-safe retry / timeout policy for the built-in extract node. Defaults to 1 day so connectors don't silently inherit AE's 2h default; override as needed, or set to `null` to fall back to AE's default. `heartbeatTimeoutSeconds` is invalid because the built-in extract node renders `activity_name = "execute_workflow"` and AE treats it as a workflow node. |
 | `publishNodeErrorHandling` | ErrorHandlingConfig? | `startToCloseTimeoutSeconds = 259200` (72h) | Workflow-safe retry / timeout policy for the toolkit-generated default publish node. Defaults to 72h so connectors don't silently inherit AE's 2h default. Override as needed. For `extraNodes["publish"]`, set `errorHandling` on that `PublishNode` directly (it also defaults to 72h). `heartbeatTimeoutSeconds` is invalid for the default publish node. |
 | `credentialFieldName` | String? | `"{name}_credential"` | Credential ref field in Input class. Null to omit. |
 | `workflowConfigName` | String | `name` | Workflow configmap name / output filename. |
@@ -1109,6 +1258,50 @@ They default to the current generated shape and should only be changed when
 matching an existing hand-authored configmap or intentionally rendering static
 UI that should not become a runtime input.
 
+### Field Lifecycle — `lifecycle` and `lifecycleMessage`
+
+Every `UIElement` carries two lifecycle properties that control backwards-compatible
+field retirement:
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `lifecycle` | `"active"\|"deprecated"\|"sunset"` | `"active"` | Lifecycle state of this field (see below). |
+| `lifecycleMessage` | `String?` | null | Optional human-readable note shown alongside the deprecation warning. Ignored when `lifecycle = "active"`. |
+
+**Lifecycle states:**
+
+- **`active`** — field is in active use. Generated Python is unchanged.
+- **`deprecated`** — field is still accepted but consumers should migrate away.
+  Generated Python: `field: T = Field(default=..., deprecated=True)`. Pydantic v2 emits a
+  runtime `DeprecationWarning` when the field is set.
+- **`sunset`** — field is retained only for backwards-compatibility and is no longer consumed
+  by the app. A stronger form of deprecated.
+  Generated Python: `field: T = Field(default=..., deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})`.
+
+**Invariants:**
+- A field's lifecycle may only *advance* (`active → deprecated → sunset`).
+- A field is **never removed** and its **type never changes** — these are breaking contract
+  changes caught by the `B005 NonAdditiveContractChange` conformance rule.
+- A "rename" is achieved by deprecating/sunsetting the old field and adding a new field
+  with the new name and a default value.
+
+```pkl
+// Deprecate an old field:
+["legacy_timeout"] = new NumericInput {
+  title = "Legacy timeout"
+  default = 60
+  lifecycle = "deprecated"
+  lifecycleMessage = "Use the standard pipeline timeout instead."
+}
+
+// Sunset an old field (no longer consumed):
+["old_batch_mode"] = new BooleanInput {
+  title = "Old batch mode"
+  default = false
+  lifecycle = "sunset"
+}
+```
+
 ### UIRule — Conditional Visibility
 
 ```pkl
@@ -1124,11 +1317,45 @@ class UIRule {
 
 | Class | Widget | Python Type | Notes |
 |---|---|---|---|
-| `TextInput` | `input` | `str` | `placeholderText`, `defaultValue`, `validationRules` |
-| `TextBoxInput` | `TextInput` | `str` | Multi-line |
+| `TextInput` | `input` | `str` | `placeholderText`, `defaultValue`, `validationRules`, `validation` |
+| `TextBoxInput` | `TextInput` | `str` | Multi-line. `validation` |
 | `PasswordInput` | `password` | `str` | Masked input |
 | `NumericInput` | `inputNumber` | `int` | `default`, `placeholderValue` |
 | `InputRepeater` | `inputRepeater` | `list[str]` | Repeatable text inputs. `placeholderText`, `validationRules` |
+
+##### `validation` (WidgetValidation)
+
+`TextInput` and `TextBoxInput` accept an optional `validation` block for opt-in
+JSON or regex validation. It renders into the widget's `ui.validation` object,
+which the frontend reads directly to build an Ant Design validation rule.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `type` | `"json"` \| `"regex"` | (required) | `"json"` rejects values that do not parse as JSON; `"regex"` rejects values that do not match `pattern`. |
+| `pattern` | `String?` | null | Required when `type = "regex"`; must be null for `"json"` (rejected otherwise). |
+| `message` | `String?` | null | Custom error message. When unset the frontend shows a generic message. |
+| `formatOnBlur` | `Boolean?` | null | Only meaningful for `"json"`. Frontend defaults to pretty-printing on blur; set `false` to disable while keeping validation. |
+
+```pkl
+["custom_attributes"] = new TextBoxInput {
+  title = "Custom attributes"
+  validation = new { type = "json"; formatOnBlur = true }
+}
+["table_prefix"] = new TextInput {
+  title = "Table prefix"
+  validation = new {
+    type = "regex"
+    pattern = "^[a-z0-9_]+$"
+    message = "Only lowercase alphanumeric and underscores allowed."
+  }
+}
+```
+
+This is separate from `validationRules` / `rules` (the Ant Design `RuleObject`
+array) — both can be set independently. `validation` is UI-only: it does not
+change the field's value type, the generated manifest arg, or the `_input.py`
+field. When unset, no `validation` key is emitted and output is unchanged. See
+the [`full`](../examples/full/) example.
 
 #### Selection
 
@@ -1146,7 +1373,7 @@ class UIRule {
 | `ConnectionCreator` | `connection` | `Connection \| None` | `placeholderText` |
 | `ConnectionSelector` | `connectionSelector` | `str` | `multiSelect`, `connectorFilter` (single), `connectorFilters` (multi — emits `connectorName` as list), `connectionCategories`, `selectedConnectorName`, `selectedCredentialGuid`, `emitMode`, `emitStart` |
 | `ConnectionRefInput` | `connectionSelector` | `ConnectionRef \| None` or `list[ConnectionRef]` | Emits `ui.shouldIncludeConnectionInfo = true`. Use when the workflow needs both `attributes.qualifiedName` and `attributes.defaultCredentialGuid` from the selected connection. Supports `multiSelect`, `connectorFilter`, `connectorFilters`, `connectionCategories`, `selectedConnectorName`, `selectedCredentialGuid`, `displayOnlyMultiConnections`, `emitMode`, `emitStart` |
-| `CredentialInput` | `credential` | `str` | `credType` (required), `authTypeVsLabel`, `hiddenFields`, `additionalDisplayFields` — triggers credential form fetch |
+| `CredentialInput` | `credential` | `str` | `credType` (required), `placeholderText`, `authTypeVsLabel`, `hiddenFields`, `additionalDisplayFields` — triggers credential form fetch |
 | `APITokenSelector` | `apiTokenSelect` | `str` | Select existing API token |
 
 `ConnectionRefInput` uses the same frontend widget as `ConnectionSelector`, but
@@ -1292,7 +1519,9 @@ open class DAGNode {
   args: Mapping<String, Any>
   dependsOn: Listing<String>?
   dependsOnCondition: DependencyCondition?      // Explicit AE condition, mutually exclusive with dependsOn
-  errorHandling: ErrorHandlingConfig?           // Retry / timeout policy, see below
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400          // 1-day default; PublishNode raises it to 3 days
+  }
 }
 ```
 
@@ -1419,6 +1648,14 @@ Enforced at `pkl eval` time:
 AE remaps `startToCloseTimeoutSeconds` server-side: it becomes `execution_timeout`
 for workflow nodes (default 2h) and `start_to_close_timeout` for activity nodes
 (default 30m).
+
+**Node defaults.** The toolkit does not leave `startToCloseTimeoutSeconds` unset.
+Every node defaults to **1 day (86400s)** via the base `DAGNode`, except
+`publish` and `lineage-publish`, which default to **3 days (259200s)** — both
+write to Atlas and can be heavy on large tenants. This keeps non-trivial
+extraction, lineage, and publish work from silently inheriting AE's tight 2h
+workflow default. Any per-node `errorHandling` you set overrides the default;
+set `errorHandling = null` to fall back to AE's own default.
 
 Example — override the default publish node with a 4-hour timeout and retry policy:
 
@@ -2565,6 +2802,101 @@ class AppInputContract(ExtractionInput):
   `{"catalog": {"db": {}}}` to the existing filter map shape
   `{"catalog": ["db"]}` before validation.
 - Publish fields simplified: `publish_dry_run` replaces the loader-specific fields
+
+---
+
+## Migration Notes
+
+### v0.17.0 — nested `deploy`/`pools` API; `deployOverrides` renamed to `overrides`
+
+**What changed:** The v0.16.x `deploy` and `deployOverrides` properties are **removed**.
+In v0.16.x, `deploy: DeployConfig` was always non-null and unconditionally emitted the
+`deploy:` block in `atlan.yaml`; `keda`, `resources`, `env`, and `envOverrides` were flat
+fields directly on `DeployConfig`. Deployment is now configured via a single nullable
+`deploy: DeployConfig? = null` — leaving it unset (the default) means no `deploy:` block
+is emitted and Heracles applies platform defaults. Per-pool scaling (`keda`, `resources`,
+`env`) now lives inside `deploy.pools`. The `deploy:` block is synthesised automatically
+from the first pool when `pools` is non-empty.
+
+The app-level `deployOverrides` escape hatch is renamed to `overrides` and is available
+at both the `DeployConfig` level and the per-`Pool` level.
+
+**Who is affected:** apps that set `deploy { ... }` or `deployOverrides { ... }` in their
+contract.
+
+**Migration — keda/resources/env → `deploy.pools`:**
+
+```pkl
+// Before (v0.16.x — keda/resources/env were flat fields on DeployConfig):
+deploy {
+  keda { enabled = true; minReplicaCount = 0 }
+  resources = new ResourceConfig {
+    requests { ["cpu"] = "500m"; ["memory"] = "1Gi" }
+  }
+  env { ["LOG_LEVEL"] = "INFO" }
+}
+
+// After (v0.17.0+ — per-pool config nested under deploy):
+deploy = new DeployConfig {
+  pools {
+    ["default"] = new Pool {
+      keda { enabled = true; minReplicaCount = 0 }
+      resources = new ResourceConfig {
+        requests { ["cpu"] = "500m"; ["memory"] = "1Gi" }
+      }
+      env { ["LOG_LEVEL"] = "INFO" }
+    }
+  }
+}
+```
+
+The `deploy:` YAML block is synthesised from the first pool. Apps with no deployment
+configuration at all are unaffected.
+
+**Migration — Dapr:**
+
+`dapr` was already a typed field on `DeployConfig` in v0.16.x — the syntax is unchanged.
+The key difference is that `deploy` is now nullable: omit it entirely when no Dapr
+components are needed and Heracles will apply platform defaults. Set it only when you
+need to enable specific components.
+
+```pkl
+// Before (v0.16.x — deploy always non-null; dapr set inline):
+deploy {
+  dapr { objectstore = true; secretstore = true }
+  keda { enabled = true }
+}
+
+// After (v0.17.0+ — dapr on DeployConfig, keda/resources/env moved to pools):
+deploy = new DeployConfig {
+  dapr { objectstore = true; secretstore = true }
+  pools {
+    ["default"] = new Pool {
+      keda { enabled = true }
+    }
+  }
+}
+```
+
+**Migration — `deployOverrides` → `overrides`:**
+
+```pkl
+// Before (v0.16.x — app-level deployOverrides escape hatch):
+deployOverrides {
+  ["verticalPodAutoscaler"] = new Mapping { ["enabled"] = true; ["updateMode"] = "Auto" }
+}
+
+// After (v0.17.0+ — per-pool overrides on Pool, or deploy-level overrides on DeployConfig):
+deploy = new DeployConfig {
+  pools {
+    ["default"] = new Pool {
+      overrides {
+        ["verticalPodAutoscaler"] = new Mapping { ["enabled"] = true; ["updateMode"] = "Auto" }
+      }
+    }
+  }
+}
+```
 
 ---
 

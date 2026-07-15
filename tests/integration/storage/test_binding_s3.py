@@ -1,19 +1,20 @@
-"""Integration tests for create_store_from_binding → AWS S3 (real service).
+"""Integration tests for create_store_from_binding → AWS S3 (real service, keyless).
 
-Verifies that each supported auth mode is correctly wired end-to-end by calling
-``list`` on the resulting store. No data is written or deleted.
+Verifies that the SDK builds a working S3 store and authenticates end-to-end by
+listing the bucket. Auth is KEYLESS: the binding carries no static credentials,
+so the SDK falls back to the ambient AWS credential chain — in CI these are the
+short-lived creds the GitHub OIDC role-assumption exports
+(AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN). Embedded-credential resolution
+(accessKey/secretKey, secretKeyRef, assumeRoleArn) is covered hermetically by the
+emulator tests (``test_emulator_s3.py``) and unit tests.
 
-Prerequisites:
-    export AWS_ACCESS_KEY_ID=<key>
-    export AWS_SECRET_ACCESS_KEY=<secret>
-    export AWS_DEFAULT_REGION=<region>     # default: us-east-1
+Prerequisites (set by the keyless CI job; or locally for an ad-hoc run):
+    # ambient AWS creds on the environment (any valid chain) +
     export S3_BUCKET=<existing-bucket>
+    export AWS_DEFAULT_REGION=<region>     # default: us-east-1
 
 Run:
     uv run pytest tests/integration/storage/test_binding_s3.py -m s3_integration -v
-
-All tests use ``create_store_from_binding`` against a real Dapr component YAML —
-no monkey-patching of the SDK factory.
 """
 
 from __future__ import annotations
@@ -23,10 +24,8 @@ import pytest
 
 from application_sdk.storage.binding import create_store_from_binding
 from tests.integration.storage.conftest import (
-    S3_ACCESS_KEY,
     S3_BUCKET,
     S3_REGION,
-    S3_SECRET_KEY,
     write_dapr_component,
 )
 
@@ -47,54 +46,25 @@ async def _assert_auth(store) -> None:
 
 
 @pytest.mark.s3_integration
-async def test_static_key_auth(tmp_path):
-    """accessKey + secretKey → list succeeds (Shared Key auth)."""
+async def test_ambient_chain_auth(tmp_path):
+    """No creds in the binding → SDK uses the ambient AWS credential chain.
+
+    This is the SDR / customer-infra production path (IRSA / instance-profile /
+    OIDC role): the Dapr component carries only bucket + region, and obstore
+    authenticates via the ambient chain the runtime provides.
+    """
     write_dapr_component(
         tmp_path / "components",
-        name="s3-key-store",
+        name="s3-ambient-store",
         binding_type="bindings.aws.s3",
         metadata={
             "bucket": S3_BUCKET,
             "region": S3_REGION,
-            "accessKey": S3_ACCESS_KEY,
-            "secretKey": S3_SECRET_KEY,
         },
     )
     store = create_store_from_binding(
-        "s3-key-store", components_dir=tmp_path / "components"
+        "s3-ambient-store", components_dir=tmp_path / "components"
     )
-    await _assert_auth(store)
-
-
-@pytest.mark.s3_integration
-async def test_secret_key_ref_resolves(tmp_path, monkeypatch):
-    """secretKeyRef entries resolve from env vars and auth succeeds."""
-    monkeypatch.setenv("_TEST_S3_ACCESS_KEY", S3_ACCESS_KEY)
-    monkeypatch.setenv("_TEST_S3_SECRET_KEY", S3_SECRET_KEY)
-
-    comp_dir = tmp_path / "components"
-    comp_dir.mkdir(parents=True)
-    (comp_dir / "s3-ref-store.yaml").write_text(f"""\
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: s3-ref-store
-spec:
-  version: v1
-  type: bindings.aws.s3
-  metadata:
-    - name: bucket
-      value: {S3_BUCKET}
-    - name: region
-      value: {S3_REGION}
-    - name: accessKey
-      secretKeyRef:
-        key: _TEST_S3_ACCESS_KEY
-    - name: secretKey
-      secretKeyRef:
-        key: _TEST_S3_SECRET_KEY
-""")
-    store = create_store_from_binding("s3-ref-store", components_dir=comp_dir)
     await _assert_auth(store)
 
 
@@ -108,8 +78,6 @@ async def test_bindings_s3_type_alias(tmp_path):
         metadata={
             "bucket": S3_BUCKET,
             "region": S3_REGION,
-            "accessKey": S3_ACCESS_KEY,
-            "secretKey": S3_SECRET_KEY,
         },
     )
     store = create_store_from_binding(
@@ -136,30 +104,3 @@ async def test_trust_anchor_arn_raises(tmp_path):
         create_store_from_binding(
             "s3-rar-store", components_dir=tmp_path / "components"
         )
-
-
-@pytest.mark.s3_integration
-async def test_assume_role_wires_up(tmp_path):
-    """assumeRoleArn creates the STS credential provider without error.
-
-    boto3 is a core dependency. The actual STS call may fail if the role does
-    not exist in this account — that is acceptable: the binding wiring is what
-    this test validates, not IAM policy configuration.
-    """
-    write_dapr_component(
-        tmp_path / "components",
-        name="s3-sts-store",
-        binding_type="bindings.aws.s3",
-        metadata={
-            "bucket": S3_BUCKET,
-            "region": S3_REGION,
-            "accessKey": S3_ACCESS_KEY,
-            "secretKey": S3_SECRET_KEY,
-            "assumeRoleArn": "arn:aws:iam::123456789012:role/IntegTestRole",
-            "sessionName": "integ-auth-test",
-        },
-    )
-    store = create_store_from_binding(
-        "s3-sts-store", components_dir=tmp_path / "components"
-    )
-    assert store is not None

@@ -37,8 +37,9 @@ from application_sdk.app.context import (
     _is_atlan_logger,
 )
 from application_sdk.app.entrypoint import EntryPointMetadata
-from application_sdk.app.registry import AppMetadata
+from application_sdk.app.registry import AppMetadata, resolve_pool_queue
 from application_sdk.app.task import get_task_metadata, is_task, task
+from application_sdk.constants import LOCAL_WORKFLOW_ID
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
     CleanupInput,
@@ -930,7 +931,7 @@ class App(ABC):
                 (single, "upstream" if single is upstream else "deployment", True)
             ]
 
-        run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
+        run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.workflow_id}/{self.context.run_id}"
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
         )
@@ -999,8 +1000,9 @@ class App(ABC):
         if result is None:
             # Unreachable under current target-construction logic (the single-target
             # branch is always fatal=True), but guards against future changes.
-            raise RuntimeError(
-                "App.upload fan-out captured no result — this is a programming error"
+            raise _InternalError(
+                message="App.upload fan-out captured no result — this is a programming error",
+                invariant="upload fan-out must produce at least one result",
             )
         return result
 
@@ -1542,6 +1544,152 @@ def _collect_interaction_relays(
     return relays
 
 
+async def _run_preflight_gate(
+    input_data: Input, app_name: str, entrypoint: str
+) -> None:
+    """Run the SDK-owned pre-extraction preflight gate (HYP-1883).
+
+    Dispatches the app's preflight handler as a mandatory first activity. The
+    activity raises ``PreflightFailed`` when the verdict is ``NOT_READY``; this
+    re-raises only that deliberate block and aborts the run. Every other activity
+    failure (timeout, secret-store/transport error, handler crash) fails open —
+    logged loudly, run proceeds — because the gate is an injected guardrail the
+    app never opted into, so its own plumbing must not kill a run.
+
+    Guards: ``workflow.patched("preflight-gate")`` keeps pre-gate runs replaying
+    deterministically; ``isinstance(input_data, CredentialResolvable)`` skips
+    source-less apps. Credential resolution happens inside the activity — the
+    deterministic workflow forwards only secret-free references. Dispatch is to
+    the one app-level handler, with ``entrypoint`` threaded through for internal
+    branching.
+    """
+    if not workflow.patched("preflight-gate"):
+        return
+
+    with workflow.unsafe.imports_passed_through():
+        from application_sdk.credentials.ref import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            CredentialResolvable,
+        )
+        from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            GATE_RETRY,
+            GATE_SCHEDULE_TO_CLOSE,
+            GATE_START_TO_CLOSE,
+            PREFLIGHT_OUTCOME_EVENT,
+            PreflightGateInput,
+            is_preflight_block,
+            preflight_gate_activity_name,
+        )
+
+    if not isinstance(input_data, CredentialResolvable):
+        return
+
+    entry = entrypoint or "<implicit>"
+    try:
+        gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
+        await workflow.execute_activity(
+            preflight_gate_activity_name(app_name),
+            gate_input,
+            schedule_to_close_timeout=GATE_SCHEDULE_TO_CLOSE,
+            start_to_close_timeout=GATE_START_TO_CLOSE,
+            retry_policy=GATE_RETRY,
+        )
+    except Exception as e:
+        # The activity emits the blocked outcome event before it raises; the
+        # workflow only re-raises the deliberate block here.
+        if is_preflight_block(e):
+            raise
+        # Fail-open: only the workflow knows a no-verdict failure happened, so it
+        # owns the no_verdict row (plus the loud ERROR line).
+        _safe_log(
+            "error",
+            "Preflight gate could not produce a verdict; proceeding without source "
+            "verification (fail-open)",
+            app_name=app_name,
+            entrypoint=entry,
+            exc_info=True,
+        )
+        _safe_log(
+            "info",
+            PREFLIGHT_OUTCOME_EVENT,
+            app_name=app_name,
+            entrypoint=entry,
+            outcome="no_verdict",
+            reason=type(e).__name__,
+        )
+        return
+
+    # Success: the activity already emitted the proceeded outcome event.
+
+
+def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
+    """Validate a decoded workflow payload against the entry point's typed contract.
+
+    The generated workflow declares its argument to Temporal with a permissive
+    ``Any`` annotation (see ``generate_workflow_class``). That is deliberate: if the
+    argument were annotated as ``input_type``, Temporal's pydantic data converter
+    would validate the payload while *decoding the workflow task*, and a bad payload
+    would surface as a Workflow *Task* failure — which Temporal retries with backoff
+    **indefinitely** (there is no max-attempts for workflow tasks). A permanently
+    invalid input (e.g. a required object field sent as ``""``) would then retry
+    forever instead of failing.
+
+    Validating here, inside the workflow body, converts that into a clean,
+    non-retryable workflow *execution* failure that fails fast.
+
+    This does **not** loosen or bypass the typed contract. The payload is validated
+    against exactly ``input_type`` — the same model the entry point declares — before
+    any app code runs, and the fully typed, validated model is what every downstream
+    caller (preflight gate, ``_log_summary``, the entry point method) receives. The
+    permissive annotation is confined to this generated wire boundary; there is no
+    path by which a raw payload reaches app code, and app authors cannot opt into it.
+
+    Note that this validates in pydantic's python/lax mode (``model_validate`` on a
+    decoded dict) rather than the json mode the removed typed annotation gave Temporal's
+    data converter. The two are equivalent for every field type a permitted ``Input``
+    tree allows — ``bytes``/``bytearray``, the one genuinely mode-divergent type, is
+    forbidden by ``validate_payload_safety`` (contracts/base.py). A maintainer adding a
+    custom, mode-sensitive pydantic type to a contract should re-check that equivalence.
+
+    Args:
+        raw_input: The decoded payload — a dict from the wire, or (unit tests / the
+            in-process ``/start`` path) an already-constructed ``input_type``.
+        input_type: The entry point's typed input contract.
+
+    Returns:
+        A validated ``input_type`` instance.
+
+    Raises:
+        ApplicationError: non-retryable, if the payload does not satisfy ``input_type``.
+    """
+    if isinstance(raw_input, input_type):
+        # Already the typed model (constructed by the SDK /start path or a test);
+        # it was validated at construction, so re-validation would be redundant.
+        return raw_input
+
+    # deferred import: circular — execution/__init__.py loads _temporal which imports app.base
+    from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
+
+    try:
+        return input_type.model_validate(raw_input)
+    # conformance: ignore[E004] deterministic input-validation failure; logged via _safe_log with exc_info=True and re-raised as a non-retryable ApplicationError
+    except Exception as e:
+        _safe_log(
+            "error",
+            "Workflow input failed validation against its typed contract",
+            input_type=input_type.__name__,
+            exc_info=True,
+        )
+        # Non-retryable: a payload that fails schema validation is deterministic —
+        # retrying the same input can never succeed. Failing the execution now
+        # avoids the indefinite Workflow Task retry loop that a decode-time failure
+        # would cause.
+        raise ApplicationError(
+            f"Invalid workflow input for {input_type.__name__}: {e}",
+            type="InputValidationError",
+            non_retryable=True,
+        ) from e
+
+
 def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:
     """Generate a Temporal workflow class for one entry point.
 
@@ -1563,17 +1711,59 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         app_cls._app_name if ep.implicit else f"{app_cls._app_name}:{ep.name}"
     )
     entry_method_name = ep.method_name
+    entrypoint_name = ep.name
     input_type = ep.input_type
     output_type = ep.output_type
     app_name = app_cls._app_name
     app_version = app_cls._app_version
 
-    async def _run(self, input_data: Input) -> Output:
+    from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — boot-time (not in workflow sandbox); avoids a module-load cycle
+        input_type_supports_gate,
+    )
+
+    if not input_type_supports_gate(input_type):
+        _task_logger.warning(
+            "Preflight gate will not run for entrypoint '%s' (%s): input type %s does "
+            "not declare the credential-routing fields (extraction_method, "
+            "credential_guid, agent_json) top-level. Expected for source-less "
+            "entrypoints; if this entrypoint verifies a data source, declare those "
+            "fields (e.g. via the contract toolkit's ExtractionInput) so source "
+            "verification runs before extraction.",
+            entrypoint_name,
+            workflow_name,
+            input_type.__name__,
+        )
+
+    # input_data is annotated ``Any`` (not ``input_type``) so Temporal's data
+    # converter decodes the payload without validating it — validation happens
+    # below via _validate_workflow_input so a bad payload fails the workflow
+    # execution (fast, non-retryable) instead of failing the workflow *task*
+    # (retried by the server indefinitely). See _validate_workflow_input.
+    async def _run(self, input_data: Any) -> Output:
         # deferred imports: inside Temporal sandbox (workflow.unsafe.imports_passed_through context)
         # BLDX-878: inter-app calls deactivated pending review.
         # from application_sdk.app.client import WorkflowAppClient
+
+        # Fail fast on a malformed / wrong-typed payload, before any setup runs.
+        # Enforces the entry point's typed contract at the workflow boundary.
+        #
+        # Placement is deliberate — this MUST stay above the setup and the outer
+        # try/except below, for two reasons:
+        #   1. Downstream code (the preflight gate, _log_summary, the entry method)
+        #      requires a validated typed model; it must never see the raw dict the
+        #      Any-annotated argument decodes to.
+        #   2. It preserves pre-PR behavior: previously a bad payload failed during
+        #      Temporal's decode, so neither the _run body nor the on_complete()
+        #      finally ran. Moving this into the try/except would run on_complete()
+        #      for an input that never entered the workflow proper.
+        # (Retryability is not the reason: the raised ApplicationError is a
+        # FailureError subclass, so the outer handler's `isinstance(e, FailureError)`
+        # branch would bare re-raise it, preserving non_retryable=True either way.)
+        input_data = _validate_workflow_input(input_data, input_type)
+
         start_time = _safe_now()
         run_id = workflow.info().run_id
+        workflow_id = workflow.info().workflow_id
 
         try:
             with workflow.unsafe.imports_passed_through():
@@ -1596,6 +1786,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             app_name=app_name,
             app_version=app_version,
             run_id=run_id,
+            workflow_id=workflow_id,
             correlation_id=correlation_id,
             started_at=start_time,
         )
@@ -1613,7 +1804,11 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             self._app_instance = app_instance
         app_instance._context = context
 
-        context_data = {"run_id": run_id, "correlation_id": context.correlation_id}
+        context_data = {
+            "run_id": run_id,
+            "workflow_id": workflow_id,
+            "correlation_id": context.correlation_id,
+        }
         # BLDX-878: inter-app calls deactivated pending review.
         # app_instance._client = WorkflowAppClient(context_data)
         _wrap_instance_tasks(app_instance, context_data)
@@ -1643,21 +1838,38 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             _safe_log("warning", "Failed to log input summary", exc_info=True)
 
         try:
+            await _run_preflight_gate(input_data, app_name, entrypoint_name)
             entry_method = getattr(app_instance, entry_method_name)
             result = await entry_method(input_data)
             return cast("Output", result)
 
         # conformance: ignore[E004] top-level entrypoint handler; logged via _safe_log with exc_info=True and re-raised as typed ApplicationError
         except Exception as e:
-            _safe_log(
-                "error",
-                "App failed",
-                app_name=app_name,
-                run_id=str(run_id),
-                correlation_id=context.correlation_id,
-                error_type=type(e).__name__,
-                exc_info=True,
-            )
+            with workflow.unsafe.imports_passed_through():
+                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+                    is_preflight_block,
+                )
+            # A deliberate preflight-gate block logs terse (classification already
+            # on the error's FailureDetails); the marker may sit on a cause.
+            if is_preflight_block(e):
+                _safe_log(
+                    "warning",
+                    "App blocked by preflight gate",
+                    app_name=app_name,
+                    run_id=str(run_id),
+                    correlation_id=context.correlation_id,
+                    reason=str(e),
+                )
+            else:
+                _safe_log(
+                    "error",
+                    "App failed",
+                    app_name=app_name,
+                    run_id=str(run_id),
+                    correlation_id=context.correlation_id,
+                    error_type=type(e).__name__,
+                    exc_info=True,
+                )
             # deferred import: circular dependency
             # Raw Python exceptions (e.g. ValueError raised directly in an
             # entrypoint) must be wrapped in ApplicationError so Temporal
@@ -1731,7 +1943,13 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
     _run.__name__ = "run"
     _run.__qualname__ = f"{cls_name}.run"
     _run.__module__ = app_cls.__module__
-    _run.__annotations__ = {"input_data": input_type, "return": output_type}
+    # input_data is decoded as ``Any`` on purpose: this is the annotation Temporal's
+    # pydantic data converter reads to decode the workflow task. Decoding as ``Any``
+    # keeps validation out of the converter (where a failure = an indefinitely
+    # retried Workflow Task failure) and defers it to _validate_workflow_input inside
+    # the run body, which enforces ``input_type`` and fails fast on a bad payload.
+    # The return type stays typed so results are still validated/serialized normally.
+    _run.__annotations__ = {"input_data": Any, "return": output_type}
 
     decorated_run = workflow.run(_run)
 
@@ -1779,7 +1997,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
 
     Args:
         app_instance: The app instance.
-        context_data: Context dict with run_id and correlation_id.
+        context_data: Context dict with run_id, workflow_id, and correlation_id.
     """
     for attr_name in dir(app_instance):
         if attr_name.startswith("_"):
@@ -1803,6 +2021,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     task_meta.heartbeat_timeout_seconds,
                     task_meta.auto_heartbeat_seconds,
                     task_meta.retry_policy,
+                    pool=task_meta.pool,
                 )
                 setattr(app_instance, attr_name, wrapper)
 
@@ -1818,6 +2037,8 @@ def _create_task_activity_wrapper(
     heartbeat_timeout_seconds: int | None = 60,
     auto_heartbeat_seconds: int | None = 10,
     retry_policy: Any = None,
+    *,
+    pool: str | None = None,
 ) -> Any:
     """Create a wrapper that executes a task as a Temporal activity.
 
@@ -1828,14 +2049,26 @@ def _create_task_activity_wrapper(
         retry_max_attempts: Maximum retry attempts.
         retry_max_interval_seconds: Maximum interval between retries.
         output_type: The typed output class for deserialization.
-        context_data: Context dict with run_id and correlation_id.
+        context_data: Context dict with run_id, workflow_id, and correlation_id.
         heartbeat_timeout_seconds: Heartbeat timeout. None disables.
         auto_heartbeat_seconds: Auto-heartbeat interval. None disables.
         retry_policy: Full retry policy (overrides max_attempts/interval if set).
+        pool: Logical worker-pool name. When set, the activity is routed
+            to a dedicated task queue. Queue name resolution order:
+            1. ``ATLAN_POOL_<POOL>_QUEUE`` env var (explicit override).
+            2. ``{ATLAN_TASK_QUEUE}-{pool}`` derived from the app's base queue
+               (default — ensures different apps with the same pool name get
+               different Temporal queues automatically).
 
     Returns:
         Async function that executes the task as an activity.
     """
+    # Resolve pool → task queue at construction time. Env vars are fixed for
+    # the process lifetime, so capturing the result in the closure is safe.
+    # Resolution order: explicit ATLAN_POOL_<POOL>_QUEUE override first, then
+    # derive from ATLAN_TASK_QUEUE so two apps sharing a pool name (e.g.
+    # "heavy") never collide on the same Temporal queue.
+    pool_queue: str | None = resolve_pool_queue(pool) if pool else None
     from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
         RetryPolicy as _RP,
     )
@@ -1868,6 +2101,7 @@ def _create_task_activity_wrapper(
             app_name=app_name,
             task_name=task_name,
             run_id=context_data.get("run_id", ""),
+            workflow_id=context_data.get("workflow_id", LOCAL_WORKFLOW_ID),
             heartbeat_timeout_seconds=heartbeat_timeout_seconds,
             auto_heartbeat_seconds=auto_heartbeat_seconds,
         )
@@ -1885,6 +2119,8 @@ def _create_task_activity_wrapper(
         # Execute as activity, routed through the SDK eviction-retry loop so
         # worker pod evictions (SIGTERM mid-activity) re-dispatch as fresh
         # attempts without burning the application-error retry budget.
+        # When a pool_queue is set the activity is dispatched to the task
+        # queue for that pool; otherwise it runs on the workflow's own queue.
         result: Output = await execute_activity_with_eviction_retry(
             f"{app_name}:{task_name}",
             args=[task_context, input_data],
@@ -1893,6 +2129,7 @@ def _create_task_activity_wrapper(
             retry_policy=temporal_retry_policy,
             result_type=output_type,
             summary=summary,
+            **({"task_queue": pool_queue} if pool_queue else {}),
         )
 
         return result

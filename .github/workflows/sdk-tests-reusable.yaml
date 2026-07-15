@@ -31,11 +31,36 @@ jobs:
         os: [ubuntu-22.04, macOS-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          # This workflow is only ever called locally by sdk-gate.yaml (same
+          # repo), so a literal name matches build-and-scan.yaml's identical
+          # security-gate mint rather than a context expression that could
+          # silently widen scope for a future empty-context caller.
+          repositories: application-sdk
       - uses: "./.github/actions/unit-tests"
         with:
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           fail-under: "85"
           python-version: ${{ matrix.python-version }}
+
+  script-tests:
+    name: Script Tests (bats)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install bats-core
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - uses: "./.github/actions/setup-deps"
+      - name: Run shell script tests
+        run: uv run poe test-scripts
 
   integration:
     name: Integration Tests
@@ -56,7 +81,7 @@ jobs:
       # Both helpers fetch their binary to ~/.cache on first use; cache those
       # paths across runs so we don't re-download every time.
       - name: Cache embedded runtime binaries
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/atlan-sdk/temporal
@@ -66,7 +91,7 @@ jobs:
             embedded-runtimes-${{ runner.os }}-
 
       - name: Run integration tests
-        run: uv run pytest tests/integration/ -m integration -v --timeout=120
+        run: uv run pytest tests/integration/ -m integration -v --timeout=120 --reruns 2 --reruns-delay 5 --only-rerun "ConnectError|ConnectionError|ClientConnectorError|TimeoutError|ReadTimeout"
 
   storage-emulator:
     name: Storage Emulator Tests
@@ -79,6 +104,13 @@ jobs:
       - name: Start object-store emulators
         run: |
           set -euo pipefail
+          # Pull images first with retry — image pulls are the main 504 surface.
+          # Use ${GITHUB_WORKSPACE} (not a bare relative path) to match the style
+          # used in composite actions and stay correct if CWD ever changes.
+          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull minio/minio:RELEASE.2025-09-07T16-13-09Z
+          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull mcr.microsoft.com/azure-storage/azurite:3.31.0
+          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull gcr.io/cloud-devrel-public-resources/storage-testbench:v0.62.0
+          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull nginx:1.27-alpine
           # S3 → MinIO
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
@@ -119,7 +151,7 @@ jobs:
           AWS_ENDPOINT_URL: http://localhost:9000
           AZURE_STORAGE_ENDPOINT: http://localhost:10000
           GCS_EMULATOR_ENDPOINT: http://localhost:9095
-        run: uv run pytest tests/integration/storage -m storage_emulator -v --timeout=300
+        run: uv run pytest tests/integration/storage -m storage_emulator -v --timeout=300 --reruns 2 --reruns-delay 5 --only-rerun "ConnectError|ConnectionError|ClientConnectorError|TimeoutError|ReadTimeout"
 
       - name: Teardown emulators
         if: always()

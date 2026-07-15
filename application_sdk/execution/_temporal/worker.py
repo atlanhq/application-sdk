@@ -17,7 +17,12 @@ from temporalio.worker import Interceptor as TemporalInterceptor
 from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
-from application_sdk.app.registry import AppRegistry
+from application_sdk.app.registry import (
+    AppRegistry,
+    TaskRegistry,
+    get_activity_name,
+    resolve_pool_queue,
+)
 from application_sdk.constants import (
     APP_BUILD_ID,
     APP_DEPLOYMENT_NAME,
@@ -345,28 +350,87 @@ def create_worker(
     app_workflows = get_all_app_workflows()
     task_activities = get_all_task_activities()
 
-    if enable_sdr and handler is not None:
-        from application_sdk.execution._temporal.sdr import (  # noqa: PLC0415 — lazy: only load SDR/handler modules when a Handler is provided
+    from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — lazy: handler-activity machinery loaded at worker assembly
+        build_preflight_gate_activity,
+        preflight_gate_activity_name,
+    )
+    from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
+
+    # When the app ships no Handler, DefaultHandler's no-op (no checks → never blocks)
+    # keeps the gate present but non-blocking.
+    gate_handler = handler if handler is not None else DefaultHandler()
+
+    sdr_registry = AppRegistry.get_instance()
+    sdr_registered_apps = sdr_registry.list_all()
+    resolved_app_name = (
+        sdr_registered_apps[0].name
+        if sdr_registered_apps
+        else (service_name or task_queue)
+    )
+
+    # Registered independent of the SDR opt-out — the gate is mandatory. Names
+    # deduped: an app registered under multiple versions appears once per version,
+    # and two activities under one name crash boot.
+    gate_app_names = list(dict.fromkeys(m.name for m in sdr_registered_apps)) or [
+        resolved_app_name
+    ]
+    gate_activity_names = [
+        preflight_gate_activity_name(name) for name in gate_app_names
+    ]
+
+    # Temporal's own duplicate-activity rejection is an opaque ValueError; surface
+    # a descriptive collision error naming the offending task and the fix instead.
+    task_activity_names = {
+        get_activity_name(tm.app_name, tm.name)
+        for tasks in TaskRegistry.get_instance().get_all_tasks().values()
+        for tm in tasks
+    }
+    gate_collisions = sorted(set(gate_activity_names) & task_activity_names)
+    if gate_collisions:
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+            WorkerActivityNameCollisionError,
+        )
+
+        raise WorkerActivityNameCollisionError(
+            message=(
+                f"App task(s) register activity name(s) {gate_collisions}, which the SDK "
+                "reserves for the injected preflight gate. Rename the offending @task "
+                "method (a discovery step 'preflight' -> 'fetch_databases'/'discover', or "
+                "fold a readiness check into Handler.preflight_check). A worker cannot "
+                "register two activities with the same name."
+            ),
+            field="task_name",
+        )
+
+    task_activities = [
+        *task_activities,
+        *(build_preflight_gate_activity(gate_handler, name) for name in gate_app_names),
+    ]
+
+    # SDR (the control-plane test_auth/preflight_check/fetch_metadata workflows)
+    # requires a REAL handler — never the bare DefaultHandler sentinel. Both the
+    # worker path (passes None) and the combined path (passes DefaultHandler() to
+    # also serve HTTP) fall back for handler-less apps; binding that to SDR would
+    # expose sdr:test_auth returning unconditional SUCCESS — a fake green on the
+    # Sage "Check". Exact-type check, not isinstance: a DefaultHandler *subclass*
+    # with real overrides is a real handler and does get SDR. The gate above uses
+    # gate_handler regardless because it must always be dispatchable.
+    has_real_handler = handler is not None and type(handler) is not DefaultHandler
+    if enable_sdr and has_real_handler:
+        from application_sdk.execution._temporal.sdr import (  # noqa: PLC0415 — lazy: only load SDR workflows when SDR is enabled
             SDR_WORKFLOWS,
             build_sdr_activities,
         )
 
-        sdr_registry = AppRegistry.get_instance()
-        sdr_registered_apps = sdr_registry.list_all()
-        sdr_app_name = (
-            sdr_registered_apps[0].name
-            if sdr_registered_apps
-            else (service_name or task_queue)
-        )
         app_workflows = [*app_workflows, *SDR_WORKFLOWS]
         task_activities = [
             *task_activities,
-            *build_sdr_activities(handler, sdr_app_name),
+            *build_sdr_activities(handler, resolved_app_name),
         ]
         logger.info(
             "SDR workflows registered for handler %s (app=%s)",
             type(handler).__name__,
-            sdr_app_name,
+            resolved_app_name,
         )
 
     interceptor_settings = load_interceptor_settings()
@@ -419,6 +483,28 @@ def create_worker(
     primary_app_name = (
         registered_apps[0].name if registered_apps else (service_name or task_queue)
     )
+
+    # ADR-0016 §3: log resolved pool→queue map at startup so a misconfigured
+    # env var (typo, missing ATLAN_POOL_<POOL>_QUEUE) is diagnosable immediately
+    # rather than manifesting as a silent activity backlog hours later.
+    task_registry = TaskRegistry.get_instance()
+    _pool_queue_map: dict[str, str] = {}
+    for _tasks in task_registry.get_all_tasks().values():
+        for _tm in _tasks:
+            if _tm.pool and _tm.pool not in _pool_queue_map:
+                _queue = resolve_pool_queue(_tm.pool)
+                if _queue is not None:
+                    _pool_queue_map[_tm.pool] = _queue
+                else:
+                    logger.warning(
+                        "Pool %r has no resolvable queue: "
+                        "set ATLAN_POOL_%s_QUEUE or ATLAN_TASK_QUEUE. "
+                        "Activities dispatched to this pool will run on the workflow's default queue.",
+                        _tm.pool,
+                        _tm.pool.upper().replace("-", "_"),
+                    )
+    if _pool_queue_map:
+        logger.info("Pool queue map: %s", _pool_queue_map)
 
     if interceptor_settings.enable_event_interceptor:
         from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution

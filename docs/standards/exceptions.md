@@ -225,11 +225,11 @@ When reviewing code, check for:
 - **Custom Exceptions**: Use the categorical leaf classes from `application_sdk/errors` for new code. Pick the leaf whose `FailureCategory` matches the failure:
   ```python
   from application_sdk.errors import (
-      AuthError, DependencyUnavailableError, InvalidInputError,
-      NotFoundError, AlreadyExistsError, PreconditionError,
-      RateLimitedError, AppTimeoutError, ResourceExhaustedError,
-      DataIntegrityError, InternalError, UnimplementedError,
-      AppPermissionDeniedError, CancelledError,
+      AuthError, DependencyUnavailableError, SourceUnavailableError,
+      InvalidInputError, NotFoundError, AlreadyExistsError,
+      PreconditionError, RateLimitedError, AppTimeoutError,
+      ResourceExhaustedError, DataIntegrityError, InternalError,
+      UnimplementedError, AppPermissionDeniedError, CancelledError,
   )
 
   # DependencyUnavailableError — retryable=True, audience=PLATFORM

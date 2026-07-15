@@ -83,7 +83,9 @@ async def test_chunked_download_roundtrip_above_threshold(local_store, tmp_path)
     assert up_sha == src_sha
 
     dest = tmp_path / "big_out.bin"
-    dl_sha = await download_file_chunked("matrix/big.bin", dest, local_store)
+    dl_sha = await download_file_chunked(
+        "matrix/big.bin", dest, local_store, compute_hash=True
+    )
 
     assert dest.stat().st_size == src.stat().st_size
     assert dl_sha == src_sha
@@ -101,7 +103,9 @@ async def test_chunked_download_small_file_falls_through_to_streaming(
     await upload_file("matrix/medium.bin", src, local_store)
 
     dest = tmp_path / "medium_out.bin"
-    dl_sha = await download_file_chunked("matrix/medium.bin", dest, local_store)
+    dl_sha = await download_file_chunked(
+        "matrix/medium.bin", dest, local_store, compute_hash=True
+    )
     assert dl_sha == src_sha
     assert dest.read_bytes() == src.read_bytes()
 

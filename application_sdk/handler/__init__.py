@@ -31,10 +31,6 @@ from application_sdk.handler.service import (
 )
 
 __all__ = [
-    "Handler",
-    "DefaultHandler",
-    "HandlerError",
-    "HandlerContext",
     "ApiMetadataObject",
     "ApiMetadataOutput",
     "AuthInput",
@@ -42,7 +38,11 @@ __all__ = [
     "AuthStatus",
     "BaseConnectionConfig",
     "BaseMetadataConfig",
+    "DefaultHandler",
+    "Handler",
+    "HandlerContext",
     "HandlerCredential",
+    "HandlerError",
     "MetadataInput",
     "MetadataOutput",
     "PreflightCheck",

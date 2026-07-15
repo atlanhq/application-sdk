@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from application_sdk.testing.e2e.base import FullDAGOutcome
 from application_sdk.testing.e2e.client import (
     DAGNodeResult,
@@ -285,12 +287,31 @@ class TestSQLAppE2ETestHooks:
         t = self._make_test(RunMode.DIRECT)
         assert t.agent_spec() is None
 
-    def test_agent_spec_returns_agent_in_agent_mode(self) -> None:
+    def test_agent_spec_returns_agent_in_agent_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Deployment env absent → run_id template path.
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
         t = self._make_test(RunMode.AGENT)
         spec = t.agent_spec()
         assert spec is not None
         assert "mysql" in spec.agent_name
         assert str(t.run_id) in spec.agent_name
+
+    def test_agent_spec_prefers_env_derivation_when_deployment_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Per-leg isolation: when the worker's ATLAN_APPLICATION_NAME +
+        # ATLAN_DEPLOYMENT_NAME are set, the agent name (and thus the extract
+        # queue) is derived from them — not the run_id template — so SQL matrix
+        # legs land on their own per-leg queue.
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "mysql")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-1-connection-reuse")
+        t = self._make_test(RunMode.AGENT)
+        spec = t.agent_spec()
+        assert spec is not None
+        assert spec.agent_name == "mysql-e2e-full-ci-1-connection-reuse"
 
     def test_connection_spec_uses_admin_role_guid(self) -> None:
         t = self._make_test()

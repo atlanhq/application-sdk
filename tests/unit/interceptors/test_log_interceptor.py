@@ -252,6 +252,103 @@ class TestLogWorkflowInboundInterceptor:
         # can replay its commands.
         mock_next.execute_workflow.assert_awaited_once()
 
+    async def test_preflight_block_logs_terse_not_error(self, interceptor, mock_next):
+        # A deliberate preflight-gate block (type="PreflightFailed") is an
+        # expected, typed outcome — workflow.ended logs at WARNING with no stack,
+        # not ERROR + exc_info.
+        mock_next.execute_workflow = AsyncMock(
+            side_effect=ApplicationError(
+                "Preflight check failed", type="PreflightFailed", non_retryable=True
+            )
+        )
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            with patch(
+                "application_sdk.execution._temporal.interceptors.log.logger"
+            ) as mock_logger:
+                with pytest.raises(ApplicationError):
+                    await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        ended_warn = [
+            c
+            for c in mock_logger.warning.call_args_list
+            if c.args and c.args[0] == "workflow.ended"
+        ]
+        ended_error = [
+            c
+            for c in mock_logger.error.call_args_list
+            if c.args and c.args[0] == "workflow.ended"
+        ]
+        assert ended_warn, "preflight block should log workflow.ended at warning"
+        assert not ended_error, "preflight block must not log workflow.ended at error"
+        assert "exc_info" not in ended_warn[0].kwargs
+
+    async def test_cause_wrapped_preflight_block_logs_terse(
+        self, interceptor, mock_next
+    ):
+        # Temporal wraps the activity's ApplicationError in an ActivityError, so
+        # the PreflightFailed marker sits on a cause, not the top-level error.
+        inner = ApplicationError(
+            "Preflight check failed", type="PreflightFailed", non_retryable=True
+        )
+        wrapper = RuntimeError("Activity task failed")
+        wrapper.__cause__ = inner
+        mock_next.execute_workflow = AsyncMock(side_effect=wrapper)
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            with patch(
+                "application_sdk.execution._temporal.interceptors.log.logger"
+            ) as mock_logger:
+                with pytest.raises(RuntimeError):
+                    await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        ended_warn = [
+            c
+            for c in mock_logger.warning.call_args_list
+            if c.args and c.args[0] == "workflow.ended"
+        ]
+        ended_error = [
+            c
+            for c in mock_logger.error.call_args_list
+            if c.args and c.args[0] == "workflow.ended"
+        ]
+        assert ended_warn, "cause-wrapped preflight block should log at warning"
+        assert not ended_error, "cause-wrapped preflight block must not log at error"
+        assert "exc_info" not in ended_warn[0].kwargs
+
+    async def test_unexpected_failure_logs_error_with_stack(
+        self, interceptor, mock_next
+    ):
+        # A non-preflight failure keeps the full ERROR traceback (exc_info=True).
+        mock_next.execute_workflow = AsyncMock(side_effect=ValueError("boom"))
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            with patch(
+                "application_sdk.execution._temporal.interceptors.log.logger"
+            ) as mock_logger:
+                with pytest.raises(ValueError):
+                    await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        ended_error = [
+            c
+            for c in mock_logger.error.call_args_list
+            if c.args and c.args[0] == "workflow.ended"
+        ]
+        assert ended_error, "unexpected failure should log workflow.ended at error"
+        assert ended_error[0].kwargs.get("exc_info") is True
+
     async def test_sets_correlation_id_on_replay_from_header(
         self, interceptor, mock_next
     ):
@@ -796,6 +893,68 @@ class TestLogActivityInboundInterceptor:
         kwargs = ended_calls[0][1]
         assert kwargs["otel.status_code"] == "ERROR"
         assert kwargs["exc_info"] is True
+
+    async def test_preflight_block_activity_ended_terse(self, mock_next):
+        # A deliberate preflight-gate block is an expected, typed outcome —
+        # activity.ended logs at WARNING with no stack (mirrors workflow.ended).
+        mock_next.execute_activity = AsyncMock(
+            side_effect=ApplicationError(
+                "Preflight failed", type="PreflightFailed", non_retryable=True
+            )
+        )
+        interceptor = _LogActivityInboundInterceptor(mock_next)
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.activity"
+        ) as mock_act:
+            mock_act.info.return_value = MockActivityInfo()
+            with (
+                patch(
+                    "application_sdk.execution._temporal.interceptors.log.logger"
+                ) as mock_logger,
+                pytest.raises(ApplicationError),
+            ):
+                await interceptor.execute_activity(MockExecuteActivityInput())
+        warn = [
+            c for c in mock_logger.warning.call_args_list if c[0][0] == "activity.ended"
+        ]
+        err = [
+            c for c in mock_logger.error.call_args_list if c[0][0] == "activity.ended"
+        ]
+        assert warn, "preflight block should log activity.ended at warning"
+        assert not err, "preflight block must not log activity.ended at error"
+        assert "exc_info" not in warn[0][1]
+
+    async def test_cause_wrapped_preflight_block_activity_ended_terse(self, mock_next):
+        # Temporal may wrap the raised error; the marker sits on a cause.
+        inner = ApplicationError(
+            "Preflight failed", type="PreflightFailed", non_retryable=True
+        )
+        wrapper = RuntimeError("activity task failed")
+        wrapper.__cause__ = inner
+        mock_next.execute_activity = AsyncMock(side_effect=wrapper)
+        interceptor = _LogActivityInboundInterceptor(mock_next)
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.activity"
+        ) as mock_act:
+            mock_act.info.return_value = MockActivityInfo()
+            with (
+                patch(
+                    "application_sdk.execution._temporal.interceptors.log.logger"
+                ) as mock_logger,
+                pytest.raises(RuntimeError),
+            ):
+                await interceptor.execute_activity(MockExecuteActivityInput())
+        warn = [
+            c for c in mock_logger.warning.call_args_list if c[0][0] == "activity.ended"
+        ]
+        err = [
+            c for c in mock_logger.error.call_args_list if c[0][0] == "activity.ended"
+        ]
+        assert (
+            warn
+        ), "cause-wrapped preflight block should log activity.ended at warning"
+        assert not err
+        assert "exc_info" not in warn[0][1]
 
     async def test_activity_ended_flattens_failure_attrs_for_apperror(self, mock_next):
         mock_next.execute_activity = AsyncMock(

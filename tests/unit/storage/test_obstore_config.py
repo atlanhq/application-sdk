@@ -9,11 +9,16 @@ timeout.
 
 from __future__ import annotations
 
+import os
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from application_sdk.storage._obstore_config import (
+    _azure_config_has_explicit_credential,
     log_obstore_config,
+    make_azure_store,
     obstore_client_options,
     obstore_retry_config,
 )
@@ -26,9 +31,13 @@ from application_sdk.storage._obstore_config import (
 class TestClientOptionsDefaults:
     """SDK defaults are never empty — every store must inherit sane values."""
 
-    def test_defaults_set_per_request_timeout_to_90_seconds(self, monkeypatch) -> None:
+    def test_defaults_set_progress_and_backstop_timeouts(self, monkeypatch) -> None:
+        # BLDX-1513: read_timeout (progress-based) is the primary liveness bound;
+        # the overall-request timeout is a generous backstop (30m), not 90s —
+        # a 90s overall cap killed slow-but-progressing GB-class downloads.
         for k in [
             "ATLAN_OBSTORE_TIMEOUT",
+            "ATLAN_OBSTORE_READ_TIMEOUT",
             "ATLAN_OBSTORE_CONNECT_TIMEOUT",
             "ATLAN_OBSTORE_POOL_IDLE_TIMEOUT",
             "ATLAN_OBSTORE_HTTP2_KEEP_ALIVE_TIMEOUT",
@@ -38,11 +47,17 @@ class TestClientOptionsDefaults:
             monkeypatch.delenv(k, raising=False)
 
         opts = obstore_client_options()
-        assert opts["timeout"] == "90s"
+        assert opts["timeout"] == "30m"
+        assert opts["read_timeout"] == "90s"
         assert opts["connect_timeout"] == "30s"
         assert opts["pool_idle_timeout"] == "90s"
         assert opts["http2_keep_alive_timeout"] == "30s"
         assert opts["user_agent"].startswith("atlan-application-sdk")
+
+    def test_read_timeout_can_be_overridden_via_env(self, monkeypatch) -> None:
+        monkeypatch.setenv("ATLAN_OBSTORE_READ_TIMEOUT", "120s")
+        opts = obstore_client_options()
+        assert opts["read_timeout"] == "120s"
 
     def test_pool_max_idle_per_host_omitted_by_default(self, monkeypatch) -> None:
         monkeypatch.delenv("ATLAN_OBSTORE_POOL_MAX_IDLE_PER_HOST", raising=False)
@@ -53,18 +68,26 @@ class TestClientOptionsDefaults:
 class TestClientOptionsOverrides:
     def test_each_field_can_be_overridden_via_env(self, monkeypatch) -> None:
         monkeypatch.setenv("ATLAN_OBSTORE_TIMEOUT", "1h")
+        monkeypatch.setenv("ATLAN_OBSTORE_READ_TIMEOUT", "150s")
         monkeypatch.setenv("ATLAN_OBSTORE_CONNECT_TIMEOUT", "10s")
         monkeypatch.setenv("ATLAN_OBSTORE_POOL_IDLE_TIMEOUT", "120s")
         monkeypatch.setenv("ATLAN_OBSTORE_HTTP2_KEEP_ALIVE_TIMEOUT", "45s")
         monkeypatch.setenv("ATLAN_OBSTORE_USER_AGENT", "custom-agent/1.0")
         monkeypatch.setenv("ATLAN_OBSTORE_POOL_MAX_IDLE_PER_HOST", "32")
 
-        # Pin no proxy so the exact-dict assertion is deterministic regardless
-        # of the host's proxy env / system settings.
-        with patch("urllib.request.getproxies", return_value={}):
+        # Pin no proxy and no custom CA so the exact-dict assertion is
+        # deterministic regardless of the host's proxy env / SSL_CERT_DIR.
+        with (
+            patch("urllib.request.getproxies", return_value={}),
+            patch(
+                "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
+                return_value=None,
+            ),
+        ):
             opts = obstore_client_options()
         assert opts == {
             "timeout": "1h",
+            "read_timeout": "150s",
             "connect_timeout": "10s",
             "pool_idle_timeout": "120s",
             "http2_keep_alive_timeout": "45s",
@@ -114,6 +137,80 @@ class TestClientOptionsProxy:
         ):
             opts = obstore_client_options()
         assert opts["proxy_url"] == "http://secure.corp:8080"
+
+
+class TestClientOptionsProxyExcludes:
+    """NO_PROXY is forwarded as ``proxy_excludes`` — but only when a proxy URL is
+    resolved (obstore ignores it otherwise)."""
+
+    def test_no_proxy_excludes_forwarded_when_proxy_set(self, monkeypatch) -> None:
+        monkeypatch.setenv("NO_PROXY", "localhost,.svc.cluster.local,10.0.0.0/8")
+        with patch(
+            "urllib.request.getproxies",
+            return_value={"https": "http://proxy.corp:8080"},
+        ):
+            opts = obstore_client_options()
+        assert opts["proxy_excludes"] == "localhost,.svc.cluster.local,10.0.0.0/8"
+
+    def test_lowercase_no_proxy_is_honored(self, monkeypatch) -> None:
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.setenv("no_proxy", "internal.example.com")
+        with patch(
+            "urllib.request.getproxies",
+            return_value={"https": "http://proxy.corp:8080"},
+        ):
+            opts = obstore_client_options()
+        assert opts["proxy_excludes"] == "internal.example.com"
+
+    def test_excludes_omitted_without_proxy_url(self, monkeypatch) -> None:
+        # obstore only consults proxy_excludes when proxy_url is set, so don't
+        # emit a dangling exclude list when there's no proxy.
+        monkeypatch.setenv("NO_PROXY", "localhost")
+        with patch("urllib.request.getproxies", return_value={}):
+            opts = obstore_client_options()
+        assert "proxy_excludes" not in opts
+
+    def test_excludes_omitted_when_no_proxy_unset(self, monkeypatch) -> None:
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        with patch(
+            "urllib.request.getproxies",
+            return_value={"https": "http://proxy.corp:8080"},
+        ):
+            opts = obstore_client_options()
+        assert "proxy_excludes" not in opts
+
+
+# ---------------------------------------------------------------------------
+# root_certificate plumbing (custom CA from SSL_CERT_DIR → obstore)
+# ---------------------------------------------------------------------------
+
+
+class TestClientOptionsRootCertificate:
+    """SSL_CERT_DIR custom CAs are forwarded as obstore's ``root_certificate``."""
+
+    def test_root_certificate_set_when_custom_ca_present(self) -> None:
+        pem = b"-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----"
+        with (
+            patch("urllib.request.getproxies", return_value={}),
+            patch(
+                "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
+                return_value=pem,
+            ),
+        ):
+            opts = obstore_client_options()
+        assert opts["root_certificate"] == pem
+
+    def test_root_certificate_omitted_without_custom_ca(self) -> None:
+        with (
+            patch("urllib.request.getproxies", return_value={}),
+            patch(
+                "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
+                return_value=None,
+            ),
+        ):
+            opts = obstore_client_options()
+        assert "root_certificate" not in opts
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +292,22 @@ class TestLogObstoreConfig:
         formatted = fmt % tuple(args)
         assert "secretpass" not in formatted
         assert "***@proxy.corp:8080" in formatted
+
+    def test_summarizes_root_certificate_bytes(self) -> None:
+        """The full PEM bundle is noise — the log shows only a byte-count."""
+        pem = (
+            b"-----BEGIN CERTIFICATE-----\nsecretlookingcert\n-----END CERTIFICATE-----"
+        )
+        with patch("application_sdk.storage._obstore_config.logger") as mock_logger:
+            log_obstore_config(
+                "s3",
+                client_options={"root_certificate": pem},
+                retry_config=None,
+            )
+        fmt, *args = mock_logger.info.call_args.args
+        formatted = fmt % tuple(args)
+        assert "secretlookingcert" not in formatted
+        assert f"<{len(pem)} bytes>" in formatted
 
 
 # ---------------------------------------------------------------------------
@@ -285,3 +398,243 @@ class TestCloudPlumbsClientOptions:
         retry_cfg = kwargs.get("retry_config") or {}
         assert client_opts.get("timeout") == "42m"
         assert retry_cfg.get("max_retries") == 7
+
+
+# ---------------------------------------------------------------------------
+# make_azure_store — ambient AZURE_* env isolation
+# ---------------------------------------------------------------------------
+
+
+class TestAzureAmbientEnvIsolation:
+    """obstore reads ``AZURE_*`` from the environment at construction and lets a
+    host-injected value outrank the caller's explicit credential. ``make_azure_store``
+    must strip the ambient env while building from an explicit credential, and leave it
+    in place for the managed/workload-identity case.
+    """
+
+    def _build_and_capture(self, config: dict | None) -> dict:
+        """Build via make_azure_store with ``obstore.store.AzureStore`` stubbed; return
+        the AZURE_* env visible *during* construction plus the kwargs passed to obstore."""
+        captured: dict = {}
+
+        def fake_azure_store(**kw):
+            captured["azure_env"] = {
+                k: v for k, v in os.environ.items() if k.startswith("AZURE_")
+            }
+            captured["kw"] = kw
+            return MagicMock(name="AzureStore")
+
+        with patch("obstore.store.AzureStore", new=fake_azure_store):
+            make_azure_store("container", config)
+        return captured
+
+    def test_explicit_account_key_strips_ambient_env_during_build(self, monkeypatch):
+        monkeypatch.setenv("AZURE_STORAGE_ACCESS_KEY", "host-key")
+        monkeypatch.setenv("AZURE_FEDERATED_TOKEN_FILE", "/var/run/token")
+        monkeypatch.setenv("AZURE_CLIENT_ID", "host-client")
+        cap = self._build_and_capture(
+            {
+                "azure_storage_account_name": "acct",
+                "azure_storage_account_key": "cust-key",
+            }
+        )
+        # no ambient identity leaks into the construction — only our config is used
+        assert cap["azure_env"] == {}
+        assert cap["kw"]["config"]["azure_storage_account_key"] == "cust-key"
+        # ambient env restored afterwards
+        assert os.environ["AZURE_STORAGE_ACCESS_KEY"] == "host-key"
+        assert os.environ["AZURE_FEDERATED_TOKEN_FILE"] == "/var/run/token"
+        assert os.environ["AZURE_CLIENT_ID"] == "host-client"
+
+    def test_explicit_client_secret_strips_ambient_env(self, monkeypatch):
+        monkeypatch.setenv("AZURE_STORAGE_ACCESS_KEY", "host-key")
+        monkeypatch.setenv("AZURE_FEDERATED_TOKEN_FILE", "/var/run/token")
+        cap = self._build_and_capture(
+            {
+                "azure_storage_account_name": "acct",
+                "azure_storage_client_id": "c",
+                "azure_storage_tenant_id": "t",
+                "azure_storage_client_secret": "s",
+            }
+        )
+        assert cap["azure_env"] == {}
+        assert os.environ["AZURE_STORAGE_ACCESS_KEY"] == "host-key"
+
+    def test_no_credential_preserves_ambient_env(self, monkeypatch):
+        # Managed / workload identity: the caller passed no standalone credential, so
+        # the host's ambient identity must stay visible to obstore.
+        monkeypatch.setenv("AZURE_STORAGE_ACCESS_KEY", "host-key")
+        monkeypatch.setenv("AZURE_FEDERATED_TOKEN_FILE", "/var/run/token")
+        cap = self._build_and_capture({"azure_storage_account_name": "acct"})
+        assert cap["azure_env"]["AZURE_STORAGE_ACCESS_KEY"] == "host-key"
+        assert cap["azure_env"]["AZURE_FEDERATED_TOKEN_FILE"] == "/var/run/token"
+
+    def test_ambient_env_restored_even_on_construction_error(self, monkeypatch):
+        monkeypatch.setenv("AZURE_STORAGE_ACCESS_KEY", "host-key")
+
+        def boom(**kw):
+            raise RuntimeError("construction failed")
+
+        with patch("obstore.store.AzureStore", new=boom):
+            with pytest.raises(RuntimeError, match="construction failed"):
+                make_azure_store(
+                    "container",
+                    {
+                        "azure_storage_account_name": "a",
+                        "azure_storage_account_key": "k",
+                    },
+                )
+        assert os.environ["AZURE_STORAGE_ACCESS_KEY"] == "host-key"
+
+    @pytest.mark.parametrize(
+        "config, expected",
+        [
+            ({"azure_storage_account_key": "k"}, True),
+            ({"azure_storage_client_secret": "s"}, True),
+            ({"azure_storage_sas_key": "sas"}, True),
+            ({"azure_storage_token": "tok"}, True),
+            ({"azure_storage_account_name": "a"}, False),  # managed identity
+            # SP without a secret → relies on workload identity, keep ambient env
+            ({"azure_storage_client_id": "c", "azure_storage_tenant_id": "t"}, False),
+            (
+                {"azure_storage_account_key": ""},
+                False,
+            ),  # empty value is not a credential
+            ({}, False),
+            (None, False),
+        ],
+    )
+    def test_explicit_credential_gate(self, config, expected):
+        assert _azure_config_has_explicit_credential(config) is expected
+
+    def test_credential_provider_strips_ambient_env(self, monkeypatch):
+        # cert-auth and other credential_provider paths leave config without any
+        # of the four guarded keys, so the original gate (_azure_config_has_explicit_credential)
+        # returned False and ambient AZURE_* env was NOT stripped — the same host-identity
+        # outranking bug as the account-key case.  The gate must also fire when
+        # credential_provider is not None.
+        monkeypatch.setenv("AZURE_STORAGE_ACCESS_KEY", "host-key")
+        monkeypatch.setenv("AZURE_FEDERATED_TOKEN_FILE", "/var/run/token")
+        monkeypatch.setenv("AZURE_CLIENT_ID", "host-client")
+
+        captured: dict = {}
+
+        def fake_azure_store(**kw):
+            captured["azure_env"] = {
+                k: v for k, v in os.environ.items() if k.startswith("AZURE_")
+            }
+            captured["kw"] = kw
+            return MagicMock(name="AzureStore")
+
+        fake_provider = MagicMock(name="cert-credential-provider")
+        with patch("obstore.store.AzureStore", new=fake_azure_store):
+            make_azure_store(
+                "container",
+                {"azure_storage_account_name": "acct"},
+                credential_provider=fake_provider,
+            )
+
+        assert (
+            captured["azure_env"] == {}
+        ), "ambient AZURE_* env must be stripped when credential_provider is supplied"
+        assert captured["kw"]["credential_provider"] is fake_provider
+        # env restored after construction
+        assert os.environ["AZURE_STORAGE_ACCESS_KEY"] == "host-key"
+        assert os.environ["AZURE_FEDERATED_TOKEN_FILE"] == "/var/run/token"
+        assert os.environ["AZURE_CLIENT_ID"] == "host-client"
+
+
+# ---------------------------------------------------------------------------
+# Config passthrough — regression guard for binding.py / cloud.py
+#
+# These tests verify that make_s3_store / make_gcs_store forward the caller's
+# config dict to the obstore constructor without dropping or mutating keys.
+# The Rust-layer credential precedence (explicit config vs. ambient env vars)
+# was confirmed by live requests during the PR audit but cannot be exercised
+# at the unit level — integration tests cover that invariant.
+# ---------------------------------------------------------------------------
+
+
+class TestS3ConfigPassthrough:
+    """Regression guard: the config dict reaches S3Store unchanged.
+
+    These tests assert that make_s3_store passes the caller's config dict to the
+    S3Store constructor without dropping or mutating keys.  They do NOT verify the
+    Rust-layer credential precedence (explicit config vs. ambient env vars) — that
+    behaviour is tested by integration tests against a real or mocked S3 endpoint.
+    """
+
+    def test_full_explicit_credentials_reach_s3_store(self, monkeypatch) -> None:
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV-ACCESS-KEY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV-SECRET-KEY")
+
+        with patch("obstore.store.S3Store") as mock_s3:
+            mock_s3.return_value = MagicMock()
+            from application_sdk.storage._obstore_config import make_s3_store
+
+            make_s3_store(
+                "test-bucket",
+                {
+                    "aws_access_key_id": "CONFIG-ACCESS-KEY",
+                    "aws_secret_access_key": "CONFIG-SECRET-KEY",
+                    "aws_region": "us-east-1",
+                },
+            )
+
+        config = mock_s3.call_args.kwargs["config"]
+        assert config["aws_access_key_id"] == "CONFIG-ACCESS-KEY"
+        assert config["aws_secret_access_key"] == "CONFIG-SECRET-KEY"
+
+    def test_no_credentials_in_config_passes_none(self, monkeypatch) -> None:
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV-ACCESS-KEY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV-SECRET-KEY")
+
+        with patch("obstore.store.S3Store") as mock_s3:
+            mock_s3.return_value = MagicMock()
+            from application_sdk.storage._obstore_config import make_s3_store
+
+            make_s3_store("test-bucket", None)
+
+        assert mock_s3.call_args.kwargs["config"] is None
+
+
+class TestGCSConfigPassthrough:
+    """Regression guard: the config dict reaches GCSStore unchanged.
+
+    These tests assert that make_gcs_store passes the caller's config dict to the
+    GCSStore constructor without dropping or mutating keys.  They do NOT verify the
+    Rust-layer credential precedence (SA key in config vs. ADC / Workload Identity) —
+    that behaviour is tested by integration tests against a real or mocked GCS endpoint.
+    """
+
+    def test_explicit_sa_key_reaches_gcs_store(self, monkeypatch) -> None:
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/adc.json")
+
+        with patch("obstore.store.GCSStore") as mock_gcs:
+            mock_gcs.return_value = MagicMock()
+            from application_sdk.storage._obstore_config import make_gcs_store
+
+            make_gcs_store(
+                "test-bucket",
+                {"google_service_account_key": '{"type":"service_account"}'},
+            )
+
+        config = mock_gcs.call_args.kwargs["config"]
+        assert config is not None
+        assert "google_service_account_key" in config
+
+    def test_no_sa_key_passes_none_config_for_adc(self, monkeypatch) -> None:
+        # No SA key → config=None → obstore uses ADC / Workload Identity.
+        # Verified empirically: GCSStore(bucket=...) with no config and
+        # GOOGLE_APPLICATION_CREDENTIALS pointing to a nonexistent path fails
+        # at construction with "No such file or directory" — proving ADC is only
+        # consulted when the config SA key is absent.
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/adc.json")
+
+        with patch("obstore.store.GCSStore") as mock_gcs:
+            mock_gcs.return_value = MagicMock()
+            from application_sdk.storage._obstore_config import make_gcs_store
+
+            make_gcs_store("test-bucket", None)
+
+        assert mock_gcs.call_args.kwargs["config"] is None

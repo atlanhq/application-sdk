@@ -40,6 +40,13 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
+        description: "Org PAT for GHCR auth, the git_token BuildKit secret, and Install Trivy's release lookup -- the build/trivy-scan jobs already need it for GHCR (App tokens only have repo-level Packages permission; these packages are org-level), so everything else in those jobs uses it uniformly too rather than minting a redundant App token."
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret), used only by security-gate's cross-repo SDK checkout (that job never touches GHCR). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
 
 permissions:
   contents: read
@@ -78,17 +85,17 @@ jobs:
           echo "scan_image=scan-target:${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Build image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           file: ${{ steps.meta.outputs.dockerfile }}
@@ -101,6 +108,15 @@ jobs:
           build-args: |
             ACCESS_TOKEN_USR=${{ github.actor }}
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+          # Forward the org PAT as a BuildKit secret too, so Dockerfiles that clone a
+          # private git dependency via `--mount=type=secret,id=git_token` (e.g. apps
+          # pulling atlan-query-redaction) can authenticate during the scan build.
+          # Ignored by Dockerfiles that don't mount it, so it's a no-op for every other
+          # app. Mirrors the token the deploy/publish workflow already provides. This
+          # job already logs into GHCR with the PAT above, so there's no benefit to
+          # minting a separate App token just for this -- the PAT is already in play.
+          secrets: |
+            git_token=${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Upload image artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -130,13 +146,17 @@ jobs:
 
       - name: Log in to GHCR
         if: inputs.image != ''
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Install Trivy
+        # This job logs into GHCR with the PAT above whenever inputs.image is
+        # set (the build-and-publish-app.yaml call path), so minting a
+        # separate App token just for this single release-lookup call isn't
+        # worth the complexity -- use the PAT uniformly in this job instead.
         env:
           GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: |
@@ -177,6 +197,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - name: Checkout base allowlist from SDK
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -186,7 +216,7 @@ jobs:
             .security
             .github/scripts
           path: _sdk
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Download Trivy results
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

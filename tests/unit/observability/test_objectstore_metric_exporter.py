@@ -233,3 +233,117 @@ class TestExporterTemporality:
             assert provider.get_meter("test")
         finally:
             provider.shutdown()
+
+
+_EXPORTER_MOD = "application_sdk.observability._objectstore_metric_exporter"
+
+
+class TestSdrUpstreamExport:
+    """SDR-mode (ENABLE_ATLAN_UPLOAD=true) upstream-store coverage.
+
+    The existing ``TestExport`` cases exercise only the deployment store. In SDR
+    mode the exporter must *also* push each metric file to the upstream (Atlan)
+    store, under an ``sdr/prometheus-metrics`` path, and swallow upstream upload
+    failures so metric collection is never blocked.
+    """
+
+    @patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", True)
+    @patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True)
+    def test_export_uploads_to_both_stores_under_sdr_path(
+        self,
+        provider: MeterProvider,
+        in_memory_reader: InMemoryMetricReader,
+        exporter: ObjectStoreMetricExporter,
+    ) -> None:
+        deployment_store = MagicMock(name="deployment_store")
+        upstream_store = MagicMock(name="upstream_store")
+        exporter._deployment_store = deployment_store
+        exporter._upstream_store = upstream_store
+
+        meter = provider.get_meter("test")
+        counter = meter.create_counter("sdr.export.test")
+        counter.add(1, {"k": "v"})
+
+        metrics_data = in_memory_reader.get_metrics_data()
+        result = exporter.export(metrics_data)
+
+        from opentelemetry.sdk.metrics.export import MetricExportResult
+
+        assert result == MetricExportResult.SUCCESS
+        # Both stores receive exactly one put with the identical remote key.
+        assert deployment_store.put.call_count == 1
+        assert upstream_store.put.call_count == 1
+        dep_key = deployment_store.put.call_args[0][0]
+        up_key = upstream_store.put.call_args[0][0]
+        assert dep_key == up_key
+        assert "prometheus-metrics" in up_key
+        # The local file is written under the SDR subdirectory.
+        local_path = str(upstream_store.put.call_args[0][1])
+        assert os.path.join("sdr", "prometheus-metrics") in local_path
+        # Local file cleaned up afterwards.
+        assert not os.path.exists(local_path)
+
+    @patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", True)
+    @patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True)
+    def test_export_swallows_upstream_upload_failure(
+        self,
+        provider: MeterProvider,
+        in_memory_reader: InMemoryMetricReader,
+        exporter: ObjectStoreMetricExporter,
+    ) -> None:
+        deployment_store = MagicMock(name="deployment_store")
+        upstream_store = MagicMock(name="upstream_store")
+        upstream_store.put.side_effect = Exception("upstream boom")
+        exporter._deployment_store = deployment_store
+        exporter._upstream_store = upstream_store
+
+        meter = provider.get_meter("test")
+        counter = meter.create_counter("sdr.fail.test")
+        counter.add(1)
+
+        metrics_data = in_memory_reader.get_metrics_data()
+        from opentelemetry.sdk.metrics.export import MetricExportResult
+
+        # Upstream raising must not block metric collection.
+        result = exporter.export(metrics_data)
+        assert result == MetricExportResult.SUCCESS
+        # Deployment upload was still attempted; upstream failure was swallowed.
+        assert deployment_store.put.call_count == 1
+        assert upstream_store.put.call_count == 1
+
+    def test_upstream_store_built_only_when_atlan_upload_enabled(
+        self, tmp_path
+    ) -> None:
+        """``__init__`` resolves the upstream store only in SDR mode."""
+        from application_sdk.constants import (
+            DEPLOYMENT_OBJECT_STORE_NAME,
+            UPSTREAM_OBJECT_STORE_NAME,
+        )
+
+        resolved: dict[str, object] = {
+            DEPLOYMENT_OBJECT_STORE_NAME: MagicMock(name="deployment"),
+            UPSTREAM_OBJECT_STORE_NAME: MagicMock(name="upstream"),
+        }
+
+        def _fake_resolve(_self, name):
+            return resolved[name]
+
+        # SDR mode: both stores resolved.
+        with (
+            patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True),
+            patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", True),
+            patch.object(ObjectStoreMetricExporter, "_resolve_store", _fake_resolve),
+        ):
+            e = ObjectStoreMetricExporter(data_dir=str(tmp_path))
+        assert e._deployment_store is resolved[DEPLOYMENT_OBJECT_STORE_NAME]
+        assert e._upstream_store is resolved[UPSTREAM_OBJECT_STORE_NAME]
+
+        # Non-SDR mode: upstream store is never built.
+        with (
+            patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True),
+            patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", False),
+            patch.object(ObjectStoreMetricExporter, "_resolve_store", _fake_resolve),
+        ):
+            e2 = ObjectStoreMetricExporter(data_dir=str(tmp_path))
+        assert e2._deployment_store is resolved[DEPLOYMENT_OBJECT_STORE_NAME]
+        assert e2._upstream_store is None

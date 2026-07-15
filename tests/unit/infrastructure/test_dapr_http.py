@@ -17,7 +17,12 @@ from application_sdk.infrastructure._dapr.http import (
     AsyncDaprClient,
     BindingResult,
     get_dapr_component_types,
+    retry_past_dapr_cold_start,
     wait_for_dapr_sidecar,
+)
+from application_sdk.infrastructure.secrets import (
+    SecretNotFoundError,
+    SecretStoreUnavailableError,
 )
 
 
@@ -358,6 +363,57 @@ class TestRetryConfiguration:
         client = AsyncDaprClient(base_url="http://localhost:3500", retries=0)
         assert isinstance(client._client._transport, RetryTransport)
 
+    def test_retry_covers_connection_errors_with_widened_budget(self):
+        """Connection-level failures (not just HTTP 5xx) must be retried, over a
+        window wide enough to bridge a cold-starting sidecar.
+
+        A Dapr call issued while daprd isn't yet accepting connections raises
+        ConnectError; if that isn't retried (or the budget is ~1.5s) the call
+        fails with "All connection attempts failed" instead of riding out the
+        startup. Guards against a regression to 5xx-only / tiny-budget retries.
+        """
+        import httpx
+
+        from application_sdk.infrastructure._dapr.http import _DEFAULT_RETRY_TOTAL
+
+        retry = AsyncDaprClient(
+            base_url="http://localhost:3500"
+        )._client._transport.retry
+        # Read errors on GET (the SDR secret-fetch codepath)...
+        assert retry.is_retryable_exception(httpx.ConnectError("x")) is True
+        assert retry.is_retryable_exception(httpx.ReadError("x")) is True
+        # ...AND write/close errors on POST/DELETE, so the explicit list stays at
+        # parity with httpx-retries' prior implicit default (regression guard for
+        # a narrower leaf-class list that would drop these).
+        assert retry.is_retryable_exception(httpx.WriteError("x")) is True
+        assert retry.is_retryable_exception(httpx.WriteTimeout("x")) is True
+        assert retry.is_retryable_exception(httpx.CloseError("x")) is True
+        assert _DEFAULT_RETRY_TOTAL >= 5
+        assert retry.backoff_factor >= 1.0
+
+
+class TestSidecarWaitTimeout:
+    """The startup readiness gate must wait long enough for a cold-starting
+    sidecar (the old 10s let CI proceed before daprd was up)."""
+
+    def test_default_timeout_raised_and_env_configurable(self, monkeypatch):
+        import importlib
+
+        import application_sdk.infrastructure._dapr.http as http_mod
+
+        # Default is generous enough for a CI cold start.
+        assert http_mod._DEFAULT_SIDECAR_WAIT_TIMEOUT >= 60.0
+
+        # ...and overridable via env. Reload under the patched env, then restore
+        # so the module globals don't leak into other tests.
+        monkeypatch.setenv("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", "123")
+        try:
+            reloaded = importlib.reload(http_mod)
+            assert reloaded._DEFAULT_SIDECAR_WAIT_TIMEOUT == 123.0
+        finally:
+            monkeypatch.delenv("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", raising=False)
+            importlib.reload(http_mod)
+
 
 class TestWaitForDaprSidecar:
     # The implementation early-returns when DEPLOYMENT_NAME == LOCAL_ENVIRONMENT
@@ -384,18 +440,26 @@ class TestWaitForDaprSidecar:
             await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
         mock_get.assert_called_once()
 
-    async def test_ready_after_retries(self):
-        """Returns once sidecar eventually responds 204 after non-204 responses."""
-        not_ready = MagicMock()
-        not_ready.status_code = 503
+    async def test_ready_after_connection_errors(self):
+        """Polls through connection errors (daprd still cold-booting) and
+        returns once daprd finally answers 204."""
+        import httpx as _httpx
+
         ready = MagicMock()
         ready.status_code = 204
-        mock_get = AsyncMock(side_effect=[not_ready, not_ready, ready])
+        mock_get = AsyncMock(
+            side_effect=[
+                _httpx.ConnectError("refused"),
+                _httpx.ConnectError("refused"),
+                ready,
+            ]
+        )
         with (
             self._DEPLOYED,
             patch(
                 "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
             ) as mock_cls,
+            patch("application_sdk.infrastructure._dapr.http.logger"),
         ):
             mock_cls.return_value.__aenter__ = AsyncMock(
                 return_value=MagicMock(get=mock_get)
@@ -404,8 +468,10 @@ class TestWaitForDaprSidecar:
             await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
         assert mock_get.call_count == 3
 
-    async def test_timeout_logs_warning(self):
-        """Logs a warning and returns when sidecar never becomes ready."""
+    async def test_returns_on_first_non_204(self):
+        """Returns on the first poll once daprd's HTTP API answers at all —
+        a non-204 (components still initializing) must NOT keep it waiting,
+        since per-component readiness is the per-call retry budget's job."""
         not_ready = MagicMock()
         not_ready.status_code = 503
         mock_get = AsyncMock(return_value=not_ready)
@@ -420,9 +486,41 @@ class TestWaitForDaprSidecar:
                 return_value=MagicMock(get=mock_get)
             )
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
+        mock_get.assert_called_once()
+        # The "proceeding without full-component wait" decision is INFO (not
+        # DEBUG) so it survives the prod INFO floor, and it carries the status
+        # code — not WARNING, since a reachable-but-not-204 sidecar is an
+        # expected steady state, not an anomaly.
+        mock_logger.info.assert_called_once()
+        assert 503 in mock_logger.info.call_args[0]
+        mock_logger.warning.assert_not_called()
+
+    async def test_timeout_logs_warning(self):
+        """Logs a warning and returns when daprd never accepts connections
+        (only the connection-error path can reach the deadline now)."""
+        import httpx as _httpx
+
+        mock_get = AsyncMock(side_effect=_httpx.ConnectError("refused"))
+        with (
+            self._DEPLOYED,
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+            patch("application_sdk.infrastructure._dapr.http.logger") as mock_logger,
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             await wait_for_dapr_sidecar(timeout=0.05, interval=0.01)
         mock_logger.warning.assert_called_once()
-        assert "not ready" in mock_logger.warning.call_args[0][0]
+        assert "not reachable" in mock_logger.warning.call_args[0][0]
+        # The terminal give-up must carry the last connection error so a
+        # genuinely unreachable/misconfigured sidecar is diagnosable.
+        assert isinstance(
+            mock_logger.warning.call_args.kwargs.get("exc_info"), _httpx.ConnectError
+        )
 
     async def test_connection_error_does_not_crash(self):
         """Poll loop survives connection errors and eventually times out cleanly."""
@@ -441,6 +539,194 @@ class TestWaitForDaprSidecar:
             )
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             await wait_for_dapr_sidecar(timeout=0.05, interval=0.01)
+
+    async def test_ready_arms_shared_cold_start_gate(self, monkeypatch):
+        """A successful health probe arms the same gate
+        retry_past_dapr_cold_start consults — a worker that already confirmed
+        readiness at startup shouldn't pay a second, uninformed wait on its
+        first real Dapr call."""
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http._dapr_sidecar_confirmed_ready",
+            False,
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 204
+        mock_get = AsyncMock(return_value=mock_response)
+        with (
+            self._DEPLOYED,
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
+
+        import application_sdk.infrastructure._dapr.http as http_mod
+
+        assert http_mod._dapr_sidecar_confirmed_ready is True
+
+    async def test_timeout_does_not_arm_shared_cold_start_gate(self, monkeypatch):
+        """Giving up on the health probe (daprd never reachable) must NOT arm
+        the shared gate — a later real Dapr call still needs its own retry
+        budget in case the sidecar needed a little longer than the probe
+        waited."""
+        import httpx as _httpx
+
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http._dapr_sidecar_confirmed_ready",
+            False,
+        )
+        mock_get = AsyncMock(side_effect=_httpx.ConnectError("refused"))
+        with (
+            self._DEPLOYED,
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+            patch("application_sdk.infrastructure._dapr.http.logger"),
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=0.05, interval=0.01)
+
+        import application_sdk.infrastructure._dapr.http as http_mod
+
+        assert http_mod._dapr_sidecar_confirmed_ready is False
+
+    async def test_non_204_does_not_arm_shared_cold_start_gate(self, monkeypatch):
+        """Returning early on a reachable-but-not-204 sidecar must NOT arm the
+        gate — components may still be initializing, so the first real Dapr
+        call still needs its own retry budget."""
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http._dapr_sidecar_confirmed_ready",
+            False,
+        )
+        not_ready = MagicMock()
+        not_ready.status_code = 503
+        mock_get = AsyncMock(return_value=not_ready)
+        with (
+            self._DEPLOYED,
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+            patch("application_sdk.infrastructure._dapr.http.logger"),
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
+
+        import application_sdk.infrastructure._dapr.http as http_mod
+
+        assert http_mod._dapr_sidecar_confirmed_ready is False
+
+
+class TestRetryPastDaprColdStart:
+    """Tests for retry_past_dapr_cold_start — the shared cold-start retry
+    engine used by every Dapr-backed call site that opts in (secret fetch,
+    credential-vault config fetch, named-credential resolver path)."""
+
+    async def test_retries_transient_failure_then_succeeds(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
+        calls = {"n": 0}
+
+        async def call() -> str:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise SecretStoreUnavailableError("p")
+            return "value"
+
+        result = await retry_past_dapr_cold_start(
+            call, description="test call", component="test-component"
+        )
+
+        assert result == "value"
+        assert calls["n"] == 3
+
+    async def test_non_transient_exception_arms_gate_and_fails_fast(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        calls = {"n": 0}
+
+        async def call() -> str:
+            calls["n"] += 1
+            raise SecretNotFoundError("p")
+
+        with pytest.raises(SecretNotFoundError):
+            await retry_past_dapr_cold_start(
+                call, description="test call", component="test-component"
+            )
+        assert calls["n"] == 1
+
+        # The gate is now armed for this component — a later transient
+        # failure on the SAME component is not retried.
+        async def transient_call() -> str:
+            calls["n"] += 1
+            raise SecretStoreUnavailableError("p")
+
+        with pytest.raises(SecretStoreUnavailableError):
+            await retry_past_dapr_cold_start(
+                transient_call, description="test call", component="test-component"
+            )
+        assert calls["n"] == 2
+
+    async def test_different_component_does_not_share_gate(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
+        """A definitive answer on one component must not arm the gate for a
+        different component — the cross-component leak fixed alongside the
+        introduction of ``component``."""
+        calls = {"n": 0}
+
+        async def call() -> str:
+            calls["n"] += 1
+            raise SecretNotFoundError("p")
+
+        with pytest.raises(SecretNotFoundError):
+            await retry_past_dapr_cold_start(
+                call, description="test call", component="component-a"
+            )
+        assert calls["n"] == 1
+
+        # A different component still gets a full retry budget.
+        async def transient_call() -> str:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise SecretStoreUnavailableError("p")
+            return "value"
+
+        result = await retry_past_dapr_cold_start(
+            transient_call,
+            description="test call",
+            component="component-b",
+        )
+        assert result == "value"
+        assert calls["n"] == 3
+
+    async def test_gives_up_at_deadline(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        calls = {"n": 0}
+
+        async def call() -> str:
+            calls["n"] += 1
+            raise SecretStoreUnavailableError("p")
+
+        with pytest.raises(SecretStoreUnavailableError):
+            await retry_past_dapr_cold_start(
+                call, description="test call", component="test-component"
+            )
+        assert calls["n"] == 2
 
 
 class TestGetDaprComponentTypes:

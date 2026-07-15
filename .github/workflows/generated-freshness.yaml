@@ -1,0 +1,154 @@
+name: Generated Artifact Freshness (reusable)
+
+# Reusable PR gate for BLDX-1414: regenerate an app's contract artifacts from
+# the committed contract/app.pkl (+ lock) and fail if the committed
+# app/generated/** / atlan.yaml / app.yaml differ from a fresh `pkl eval`.
+# This is the CI half — the only check that proves *content* freshness. The
+# static conformance rules K003/K004/K005 catch a stale lock, a missing output,
+# or a stripped provenance banner, but a hand-edit that keeps the banner is
+# invisible to a static scanner; only regenerate-and-diff catches it.
+#
+# NON-BLOCKING by design: this workflow is intended to run as an *informational*
+# check (not a required status check). On drift it fails the job and posts a
+# sticky comment telling the contributor to regenerate. Promote it to a required
+# check once fleet drift has dropped and stopped growing (tier discipline).
+#
+# Opt-out: an app that deliberately hand-maintains its generated artifacts sets
+# `check-freshness: false` on the caller (mirrors renovate-pkl-sync's
+# `regenerate-contract: false`), and the check no-ops.
+#
+# Consumer repos call this from their own
+# .github/workflows/generated-freshness.yaml:
+#
+#   on:
+#     pull_request:
+#       branches: [main]
+#       paths: ['contract/**', 'atlan.yaml', 'app.yaml', 'app/generated/**']
+#   permissions:
+#     contents: read
+#     pull-requests: write
+#   jobs:
+#     freshness:
+#       uses: atlanhq/application-sdk/.github/workflows/generated-freshness.yaml@main
+#       # hand-generating apps opt out with:
+#       # with:
+#       #   check-freshness: false
+
+on:
+  workflow_call:
+    inputs:
+      pkl-version:
+        description: Pkl toolchain version to use.
+        required: false
+        default: "0.27.2"
+        type: string
+      check-freshness:
+        description: >
+          Run the freshness check. Default true. Set false to opt out (e.g. an
+          app with hand-maintained generated config) — mirrors renovate-pkl-sync's
+          regenerate-contract opt-out.
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# One in-flight run per PR: avoid duplicate sticky comments on rapid pushes.
+concurrency:
+  group: generated-freshness-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  freshness:
+    name: Generated Artifact Freshness
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The PR branch HEAD, not the synthetic merge commit — we diff exactly
+          # what the contributor committed against a fresh regeneration.
+          #
+          # Accepted posture: a fork PR can point contract/PklProject at an
+          # attacker-controlled module URI, which `pkl eval` (below) then
+          # fetches and evaluates. This is accepted rather than allowlisted:
+          # pkl is a config DSL with no I/O primitives, permissions here are
+          # contents:read + pull-requests:write (no secrets exposed), and the
+          # same posture already exists on renovate-pkl-sync.yaml. A
+          # PklProject module-URI allowlist, if ever added, should cover all
+          # such pkl-eval-on-PR-head workflows at once, not just this one.
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # Provides `uvx ruff`, used by the driver to format generated Python so the
+      # diff compares against ruff-formatted output (matching how the artifacts
+      # were committed).
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Install pkl
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/pkl \
+            "https://github.com/apple/pkl/releases/download/${{ inputs.pkl-version }}/pkl-linux-amd64"
+          chmod +x /tmp/pkl
+          sudo mv /tmp/pkl /usr/local/bin/pkl
+
+      # A `uses:` reusable workflow does NOT bring its repo's files into the
+      # caller's checkout, so the consumer repo has no copy of the driver. Sparse
+      # -checkout the SDK scripts into .sdk-scripts (same pattern as
+      # renovate-pkl-sync.yaml). The driver runs against the consumer's working
+      # tree (CWD) and only reads .sdk-scripts for its own code — never staged,
+      # and outside OUTPUT_PATHS so it can't register as drift.
+      - name: Fetch freshness driver
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: .sdk-scripts
+
+      - name: Check generated-artifact freshness
+        id: freshness
+        env:
+          CHECK_FRESHNESS: ${{ inputs.check-freshness }}
+        run: |
+          python3 .sdk-scripts/.github/scripts/check_generated_freshness.py \
+            --contract-dir contract \
+            --check-freshness "$CHECK_FRESHNESS"
+
+      - name: Post sticky comment on failure
+        if: failure() && github.event.pull_request.head.repo.fork == false
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
+        with:
+          header: generated-artifact-freshness
+          message: |
+            ### 🧬 Generated artifacts are not verifiably fresh
+
+            The committed generated artifacts (`app/generated/**`, `atlan.yaml`, `app.yaml`)
+            could not be confirmed current against `contract/app.pkl`. See the job log —
+            it is one of:
+
+            - **Drift** — a fresh `pkl eval` produced different output; the committed
+              artifacts are stale or were hand-edited.
+            - **Broken contract** — `contract/app.pkl` exists but `pkl eval` failed, so it
+              does not regenerate at all (a toolkit bump likely merged without regenerating).
+
+            **To resolve, pick one:**
+            - Run `pkl eval -m . contract/app.pkl` (or `uv run poe generate`) locally, fix any
+              eval error, and push the refreshed output.
+            - If this app **intentionally** hand-maintains its generated config, opt out by
+              setting `check-freshness: false` on the caller workflow.
+
+            This check is not a required status by default, so it flags the problem without
+            hard-blocking merge — but a red check here means the generated diff in
+            **Files changed** is missing or stale, so reviewers should not approve on it.
+
+      - name: Clear sticky comment when fresh
+        if: success() && github.event.pull_request.head.repo.fork == false
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
+        with:
+          header: generated-artifact-freshness
+          delete: true

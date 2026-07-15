@@ -92,32 +92,28 @@ def test_load_respects_pool_pre_ping_override(
 
 
 @pytest.mark.asyncio
-@patch("application_sdk.clients.sql.asyncio.to_thread")
+@patch("application_sdk.clients.sql.run_in_thread", new_callable=AsyncMock)
 @patch("sqlalchemy.create_engine")
-async def test_load_uses_asyncio_to_thread_for_ping(
-    mock_create_engine: Any, mock_to_thread: AsyncMock, sql_client: BaseSQLClient
+async def test_load_uses_run_in_thread_for_ping(
+    mock_create_engine: Any, mock_run_in_thread: AsyncMock, sql_client: BaseSQLClient
 ):
-    """load() must delegate the blocking engine.connect() ping to asyncio.to_thread.
+    """load() must delegate the blocking engine.connect() ping to run_in_thread.
 
     The ping closes the event loop for the duration of the ODBC handshake; running
     it on the event loop directly starves Temporal's auto-heartbeat. Verify that
-    asyncio.to_thread is called (not a direct engine.connect() on the loop).
+    run_in_thread is called (not a direct engine.connect() on the loop, and not
+    asyncio.to_thread — which would land on asyncio's shared default executor
+    instead of the SDK's dedicated pool).
     """
-    from unittest.mock import AsyncMock as _AsyncMock
-
     mock_engine = MagicMock()
     mock_create_engine.return_value = mock_engine
-    mock_to_thread.return_value = None  # AsyncMock already returns a coroutine
-    mock_to_thread.__class__ = _AsyncMock
+    mock_run_in_thread.return_value = None
 
-    # Replace with a true AsyncMock so await works
-    actual_async_mock = _AsyncMock(return_value=None)
-    with patch("application_sdk.clients.sql.asyncio.to_thread", actual_async_mock):
-        await sql_client.load({"username": "u", "password": "p"})
+    await sql_client.load({"username": "u", "password": "p"})
 
-    actual_async_mock.assert_called_once()
-    # The callable passed to to_thread should trigger engine.connect when called
-    ping_fn = actual_async_mock.call_args[0][0]
+    mock_run_in_thread.assert_called_once()
+    # The callable passed to run_in_thread should trigger engine.connect when called
+    ping_fn = mock_run_in_thread.call_args[0][0]
     ping_fn()
     mock_engine.connect.assert_called_once()
 
@@ -671,9 +667,9 @@ async def test_load_wraps_engine_failure_as_client_error(
     mock_engine = MagicMock()
     mock_create_engine.return_value = mock_engine
 
-    # Force the connect-test inside asyncio.to_thread to fail
+    # Force the connect-test inside run_in_thread to fail
     actual_async_mock = AsyncMock(side_effect=RuntimeError("auth handshake failed"))
-    with patch("application_sdk.clients.sql.asyncio.to_thread", actual_async_mock):
+    with patch("application_sdk.clients.sql.run_in_thread", actual_async_mock):
         with pytest.raises(SqlClientAuthFailedError) as exc_info:
             await sql_client.load({"username": "u", "password": "p"})
     assert isinstance(exc_info.value.cause, RuntimeError)
@@ -829,42 +825,6 @@ def test_get_sqlalchemy_connection_string_requires_db_config():
     client.DB_CONFIG = None
     with pytest.raises(SqlClientConfigError):
         client.get_sqlalchemy_connection_string()
-
-
-# ---------- _execute_query_daft (drives `import daft`) ----------
-
-
-def test_execute_query_daft_requires_engine(sql_client: BaseSQLClient):
-    sql_client.engine = None
-    with pytest.raises(EngineNotInitializedError):
-        sql_client._execute_query_daft("SELECT 1", chunksize=None)
-
-
-def test_execute_query_daft_with_string_engine(sql_client: BaseSQLClient):
-    """When engine is a connection string, daft.read_sql is called with the string directly."""
-    sql_client.engine = "postgresql://u:p@h/db"
-    fake_daft = MagicMock()
-    fake_daft.read_sql.return_value = "df-string-engine"
-    with patch.dict("sys.modules", {"daft": fake_daft}):
-        result = sql_client._execute_query_daft("SELECT 1", chunksize=10)
-    assert result == "df-string-engine"
-    fake_daft.read_sql.assert_called_once_with(
-        "SELECT 1", "postgresql://u:p@h/db", infer_schema_length=10
-    )
-
-
-def test_execute_query_daft_with_engine_object(sql_client: BaseSQLClient):
-    """When engine is a SQLAlchemy engine, daft.read_sql is called with engine.connect."""
-    fake_engine = MagicMock()
-    sql_client.engine = fake_engine
-    fake_daft = MagicMock()
-    fake_daft.read_sql.return_value = "df-engine-obj"
-    with patch.dict("sys.modules", {"daft": fake_daft}):
-        result = sql_client._execute_query_daft("SELECT 1", chunksize=None)
-    assert result == "df-engine-obj"
-    fake_daft.read_sql.assert_called_once_with(
-        "SELECT 1", fake_engine.connect, infer_schema_length=None
-    )
 
 
 # ---------- _execute_query / _execute_pandas_query (drives pandas imports) ----------

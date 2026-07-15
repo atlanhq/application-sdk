@@ -64,6 +64,7 @@ remediation/
 | error-handling | E | ✅ Mechanical (E005, E016) + judgment (E001–E002, E013, others) |
 | logging | L | 🚧 Detection only → residue |
 | ci | C | 🚧 Detection only → residue |
+| tests | T | ✅ Judgment, all routed to residue (T001–T004); WARN-tier, so strict-mode only |
 
 ### Adding a new area
 

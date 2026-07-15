@@ -1,10 +1,20 @@
+import warnings
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from application_sdk.transformers.errors import TransformerNotImplementedError
 
 if TYPE_CHECKING:
-    import daft
+    import pandas as pd
+    import pyarrow as pa
+
+warnings.warn(
+    "application_sdk.transformers is deprecated; use the connector-side asset-mapper "
+    "pattern (typed records → map_<entity>() → pyatlan_v9 Asset) instead — will be "
+    "removed in v4.0. See docs/upgrade-guide-v3.md.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 class TransformerInterface(ABC):
@@ -16,18 +26,41 @@ class TransformerInterface(ABC):
 
     All transformer implementations must inherit from this class and implement
     the transform_metadata method.
+
+    .. deprecated:: 3.20.0
+        Use the connector-side asset-mapper pattern (typed records →
+        ``map_<entity>()`` → ``pyatlan_v9`` Asset) instead — will be removed in
+        v4.0. See ``docs/upgrade-guide-v3.md``.
     """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # The SDK's own concrete transformers (AtlasTransformer,
+        # QueryBasedTransformer) subclass this ABC; warning on *their* definition
+        # would fire at SDK import with no consumer code to point at, on top of
+        # each class's targeted __init__ warning. Skip those — a consumer
+        # subclass (module outside application_sdk.transformers) still warns here,
+        # and B001 catches the import statically via the manifest regardless.
+        if cls.__module__.startswith("application_sdk.transformers"):
+            return
+        warnings.warn(
+            "TransformerInterface is deprecated; use the connector-side asset-mapper "
+            "pattern (typed records → map_<entity>() → pyatlan_v9 Asset) instead — "
+            "will be removed in v4.0. See docs/upgrade-guide-v3.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     @abstractmethod
     def transform_metadata(
         self,
         typename: str,
-        dataframe: "daft.DataFrame",
+        dataframe: "pa.Table | pd.DataFrame | list[dict[str, Any]]",
         workflow_id: str,
         workflow_run_id: str,
         entity_class_definitions: dict[str, type[Any]] | None = None,
         **kwargs: Any,
-    ) -> "daft.DataFrame":
+    ) -> "pa.Table | list[dict[str, Any]] | None":
         """Transform metadata from one format to another.
 
         This method should convert the input metadata into a different format

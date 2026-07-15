@@ -13,6 +13,7 @@ import yaml
 from application_sdk.storage.binding import (
     _AZURE_AUTHORITY_HOSTS,
     GCS_SERVICE_ACCOUNT_FIELDS,
+    _adc_is_external_account,
     _coerce_bool,
     _create_store_from_binding_optional_with_put_attrs,
     _endpoint_is_aws,
@@ -240,6 +241,86 @@ class TestS3StaticCredentials:
         config = mock_s3_cls.call_args.kwargs["config"]
         assert config["aws_session_token"] == "TOKEN"
 
+    @patch("obstore.store.S3Store")
+    def test_access_key_only_warns_and_omits_credentials(
+        self, mock_s3_cls: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Empirically confirmed: obstore mixes config access_key_id with env
+        # secret_access_key when only one half of the pair is in config.  The
+        # mismatched pair signs requests as the wrong identity (if env creds are
+        # present) or fails authentication.  We must emit neither key so the
+        # store falls back cleanly to the ambient credential chain.
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV-ACCESS-KEY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV-SECRET-KEY")
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "region": "us-east-1", "accessKey": "AK"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        with patch("application_sdk.storage.binding._get_logger") as mock_logger_fn:
+            mock_logger = MagicMock()
+            mock_logger_fn.return_value = mock_logger
+            create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"] or {}
+        assert "aws_access_key_id" not in config
+        assert "aws_secret_access_key" not in config
+        mock_logger.warning.assert_called_once()
+        assert "only one was set" in mock_logger.warning.call_args.args[0]
+
+    @patch("obstore.store.S3Store")
+    def test_secret_key_only_warns_and_omits_credentials(
+        self, mock_s3_cls: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV-ACCESS-KEY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV-SECRET-KEY")
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "region": "us-east-1", "secretKey": "SK"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        with patch("application_sdk.storage.binding._get_logger") as mock_logger_fn:
+            mock_logger = MagicMock()
+            mock_logger_fn.return_value = mock_logger
+            create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"] or {}
+        assert "aws_access_key_id" not in config
+        assert "aws_secret_access_key" not in config
+        mock_logger.warning.assert_called_once()
+
+    @patch("obstore.store.S3Store")
+    def test_session_token_without_key_pair_warns_and_is_ignored(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        # STS session tokens require base credentials by definition; a bare
+        # sessionToken is a misconfiguration that should warn rather than
+        # silently fall back (symmetric with the half-pair warning above).
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "region": "us-east-1", "sessionToken": "TOKEN"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        with patch("application_sdk.storage.binding._get_logger") as mock_logger_fn:
+            mock_logger = MagicMock()
+            mock_logger_fn.return_value = mock_logger
+            create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"] or {}
+        assert "aws_session_token" not in config
+        assert "aws_access_key_id" not in config
+        assert "aws_secret_access_key" not in config
+        mock_logger.warning.assert_called_once()
+        assert (
+            "sessionToken requires accessKey" in mock_logger.warning.call_args.args[0]
+        )
+
 
 class TestS3EmptyConfigHardening:
     @patch("obstore.store.S3Store")
@@ -371,7 +452,10 @@ class TestS3BehaviorKnobs:
         assert "aws_endpoint" not in config
         assert "aws_virtual_hosted_style_request" not in config
         client_options = mock_s3_cls.call_args.kwargs["client_options"]
-        assert client_options.get("timeout") == "90s"
+        # BLDX-1513: overall-request timeout is a 30m backstop; read_timeout
+        # (90s, progress-based) is the primary liveness bound plumbed to obstore.
+        assert client_options.get("timeout") == "30m"
+        assert client_options.get("read_timeout") == "90s"
         assert client_options.get("user_agent", "").startswith("atlan-application-sdk")
 
     @pytest.mark.parametrize(
@@ -560,16 +644,16 @@ class TestS3AssumeRole:
     @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
     @patch("boto3.Session")
     @patch("obstore.store.S3Store")
-    def test_assume_role_region_falls_back_to_env(
+    def test_assume_role_region_not_scoped_to_sts_session(
         self,
         mock_s3_cls: MagicMock,
         mock_session_cls: MagicMock,
         mock_sts_cls: MagicMock,
         tmp_path: Path,
     ) -> None:
-        # resolved_region (binding.py L340) must flow into boto3.Session so
-        # the STS call targets the correct regional endpoint when metadata.region
-        # is absent but AWS_REGION is set (IRSA / EKS injection).
+        # resolved_region (env fallback here) still lands on the S3 store's own
+        # config, but must never reach the STS session — that breaks AssumeRole
+        # for opt-in AWS regions (e.g. me-central-1).
         mock_s3_cls.return_value = MagicMock()
         mock_sts_cls.return_value = MagicMock()
         mock_session_cls.return_value = MagicMock()
@@ -582,8 +666,9 @@ class TestS3AssumeRole:
         )
         create_store_from_binding("objectstore", components_dir=components_dir)
 
+        assert mock_s3_cls.call_args.kwargs["config"]["aws_region"] == "ap-south-1"
         session_kwargs = mock_session_cls.call_args.kwargs
-        assert session_kwargs.get("region_name") == "ap-south-1"
+        assert "region_name" not in session_kwargs
 
 
 class TestS3SecretKeyRef:
@@ -2004,3 +2089,51 @@ class TestS3CompatibilityKnobs:
             "objectstore", components_dir=components_dir
         )
         assert put_attrs is None
+
+
+class TestAdcIsExternalAccount:
+    """`_adc_is_external_account` — the WIF carve-out probe (reads a local ADC
+    file only, never networks). Must stay total: a malformed creds file must
+    return False, never crash boot in `_create_infrastructure`."""
+
+    def test_no_env_returns_false(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            assert _adc_is_external_account() is False
+
+    def test_external_account_returns_true(self, tmp_path: Path) -> None:
+        cred = tmp_path / "wif.json"
+        cred.write_text(orjson.dumps({"type": "external_account"}).decode())
+        with patch.dict(
+            os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": str(cred)}, clear=True
+        ):
+            assert _adc_is_external_account() is True
+
+    def test_service_account_key_returns_false(self, tmp_path: Path) -> None:
+        cred = tmp_path / "sa.json"
+        cred.write_text(orjson.dumps({"type": "service_account"}).decode())
+        with patch.dict(
+            os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": str(cred)}, clear=True
+        ):
+            assert _adc_is_external_account() is False
+
+    def test_missing_file_returns_false(self, tmp_path: Path) -> None:
+        with patch.dict(
+            os.environ,
+            {"GOOGLE_APPLICATION_CREDENTIALS": str(tmp_path / "absent.json")},
+            clear=True,
+        ):
+            assert _adc_is_external_account() is False
+
+    @pytest.mark.parametrize("payload", ["[]", "null", "42", '"external_account"'])
+    def test_non_dict_json_returns_false_not_attributeerror(
+        self, tmp_path: Path, payload: str
+    ) -> None:
+        # Regression guard: a creds file that parses to a non-dict must fall
+        # through to False (let obstore surface the error) rather than raising
+        # AttributeError on `.get("type")` and crashing boot.
+        cred = tmp_path / "bad.json"
+        cred.write_text(payload)
+        with patch.dict(
+            os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": str(cred)}, clear=True
+        ):
+            assert _adc_is_external_account() is False

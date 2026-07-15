@@ -7,14 +7,16 @@ into Atlas entities using the pyatlan library.
 from __future__ import annotations
 
 import hashlib
-import json
+import warnings
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+import orjson
 from pyatlan.model.enums import AtlanConnectorType, EntityStatus
 
 if TYPE_CHECKING:
-    import daft
+    import pandas as pd
+    import pyarrow as pa
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers import TransformerInterface
@@ -24,6 +26,14 @@ from application_sdk.transformers.common.last_sync import (
     set_last_sync_details_on_asset,
 )
 from application_sdk.transformers.common.utils import process_text
+
+warnings.warn(
+    "application_sdk.transformers.atlas is deprecated; use the connector-side "
+    "asset-mapper pattern (typed records → map_<entity>() → pyatlan_v9 Asset) instead "
+    "— will be removed in v4.0. See docs/upgrade-guide-v3.md.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = get_logger(__name__)
 
@@ -52,6 +62,11 @@ class AtlasTransformer(TransformerInterface):
     Example:
         >>> transformer = AtlasTransformer("sql-connector", "tenant123")
         >>> result = transformer.transform_metadata("DATABASE", data, "workflow1", "run1")
+
+    .. deprecated:: 3.20.0
+        Use the connector-side asset-mapper pattern (typed records →
+        ``map_<entity>()`` → ``pyatlan_v9`` Asset) instead — will be removed in
+        v4.0. See ``docs/upgrade-guide-v3.md``.
     """
 
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
@@ -64,6 +79,13 @@ class AtlasTransformer(TransformerInterface):
                 current_epoch (str): Current epoch timestamp.
                 connection_qualified_name (str): Qualified name for the connection.
         """
+        warnings.warn(
+            "AtlasTransformer is deprecated; use the connector-side asset-mapper "
+            "pattern (typed records → map_<entity>() → pyatlan_v9 Asset) instead — "
+            "will be removed in v4.0. See docs/upgrade-guide-v3.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         from application_sdk.transformers.atlas.sql import (  # noqa: PLC0415 — circular: transformers/atlas/__init__.py loads sibling sql submodule
             Column,
             Database,
@@ -92,12 +114,12 @@ class AtlasTransformer(TransformerInterface):
     def transform_metadata(
         self,
         typename: str,
-        dataframe: daft.DataFrame,
+        dataframe: pa.Table | pd.DataFrame | list[dict[str, Any]],
         workflow_id: str,
         workflow_run_id: str,
         entity_class_definitions: dict[str, type[Any]] | None = None,
         **kwargs: dict[str, Any],
-    ) -> daft.DataFrame:
+    ) -> list[dict[str, Any]]:
         self.entity_class_definitions = (
             entity_class_definitions or self.entity_class_definitions
         )
@@ -105,8 +127,25 @@ class AtlasTransformer(TransformerInterface):
         connection_qualified_name = kwargs.get("connection", {}).get(
             "connection_qualified_name", None
         )
+        if isinstance(dataframe, list):
+            rows: list[dict[str, Any]] = dataframe
+        else:
+            import sys  # noqa: PLC0415
+
+            # Readers (e.g. ParquetFileReader) return pandas; bridge it to the
+            # pyarrow Table this transformer operates on. Producing a pandas
+            # DataFrame in the first place requires pandas to already be
+            # installed and imported, so probing sys.modules here (rather
+            # than importing pandas unconditionally) never forces the
+            # optional dependency on callers passing a pa.Table input.
+            pd = sys.modules.get("pandas")
+            if pd is not None and isinstance(dataframe, pd.DataFrame):
+                import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+
+                dataframe = pa.Table.from_pandas(dataframe, preserve_index=False)
+            rows = dataframe.to_pylist()
         transformed_metadata_list = []
-        for row in dataframe.iter_rows():
+        for row in rows:
             try:
                 transformed_metadata = self.transform_row(
                     typename,
@@ -124,7 +163,7 @@ class AtlasTransformer(TransformerInterface):
                         typename,
                         sorted(row.keys()) if isinstance(row, dict) else None,
                         hashlib.sha256(
-                            json.dumps(row, sort_keys=True, default=str).encode("utf-8")
+                            orjson.dumps(row, option=orjson.OPT_SORT_KEYS, default=str)
                         ).hexdigest()[:16]
                         if isinstance(row, dict)
                         else None,
@@ -132,9 +171,7 @@ class AtlasTransformer(TransformerInterface):
             except Exception:
                 logger.error("Error processing row: %s", typename, exc_info=True)
 
-        import daft  # noqa: PLC0415 — optional dep: daft
-
-        return daft.from_pylist(transformed_metadata_list)
+        return transformed_metadata_list
 
     def transform_row(
         self,

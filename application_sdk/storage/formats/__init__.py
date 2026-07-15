@@ -55,7 +55,6 @@ logger = get_logger(__name__)
 
 
 if TYPE_CHECKING:
-    import daft  # type: ignore
     import pandas as pd
 
 
@@ -179,10 +178,9 @@ class Reader(ABC):
     ) -> (
         Iterator["pd.DataFrame"]
         | AsyncIterator["pd.DataFrame"]
-        | Iterator["daft.DataFrame"]
-        | AsyncIterator["daft.DataFrame"]
+        | AsyncIterator[list[dict]]
     ):
-        """Get an iterator of batched pandas DataFrames.
+        """Get an iterator of batched pandas DataFrames (or list[dict] batches).
 
         Returns:
             Iterator["pd.DataFrame"]: An iterator of batched pandas DataFrames.
@@ -198,11 +196,11 @@ class Reader(ABC):
         raise AbstractFormatReaderError()
 
     @abstractmethod
-    async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
-        """Get a single pandas or daft DataFrame.
+    async def read(self) -> "pd.DataFrame":
+        """Get a single pandas DataFrame.
 
         Returns:
-            Union["pd.DataFrame", "daft.DataFrame"]: A pandas or daft DataFrame.
+            "pd.DataFrame": A pandas DataFrame.
 
         Raises:
             NotImplementedError: If the method is not implemented.
@@ -294,76 +292,29 @@ class Writer(ABC):
 
     def _convert_to_dataframe(
         self,
-        data: Union[
-            "pd.DataFrame", "daft.DataFrame", dict[str, Any], list[dict[str, Any]]
-        ],
-    ) -> Union["pd.DataFrame", "daft.DataFrame"]:
+        data: Union["pd.DataFrame", dict[str, Any], list[dict[str, Any]]],
+    ) -> "pd.DataFrame":
         """Convert input data to a DataFrame if needed.
 
         Args:
-            data: Input data - can be a DataFrame, dict, or list of dicts.
+            data: Input data - can be a pandas DataFrame, dict, or list of dicts.
 
         Returns:
-            A pandas or daft DataFrame depending on self.dataframe_type.
+            A pandas DataFrame.
 
         Raises:
-            TypeError: If data type is not supported or if dict/list input is used with daft when daft is not available.
+            UnsupportedDataTypeError: If data type is not supported.
         """
         import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
-        # Already a pandas DataFrame - return as-is or convert to daft if needed
+        # Already a pandas DataFrame - return as-is
         if isinstance(data, pd.DataFrame):
-            if self.dataframe_type == DataframeType.daft:
-                try:
-                    import daft  # noqa: PLC0415 — optional dep: daft
-
-                    return daft.from_pandas(data)
-                except ImportError:  # conformance: ignore[E008] re-raising as DaftNotInstalledError; optional dep daft not installed
-                    from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                        DaftNotInstalledError,
-                    )
-
-                    raise DaftNotInstalledError()
             return data
-
-        # Check for daft DataFrame
-        try:
-            import daft  # noqa: PLC0415 — optional dep: daft
-
-            if isinstance(data, daft.DataFrame):
-                return data
-        except ImportError:  # conformance: ignore[E002,E008] optional dep daft not installed; fall through to dict/list handling
-            pass
 
         # Convert dict or list of dicts to DataFrame
         if isinstance(data, dict) or (
             isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict)
         ):
-            # For daft dataframe_type, convert to daft DataFrame directly
-            if self.dataframe_type == DataframeType.daft:
-                try:
-                    import daft  # noqa: PLC0415 — optional dep: daft
-
-                    # Convert to columnar format for daft.from_pydict()
-                    if isinstance(data, dict):
-                        # Single dict: {"col1": "val1", "col2": "val2"} -> {"col1": ["val1"], "col2": ["val2"]}
-                        columnar_data = {k: [v] for k, v in data.items()}
-                    else:
-                        # List of dicts: [{"col1": "v1"}, {"col1": "v2"}] -> {"col1": ["v1", "v2"]}
-                        columnar_data = {}
-                        for record in data:
-                            for key, value in record.items():
-                                if key not in columnar_data:
-                                    columnar_data[key] = []
-                                columnar_data[key].append(value)
-                    return daft.from_pydict(columnar_data)
-                except ImportError:  # conformance: ignore[E008] re-raising as DaftNotInstalledError; optional dep daft not installed
-                    from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                        DaftNotInstalledError,
-                    )
-
-                    raise DaftNotInstalledError()
-            # For pandas dataframe_type, convert to pandas DataFrame
             return pd.DataFrame([data] if isinstance(data, dict) else data)
 
         from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
@@ -374,9 +325,7 @@ class Writer(ABC):
 
     async def write(
         self,
-        data: Union[
-            "pd.DataFrame", "daft.DataFrame", dict[str, Any], list[dict[str, Any]]
-        ],
+        data: Union["pd.DataFrame", dict[str, Any], list[dict[str, Any]]],
         **kwargs: Any,
     ) -> None:
         """Write data to the output destination.
@@ -405,7 +354,15 @@ class Writer(ABC):
         if self.dataframe_type == DataframeType.pandas:
             await self._write_dataframe(dataframe, **kwargs)
         elif self.dataframe_type == DataframeType.daft:
-            await self._write_daft_dataframe(dataframe, **kwargs)
+            import warnings as _warnings  # noqa: PLC0415
+
+            _warnings.warn(
+                "DataframeType.daft is deprecated and will be removed in v4.0; "
+                "use DataframeType.pandas instead. Routing to the pandas path.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            await self._write_dataframe(dataframe, **kwargs)
         else:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 UnsupportedDataframeTypeError,
@@ -416,9 +373,7 @@ class Writer(ABC):
     async def write_batches(
         self,
         dataframe: AsyncGenerator["pd.DataFrame", None]
-        | Generator["pd.DataFrame", None, None]
-        | AsyncGenerator["daft.DataFrame", None]
-        | Generator["daft.DataFrame", None, None],
+        | Generator["pd.DataFrame", None, None],
     ) -> None:
         """Write batched DataFrames to the output destination.
 
@@ -438,7 +393,15 @@ class Writer(ABC):
         if self.dataframe_type == DataframeType.pandas:
             await self._write_batched_dataframe(dataframe)
         elif self.dataframe_type == DataframeType.daft:
-            await self._write_batched_daft_dataframe(dataframe)
+            import warnings as _warnings  # noqa: PLC0415
+
+            _warnings.warn(
+                "DataframeType.daft is deprecated and will be removed in v4.0; "
+                "use DataframeType.pandas instead. Routing to the pandas path.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            await self._write_batched_dataframe(dataframe)
         else:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 UnsupportedDataframeTypeError,
@@ -565,52 +528,6 @@ class Writer(ABC):
                 description="Number of errors while writing to files",
             )
             raise
-
-    async def _write_batched_daft_dataframe(
-        self,
-        batched_dataframe: AsyncGenerator["daft.DataFrame", None]
-        | Generator["daft.DataFrame", None, None],
-    ):
-        """Write a batched daft DataFrame to JSON files.
-
-        This method writes the DataFrame to JSON files, potentially splitting it
-        into chunks based on chunk_size and buffer_size settings.
-
-        Args:
-            dataframe (daft.DataFrame): The DataFrame to write.
-
-        Note:
-            If the DataFrame is empty, the method returns without writing.
-        """
-        try:
-            if inspect.isasyncgen(batched_dataframe):
-                async for dataframe in batched_dataframe:
-                    if not is_empty_dataframe(dataframe):
-                        await self._write_daft_dataframe(dataframe)
-            else:
-                # Cast to Generator since we've confirmed it's not an AsyncGenerator
-                sync_generator = cast(
-                    Generator["daft.DataFrame", None, None], batched_dataframe
-                )
-                for dataframe in sync_generator:
-                    if not is_empty_dataframe(dataframe):
-                        await self._write_daft_dataframe(dataframe)
-        # conformance: ignore[E004] re-raises as typed FormatWriteError; no information is discarded
-        except Exception as e:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                FormatWriteError,
-            )
-
-            raise FormatWriteError(cause=e) from e
-
-    @abstractmethod
-    async def _write_daft_dataframe(self, dataframe: "daft.DataFrame", **kwargs):
-        """Write a daft DataFrame to the output destination.
-
-        Args:
-            dataframe (daft.DataFrame): The DataFrame to write.
-            **kwargs: Additional parameters passed through from write().
-        """
 
     @property
     def last_result(self) -> "WriterResult | None":

@@ -16,7 +16,7 @@ from conformance.suite.checks.error_handling._helpers import _get_name
 from conformance.suite.schema.findings import Finding
 
 # Mirrors application_sdk/errors/leaves.py.  Subclasses (transitively) of these
-# 14 classes must declare a ``code: ClassVar[str]`` that starts with the
+# 15 classes must declare a ``code: ClassVar[str]`` that starts with the
 # corresponding prefix followed by an underscore.
 LEAF_PREFIX_MAP: dict[str, str] = {
     "CancelledError": "CANCELLED",
@@ -29,6 +29,7 @@ LEAF_PREFIX_MAP: dict[str, str] = {
     "InvalidInputError": "INVALID_INPUT",
     "PreconditionError": "PRECONDITION",
     "DependencyUnavailableError": "DEPENDENCY_UNAVAILABLE",
+    "SourceUnavailableError": "SOURCE_UNAVAILABLE",
     "ResourceExhaustedError": "RESOURCE_EXHAUSTED",
     "DataIntegrityError": "DATA_INTEGRITY",
     "InternalError": "INTERNAL",
@@ -147,7 +148,7 @@ def resolve_leaf_prefix(
 ) -> str | None:
     """Walk the (transitive) base chain of *name* and return the leaf prefix.
 
-    Returns ``None`` if *name* is not derived from one of the 14 leaves.
+    Returns ``None`` if *name* is not derived from one of the 15 leaves.
     Cycle-safe via ``visiting``; results memoised in ``cache``.
     """
     if name in LEAF_PREFIX_MAP:
@@ -167,6 +168,54 @@ def resolve_leaf_prefix(
         if prefix is not None:
             result = prefix
             break
+    visiting.discard(name)
+    cache[name] = result
+    return result
+
+
+def resolve_ancestor(
+    name: str,
+    target: str,
+    by_name: dict[str, ClassRecord],
+    cache: dict[str, bool | None],
+    visiting: set[str],
+) -> bool | None:
+    """Transitively resolve *name*'s base chain looking for *target*.
+
+    Generic counterpart to :func:`resolve_leaf_prefix` with ``bool | None``
+    semantics for use by P013/P014 boundary resolution.
+
+    Returns
+    -------
+    ``True``
+        *name* IS *target*, or one of its ancestors is.
+    ``False``
+        *name* is in the scanned universe but none of its ancestors reach
+        *target*.  Definitive even when some bases are external/unknown — an
+        external base simply fails to confirm the target.
+    ``None``
+        *name* is not in the scanned universe (unknown / third-party /
+        generated — assumed OK to avoid false positives).
+    """
+    if name == target:
+        return True
+    if name in cache:
+        return cache[name]
+    if name in visiting:
+        # Cycle — treat as unknown to avoid false positives.
+        return None
+    rec = by_name.get(name)
+    if rec is None:
+        cache[name] = None
+        return None
+    visiting.add(name)
+    result: bool = False
+    for base in rec.bases:
+        sub = resolve_ancestor(base, target, by_name, cache, visiting)
+        if sub is True:
+            result = True
+            break
+        # sub is None (external base) or False — keep looking.
     visiting.discard(name)
     cache[name] = result
     return result

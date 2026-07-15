@@ -7,7 +7,6 @@ A connector test:
     import os
     import pytest
     from application_sdk.testing.e2e import BaseE2ETest, RunMode
-    from application_sdk.testing.e2e.payload import AgentSpec
 
     @pytest.mark.e2e
     class TestOpenAPIE2E(BaseE2ETest):
@@ -15,8 +14,10 @@ A connector test:
         connection_name_prefix = "e2e-ci"
         expected_min_asset_counts = {"APISpec": 1, "APIPath": 10}
 
-        def agent_spec(self) -> AgentSpec:
-            return AgentSpec(agent_name=f"openapi-e2e-ci-{self.run_id}")
+    # agent_spec() is derived from ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME
+    # by default (matching the worker's atlan-{app}-{deployment} queue, including
+    # any per-leg suffix the CI action sets). Override it only to pin an explicit
+    # queue — a run_id-keyed override would silently drop per-leg isolation.
 
 The base class handles submit + native-status poll + Atlas-side
 Connection assertion + per-node duration reporting. Subclasses provide
@@ -32,6 +33,7 @@ To skip the whole class when the harness env isn't configured::
 from __future__ import annotations
 
 import os
+import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -78,6 +80,10 @@ class FullDAGOutcome:
             Connection QN. Empty when the Connection probe didn't succeed.
         lineage_present: True iff at least one Process / ColumnProcess
             asset exists under the Connection QN.
+        asset_qn_samples: A few sampled qualifiedNames per type (only for
+            the types in ``expected_asset_qn_depth``); used to assert assets
+            landed at the correct hierarchy depth. Empty when location
+            validation isn't requested or the Connection probe didn't succeed.
     """
 
     ae_result: DAGRunResult
@@ -86,6 +92,7 @@ class FullDAGOutcome:
     asset_counts: dict[str, int] = field(default_factory=dict)
     total_assets: int = 0
     lineage_present: bool = False
+    asset_qn_samples: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def succeeded(self) -> bool:
@@ -155,6 +162,26 @@ class BaseE2ETest:
 
     ae_poll_interval_seconds: ClassVar[int] = 10
     ae_poll_timeout_seconds: ClassVar[int] = 600
+    # Fail-fast stall guard (test-harness only — this module is never imported
+    # by the production execution path). If no DAG node has started within this
+    # window, run_full_dag raises NoWorkerOnTaskQueueError instead of hanging
+    # for the full ae_poll_timeout_seconds. Catches the common wedge where a
+    # test's agent_spec().agent_name doesn't match the deployed worker's queue
+    # (or a second run_full_dag() in one test targets a different agent_name).
+    #
+    # On by default at 180s: e2e runs against a dedicated worker (the CI
+    # docker-compose container) that long-polls and picks work up within
+    # seconds, so a healthy run never trips it, and the full
+    # ae_poll_timeout_seconds still bounds real work. Set to 0 to disable on a
+    # suite that runs against shared / KEDA-autoscaled infra (e.g. some
+    # RunMode.DIRECT setups hitting a prod pod that may be scaled to zero),
+    # where legitimate pickup can take longer than any fixed grace.
+    #
+    # The guard fires at the first poll where elapsed >= grace, so real
+    # detection latency is grace + up to one ae_poll_interval_seconds
+    # (negligible at the 180/10 defaults; only noticeable if a subclass sets a
+    # grace close to the interval).
+    ae_stall_grace_seconds: ClassVar[int] = 180
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
     # Asset counts use a much shorter poll window: Elasticsearch is eventually
@@ -180,6 +207,36 @@ class BaseE2ETest:
     require_nonempty_assets: ClassVar[bool] = True
     expect_lineage: ClassVar[bool] = True
 
+    # Opt-in: validate the LOCATION (qualifiedName hierarchy) of published
+    # assets, not just their counts. Maps typeName -> the number of path
+    # segments its qualifiedName must have BELOW the connection QN
+    # (for the SQL db>schema>table>column shape: Database=1, Schema=2,
+    # Table=3, View=3, Column=4). For each declared type the harness samples a
+    # few landed assets and asserts each is nested under the connection at
+    # exactly that depth — catching a whole type that published to the wrong
+    # hierarchy level (mis-parented / flattened / a dropped path-template
+    # segment), which the counts alone can't see. This is the structural
+    # complement to the count + non-empty checks for the recurring
+    # egress->publish path-drift incident class. Empty = skip (counts +
+    # non-empty backstop still run).
+    #
+    # Scope + contract (so adopters don't over-trust it):
+    #   * Systematic-drift detector, NOT per-asset integrity: it samples a few
+    #     assets per type (no sort), so it reliably catches "the whole type is
+    #     at the wrong depth" but will almost never catch one mis-parented asset
+    #     among thousands. That's the right tradeoff for the path-drift class.
+    #   * A FULLY-DROPPED type is invisible here (no samples -> the type is
+    #     skipped). "Too few / none" is the COUNT check's job — so pair every
+    #     type you put here with an expected_min_asset_counts floor for the same
+    #     type. (The harness folds these types into its count-poll wait, so the
+    #     samples are read AFTER ES indexes them, but a genuinely-zero type is
+    #     still only surfaced by the floor.)
+    #   * Depth is computed by splitting the QN tail on "/", so it assumes
+    #     qualifiedName segments don't themselves contain "/". True for SQL
+    #     (db>schema>table>column); BI / object-store connectors whose QNs embed
+    #     slashes would mis-count — don't enable it there without adjusting.
+    expected_asset_qn_depth: ClassVar[dict[str, int]] = {}
+
     # ------------------------------------------------------------------
     # Setup
     # ------------------------------------------------------------------
@@ -196,6 +253,41 @@ class BaseE2ETest:
                     message=f"{type(self).__name__}: class attribute '{required}' must be set",
                     field=required,
                 )
+
+        # ADR-0014 two-store posture (sdr-e2e's `enable-two-store` input,
+        # threaded through as this env var) only changes anything on the
+        # CI-built worker container, which is only in the extraction path
+        # under RunMode.AGENT — the harness submits to that worker's own
+        # dynamic queue. Under RunMode.DIRECT extraction runs on the
+        # tenant's already-deployed production pod instead, whose storage
+        # config this harness never touches, so a missing App.upload()
+        # hand-off would not be caught even with two-store enabled here.
+        # Warn rather than fail: a DIRECT-mode run is still valid and
+        # useful on its own terms, just not a two-store hand-off check.
+        if os.environ.get("TWO_STORE") == "true" and self.mode is RunMode.DIRECT:
+            logger.warning(
+                "two-store mode is enabled but %s runs in RunMode.DIRECT — "
+                "extraction happens on the tenant's own production pod, not "
+                "the CI worker the two-store env vars were applied to, so a "
+                "missing App.upload() hand-off will NOT be caught by this run.",
+                type(self).__name__,
+            )
+
+        # The stall guard assumes a dedicated worker that picks work up within
+        # seconds. Under RunMode.DIRECT extraction runs on the tenant's own
+        # deployed pod, which may be KEDA-idle and cold-start slower than the
+        # grace — tripping a spurious NoWorkerOnTaskQueueError on an otherwise
+        # healthy run. Nudge the operator toward the opt-out rather than fail.
+        if self.mode is RunMode.DIRECT and self.ae_stall_grace_seconds > 0:
+            logger.warning(
+                "%s runs in RunMode.DIRECT with ae_stall_grace_seconds=%ds — "
+                "extraction runs on the tenant's own (possibly KEDA-idle) pod, "
+                "whose cold-start can exceed the grace and raise a spurious "
+                "NoWorkerOnTaskQueueError. Set ae_stall_grace_seconds = 0 on the "
+                "test class to disable the stall guard if you see false failures.",
+                type(self).__name__,
+                self.ae_stall_grace_seconds,
+            )
 
         tenant_url = os.environ.get("ATLAN_BASE_URL", "").rstrip("/")
         api_token = os.environ.get("ATLAN_API_KEY", "")
@@ -225,12 +317,20 @@ class BaseE2ETest:
         # connection_type overrides connector_short_name when the Atlan
         # catalog type segment differs from the connector's app name (e.g.
         # OpenAPI: connector_short_name="openapi", connection_type="api").
-        # The name is pure epoch seconds so Atlas never rejects it for
-        # containing hyphens or alpha characters.
+        #
+        # The trailing segment must be unique per test *instance*: with the e2e
+        # matrix, each suite runs as a separate parallel job whose setup_method
+        # can land in the same wall-clock second as another leg's, and rapid
+        # same-ref pushes can overlap too. A shared connection QN would let one
+        # leg's teardown purge another's assets and mix Atlas counts. epoch
+        # alone (1-second resolution) can't guarantee that, so append random
+        # digits. Kept PURE NUMERIC so Atlas never rejects the name for hyphens
+        # or alpha characters (agent queue + AE slug are already run-id-scoped
+        # and unique per run; this closes the connection-QN gap).
         _conn_type = self.connection_type or self.connector_short_name
-        _epoch = int(time.time())
-        self.connection_qualified_name = f"default/{_conn_type}/{_epoch}"
-        self.connection_display_name = f"{_conn_type}-{_epoch}"
+        _unique = f"{int(time.time())}{secrets.randbelow(1_000_000):06d}"
+        self.connection_qualified_name = f"default/{_conn_type}/{_unique}"
+        self.connection_display_name = f"{_conn_type}-{_unique}"
 
         # Atlas requires at least one non-empty admin list on a Connection
         # (ATLAS-400-00-114). When the subclass leaves all three admin attrs
@@ -251,6 +351,7 @@ class BaseE2ETest:
                     AtlanClient,
                 )
 
+                # conformance: ignore[P024] e2e harness admin-role lookup runs outside the async execution path; sync pyatlan is intentional
                 _pc = AtlanClient(base_url=tenant_url, api_key=api_token)
                 _guid = _pc.role_cache.get_id_for_name("$admin")
                 if _guid:
@@ -309,6 +410,7 @@ class BaseE2ETest:
             if not tenant_url or not api_token:
                 return
 
+            # conformance: ignore[P024] e2e harness asset lookup runs outside the async execution path; sync pyatlan is intentional
             client = AtlanClient(base_url=tenant_url, api_key=api_token)
 
             # Collect GUIDs for all descendant assets.
@@ -342,6 +444,7 @@ class BaseE2ETest:
             for asset in client.asset.search(conn_request):
                 if asset.guid:
                     client.asset.purge_by_guid(asset.guid)
+                    # conformance: ignore[L006] loop bounded to a single result via dsl.size=1; one purge event per connection
                     logger.info("e2e cleanup: purged connection %s", conn_qn)
 
         except Exception:
@@ -356,13 +459,83 @@ class BaseE2ETest:
     # ------------------------------------------------------------------
 
     def agent_spec(self) -> AgentSpec | None:
-        """Agent identity (tier 4 only). Return None for direct mode."""
+        """Agent identity (tier 4 only). Return None for direct mode.
+
+        Default (AGENT mode): derive the agent identity from the worker's own
+        deployment env so the extract node is dispatched to exactly the queue
+        the deployed worker polls — no per-connector hard-coding. The worker
+        derives its Temporal queue as
+        ``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}`` (see
+        :func:`application_sdk.main._derive_task_queue`); mirroring that here as
+        ``agent_name = {ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}`` makes
+        :meth:`_extract_task_queue` (``atlan-{agent_name}``) equal the worker
+        queue automatically. In particular this picks up any *per-leg*
+        ``ATLAN_DEPLOYMENT_NAME`` the CI action sets to give each parallel
+        matrix leg its own worker + queue (avoiding cross-worker artifact
+        invisibility under the two-store posture). Subclasses may still override
+        to pin an explicit agent identity.
+
+        Only the two-var shape is derivable from env. When the deployment env is
+        absent — e.g. a developer running ``pytest`` locally without the CI
+        action's ``ATLAN_DEPLOYMENT_NAME`` — this falls back to
+        ``{connector_short_name}-{connection_name_prefix}-{run_id}`` (the same
+        run-id-keyed shape connectors used to hard-code in an override). That
+        keeps local runs working with no override while CI (which always exports
+        the per-leg ``ATLAN_DEPLOYMENT_NAME``) still gets the exact worker queue.
+        For a local full-DAG run you must start the connector worker on this same
+        run-id queue explicitly — it is **not** what ``main._derive_task_queue``
+        builds from the same partial env, so the worker won't land there on its
+        own. A one-line ``logger.warning`` is emitted on the fallback path so a
+        CI leg that reaches it (env genuinely mis-set) gets an actionable log
+        line rather than a silent stall.
+
+        Subclasses should **not** override this to pin a hard-coded run-id name:
+        doing so drops the per-leg suffix the worker inherits and desyncs the two
+        queues (conformance rule T017). Override only to pin a genuinely
+        different agent identity (and then read the deployment env yourself).
+        """
         if self.mode is RunMode.DIRECT:
             return None
-        raise HarnessMethodNotImplementedError(
-            message="subclass must override agent_spec() for AGENT mode",
-            operation="agent_spec",
+        app_name = os.environ.get("ATLAN_APPLICATION_NAME", "")
+        deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", "")
+        if app_name and deployment_name:
+            return AgentSpec(agent_name=f"{app_name}-{deployment_name}")
+        # Local fallback: no CI-exported deployment env. Reproduce the exact
+        # {connector}-{connection_name_prefix}-{run_id} shape connectors used to
+        # hard-code in a working local override, so a local run lands on its own
+        # queue without needing a per-connector override. NB this does NOT match
+        # what a worker's main._derive_task_queue() would build from the same
+        # partial env — that returns atlan-{app}-{deployment} (both vars),
+        # bare {app} (only app), or {ClassName}-queue (neither), never a run-id
+        # queue. So for a local full-DAG run the worker must be started on this
+        # same agent_name queue explicitly; CI is unaffected (it always exports
+        # both vars, taking the exact-match branch above).
+        agent_name = (
+            f"{self.connector_short_name}-{self.connection_name_prefix}-{self.run_id}"
         )
+        # The real Temporal queue is atlan-{agent_name} (_extract_task_queue
+        # prepends "atlan-"). Render that one consistent, fully-qualified queue
+        # everywhere in the message so a reader doesn't see the name two ways.
+        queue = f"atlan-{agent_name}"
+        # Fire loud: in CI both vars are always exported, so reaching this branch
+        # there means the env is mis-set and the worker will poll a different
+        # queue → silent stall until the run-full-dag stall guard trips. Naming
+        # both vars makes a mis-set CI leg immediately actionable. (On a genuine
+        # local run this is just an FYI that you must start the worker on this
+        # queue.)
+        logger.warning(
+            "AGENT-mode agent_spec fell back to extract queue %s because "
+            "ATLAN_APPLICATION_NAME and/or ATLAN_DEPLOYMENT_NAME is unset "
+            "(app=%r deployment=%r). In CI both are always exported, so a mis-set "
+            "leg here will stall — the worker polls atlan-{app}-{deployment}, not "
+            "%s. Locally, start the connector worker on %s.",
+            queue,
+            app_name,
+            deployment_name,
+            queue,
+            queue,
+        )
+        return AgentSpec(agent_name=agent_name)
 
     def connection_spec(self) -> ConnectionSpec:
         """Where the resulting Atlas Connection will live."""
@@ -517,18 +690,34 @@ class BaseE2ETest:
         return dag
 
     def _apply_mustache_subs(self, obj: Any, subs: dict) -> Any:
-        """Recursively replace exact-match ``{{...}}`` strings."""
-        if isinstance(obj, dict):
-            return {k: self._apply_mustache_subs(v, subs) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [self._apply_mustache_subs(x, subs) for x in obj]
-        if isinstance(obj, str) and obj in subs:
-            return subs[obj]
-        return obj
+        """Recursively replace exact-match ``{{...}}`` strings.
+
+        Delegates to the shared walker (``application_sdk.testing._mustache``) so
+        the e2e and SDR harnesses share one implementation and cannot drift.
+        """
+        from application_sdk.testing._mustache import (  # noqa: PLC0415
+            apply_mustache_subs,
+        )
+
+        return apply_mustache_subs(obj, subs)
 
     # ------------------------------------------------------------------
     # The actual flow
     # ------------------------------------------------------------------
+
+    def _extract_task_queue(self) -> str:
+        """Task queue the ``extract`` node is dispatched to.
+
+        Single source of truth for both the seed DAG (which pins the extract
+        node's ``task_queue`` to this value) and the stall-guard diagnostic. In
+        AGENT mode this must equal the queue the deployed worker polls
+        (``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}``), so the
+        test's ``agent_spec().agent_name`` has to match that suffix.
+        """
+        agent = self.agent_spec()
+        if agent is not None:
+            return f"atlan-{agent.agent_name}"
+        return f"atlan-{self.connector_short_name}-default"
 
     def _bootstrap_workflow(self) -> str:
         """Ensure an AE workflow exists with a published version.
@@ -552,11 +741,7 @@ class BaseE2ETest:
         logger.info("Created (or reused) AE workflow: name=%s slug=%s", name, slug)
         time.sleep(3)
 
-        agent = self.agent_spec()
-        if agent is not None:
-            extract_queue = f"atlan-{agent.agent_name}"
-        else:
-            extract_queue = f"atlan-{self.connector_short_name}-default"
+        extract_queue = self._extract_task_queue()
 
         if self.manifest_path:
             seed_dag = self._seed_dag_from_manifest(extract_queue)
@@ -590,9 +775,12 @@ class BaseE2ETest:
             run_id,
             interval_seconds=self.ae_poll_interval_seconds,
             timeout_seconds=self.ae_poll_timeout_seconds,
+            stall_grace_seconds=self.ae_stall_grace_seconds,
+            stall_task_queue=self._extract_task_queue(),
         )
 
         asset_counts: dict[str, int] = {}
+        asset_qn_samples: dict[str, list[str]] = {}
         total_assets = 0
         lineage_present = False
         if ae_result.all_nodes_succeeded:
@@ -602,10 +790,24 @@ class BaseE2ETest:
                 timeout_seconds=self.atlas_poll_timeout_seconds,
             )
             if connection_in_atlas:
-                # Probe the union of types referenced by floors + exact-count
-                # parity, so both kinds of expectation get real Atlas counts.
+                # Probe the union of types referenced by floors, exact-count
+                # parity, AND location-depth checks, so all three kinds of
+                # expectation get real Atlas counts and the post-loop location
+                # sample reads populated data once those types have indexed.
+                # NOTE: adding a location type here does NOT by itself make the
+                # poll WAIT for that type — the loop only stays alive via a
+                # per-type floor or the non-empty backstop (total == 0), so a
+                # location-only type with no floor can still be zero when the
+                # loop exits (the moment any other type makes total > 0). The
+                # real wait-for-this-type safeguard is pairing each
+                # expected_asset_qn_depth type with an expected_min_asset_counts
+                # floor — see that attr's docstring.
                 probe_types = tuple(
-                    {*self.expected_min_asset_counts, *self.expected_exact_counts}
+                    {
+                        *self.expected_min_asset_counts,
+                        *self.expected_exact_counts,
+                        *self.expected_asset_qn_depth,
+                    }
                 )
                 if probe_types:
                     # Poll for asset counts — Elasticsearch is eventually
@@ -618,6 +820,7 @@ class BaseE2ETest:
                             self.connection_qualified_name,
                             type_names=probe_types,
                         )
+                        # conformance: ignore[L006] short, bounded poll (atlas_asset_poll_timeout_seconds) with modest iteration count, not a hot loop; the per-iteration asset counts are the primary diagnostic signal when an E2E run fails to converge
                         logger.info(
                             "Atlas inventory under %s: %s",
                             self.connection_qualified_name,
@@ -656,6 +859,21 @@ class BaseE2ETest:
                         lineage_counts,
                         lineage_present,
                     )
+                # Sample qualifiedNames for the location/hierarchy assertion
+                # (opt-in). Only the declared types are probed, so connectors
+                # that don't set expected_asset_qn_depth pay no extra Atlas call.
+                if self.expected_asset_qn_depth:
+                    asset_qn_samples = (
+                        self.client.sample_asset_qualified_names_under_connection(
+                            self.connection_qualified_name,
+                            type_names=tuple(self.expected_asset_qn_depth),
+                        )
+                    )
+                    logger.info(
+                        "Atlas qualifiedName samples under %s: %s",
+                        self.connection_qualified_name,
+                        asset_qn_samples,
+                    )
         else:
             failed_names = ", ".join(n.name for n in ae_result.failed_nodes) or "(none)"
             logger.warning(
@@ -673,6 +891,7 @@ class BaseE2ETest:
             asset_counts=asset_counts,
             total_assets=total_assets,
             lineage_present=lineage_present,
+            asset_qn_samples=asset_qn_samples,
         )
 
     # ------------------------------------------------------------------
@@ -736,6 +955,54 @@ class BaseE2ETest:
 
         return failures
 
+    def _validate_asset_locations(
+        self, asset_qn_samples: dict[str, list[str]]
+    ) -> list[str]:
+        """Validate sampled assets are nested under the connection at the
+        expected hierarchy depth.
+
+        Pure function of the samples + ``expected_asset_qn_depth`` + the
+        connection QN, so it is unit-testable without a tenant. For each
+        declared type, every sampled qualifiedName must (a) be nested under the
+        connection prefix and (b) have exactly the declared number of segments
+        below it — catching assets that landed at the wrong hierarchy level
+        (mis-parented / flattened / a dropped path segment) even when the COUNT
+        is correct. Types with no sampled assets are skipped: "too few / none"
+        is already covered by the count floors + the non-empty backstop, so this
+        check is purely about the *shape* of assets that did land.
+
+        NOTE - fails open: the sampling read path
+        (``sample_asset_qualified_names_under_connection``) returns ``[]`` on any
+        search error, which lands here as "no samples -> skip". So an auth / API
+        fault degrades to a silent pass, not a failure. The ``run_full_dag``
+        "Atlas qualifiedName samples under ..." log line is how you confirm
+        samples were actually non-empty - which is why first-run validation
+        against a real tenant is required, not optional.
+        """
+        failures: list[str] = []
+        prefix = f"{self.connection_qualified_name}/"
+        for type_name, depth in self.expected_asset_qn_depth.items():
+            for qn in asset_qn_samples.get(type_name, []):
+                if not qn.startswith(prefix):
+                    failures.append(
+                        f"  - {type_name} {qn!r} is not nested under the "
+                        f"connection {self.connection_qualified_name}"
+                    )
+                    continue
+                # rstrip a trailing "/" first: a QN that ends in "/" would
+                # otherwise split into an empty tail segment and over-count the
+                # depth by one. (Atlan QNs conventionally don't end in "/", so
+                # this is defensive.)
+                tail = qn[len(prefix) :].rstrip("/")
+                below = tail.split("/") if tail else []
+                if len(below) != depth:
+                    failures.append(
+                        f"  - {type_name} {qn!r} has {len(below)} segment(s) "
+                        f"below the connection, expected {depth} "
+                        "(wrong hierarchy level)"
+                    )
+        return failures
+
     # ------------------------------------------------------------------
     # Default test method
     # ------------------------------------------------------------------
@@ -749,7 +1016,9 @@ class BaseE2ETest:
           3. Asset-count expectations: ``expected_min_asset_counts`` floors,
              ``expected_exact_counts`` parity vs. the direct-run baseline, and
              the non-empty backstop (see ``_evaluate_asset_expectations``).
-          4. At least one Process/ColumnProcess exists (unless ``expect_lineage``
+          4. Asset locations: sampled assets are nested under the connection at
+             the depth declared in ``expected_asset_qn_depth`` (opt-in).
+          5. At least one Process/ColumnProcess exists (unless ``expect_lineage``
              is False).
         """
         outcome = self.run_full_dag()
@@ -781,6 +1050,15 @@ class BaseE2ETest:
                 f"{outcome.connection_qualified_name} did not meet expectations:\n"
                 + "\n".join(asset_failures)
                 + f"\nFull counts: {outcome.asset_counts}"
+            )
+
+        location_failures = self._validate_asset_locations(outcome.asset_qn_samples)
+        if location_failures:
+            raise AssertionError(
+                "Published assets are at the wrong location under "
+                f"{outcome.connection_qualified_name} (extract succeeded and the "
+                "counts may look right, but the qualifiedName hierarchy is "
+                "wrong):\n" + "\n".join(location_failures)
             )
 
         if self.expect_lineage and not outcome.lineage_present:

@@ -21,12 +21,55 @@ from temporalio import activity
 
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata
-from application_sdk.constants import TRACKED_FILE_REFS_KEY
+from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+# Temporal's failure serializer (_error_to_failure) recurses into __cause__ /
+# __context__ chains without a depth bound.  A deep or cyclic chain hits
+# Python's recursion limit and the serializer's own crash replaces the real
+# error with "Failed building exception result: maximum recursion depth
+# exceeded" (BLDX-1512).  We sever the chain at this depth before raising
+# ApplicationError so the serializer can always complete safely.
+#
+# Safety maths: serializer uses 2 call frames per level; baseline async call
+# stack is ~30–50 frames; at depth 50 we reach ~150 frames total vs. Python's
+# default limit of 1000.  Each stack trace is typically 1–5 KB, so 50 levels ≈
+# 50–250 KB — well inside Temporal's default 2 MB payload limit.
+_MAX_CHAIN_DEPTH = 50
+
+
+def _sever_cause_chain(exc: BaseException) -> None:
+    """Sever the __cause__/__context__ chain at _MAX_CHAIN_DEPTH.
+
+    Walks the chain iteratively (safe against deep stacks) and cuts the link
+    once we hit the depth cap or detect a cycle via object identity.  Mutates
+    the exception objects in place — safe because this is called immediately
+    before we raise a fresh ApplicationError that will own the chain.
+
+    At the cut point both ``__cause__`` and ``__context__`` are nulled out so
+    that neither link re-opens the chain.  Any un-traversed alternate link
+    (e.g. a ``__context__`` branch not followed because ``__cause__`` was
+    taken) is also discarded — this is a deliberate trade-off to guarantee
+    termination; the primary causal path up to the depth cap is preserved.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    depth = 0
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        depth += 1
+        nxt = current.__cause__ or (
+            current.__context__ if not current.__suppress_context__ else None
+        )
+        if nxt is not None and (depth >= _MAX_CHAIN_DEPTH or id(nxt) in seen):
+            current.__cause__ = None
+            current.__context__ = None
+            break
+        current = nxt
 
 
 @dataclasses.dataclass
@@ -44,6 +87,9 @@ class TaskContext:
 
     run_id: str
     """Workflow run ID."""
+
+    workflow_id: str = LOCAL_WORKFLOW_ID
+    """Temporal workflow ID. Set by the workflow side so both sites read from one transport."""
 
     heartbeat_timeout_seconds: int | None = 60
     """Heartbeat timeout in seconds. Set to None to disable heartbeating."""
@@ -116,6 +162,7 @@ def create_activity_from_task(
             app_name=context.app_name,
             app_version=app_metadata.version,
             run_id=run_id,
+            workflow_id=context.workflow_id,
             correlation_id=correlation_id,
         )
 
@@ -206,7 +253,7 @@ def create_activity_from_task(
 
             all_refs = _find_file_refs(input_data) + _find_file_refs(result)
             if all_refs:
-                _track_file_refs(activity.info().workflow_id, *all_refs)
+                _track_file_refs(context.workflow_id, *all_refs)
 
             return cast("Output", result)
 
@@ -240,6 +287,7 @@ def create_activity_from_task(
                     ApplicationError,
                 )
 
+                _sever_cause_chain(e)
                 raise ApplicationError(
                     "Activity terminated because the worker pod is shutting down",
                     type=WORKER_EVICTED_TYPE,
@@ -258,9 +306,26 @@ def create_activity_from_task(
                     ApplicationError,
                 )
 
+                # Guard FailureDetails construction: evidence fields may contain
+                # non-serialisable values; fall back to details-free ApplicationError
+                # rather than letting a secondary error mask the original.
+                try:
+                    details: tuple[Any, ...] = (e.to_failure_details(),)
+                except Exception:
+                    logger.warning(
+                        "Failed to build FailureDetails for %s; raising without structured details",
+                        type(e).__name__,
+                        exc_info=True,
+                    )
+                    details = ()
+
+                # Sever deep / cyclic __cause__ / __context__ chains before
+                # Temporal's failure serializer walks them (BLDX-1512).
+                _sever_cause_chain(e)
+
                 raise ApplicationError(
                     str(e),
-                    e.to_failure_details(),
+                    *details,
                     type=type(e).__name__,
                     non_retryable=not e.effective_retryable,
                 ) from e

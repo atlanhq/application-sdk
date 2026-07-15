@@ -10,7 +10,7 @@ A connector test:
         BaseFullDAGE2ETest, RunMode,
     )
     from application_sdk.testing.full_dag.payload import (
-        ConnectionSpec, DatabaseSpec, AgentSpec,
+        ConnectionSpec, DatabaseSpec,
     )
 
     @pytest.mark.full_dag_e2e
@@ -31,8 +31,10 @@ A connector test:
                 password=os.environ["MYSQL_PASSWORD"],
             )
 
-        def agent_spec(self) -> AgentSpec | None:
-            return AgentSpec(agent_name=f"ci-{self.run_id}")
+    # agent_spec() is derived from ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME
+    # by default (matching the worker's atlan-{app}-{deployment} queue, including
+    # any per-leg suffix the CI action sets). Override it only to pin an explicit
+    # queue — a run_id-keyed override would silently drop per-leg isolation.
 
 The base class handles submit + native-status poll + Atlas-side
 Connection assertion + per-node duration reporting. Subclasses just
@@ -336,11 +338,36 @@ class BaseFullDAGE2ETest:
         )
 
     def agent_spec(self) -> AgentSpec | None:
-        """Agent identity (tier 4 only). Return None for direct mode."""
+        """Agent identity (tier 4 only). Return None for direct mode.
+
+        Default (AGENT mode): derive the agent identity from the worker's own
+        deployment env so the extract node lands on exactly the queue the
+        deployed worker polls (``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}``),
+        including any per-leg ``ATLAN_DEPLOYMENT_NAME`` the CI action sets to
+        isolate parallel matrix legs. Subclasses may still override.
+
+        Only the two-var shape is derivable here: a worker with
+        ATLAN_APPLICATION_NAME set but ATLAN_DEPLOYMENT_NAME absent polls the
+        bare ``{app}`` queue, which the harness can't reconstruct from env — such
+        deployments must override agent_spec() explicitly.
+
+        NOTE: keep this env-derivation in sync with
+        :meth:`application_sdk.testing.e2e.base.BaseE2ETest.agent_spec` — this
+        module is the deprecated alias (removed in v4.0) and shares no
+        inheritance with it, so the block is intentionally duplicated.
+        """
         if self.mode is RunMode.DIRECT:
             return None
+        app_name = os.environ.get("ATLAN_APPLICATION_NAME", "")
+        deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", "")
+        if app_name and deployment_name:
+            return AgentSpec(agent_name=f"{app_name}-{deployment_name}")
         raise HarnessMethodNotImplementedError(
-            message="subclass must override agent_spec() for AGENT mode",
+            message=(
+                "AGENT mode needs an agent_spec() override, or both "
+                "ATLAN_APPLICATION_NAME and ATLAN_DEPLOYMENT_NAME set in the "
+                "environment to derive the worker's task queue"
+            ),
             operation="agent_spec",
         )
 
@@ -396,8 +423,9 @@ class BaseFullDAGE2ETest:
             RuntimeError: If ``manifest_path`` can't be read or doesn't
                 contain a top-level ``dag`` object.
         """
-        import json  # noqa: PLC0415 — cold path: only at bootstrap
         from pathlib import Path  # noqa: PLC0415 — cold path: only at bootstrap
+
+        import orjson  # noqa: PLC0415 — cold path: only at bootstrap
 
         path = Path(self.manifest_path)
         if not path.is_absolute():
@@ -412,7 +440,7 @@ class BaseFullDAGE2ETest:
                 ),
                 resource_identifier=str(path),
             )
-        manifest = json.loads(path.read_text())
+        manifest = orjson.loads(path.read_text())
         dag = manifest.get("dag")
         if not isinstance(dag, dict) or not dag:
             raise ManifestDagMissingError(

@@ -2,13 +2,27 @@
 
 from __future__ import annotations
 
+from temporalio.client import Client as _TemporalClientImpl
+from temporalio.client import WorkflowFailureError as _TemporalWorkflowFailureErrorImpl
 from temporalio.converter import DataConverter
+from temporalio.exceptions import ActivityError as _TemporalActivityErrorImpl
+from temporalio.exceptions import CancelledError as _TemporalCancelledErrorImpl
+from temporalio.exceptions import ChildWorkflowError as _TemporalChildWorkflowErrorImpl
+from temporalio.exceptions import TerminatedError as _TemporalTerminatedErrorImpl
+from temporalio.exceptions import TimeoutError as _TemporalTimeoutErrorImpl
 
 from application_sdk.contracts.base import Input, Output
-from application_sdk.execution._temporal.converter import (
-    create_data_converter,
+from application_sdk.execution import (
+    TemporalActivityError,
+    TemporalCancelledError,
+    TemporalChildWorkflowError,
+    TemporalClient,
+    TemporalTerminatedError,
+    TemporalTimeoutError,
+    TemporalWorkflowFailureError,
     create_data_converter_for_app,
 )
+from application_sdk.execution._temporal.converter import create_data_converter
 
 
 class _ConverterInput(Input):
@@ -19,6 +33,101 @@ class _ConverterInput(Input):
 class _ConverterOutput(Output):
     result: str = ""
     success: bool = True
+
+
+class TestPublicSurface:
+    """Smoke tests for the application_sdk.execution public surface."""
+
+    def test_temporal_client_is_exported(self) -> None:
+        assert TemporalClient is _TemporalClientImpl
+
+    def test_temporal_workflow_failure_error_is_exported(self) -> None:
+        assert TemporalWorkflowFailureError is _TemporalWorkflowFailureErrorImpl
+
+    def test_temporal_activity_error_is_exported(self) -> None:
+        assert TemporalActivityError is _TemporalActivityErrorImpl
+
+    def test_temporal_cancelled_error_is_exported(self) -> None:
+        assert TemporalCancelledError is _TemporalCancelledErrorImpl
+
+    def test_temporal_child_workflow_error_is_exported(self) -> None:
+        assert TemporalChildWorkflowError is _TemporalChildWorkflowErrorImpl
+
+    def test_temporal_terminated_error_is_exported(self) -> None:
+        assert TemporalTerminatedError is _TemporalTerminatedErrorImpl
+
+    def test_temporal_timeout_error_is_exported(self) -> None:
+        assert TemporalTimeoutError is _TemporalTimeoutErrorImpl
+
+    def test_temporal_error_reexports_are_in_dunder_all(self) -> None:
+        from application_sdk import execution
+
+        assert {
+            "TemporalWorkflowFailureError",
+            "TemporalActivityError",
+            "TemporalCancelledError",
+            "TemporalChildWorkflowError",
+            "TemporalTerminatedError",
+            "TemporalTimeoutError",
+        } <= set(execution.__all__)
+
+    def test_workflow_failure_error_cause_dispatches_via_match_case(self) -> None:
+        """Pins the docs/concepts/apps.md example -- `match e.cause: case
+        TemporalActivityError(): ...` must actually dispatch on the re-exported
+        types via structural pattern matching, not just type-check in isolation."""
+        activity_error = TemporalActivityError(
+            "activity failed",
+            scheduled_event_id=1,
+            started_event_id=2,
+            identity="test-worker",
+            activity_type="my_activity",
+            activity_id="1",
+            retry_state=None,
+        )
+        failure = TemporalWorkflowFailureError(cause=activity_error)
+
+        match failure.cause:
+            case TemporalActivityError():
+                matched = "activity"
+            case TemporalCancelledError():
+                matched = "cancelled"
+            case _:
+                matched = "other"
+
+        assert matched == "activity"
+
+    def test_workflow_failure_error_cause_falls_through_to_catch_all_for_unrecognized_cause(
+        self,
+    ) -> None:
+        """A cause outside the re-exported family -- e.g.
+        temporalio.exceptions.ApplicationError, which is what surfaces when
+        run()/@entrypoint itself raises directly rather than an activity -- must
+        still be reachable via the documented `case _:` catch-all, not silently
+        dropped by a `match` with no fallback branch."""
+        from temporalio.exceptions import (
+            ApplicationError as _TemporalApplicationErrorImpl,
+        )
+
+        failure = TemporalWorkflowFailureError(
+            cause=_TemporalApplicationErrorImpl("boom")
+        )
+
+        match failure.cause:
+            case TemporalActivityError():
+                matched = "activity"
+            case TemporalCancelledError():
+                matched = "cancelled"
+            case _:
+                matched = "other"
+
+        assert matched == "other"
+
+    def test_create_data_converter_for_app_is_exported(self) -> None:
+        from application_sdk.execution._temporal.converter import (
+            create_data_converter_for_app as _internal,
+        )
+
+        assert create_data_converter_for_app is _internal
 
 
 class TestCreateDataConverter:

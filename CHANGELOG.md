@@ -1,5 +1,114 @@
 # Changelog
 
+## v3.22.0 (July 13, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.21.2...v3.22.0
+
+### Features
+
+- SDK-native pre-extraction gate (HYP-1883) (#2361) (by @fyzanshaik-atlan in [a6335e6](https://github.com/atlanhq/application-sdk/commit/a6335e6))
+- SDR-QA gap coverage — obs upload + per-type asset counts (#2609) (by @adityachoudhury-cloud in [929cf18](https://github.com/atlanhq/application-sdk/commit/929cf18))
+- enrich gate outcome event for connector-pulse dashboard (#2626) (by @fyzanshaik-atlan in [15acae0](https://github.com/atlanhq/application-sdk/commit/15acae0))
+- app-agnostic filter matching (regex vs exact) (DISTR-855) (#2608) (by @adityachoudhury-cloud in [326b889](https://github.com/atlanhq/application-sdk/commit/326b889))
+
+### Bug Fixes
+
+- plumb custom CA and NO_PROXY into obstore (#2627) (by @louisnow in [7fa79cf](https://github.com/atlanhq/application-sdk/commit/7fa79cf))
+- preserve full key path for empty-prefix CloudStore downloads (#2637) (by @chaitanyaatlan in [1c8db3f](https://github.com/atlanhq/application-sdk/commit/1c8db3f))
+- don't scope the S3 cross-account STS session to the bucket region (#2636) (by @chaitanyaatlan in [6c9db25](https://github.com/atlanhq/application-sdk/commit/6c9db25))
+- return from startup sidecar wait once daprd HTTP API is reachable (#2641) (by @fyzanshaik-atlan in [ede5f24](https://github.com/atlanhq/application-sdk/commit/ede5f24))
+- SqlApp docstring teaches pyatlan_v9 .creator(), not a hand-built qualifiedName (#2651) (by @vaibhavatlan in [24a9735](https://github.com/atlanhq/application-sdk/commit/24a9735))
+
+
+## v3.21.2 (July 09, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.21.1...v3.21.2
+
+### Bug Fixes
+
+- chunked, resumable, version-pinned object-store transfers on slow egress (BLDX-1513, BLDX-1523) (#2479) (by @vaibhavatlan in [87b0d5b](https://github.com/atlanhq/application-sdk/commit/87b0d5b))
+
+
+## v3.21.1 (July 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.21.0...v3.21.1
+
+### Bug Fixes
+
+- add P031 rule for shared-default-executor offload (#2556) (by @cmgrote in [76d92b2](https://github.com/atlanhq/application-sdk/commit/76d92b2))
+- accept pandas DataFrame in transform_metadata (#2585) (by @cmgrote in [c0f8c35](https://github.com/atlanhq/application-sdk/commit/c0f8c35))
+- add opt-in two-store SDR posture to the full-DAG suite (#2586) (by @cmgrote in [bf87f36](https://github.com/atlanhq/application-sdk/commit/bf87f36))
+- remediate error-handling, logging, and optimization findings (#2573) (by @cmgrote in [460d7f2](https://github.com/atlanhq/application-sdk/commit/460d7f2))
+- two-store SDR guards (deployment + upstream) + real-cloud handoff (#2552) (by @adityachoudhury-cloud in [25b8f2d](https://github.com/atlanhq/application-sdk/commit/25b8f2d))
+
+
+## v3.21.0 (July 07, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.20.3...v3.21.0
+
+### Features
+
+- add SourceUnavailableError for customer-controlled source systems (#2476) (by @araghuraman-atlan in [4ba7158](https://github.com/atlanhq/application-sdk/commit/4ba7158))
+- route/card split, pools map, pool task routing (BLDX-1342, BLDX-1375, BLDX-1382) (#2351) (by @cmgrote in [b0c780b](https://github.com/atlanhq/application-sdk/commit/b0c780b))
+
+### Bug Fixes
+
+- wait for cold-starting sidecar + retry connection errors (fixes SDR e2e secret-fetch race) (#2467) (by @adityachoudhury-cloud in [892bb3d](https://github.com/atlanhq/application-sdk/commit/892bb3d))
+- re-export Temporal client-side failure exceptions (#2516) (by @cmgrote in [c0c75f7](https://github.com/atlanhq/application-sdk/commit/c0c75f7))
+- hash files off the event loop in materialize_file_reference (#2538) (by @chaitanyaatlan in [1e3d33d](https://github.com/atlanhq/application-sdk/commit/1e3d33d))
+- retry agent secret-bundle fetch past a cold Dapr sidecar (fixes openapi e2e flake) (#2525) (by @adityachoudhury-cloud in [1805dfc](https://github.com/atlanhq/application-sdk/commit/1805dfc))
+
+
+## v3.20.3 (July 01, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.20.2...v3.20.3
+
+### Bug Fixes
+
+- guard Temporal failure serialiser against deep/cyclic exception chains (BLDX-1512) (#2423) (by @cmgrote in [c59066a](https://github.com/atlanhq/application-sdk/commit/c59066a))
+- narrow ParquetFileWriter inline-upload RuntimeError catch (#2442) (by @mothership-ai[bot] in [8551d32](https://github.com/atlanhq/application-sdk/commit/8551d32))
+
+
+## v3.20.2 (June 30, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.20.1...v3.20.2
+
+### Bug Fixes
+
+- prefer _app_name over APPLICATION_NAME for output path derivation (#2380) (by @cmgrote in [f28312c](https://github.com/atlanhq/application-sdk/commit/f28312c))
+- stamp deployment_name on every log record (#2383) (by @Lalit3716-atlan in [04eda87](https://github.com/atlanhq/application-sdk/commit/04eda87))
+- add monotonic counter to partition filenames to prevent Windows clock-collision (#2411) (by @cmgrote in [6fa1dad](https://github.com/atlanhq/application-sdk/commit/6fa1dad))
+- surface OOM kills immediately in logs (#2409) (by @cmgrote in [31ec533](https://github.com/atlanhq/application-sdk/commit/31ec533))
+
+
+## v3.20.1 (June 26, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.20.0...v3.20.1
+
+### Bug Fixes
+
+- remove delete from preflight probe; use fixed key (#2347) (by @cmgrote in [9128001](https://github.com/atlanhq/application-sdk/commit/9128001))
+- make %-style log args lazily evaluated (#2353) (by @cmgrote in [4fcc98b](https://github.com/atlanhq/application-sdk/commit/4fcc98b))
+- forward daprd sidecar logs into the SDK pipeline (#2345) (by @Lalit3716-atlan in [06ba53c](https://github.com/atlanhq/application-sdk/commit/06ba53c))
+- align App.upload() path with WORKFLOW_OUTPUT_PATH_TEMPLATE (#2364) (by @cmgrote in [3316da0](https://github.com/atlanhq/application-sdk/commit/3316da0))
+
+
+## v3.20.0 (June 25, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.19.0...v3.20.0
+
+### Features
+
+- export TemporalExecutorBackend and RetryPolicy from package root (#2307) (by @cmgrote in [57b187b](https://github.com/atlanhq/application-sdk/commit/57b187b))
+- expose TemporalClient and create_data_converter_for_app publicly (#2321) (by @cmgrote in [13af2c7](https://github.com/atlanhq/application-sdk/commit/13af2c7))
+- remove daft entirely, replace with pyarrow/orjson/duckdb (#2300) (by @cmgrote in [41f32e1](https://github.com/atlanhq/application-sdk/commit/41f32e1))
+
+### Bug Fixes
+
+- Surface `defaultConnectorType` in configmap (#2319) (by @AngadSethi in [e84fd71](https://github.com/atlanhq/application-sdk/commit/e84fd71))
+- isolate explicit Azure credentials from the host's ambient AZURE_* env (#2335) (by @chaitanyaatlan in [1b3b46b](https://github.com/atlanhq/application-sdk/commit/1b3b46b))
+
+
 ## v3.19.0 (June 22, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.18.0...v3.19.0

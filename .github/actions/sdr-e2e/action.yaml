@@ -71,12 +71,34 @@ inputs:
       How long to wait for the SDR container's /server/health endpoint to
       respond before failing. Connectors with heavy native deps (e.g. SAP
       JCo) may need 180s+; default fits most.
+
+      INVARIANT: keep this strictly greater than the SDK's max startup
+      sidecar wait (ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT, default 60 in
+      application_sdk/infrastructure/_dapr/http.py). The health bind happens
+      after that wait, so an equal value makes the gate a coin-flip. See
+      CNCT-66.
     required: false
-    default: "60"
+    default: "120"
   pytest-extra-args:
     description: Extra arguments appended to the pytest invocation.
     required: false
     default: ""
+  artifact-suffix:
+    description: |
+      Suffix appended to the uploaded results artifact name so parallel
+      callers (e.g. the e2e matrix, one leg per suite) don't collide on
+      upload-artifact, which rejects duplicate names within a run. Empty
+      (default) keeps the historical single-artifact name.
+    required: false
+    default: ""
+  post-pr-comment:
+    description: |
+      Whether the action posts its per-run summary comment on the connector
+      PR. "true" (default) preserves current behaviour. Set "false" when a
+      caller posts one aggregated summary itself (e.g. the e2e matrix, so N
+      legs don't post N comments).
+    required: false
+    default: "true"
   application-sdk-ref:
     description: |
       Optional application-sdk commit SHA / ref. When supplied, the
@@ -121,6 +143,56 @@ inputs:
       agent-name so the worker registers on its own Temporal queue).
     required: false
     default: ""
+  git-token:
+    description: |
+      Optional GitHub token forwarded to the docker buildx build as the
+      `git_token` build secret. Connectors whose pyproject.toml declares
+      git+ssh / git+https dependencies on other private atlanhq repos
+      (e.g. `query-redaction` from `atlan-query-intelligence-app`) need
+      this so `uv sync` inside the Docker build can authenticate the
+      clone. The caller workflow passes the org-scoped PAT from its own
+      secrets context (typically `secrets.ORG_PAT_GITHUB`).
+
+      When empty (the default), no `--secret` flag is appended to the
+      docker buildx invocation — connectors with PyPI-only dependencies
+      stay unaffected.
+
+      Consumed by the Dockerfile as:
+          RUN --mount=type=secret,id=git_token,uid=1000 \
+              git config --global url."https://x-access-token:$(cat /run/secrets/git_token)@github.com/".insteadOf "ssh://git@github.com/" \
+              && uv sync --locked --no-install-project
+    required: false
+    default: ""
+  enable-two-store:
+    description: |
+      Opt-in ADR-0014 two-store SDR posture (docs/adr/0014-two-store-
+      storage-architecture.md). When "true": the connector's `objectstore`
+      component is forced to the SDK default (an app-level
+      `objectstore.yaml` override is ignored) so it stays physically
+      distinct from the configurator-emitted `atlan-objectstore`; the
+      composite hard-fails if `atlan-objectstore.yaml` isn't present; and
+      ENABLE_ATLAN_UPLOAD=true / ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE=required
+      are set on the worker via docker-compose.two-store.yml. Set by
+      e2e-full-reusable.yaml's `two-store` input; the pure-SDR pipeline
+      never sets this.
+    required: false
+    default: "false"
+  ghcr-token:
+    description: |
+      Optional token used to authenticate the GHCR login for the test-image
+      build/push (and the compose worker's subsequent pull). The connector's
+      `sdr-test-<sha>` image is pushed to `ghcr.io/atlanhq/<app-image-name>`,
+      and some connector packages are PAT-published (created by
+      build-and-publish via `ORG_PAT_GITHUB`) and are NOT writable by the
+      default `GITHUB_TOKEN` — so a plain-token push 403s for those apps.
+      Pass the org-scoped PAT here (typically `secrets.ORG_PAT_GITHUB`, the
+      same one build-and-publish uses) to push with the package-owning
+      identity, which works uniformly across every connector package.
+
+      When empty (the default), the login falls back to `github.token`, so
+      callers that don't wire this stay on the previous behaviour.
+    required: false
+    default: ""
 outputs:
   test-outcome:
     description: pytest exit outcome (success/failure)
@@ -136,11 +208,14 @@ runs:
   using: composite
   steps:
     - name: Log in to GHCR
-      uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+      uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
-        password: ${{ github.token }}
+        # Prefer the caller-supplied org PAT (writes PAT-published connector
+        # packages); fall back to github.token when unset (unchanged behaviour
+        # for callers that don't pass ghcr-token).
+        password: ${{ inputs.ghcr-token != '' && inputs.ghcr-token || github.token }}
 
     # Cross-repo dispatch from apps-sdk PRs hands us a specific SDK ref;
     # rewrite the [tool.uv.sources] entry so the Docker build's COPY +
@@ -187,10 +262,24 @@ runs:
         fi
         uv lock
 
+    # Regenerate app/generated/** (incl. manifest.json — the AE DAG) from
+    # contract/app.pkl BEFORE the image build, so the connector image bakes a
+    # manifest generated from the CURRENT contract + toolkit rather than a
+    # possibly-stale committed one (BLDX-1493). This is the ONLY regeneration in
+    # this action — it must precede the buildx build below that COPYs the tree.
+    # check-drift is false: uv/ruff aren't installed until setup-deps (later), so
+    # generated-Python formatting is skipped here; the warn-only drift gate lives
+    # in the connector-integration-tests job. Self-skips when no contract/app.pkl.
+    - name: Regenerate contract artifacts (manifest.json) before image build
+      uses: atlanhq/application-sdk/.github/actions/regenerate-contract@main
+      with:
+        application-sdk-ref: ${{ inputs.application-sdk-ref }}
+        check-drift: "false"
+
     # Buildx is required for the GHA cache backend below. Set up once
     # per run, before the image build that uses `cache-from/cache-to`.
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+      uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
     # Image build runs before setup-deps so the workspace is still pristine —
     # no host .venv yet, so the Dockerfile's COPY . . won't pull in a
@@ -208,6 +297,11 @@ runs:
       shell: bash
       env:
         BASE_IMAGE_REF: ${{ inputs.base-image-ref }}
+        # Read by --secret id=git_token,env=GIT_TOKEN below. The env-var
+        # form (vs --secret-file) keeps the token out of the buildx
+        # command line and out of any tmpfile on the runner — buildx
+        # streams it directly into the build context.
+        GIT_TOKEN: ${{ inputs.git-token }}
       run: |
         SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
         IMAGE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:sdr-test-${SHORT_SHA}"
@@ -220,6 +314,15 @@ runs:
         if [ -n "${BASE_IMAGE_REF}" ]; then
           echo "Building connector on dispatched base image: ${BASE_IMAGE_REF}"
           BUILD_ARGS+=(--build-arg "BASE_IMAGE=${BASE_IMAGE_REF}")
+        fi
+        # When the caller supplies git-token, forward it as the
+        # `git_token` build secret so Dockerfiles that clone private
+        # atlanhq repos during `uv sync` can authenticate. Connectors
+        # with PyPI-only deps don't need this — leaving the input empty
+        # skips the flag entirely so their builds stay unchanged.
+        if [ -n "${GIT_TOKEN}" ]; then
+          echo "Forwarding git-token to docker build as 'git_token' secret"
+          BUILD_ARGS+=(--secret "id=git_token,env=GIT_TOKEN")
         fi
         # --push pushes to GHCR; compose pulls from there at run-time
         # (atlan-configurator wires app_image into the generated
@@ -238,7 +341,7 @@ runs:
     # Must run before atlan-configurator generates ci-deploy/ — setup-deps
     # uses actions/checkout internally which would wipe generated files.
     - name: Setup Python and dependencies
-      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.19.0
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.22.0
 
     # setup-deps' actions/checkout wipes the pre-build re-pin above. Do
     # it again so the host pytest runtime resolves the dispatched SDK
@@ -320,6 +423,26 @@ runs:
           echo "APP_YAML_PATH=$APP_YAML"
         } >> "$GITHUB_ENV"
 
+    # Give each matrix leg its own worker + Temporal queue. The queue is
+    # atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}; parallel legs
+    # share the run id, so without a per-leg suffix their workers co-serve one
+    # queue and Temporal splits a single workflow's activities across them —
+    # which, under the two-store posture (per-container localstorage), makes a
+    # FileReference written by one leg's worker invisible to the other. Derive a
+    # per-leg ATLAN_DEPLOYMENT_NAME (base + sanitised artifact-suffix) here, so
+    # both the worker (compose reads it below) and the harness (agent_spec reads
+    # the same env) land on the same isolated queue. Empty suffix (single-suite
+    # callers) keeps the original e2e-full-ci-<run_id> shape.
+    - name: Derive per-leg deployment name
+      shell: bash
+      env:
+        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        ARTIFACT_SUFFIX: ${{ inputs.artifact-suffix }}
+      run: |
+        python3 "$SDR_E2E_ROOT/derive_deployment_name.py" \
+          --run-id "${GITHUB_RUN_ID}" \
+          --suffix "${ARTIFACT_SUFFIX}" >> "$GITHUB_ENV"
+
     - name: Resolve app.yaml
       shell: bash
       env:
@@ -370,49 +493,45 @@ runs:
         fi
 
     # SDK defaults first, app overrides on top so apps can replace any single
-    # component file without forking the whole set.
-    - name: Override CI Dapr components
+    # component file without forking the whole set. Two-store mode is the one
+    # exception: see select_dapr_components.py docstring for why the app's
+    # own objectstore.yaml override is skipped in that mode. Branching logic
+    # lives in the tested script per docs/standards/ci.md; this step is
+    # straight-line.
+    - name: Select CI Dapr components
       shell: bash
       env:
-        SDK_COMPONENTS: ${{ steps.action_root.outputs.path }}/components
+        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
         APP_COMPONENTS: ${{ inputs.components-dir }}
+        TWO_STORE: ${{ inputs.enable-two-store }}
       run: |
-        cp "${SDK_COMPONENTS}"/*.yaml ci-deploy/components/
-        # Resolve effective overrides directory: explicit input wins,
-        # otherwise fall back to $SDR_CONFIG_DIR/components convention.
-        if [ -n "${APP_COMPONENTS}" ]; then
-          OVERRIDE_DIR="${APP_COMPONENTS}"
-        else
-          OVERRIDE_DIR="$SDR_CONFIG_DIR/components"
-        fi
-        if [ -d "${OVERRIDE_DIR}" ] && [ -n "$(ls -A "${OVERRIDE_DIR}" 2>/dev/null)" ]; then
-          echo "Applying app-level component overrides from ${OVERRIDE_DIR}"
-          cp "${OVERRIDE_DIR}"/*.yaml ci-deploy/components/
-        fi
+        python3 "$SDR_E2E_ROOT/select_dapr_components.py" \
+          --ci-components-dir ci-deploy/components \
+          --sdk-components-dir "$SDR_E2E_ROOT/components" \
+          --app-components-dir "${APP_COMPONENTS}" \
+          --sdr-config-dir "$SDR_CONFIG_DIR" \
+          --two-store "${TWO_STORE}"
 
+    # Order: configurator-generated base → SDK CI overrides → optional app
+    # layer → two-store overlay (only when enabled, always last — see
+    # build_compose_chain.py). Branching logic lives in the tested script
+    # per docs/standards/ci.md; this step is straight-line.
     - name: Build compose -f chain
       id: compose_files
       shell: bash
       env:
-        SDK_COMPOSE: ${{ steps.action_root.outputs.path }}/docker-compose.ci.yml
+        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
         APP_COMPOSE: ${{ inputs.compose-overlay }}
+        TWO_STORE: ${{ inputs.enable-two-store }}
       run: |
-        # Order: configurator-generated base → SDK CI overrides → optional app layer.
-        FILES=("-f" "ci-deploy/docker-compose.yaml" "-f" "${SDK_COMPOSE}")
-        # Resolve effective compose overlay: explicit input wins,
-        # otherwise fall back to $SDR_CONFIG_DIR/docker-compose.ci.yml convention.
-        if [ -n "${APP_COMPOSE}" ]; then
-          OVERLAY="${APP_COMPOSE}"
-        else
-          OVERLAY="$SDR_CONFIG_DIR/docker-compose.ci.yml"
-        fi
-        if [ -f "${OVERLAY}" ]; then
-          echo "Adding app-level compose layer from ${OVERLAY}"
-          FILES+=("-f" "${OVERLAY}")
-        fi
-        # Persist the array as a single space-joined string (compose -f flags
-        # are simple paths, no whitespace issues).
-        echo "files=${FILES[*]}" >> "$GITHUB_OUTPUT"
+        OUT=$(python3 "$SDR_E2E_ROOT/build_compose_chain.py" \
+          --base-compose ci-deploy/docker-compose.yaml \
+          --sdk-compose "$SDR_E2E_ROOT/docker-compose.ci.yml" \
+          --app-compose "${APP_COMPOSE}" \
+          --sdr-config-dir "$SDR_CONFIG_DIR" \
+          --two-store "${TWO_STORE}" \
+          --two-store-compose "$SDR_E2E_ROOT/docker-compose.two-store.yml")
+        echo "$OUT" >> "$GITHUB_OUTPUT"
 
     # GH-runner docker bridges have no global IPv6 routing, but
     # temporalio's bundled Rust gRPC resolver returns AAAA records and
@@ -478,6 +597,9 @@ runs:
       shell: bash
       env:
         ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
+        # Read by BaseE2ETest.setup_method() to warn if two-store is on
+        # but the test class runs in RunMode.DIRECT, where it has no effect.
+        TWO_STORE: ${{ inputs.enable-two-store }}
       run: |
         mkdir -p results
         set +e
@@ -722,6 +844,7 @@ runs:
       shell: bash
       env:
         SDR_TEST_TENANT: ${{ env.SDR_TEST_TENANT }}
+        TWO_STORE: ${{ inputs.enable-two-store }}
       run: |
         uv run python3 - <<'PYEOF'
         import os
@@ -866,11 +989,37 @@ runs:
             assets_match = next(iter(list(assets_re.finditer(test_text))[::-1]), None)
             lineage_match = next(iter(list(lineage_re.finditer(test_text))[::-1]), None)
             if assets_match:
+                atlas_counts = _safe_dict(assets_match.group("counts"))
                 lines.extend(_render_section(
                     "Assets in Atlas",
                     assets_match.group("qn"),
-                    _safe_dict(assets_match.group("counts")),
+                    atlas_counts,
                 ))
+                # Two-store diagnostic (not a gate — the existing
+                # expected_min_asset_counts / require_nonempty_assets
+                # assertions already fail the run on this condition).
+                # Extraction succeeding locally while nothing reaches
+                # Atlas is exactly the ADR-0014 hand-off gap this posture
+                # exists to catch: the interceptor wrote to `objectstore`
+                # but the connector never bridged it to `atlan-objectstore`
+                # via App.upload(), so publish/QI/lineage read an empty
+                # upstream bucket.
+                if os.environ.get("TWO_STORE") == "true":
+                    total_transformed = sum(
+                        n
+                        for entity_counts in transformed.values()
+                        for n in entity_counts.values()
+                    )
+                    if total_transformed > 0 and sum(atlas_counts.values()) == 0:
+                        lines.append(
+                            "> ⚠️ **Possible missing hand-off:** the connector "
+                            f"transformed {total_transformed} record(s) locally "
+                            "but 0 assets reached Atlas. Check for a missing "
+                            "`App.upload()` bridging the transformed-data prefix "
+                            "from the deployment `objectstore` to "
+                            "`atlan-objectstore` (see ADR-0014)."
+                        )
+                        lines.append("")
             if lineage_match:
                 lineage_counts = _safe_dict(lineage_match.group("counts"))
                 lines.extend(_render_section(
@@ -895,7 +1044,9 @@ runs:
     # new comments at the bottom of the conversation rather than silently
     # mutating an old one, which makes "what's the latest run" obvious.
     - name: Render PR comment + post (when on a PR)
-      if: always()
+      # Suppressed when the caller aggregates its own summary (e.g. the e2e
+      # matrix sets post-pr-comment=false so N legs don't post N comments).
+      if: always() && inputs.post-pr-comment == 'true'
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
       env:
         APP_NAME: ${{ inputs.app-name }}
@@ -1058,7 +1209,10 @@ runs:
       if: always()
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
-        name: sdr-integration-tests-${{ inputs.app-name }}-results
+        # artifact-suffix keeps parallel matrix legs from colliding on this
+        # name (upload-artifact rejects duplicate names within a run); empty
+        # suffix preserves the historical single-artifact name.
+        name: sdr-integration-tests-${{ inputs.app-name }}${{ inputs.artifact-suffix != '' && format('-{0}', inputs.artifact-suffix) || '' }}-results
         path: results/
         retention-days: 14
 

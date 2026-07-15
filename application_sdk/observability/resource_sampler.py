@@ -33,6 +33,64 @@ class ResourceSample:
     rss_bytes: int  # resident set size in bytes (memory currently in RAM)
 
 
+_BINARY_SUFFIXES: dict[str, int] = {
+    "Ki": 1024,
+    "Mi": 1024**2,
+    "Gi": 1024**3,
+    "Ti": 1024**4,
+    "Pi": 1024**5,
+    "Ei": 1024**6,
+}
+_DECIMAL_SUFFIXES: dict[str, int] = {
+    "k": 1000,
+    "M": 1000**2,
+    "G": 1000**3,
+    "T": 1000**4,
+    "P": 1000**5,
+    "E": 1000**6,
+}
+
+
+def parse_pod_memory_limit(raw: str) -> int:
+    """Parse a K8S_POD_MEMORY_LIMIT value into bytes.
+
+    Accepts plain integer bytes (the value produced by ``resourceFieldRef``
+    with ``divisor: "1"``) and Kubernetes quantity suffixes:
+
+    * Binary: ``Ki``, ``Mi``, ``Gi``, ``Ti``, ``Pi``, ``Ei``
+    * Decimal: ``k``, ``M``, ``G``, ``T``, ``P``, ``E``
+
+    Returns 0 on any parse failure so callers can safely treat 0 as
+    "limit unknown / feature disabled".
+    """
+    raw = raw.strip()
+    if not raw:
+        return 0
+    for suffix, multiplier in {**_BINARY_SUFFIXES, **_DECIMAL_SUFFIXES}.items():
+        if raw.endswith(suffix):
+            try:
+                return int(raw[: -len(suffix)]) * multiplier
+            except ValueError as e:
+                _logger.warning(
+                    "Could not parse pod memory limit %r (suffix %r): %s",
+                    raw,
+                    suffix,
+                    e,
+                    exc_info=True,
+                )
+                return 0
+    try:
+        return int(raw)
+    except ValueError as e:
+        _logger.warning(
+            "Could not parse pod memory limit %r as integer bytes: %s",
+            raw,
+            e,
+            exc_info=True,
+        )
+        return 0
+
+
 def _read_proc_rss() -> int | None:
     """Read RSS from /proc/self/stat (Linux only, no dependencies)."""
     try:

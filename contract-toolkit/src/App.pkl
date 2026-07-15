@@ -14,7 +14,7 @@
 /// Connector constants are accessible as `Connectors.*`.
 ///
 /// **Single-entrypoint apps** (the common case): set `uiConfig`, `pipeline`,
-/// and optionally `deploy`, then run:
+/// and optionally `pools`, then run:
 ///
 ///   `pkl eval -m . contract/app.pkl`
 ///
@@ -29,6 +29,7 @@
 open module com.atlan.app.contract.App
 
 import "Connectors.pkl"
+import "Deployment.pkl" as DeploymentPkg
 import "Widgets.pkl"
 
 // ── WIDGET TYPE RE-EXPORTS ────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ import "Widgets.pkl"
 
 typealias InfoBannerType = Widgets.InfoBannerType
 typealias WidgetLink = Widgets.WidgetLink
+typealias WidgetValidation = Widgets.WidgetValidation
 typealias UIConfig = Widgets.UIConfig
 typealias UIStep = Widgets.UIStep
 typealias UIRule = Widgets.UIRule
@@ -83,6 +85,17 @@ typealias Condition = Widgets.Condition
 typealias InputRepeater = Widgets.InputRepeater
 typealias Schedule = Widgets.Schedule
 typealias CustomWidget = Widgets.CustomWidget
+
+// ── DEPLOYMENT TYPE RE-EXPORTS ────────────────────────────────────────────────
+// Typealiases so amending contracts write `new DeployConfig { }`, `new KedaConfig { }`, etc.
+// without needing a supplemental `import "@app-contract-toolkit/Deployment.pkl"`.
+
+typealias DaprComponents = DeploymentPkg.DaprComponents
+typealias KedaTemporalConfig = DeploymentPkg.KedaTemporalConfig
+typealias KedaConfig = DeploymentPkg.KedaConfig
+typealias ResourceConfig = DeploymentPkg.ResourceConfig
+typealias DeployConfig = DeploymentPkg.DeployConfig
+typealias Pool = DeploymentPkg.Pool
 
 // ── CONSTRAINED TYPES ────────────────────────────────────────────────────────
 
@@ -170,6 +183,18 @@ longDescription: String = ""
 /// no key in the rendered yaml (the `when` guard suppresses emission).
 tags: Listing<String> = new Listing {}
 
+/// Whether this app appears as a card in the marketplace (LM/GM).
+///
+/// Default: `true`. Single-entrypoint apps auto-derive `package_id: "@atlan/{name}"`
+/// and emit `marketplace_card: true` in `atlan.yaml` from this default.
+/// Set to `false` for purely behind-the-scenes apps that should never surface
+/// in the marketplace UI — the entrypoints block is still emitted for routing,
+/// but no `package_id` or `marketplace_card` key appears.
+///
+/// For multi-entrypoint apps this flag has no effect; control card presence
+/// per-entrypoint via `Entrypoint.packageId` instead.
+marketplaceCard: Boolean = true
+
 /// Extra top-level metadata fields for atlan.yaml.
 metadata: Mapping<String, Any> = new Mapping {}
 
@@ -179,7 +204,12 @@ atlanYamlOverrides: Mapping<String, Any> = new Mapping {}
 /// Whether to emit `atlan.yaml` in the output.
 emitAtlanYaml: Boolean = true
 
-/// Whether to emit the `entrypoints:` block into `atlan.yaml`.
+/// @Deprecated — use the `entrypoints` listing with `packageId` set on those that should
+/// render as marketplace cards, rather than toggling the entire block.
+/// Will be removed in the next minor version.
+///
+/// When `true` (default), all entrypoints are emitted into the `entrypoints:` block
+/// of `atlan.yaml`. When `false`, the block is suppressed entirely.
 emitEntrypoints: Boolean = true
 
 /// Whether to emit `app.yaml` in the output.
@@ -190,21 +220,35 @@ emitGeneratedArtifacts: Boolean = true
 
 // ── WORKFLOW TYPE ────────────────────────────────────────────────────────────
 
-/// Temporal workflow type written to `manifest.json` as `workflow_type` (in kebab-case).
-/// Accepts PascalCase (e.g. `"SnowflakeApp"`) or kebab-case (e.g. `"snowflake-app"`)
-/// — the toolkit converts either form to kebab-case at output time.
-/// Defaults to `name`. Also accepts colon-format identifiers (e.g. `"dbt:extract-metadata"`),
-/// which pass through the conversion unchanged.
-workflowType: String = name
+/// Temporal workflow type written to `manifest.json` as `workflow_type`.
+/// When set, the value is emitted verbatim — no conversion is applied. Use this
+/// when the runtime keys on a specific string that must not be transformed
+/// (e.g. `"NetSuiteMetadataExtractionWorkflow"` or `"teradata-app:crawler"`).
+/// When unset (the default), the toolkit derives the value by kebab-casing `name`
+/// (e.g. `name = "snowflake-app"` → `workflow_type: "snowflake-app"`). Most apps
+/// can omit this property entirely.
+workflowType: String?
 
 /// Task queue prefix for the extract node in the AE manifest.
 taskQueuePrefix: String = "atlan-\(name)"
 
 // ── E2E TEST HARNESS ──────────────────────────────────────────────────────────
 
-/// Argo WorkflowTemplate package name used by the e2e test harness.
-/// Default: `"@atlan/<name>"`. Override for apps with scoped or non-standard package names.
-argoPackageName: String = "@atlan/\(name)"
+/// Argo WorkflowTemplate package names. The single knob for Argo package
+/// naming — drives two outputs:
+///   - rendered into `atlan.yaml` as `argo_package_names` (between `visibility`
+///     and `build_tag`), consumed by the marketplace; emitted only when non-empty.
+///   - the e2e test harness's single `argo_package_name`, taken as the first
+///     entry.
+/// Single-package apps can leave this empty: the harness falls back to
+/// `"@atlan/<name>"` and `atlan.yaml` omits the key. Set one entry for a scoped
+/// or non-standard package, or several for a multi-package app.
+argoPackageNames: Listing<String> = new Listing {}
+
+/// (Derived) Single Argo package name for the e2e harness: the first entry of
+/// `argoPackageNames`, or `"@atlan/<name>"` when the list is empty.
+local resolvedArgoPackageName: String =
+  if (!argoPackageNames.isEmpty) argoPackageNames.first else "@atlan/\(name)"
 
 /// Argo WorkflowTemplate resource name as deployed in the cluster.
 /// Default: `"atlan-<name>"` — same pattern as `taskQueuePrefix`.
@@ -285,6 +329,17 @@ uiConfig: Widgets.UIConfig?
 /// completion notification node.
 extraNodes: Mapping<String, DAGNode> = new Mapping {}
 
+/// Background-job schedules (DISTR-815). When non-empty, the toolkit renders a
+/// `triggers.schedules` block into `manifest.json` (AE ScheduleTrigger shape) so a
+/// reconciler (Local Marketplace) can create the workflow's Temporal schedule(s)
+/// straight from the manifest. Only scheduled (cron) entrypoints set this; leave
+/// empty for UI/event-triggered entrypoints.
+///
+/// `name` is the reconcile identity key downstream, so names must be unique within
+/// an entrypoint — duplicates would collapse to one AE trigger. The constraint
+/// fails such a contract at eval time.
+schedules: Listing<ScheduleSpec>(this.toList().map((s) -> s.name).isDistinct) = new Listing {}
+
 /// Top-level on/off for app notifications.
 ///
 /// When `true`, appends a run-level notification node (`NotificationNode`, key
@@ -337,13 +392,30 @@ pipeline: Pipeline = new Pipeline {}
 
 // ── DEPLOY CONFIG ─────────────────────────────────────────────────────────────
 
-/// Typed deployment configuration rendered into `atlan.yaml`'s `deploy:` block.
-deploy: DeployConfig = new DeployConfig {}
-
-/// Deep-merged on top of the rendered `deploy` block last.
-/// Use this for marketplace keys the toolkit does not yet model (VPA, canary,
-/// extraVolumes, securityContext, appExternalResources, etc.).
-deployOverrides: Mapping<String, Any> = new Mapping {}
+/// Deployment configuration. Leave unset (null, the default) to let Heracles
+/// apply platform defaults. Set to configure the `deploy:` block in `atlan.yaml`.
+///
+/// Singleton fields (`executionMode`, `splitDeployment`, `dapr`) apply to the
+/// whole deployment. Per-pool KEDA, resources, and env go inside `pools`.
+///
+/// Example (two pools — hot always-on + cold scale-to-zero):
+///
+/// ```pkl
+/// deploy = new DeployConfig {
+///   pools {
+///     ["hot"] = new Pool {
+///       keda { minReplicaCount = 1; cooldownPeriod = 300 }
+///     }
+///     ["cold"] = new Pool {
+///       keda { minReplicaCount = 0; cooldownPeriod = 30 }
+///     }
+///   }
+/// }
+/// ```
+///
+/// For the single-pool case, use the key `"default"`. See `examples/deploy/` for
+/// a full example with Dapr, KEDA, resources, env, and overrides.
+deploy: DeployConfig? = null
 
 // ── ENTRYPOINTS ──────────────────────────────────────────────────────────────
 
@@ -593,7 +665,15 @@ open class DAGNode {
 
   dependsOnCondition: DependencyCondition?
 
-  errorHandling: ErrorHandlingConfig?
+  /// Defaults to a 1-day `startToCloseTimeoutSeconds`. Automation Engine's
+  /// source-code default for workflow nodes is 2h, which is too tight for
+  /// non-trivial extraction/lineage work and has caused avoidable timeouts on
+  /// large tenants. `PublishNode` and `LineagePublishNode` raise this to 3 days
+  /// (both write to Atlas). Override on the instance for a different value (up
+  /// to the 10-day cap), or set to `null` to fall back to AE's own default.
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400
+  }
 
   hidden _errorHandlingCheck: Any =
     if (nodeType == "workflow" && errorHandling != null && errorHandling.heartbeatTimeoutSeconds != null)
@@ -837,7 +917,7 @@ open class QueryIntelligenceNode extends DAGNode {
 
   displayName = "Parse SQL Queries"
   workflowType = "QueryIntelligenceWorkflow"
-  appName = "automation-engine"
+  appName = "query-intelligence"
   taskQueue = "atlan-query-intelligence-{deployment_name}"
   args {
     ["connection_qualified_name"] = connectionQualifiedName
@@ -1122,7 +1202,7 @@ open class LineageNode extends DAGNode {
 
   displayName = "Build Lineage Entities"
   workflowType = "LineageWorkflow"
-  appName = "automation-engine"
+  appName = "lineage"
   taskQueue = "atlan-lineage-{deployment_name}"
   args {
     ["connection_qualified_name"] = connectionQualifiedName
@@ -1177,6 +1257,15 @@ open class LineageNode extends DAGNode {
 /// Pre-built lineage publish node.
 open class LineagePublishNode extends DAGNode {
   hidden upstream: String = "lineage-app"
+
+  /// Defaults to a 3-day `startToCloseTimeoutSeconds`, matching `PublishNode`.
+  /// Like the asset publish, lineage-publish writes to Atlas and can be heavy on
+  /// large tenants — lineage can produce very large numbers of
+  /// `Process`/`ColumnProcess` entities, each with many edges — so the 1-day
+  /// base default is too tight. Override on the instance for a different value.
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 259200
+  }
 
   assetPublishNode: String = "publish"
 
@@ -1271,8 +1360,12 @@ class ExtractStep {
   /// Display name for the AE step. Defaults to "Extract <displayName> Metadata".
   displayName: String?
 
-  /// Error handling for the extract node.
-  errorHandling: ErrorHandlingConfig? = null
+  /// Error handling for the extract node. Defaults to a 1-day
+  /// `startToCloseTimeoutSeconds` (the base `DAGNode` default); override for a
+  /// different value, or set to `null` to fall back to AE's own default.
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400
+  }
 }
 
 /// Query Intelligence step — opt-in. Extends `QueryIntelligenceNode` with no
@@ -1387,56 +1480,9 @@ class Pipeline {
   publish: PublishStep? = new PublishStep {}
 }
 
-// ── Deploy config classes ─────────────────────────────────────────────────────
-
-/// Dapr component flags. Each boolean controls whether the component sidecar
-/// is wired into the app deployment.
-class DaprComponents {
-  objectstore: Boolean = false
-  secretstore: Boolean = false
-  statestore: Boolean = false
-  eventstore: Boolean = false
-  subscription: Boolean = false
-  configurationstore: Boolean = false
-  lock: Boolean = false
-  /// Full-spec Dapr components that can't be expressed as boolean flags
-  /// (e.g. pubsub.kafka with custom metadata).
-  customComponents: Mapping<String, Any> = new Mapping {}
-}
-
-class KedaTemporalConfig {
-  /// Only `targetQueueSize` is read by the Helm chart — NOT the top-level
-  /// `keda.targetQueueSize`. Always set via this nested path.
-  targetQueueSize: Int = 5
-}
-
-class KedaConfig {
-  enabled: Boolean = true
-  minReplicaCount: Int = 0
-  temporal: KedaTemporalConfig = new KedaTemporalConfig {}
-}
-
-class ResourceConfig {
-  requests: Mapping<String, String> = new Mapping {}
-  limits: Mapping<String, String> = new Mapping {}
-}
-
-/// Typed deployment configuration rendered into `atlan.yaml`'s `deploy:` block.
-class DeployConfig {
-  executionMode: String = "native"
-  splitDeployment: Boolean = true
-  /// Ignored when keda.enabled = true (KEDA manages replica count).
-  replicaCount: Int? = null
-  dapr: DaprComponents = new DaprComponents {}
-  keda: KedaConfig = new KedaConfig {}
-  resources: ResourceConfig? = null
-  env: Mapping<String, String> = new Mapping {}
-  envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
-}
-
 // ── Entrypoint class ──────────────────────────────────────────────────────────
 
-/// One marketplace card / SDK entrypoint under the deployed app.
+/// One SDK routing endpoint and (optionally) marketplace UI card under the deployed app.
 open class Entrypoint {
   name: String
 
@@ -1459,6 +1505,17 @@ open class Entrypoint {
   docsUrl: String?
 
   metadata: Mapping<String, Any> = new Mapping {}
+
+  /// Stable marketplace package ID for this entrypoint (e.g. `"@atlan/qlik-sense"`).
+  /// When set, emits `package_id:` and `marketplace_card: true` in `atlan.yaml`,
+  /// making this entrypoint a user-facing marketplace card.
+  /// Required for multi-entrypoint apps to preserve backward compat with legacy
+  /// Argo workflows that reference the app by its stable card ID; without it the
+  /// marketplace derives a card ID from the GMP name and entrypoint name, which
+  /// will not match old `app_id` values and breaks existing connection references.
+  /// Entrypoints without a `packageId` are always routable via `?entrypoint=` but
+  /// do not appear as marketplace cards.
+  packageId: String?
 
   /// Optional imported contract for this entrypoint.
   /// When set and `emitGeneratedArtifacts` is true, all files from
@@ -2106,9 +2163,37 @@ local _publishTagPipelineEnabled: Boolean|String? =
 local _publishTagAttachmentsPrefix: String? =
   if (_publishTagPipelineEnabled != null) "$.extract.outputs.tag_attachments_prefix" else null
 
+/// One background-job schedule rendered into `manifest.json`'s `triggers.schedules`
+/// (AE ScheduleTrigger shape). `name` is the stable trigger id — never rename/reuse
+/// (a rename is a delete+recreate downstream); names must be unique within an
+/// entrypoint. `timezone` is an IANA zone (format-validated at eval time). `status`
+/// is a closed set — a typo would otherwise silently pause a schedule downstream.
+class ScheduleSpec {
+  name: String
+  cronExpression: String
+  timezone: String(matches(Regex("[A-Za-z_]+(/[A-Za-z0-9_+-]+)*"))) = "UTC"
+  status: "ACTIVE"|"PAUSED" = "ACTIVE"
+}
+
 local manifestData: Mapping<String, Any> = new Mapping {
   ["execution_mode"] = "automation-engine"
   ["dag"] = generateDAG()
+  // DISTR-815: emit triggers.schedules when the entrypoint declares schedules,
+  // so the cron lives in the manifest itself (not a separate file).
+  when (schedules.length > 0) {
+    ["triggers"] = new Mapping {
+      ["schedules"] = new Listing {
+        for (s in schedules) {
+          new Mapping {
+            ["name"] = s.name
+            ["cron_expression"] = s.cronExpression
+            ["timezone"] = s.timezone
+            ["status"] = s.status
+          }
+        }
+      }
+    }
+  }
 }
 
 local function generateDAG(): Mapping<String, Any> = new Mapping {
@@ -2349,6 +2434,15 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
     }
   else node.args
 
+/// Workflow type for the extract node: verbatim `workflowType` when set,
+/// otherwise `name` kebab-cased.
+local workflowTypeResolved: String =
+  if (workflowType != null) workflowType!!
+  else name
+    .replaceAll(Regex("([A-Z]+)([A-Z][a-z])"), "$1-$2")
+    .replaceAll(Regex("([a-z0-9])([A-Z])"), "$1-$2")
+    .toLowerCase()
+
 local function generateExtractNode(): Mapping<String, Any> =
   let (step = pipeline.extract!!)
   let (_extractEhCheck = validateWorkflowNodeErrorHandling(step.errorHandling, "pipeline.extract.errorHandling"))
@@ -2362,16 +2456,21 @@ local function generateExtractNode(): Mapping<String, Any> =
     // the runtime app class name) or failure logs won't surface (HYP-1678).
     ["app_name"] = name
     ["inputs"] = new Mapping {
-      ["workflow_type"] = workflowType
-          .replaceAll(Regex("([A-Z]+)([A-Z][a-z])"), "$1-$2")
-          .replaceAll(Regex("([a-z0-9])([A-Z])"), "$1-$2")
-          .toLowerCase()
+      ["workflow_type"] = workflowTypeResolved
       ["app_name"] = name
       ["app_id"] = ""
       ["argo_workflow_slug"] = ""
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
       ["args"] = new Mapping {
         ["credential"] = "{{credential}}"
+        // SDR / agent-mode credential slot. Emitted whenever the app does not
+        // model `agent-json` — the gap that silently broke MSSQL's SDR rollout
+        // (atlan-mssql-app#177). When the app DOES model `agent-json`, the loop
+        // below emits it (AgentSelector constrains includeInManifest to true, so the
+        // loop always fires); this guard skips to avoid a duplicate key.
+        when (uiConfig == null || !uiConfig!!.properties.containsKey("agent-json")) {
+          ["agent_json"] = "{{agent-json}}"
+        }
         for (argName, formField in manifestTopLevelArgs) {
           when (uiConfig != null && uiConfig!!.properties.containsKey(formField) && uiConfig!!.properties[formField].includeInManifest) {
             [argName] = "{{" + formField + "}}"
@@ -2422,69 +2521,99 @@ local function getPyDefaultFactoryField(k: String, fieldType: String, factory: S
   else
     "\(k): \(fieldType) = Field(\n        default_factory=\(factory)\n    )"
 
+/// Wrap a generated field line with a Pydantic lifecycle marker when the field is
+/// deprecated or sunset.  The existing default value is preserved inside Field(...).
+///
+/// active  → pass through unchanged
+/// deprecated → `x: T = expr`          → `x: T = Field(default=expr, deprecated=True)`
+///              `x: T = Field(...)`     → `x: T = Field(..., deprecated=True)`
+/// sunset  → same as deprecated but also appends `json_schema_extra={"x-lifecycle": "sunset"}`
+local function applyLifecycle(fieldLine: String, u: Widgets.UIElement): String =
+  if (u.lifecycle == "active")
+    fieldLine
+  else
+    let (deprecatedKwarg =
+      if (u.lifecycleMessage != null)
+        "deprecated=\"\(u.lifecycleMessage!!)\""
+      else
+        "deprecated=True")
+    let (lifecycleKwargs =
+      if (u.lifecycle == "sunset")
+        ", \(deprecatedKwarg), json_schema_extra={\"x-lifecycle\": \"sunset\"}"
+      else
+        ", \(deprecatedKwarg)")
+    if (fieldLine.contains("= Field("))
+      // Already has a Field(...) call — append lifecycle kwargs before the final closing )
+      fieldLine.replaceFirst(Regex("\\)\\s*$"), "\(lifecycleKwargs))")
+    else
+      // Simple `name: Type = expr` form — rewrite as Field(default=expr, ...)
+      fieldLine.replaceFirst(Regex(" = (.+)$"), " = Field(default=$1\(lifecycleKwargs))")
+
 local function getInputPyField(k: String, u: Widgets.UIElement): String =
   let (k = toPyName(k))
-  if (u is Widgets.BooleanInput)
-    "\(k): bool = \(if ((u as Widgets.BooleanInput).default) "True" else "False")"
-  else if (u is Widgets.Switcher)
-    "\(k): bool = \(if ((u as Widgets.Switcher).default) "True" else "False")"
-  else if (u is Widgets.NumericInput)
-    "\(k): int = \(if ((u as Widgets.NumericInput).default != null) (u as Widgets.NumericInput).default!!.toInt() else 0)"
-  else if (u is Widgets.DateInput)
-    "\(k): int = 0"
-  else if (u is Widgets.FileUploader)
-    "\(k): FileReference | None = None"
-  else if (u is Widgets.ConnectionCreator)
-    "\(k): ConnectionRef | None = None"
-  else if (u is Widgets.ConnectionRefInput)
-    (if ((u as Widgets.ConnectionRefInput).multiSelect)
-      getPyDefaultFactoryField(k, "Annotated[list[ConnectionRef], MaxItems(1000)]", "list")
-    else
-      "\(k): ConnectionRef | None = None")
-  else if (u is Widgets.ConnectionSelector)
-    "\(k): str = \"\""
-  else if (u is Widgets.CredentialInput)
-    "\(k): str = \"\""
-  else if (u is Widgets.PasswordInput)
-    "\(k): str = \"\""
-  else if (u is Widgets.TagsInput)
-    getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
-  else if (u is Widgets.InputRepeater)
-    getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
-  else if (u is Widgets.DropDown)
-    (if ((u as Widgets.DropDown).multiSelect)
-      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
-    else
-      "\(k): str = \"\(if ((u as Widgets.DropDown).default != null) (u as Widgets.DropDown).default!! else "")\"")
-  else if (u is Widgets.Radio)
-    "\(k): str = \"\(if ((u as Widgets.Radio).default != null) (u as Widgets.Radio).default!! else "")\""
-  else if (u is Widgets.CloudProvider)
-    "\(k): str = \"\""
-  else if (u is Widgets.Sage || u is Widgets.SageV2)
-    "\(k): str = \"\""
-  else if (u is Widgets.InfoBanner || u is Widgets.GlossarySelector)
-    "\(k): str = \"\""
-  else if (u is Widgets.CustomWidget)
-    "\(k): str = \"\""
-  else if (u is Widgets.TextInput)
-    "\(k): str = \"\(if ((u as Widgets.TextInput).default != null) (u as Widgets.TextInput).default!! else "")\""
-  else if (u is Widgets.TextBoxInput)
-    "\(k): str = \"\""
-  else if (u is Widgets.ConditionalInput)
-    (let (ci = u as Widgets.ConditionalInput)
-      if (ci.outputValueType == "object")
-        getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
+  let (baseLine =
+    if (u is Widgets.BooleanInput)
+      "\(k): bool = \(if ((u as Widgets.BooleanInput).default) "True" else "False")"
+    else if (u is Widgets.Switcher)
+      "\(k): bool = \(if ((u as Widgets.Switcher).default) "True" else "False")"
+    else if (u is Widgets.NumericInput)
+      "\(k): int = \(if ((u as Widgets.NumericInput).default != null) (u as Widgets.NumericInput).default!!.toInt() else 0)"
+    else if (u is Widgets.DateInput)
+      "\(k): int = 0"
+    else if (u is Widgets.FileUploader)
+      "\(k): FileReference | None = None"
+    else if (u is Widgets.ConnectionCreator)
+      "\(k): ConnectionRef | None = None"
+    else if (u is Widgets.ConnectionRefInput)
+      (if ((u as Widgets.ConnectionRefInput).multiSelect)
+        getPyDefaultFactoryField(k, "Annotated[list[ConnectionRef], MaxItems(1000)]", "list")
       else
-        "\(k): str = \"\(if (ci.default != null) ci.default!!.toString() else "")\"")
-  else if (u is Widgets.SqlTree)
-    // Values are bounded strings (schema names / JSON-encoded selections); `str` avoids
-    // the SDK's AAF-CTR-002 rejection of `Any`.  Pydantic's lax mode coerces non-string
-    // leaf values (e.g. booleans) to str during model construction.
-    getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
-  else if (u is Widgets.NestedInput || u is Widgets.APITree || u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap || u is Widgets.AgentSelector)
-    getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
-  else
-    "\(k): str = \"\""
+        "\(k): ConnectionRef | None = None")
+    else if (u is Widgets.ConnectionSelector)
+      "\(k): str = \"\""
+    else if (u is Widgets.CredentialInput)
+      "\(k): str = \"\""
+    else if (u is Widgets.PasswordInput)
+      "\(k): str = \"\""
+    else if (u is Widgets.TagsInput)
+      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
+    else if (u is Widgets.InputRepeater)
+      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
+    else if (u is Widgets.DropDown)
+      (if ((u as Widgets.DropDown).multiSelect)
+        getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
+      else
+        "\(k): str = \"\(if ((u as Widgets.DropDown).default != null) (u as Widgets.DropDown).default!! else "")\"")
+    else if (u is Widgets.Radio)
+      "\(k): str = \"\(if ((u as Widgets.Radio).default != null) (u as Widgets.Radio).default!! else "")\""
+    else if (u is Widgets.CloudProvider)
+      "\(k): str = \"\""
+    else if (u is Widgets.Sage || u is Widgets.SageV2)
+      "\(k): str = \"\""
+    else if (u is Widgets.InfoBanner || u is Widgets.GlossarySelector)
+      "\(k): str = \"\""
+    else if (u is Widgets.CustomWidget)
+      "\(k): str = \"\""
+    else if (u is Widgets.TextInput)
+      "\(k): str = \"\(if ((u as Widgets.TextInput).default != null) (u as Widgets.TextInput).default!! else "")\""
+    else if (u is Widgets.TextBoxInput)
+      "\(k): str = \"\""
+    else if (u is Widgets.ConditionalInput)
+      (let (ci = u as Widgets.ConditionalInput)
+        if (ci.outputValueType == "object")
+          getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
+        else
+          "\(k): str = \"\(if (ci.default != null) ci.default!!.toString() else "")\"")
+    else if (u is Widgets.SqlTree)
+      // Values are bounded strings (schema names / JSON-encoded selections); `str` avoids
+      // the SDK's AAF-CTR-002 rejection of `Any`.  Pydantic's lax mode coerces non-string
+      // leaf values (e.g. booleans) to str during model construction.
+      getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
+    else if (u is Widgets.NestedInput || u is Widgets.APITree || u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap || u is Widgets.AgentSelector)
+      getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
+    else
+      "\(k): str = \"\"")
+  applyLifecycle(baseLine, u)
 
 local function needsJsonObjectStringCoercion(u: Widgets.UIElement): Boolean =
   u is Widgets.NestedInput
@@ -2740,8 +2869,25 @@ local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
     if (ci.outputValueType == "object")
       fmtSubsField(pyName, "dict[str, Any] | None", "default=None", k)
     else if (ci.baseWidgetType == "radio" && ci.baseEnum != null && !ci.baseEnum!!.isEmpty)
-      let (litStr = (new Listing { for (v in ci.baseEnum!!) { "\"\(v)\"" } }).toList().join(", "))
-      let (defVal = if (ci.default != null) ci.default!!.toString() else ci.baseEnum!!.toList().first)
+      // A ConditionalInput's value space is the union of `baseEnum` and every
+      // `conditions[].overrideEnum` (e.g. extraction-method exposes "agent" only
+      // when a lab flag is on). The Literal must admit all of them, or AGENT-mode
+      // e2e can't set extraction_method="agent". Base values first, then override
+      // values not already present, deduped while preserving order.
+      let (baseVals = ci.baseEnum!!.toList())
+      let (overrideVals = (new Listing {
+            when (ci.conditions != null) {
+              for (c in ci.conditions!!) {
+                when (c.overrideEnum != null) {
+                  for (v in c.overrideEnum!!) { v }
+                }
+              }
+            }
+          }).toList())
+      let (allVals = (baseVals + overrideVals)
+            .fold(List(), (acc: List<String>, v: String) -> if (acc.contains(v)) acc else acc.add(v)))
+      let (litStr = (new Listing { for (v in allVals) { "\"\(v)\"" } }).toList().join(", "))
+      let (defVal = if (ci.default != null) ci.default!!.toString() else baseVals.first)
       fmtSubsField(pyName, "Literal[\(litStr)]", "default=\"\(defVal)\"", k)
     else
       fmtSubsField(pyName, "str", "default=\"\(if (ci.default != null) ci.default!!.toString() else "")\"", k)
@@ -2767,7 +2913,7 @@ local function generateE2EBasePy(): FileOutput = new FileOutput {
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
     "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
     "    connector_short_name = \"\(escapePyStr(name))\"\n" +
-    "    argo_package_name = \"\(escapePyStr(argoPackageName))\"\n" +
+    "    argo_package_name = \"\(escapePyStr(resolvedArgoPackageName))\"\n" +
     "    argo_template_name = \"\(escapePyStr(argoTemplateName))\"\n" +
     "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n" +
     (if (emitConnType) "    connection_type = \"\(escapePyStr(connector!!.value))\"\n" else "") +
@@ -2826,6 +2972,25 @@ local function credFieldLine(f: FieldSpec, authSpecific: Boolean): String =
     "    \(pyName): \(pyType) = Field(alias=\"\(f.name)\")"
   else
     "    \(pyName): \(pyType) = Field(default=\(defExpr), alias=\"\(f.name)\")"
+
+// Lightweight agent (SDR) credential body, appended after the direct body so a
+// single `_e2e_credential.py` carries BOTH `<Cname>CredentialBody` (direct) and
+// `<Cname>AgentCredentialBody` (agent). The e2e test picks the shape per RunMode;
+// the credential mode is a per-run concern, not a contract property. Agent mode
+// omits all inline credential fields: the harness serialises the body with a
+// plain `model_dump(by_alias=True)` (no `exclude_unset`), so an inline
+// host/username/password would be sent on the wire and make the orchestrator
+// treat the submit as a direct credential — skipping credential creation and
+// leaving `{{credentialGuid}}` unsubstituted. Real creds live in the agent's
+// secret store, resolved at runtime via agent-json ref keys.
+local function agentCredentialClass(cname: String, firstAuthKey: String): String =
+  "\n\nclass \(cname)AgentCredentialBody(CredentialBody):\n" +
+  "    name: str = Field(alias=\"name\")\n" +
+  "    auth_type: str = Field(default=\"\(firstAuthKey)\", alias=\"authType\")\n" +
+  "    connector_config_name: str = Field(\n" +
+  "        default=\"\(connectorConfigName)\", alias=\"connectorConfigName\"\n" +
+  "    )\n" +
+  "    extra: dict = Field(default_factory=dict, alias=\"extra\")\n"
 
 local function generateE2ECredentialPy(): FileOutput? =
   if (!(hasCredentialConfig && credentialAuthOptions != null && !credentialAuthOptions!!.isEmpty))
@@ -2978,7 +3143,8 @@ local function generateE2ECredentialPy(): FileOutput? =
       "from application_sdk.testing.e2e.credential import CredentialBody\n" +
       extraModelBlock +
       "\n\nclass \(cname)CredentialBody(CredentialBody):\n" +
-      mainClassBody
+      mainClassBody +
+      agentCredentialClass(cname, firstAuthKey)
   }
 
 // ── atlan.yaml generation ─────────────────────────────────────────────────────
@@ -3017,50 +3183,87 @@ local function renderEntrypoint(e: Entrypoint): Mapping<String, Any> = new Mappi
   when (e.id != null) { ["id"] = e.id }
   ["name"] = e.name
   ["display_name"] = e.displayName
-  when (e.description != null) { ["description"] = e.description }
+  when (e.description != null || shortDescription != "") { ["description"] = e.description ?? shortDescription }
   when (e.iconUrl != null || iconUrl != null) { ["icon_url"] = e.iconUrl ?? iconUrl }
   ["type"] = e.type
   when (e.source != null) { ["source"] = e.source }
   when (e.sourceCategory != null) { ["source_category"] = e.sourceCategory }
   when (!e.categories.isEmpty) { ["categories"] = e.categories }
-  when (e.docsUrl != null) { ["docs_url"] = e.docsUrl }
+  when (e.docsUrl != null || docsUrl != "") { ["docs_url"] = e.docsUrl ?? docsUrl }
+  when (e.packageId != null) {
+    ["package_id"] = e.packageId
+    ["marketplace_card"] = true
+  }
   ...e.metadata
 }
 
-local function renderDeployConfig(d: DeployConfig): Mapping<String, Any> = new Mapping {
-  ["execution_mode"] = d.executionMode
-  ["splitDeploymentEnabled"] = d.splitDeployment
-  when (d.replicaCount != null) { ["replicaCount"] = d.replicaCount }
-  ["dapr"] = new Mapping {
-    ["objectstore"] = d.dapr.objectstore
-    ["secretstore"] = d.dapr.secretstore
-    ["statestore"] = d.dapr.statestore
-    ["eventstore"] = d.dapr.eventstore
-    ["subscription"] = d.dapr.subscription
-    ["configurationstore"] = d.dapr.configurationstore
-    ["lock"] = d.dapr.lock
-    for (k, v in d.dapr.customComponents) {
-      [k] = v
+local function renderKedaConfig(k: KedaConfig): Mapping<String, Any> = new Mapping {
+  ["enabled"] = k.enabled
+  when (k.enabled) {
+    ["minReplicaCount"] = k.minReplicaCount
+    when (k.cooldownPeriod != null) { ["cooldownPeriod"] = k.cooldownPeriod }
+    ["temporal"] = new Mapping {
+      ["targetQueueSize"] = k.temporal.targetQueueSize
     }
   }
-  ["keda"] = new Mapping {
-    ["enabled"] = d.keda.enabled
-    when (d.keda.enabled) {
-      ["minReplicaCount"] = d.keda.minReplicaCount
-      ["temporal"] = new Mapping {
-        ["targetQueueSize"] = d.keda.temporal.targetQueueSize
-      }
-    }
-  }
-  when (d.resources != null) {
-    ["resources"] = new Mapping {
-      when (!d.resources!!.requests.isEmpty) { ["requests"] = d.resources!!.requests }
-      when (!d.resources!!.limits.isEmpty) { ["limits"] = d.resources!!.limits }
-    }
-  }
-  when (!d.env.isEmpty) { ["env"] = d.env }
-  when (!d.envOverrides.isEmpty) { ["envOverrides"] = d.envOverrides }
 }
+
+local function renderPool(p: Pool): Mapping<String, Any> = new Mapping {
+  when (p.replicaCount != null) { ["replicaCount"] = p.replicaCount }
+  ["keda"] = renderKedaConfig(p.keda)
+  when (p.resources != null) {
+    ["resources"] = new Mapping {
+      when (!p.resources!!.requests.isEmpty) { ["requests"] = p.resources!!.requests }
+      when (!p.resources!!.limits.isEmpty) { ["limits"] = p.resources!!.limits }
+    }
+  }
+  when (!p.env.isEmpty) { ["env"] = p.env }
+  when (!p.envOverrides.isEmpty) { ["envOverrides"] = p.envOverrides }
+}
+
+local function renderDapr(d: DaprComponents): Mapping<String, Any> = new Mapping {
+  ["objectstore"] = d.objectstore
+  ["secretstore"] = d.secretstore
+  ["statestore"] = d.statestore
+  ["eventstore"] = d.eventstore
+  ["subscription"] = d.subscription
+  ["configurationstore"] = d.configurationstore
+  ["lock"] = d.lock
+  for (k, v in d.customComponents) {
+    [k] = v
+  }
+}
+
+local function renderDeployYaml(d: DeployConfig): Mapping<String, Any> =
+  let (hasDapr = d.dapr.objectstore || d.dapr.secretstore || d.dapr.statestore ||
+        d.dapr.eventstore || d.dapr.subscription || d.dapr.configurationstore ||
+        d.dapr.lock || !d.dapr.customComponents.isEmpty)
+  let (globalFields: Mapping<String, Any> = new Mapping {
+    ["execution_mode"] = d.executionMode
+    ["splitDeploymentEnabled"] = d.splitDeployment
+    when (hasDapr) { ["dapr"] = renderDapr(d.dapr) }
+  })
+  if (d.pools.isEmpty)
+    deepMergeMapping(globalFields, d.overrides)
+  else
+    let (firstPool: Pool = (new Listing<Pool> { for (_, p in d.pools) { p } }).first)
+    let (poolFields: Mapping<String, Any> = new Mapping {
+      when (firstPool.replicaCount != null) { ["replicaCount"] = firstPool.replicaCount }
+      ["keda"] = renderKedaConfig(firstPool.keda)
+      when (firstPool.resources != null) {
+        ["resources"] = new Mapping {
+          when (!firstPool.resources!!.requests.isEmpty) { ["requests"] = firstPool.resources!!.requests }
+          when (!firstPool.resources!!.limits.isEmpty) { ["limits"] = firstPool.resources!!.limits }
+        }
+      }
+      when (!firstPool.env.isEmpty) { ["env"] = firstPool.env }
+      when (!firstPool.envOverrides.isEmpty) { ["envOverrides"] = firstPool.envOverrides }
+    })
+    deepMergeMapping(
+      deepMergeMapping(globalFields, poolFields),
+      deepMergeMapping(d.overrides, firstPool.overrides)
+    )
+
 
 local effectiveEntrypoints: Listing<Entrypoint> =
   if (!entrypoints.isEmpty) entrypoints
@@ -3069,12 +3272,14 @@ local effectiveEntrypoints: Listing<Entrypoint> =
     let (_displayName = displayName)
     let (_iconUrl = iconUrl)
     let (_type = type)
+    let (_pkgId = if (marketplaceCard) "@atlan/\(_name)" else null)
     new Listing {
       new Entrypoint {
         name = _name
         displayName = _displayName
         iconUrl = _iconUrl
         type = _type
+        packageId = _pkgId
       }
     }
 
@@ -3087,9 +3292,10 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   when (docsUrl != "") { ["docs_url"] = docsUrl }
   when (creatorOrg != null) { ["creator_org"] = creatorOrg }
   ["type"] = type
-  ["execution_mode"] = deploy.executionMode
+  ["execution_mode"] = "native"
   when (iconUrl != null) { ["icon_url"] = iconUrl }
   ["visibility"] = visibility
+  when (!argoPackageNames.isEmpty) { ["argo_package_names"] = argoPackageNames }
   ["build_tag"] = buildTag
   ["self_deployed_runtime"] = selfDeployedRuntime
   when (tags.toList().length > 0) { ["tags"] = tags }
@@ -3100,7 +3306,16 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
       }
     }
   }
-  ["deploy"] = deepMergeMapping(renderDeployConfig(deploy), deployOverrides)
+  when (deploy != null) {
+    ["deploy"] = renderDeployYaml(deploy!!)
+    when (!deploy!!.pools.isEmpty) {
+      ["pools"] = new Mapping {
+        for (poolName, pool in deploy!!.pools) {
+          [poolName] = deepMergeMapping(renderPool(pool), pool.overrides)
+        }
+      }
+    }
+  }
 }
 
 local atlanYamlData: Mapping<String, Any> =

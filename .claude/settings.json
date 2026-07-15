@@ -1,13 +1,14 @@
 {
   "hooks": {
-    "PostToolUse": [
+    "PreToolUse": [
       {
-        "matcher": "Edit|Write",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.file_path // empty' | { read -r f; [ -n \"$f\" ] && uvx ruff check --fix \"$f\" && uvx ruff format \"$f\"; } 2>/dev/null || true",
-            "statusMessage": "Linting with ruff..."
+            "if": "Bash(git commit *)",
+            "command": "root=$(git rev-parse --show-toplevel); staged=$(git -C \"$root\" diff --name-only --cached); for i in 1 2 3; do (cd \"$root\" && uv run pre-commit run) && exit 0; while IFS= read -r f; do [ -n \"$f\" ] && git -C \"$root\" add -- \"$f\"; done <<< \"$staged\"; done; exit 2",
+            "statusMessage": "Running pre-commit checks..."
           }
         ]
       }

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
+from application_sdk.errors.leaves import ColdStartRaceError
 from application_sdk.infrastructure._dapr.credential_vault import (
     DaprCredentialVault,
     _resolve_credentials,
@@ -250,6 +253,77 @@ class TestDaprCredentialVaultGetCredentials:
 
         assert result.get("password") == "actual_password"
 
+    async def test_agent_single_key_mode_outage_raises_not_silently_swallowed(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        """Single-key mode must not silently proceed with an incomplete
+        credential when the secret store genuinely never answers — that's
+        the same swallow already fixed for multi-key mode (see
+        test_persistent_transient_failure_raises_not_silently_swallowed);
+        single-key probing must still fail loudly on an exhausted
+        cold-start outage rather than treating it like a non-secret field."""
+        config = {
+            "credentialSource": "agent",
+            "password": "secret_key_ref",
+        }
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(
+            side_effect=httpx.ConnectError("all connection attempts failed")
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("my-guid")
+
+        # The raw ref-key must not survive into the outer CredentialVaultError's
+        # message — it's rebuilt with a hashed label before propagating out of
+        # _try_fetch, not the original SecretStoreUnavailableError("secret_key_ref").
+        assert "secret_key_ref" not in str(exc_info.value)
+
+    async def test_single_key_failure_summary_does_not_leak_ref_key_in_logs(
+        self,
+    ) -> None:
+        """A definitive (non-cold-start) rejection during single-key probing
+        must not leak the raw ref-key in either the per-field DEBUG log or
+        the aggregated ERROR summary — mirrors credentials.agent's ref-key
+        hashing for the identical single-key-probe shape."""
+        ref_key = "SNOWFLAKE_PROD_PASSWORD"
+        expected_hash = hashlib.sha256(ref_key.encode()).hexdigest()[:8]
+        config = {"credentialSource": "agent", "password": ref_key}
+
+        req = httpx.Request("GET", "http://localhost/secret")
+        resp = httpx.Response(403, request=req)
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(
+            side_effect=httpx.HTTPStatusError("forbidden", request=req, response=resp)
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            patch(
+                "application_sdk.infrastructure._dapr.credential_vault.logger"
+            ) as mock_logger,
+        ):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("my-guid")
+
+        # Unresolved placeholder retained — mirrors the "not a secret" fallthrough.
+        assert result.get("password") == ref_key
+
+        logged = " ".join(
+            str(arg)
+            for call in mock_logger.debug.call_args_list
+            + mock_logger.error.call_args_list
+            for arg in call.args
+        )
+        assert ref_key not in logged
+        assert f"sha256:{expected_hash}" in logged
+
     async def test_guid_validation_rejects_path_traversal(self) -> None:
         """GUIDs with unsafe characters (e.g. '../') raise CredentialVaultError immediately."""
         mock_client = _make_mock_dapr_client(config_bytes=b"", secret_data={})
@@ -267,6 +341,299 @@ class TestDaprCredentialVaultGetCredentials:
             await vault.get_credentials("valid-prefix/injected")
 
         mock_client.invoke_binding.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# DaprCredentialVault._get_secret cold-start retry / classification
+# ---------------------------------------------------------------------------
+
+
+class TestDaprCredentialVaultColdStartRetry:
+    """The GUID/vault path races the same cold Dapr sidecar the bundle/named
+    paths do, and must retry a transient failure rather than silently
+    treating it as an absent bundle (a cold-start race here used to look
+    identical to "no secret", degrading to an incomplete credential)."""
+
+    def _make_vault(self, mock_client: MagicMock) -> DaprCredentialVault:
+        return DaprCredentialVault(
+            mock_client,
+            upstream_binding_name="upstream-objectstore",
+            secret_store_name="secretstore",
+        )
+
+    async def test_transient_failure_is_retried_then_succeeds(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
+        calls = {"n": 0}
+
+        async def _cold_then_ready(*, store_name: str, key: str) -> dict[str, str]:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise httpx.ConnectError("all connection attempts failed")
+            return {"password": "secret_pass"}
+
+        mock_client = _make_mock_dapr_client(config_bytes=b"{}", secret_data={})
+        mock_client.get_secret = AsyncMock(side_effect=_cold_then_ready)
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            result = await vault._get_secret("my-guid")
+
+        assert result == {"password": "secret_pass"}
+        assert calls["n"] == 3
+
+    async def test_secretstore_cold_start_not_masked_by_binding_success(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
+        """The upstream object-store binding and the secret store are
+        distinct Dapr components racing the same cold sidecar independently
+        — the binding's config-fetch answering immediately (e.g. it happened
+        to finish initializing first) must not arm the secret store's gate
+        too. Exercises the full get_credentials() flow, where both steps
+        run in the same call."""
+        config = {"credentialSource": "direct", "host": "db.example.com"}
+        calls = {"n": 0}
+
+        async def _cold_then_ready(*, store_name: str, key: str) -> dict[str, str]:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise httpx.ConnectError("all connection attempts failed")
+            return {"password": "secret_pass"}
+
+        # Config-fetch (binding) succeeds immediately — this alone must not
+        # arm the secret store's cold-start gate.
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(side_effect=_cold_then_ready)
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("my-guid")
+
+        assert result["password"] == "secret_pass"
+        assert calls["n"] == 3
+
+    async def test_persistent_transient_failure_raises_not_silently_swallowed(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        config = {"credentialSource": "direct", "host": "db.example.com"}
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(
+            side_effect=httpx.ConnectError("all connection attempts failed")
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            # Prior behavior: this silently proceeded with secret_data={}.
+            # A persistent cold-start-shaped failure must surface as a real
+            # error instead of degrading to an incomplete credential.
+            with pytest.raises(CredentialVaultError):
+                await vault.get_credentials("my-guid")
+
+    async def test_4xx_rejection_is_not_retried(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        config = {"credentialSource": "direct", "host": "db.example.com"}
+        req = httpx.Request("GET", "http://localhost/secret")
+        resp = httpx.Response(403, request=req)
+        calls = {"n": 0}
+
+        async def _forbidden(*, store_name: str, key: str) -> dict[str, str]:
+            calls["n"] += 1
+            raise httpx.HTTPStatusError("forbidden", request=req, response=resp)
+
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(side_effect=_forbidden)
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError):
+                await vault.get_credentials("my-guid")
+
+        # A definitive rejection fails fast — never retried.
+        assert calls["n"] == 1
+
+    async def test_definitively_absent_bundle_proceeds_with_empty_secrets(
+        self,
+    ) -> None:
+        """An empty-but-200 response is a genuine "no secret" — not an error."""
+        config = {"credentialSource": "direct", "host": "db.example.com"}
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("my-guid")
+
+        assert result["host"] == "db.example.com"
+        assert "password" not in result
+
+    async def test_genuinely_missing_bundle_proceeds_with_empty_secrets(self) -> None:
+        """Dapr's real shape for a genuinely-missing key is NOT an empty-200
+        response — it's HTTP 500 with errorCode=ERR_SECRET_GET (see
+        classify_secret_fetch_error's docstring, verified against a live
+        sidecar). An AGENT-source credential's secret-path bundle is
+        explicitly optional ("not every credential has one" — see
+        get_credentials's MULTI_KEY branch), so this must proceed with an
+        empty secret dict exactly like the empty-200 case above, not raise.
+        Regression test: this shape used to escalate to CredentialVaultError
+        because classify_secret_fetch_error returned a generic
+        SecretStoreError for it, which _get_secret's `except
+        SecretNotFoundError: return {}` never caught."""
+        config = {
+            "credentialSource": "agent",
+            "secret-path": "bundle/path",
+            "host": "db.example.com",
+        }
+        req = httpx.Request("GET", "http://localhost/secret")
+        resp = httpx.Response(
+            500,
+            request=req,
+            json={
+                "errorCode": "ERR_SECRET_GET",
+                "message": "failed getting secret with key bundle/path from "
+                "secret store secretstore: secret bundle/path not found",
+            },
+        )
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "internal error", request=req, response=resp
+            )
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("my-guid")
+
+        assert result["host"] == "db.example.com"
+        assert "password" not in result
+
+
+# ---------------------------------------------------------------------------
+# DaprCredentialVault._fetch_credential_config cold-start retry / classification
+# ---------------------------------------------------------------------------
+
+
+class TestFetchCredentialConfigColdStartRetry:
+    """The config-fetch step is typically the *first* Dapr call
+    get_credentials() makes, racing the identical cold sidecar the
+    secret-fetch step does. A transient failure here must be retried and
+    tagged ColdStartRaceError, not collapsed into the same BindingError the
+    (still-current) "no config found" case produces — see the sibling
+    tests in TestDaprCredentialVaultGetCredentials for that latter case."""
+
+    def _make_vault(self, mock_client: MagicMock) -> DaprCredentialVault:
+        return DaprCredentialVault(
+            mock_client,
+            upstream_binding_name="upstream-objectstore",
+            secret_store_name="secretstore",
+        )
+
+    async def test_transient_failure_is_retried_then_succeeds(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
+        from application_sdk.infrastructure._dapr.http import BindingResult
+
+        config = {"credentialSource": "direct", "host": "db.example.com"}
+        calls = {"n": 0}
+
+        async def _cold_then_ready(
+            *, binding_name: str, operation: str, data: bytes, metadata: dict[str, str]
+        ) -> BindingResult:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise httpx.ConnectError("all connection attempts failed")
+            return BindingResult(data=json.dumps(config).encode(), metadata={})
+
+        mock_client = _make_mock_dapr_client(config_bytes=b"{}", secret_data={})
+        mock_client.invoke_binding = AsyncMock(side_effect=_cold_then_ready)
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("my-guid")
+
+        assert result["host"] == "db.example.com"
+        assert calls["n"] == 3
+
+    async def test_persistent_transient_failure_tags_cold_start_cause(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        """A cold-start race here must NOT be indistinguishable from a
+        genuinely-missing config — the resolver keys off `.cause` being a
+        ColdStartRaceError to avoid misreporting a retryable platform outage
+        as a non-retryable "credential not found"."""
+        mock_client = _make_mock_dapr_client(config_bytes=b"{}", secret_data={})
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=httpx.ConnectError("all connection attempts failed")
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("my-guid")
+
+        assert isinstance(exc_info.value.cause, ColdStartRaceError)
+
+    async def test_5xx_transient_failure_tags_cold_start_cause(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        """A bare 5xx on the *binding* fetch is unambiguously cold-start-shaped
+        (unlike the secrets API, a missing config blob is a successful
+        response with empty data, not a 5xx — see is_dapr_transport_unavailable's
+        docstring) — it must be retried and tagged ColdStartRaceError via
+        is_dapr_transport_unavailable, exactly like a bare ConnectError."""
+        req = httpx.Request("POST", "http://localhost/bindings/upstream-objectstore")
+        resp = httpx.Response(503, request=req)
+        mock_client = _make_mock_dapr_client(config_bytes=b"{}", secret_data={})
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "service unavailable", request=req, response=resp
+            )
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("my-guid")
+
+        assert isinstance(exc_info.value.cause, ColdStartRaceError)
+
+    async def test_4xx_rejection_is_not_retried(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        req = httpx.Request("POST", "http://localhost/bindings/upstream-objectstore")
+        resp = httpx.Response(403, request=req)
+        calls = {"n": 0}
+
+        async def _forbidden(**kwargs: Any) -> Any:
+            calls["n"] += 1
+            raise httpx.HTTPStatusError("forbidden", request=req, response=resp)
+
+        mock_client = _make_mock_dapr_client(config_bytes=b"{}", secret_data={})
+        mock_client.invoke_binding = AsyncMock(side_effect=_forbidden)
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("my-guid")
+
+        # A definitive rejection fails fast — never retried — and is not
+        # tagged as a cold-start race.
+        assert calls["n"] == 1
+        assert not isinstance(exc_info.value.cause, ColdStartRaceError)
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@ from application_sdk.app.base import (
     _safe_now,
     _safe_uuid,
     _scan_entrypoints,
+    _validate_workflow_input,
     _workflow_class_cache,
     _wrap_instance_tasks,
     generate_workflow_class,
@@ -354,6 +355,14 @@ class _BLDXInput(Input, allow_unbounded_fields=True):
 
 class _BLDXOutput(Output, allow_unbounded_fields=True):
     result: str = ""
+
+
+class _GateEligibleInput(Input, allow_unbounded_fields=True):
+    """Declares the three CredentialResolvable fields top-level — gate-eligible."""
+
+    extraction_method: str = ""
+    credential_guid: str = ""
+    agent_json: _Any = None
 
 
 @pytest.fixture(autouse=True)
@@ -988,6 +997,51 @@ class TestGenerateWorkflowClass:
         assert wf_cls_a is wf_cls_b
 
     @pytest.mark.asyncio
+    async def test_warns_at_boot_when_input_not_gate_eligible(self) -> None:
+        # _BLDXInput is a bare Input — not credential-resolvable — so the gate
+        # would silently skip at runtime. Boot must surface that once, loudly.
+        class _NotResolvableApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+            mock.patch("application_sdk.app.base._task_logger") as log,
+        ):
+            generate_workflow_class(_NotResolvableApp, ep)
+
+        assert log.warning.called
+        assert "Preflight gate will not run" in log.warning.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_no_boot_warn_when_input_gate_eligible(self) -> None:
+        class _ResolvableApp(App):
+            async def run(self, input: _GateEligibleInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_GateEligibleInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+            mock.patch("application_sdk.app.base._task_logger") as log,
+        ):
+            generate_workflow_class(_ResolvableApp, ep)
+
+        assert not log.warning.called
+
+    @pytest.mark.asyncio
     async def test_run_happy_path_executes_entry_method(self) -> None:
         results: list[str] = []
 
@@ -1028,6 +1082,103 @@ class TestGenerateWorkflowClass:
         assert results == ["ran:hi"]
         on_complete.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_run_raw_dict_payload_is_validated_into_typed_model(self) -> None:
+        """A raw wire payload (dict) is validated into the typed contract before the
+        entry method runs — the entry point still receives a typed model, so the
+        permissive Any annotation is not a bypass of the typed contract."""
+        seen: list[object] = []
+
+        class DictApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                seen.append(input)
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(DictApp, ep)
+
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch.object(DictApp, "on_complete", new_callable=mock.AsyncMock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+        ):
+            # Pass a dict, as Temporal's data converter yields under the Any annotation.
+            out = await wf_cls.run(mock.MagicMock(), {"value": "hi"})
+
+        assert isinstance(out, _BLDXOutput)
+        assert len(seen) == 1
+        # Entry method received a fully typed, validated model — not the raw dict.
+        assert isinstance(seen[0], _BLDXInput)
+        assert seen[0].value == "hi"
+
+    @pytest.mark.asyncio
+    async def test_run_invalid_payload_fails_fast_non_retryable(self) -> None:
+        """An invalid payload fails as a non-retryable workflow *execution* error
+        (fast) rather than an unvalidated decode failure that Temporal would retry
+        as a Workflow Task indefinitely."""
+        ran: list[object] = []
+
+        class StrictApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                ran.append(input)
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(StrictApp, ep)
+
+        from application_sdk.execution.errors import ApplicationError
+
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch.object(StrictApp, "on_complete", new_callable=mock.AsyncMock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+            pytest.raises(ApplicationError) as exc,
+        ):
+            # A bare string where an object is required — mirrors the observed
+            # "Input should be an object [input_value='', input_type=str]" failure.
+            await wf_cls.run(mock.MagicMock(), "not-an-object")
+
+        # Direct attribute access (not getattr-with-default): a contract-drift
+        # rename should surface as an AttributeError, not a silent None mismatch.
+        assert exc.value.non_retryable is True
+        assert exc.value.type == "InputValidationError"
+        # The entry method never ran — we failed before any app code.
+        assert ran == []
+
+    def test_validate_workflow_input_returns_typed_instance_unchanged(self) -> None:
+        """An already-typed instance is returned as the same object (fast-path),
+        not re-validated into a copy. Guards against a future refactor silently
+        dropping the ``isinstance`` early return."""
+        instance = _BLDXInput(value="hi")
+        result = _validate_workflow_input(instance, _BLDXInput)
+        assert result is instance
+
     def _patched_workflow_layer(self, info_mock: mock.MagicMock):
         """Returns a contextlib.ExitStack wired with the patches every _run test needs."""
         import contextlib
@@ -1042,6 +1193,11 @@ class TestGenerateWorkflowClass:
         ipt.return_value.__exit__ = mock.MagicMock(return_value=False)
         stack.enter_context(
             mock.patch("application_sdk.app.base.workflow.info", return_value=info_mock)
+        )
+        # Preflight gate (HYP-1883) runs at the head of _run; these tests target
+        # the entry-method path, so disable the gate via the unpatched branch.
+        stack.enter_context(
+            mock.patch("application_sdk.app.base.workflow.patched", return_value=False)
         )
         stack.enter_context(mock.patch("application_sdk.app.base._safe_log"))
         stack.enter_context(
@@ -1227,6 +1383,78 @@ class TestGenerateWorkflowClass:
             out = await wf_cls.run(mock.MagicMock(), _BLDXInput())
 
         assert isinstance(out, _BLDXOutput)
+
+    @pytest.mark.asyncio
+    async def test_preflight_block_logs_warning_not_error(self) -> None:
+        """A PreflightFailed gate block must log at warning (no stack), not error."""
+
+        class BlockedApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(BlockedApp, ep)
+
+        from application_sdk.execution._temporal.preflight_gate import (
+            PREFLIGHT_FAILED_ERROR_TYPE,
+        )
+        from application_sdk.execution.errors import ApplicationError
+
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        safe_log_mock = mock.MagicMock()
+        preflight_error = ApplicationError(
+            "source unreachable",
+            type=PREFLIGHT_FAILED_ERROR_TYPE,
+            non_retryable=True,
+        )
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch("application_sdk.app.base._safe_log", safe_log_mock),
+            mock.patch.object(BlockedApp, "on_complete", new_callable=mock.AsyncMock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+            mock.patch(
+                "application_sdk.app.base._run_preflight_gate",
+                side_effect=preflight_error,
+            ),
+            pytest.raises(ApplicationError),
+        ):
+            await wf_cls.run(mock.MagicMock(), _BLDXInput())
+
+        warning_calls = [
+            c
+            for c in safe_log_mock.call_args_list
+            if c.args
+            and c.args[0] == "warning"
+            and "blocked by preflight" in str(c.args[1] if len(c.args) > 1 else "")
+        ]
+        assert (
+            warning_calls
+        ), "_safe_log('warning', 'App blocked by preflight gate', ...) was not called"
+        for call in warning_calls:
+            assert not call.kwargs.get(
+                "exc_info"
+            ), "Preflight block must not include exc_info=True"
+        # Also confirm no error-level call was made for the gate block
+        error_calls = [
+            c
+            for c in safe_log_mock.call_args_list
+            if c.args
+            and c.args[0] == "error"
+            and "blocked by preflight" in str(c.args[1] if len(c.args) > 1 else "")
+        ]
+        assert not error_calls, "Preflight block must not log at error level"
 
 
 # =============================================================================

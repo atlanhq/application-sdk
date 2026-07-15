@@ -119,13 +119,13 @@ Prefer one metric with a `format` label over many parallel metrics:
 
 ```python
 # WRONG — three near-duplicate metrics
-record_metric(name="json_chunks_written", labels={"type": "daft"})
-record_metric(name="parquet_write_records", labels={"type": "daft", "mode": ...})
+record_metric(name="json_chunks_written", labels={"type": "pandas"})
+record_metric(name="parquet_write_records", labels={"type": "pandas", "mode": ...})
 record_metric(name="chunks_written", labels={"type": "pandas", "mode": ...})
 
 # RIGHT — one metric, format as a label
-record_metric(name="chunks_written", labels={"format": "json", "engine": "daft", "mode": ...})
-record_metric(name="records_written", labels={"format": "parquet", "engine": "daft", "mode": ...})
+record_metric(name="chunks_written", labels={"format": "json", "mode": ...})
+record_metric(name="records_written", labels={"format": "parquet", "mode": ...})
 ```
 
 (Note: the SDK currently has the legacy fragmented form. New metrics should

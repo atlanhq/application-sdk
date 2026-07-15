@@ -15,7 +15,7 @@ Currently implemented:
 * ``P001`` UnboundedContractFields — an ``Input``/``Output`` contract subclass
   declared with the ``allow_unbounded_fields=True`` class keyword.
 * ``P002`` CategoryFieldOverride — a subclass of ``AppError`` (or any of its
-  14 categorical leaves) that redeclares the ``category`` ``ClassVar`` in its
+  15 categorical leaves) that redeclares the ``category`` ``ClassVar`` in its
   own body, drifting the canonical taxonomy.  The check uses a transitive
   closure of AppError-derived class names within the file so second-generation
   overrides are caught even when the intermediate class is not in the canonical
@@ -39,6 +39,18 @@ Currently implemented:
   task boundary.
 * ``P012`` FilePathStringInContract — a ``str`` field on a contract whose name or
   doc marks it as a filesystem path (a worker-local reference).
+* ``P013`` UntypedEntrypointBoundary — a ``@entrypoint`` method (or implicit
+  ``run()`` on an ``App`` subclass) whose input parameter or return type is not
+  a subclass of the SDK's ``Input``/``Output`` contract.  Cross-file; requires
+  ``scan_all``.
+* ``P014`` UntypedTaskBoundary — a ``@task`` method whose input parameter or
+  return type is not a subclass of the SDK's ``Input``/``Output`` contract.
+  Cross-file; requires ``scan_all``.
+* ``P015`` UnmodeledBoundedContractField — a field on an ``Input``/``Output``
+  contract annotated with a container of primitives/``Any`` (``dict[str, str]``,
+  ``list[str]``, or the bounded ``Annotated[dict[…], MaxItems(N)]`` form).
+  Bounded containers pass payload-safety validation (P001) but are stringly-typed.
+  Per-file (like P011/P012).
 
 Inline suppression
 ------------------
@@ -64,12 +76,13 @@ from conformance.suite.checks._ast_common import (
 )
 from conformance.suite.schema.findings import Finding
 
+from ._app_state_seam import check_p027
 from ._category_override import (
     _CANONICAL_ERROR_CLASSES,
     CategoryOverrideChecker,
     _collect_apperror_subclasses,
 )
-from ._contract_fields import check_p011, check_p012
+from ._contract_fields import check_p011, check_p012, check_p015
 from ._error_code_prefix import (
     LEAF_PREFIX_MAP,
     ClassRecord,
@@ -80,7 +93,10 @@ from ._error_code_prefix import (
 )
 from ._file_reference import check_p010
 from ._framework_transfer import check_p008
+from ._getattr_contract_field import check_p026
+from ._qualified_name import check_p028
 from ._store_construction import check_p009
+from ._typed_boundaries import check_p013_p014
 from ._unbounded_fields import UnboundedContractFieldsChecker
 
 SERIES = "P"
@@ -91,9 +107,10 @@ __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path", "scan_text"]
 def scan_text(text: str, file: str) -> list[Finding]:
     """Scan a single Python source *text* for per-file findings.
 
-    Runs P001, P002, and P008–P012 — every rule that needs only a single file's
-    AST.  P003 needs cross-file context; use :func:`scan_all` for full-suite
-    runs.  Kept for symmetry with the per-file ``scan_path`` runner contract.
+    Runs P001, P002, P008–P012, P015, P026 and P028 — every rule that needs only
+    a single file's AST.  P003, P013, P014 and P027 need cross-file context; use
+    :func:`scan_all` for full-suite runs.  Kept for symmetry with the per-file
+    ``scan_path`` runner contract.
     """
     try:
         tree = ast.parse(text, filename=file)
@@ -118,6 +135,9 @@ def scan_text(text: str, file: str) -> list[Finding]:
     findings_p010 = check_p010(tree, file, directives)
     findings_p011 = check_p011(tree, file, directives)
     findings_p012 = check_p012(tree, file, directives)
+    findings_p015 = check_p015(tree, file, directives)
+    findings_p026 = check_p026(tree, file, directives)
+    findings_p028 = check_p028(tree, file, directives)
 
     return (
         p001._findings
@@ -127,11 +147,17 @@ def scan_text(text: str, file: str) -> list[Finding]:
         + findings_p010
         + findings_p011
         + findings_p012
+        + findings_p015
+        + findings_p026
+        + findings_p028
     )
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file (P001 + P002 + P008–P012).  P003 requires :func:`scan_all`."""
+    """Scan a single Python file (P001 + P002 + P008–P012 + P015 + P026 + P028).
+
+    P003, P013, P014 and P027 require :func:`scan_all` for cross-file resolution.
+    """
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -144,27 +170,36 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    """Multi-pass scan over *paths*, emitting P001 + P002 + P003 findings.
+    """Multi-pass scan over *paths*, emitting all P-series findings.
 
-    Pass 1 — parse every file once, run P001 and P002 per-file, collect every
-    ``ClassDef`` into a name-keyed registry along with its base names and any
-    literal ``code`` declaration.
+    Pass 1 — parse every file once, run the per-file rules (P001, P002,
+    P008–P012, P015, P026, P028), collect every ``ClassDef`` into a name-keyed
+    registry along with its base names and any literal ``code`` declaration.
+    Store each parsed tree for the P013/P014 and P027 cross-file passes.
 
     Pass 2 — for each registered class, walk its (transitive) base chain to
-    find the deepest ancestor that names one of the 14 leaves in
+    find the deepest ancestor that names one of the 15 leaves in
     ``LEAF_PREFIX_MAP``.  Cycle-safe via a per-resolution ``visiting`` set;
     results memoised.
 
     Pass 3 — emit P003 for every class that derives from a leaf and either
     omits its own ``code`` declaration or declares one that does not start
-    with the leaf's category prefix + ``_``.  The 14 leaves themselves are
+    with the leaf's category prefix + ``_``.  The 15 leaves themselves are
     exempt (their bare codes are the prefix definitions).
+
+    Pass 4 — emit P013/P014 using the pre-built ``by_name`` class registry and
+    stored trees.  Resolution is transitive and memoised across all files.
+
+    Pass 5 — emit P027 (app-wide ``app_state`` read-with-no-writer): resolve key
+    constants across all stored trees and flag every ``get_app_state(KEY)`` whose
+    ``KEY`` has no populating ``set_app_state`` writer anywhere.
     """
     findings: list[Finding] = []
 
     # Pass 1
     file_directives: dict[Path, dict[int, _IgnoreDirective]] = {}
     file_records: dict[Path, list[ClassRecord]] = {}
+    file_trees: dict[Path, ast.AST] = {}
     by_name: dict[str, ClassRecord] = {}
 
     for path in paths:
@@ -183,6 +218,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         rel_str = str(rel)
         directives = _parse_directives(text)
         file_directives[path] = directives
+        file_trees[path] = tree
 
         # P001 (per-file)
         checker = UnboundedContractFieldsChecker(
@@ -203,15 +239,18 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         p002_checker.visit(tree)
         findings.extend(p002_checker._findings)
 
-        # P008–P012 (per-file)
+        # P008–P012, P015, P026, P028 (per-file)
         findings.extend(check_p008(tree, rel_str, directives))
         findings.extend(check_p009(tree, rel_str, directives))
         findings.extend(check_p010(tree, rel_str, directives))
         findings.extend(check_p011(tree, rel_str, directives))
         findings.extend(check_p012(tree, rel_str, directives))
+        findings.extend(check_p015(tree, rel_str, directives))
+        findings.extend(check_p026(tree, rel_str, directives))
+        findings.extend(check_p028(tree, rel_str, directives))
 
-        # Class registry for P003 — de-alias base names so aliased imports
-        # of leaf classes don't hide the real ancestry.
+        # Class registry for P003 and P013/P014 — de-alias base names so aliased
+        # imports of leaf/base classes don't hide the real ancestry.
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
         records = collect_classes(tree, rel_str, aliases)
         file_records[path] = records
@@ -236,6 +275,13 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                 findings.append(emit_p003(rec, leaf_prefix, directives))
             elif not rec.code_value.startswith(f"{leaf_prefix}_"):
                 findings.append(emit_p003(rec, leaf_prefix, directives))
+
+    # Pass 4 — emit P013/P014 (cross-file boundary-type enforcement)
+    findings.extend(check_p013_p014(file_trees, by_name, file_directives, root))
+
+    # Pass 5 — emit P027 (app-wide app_state read-with-no-writer)
+    findings.extend(check_p027(file_trees, file_directives, root))
+
     return findings
 
 

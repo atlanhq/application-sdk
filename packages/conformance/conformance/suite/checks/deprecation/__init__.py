@@ -1,12 +1,14 @@
 """B-series deprecation checks — AST-based, mixed-scope.
 
-One checker, two halves, dispatched by the repo under scan:
+One checker, two halves plus a contract-compat pass, dispatched by scope:
 
 * **consumer half (B001, scope ``app``)** — flags app usage of any SDK symbol the
   committed manifest marks deprecated;
 * **authoring half (B002/B003/B004, scope ``sdk``)** — flags the SDK declaring
   its own deprecations incorrectly (malformed notice, overdue removal, or an
-  unmarked docstring claim).
+  unmarked docstring claim);
+* **contract-compat (B005/B006, scope ``both``)** — guards entrypoint contracts
+  against non-additive changes (field removal, type change) and ledger staleness.
 
 Scope is detected once per run from the repo's ``[project].name`` (the same
 mechanism every series uses): the SDK runs only the authoring half, a consumer
@@ -16,7 +18,7 @@ never depends on this dispatch alone.
 
 Inline suppression
 ------------------
-Add ``# conformance: ignore[B001] <reason>`` (or B002/B003/B004) on the offending
+Add ``# conformance: ignore[B001] <reason>`` (or B002–B006) on the offending
 line or the comment-only line directly above it.
 """
 
@@ -38,6 +40,8 @@ from conformance.suite.schema.findings import Finding
 
 from ._authoring import scan_authoring
 from ._consumer import scan_consumer
+from ._contract_compat import scan_contract_compat
+from ._ledger_schema import load_ledger
 from ._manifest import load_manifest
 
 SERIES = "B"
@@ -45,10 +49,12 @@ SERIES = "B"
 __all__ = [
     "SERIES",
     "discover",
+    "load_ledger",
     "main",
     "scan_all",
     "scan_authoring",
     "scan_consumer",
+    "scan_contract_compat",
     "scan_path",
 ]
 
@@ -97,6 +103,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             findings.extend(scan_consumer(tree, rel, manifest, directives))
         if run_authoring:
             findings.extend(scan_authoring(tree, rel, version, directives))
+
+    ledger = load_ledger(repo_root=root)
+    findings.extend(scan_contract_compat(paths, root, ledger))
     return findings
 
 

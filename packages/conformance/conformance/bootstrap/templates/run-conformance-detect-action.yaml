@@ -1,0 +1,124 @@
+name: "Run conformance detect"
+description: >
+  Build the conformance detect arg list and invoke atlan-application-sdk-conformance
+  for one matrix leg. Handles all four invocation flavours — published package vs. git-ref,
+  isolated env vs. resolved env — via composite-action step conditions so the reusable
+  workflow needs only one uses: line per leg.
+
+  The arg-building script is read from $GITHUB_ACTION_PATH so it resolves to the SDK's
+  .github/scripts/ regardless of whether the caller is the SDK itself or a consumer app.
+
+inputs:
+  series:
+    description: "Conformance series letter(s), e.g. C or D"
+    required: true
+  slug:
+    description: "Series slug used for the SARIF output filename, e.g. ci or dependency"
+    required: true
+  exclude-paths:
+    description: "Comma-separated repo-root-relative path prefixes to exclude from scanning"
+    required: false
+    default: ""
+  exit-zero:
+    description: >
+      Exit 0 even when blocking violations are found (soft-enforce / observe mode).
+      The SARIF invocation.exitCode still records the real result.
+    required: false
+    default: "false"
+  conformance-ref:
+    description: >
+      Git ref (branch, tag, or SHA) for the conformance package.
+      Empty string (default) installs the latest published PyPI package via uvx.
+      Set to a SHA to test an unreleased suite change before it is published.
+    required: false
+    default: ""
+  needs-env:
+    description: >
+      When true, sync the caller's resolved environment before running detect.
+      Required for D-series (UnusedDependency maps declared deps to import names via
+      installed package metadata).
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Sync resolved env"
+      if: inputs.needs-env == 'true'
+      shell: bash
+      run: |
+        # D003 only needs the core [project.dependencies] importable, which a
+        # plain sync installs; avoid --all-extras/--all-groups so the leg does
+        # not pull heavier or private-index dev/optional deps it never inspects.
+        uv sync
+
+    - name: "Detect (published package, isolated env)"
+      if: inputs.conformance-ref == '' && inputs.needs-env != 'true'
+      shell: bash
+      env:
+        SERIES: ${{ inputs.series }}
+        SLUG: ${{ inputs.slug }}
+        EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+        EXIT_ZERO: ${{ inputs.exit-zero }}
+      run: |
+        set -euo pipefail
+        raw=$(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
+          --series "$SERIES" --slug "$SLUG")
+        mapfile -t detect_args <<< "$raw"
+        uvx atlan-application-sdk-conformance detect "${detect_args[@]}"
+
+    - name: "Detect (published package, resolved env)"
+      if: inputs.conformance-ref == '' && inputs.needs-env == 'true'
+      shell: bash
+      env:
+        SERIES: ${{ inputs.series }}
+        SLUG: ${{ inputs.slug }}
+        EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+        EXIT_ZERO: ${{ inputs.exit-zero }}
+      run: |
+        set -euo pipefail
+        raw=$(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
+          --series "$SERIES" --slug "$SLUG")
+        mapfile -t detect_args <<< "$raw"
+        uv run \
+          --with "atlan-application-sdk-conformance" \
+          -- atlan-application-sdk-conformance detect "${detect_args[@]}"
+
+    - name: "Detect (from git ref, isolated env)"
+      if: inputs.conformance-ref != '' && inputs.needs-env != 'true'
+      shell: bash
+      env:
+        SERIES: ${{ inputs.series }}
+        SLUG: ${{ inputs.slug }}
+        EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+        EXIT_ZERO: ${{ inputs.exit-zero }}
+        CONFORMANCE_REF: ${{ inputs.conformance-ref }}
+      run: |
+        set -euo pipefail
+        raw=$(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
+          --series "$SERIES" --slug "$SLUG")
+        mapfile -t detect_args <<< "$raw"
+        uv run \
+          --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${CONFORMANCE_REF}#subdirectory=packages/conformance" \
+          -- atlan-application-sdk-conformance detect "${detect_args[@]}"
+
+    - name: "Detect (from git ref, resolved env)"
+      if: inputs.conformance-ref != '' && inputs.needs-env == 'true'
+      shell: bash
+      env:
+        SERIES: ${{ inputs.series }}
+        SLUG: ${{ inputs.slug }}
+        EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+        EXIT_ZERO: ${{ inputs.exit-zero }}
+        CONFORMANCE_REF: ${{ inputs.conformance-ref }}
+      run: |
+        set -euo pipefail
+        raw=$(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
+          --series "$SERIES" --slug "$SLUG")
+        mapfile -t detect_args <<< "$raw"
+        # uv run --with overlays this leg's ephemeral requirement onto the resolved
+        # env from the preceding sync step; needed so the suite's own D-series detect
+        # sees consumer deps.
+        uv run \
+          --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${CONFORMANCE_REF}#subdirectory=packages/conformance" \
+          -- atlan-application-sdk-conformance detect "${detect_args[@]}"

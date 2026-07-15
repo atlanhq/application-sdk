@@ -11,3 +11,12 @@ class CrawlerCredentialBody(CredentialBody):
     host: str = Field(alias="host")
     username: str = Field(default="", alias="username")
     password: str = Field(default="", alias="password")
+
+
+class CrawlerAgentCredentialBody(CredentialBody):
+    name: str = Field(alias="name")
+    auth_type: str = Field(default="basic", alias="authType")
+    connector_config_name: str = Field(
+        default="atlan-connectors-bundle", alias="connectorConfigName"
+    )
+    extra: dict = Field(default_factory=dict, alias="extra")

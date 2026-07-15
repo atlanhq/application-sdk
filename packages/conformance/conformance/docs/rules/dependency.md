@@ -5,7 +5,7 @@
 
 # Dependency Rules (D-series)
 
-**8 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
+**9 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -23,6 +23,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [D006](#d006) | `IncompatibleRequiresPython` | `warn` | `app` | `python-version` | yes | 0.5.0 |
 | [D007](#d007) | `NonStandardBuildBackend` | `warn` | `app` | `build-system` | yes | 0.5.0 |
 | [D008](#d008) | `WeakenedTypeChecking` | `warn` | `app` | `tooling-baseline` | yes | 0.5.0 |
+| [D009](#d009) | `RemoteDaprComponentFetch` | `block` | `app` | `dapr-components` | yes | 0.12.0 |
 
 ---
 
@@ -194,5 +195,30 @@ APIs pass app CI unnoticed, defeating the point of the typed surface.
 regressions against the SDK's typed APIs slip through app CI.  A pyproject that does not
 set `typeCheckingMode` is not flagged; blanket `reportX = false` overrides are out of
 scope (they can be legitimate).  Cite: BLDX-1410.
+
+---
+
+## D009 — `RemoteDaprComponentFetch` {#d009}
+
+**Tier:** `block` · **Scope:** `app` · **Category:** `dapr-components` · **Autofixable:** yes · **Since:** 0.12.0
+
+> A poe task fetches Dapr component YAMLs from GitHub instead of the installed application-sdk wheel
+
+**Rationale:** Fetching Dapr component YAMLs from raw.githubusercontent.com or the GitHub contents API
+at build time hits GitHub's unauthenticated rate limit under CI concurrency, turning
+routine builds into flaky 429s across the fleet. The hardcoded SDK ref these fetches pin
+to also drifts from whatever application-sdk version is actually locked in the app's own
+uv.lock. The installed SDK wheel already bundles these files at
+application_sdk/components/, so the network round-trip is both fragile and redundant.
+
+No `[tool.poe.tasks.*]` entry (in either the shorthand `task.shell = "..."` form or the
+full `[tool.poe.tasks.task]` table form) may reference `raw.githubusercontent.com` or
+`api.github.com` for `atlanhq/application-sdk`. Dapr component YAMLs are bundled inside
+the `atlan-application-sdk` wheel at `application_sdk/components/` — copy them from
+there instead, e.g. `shutil.copytree(pathlib.Path(application_sdk.__file__).parent /
+'components', 'components', dirs_exist_ok=True)`. This requires application-sdk to
+already be installed into the venv before the task runs (true both locally and in the
+Docker build, where `uv sync` precedes `poe download-components`). Inline suppression:
+`# conformance: ignore[D009] <reason>` on the line above the offending entry.
 
 ---

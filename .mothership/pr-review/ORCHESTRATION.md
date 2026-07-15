@@ -15,7 +15,6 @@ you have — a partial review is better than no review.
 | Phase 1: Context | 60s | 2 min | 5 min | Skip reachability, grep-only |
 | Phase 2: Review | 5 min | 10 min | 15 min | Drop to 2 agents, skip adversarial |
 | Phase 3: Submit | 30s | 30s | 60s | Nothing — just a curl call |
-| Phase 4: CI Fix | 3 min | 5 min | 5 min | Skip if complex |
 
 | PR Size | Total Budget | Hard Stop |
 |---------|-------------|-----------|
@@ -95,7 +94,6 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    - `.mothership/pr-review/CLAUDE.md`
    - `.mothership/pr-review/severity-rubric.yaml`
    - `.mothership/pr-review/modes/standard.md`
-   - `.mothership/pr-review/modes/auto-complete.md`
    - `.mothership/pr-review/references/*.md`
    - `.mothership/pr-review/agents/*.md`
    - `.mothership/review-policy.md`
@@ -105,7 +103,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
     previous `<!-- SDK_REVIEW -->` summary comment exists on this
     PR, read its full body and write it to `/tmp/PRIOR_REVIEW.md`. The
     body becomes **input** to Phase 2 reasoning (not just a labeling
-    reference for §2d at the end): it tells the agents what was flagged
+    reference for §2e at the end): it tells the agents what was flagged
     before, what the author said in response, and what should be
     carried forward, downgraded, or re-checked given the current HEAD.
 
@@ -137,24 +135,20 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
     threads) the human's response, which materially changes what
     counts as a "new" finding vs a known-and-discussed one.
 
-7. **§Intent Inference** — interpret `COMMENTER_INTENT` (free-form text
-   the human typed after `@sdk-review`) and set the mode for this run.
-   The workflow does NOT parse commands — that is your job.
+7. **Always run a standard review.** There is a single mode. Ignore any
+   free-form text after `@sdk-review` (`COMMENTER_INTENT`) — there are no
+   commands to parse (no auto-fix, stop, challenge, override, or focus
+   modes). Every trigger runs the full multi-agent review for the PR's
+   `review_scope`, posts findings, and exits.
 
-   Apply these rules in order; first match wins. If `COMMENTER_INTENT`
-   is empty, default to **standard review** (Mode A).
+   **Re-review continuity:** if `/tmp/PRIOR_REVIEW.md` is non-empty (a prior
+   `<!-- SDK_REVIEW -->` summary exists — loaded in Phase 0 step 6b), this
+   run is a **re-review**: prior findings + author replies are part of the
+   input. Carry forward findings that are still present, label resolved ones
+   explicitly, surface new ones, and downgrade ones the author successfully
+   addressed in inline-comment threads. See §2e for the labeling rules.
 
-   | If the intent contains... | Mode |
-   |---|---|
-   | (empty) | **A. Standard review** — full multi-agent review, post findings, exit. **If `/tmp/PRIOR_REVIEW.md` is non-empty, this is a re-review**: prior findings + author replies are part of the input. Carry forward findings that are still present, label resolved ones explicitly, surface new ones, downgrade ones the author successfully challenged in inline-comment threads. See §2d for the labeling rules; see Phase 0 step 6b for how `PRIOR_REVIEW` was loaded. |
-   | `stop`, `cancel`, `abort` | **B. Stop** — no-op. Reply to the triggering comment confirming the cancel, label the PR if applicable, exit cleanly. |
-   | `auto-complete`, `resolve all`, `apply fixes`, `fix it`, `fix the issues` | **C. Auto-fix loop** — review, then iterate the in-sandbox fix loop (see §Auto-fix loop). |
-   | `challenge` *with* a finding ID, a quoted finding, or a paragraph of reasoning | **D. Targeted challenge** — re-evaluate only the cited findings using the human's explanation as additional context (see Phase 2h). |
-   | `override:` followed by a justification | **E. Admin override** — verify the commenter is a repo admin via `gh api repos/$REPO/collaborators/$COMMENTER/permission`. If admin, set status check to success and log the override in REVIEW_DATA. If not admin, reply with the failure reason and exit. |
-   | Anything else (free-form prose) | **F. Standard review with focus** — run mode A, but treat the prose as a supplementary focus area or extra context the reviewers should weigh (e.g., "look closely at the new metric reader code"). Echo the focus back in the summary so the human sees it landed. |
-
-   Record the chosen mode and pass it forward — every downstream phase
-   may behave slightly differently based on it.
+   The review is **read-only**: it never commits or pushes to the PR branch.
 
 8. **Branch freshness + conflict resolution** (before reviewing):
    ```bash
@@ -192,87 +186,75 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    NEEDS_REBASE -->`); the GHA layer applies the `sdk-review-needs-rebase`
    label from there. EXIT.
 
-9. **Pre-commit cleanup** (eliminate style noise before review):
+9. **CI status read** (feeds the verdict — the review never fixes CI):
    ```bash
-   CHANGED=$(git diff --name-only "origin/$BASE_REF"...HEAD -- '*.py')
-   if [ -n "$CHANGED" ]; then
-     uv run pre-commit run --files $CHANGED 2>/dev/null || true
-     if [ -n "$(git status --porcelain -- '*.py')" ]; then
-       git add $(git diff --name-only)
-       git commit -m "style: auto-format via pre-commit"
-       git push origin HEAD
-       # Refresh the diff after the auto-format commit.
-       gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/DIFF.patch
-     fi
-   fi
+   FAILING=$(gh pr checks "$PR_NUMBER" --repo "$REPO" \
+     --json name,conclusion --jq '.[] | select(.conclusion=="failure") | .name' 2>/dev/null)
    ```
-   This ensures the review finds REAL issues, not formatting noise.
+   Record `FAILING` for the verdict (G7) and the `**CI:**` summary line. The
+   review is **read-only**: it does NOT run pre-commit, read CI logs, fix CI,
+   commit, or push. CI reports its own failures, and
+   `sdk-review-downgrade-on-ci-failure.yml` strips the approval if a
+   non-review check fails. A real CI failure on its own → verdict
+   NEEDS_FIXES (per §2h).
 
-10. **CI pre-check** (don't waste review time if CI is broken):
-    ```bash
-    FAILING=$(gh pr checks "$PR_NUMBER" --repo "$REPO" \
-      --json name,conclusion --jq '.[] | select(.conclusion=="failure") | .name' 2>/dev/null)
-    ```
+10. Read the repo's `CLAUDE.md` for project conventions.
 
-    If CI is failing:
-    - Read failure logs: `gh run view <run_id> --log-failed 2>/dev/null | head -100`
-    - If failure is in PR code (lint, type error, missing import, test failure):
-      → Dispatch Sonnet CI fix sub-agent (see below)
-    - If failure is pre-existing or infrastructure: note in review, proceed
-
-    **Sonnet CI Fix sub-agent** (lightweight, fast):
-    ```
-    Read the CI failure logs. Fix categories you CAN handle:
-    - Pre-commit failures (ruff, isort) → run pre-commit, commit
-    - Import errors → add missing imports
-    - Type errors (pyright) → fix type annotations
-    - Unit test failures from PR changes → fix the code
-
-    Categories you CANNOT handle (skip):
-    - Test failures in untouched code (pre-existing)
-    - Infrastructure failures (timeout, OOM)
-    - Complex logic errors (leave for review)
-
-    Run: uv run pre-commit run --files <files> && uv run pytest tests/unit/ -x --timeout=60
-    If fix works: git commit -m "fix(ci): <description>" && git push
-    If not: skip, note for review
-    ```
-
-11. Read the repo's `CLAUDE.md` for project conventions.
-
-12. **Smart agent routing** — classify the PR:
+11. **Smart agent routing** — classify the PR by which area it touches, and
+    dispatch only the matching specialist(s):
     ```bash
     gh pr view "$PR_NUMBER" --repo "$REPO" --json files --jq '.files[].path' > /tmp/PR_FILES.txt
     TOTAL_FILES=$(wc -l < /tmp/PR_FILES.txt)
     CT_FILES=$(grep -cE '^contract-toolkit/' /tmp/PR_FILES.txt || true)
     SDK_FILES=$(grep -cE '^application_sdk/' /tmp/PR_FILES.txt || true)
+    CONF_FILES=$(grep -cE '^(packages/conformance/|remediation/)' /tmp/PR_FILES.txt || true)
     TEST_FILES=$(grep -cE '^(tests/|contract-toolkit/tests/)' /tmp/PR_FILES.txt || true)
     DOC_FILES=$(grep -cE '^(docs/|contract-toolkit/docs/|.*README\.md$)' /tmp/PR_FILES.txt || true)
     CONFIG_FILES=$(grep -cE '^(pyproject\.toml|uv\.lock|\.pre-commit|\.github/|helm/)' /tmp/PR_FILES.txt || true)
-    SOURCE_FILES=$((TOTAL_FILES - TEST_FILES - DOC_FILES - CONFIG_FILES))
+    SOURCE_FILES=$((TOTAL_FILES - CONF_FILES - TEST_FILES - DOC_FILES - CONFIG_FILES))
+    CHANGED_LINES=$(grep -cE '^[+-]' /tmp/DIFF.patch 2>/dev/null || echo 0)
+    # Security-sensitive paths NEVER take the fast path (a 3-line auth/secret
+    # change is exactly where a subtle blocker hides).
+    SECURITY_PATHS=$(grep -cE '(credential|secret|auth|token|_dapr|_temporal)' /tmp/PR_FILES.txt || true)
     ```
    This file-list based classification includes deleted files; do not classify
-   only from `+++ b/` diff headers.
-   - If `CT_FILES > 0 && SDK_FILES == 0 && CONFIG_FILES == 0` → `review_scope=contract-toolkit`
+   only from `+++ b/` diff headers. Apply in order; **first match wins**:
+   - If `CT_FILES > 0 && SDK_FILES == 0 && CONF_FILES == 0 && CONFIG_FILES == 0` → `review_scope=contract-toolkit`
      (toolkit-review.md only; mandatory private consumer validation based on affected surface)
    - If `CT_FILES > 0 && (SDK_FILES > 0 || CONFIG_FILES > 0)` → `review_scope=mixed-sdk-toolkit`
      (standard SDK review agents + toolkit-review.md)
+   - If `SOURCE_FILES == 0 && CONF_FILES > 0 && CT_FILES == 0` → `review_scope=conformance-only`
+     (`conformance.md` agent only — the conformance-suite specialist for
+     `packages/conformance/**` + `remediation/**`: SARIF detector correctness,
+     rule-catalog consistency, rule scope (sdk/app/both), the two CI gates, and
+     the paired remediation program in the SAME PR. NOT the SDK CORRECTNESS
+     agent — conformance code is AST/rule logic, not Temporal/Dapr runtime.
+     If `CONFIG_FILES > 0` too, also dispatch `ci-config.md` on the config slice.)
    - If `SOURCE_FILES == 0 && TEST_FILES > 0` → `review_scope=tests-only`
      (QUALITY agent only — focused on test patterns, coverage, assertions)
    - If `SOURCE_FILES == 0 && DOC_FILES > 0 && TEST_FILES == 0` → `review_scope=docs-only`
      (Skip Phase 2 — submit APPROVE with "Docs-only PR, no code review needed")
    - If `SOURCE_FILES == 0 && CONFIG_FILES > 0` → `review_scope=config-only`
-     (CORRECTNESS agent only — dependency/security/CI permission check)
+     (`ci-config.md` agent only — the CI/workflow/deps/infra specialist, NOT
+     the SDK CORRECTNESS agent. Reviews GHA injection/permissions/pinning,
+     shell robustness, dependency/supply-chain, and `helm/**`.)
    - If `SOURCE_FILES <= 2 && TEST_FILES >= SOURCE_FILES * 3` → `review_scope=tests-focused`
      (QUALITY agent + lightweight CORRECTNESS — mostly tests with a few source changes)
-   - Otherwise → `review_scope=full` (all 3 agents)
+   - If `SOURCE_FILES >= 1 && TOTAL_FILES <= 2 && CHANGED_LINES < 50 && CONF_FILES == 0
+     && CT_FILES == 0 && CONFIG_FILES == 0 && SECURITY_PATHS == 0` → `review_scope=minor`
+     (**fast path** for a tiny source change: CORRECTNESS agent only — it always
+     keeps guardrail coverage G1-G5 — skipping the heavier QUALITY/STRUCTURE
+     waves and the adversarial Wave 2, on the Small time budget. NEVER matches
+     credential/secret/auth or `_dapr`/`_temporal` seam paths; those fall through
+     to `full`.)
+   - Otherwise → `review_scope=full` (correctness + quality + structure)
 
-13. Check diff size for tier:
+12. Check diff size for tier:
     - < 2000 lines → `review_tier = "full"`
     - 2000-20000 → `review_tier = "partitioned"`
     - > 20000 → `review_tier = "staged"`
 
-Print: `[Phase 0 complete] PR #<N>, mode=<A-H>, scope=<scope>, tier=<tier>`
+Print: `[Phase 0 complete] PR #<N>, scope=<scope>, tier=<tier>`
 
 ---
 
@@ -296,7 +278,7 @@ Use Agent tool to dispatch `agents/reachability.md` — classifies each
 changed symbol as temporal-workflow, temporal-activity, public-http,
 internal, test, or dead.
 
-Skip if review_scope is contract-toolkit, tests-only, docs-only, or config-only.
+Skip if review_scope is contract-toolkit, conformance-only, tests-only, docs-only, or config-only.
 
 ### 1b-toolkit. Private Toolkit Consumer Setup (if review_scope=contract-toolkit or mixed-sdk-toolkit)
 
@@ -617,12 +599,28 @@ Based on `review_scope`, dispatch agents via the Agent tool:
 | review_scope | Agents dispatched |
 |---|---|
 | `full` | correctness.md + quality.md + structure.md (all 3) |
+| `minor` | correctness.md only (fast path — keeps guardrail coverage) |
 | `contract-toolkit` | toolkit-review.md only |
 | `mixed-sdk-toolkit` | correctness.md + quality.md + structure.md + toolkit-review.md |
 | `tests-only` | quality.md only |
 | `tests-focused` | quality.md + correctness.md (lightweight) |
-| `config-only` | correctness.md only |
+| `conformance-only` | conformance.md only (conformance-suite specialist) |
+| `config-only` | ci-config.md only (CI/workflow/deps/infra specialist) |
 | `docs-only` | SKIP Phase 2 entirely |
+
+**Mixed partitions:** when a `full` or `tests-focused` PR ALSO changes config
+or conformance files, additionally dispatch the matching specialist scoped to
+**only** that partition — never hand it to the SDK domain agents:
+- `CONFIG_FILES > 0` (`.github/**`, `pyproject.toml`, `uv.lock`, `.pre-commit*`,
+  `helm/**`) → also dispatch `ci-config.md` on the config slice. (Skip if the
+  only config file is incidental `uv.lock` churn with no `.github/`/`helm/`/
+  `pyproject` change.)
+- `CONF_FILES > 0` (`packages/conformance/**`, `remediation/**`) → also
+  dispatch `conformance.md` on the conformance slice.
+
+The SDK domain agents (correctness/quality/structure) review `application_sdk/**`
++ tests and must NOT be handed `.github/**`, `helm/**`, or
+`packages/conformance/**` for Temporal/Dapr review.
 
 Each agent receives: PR diff (or partition), full file contents,
 holistic annotations, their reference rules, reachability output.
@@ -650,7 +648,7 @@ Parse JSON findings from each agent response.
 After Wave 1, call GPT to challenge your findings.
 
 **Skip conditions** (no adversarial):
-- `review_scope` is tests-only, config-only, or docs-only
+- `review_scope` is tests-only, conformance-only, config-only, docs-only, or minor
 - `review_scope` is contract-toolkit and toolkit-review.md produced zero findings
 - `review_tier` is "staged" (massive PR — too much context for one GPT call)
 - Wave 1 produced zero findings (nothing to challenge)
@@ -692,7 +690,64 @@ Note in review: "Cross-model adversarial: <skipped (reason) | ran | unavailable>
 
 If GPT was unavailable or skipped: keep all Opus findings >= 80%.
 
-### 2d. Delta Tracking (if previous review exists)
+### 2d. Root-Cause Clustering & Class-Completeness Sweep
+
+Findings arrive atomized — one per file/line — but bugs travel in
+**classes**. If you report only the instances the agents happened to
+land on, the author fixes them one at a time and the same defect comes
+back for another review round (and another, and another). A single
+revert-scope bug once cost this repo five review rounds because each
+round fixed the one instance reported and never the class. Kill the
+whole class in one pass.
+
+Operate on the post-de-bias finding set, before locking the verdict:
+
+1. **Cluster by root cause, not by file.** Two findings share a class
+   when the *same* underlying fix would resolve both (e.g. "a multi-file
+   writer that reverts only `finding.file`", "an auto-detect that resets
+   a customized value to its default on a bare re-run", "an
+   externally-derived value interpolated into a shell-out"). Give each
+   class a one-line name.
+
+2. **Sweep the whole diff for every sibling.** For each class with >= 1
+   confirmed finding, grep the *entire* diff — and the immediate module
+   the fix will touch — for other occurrences of the same shape that no
+   agent flagged individually. Report each as its own finding and note the
+   shared class in its human-visible title/body — e.g. a `class: <name>`
+   prefix. This is **prose only**: do not add a `class` field to the finding
+   payload — the Phase 3a inline-comment schema rejects unknown fields
+   (422). A swept-in sibling inherits the class's severity (it is the same
+   defect) — do not re-run it through de-bias.
+   ```bash
+   # e.g. a revert-scope class found in one writer → check every sibling
+   rg -n "finding\.file" /tmp/DIFF.patch
+   ```
+
+3. **Gate/flag classes: prove the gate isn't hollow.** When the class
+   concerns a check, gate, or flag *added in this PR*, verify it has no
+   input for which it silently passes: a gate that returns `passed=true`
+   unconditionally, a `forces_*`/escalation flag the model must remember
+   to set per-call rather than a structural rule field, a validator with
+   an early `return True`. An always-pass path is itself a finding — the
+   most expensive kind, because it defeats the safety net rather than
+   tripping it.
+
+4. **Report the class, once.** In the summary text, group findings by
+   class so the author sees "these six are one bug" and fixes the
+   invariant, not the instances. This is the single highest-leverage step
+   for holding a PR to 2-3 review rounds instead of 20+.
+
+**Scope — reviewer only.** This step targets the sdk-review reviewer, whose
+failure mode is *under*-generalization across serial human review rounds. Do
+not port it to the deterministic conformance remediation loop
+(`detect-fix-recheck`): that loop already fans out into independent,
+individually-gated per-finding fixes, and there per-site independence
+(fix-vs-suppress decided per site; uncorrelated model errors that recheck
+catches one at a time) is a feature, not a limitation. Clustering the *fixes*
+there would trade that robustness away for a round-count problem the
+self-iterating loop doesn't have.
+
+### 2e. Delta Tracking (if previous review exists)
 
 The previous review should already be loaded into context in Phase 0
 step 6b (`PRIOR_REVIEW` / `/tmp/PRIOR_REVIEW.md`) and used as input
@@ -723,11 +778,11 @@ Include the delta status in the review summary (and inline body
 where applicable) so the author sees at a glance what was fixed vs
 what remains.
 
-### 2e. Guardrails G1-G8
+### 2f. Guardrails G1-G8
 
 Check consolidated findings. Any G1/G2/G3/G5 → BLOCKED.
 
-### 2f. Holistic Path Forward (Critical + High only)
+### 2g. Holistic Path Forward (Critical + High only)
 
 For BLOCKING/CRITICAL/HIGH findings, include a `path_forward` in the
 inline comment body:
@@ -738,7 +793,7 @@ inline comment body:
 
 MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 
-### 2g. Determine Verdict
+### 2h. Determine Verdict
 
 | Verdict | Condition | approval_recommendation |
 |---|---|---|
@@ -750,26 +805,10 @@ MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 
 `READY_TO_MERGE` is strict: a single Important finding forces
 `NEEDS_FIXES`. Nits do not block. If you believe an Important should
-be downgraded, downgrade it explicitly in §2d with a one-line reason
+be downgraded, downgrade it explicitly in §2e with a one-line reason
 — do not silently approve over the top of it.
 
-### 2h. Challenge Mode (if Intent Inference picked Mode D)
-
-**Targeted challenge** — do NOT re-run the full review. Instead:
-
-1. Read the previous review comment from this PR (delta tracking in 2d)
-2. Take the author's challenge text from `COMMENTER_INTENT`
-3. Identify which specific findings the challenge addresses
-   (match by file, line, or description keywords)
-4. For ONLY the disputed findings:
-   - Re-read the flagged code with fresh eyes + the author's context
-   - Valid challenge → RESOLVED with note: "Accepted: <author's reason>"
-   - Partially valid → downgrade severity
-   - Not valid → STILL PRESENT with explanation
-5. All non-disputed findings: carry forward from previous review unchanged
-6. Submit updated review with delta tracking
-
-Print: `[Phase 2 complete] <N> findings, verdict=<verdict>`
+Print: `[Phase 2 complete] <N> findings across <C> classes, verdict=<verdict>`
 
 ---
 
@@ -972,7 +1011,7 @@ after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
 - If a prior summary exists → use **"SDK Re-review (mothership)"**.
   This tells the human reading the PR-comment timeline that this
   pass loaded the previous review as context and reasoned about
-  deltas (per Phase 0 §6b + §2d), not that it ignored history and
+  deltas (per Phase 0 §6b + §2e), not that it ignored history and
   reran the full review from scratch.
 - If `review_scope=contract-toolkit`, replace `SDK` in the visible
   heading with `Contract Toolkit`. Keep `<!-- SDK_REVIEW -->` unchanged
@@ -1039,87 +1078,16 @@ Retry once on 5xx from the GitHub API. On 422 (malformed inline
 comment because the line is not in the diff), drop that one finding
 and continue with the rest.
 
-### 3g. CI Check — Fix Failures Before Final Verdict
+### 3g. CI Check — note failures (read-only)
 
-After posting the review, re-check CI via `gh pr checks "$PR_NUMBER" --repo "$REPO"`. If failures:
-
-1. Read the failing check logs (if accessible via gh CLI in sandbox)
-2. If the failure is in code the PR touched AND the fix is obvious (lint, type error, import):
-   - Apply the fix
-   - Run pre-commit + pytest locally
-   - Push the fix commit
-   - **Do NOT re-run the full review cycle** — just re-submit with updated status
-3. If the failure is complex or in untouched code:
-   - Note in review: "CI failing: <check name>. This appears to be <in PR code / pre-existing>."
-   - Do NOT attempt to fix
+After posting the review, re-check CI via `gh pr checks "$PR_NUMBER" --repo "$REPO"`.
+The review does NOT fix CI and does NOT push. Reflect the failing checks
+in the `**CI:**` summary line and the verdict (a real CI failure →
+NEEDS_FIXES per §2h). `sdk-review-downgrade-on-ci-failure.yml` independently
+strips any approval if a non-review check fails, so the gate is covered
+without the reviewer mutating the branch.
 
 Print: `[Phase 3 complete] Review submitted`
-
----
-
-## Phase 4: Auto-Fix Loop (in-sandbox iteration)
-
-**Runs only when Intent Inference picked Mode C (auto-fix) AND the
-verdict is NEEDS_FIXES.** Skip entirely for any other mode/verdict.
-
-The loop happens *inside this same sandbox* — no re-dispatch, no
-separate fix-only session. Rover Direct's `session_id` resume means the
-GHA workflow blocks on this one dispatch for the whole loop (sync
-delivery, capped at `max_timeout_seconds: 7200`).
-
-### Hard limits
-- Max 3 iterations total (including this review = iteration 1).
-- Wall-clock cap on the loop: 90 minutes from Phase 0 start. If
-  approaching, finalize whatever fixes have landed and exit with the
-  current verdict.
-- One CI retry per push. Two consecutive red CIs ends the loop with
-  `REQUEST_CHANGES`.
-
-### Loop body
-
-```
-for iteration in 2 3:
-  # 1. Read the just-posted review comment (REVIEW_DATA block) and pull
-  #    every PATCH-scope finding (any severity). Skip MIGRATE, REFACTOR,
-  #    DESIGN_CHANGE — those need human decisions.
-  # 2. For each PATCH finding, in severity order:
-  #    a. Read the full file
-  #    b. Apply the exact suggested_fix
-  #    c. uv run pre-commit run --files <file>
-  #    d. uv run pytest tests/unit/ -x --timeout=60 (scoped if possible)
-  #    e. If anything fails → revert this fix only, note why, continue
-  # 3. git diff --stat — verify only intended files changed
-  #    If pre-commit reformatted unrelated files: git checkout -- them
-  # 4. Stage specific files (NEVER git add -A), commit with Conventional
-  #    Commits ("fix(review): address SDK review findings (iter N/3)"),
-  #    push origin HEAD.
-  # 5. gh pr checks "$PR_NUMBER" --repo "$REPO" --watch (max 10 min)
-  #    If CI red and fix is obvious (lint/import/type) → one CI fix
-  #    push. If CI red again → exit loop, submit REQUEST_CHANGES.
-  # 6. Re-run Phases 0 (steps 3-12 only — skip Intent Inference, mode
-  #    stays C) → 1 → 2 → 3 with the new diff.
-  # 7. If new verdict == READY_TO_MERGE → break, submit APPROVE
-  # 8. If new verdict != NEEDS_FIXES → break, submit current verdict
-  # 9. Otherwise continue
-```
-
-### Scope restrictions (non-negotiable)
-- ONLY fix PATCH scope findings
-- NEVER touch MIGRATE, REFACTOR, or DESIGN_CHANGE scope findings
-- NEVER modify files the PR doesn't already touch
-- NEVER add features, refactor, or "improve" things beyond the findings
-- NEVER force-push
-- NEVER add Co-Authored-By lines
-
-### Why in-sandbox now
-The previous design ran each iteration as a separate sandbox dispatched
-by re-posting `@sdk-review --iteration=N+1`. That worked but cost more
-(no cache reuse) and was hard to bound under a single GHA job. With
-Rover Direct's session resume + sync delivery, one dispatch covers the
-whole loop and the GHA workflow simply waits.
-
-Print: `[Phase 4 complete] iter=<N>, verdict=<verdict>` or
-`[Phase 4 skipped] mode=<mode>, verdict=<verdict>`
 
 ---
 

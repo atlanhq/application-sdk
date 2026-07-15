@@ -10,6 +10,7 @@ from application_sdk.infrastructure.secrets import (
     EnvironmentSecretStore,
     SecretNotFoundError,
     SecretStoreError,
+    SecretStoreUnavailableError,
     get_deployment_secret,
 )
 from application_sdk.testing.mocks import MockSecretStore
@@ -255,6 +256,39 @@ class TestSecretStoreError:
         """Test that secret_name is included in string representation."""
         err = SecretStoreError("failed", secret_name="MY_VAR")
         assert "MY_VAR" in str(err)
+
+    def test_secret_store_error_defaults_retryable(self) -> None:
+        """Unset retryable falls back to DependencyUnavailableError's default (True)."""
+        err = SecretStoreError("failed")
+        assert err.effective_retryable is True
+        assert err.to_failure_details().retryable is True
+
+    def test_secret_store_error_retryable_override(self) -> None:
+        """A definitive rejection (e.g. a 4xx) can be marked non-retryable
+        explicitly — retrying it would fail identically every time."""
+        err = SecretStoreError("forbidden", secret_name="MY_VAR", retryable=False)
+        assert err.effective_retryable is False
+        assert err.to_failure_details().retryable is False
+
+
+class TestSecretStoreUnavailableError:
+    """Tests for SecretStoreUnavailableError — the structurally-transient
+    "store unreachable" subtype callers retry a cold-start race against."""
+
+    def test_is_a_secret_store_error(self) -> None:
+        err = SecretStoreUnavailableError("db_pass", cause=RuntimeError("boom"))
+        assert isinstance(err, SecretStoreError)
+
+    def test_includes_code_and_secret_name(self) -> None:
+        err = SecretStoreUnavailableError("db_pass")
+        assert err.code == "DEPENDENCY_UNAVAILABLE_SECRET_STORE_UNREACHABLE"
+        assert "db_pass" in str(err)
+
+    def test_defaults_retryable_true(self) -> None:
+        """Unlike a definitive rejection, an unreachable store is retryable
+        by default — it inherits DependencyUnavailableError's default."""
+        err = SecretStoreUnavailableError("db_pass")
+        assert err.effective_retryable is True
 
 
 class TestGetDeploymentSecret:

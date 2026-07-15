@@ -1,9 +1,24 @@
-name: Sync PklProject.deps.json for Renovate (Reusable)
+name: Sync Pkl contract artifacts for Renovate (Reusable)
 
-# Reusable merge gate for Renovate (and Dependabot) upgrade PRs.
+# Reusable merge gate for Renovate (and Dependabot) app-contract-toolkit PRs.
+#
 # When Renovate bumps the @<version> URI in contract/PklProject, the committed
-# PklProject.deps.json lock file is stale. This workflow re-resolves it so the
-# PR is self-contained and CI passes without a manual `pkl project resolve` step.
+# artifacts go stale. This workflow re-syncs them so the PR is self-contained
+# and CI passes without a manual step. All logic lives in the tested driver
+# .github/scripts/renovate_pkl_sync.py (see that file's docstring); this
+# workflow only provides the toolchain and pushes the driver's commit.
+#
+#   1. contract/PklProject.deps.json — the Pkl lock. Always re-resolved.
+#   2. app/generated/** (+ atlan.yaml / app.yaml) — the generated artifacts.
+#      Regenerated via `pkl eval` by default (regenerate-contract: true), since
+#      a toolkit bump can change generated output and a lock-only sync would
+#      leave it stale. An app opts OUT with regenerate-contract: false (e.g.
+#      hand-maintained generated config, or a layout this can't drive). A
+#      failed eval degrades to a lock-only sync (never worse than re-resolve).
+#
+# Scope: standard repo-root layout (contract/PklProject, contract/app.pkl,
+# output at the repo root). Non-standard layouts (app/contract/, monorepo
+# apps/*/contract/) self-skip regeneration when contract/app.pkl is absent.
 #
 # Consumer repos call this from their own .github/workflows/renovate-pkl-sync.yaml:
 #
@@ -16,9 +31,16 @@ name: Sync PklProject.deps.json for Renovate (Reusable)
 #   jobs:
 #     sync:
 #       uses: atlanhq/application-sdk/.github/workflows/renovate-pkl-sync.yaml@main
+#       # artifact regeneration is ON by default; opt OUT with:
+#       # with:
+#       #   regenerate-contract: false
+#       secrets: inherit
 #
-# The GITHUB_TOKEN in the called workflow inherits the caller's contents:write
-# permission, which is enough to commit and push to the renovate/** branch.
+# This workflow mints a minted atlan-app-fleet App token to push the commit
+# (a real, non-github-actions[bot] identity is needed so the push re-triggers
+# the PR's required checks against the new commit -- a GITHUB_TOKEN push
+# doesn't). Falls back to the caller's push_token, then plain GITHUB_TOKEN,
+# if the App token can't be minted.
 
 on:
   workflow_call:
@@ -28,27 +50,55 @@ on:
         required: false
         default: "0.27.2"
         type: string
+      regenerate-contract:
+        description: >
+          Regenerate app/generated/** (+ atlan.yaml/app.yaml) via `pkl eval`,
+          not just the lock. Default true — a toolkit bump otherwise leaves the
+          generated artifacts stale. Set false to opt out (e.g. an app with
+          hand-maintained generated config, or a layout this can't drive).
+        required: false
+        default: true
+        type: boolean
     secrets:
       push_token:
         description: >
-          PAT of an org member to use for the commit push. Required on public
-          repos — a GITHUB_TOKEN push from github-actions[bot] triggers
-          GitHub's outside-collaborator workflow re-approval gate. Falls back
-          to GITHUB_TOKEN when omitted (fine for private repos).
+          Fallback PAT of an org member to use for the commit push, if the
+          fleet App token can't be minted. Falls back further to GITHUB_TOKEN
+          if this is also omitted (fine for private repos, but won't re-fire
+          the PR's required checks against the sync commit).
         required: false
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
 
 permissions:
   contents: write
 
 jobs:
   sync-pkl-deps:
-    name: Re-resolve PklProject.deps.json
+    name: Re-resolve and regenerate Pkl contract artifacts
     runs-on: ubuntu-latest
     steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          token: ${{ secrets.push_token || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token || secrets.push_token || secrets.GITHUB_TOKEN }}
           ref: ${{ github.ref }}
+
+      # Provides `uvx ruff`, used by the driver to format generated Python.
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
 
       - name: Install pkl
         run: |
@@ -58,15 +108,27 @@ jobs:
           chmod +x /tmp/pkl
           sudo mv /tmp/pkl /usr/local/bin/pkl
 
-      - name: Re-resolve PklProject.deps.json
-        run: pkl project resolve contract/
+      # Fetch the driver from the SDK default branch — a `uses:` reusable
+      # workflow does NOT bring its repo's files into the caller's checkout, so
+      # the consumer repo (checked out above) has no copy of this script. Same
+      # .sdk-scripts pattern as release-version-bump.yaml. The script is run
+      # from the consumer's working tree (CWD), so it acts on the consumer's
+      # contract/ and app/generated/; only .sdk-scripts holds SDK code, and it
+      # is never staged (the driver stages explicit paths only).
+      - name: Fetch sync driver
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: .sdk-scripts
 
-      - name: Commit and push if changed
+      - name: Re-resolve and (optionally) regenerate
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet contract/PklProject.deps.json; then
-            git add contract/PklProject.deps.json
-            git commit -m "chore: sync PklProject.deps.json with updated app-contract-toolkit"
-            git push
-          fi
+          python3 .sdk-scripts/.github/scripts/renovate_pkl_sync.py \
+            --contract-dir contract \
+            --regenerate "${{ inputs.regenerate-contract }}"
+
+      - name: Push
+        run: git push

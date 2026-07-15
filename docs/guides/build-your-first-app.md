@@ -227,15 +227,32 @@ asyncio.run(
 )
 ```
 
-Copy the Dapr component definitions into your project. The components ship with the SDK repo, not the wheel:
+Copy the Dapr component definitions into your project. They ship inside the
+`atlan-application-sdk` wheel — don't curl them from GitHub (that hits rate limits under CI
+concurrency and can drift from the SDK version locked in your `uv.lock`). This uses `poe` from
+the `poethepoet` package, so add it as a dependency first:
 
 ```bash
-# If you have the SDK repo cloned locally:
-cp -r /path/to/application-sdk/components ./components
+uv add poethepoet
+```
 
-# Otherwise, download them directly:
-curl -sL https://github.com/atlanhq/application-sdk/archive/refs/heads/main.tar.gz \
-  | tar -xz --strip-components=2 application-sdk-main/components
+Then add a `download-components` poe task to `pyproject.toml`:
+
+```toml
+[tool.poe.tasks]
+download-components.shell = """
+python -c "
+import application_sdk, pathlib, shutil
+src = pathlib.Path(application_sdk.__file__).parent / 'components'
+shutil.copytree(src, 'components', dirs_exist_ok=True)
+"
+"""
+```
+
+Then run it:
+
+```bash
+uv run poe download-components
 ```
 
 Start infrastructure and run:
@@ -244,8 +261,9 @@ Start infrastructure and run:
 # Terminal 1
 temporal server start-dev --db-filename temporal.db
 
-# Terminal 2
-dapr run \
+# Terminal 2 — resolve the pinned daprd binary via the SDK (no Dapr CLI), then run it
+DAPRD=$(uv run python -c "from application_sdk.dev._dapr import _ensure_daprd_binary; print(_ensure_daprd_binary())")
+"$DAPRD" \
   --app-id app \
   --app-port 8000 \
   --dapr-http-port 3500 \

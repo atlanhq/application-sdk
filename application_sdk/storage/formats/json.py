@@ -1,7 +1,7 @@
 import os
 import warnings
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any
 
 import orjson
 
@@ -9,17 +9,14 @@ from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
+from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.storage.formats.utils import (
     JSON_FILE_EXTENSION,
     _download_files,
-    convert_datetime_to_epoch,
     path_gen,
-    process_null_fields,
 )
 
 if TYPE_CHECKING:
-    import daft
     import pandas as pd
 
 from application_sdk.storage.formats import Reader, Writer
@@ -28,16 +25,21 @@ logger = get_logger(__name__)
 
 
 class JsonFileReader(Reader):
-    """JSON File Reader class to read data from JSON files using daft and pandas.
+    """JSON File Reader class to read data from JSON files using orjson.
 
     Supports reading both single files and directories containing multiple JSON files.
     Follows Python's file I/O pattern with read/close semantics and supports context managers.
+
+    Both ``read()`` and ``read_batches()`` return ``pd.DataFrame`` — ``read()``
+    materialises all records at once; ``read_batches()`` yields one
+    ``pd.DataFrame`` per ``chunk_size`` records, streaming the file line-by-line.
 
     Attributes:
         path (str): Path to JSON file or directory containing JSON files.
         chunk_size (int): Number of rows per batch.
         file_names (Optional[List[str]]): List of specific file names to read.
-        dataframe_type (DataframeType): Type of dataframe to return (pandas or daft).
+        dataframe_type (DataframeType): Type of dataframe to return (pandas only;
+            daft is a deprecated no-op alias that routes to the pandas path).
         cleanup_on_close (bool): Whether to clean up downloaded temp files on close.
 
     Example:
@@ -114,11 +116,22 @@ class JsonFileReader(Reader):
         self.dataframe_type = dataframe_type
         self.cleanup_on_close = cleanup_on_close
 
-    async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
+        if dataframe_type == DataframeType.daft:
+            import warnings as _warnings  # noqa: PLC0415
+
+            _warnings.warn(
+                "DataframeType.daft is deprecated and will be removed in v4.0; "
+                "use DataframeType.pandas. Routing to the pandas/orjson path.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            self.dataframe_type = DataframeType.pandas
+
+    async def read(self) -> "pd.DataFrame":
         """Read the data from the JSON files and return as a single DataFrame.
 
         Returns:
-            Union[pd.DataFrame, daft.DataFrame]: Combined dataframe from JSON files.
+            pd.DataFrame: Combined dataframe from JSON files.
 
         Raises:
             ValueError: If the reader has been closed or dataframe_type is unsupported.
@@ -132,8 +145,6 @@ class JsonFileReader(Reader):
 
         if self.dataframe_type == DataframeType.pandas:
             return await self._get_dataframe()
-        elif self.dataframe_type == DataframeType.daft:
-            return await self._get_daft_dataframe()
         else:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 UnsupportedDataframeTypeError,
@@ -143,12 +154,15 @@ class JsonFileReader(Reader):
 
     def read_batches(
         self,
-    ) -> AsyncIterator["pd.DataFrame"] | AsyncIterator["daft.DataFrame"]:
-        """Read the data from the JSON files and return as batched DataFrames.
+    ) -> AsyncIterator["pd.DataFrame"]:
+        """Read the data from the JSON files as batched pandas DataFrames.
+
+        Files are read line-by-line via orjson; each yielded batch is a
+        ``pd.DataFrame`` of up to ``chunk_size`` rows. Peak memory is bounded
+        to one batch at a time — the file never fully materialises.
 
         Returns:
-            Union[AsyncIterator[pd.DataFrame], AsyncIterator[daft.DataFrame]]:
-                Async iterator of DataFrames.
+            AsyncIterator[pd.DataFrame]: Async iterator of pandas DataFrames.
 
         Raises:
             ValueError: If the reader has been closed or dataframe_type is unsupported.
@@ -162,8 +176,6 @@ class JsonFileReader(Reader):
 
         if self.dataframe_type == DataframeType.pandas:
             return self._get_batched_dataframe()
-        elif self.dataframe_type == DataframeType.daft:
-            return self._get_batched_daft_dataframe()
         else:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 UnsupportedDataframeTypeError,
@@ -174,7 +186,7 @@ class JsonFileReader(Reader):
     async def _get_batched_dataframe(
         self,
     ) -> AsyncIterator["pd.DataFrame"]:
-        """Read the data from the JSON files and return as a batched pandas dataframe."""
+        """Read data from JSON files line-by-line via orjson, yielding pd.DataFrame batches."""
         try:
             import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
@@ -186,14 +198,22 @@ class JsonFileReader(Reader):
             self._downloaded_files.extend(json_files)
             logger.info("Reading %d JSON files in batches", len(json_files))
 
+            chunk_size = self.chunk_size or 100000
+            batch: list[dict] = []
+            # Files must be JSONL (one JSON object per line). Multi-line JSON
+            # arrays are not supported and will raise orjson.JSONDecodeError.
             for json_file in json_files:
-                json_reader_obj = pd.read_json(
-                    json_file,
-                    chunksize=self.chunk_size,
-                    lines=True,
-                )
-                for chunk in json_reader_obj:
-                    yield chunk
+                with open(json_file, "rb") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        batch.append(orjson.loads(line))
+                        if len(batch) >= chunk_size:
+                            yield pd.DataFrame(batch)
+                            batch = []
+            if batch:
+                yield pd.DataFrame(batch)
         # conformance: ignore[E004] pure re-raise into typed FormatReadError; exception is not swallowed
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
@@ -203,7 +223,7 @@ class JsonFileReader(Reader):
             raise FormatReadError(cause=e) from e
 
     async def _get_dataframe(self) -> "pd.DataFrame":
-        """Read the data from the JSON files and return as a single pandas dataframe."""
+        """Read data from JSON files using orjson line-by-line into a pandas DataFrame."""
         try:
             import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
@@ -215,60 +235,17 @@ class JsonFileReader(Reader):
             self._downloaded_files.extend(json_files)
             logger.info("Reading %d JSON files as pandas dataframe", len(json_files))
 
-            return pd.concat(
-                (pd.read_json(json_file, lines=True) for json_file in json_files),
-                ignore_index=True,
-            )
-
-        # conformance: ignore[E004] pure re-raise into typed FormatReadError; exception is not swallowed
-        except Exception as e:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                FormatReadError,
-            )
-
-            raise FormatReadError(cause=e) from e
-
-    async def _get_batched_daft_dataframe(
-        self,
-    ) -> AsyncIterator["daft.DataFrame"]:
-        """Read the data from the JSON files and return as a batched daft dataframe."""
-        try:
-            import daft  # noqa: PLC0415 — optional dep: daft
-
-            # Ensure files are available (local or downloaded)
-            json_files = await _download_files(
-                self.path, self.extension, self.file_names
-            )
-            # Track downloaded files for cleanup on close
-            self._downloaded_files.extend(json_files)
-            logger.info("Reading %d JSON files as daft batches", len(json_files))
-
-            # Yield each discovered file as separate batch with chunking
+            # All records are accumulated in memory before building the
+            # DataFrame. Suitable only for small datasets (≲ a few hundred MB).
+            # For large inputs, use read_batches() to stay bounded.
+            all_records: list[dict] = []
             for json_file in json_files:
-                yield daft.read_json(json_file, _chunk_size=self.chunk_size)
-        # conformance: ignore[E004] pure re-raise into typed FormatReadError; exception is not swallowed
-        except Exception as e:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                FormatReadError,
-            )
-
-            raise FormatReadError(cause=e) from e
-
-    async def _get_daft_dataframe(self) -> "daft.DataFrame":
-        """Read the data from the JSON files and return as a single daft dataframe."""
-        try:
-            import daft  # noqa: PLC0415 — optional dep: daft
-
-            # Ensure files are available (local or downloaded)
-            json_files = await _download_files(
-                self.path, self.extension, self.file_names
-            )
-            # Track downloaded files for cleanup on close
-            self._downloaded_files.extend(json_files)
-            logger.info("Reading %d JSON files with daft", len(json_files))
-
-            # Use the discovered/downloaded files directly
-            return daft.read_json(json_files)
+                with open(json_file, "rb") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            all_records.append(orjson.loads(line))
+            return pd.DataFrame(all_records)
         # conformance: ignore[E004] pure re-raise into typed FormatReadError; exception is not swallowed
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
@@ -283,7 +260,8 @@ class JsonFileWriter(Writer):
 
     This class provides functionality for writing data to JSON files with support
     for chunking large datasets, buffering, and automatic file path generation.
-    It can handle both pandas and daft DataFrames as input.
+    It accepts pandas DataFrames; DataframeType.daft is a deprecated no-op alias
+    that routes to the pandas path.
 
     The output can be written to local files and optionally uploaded to an object
     store. Files are named using a configurable path generation scheme that
@@ -297,7 +275,7 @@ class JsonFileWriter(Writer):
         chunk_size (int): Maximum number of records per chunk.
         total_record_count (int): Total number of records processed.
         chunk_count (int): Number of chunks written.
-        buffer (List[Union[pd.DataFrame, daft.DataFrame]]): Buffer for accumulating
+        buffer (List[Union[pd.DataFrame, list]]): Buffer for accumulating
             data before writing.
     """
 
@@ -361,7 +339,7 @@ class JsonFileWriter(Writer):
         self.chunk_count = chunk_count
         self.buffer_size = buffer_size
         self.chunk_size = chunk_size or 50000  # to limit the memory usage on upload
-        self.buffer: list[pd.DataFrame | daft.DataFrame] = []
+        self.buffer: list = []
         self.current_buffer_size = 0
         self.current_buffer_size_bytes = 0  # Track estimated buffer size in bytes
         self.max_file_size_bytes = int(
@@ -385,6 +363,17 @@ class JsonFileWriter(Writer):
 
             raise FormatPathRequiredError()
 
+        if dataframe_type == DataframeType.daft:
+            import warnings as _warnings  # noqa: PLC0415
+
+            _warnings.warn(
+                "DataframeType.daft is deprecated and will be removed in v4.0; "
+                "use DataframeType.pandas. Routing to the pandas/orjson path.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            self.dataframe_type = DataframeType.pandas
+
         if typename:
             self.path = os.path.join(self.path, typename)
         SafeFileOps.makedirs(self.path, exist_ok=True)
@@ -392,152 +381,32 @@ class JsonFileWriter(Writer):
         if self.chunk_start:
             self.chunk_count = self.chunk_start + self.chunk_count
 
-    async def _write_daft_dataframe(
-        self,
-        dataframe: "daft.DataFrame",
-        preserve_fields: list[str] | None = None,
-        null_to_empty_dict_fields: list[str] | None = None,
-        **kwargs,
-    ):
-        """Write a daft DataFrame to JSON files.
-
-        This method converts the daft DataFrame to pandas and writes it to JSON files.
-
-        Args:
-            dataframe (daft.DataFrame): The DataFrame to write.
-            preserve_fields (Optional[List[str]]): List of fields to preserve during null processing.
-                Defaults to ["identity_cycle", "number_columns_in_part_key",
-                "columns_participating_in_part_key", "engine", "is_insertable_into", "is_typed"].
-            null_to_empty_dict_fields (Optional[List[str]]): List of fields to convert from null to empty dict.
-                Defaults to ["attributes", "customAttributes"].
-
-        Note:
-            Daft does not have built-in JSON writing support, so we are using orjson.
-        """
-        # Initialize default values for mutable arguments
-        if preserve_fields is None:
-            preserve_fields = [
-                "identity_cycle",
-                "number_columns_in_part_key",
-                "columns_participating_in_part_key",
-                "engine",
-                "is_insertable_into",
-                "is_typed",
-            ]
-        if null_to_empty_dict_fields is None:
-            null_to_empty_dict_fields = [
-                "attributes",
-                "customAttributes",
-            ]
-
-        try:
-            if self.chunk_start is None:
-                self.chunk_part = 0
-
-            buffer = []
-            for row in dataframe.iter_rows():
-                self.total_record_count += 1
-                # Convert datetime fields to epoch timestamps before serialization
-                row = convert_datetime_to_epoch(row)
-                # Remove null attributes from the row recursively, preserving specified fields
-                cleaned_row = process_null_fields(
-                    row, preserve_fields, null_to_empty_dict_fields
-                )
-                # Serialize the row and add it to the buffer
-                serialized_row = orjson.dumps(
-                    cleaned_row, option=orjson.OPT_APPEND_NEWLINE
-                )
-                buffer.append(serialized_row)
-                self.current_buffer_size += 1
-                self.current_buffer_size_bytes += len(serialized_row)
-
-                # If the buffer size is reached append to the file and clear the buffer
-                if self.current_buffer_size >= self.buffer_size:
-                    await self._flush_daft_buffer(buffer, self.chunk_part)
-
-                if self.current_buffer_size_bytes > self.max_file_size_bytes or (
-                    self.total_record_count > 0
-                    and self.total_record_count % self.chunk_size == 0
-                ):
-                    output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
-                    if SafeFileOps.exists(output_file_name):
-                        await self._upload_file(output_file_name)
-                        self.chunk_part += 1
-
-            # Write any remaining rows in the buffer
-            if self.current_buffer_size > 0:
-                await self._flush_daft_buffer(buffer, self.chunk_part)
-
-            # Upload the final file (matching pandas behavior)
-            if self.current_buffer_size_bytes > 0:
-                output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
-                if os.path.exists(output_file_name):
-                    await self._upload_file(output_file_name)
-                    self.chunk_part += 1
-
-            # Record metrics for successful write
-            self.metrics.record_metric(
-                name="json_write_records",
-                value=dataframe.count_rows(),
-                metric_type=MetricType.COUNTER,
-                labels={"type": "daft"},
-                description="Number of records written to JSON files from daft DataFrame",
-            )
-
-            # Increment chunk_count and record partitions (matching pandas behavior)
-            if self.chunk_start is None:
-                self.chunk_count += 1
-            self.partitions.append(self.chunk_part)
-        # conformance: ignore[E004] records error metric then re-raises; exception is not swallowed
-        except Exception as e:
-            # Record metrics for failed write
-            self.metrics.record_metric(
-                name="json_write_errors",
-                value=1,
-                metric_type=MetricType.COUNTER,
-                labels={"type": "daft", "error_type": type(e).__name__},
-                description="Number of errors while writing to JSON files",
-            )
-            raise
-
-    async def _flush_daft_buffer(self, buffer: list[str], chunk_part: int):
-        """Flush the current buffer to a JSON file.
-
-        This method combines all DataFrames in the buffer, writes them to a JSON file,
-        and uploads the file to the object store.
-        """
-        output_file_name = f"{self.path}/{path_gen(self.chunk_count, chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
-        with SafeFileOps.open(output_file_name, "ab+") as f:
-            f.writelines(buffer)
-        buffer.clear()  # Clear the buffer
-
-        self.current_buffer_size = 0
-
-        # Record chunk metrics
-        self.metrics.record_metric(
-            name="json_chunks_written",
-            value=1,
-            metric_type=MetricType.COUNTER,
-            labels={"type": "daft"},
-            description="Number of chunks written to JSON files",
-        )
-
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
-        """Write a chunk to a JSON file.
+        """Write a chunk to a JSON file using orjson."""
 
-        This method writes a chunk to a JSON file and uploads the file to the object store.
-        """
-        mode = "w" if not SafeFileOps.exists(file_name) else "a"
+        def _default_serializer(obj: object) -> str:
+            # pandas.Timestamp and similar datetime-like objects are not
+            # natively handled by orjson when they appear as dict values.
+            return str(obj)
+
+        mode = "ab+" if SafeFileOps.exists(file_name) else "wb"
         with SafeFileOps.open(file_name, mode=mode) as f:
-            chunk.to_json(f, orient="records", lines=True)
+            for record in chunk.to_dict(orient="records"):
+                f.write(
+                    orjson.dumps(
+                        record,
+                        default=_default_serializer,
+                        option=orjson.OPT_APPEND_NEWLINE,
+                    )
+                )
 
     async def _finalize(self) -> None:
         """Finalize the JSON writer before closing.
 
         Uploads any remaining buffered data to the object store.
         Only updates chunk_count/partitions when it performs the upload, to
-        avoid double-counting with _write_dataframe/_write_daft_dataframe which
-        already update statistics after their own upload.
+        avoid double-counting with _write_chunk which already updates statistics
+        after its own upload.
         """
         if self.current_buffer_size_bytes > 0:
             output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"

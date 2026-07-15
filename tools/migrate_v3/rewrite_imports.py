@@ -43,15 +43,19 @@ After running, check remaining structural work::
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Sequence
 
 import libcst as cst
+import orjson
+
+from application_sdk.observability.logger_adaptor import get_logger
 
 from .import_mapping import DEPRECATED_MODULES, MODULE_MAP, SYMBOL_MAP, RewriteTarget
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -303,7 +307,7 @@ def rewrite_file(path: Path, *, dry_run: bool = False) -> list[str]:
     try:
         tree = cst.parse_module(source)
     except cst.ParserSyntaxError as exc:
-        print(f"  SKIP (parse error): {exc}", file=sys.stderr)
+        logger.warning("Skipping %s (parse error): %s", path, exc, exc_info=True)
         return []
 
     rewriter = V3ImportRewriter()
@@ -314,6 +318,7 @@ def rewrite_file(path: Path, *, dry_run: bool = False) -> list[str]:
 
     new_source = new_tree.code
     if dry_run:
+        # conformance: ignore[L005] --dry-run emits transformed source to stdout as the tool's data output for piping/redirect; must not be wrapped in a logger
         print(new_source)
     else:
         path.write_text(new_source, encoding="utf-8")
@@ -384,7 +389,7 @@ def rewrite_internal_file(
     try:
         tree = cst.parse_module(source)
     except cst.ParserSyntaxError as exc:
-        print(f"  SKIP (parse error): {exc}", file=sys.stderr)
+        logger.warning("Skipping %s (parse error): %s", path, exc, exc_info=True)
         return []
 
     rewriter = InternalImportRewriter(mapping)
@@ -395,6 +400,7 @@ def rewrite_internal_file(
 
     new_source = new_tree.code
     if dry_run:
+        # conformance: ignore[L005] --dry-run emits transformed source to stdout as the tool's data output for piping/redirect; must not be wrapped in a logger
         print(new_source)
     else:
         path.write_text(new_source, encoding="utf-8")
@@ -470,9 +476,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.internal_map is not None:
         try:
-            mapping: dict[str, str] = json.loads(args.internal_map)
+            mapping: dict[str, str] = orjson.loads(args.internal_map)
         except ValueError as exc:
-            print(f"ERROR: --internal-map is not valid JSON: {exc}", file=sys.stderr)
+            logger.error("--internal-map is not valid JSON: %s", exc, exc_info=True)
             return 2
 
         total_files = 0
@@ -480,19 +486,25 @@ def main(argv: list[str] | None = None) -> int:
         for raw in args.targets:
             target = Path(raw)
             if not target.exists():
-                print(f"ERROR: path does not exist: {target}", file=sys.stderr)
+                logger.error("Path does not exist: %s", target)
                 return 1
             results = rewrite_internal_imports(target, mapping, dry_run=args.dry_run)
             for path, changes in results.items():
                 total_files += 1
                 total_changes += len(changes)
                 if not args.dry_run:
-                    print(f"REWROTE  {path}")
+                    # conformance: ignore[L006] CLI rewrite report; loop is bounded to the actual files/lines this run changed, not an unbounded hot path
+                    logger.info("REWROTE  %s", path)
                     for line in changes:
-                        print(line)
+                        # conformance: ignore[L006] CLI rewrite report; loop is bounded to the actual lines changed in this file, not an unbounded hot path
+                        logger.info("%s", line)
 
         if not args.dry_run:
-            print(f"\nDone. Rewrote {total_files} file(s), {total_changes} import(s).")
+            logger.info(
+                "Done. Rewrote %d file(s), %d import(s).",
+                total_files,
+                total_changes,
+            )
         return 0
 
     total_files = 0
@@ -501,23 +513,29 @@ def main(argv: list[str] | None = None) -> int:
     for raw in args.targets:
         target = Path(raw)
         if not target.exists():
-            print(f"ERROR: path does not exist: {target}", file=sys.stderr)
+            logger.error("Path does not exist: %s", target)
             return 1
         results = rewrite_path(target, dry_run=args.dry_run)
         for path, changes in results.items():
             total_files += 1
             total_changes += len(changes)
             if not args.dry_run:
-                print(f"REWROTE  {path}")
+                # conformance: ignore[L006] CLI rewrite report; loop is bounded to the actual files/lines this run changed, not an unbounded hot path
+                logger.info("REWROTE  %s", path)
                 for line in changes:
-                    print(line)
+                    # conformance: ignore[L006] CLI rewrite report; loop is bounded to the actual lines changed in this file, not an unbounded hot path
+                    logger.info("%s", line)
 
     if not args.dry_run:
-        print(f"\nDone. Rewrote {total_files} file(s), {total_changes} import(s).")
+        logger.info(
+            "Done. Rewrote %d file(s), %d import(s).",
+            total_files,
+            total_changes,
+        )
         if total_changes:
-            print(
-                "\nNext step: run the migration checker to see remaining structural work:\n"
-                "  python -m tools.migrate_v3.check_migration <path>"
+            logger.info(
+                "Next step: run the migration checker to see remaining structural "
+                "work:\n  python -m tools.migrate_v3.check_migration <path>"
             )
     return 0
 

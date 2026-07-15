@@ -17,8 +17,8 @@ description: >
   on result URIs after the runner produces the full-repo report.  The runner has
   no `--include` flag; filtering is always done on the parsed output.  When
   omitted, all results are returned.
-- `series` (string, default `"E,L,C,P,O"`) — comma-separated list of rule-series
-  letters to run, e.g. `"E"` for error-handling only or `"E,L"` for
+- `series` (string, default `"E,L,C,P,O,D,B,I,T,K,S"`) — comma-separated list of
+  rule-series letters to run, e.g. `"E"` for error-handling only or `"E,L"` for
   error-handling and logging.
 - `target` (string, default `"failing"`) — which dispositions to return.
   `"failing"` returns only FAILING results (BLOCK-tier, gate-blocking).
@@ -32,7 +32,8 @@ description: >
   - `rule_id` — e.g. `"E002"`.
   - `area` — series letter mapped to area name: `E` → `error-handling`,
     `L` → `logging`, `C` → `ci`, `P` → `prescriptions`, `O` → `optimizations`,
-    `D` → `dependency`, `B` → `deprecation`.
+    `D` → `dependency`, `B` → `deprecation`, `I` → `dockerfile`, `T` → `tests`,
+    `K` → `contract-toolkit`, `S` → `security`.
   - `file` — repo-relative path.
   - `line`, `column` — location.
   - `fingerprint` — value of `partial_fingerprints["atlanConformance/v1"]`;
@@ -41,6 +42,13 @@ description: >
   - `mechanism` — `"static"` or `"test"` (from `atlan/mechanism`).
   - `autofixable` — boolean (from `atlan/autofixable`).
   - `orthogonal_gate` — string or null (from `atlan/orthogonalGate`).
+  - `forces_external_influence` — boolean (from `atlan/forcesExternalInfluence`,
+    default `false`). Structural, rule-level flag — `true` for a rule whose
+    fix always consults untrusted external content (currently only C001),
+    independent of whatever `remediate-finding`'s own per-invocation
+    `external_influence` result reports. `detect-fix-recheck` ORs the two
+    together so residue-routing for such a rule doesn't depend on the model
+    remembering to set its own flag on every single call.
   - `hint` — string or null (from `atlan/hint`).
   - `message` — human-readable violation message from the runner.
 
@@ -91,9 +99,11 @@ comparing so that `"./application_sdk/foo.py"` matches `"application_sdk"`).
 
 Tag each result's area by reading the first letter of `result.rule_id`:
 `E` → `error-handling`, `L` → `logging`, `C` → `ci`, `P` → `prescriptions`,
-`O` → `optimizations`, `D` → `dependency`, `B` → `deprecation`.
+`O` → `optimizations`, `D` → `dependency`, `B` → `deprecation`,
+`I` → `dockerfile`, `T` → `tests`, `K` → `contract-toolkit`, `S` → `security`.
 
-Extract `atlan/mechanism`, `atlan/autofixable`, `atlan/orthogonalGate` from
+Extract `atlan/mechanism`, `atlan/autofixable`, `atlan/orthogonalGate`,
+`atlan/forcesExternalInfluence` (default `false` if absent) from
 `run.tool.driver.rules[result.rule_index].properties`, and `atlan/hint` from
 `result.properties`.  Return `sarif_path` and the structured `findings` list.
 

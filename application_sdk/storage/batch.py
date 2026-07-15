@@ -30,7 +30,7 @@ from application_sdk.storage.ops import (
     _normalize_listing_prefix,
     _resolve_store,
     _safe_join_under,
-    download_file,
+    download_file_chunked,
     normalize_key,
     upload_file,
 )
@@ -84,7 +84,7 @@ async def list_keys(
 
     Raises:
         StorageError: If the listing fails.
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
     prefix = _normalize_listing_prefix(prefix, normalize)
@@ -95,7 +95,52 @@ async def list_keys(
         )
         lsuffix = suffix.lower() if suffix else ""
         return sorted(
-            path for path, _ in items if not lsuffix or path.lower().endswith(lsuffix)
+            path
+            for path, _, _ in items
+            if not lsuffix or path.lower().endswith(lsuffix)
+        )
+    # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
+    except Exception as exc:
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageError,
+        )
+
+        raise StorageError(
+            f"Failed to list keys with prefix '{prefix}'", cause=exc
+        ) from exc
+
+
+async def list_keys_with_meta(
+    prefix: str = "",
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    suffix: str = "",
+    normalize: bool = True,
+) -> list[tuple[str, int, str | None]]:
+    """Like :func:`list_keys`, but return ``(key, size_bytes, e_tag)`` tuples.
+
+    The listing already carries each object's size and etag, so callers that
+    need to decide *per file* whether to chunk a download (large object) or
+    stream it (small object) — and to version-pin the chunked range GETs —
+    can do so without a follow-up HEAD per key (BLDX-1513 / BLDX-1523).
+    ``e_tag`` may be ``None`` on stores that don't provide one.
+    Directory-marker filtering, suffix filtering, and sort order match
+    :func:`list_keys`.
+
+    Raises:
+        StorageError: If the listing fails.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
+    """
+    resolved = _resolve_store(store)
+    prefix = _normalize_listing_prefix(prefix, normalize)
+
+    try:
+        items = await _list_items(resolved, prefix or None)
+        lsuffix = suffix.lower() if suffix else ""
+        return sorted(
+            (path, size, etag)
+            for path, size, etag in items
+            if not lsuffix or path.lower().endswith(lsuffix)
         )
     # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:
@@ -136,7 +181,7 @@ async def delete_prefix(
 
     Raises:
         StorageError: If the listing or any deletion fails.
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
     prefix = _normalize_listing_prefix(prefix, normalize)
@@ -159,7 +204,7 @@ async def delete_prefix(
             f"Failed to list keys with prefix '{prefix}'", cause=exc
         ) from exc
 
-    paths = [path for path, _ in items]
+    paths = [path for path, _, _ in items]
 
     # Also delete the directory marker at the prefix root itself (e.g. the GCS
     # object "artifacts/run" when prefix = "artifacts/run/").  obstore strips
@@ -231,22 +276,36 @@ async def download_prefix(
 
     Raises:
         StorageError: If listing or downloading fails.
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     import asyncio  # noqa: PLC0415 — stdlib asyncio; lazy use only
 
-    keys = await list_keys(prefix, store, suffix=suffix, normalize=normalize)
+    items = await list_keys_with_meta(prefix, store, suffix=suffix, normalize=normalize)
     local = Path(local_dir)
     # Reject keys whose resolved path escapes local_dir (e.g. via ".." segments).
-    destinations = [str(_safe_join_under(local, key)) for key in keys]
+    destinations = [str(_safe_join_under(local, key)) for key, _, _ in items]
 
     sem = asyncio.Semaphore(max_concurrency)
 
-    async def _download_one(key: str, dest: str) -> None:
+    async def _download_one(key: str, dest: str, size: int, etag: str | None) -> None:
         async with sem:
-            await download_file(key, dest, store, normalize=False)
+            # Pass the listing's size + etag so a large object is fetched via
+            # bounded parallel range GETs (each with its own timeout / retry
+            # budget, version-pinned via If-Match) while small objects still
+            # stream in a single GET — and no per-file HEAD is issued, since
+            # the metadata is already known. (BLDX-1513 / BLDX-1523)
+            await download_file_chunked(
+                key,
+                dest,
+                store,
+                normalize=False,
+                file_size=size,
+                etag=etag,
+            )
 
-    await asyncio.gather(*[_download_one(k, d) for k, d in zip(keys, destinations)])
+    await asyncio.gather(
+        *[_download_one(k, d, s, e) for (k, s, e), d in zip(items, destinations)]
+    )
     return destinations
 
 
