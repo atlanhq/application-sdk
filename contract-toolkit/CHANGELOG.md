@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.18.2] - 2026-07-15
+
+### Bug fixes
+
+- generated JSON coercion uses orjson and logs its fallback (#2720) ([2e9288e](https://github.com/atlanhq/application-sdk/commit/2e9288e))
+
 ## [0.18.1] - 2026-07-10
 
 ### Bug fixes
