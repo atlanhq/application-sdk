@@ -107,6 +107,10 @@ def _resolver_by_guid(mapping: dict) -> mock.MagicMock:
     """
 
     def _resolve(ref):
+        if ref.credential_guid not in mapping:
+            raise KeyError(
+                f"unexpected guid {ref.credential_guid!r} — declare it in the mapping"
+            )
         result = mapping[ref.credential_guid]
         if isinstance(result, Exception):
             raise result
