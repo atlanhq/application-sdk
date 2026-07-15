@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Roll up the async ``Connector E2E / *`` check runs into a single pass/fail
+"""Roll up the async ``Connector E2E run / *`` check runs into a single pass/fail
 for the required "Test Gate" (Connector Tests Gate).
 
 The dispatch side (create_check_run.py, invoked from e2e-apps) exits right

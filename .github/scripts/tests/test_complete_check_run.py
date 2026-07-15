@@ -13,7 +13,7 @@ import complete_check_run as mod
 
 REPO = "atlanhq/application-sdk"
 SHA = "abc123"
-NAME = "Connector E2E / atlan-mysql-app"
+NAME = "Connector E2E run / atlan-mysql-app"
 
 
 def _completed(stdout: str) -> subprocess.CompletedProcess:
@@ -37,7 +37,7 @@ def test_find_check_run_picks_highest_id_on_duplicates():
     runs = [
         {"id": 1, "name": NAME},
         {"id": 5, "name": NAME},
-        {"id": 3, "name": "Connector E2E / atlan-openapi-app"},
+        {"id": 3, "name": "Connector E2E run / atlan-openapi-app"},
     ]
     found = mod.find_check_run(runs, NAME)
     assert found["id"] == 5

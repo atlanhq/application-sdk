@@ -146,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--name",
         required=True,
-        help="Check run name, e.g. 'Connector E2E / atlan-mysql-app'.",
+        help="Check run name, e.g. 'Connector E2E run / atlan-mysql-app'.",
     )
     parser.add_argument(
         "--conclusion",
