@@ -14,6 +14,7 @@ All notable changes to `atlan-application-sdk-conformance` are documented here.
 
 ### Bug fixes
 
+- P028 no longer flags object-store keys embedding a qualifiedName (#2719) ([eed14f6](https://github.com/atlanhq/application-sdk/commit/eed14f6))
 - accept agent-mode e2e test as T002 SDR coverage (#2696) ([60c7c19](https://github.com/atlanhq/application-sdk/commit/60c7c19))
 - E004 exempts broad excepts that re-raise with the trace intact (#2650) ([aab37f1](https://github.com/atlanhq/application-sdk/commit/aab37f1))
 - D003 recognises SQLAlchemy dialect-string drivers as used (#2649) ([7993db5](https://github.com/atlanhq/application-sdk/commit/7993db5))
