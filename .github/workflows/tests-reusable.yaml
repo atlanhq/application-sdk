@@ -329,6 +329,21 @@ jobs:
     permissions:
       contents: read
     steps:
+      # The Checks API's write endpoints (create/update a check run) reject
+      # PATs outright — "You must authenticate via a GitHub App" — only a
+      # real GitHub App installation token works. ORG_PAT_GITHUB can't do
+      # the "Complete the check run" step below at all; mint a scoped
+      # atlan-app-fleet token instead (same one used for the checkout, so
+      # this job touches application-sdk with a single credential).
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       # Pinned to the exact SHA that dispatched this run (not `main`): that
       # SHA is what created the check run we're about to complete, so the
       # callback script version can never drift from it. Also required for
@@ -339,7 +354,7 @@ jobs:
         with:
           repository: atlanhq/application-sdk
           ref: ${{ inputs.application-sdk-ref }}
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
@@ -366,7 +381,7 @@ jobs:
 
       - name: Complete the check run on application-sdk
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SHA: ${{ inputs.application-sdk-ref }}
           REPO_SHORT: ${{ github.event.repository.name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
