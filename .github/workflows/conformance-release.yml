@@ -21,6 +21,16 @@ permissions:
   contents: write
   pull-requests: write
 
+# Serialize release runs. When two conformance PRs merge close together, each
+# merge fires this workflow; without serialization they race to force-push the
+# shared bump branch and the run with the *older* main snapshot can win, dropping
+# the other PR's changelog entry (see PR #2596). cancel-in-progress: false lets
+# the in-flight run finish, then the newest queued run regenerates against a main
+# that includes every merged PR.
+concurrency:
+  group: conformance-release
+  cancel-in-progress: false
+
 env:
   RELEASE_LABEL: "release:conformance"
   BUMP_BRANCH: "bump-version-conformance"
