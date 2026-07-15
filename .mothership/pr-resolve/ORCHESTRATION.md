@@ -103,9 +103,44 @@ CI comments, human comments, or an older review as the reply.
 From the reply body, read the `<!-- VERDICT: X -->` marker and every bullet
 under `### Findings` (all severities, **including `Nit`**).
 
-**Stopping condition:** `### Findings` absent / empty AND verdict
-`READY_TO_MERGE` AND CI green → done, go to Phase 4. (This is stricter than the
-bot's own verdict, which tolerates nits — here nits count.)
+**Stopping condition — strict, nits included:** advance to Phase 4 as
+*merge-ready* ONLY when ALL THREE hold at once — `### Findings` is absent/empty
+(every severity; a single `Nit` still counts as an open finding), verdict is
+`READY_TO_MERGE`, and CI is green. This is stricter than the bot's own verdict,
+which tolerates nits — **here a lone nit does NOT let you stop; keep looping and
+fix it.** The only other ways this loop ends are the five explicit escalations
+(round-cap / re-raised-after-dismiss / ci-stuck / ambiguous-fork / cross-repo),
+and every one of them still runs Phase 4 and posts the report. **Never end the
+run with open findings and no Phase 4 report on the PR.**
+
+### 3c′. Acknowledge on the PR — visible status (every round that has findings)
+A review comment landing on the PR is not, by itself, a signal that anyone is
+acting on it — from a watcher's side, the review just sits there. Close that gap:
+**before** you start fixing, surface ONE concise plain-text status so the PR
+visibly shows the handoff — that resolve has picked up *this* review and will
+re-run `@sdk-review` after it pushes.
+
+**Update a single status comment in place; don't post a fresh one each round**
+(a full loop can be ~8 rounds — 8 near-identical comments is noise). Find the
+prior status comment by its stable marker and PATCH it; only create one the
+first time:
+```bash
+STATUS_BODY="<!-- SDK_RESOLVE_STATUS -->
+🤖 **SDK Resolve — round ${R}.** Picked up the latest review: ${N} open finding(s)
+(${CRIT} blocking, ${NIT} nit). Fixing them now, then I'll push and re-run
+\`@sdk-review\` automatically — I keep looping until zero findings (nits included)
++ green CI + \`READY_TO_MERGE\`. Progress: ${GHA_RUN_URL}"
+
+CID=$(gh api "repos/atlanhq/application-sdk/issues/${PR_NUMBER}/comments" --paginate \
+  --jq 'map(select(.body | contains("<!-- SDK_RESOLVE_STATUS -->"))) | last | .id // empty')
+if [ -n "$CID" ]; then
+  gh api -X PATCH "repos/atlanhq/application-sdk/issues/comments/${CID}" -f body="$STATUS_BODY"
+else
+  gh pr comment "$PR_NUMBER" --body "$STATUS_BODY"
+fi
+```
+Keep it factual. NEVER write the literal resolve trigger token in this or any
+comment (guardrail 9) — only `@sdk-review` and prose.
 
 ### 3d. Fix every finding (or prove it false)
 For each bullet, incl. every nit:
@@ -124,7 +159,9 @@ files → push. The push resets the reviewer labels/status (expected). Then make
 best-effort pass at greening CI on the new HEAD before re-triggering, so you
 don't waste a round on a failure you just introduced — but if CI stays red for a
 reason you can't fix, still re-trigger the review (same rule as Phase 1: red CI
-never blocks the review).
+never blocks the review). Looping back to 3a posts a fresh `@sdk-review` comment
+on the PR — that comment is the visible "re-running the review now" signal the
+3c′ acknowledgement promised, so the handoff is observable end to end.
 
 ### 3f. Repeat → 3a.
 
@@ -139,18 +176,28 @@ Print at end: `[Phase 3 complete] rounds=<R>, converged=<yes|no>`
 
 ## Phase 4: Hand to human review + report (do NOT merge)
 
+**Phase 4 is mandatory and runs on EVERY termination** — merge-ready, round-cap,
+re-raised-after-dismiss, ci-stuck, ambiguous-fork, or cross-repo. The run must
+never end without a final human-readable summary comment on the PR. The
+`gh pr comment` in step 2 is the load-bearing signal for humans; post it even if
+the review-request in step 1 fails (e.g. can't request from the author) — do
+step 2 regardless, and do it before you exit.
+
 1. **Request human review** (from the prompt header: `REVIEWERS` handles +
    `REQUESTER`). This runs whether the outcome is merge-ready OR `NEEDS_HUMAN` —
    either way the PR is now a human's:
    ```bash
    gh pr edit <PR> --add-reviewer <REVIEWERS>   # ignore "can't request from the author"
    ```
-2. Post a final PR comment that **@-mentions `TAG_LIST`** (the reviewers + the
-   requester) so they know it's their turn, and includes: rounds taken, findings
-   fixed vs dismissed (with dismissal rationales), final CI + verdict, and — if
-   stopped short — exactly what remains and why (round cap /
-   re-raised-after-dismiss / ambiguous fork). State plainly whether it's
-   merge-ready (green + zero findings + `READY_TO_MERGE`) or needs their call.
+2. **Always** post a final PR comment (`<!-- SDK_RESOLVE_SUMMARY -->` marker)
+   that **@-mentions `TAG_LIST`** (the reviewers + the requester) so they know
+   it's their turn, and includes: rounds taken, findings fixed vs dismissed (with
+   dismissal rationales), final CI + verdict, and — if stopped short — exactly
+   what remains and why (round-cap / re-raised-after-dismiss / ci-stuck /
+   ambiguous-fork / cross-repo). State plainly whether it's merge-ready (green +
+   zero findings incl. nits + `READY_TO_MERGE`) or needs their call. This is the
+   human-facing counterpart to the machine block in step 4 — post both, never
+   just one.
 3. **Do NOT `gh pr merge`.** Leave the merge to a human.
 4. Emit this block verbatim (the dispatch script parses it):
    ```
