@@ -163,8 +163,9 @@ first time:
 STATUS_BODY="<!-- SDK_RESOLVE_STATUS -->
 🤖 **SDK Resolve — round ${R}.** Picked up the latest review: ${N} open finding(s)
 (${CRIT} blocking, ${NIT} nit). Fixing them now, then I'll push and re-run
-\`@sdk-review\` automatically — I keep looping until zero findings (nits included)
-+ green CI + \`READY_TO_MERGE\`. Progress: ${GHA_RUN_URL}"
+\`@sdk-review\` automatically — I keep looping until every finding (nits included)
+is fixed + green CI + \`READY_TO_MERGE\` (anything I dispute I hand back to a human
+with a rationale, rather than merging over it). Progress: ${GHA_RUN_URL}"
 
 CID=$(gh api "repos/atlanhq/application-sdk/issues/${PR_NUMBER}/comments" --paginate \
   --jq 'map(select(.body | contains("<!-- SDK_RESOLVE_STATUS -->"))) | last | .id // empty')
@@ -238,8 +239,8 @@ step 2 regardless, and do it before you exit.
    dismissal rationales), final CI + verdict, and — if stopped short — exactly
    what remains and why (round-cap / re-raised-after-dismiss / ci-stuck /
    ambiguous-fork / cross-repo / review-timeout). State plainly whether it's
-   merge-ready (green + zero findings incl. nits + `READY_TO_MERGE`) or needs
-   their call. This is the human-facing counterpart to the machine block in step
+   merge-ready (green + every finding fixed, nits included + `READY_TO_MERGE`) or
+   needs their call. This is the human-facing counterpart to the machine block in step
    4 — post both, never just one.
 3. **Do NOT `gh pr merge`.** Leave the merge to a human.
 4. Emit this block verbatim (the dispatch script parses it):
@@ -262,8 +263,8 @@ Print: `[Phase 4 complete] merge_ready=<yes|no>`
 
 ## Principles
 
-- **Merge-ready, not merged.** Green CI + zero findings + `READY_TO_MERGE`, then
-  hand back to a human.
+- **Merge-ready, not merged.** Green CI + every finding fixed (nits included) +
+  `READY_TO_MERGE`, then hand back to a human.
 - **The reviewer stays read-only.** You are the only writer; it runs in its own
   sandbox and you consume its comment output.
 - **A round isn't done until the review answers.** Posting `@sdk-review` only
