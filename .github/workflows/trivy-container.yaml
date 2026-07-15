@@ -46,6 +46,17 @@ on:
         required: false
         type: string
         default: 'true'
+      private_dep_repo:
+        description: >-
+          Optional bare repo name (under the atlanhq org) that the caller's
+          Dockerfile clones as a private git dependency during the scan build.
+          When set, the minted fleet App token is scoped to just that repo plus
+          application-sdk (needed for the allowlist checkout) for
+          least-privilege. When unset, the token stays org-wide (the default),
+          since a shared reusable can't know the caller's dependency repo.
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -61,11 +72,15 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Mint fleet App token
-        # Not scoped to a specific repositories: list -- this token also
-        # feeds the composite's PRIVATE_REPO_ACCESS_TOKEN BuildKit secret,
-        # used by Dockerfiles that clone a private git dependency during the
-        # scan build. The target repo varies per caller and isn't known
-        # here, so this needs org-wide reach, same as build-and-scan.yaml's
+        # This token feeds both the cross-repo application-sdk allowlist
+        # checkout below and the composite's PRIVATE_REPO_ACCESS_TOKEN BuildKit
+        # secret (used by Dockerfiles that clone a private git dependency
+        # during the scan build). A caller that knows its single dependency
+        # repo can advertise it via the private_dep_repo input; the token is
+        # then scoped to that repo plus application-sdk for least-privilege.
+        # When unset, repositories is empty and (with owner: atlanhq) the token
+        # stays org-wide -- the necessary default for a shared reusable whose
+        # dependency repo varies per caller, same as build-and-scan.yaml's
         # git_token mint.
         id: app-token
         continue-on-error: true
@@ -74,6 +89,7 @@ jobs:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
+          repositories: ${{ inputs.private_dep_repo && format('application-sdk,{0}', inputs.private_dep_repo) || '' }}
 
       - name: Checkout base allowlist from SDK
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
