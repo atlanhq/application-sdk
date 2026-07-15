@@ -313,15 +313,23 @@ class TestGetOrCreateRuntime:
         # Constructed exactly once.
         assert Runtime.call_count == 1
 
-    def test_without_prometheus_uses_default_runtime(self) -> None:
-        sentinel = mock.MagicMock(name="default-runtime")
+    def test_without_prometheus_builds_forwarding_runtime(self) -> None:
+        # Disabled path no longer uses Runtime.default() (which forwards no
+        # logs); it builds an explicit Runtime with log forwarding so the
+        # Cloudflare-504 filter can still see Rust-core records. No Prometheus
+        # endpoint is bound.
         with mock.patch.object(backend_module, "Runtime") as Runtime:
-            Runtime.default = mock.MagicMock(return_value=sentinel)
+            Runtime.side_effect = lambda **kwargs: mock.MagicMock(name="rt")
+            Runtime.default = mock.MagicMock()
             r1 = _get_or_create_runtime(enable_prometheus=False)
             r2 = _get_or_create_runtime(enable_prometheus=False)
-        assert r1 is sentinel
-        assert r2 is sentinel
-        assert Runtime.default.call_count == 1
+        assert r1 is r2
+        assert Runtime.call_count == 1
+        assert Runtime.default.call_count == 0
+        telemetry = Runtime.call_args.kwargs["telemetry"]
+        assert telemetry.metrics is None
+        assert telemetry.logging is not None
+        assert telemetry.logging.forwarding is not None
 
 
 # ---------------------------------------------------------------------------
