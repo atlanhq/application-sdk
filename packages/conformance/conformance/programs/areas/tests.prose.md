@@ -104,24 +104,21 @@ to residue):
   reading the test's I/O intent.
 
 - **T002 MissingSdrTestClass** — the app declares `self_deployed_runtime: true`
-  in `atlan.yaml` but no test drives the SDR (agent-mode) path.  Add an
-  **agent-mode e2e test** — the `BaseSDRIntegrationTest` harness is deprecated
-  (see T003), so do NOT create a new subclass of it.  Draft
-  `tests/e2e/test_<app>_e2e.py`:
+  in `atlan.yaml` but no `BaseSDRIntegrationTest` subclass exists anywhere under
+  `tests/`.  Draft a new test file (e.g. `tests/integration/test_sdr.py`) with
+  a minimal subclass:
 
   ```python
-  from application_sdk.testing.e2e import RunMode
-  from app.generated._e2e_base import MyAppGeneratedE2EBase
-
-  @pytest.mark.e2e
-  class TestMyAppE2E(MyAppGeneratedE2EBase):
-      mode = RunMode.AGENT
+  class TestMyAppSDR(BaseSDRIntegrationTest):
+      manifest_path = "app/generated/manifest.json"
+      workflow_type = "extraction"
   ```
 
-  Guard the import (`try: ...; except ImportError: pytest.skip(allow_module_level=True)`)
-  so the file is a clean skip on older SDKs.  Route to residue — the connector's
-  `*GeneratedE2EBase`, credential/mustache wiring, and asset expectations require
-  reading the app's contract.
+  Use `manifest_path` (not `agent_spec_template`) so the test reads inputs from
+  the committed manifest — see T003.  Apply `@pytest.mark.integration` (or the
+  repo's equivalent SDR marker) so T001 is satisfied and the integration CI job
+  picks it up.  Route to residue — the correct `manifest_path` and
+  `workflow_type` require reading the app's contract and generated manifests.
 
   `classification` is always `"judgment"`.
 
