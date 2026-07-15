@@ -90,6 +90,41 @@ def test_events_but_no_complete_fails():
     assert sr.decide_exit(st)[0] == 1
 
 
+def test_no_complete_but_phase4_summary_soft_completes():
+    # Stream ends (clean EOF) with no `complete` sentinel, but the resolver
+    # streamed its Phase 4 summary block — that is end-of-run evidence, so the
+    # run is treated as completed (exit 0) rather than a transport failure.
+    fragments = [
+        line
+        for chunk in _SUMMARY_BLOCK.splitlines(keepends=True)
+        for line in ("event: response", f'data: {json.dumps({"text": chunk})}')
+    ]
+    st = _stream(*fragments)
+    assert not st.completed
+    code, msg = sr.decide_exit(st)
+    assert code == 0 and "treating the run as completed" in msg
+    assert sr.run_completed(st)
+
+
+def test_no_complete_and_no_summary_is_diagnosed_as_midrun_drop():
+    # Responses but no summary block and no sentinel → genuinely truncated.
+    # Still fails (exit 1), and the message names it a mid-run stream drop
+    # rather than a resolver bug.
+    st = _stream("event: response", 'data: {"text": "working on it..."}')
+    code, msg = sr.decide_exit(st)
+    assert code == 1
+    assert "mid-run" in msg
+    assert not sr.run_completed(st)
+
+
+def test_render_soft_complete_shows_outcome_not_failure():
+    st = sr.SSEState()
+    st.response_text = _SUMMARY_BLOCK  # no complete event, but summary present
+    out = sr.render_step_summary(st, "1234", "http://run")
+    assert "run failed" not in out
+    assert "merge-ready (human merges)" in out
+
+
 def test_malformed_json_does_not_crash():
     st = _stream("event: complete", "data: {not json")
     assert st.completed and st.status == "unknown"

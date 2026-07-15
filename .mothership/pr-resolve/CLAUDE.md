@@ -63,3 +63,11 @@ auto-merge loop is what the SDK-evolution rebuild was undoing).
 9. **Never write the literal `@sdk-resolve` in any PR comment** — it would
    re-trigger this workflow and loop. Post `@sdk-review` (to invoke the
    reviewer) and plain-text summaries only.
+10. **Keep the loop observable on the PR.** A review comment on its own gives a
+    watcher no sign that anyone is acting on it. Each round that has findings,
+    post the concise `<!-- SDK_RESOLVE_STATUS -->` acknowledgement (ORCHESTRATION
+    §3c′) *before* fixing — so the PR visibly shows resolve picked up the review
+    and will re-run `@sdk-review` after pushing — and always close with the
+    mandatory `<!-- SDK_RESOLVE_SUMMARY -->` comment (§Phase 4), on every exit
+    path. The stopping line is strict: keep looping until **zero findings,
+    nits included**, green CI, and `READY_TO_MERGE`; never stop on an open nit.

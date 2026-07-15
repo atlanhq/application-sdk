@@ -59,10 +59,11 @@ Each `HandlerCredential` has a `key: str` and `value: str`.
 
 ```python
 class PreflightInput(BaseModel):
-    credentials: list[HandlerCredential] = []  # credentials for preflight
+    credentials: list[HandlerCredential] = []  # single-credential apps: the resolved credential
+    credentials_by_name: dict[str, list[HandlerCredential]] = {}  # multi-credential apps: per named ref
     connection_config: dict[str, Any] = {}     # host, port, database, etc.
     checks_to_run: list[str] = []              # specific checks (empty = all)
-    timeout_seconds: int = 60                  # max wait time
+    timeout_seconds: int = 60                  # on the gate path the SDK stamps the real per-attempt budget (~25s); advisory on HTTP/SDR
 
 class PreflightOutput(BaseModel):
     status: PreflightStatus           # READY, NOT_READY, or PARTIAL
@@ -70,6 +71,38 @@ class PreflightOutput(BaseModel):
     message: str = ""                 # human-readable summary
     total_duration_ms: float = 0.0    # total time for all checks
 ```
+
+#### Multi-credential preflight
+
+Most apps use one credential and read `input.credentials`. Apps that need
+several credentials of different auth types (for example an API key plus an
+object-store credential) declare a **class-level** `preflight_credential_refs`
+map on their extraction-input contract — ref name to the top-level guid field
+that carries it:
+
+```python
+class MyExtractInput(ExtractionInput):
+    preflight_credential_refs: ClassVar[dict[str, str]] = {
+        "api": "api_credential_guid",
+        "object_store": "object_store_credential_guid",
+    }
+```
+
+The injected gate resolves each guid inside the activity frame under one
+fail-open taxonomy — a confirmed dependency outage propagates (the workflow
+fails open, never blocks a healthy run), a genuinely absent credential becomes
+an empty group — and hands the handler `input.credentials_by_name`:
+
+```python
+async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+    api = input.credentials_by_name["api"]
+    obj = input.credentials_by_name.get("object_store", [])
+    ...
+```
+
+It **must** be a `ClassVar`, not a pydantic field: declared as a field the gate
+reads `{}` and silently falls back to the single-credential path. Apps that
+declare nothing keep the unchanged single-credential path via `input.credentials`.
 
 ### MetadataInput / MetadataOutput
 

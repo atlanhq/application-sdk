@@ -770,11 +770,13 @@ def validate_payload_safety(cls: type, *, skip_fields: set[str] | None = None) -
         return
 
     for field_name, field_type in hints.items():
-        # Skip internal fields, explicitly skipped fields, and Pydantic internals
+        # Skip internal fields, explicitly skipped fields, Pydantic internals, and
+        # ClassVars (class-level constants, never part of the serialized payload).
         if (
             field_name in skip
             or field_name.startswith("_")
             or field_name.startswith("model_")
+            or get_origin(field_type) is ClassVar
         ):
             continue
 
