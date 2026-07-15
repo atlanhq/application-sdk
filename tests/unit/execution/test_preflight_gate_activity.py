@@ -416,6 +416,27 @@ class TestPreflightGateActivity:
             "object_store": "object_store_credential_guid",
         }
 
+    def test_from_extraction_input_warns_when_refs_declared_as_field(self) -> None:
+        # Misdeclaration guard: a multi-credential app that declares
+        # preflight_credential_refs as a Pydantic *field* instead of a ClassVar
+        # would silently fall back to the single-credential path (the class-level
+        # read returns {}), blocking healthy runs. from_extraction_input must fall
+        # back AND warn so the mistake is visible.
+        from pydantic import BaseModel
+
+        class _FieldDeclInput(BaseModel):
+            preflight_credential_refs: dict[str, str] = {}
+
+        with mock.patch(
+            "application_sdk.execution._temporal.preflight_gate.logger"
+        ) as mock_logger:
+            gate_input = PreflightGateInput.from_extraction_input(
+                _FieldDeclInput(), "crawl"
+            )
+
+        assert gate_input.credential_ref_fields == {}
+        mock_logger.warning.assert_called_once()
+
     def test_from_extraction_input_degrades_on_unbuildable_metadata(self) -> None:
         # A custom input whose metadata can't fit the model must not raise —
         # the gate has to fail open before dispatch, not only during it.

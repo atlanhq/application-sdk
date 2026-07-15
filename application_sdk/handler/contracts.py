@@ -377,11 +377,12 @@ class PreflightInput(BaseModel):
     credentials_by_name: dict[str, list[HandlerCredential]] = Field(
         default_factory=dict
     )
-    """Resolved credentials grouped by the app's declared
-    ``ExtractionInput.preflight_credential_refs`` name (same flat ``[{key, value}]``
-    shape as :attr:`credentials`). Populated only on the gate path for
-    multi-credential apps; empty on the single-credential and HTTP/SDR paths, which
-    use :attr:`credentials`."""
+    """Resolved credentials grouped by ref name for multi-credential apps.
+
+    Keyed by the app's declared ``ExtractionInput.preflight_credential_refs`` name;
+    each group has the same flat ``[{key, value}]`` shape as :attr:`credentials`.
+    Populated only on the gate path for multi-credential apps; empty on the
+    single-credential and HTTP/SDR paths, which use :attr:`credentials`."""
 
     entrypoint: str = ""
     """Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative

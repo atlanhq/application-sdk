@@ -85,6 +85,11 @@ def input_type_supports_gate(input_type: type) -> bool:
     protocol members are declared as top-level Pydantic ``model_fields`` —
     declaring them (rather than carrying them as Pydantic extras) is the
     portable way to satisfy the guard across supported Python versions.
+
+    Multi-credential apps qualify through this same triple: ``preflight_credential_refs``
+    is an additive opt-in resolved separately by the gate, not a replacement — an
+    input declaring only the named refs and none of the triple is (correctly)
+    gate-ineligible.
     """
     fields = getattr(input_type, "model_fields", None)
     if not fields:
@@ -343,6 +348,21 @@ async def _resolve_named_refs(
         for name, field in input.credential_ref_fields.items()
         if (guid := input.extraction_snapshot.get(field))
     }
+    # A declared ref whose guid field is absent from the snapshot resolves to an
+    # empty group — fail-open-safe, but indistinguishable from a genuine
+    # not-found. Surface the field names (never secrets) so a typo in
+    # ``preflight_credential_refs`` is visible in logs rather than silent.
+    missing = {
+        name: field
+        for name, field in input.credential_ref_fields.items()
+        if name not in present
+    }
+    if missing:
+        logger.warning(
+            "Declared preflight credential ref(s) have no value in the extraction "
+            "snapshot; verify the guid field names in preflight_credential_refs",
+            missing_refs=missing,
+        )
     if not present:
         return grouped
 
