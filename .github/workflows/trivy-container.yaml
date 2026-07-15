@@ -3,6 +3,19 @@
 # Runs Trivy, checks findings against the centralized base-allowlist in the SDK
 # repo (.security/base-allowlist.json), posts a summary comment on PRs, and
 # fails on new/expired entries.
+#
+# Usage:
+#
+#   jobs:
+#     build:
+#       uses: atlanhq/application-sdk/.github/workflows/trivy-container.yaml@main
+#       secrets: inherit
+#
+# This workflow mints a fleet App token (falling back to the caller's
+# ORG_PAT_GITHUB) for the cross-repo allowlist checkout and the
+# private-dependency BuildKit secret. Callers passing named secrets
+# explicitly instead of `inherit` keep working unchanged on their own
+# ORG_PAT_GITHUB.
 
 name: Atlan Application Trivy container scan
 
@@ -11,10 +24,17 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
+        description: "Fallback PAT, used if the fleet App token can't be minted."
       CHAINGUARD_USERNAME:
         required: true
       CHAINGUARD_PASSWORD:
         required: true
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
 
     inputs:
       skip-files:
@@ -40,6 +60,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - name: Mint fleet App token
+        # Not scoped to a specific repositories: list -- this token also
+        # feeds the composite's PRIVATE_REPO_ACCESS_TOKEN BuildKit secret,
+        # used by Dockerfiles that clone a private git dependency during the
+        # scan build. The target repo varies per caller and isn't known
+        # here, so this needs org-wide reach, same as build-and-scan.yaml's
+        # git_token mint.
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
       - name: Checkout base allowlist from SDK
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -49,7 +84,7 @@ jobs:
             .security
             .github/scripts
           path: _sdk
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       # Composite handles build, Trivy JSON+SARIF scan, SARIF upload.
       # fail-on-vulns is disabled here — the allowlist gate below takes over.
@@ -58,7 +93,7 @@ jobs:
         with:
           chainguard-username: ${{ secrets.CHAINGUARD_USERNAME }}
           chainguard-password: ${{ secrets.CHAINGUARD_PASSWORD }}
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           skip-files: ${{ inputs.skip-files }}
           fail-on-vulns: 'false'
 
