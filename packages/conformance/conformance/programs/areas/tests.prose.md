@@ -135,22 +135,20 @@ to residue):
 
   `classification` is always `"judgment"`.
 
-- **T003 SdrTestLegacyAgentSpec** — a `BaseSDRIntegrationTest` subclass sets
-  `agent_spec_template` (with a non-empty dict/string literal) but no
-  `manifest_path`.  The hand-crafted spec bypasses manifest validation: the test
-  can pass even when `manifest.json` is missing the `agent_json` slot — the
-  exact mechanism behind the MSSQL regression (atlan-mssql-app#177, DISTR-752).
-  Fix: on the class body, replace the `agent_spec_template` assignment with:
+- **T003 DeprecatedSdrHarness** — a class under `tests/` subclasses
+  `BaseSDRIntegrationTest`, which is deprecated and will be removed in v4.0.
+  Migrate to the agnostic agent-mode e2e harness (same shape as the T002
+  example above): a `BaseE2ETest` subclass via the generated `*GeneratedE2EBase`
+  with `mode = RunMode.AGENT`, `@pytest.mark.e2e`, guarded import.
 
-  ```python
-  manifest_path = "app/generated/<name>/manifest.json"
-  ```
-
-  Use the committed manifest path for this app's workflow type.  Suppress with
-  `# conformance: ignore[T003] <reason>` on the class definition line only when
-  `agent_spec_template` is intentionally used for a non-manifest test scenario
-  (e.g. a negative-path test that supplies deliberately invalid credentials) —
-  and state that reason explicitly.
+  **Ordering matters:** ADD the agent-mode e2e test first and confirm T002 is
+  satisfied, THEN delete the `BaseSDRIntegrationTest` subclass (`test_sdr.py`) —
+  an app that removes the SDR test before adding the e2e replacement would fail
+  T002.  Carry over any behaviour the SDR suite validated (e.g. `manifest_path`
+  assertions) into the e2e test.  Suppress with
+  `# conformance: ignore[T003] <reason>` on the class definition line for a
+  legitimate exception (e.g. a shim intentionally keeping the legacy harness
+  during migration).
 
   `classification` is always `"judgment"`.
 

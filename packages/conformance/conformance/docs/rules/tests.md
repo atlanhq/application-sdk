@@ -17,7 +17,7 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [T001](#t001) | `UnmarkedIntegrationTest` | `warn` | `both` | `test-marking` | — | 0.4.0 |
 | [T002](#t002) | `MissingSdrTestClass` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
-| [T003](#t003) | `SdrTestLegacyAgentSpec` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
+| [T003](#t003) | `DeprecatedSdrHarness` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
 | [T004](#t004) | `DevEntrypointRequiresAppModule` | `warn` | `app` | `dev-entrypoint` | — | 0.10.0 |
 | [T005](#t005) | `AssertionFreeTest` | `warn` | `both` | `test-assertion-quality` | — | 0.12.0 |
 | [T006](#t006) | `EmptyTestBody` | `warn` | `both` | `test-assertion-quality` | — | 0.12.0 |
@@ -112,55 +112,48 @@ class TestMyAppSDR(BaseSDRIntegrationTest):
 
 ---
 
-## T003 — `SdrTestLegacyAgentSpec` {#t003}
+## T003 — `DeprecatedSdrHarness` {#t003}
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-test-coverage` · **Autofixable:** — · **Since:** 0.9.0
 
-> BaseSDRIntegrationTest subclass uses legacy agent_spec_template instead of manifest_path
+> Subclasses the deprecated BaseSDRIntegrationTest harness instead of agent-mode BaseE2ETest
 
-**Rationale:** A BaseSDRIntegrationTest subclass that sets agent_spec_template (and not manifest_path)
-supplies credentials to the test workflow via a hand-crafted JSON blob rather than
-reading inputs from the committed manifest.json. This means the test can pass even when
-the manifest is missing the agent_json slot — the hand-crafted spec fills the gap the
-manifest was supposed to fill. This is the exact mechanism that allowed the MSSQL
-regression (atlan-mssql-app#177, DISTR-752) to slip through: the test passed because
-agent_spec_template bypassed the broken manifest, but production runs failed because the
-manifest had no agent_json slot. Switching to manifest_path forces the test to read
-inputs from the committed manifest, catching missing-agent_json and other manifest
-defects at CI time.
+**Rationale:** BaseSDRIntegrationTest is deprecated. The self-deployed-runtime path is now validated by
+the agnostic e2e harness — a BaseE2ETest subclass (from application_sdk.testing.e2e,
+usually via a generated *GeneratedE2EBase) run in agent mode (mode = RunMode.AGENT),
+which drives the real agent-mode DAG end to end. The legacy BaseSDRIntegrationTest
+harness will be removed in v4.0; a subclass will break at that bump. Surfacing usage now
+— while the deprecation notice still carries the migration target — nudges the fleet off
+it before removal. WARN because the migration restructures the test (base class, run
+mode, credential wiring) and needs human judgement.
 
-A `BaseSDRIntegrationTest` subclass must use `manifest_path` (not `agent_spec_template`)
-so the test reads workflow inputs from the committed `manifest.json` file.
+`BaseSDRIntegrationTest` (`application_sdk.testing.sdr.base`) is **deprecated** and will
+be removed in v4.0. Any subclass under `tests/` is flagged.
 
-`agent_spec_template` is the legacy class var: it supplies a hand-crafted JSON blob
-directly to the test workflow, bypassing the manifest entirely.  This means the test can
-pass even when `manifest.json` is missing the `agent_json` slot or has other defects —
-the template fills in what the manifest was supposed to provide.  P029 closes the static
-manifest gap; T003 closes the test gap: a subclass using `manifest_path` will fail at
-test time whenever `manifest.json` is broken, not silently pass.
+The self-deployed-runtime (agent-mode) path is now validated by the agnostic e2e
+harness: a `BaseE2ETest` subclass (from `application_sdk.testing.e2e`, normally via the
+generated `*GeneratedE2EBase`) with a class-level `mode = RunMode.AGENT`. It submits a
+real workflow that runs through the agent-mode dispatch path end to end, superseding the
+local-container SDR harness.
 
-**Remediation:** in the subclass body, replace:
+**Remediation** — migrate the SDR test to the agent-mode e2e harness:
 
 ```python
-agent_spec_template = '{...}'    # legacy
+from application_sdk.testing.e2e import RunMode
+from app.generated._e2e_base import MyAppGeneratedE2EBase
+
+@pytest.mark.e2e
+class TestMyAppE2E(MyAppGeneratedE2EBase):
+    mode = RunMode.AGENT
 ```
 
-with:
+Add the agent-mode e2e test **first** and confirm T002 is satisfied, then delete the
+`BaseSDRIntegrationTest` subclass — an app that removes the SDR test before adding the
+e2e replacement would fail T002.
 
-```python
-manifest_path = 'app/generated/manifest.json'
-```
-
-The `manifest_path` class var tells `BaseSDRIntegrationTest` to call
-`_manifest_extract_inputs()` which reads `dag.extract.inputs` from the manifest —
-including the `agent_json` slot — and passes them as the workflow start parameters.  If
-`agent_json` is missing from the manifest the test will raise a `KeyError` at startup,
-surface the defect, and fail the CI run rather than letting the broken manifest reach
-production.
-
-Suppress with `# conformance: ignore[T003] <reason>` on the class definition line when
-`agent_spec_template` is intentionally used for a non-manifest test scenario (e.g. a
-negative-path test that supplies deliberately invalid credentials).
+Suppress with `# conformance: ignore[T003] <reason>` on the class definition line for a
+legitimate exception (e.g. a shim that intentionally keeps the legacy harness during
+migration).
 
 ---
 

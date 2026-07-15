@@ -1,5 +1,12 @@
 """Base class for Self-Deployed Runtime (SDR) integration tests.
 
+.. deprecated:: 3.23.0
+   ``BaseSDRIntegrationTest`` is deprecated in favour of the agnostic e2e
+   harness :class:`application_sdk.testing.e2e.BaseE2ETest` run in agent mode
+   (``mode = RunMode.AGENT``). It will be removed in v4.0. Subclassing this
+   class emits a :class:`DeprecationWarning`; conformance rule B001 flags
+   consumers fleet-wide. See the migration note on the class below.
+
 Connector apps subclass :class:`BaseSDRIntegrationTest` to run their auth /
 preflight / workflow scenarios against a real SDR container — the same
 compose stack atlan-configurator generates for customer deployments,
@@ -50,6 +57,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import warnings
 from collections import Counter
 from pathlib import Path
 from typing import Any, ClassVar
@@ -90,7 +98,17 @@ def _collect_placeholders(obj: Any) -> set[str]:
 
 
 class BaseSDRIntegrationTest(BaseIntegrationTest):
-    """Base class for SDR integration tests.
+    """Deprecated: use ``application_sdk.testing.e2e.BaseE2ETest`` with
+    ``RunMode.AGENT`` — will be removed in v4.0.
+
+    Base class for SDR integration tests.
+
+    .. deprecated:: 3.23.0
+       The self-deployed-runtime path is now validated by the agnostic e2e
+       harness. Migrate to a ``BaseE2ETest`` subclass (typically via the
+       generated ``*GeneratedE2EBase``) with a class-level ``mode = RunMode.AGENT``,
+       guarding the import and marking the class ``@pytest.mark.e2e``. Subclassing
+       ``BaseSDRIntegrationTest`` emits a :class:`DeprecationWarning`.
 
     Class attributes subclasses are expected to set:
 
@@ -179,6 +197,16 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
     #: the two-store CI SDR stack (e.g. ``data-upstream/artifacts/apps/<app>/workflows``).
     #: Required for :pyattr:`require_upstream_assets_landed`.
     upstream_output_base_path: ClassVar[str | None] = None
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        warnings.warn(
+            "application_sdk.testing.sdr.BaseSDRIntegrationTest is deprecated; "
+            "use application_sdk.testing.e2e.BaseE2ETest with RunMode.AGENT "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     def _build_scenario_args(self, scenario: Scenario) -> dict[str, Any]:
         args = super()._build_scenario_args(scenario)
