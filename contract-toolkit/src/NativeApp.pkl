@@ -2909,8 +2909,12 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "            if not stripped:\n" +
     "                return {}\n" +
     "            try:\n" +
-    "                parsed = json.loads(stripped)\n" +
-    "            except json.JSONDecodeError:\n" +
+    "                parsed = orjson.loads(stripped)\n" +
+    "            except orjson.JSONDecodeError:\n" +
+    "                logger.debug(\n" +
+    "                    \"Coercion input was not valid JSON; passing the raw \"\n" +
+    "                    \"string through for downstream validation.\"\n" +
+    "                )\n" +
     "                return value\n" +
     "            if isinstance(parsed, dict):\n" +
     "                return parsed\n" +
@@ -2955,8 +2959,12 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     }
   }).toList()
   local stdlibImportLines: String =
-    (if (!objectStringCoercionFields.isEmpty) "import json\n" else "") +
     (if (!typingImports.isEmpty) "from typing import \(typingImports.join(", "))\n" else "")
+  // orjson is a core SDK dependency (~10x faster than stdlib json) and is the
+  // sanctioned JSON entrypoint (conformance O001). Emitted as a third-party
+  // import only when the JSON-object-string coercion validator is generated.
+  local thirdPartyImportLines: String =
+    (if (!objectStringCoercionFields.isEmpty) "import orjson\n" else "")
   local pydanticImports: List<String> = (new Listing {
     when (uiFieldLines.contains(" = Field(")) {
       "Field"
@@ -2983,17 +2991,30 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
       "from application_sdk.contracts.types import \(sdkTypeImports.join(", "))\n"
     else "") +
     (if (!credFieldLine.isEmpty) "from application_sdk.credentials.ref import CredentialRef\n" else "") +
+    (if (!objectStringCoercionFields.isEmpty)
+      "from application_sdk.observability.logger_adaptor import get_logger\n"
+    else "") +
     "from application_sdk.templates.contracts import ExtractionInput\n"
+  // Module-level logger, emitted only when the coercion validator needs it, so
+  // its benign "not valid JSON" fallback is observable (conformance E007) rather
+  // than silently swallowed. The message never logs the value itself.
+  local loggerModuleLine: String =
+    if (!objectStringCoercionFields.isEmpty) "logger = get_logger(__name__)\n\n\n" else ""
   local inputImportBlock: String =
     "from __future__ import annotations\n\n" +
     (if (!stdlibImportLines.isEmpty) stdlibImportLines + "\n" else "") +
-    (if (!pydanticImportLines.isEmpty) pydanticImportLines + "\n" else "") +
+    (if (!thirdPartyImportLines.isEmpty || !pydanticImportLines.isEmpty)
+      thirdPartyImportLines + pydanticImportLines + "\n"
+    else "") +
     firstPartyImportLines +
-    "\n\n"
+    // One blank line before the module-level logger assignment (if any),
+    // two before the class itself — matches ruff/isort canonical spacing.
+    (if (!loggerModuleLine.isEmpty) "\n" else "\n\n")
   text =
     "# AUTO-GENERATED from app.pkl — DO NOT EDIT MANUALLY.\n" +
     "# To regenerate: make generate\n" +
     inputImportBlock +
+    loggerModuleLine +
     "class AppInputContract(ExtractionInput):\n" +
     publishHashExcludeBlock +
     uiFieldLines +
