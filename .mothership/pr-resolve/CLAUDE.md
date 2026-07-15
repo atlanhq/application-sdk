@@ -69,5 +69,7 @@ auto-merge loop is what the SDK-evolution rebuild was undoing).
     §3c′) *before* fixing — so the PR visibly shows resolve picked up the review
     and will re-run `@sdk-review` after pushing — and always close with the
     mandatory `<!-- SDK_RESOLVE_SUMMARY -->` comment (§Phase 4), on every exit
-    path. The stopping line is strict: keep looping until **zero findings,
-    nits included**, green CI, and `READY_TO_MERGE`; never stop on an open nit.
+    path. The stopping line is strict: keep looping until **every finding (nits
+    included) is fixed or recorded proven-false**, green CI, and
+    `READY_TO_MERGE`; never stop on an open nit you have neither fixed nor
+    rebutted.
