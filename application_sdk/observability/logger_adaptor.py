@@ -478,6 +478,14 @@ DEPENDENCY_LOGGERS = ["daft_io.stats", "tracing.span", "httpx"]
 for logger_name in DEPENDENCY_LOGGERS:
     logging.getLogger(logger_name).setLevel(logging.WARNING)
 
+# Pin the forwarded-core logger to WARNING so ``_CloudflareTimeoutFilter`` sees the
+# WARN half of the 504 pattern (retries 1–15) regardless of ``LOG_LEVEL``. Without
+# this, an operator setting ``LOG_LEVEL=ERROR`` would drop those WARN records at the
+# root level gate before the filter runs, so the filter's WARN branch would again
+# become dead code — the exact failure this fix removes. The suppression is the
+# filter's job, not a side effect of the root level.
+logging.getLogger("temporalio").setLevel(logging.WARNING)
+
 
 # Add these constants
 SEVERITY_MAPPING = {

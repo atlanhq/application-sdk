@@ -2728,6 +2728,16 @@ class TestCloudflareTimeoutFilter:
             second_msg = mock_adapter.info.call_args_list[1][0][0]
             assert "2" in second_msg
 
+    def test_temporalio_logger_pinned_to_warning(self):
+        """The forwarded-core ``temporalio`` logger must be pinned to WARNING at
+        import time so ``_CloudflareTimeoutFilter`` sees the WARN half of the 504
+        pattern independent of ``LOG_LEVEL``. Without the pin, ``LOG_LEVEL=ERROR``
+        would drop those WARN records at the root level gate before the filter
+        runs, reviving the dead-filter bug this fix removes."""
+        import application_sdk.observability.logger_adaptor  # noqa: F401
+
+        assert logging.getLogger("temporalio").level == logging.WARNING
+
 
 # ---------------------------------------------------------------------------
 # TestReplayLogSuppression
