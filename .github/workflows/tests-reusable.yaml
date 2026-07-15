@@ -389,7 +389,7 @@ jobs:
           python3 application-sdk-scripts/.github/scripts/complete_check_run.py \
             --repo atlanhq/application-sdk \
             --sha "$SHA" \
-            --name "Connector E2E / ${REPO_SHORT}" \
+            --name "Connector E2E run / ${REPO_SHORT}" \
             --conclusion "${{ steps.report.outputs.conclusion }}" \
             --summary-file "${{ steps.report.outputs.summary_file }}" \
             --details-url "$RUN_URL"

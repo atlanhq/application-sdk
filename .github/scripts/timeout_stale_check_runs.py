@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Watchdog for the cross-repo e2e callback pattern: time out any
-``Connector E2E / *`` check run that's been stuck ``in_progress`` past the
+``Connector E2E run / *`` check run that's been stuck ``in_progress`` past the
 window a connector run could legitimately still be running.
 
 This only matters when a connector runner dies before its ``report-to-sdk``
@@ -157,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--repo", required=True, help="owner/repo, e.g. atlanhq/application-sdk"
     )
-    parser.add_argument("--name-prefix", default="Connector E2E / ")
+    parser.add_argument("--name-prefix", default="Connector E2E run / ")
     parser.add_argument(
         "--max-age-minutes",
         type=int,

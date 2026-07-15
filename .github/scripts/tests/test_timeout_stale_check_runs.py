@@ -14,7 +14,7 @@ import timeout_stale_check_runs as mod
 
 REPO = "atlanhq/application-sdk"
 NOW = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
-PREFIX = "Connector E2E / "
+PREFIX = "Connector E2E run / "
 
 
 def _completed(stdout: str) -> subprocess.CompletedProcess:

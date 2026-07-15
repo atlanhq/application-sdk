@@ -13,7 +13,7 @@ import create_check_run as mod
 
 REPO = "atlanhq/application-sdk"
 SHA = "abc123"
-NAME = "Connector E2E / atlan-mysql-app"
+NAME = "Connector E2E run / atlan-mysql-app"
 
 
 def _completed(stdout: str) -> subprocess.CompletedProcess:

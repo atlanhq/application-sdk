@@ -15,7 +15,7 @@ import poll_check_runs_gate as mod
 
 REPO = "atlanhq/application-sdk"
 SHA = "abc123"
-NAMES = ["Connector E2E / atlan-openapi-app", "Connector E2E / atlan-mysql-app"]
+NAMES = ["Connector E2E run / atlan-openapi-app", "Connector E2E run / atlan-mysql-app"]
 
 
 @pytest.fixture(autouse=True)

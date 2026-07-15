@@ -3,7 +3,7 @@ name: E2E Callback Watchdog
 # Safety net for the cross-repo e2e callback pattern (see e2e-apps'
 # wait-mode: callback and tests-reusable.yaml's report-to-sdk job).
 #
-# Each connector reports back by PATCHing its own 'Connector E2E / <repo>'
+# Each connector reports back by PATCHing its own 'Connector E2E run / <repo>'
 # check run to completed the instant its run finishes — there's no polling
 # on the happy path. But if a connector runner dies before that callback
 # step runs (crash, force-cancel, runner reclaim), the check run is left
