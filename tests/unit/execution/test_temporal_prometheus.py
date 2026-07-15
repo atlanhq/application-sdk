@@ -35,6 +35,29 @@ def test_get_or_create_runtime_creates_prometheus_singleton(_reset_singleton):
     _reset_singleton.assert_called_once()
 
 
+def test_prometheus_path_also_enables_log_forwarding(_reset_singleton):
+    """The prod (Prometheus-enabled) path must set BOTH metrics and log
+    forwarding — the disabled path is not the only one that needs the filter to
+    fire. Regression guard: dropping logging= from this branch would silently
+    reintroduce the Cloudflare-504 spam in production."""
+    _get_or_create_runtime(enable_prometheus=True)
+    telemetry = _reset_singleton.call_args.kwargs["telemetry"]
+    assert telemetry.metrics is not None
+    assert telemetry.logging is not None
+    assert telemetry.logging.forwarding is not None
+
+
+def test_core_logging_config_targets_temporalio_logger(_reset_singleton):
+    """Contract the _CloudflareTimeoutFilter depends on: Rust-core logs are
+    forwarded to a logger whose name starts with 'temporalio' (the filter's
+    name gate), at core=WARN / other=ERROR so genuine failures still surface."""
+    cfg = backend_module._core_logging_config()
+    assert cfg.forwarding is not None
+    assert cfg.forwarding.logger.name.startswith("temporalio")
+    assert cfg.filter.core_level == "WARN"
+    assert cfg.filter.other_level == "ERROR"
+
+
 def test_get_or_create_runtime_disabled_builds_forwarding_runtime(_reset_singleton):
     """enable_prometheus=False builds an explicit Runtime with log forwarding
     (not Runtime.default(), which forwards nothing) and no Prometheus metrics."""

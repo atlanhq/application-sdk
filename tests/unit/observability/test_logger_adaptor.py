@@ -2588,6 +2588,55 @@ class TestCloudflareTimeoutFilter:
             is True
         )
 
+    def test_genuine_temporalio_warn_passes_through(self):
+        """Non-504 WARN from temporalio must still surface (WARN gate is active
+        now, but only the 504 pattern is suppressed)."""
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        assert (
+            f.filter(
+                _make_temporalio_record(
+                    level=logging.WARNING, msg="slow poll: server busy"
+                )
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize("level", [logging.WARNING, logging.ERROR])
+    def test_real_forwarded_record_shape_suppressed(self, level):
+        """Guard against the false-green trap: exercise the *actual* record
+        shape produced by temporalio's ``LogForwardingConfig._on_logs`` — the
+        base logger name with ``-sdk_core::<target>`` appended, the message
+        prefixed with ``[sdk_core::<target>]``, and the error status appended
+        as a ``fields`` dict — not a hand-crafted record. If this stops
+        matching (e.g. upstream renames the target or the fields move), the
+        filter silently reverts to dead code."""
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        # Mirrors LogForwardingConfig with logger="temporalio",
+        # append_target_to_name=True, prepend_target_on_message=True,
+        # append_log_fields_to_message=True.
+        target = "temporalio_client::retry"
+        name = f"temporalio-sdk_core::{target}"
+        msg = (
+            f"[sdk_core::{target}] gRPC call poll_workflow_task_queue retried "
+            "16 times {'error': 'Status { code: Internal, message: \"protocol "
+            "error: received message with invalid compression flag: 60 (valid "
+            "flags are 0 and 1) while receiving response with status: 504 "
+            'Gateway Timeout" }\'}'
+        )
+        f = _CloudflareTimeoutFilter()
+        with mock.patch("application_sdk.observability.logger_adaptor.get_logger"):
+            assert (
+                f.filter(_make_temporalio_record(msg=msg, level=level, name=name))
+                is False
+            )
+
     def test_partial_match_passes_through(self):
         """All three anchors must be present — two out of three still passes through."""
         from application_sdk.observability.logger_adaptor import (
