@@ -374,6 +374,16 @@ class PreflightInput(BaseModel):
     credentials: list[HandlerCredential] = []
     """Credentials to use during preflight."""
 
+    credentials_by_name: dict[str, list[HandlerCredential]] = Field(
+        default_factory=dict
+    )
+    """Resolved credentials grouped by ref name for multi-credential apps.
+
+    Keyed by the app's declared ``ExtractionInput.preflight_credential_refs`` name;
+    each group has the same flat ``[{key, value}]`` shape as :attr:`credentials`.
+    Populated only on the gate path for multi-credential apps; empty on the
+    single-credential and HTTP/SDR paths, which use :attr:`credentials`."""
+
     entrypoint: str = ""
     """Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
     when present. The orchestrator resolves it from the Global Marketplace app
@@ -419,7 +429,13 @@ class PreflightInput(BaseModel):
     """Specific checks to run (empty = run all)."""
 
     timeout_seconds: int = 60
-    """Maximum seconds to wait for all checks."""
+    """Maximum seconds the handler has to run all checks.
+
+    On the injected gate path this carries the *enforced* per-attempt budget
+    (the gate activity's ``start_to_close``), so a handler that sizes its checks
+    to this value stays inside the real deadline — design them to finish within
+    it, with headroom. Advisory on the HTTP ``/check`` and SDR paths, which are
+    not bounded by the gate activity timeout."""
 
 
 class PreflightOutput(BaseModel):

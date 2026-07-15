@@ -1,6 +1,6 @@
 """Unit tests for application_sdk.contracts.base."""
 
-from typing import Annotated, Any
+from typing import Annotated, Any, ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -214,6 +214,17 @@ class TestPayloadSafetyValidation:
 
             class BadOutput(Output):
                 content: bytes
+
+    def test_classvar_is_skipped_even_with_unbounded_inner_type(self) -> None:
+        # ClassVars are class-level constants, never serialized into the payload,
+        # so the scan must skip them even when the inner type (an unbounded dict)
+        # would be forbidden on a real field. Pins the get_origin(...) is ClassVar
+        # skip; this is exactly the shape ExtractionInput.preflight_credential_refs
+        # uses, which would otherwise raise at class-definition time.
+        class OkInput(Input):
+            preflight_credential_refs: ClassVar[dict[str, str]] = {}
+
+        assert OkInput.preflight_credential_refs == {}
 
     def test_allow_unbounded_fields_bypasses_validation(self) -> None:
         # Should NOT raise even with Any/bytes/unbounded list

@@ -6,7 +6,7 @@ These replace the ``Dict[str, Any]`` interfaces used by
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, ClassVar
 
 import orjson
 from pydantic import Field, JsonValue, ValidationInfo, field_validator, model_validator
@@ -109,6 +109,18 @@ def _is_sdk_sql_filter_field(cls: type, field_name: str | None) -> bool:
 
 class ExtractionInput(Input):
     """Top-level input for a SQL metadata extraction run."""
+
+    preflight_credential_refs: ClassVar[dict[str, str]] = {}
+    """Opt-in map of ``{ref_name: guid_field}`` for multi-credential apps.
+
+    Single-credential apps leave this empty: the injected preflight gate resolves
+    the one top-level ``extraction_method``/``credential_guid``/``agent_json``
+    triple as usual. Apps whose per-auth-type guids live in separate top-level
+    fields (e.g. ``{"api": "api_credential_guid", "object_store":
+    "object_store_credential_guid"}``) declare them here; the gate then resolves
+    each one — applying its single fail-open taxonomy — and hands the handler the
+    results via ``PreflightInput.credentials_by_name``. A ``ClassVar`` so it stays
+    out of ``model_fields`` and the credential-resolvable snapshot."""
 
     workflow_id: str = ""
     """Temporal workflow ID for this run."""
