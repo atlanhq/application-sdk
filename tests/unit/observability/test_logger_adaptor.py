@@ -2628,7 +2628,7 @@ class TestCloudflareTimeoutFilter:
             "16 times {'error': 'Status { code: Internal, message: \"protocol "
             "error: received message with invalid compression flag: 60 (valid "
             "flags are 0 and 1) while receiving response with status: 504 "
-            'Gateway Timeout" }\'}'
+            "Gateway Timeout\" }'}"
         )
         f = _CloudflareTimeoutFilter()
         with mock.patch("application_sdk.observability.logger_adaptor.get_logger"):
