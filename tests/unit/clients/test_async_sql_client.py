@@ -285,6 +285,7 @@ async def test_run_query_escapes_colons_client_side(
     async for _ in async_sql_client.run_query("RLIKE '^(?:cdl)'"):
         pass
 
+    mock_text.assert_called_once_with("RLIKE '^(?\\:cdl)'")
     mock_connection.execute.assert_called_once_with("RLIKE '^(?\\:cdl)'")
 
 
@@ -310,4 +311,5 @@ async def test_run_query_escapes_colons_server_side(
     async for _ in async_sql_client.run_query("RLIKE '^(?:cdl)'"):
         pass
 
+    mock_text.assert_called_once_with("RLIKE '^(?\\:cdl)'")
     mock_connection_with_options.stream.assert_called_once_with("RLIKE '^(?\\:cdl)'")

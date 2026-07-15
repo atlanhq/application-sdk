@@ -40,13 +40,16 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-def _escape_bind_colons(query: str) -> str:
-    """Backslash-escape literal colons so SQLAlchemy ``text()`` does not treat them as bind params.
+def _escape_colons_for_text(query: str) -> str:
+    """Backslash-escape *every* literal colon so SQLAlchemy ``text()`` does not treat them as bind params.
 
     Callers pass fully-rendered SQL (all values inlined; no bind params to supply). ``text()``
     reads any ``:name`` as a required bind parameter and raises at compile time on colon-bearing
     SQL — a regex ``(?:...)``, a ``::text`` cast, a ``'12:30:00'`` literal. SQLAlchemy strips the
     backslash before the driver, so the DB receives the original literal colon.
+
+    Note: this escapes *all* colons. Any future call site that genuinely needs ``:name`` bind
+    parameters must not route through this helper.
     """
     return query.replace(":", "\\:")
 
@@ -404,7 +407,7 @@ class BaseSQLClient(ClientInterface):
                 from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
                 cursor = await loop.run_in_executor(
-                    pool, connection.execute, text(_escape_bind_colons(query))
+                    pool, connection.execute, text(_escape_colons_for_text(query))
                 )
                 if not cursor or not cursor.cursor:
                     raise UnsupportedSqlCursorError()
@@ -450,7 +453,7 @@ class BaseSQLClient(ClientInterface):
 
         if import_optional_dependency("sqlalchemy", errors="ignore"):
             return pd.read_sql_query(
-                text(_escape_bind_colons(query)), conn, chunksize=chunksize
+                text(_escape_colons_for_text(query)), conn, chunksize=chunksize
             )
         else:
             dbapi_conn = getattr(conn, "connection", None)
@@ -688,7 +691,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
                         yield_per=batch_size
                     )
 
-                escaped_query = _escape_bind_colons(query)
+                escaped_query = _escape_colons_for_text(query)
                 result = (
                     await connection.stream(text(escaped_query))
                     if use_server_side_cursor

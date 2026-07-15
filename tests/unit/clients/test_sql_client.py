@@ -9,7 +9,7 @@ from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import (
     AsyncBaseSQLClient,
     BaseSQLClient,
-    _escape_bind_colons,
+    _escape_colons_for_text,
 )
 from application_sdk.clients.sql_errors import (
     EngineNotInitializedError,
@@ -925,10 +925,11 @@ def test_read_sql_query_uses_session_connection(sql_client: BaseSQLClient):
         ("'12:30:00'", "'12\\:30\\:00'"),
         ("SELECT 1", "SELECT 1"),  # no colon: unchanged
         ("regex '\\:'", "regex '\\\\:'"),  # pre-existing backslash-colon round-trips
+        ("", ""),  # empty string: identity
     ],
 )
-def test_escape_bind_colons(query: str, expected: str):
-    assert _escape_bind_colons(query) == expected
+def test_escape_colons_for_text(query: str, expected: str):
+    assert _escape_colons_for_text(query) == expected
 
 
 @pytest.mark.parametrize(
@@ -949,14 +950,16 @@ def test_escaped_colon_round_trips_to_driver(literal: str):
     """The load-bearing fact: escaping colons and wrapping in text() must deliver
     the *original literal colon* to the database — not a backslash-corrupted
     string — for every colon shape (regex, POSIX class, cast, time literal). All
-    four execution sites share this escape+text() path, so proving it once on a
-    real engine proves the semantics for every site."""
+    four execution sites share this one escape+text() path, so this real-engine
+    check exercises that shared path end to end. It runs on SQLite; the escape is
+    dialect-agnostic (SQLAlchemy strips the backslash before the driver on every
+    dialect), so a passing SQLite round-trip is representative, not exhaustive."""
     from sqlalchemy import create_engine, text
 
     engine = create_engine("sqlite://")
     with engine.connect() as conn:
         query = f"SELECT '{literal}' AS v"
-        returned = conn.execute(text(_escape_bind_colons(query))).fetchall()[0][0]
+        returned = conn.execute(text(_escape_colons_for_text(query))).fetchall()[0][0]
     assert returned == literal
 
 
@@ -1006,28 +1009,21 @@ def test_execute_pandas_query_no_colon_unchanged(sql_client: BaseSQLClient):
 
 def test_execute_pandas_query_escapes_colons_before_text(sql_client: BaseSQLClient):
     """The read path hands text() the colon-escaped string, never the raw one."""
-    fake_pandas = MagicMock()
-    fake_pandas.read_sql_query.return_value = "df"
-    fake_compat = MagicMock()
-    fake_compat.import_optional_dependency.return_value = MagicMock()  # truthy
-    fake_pandas.compat = MagicMock()
-    fake_pandas.compat._optional = fake_compat
-
-    fake_sqlalchemy = MagicMock()
-    fake_sqlalchemy.text = MagicMock(side_effect=lambda q: f"text({q})")
+    import pandas
+    from pandas.compat import _optional
 
     conn = MagicMock()
-    with patch.dict(
-        "sys.modules",
-        {
-            "pandas": fake_pandas,
-            "pandas.compat": fake_pandas.compat,
-            "pandas.compat._optional": fake_compat,
-            "sqlalchemy": fake_sqlalchemy,
-        },
+    # Patch sqlalchemy.text and the two pandas call sites the method uses, rather
+    # than swapping whole modules in sys.modules (which is fragile across pandas
+    # versions). The method imports these locally, so the patched attributes are
+    # what it resolves at call time.
+    with (
+        patch("sqlalchemy.text", side_effect=lambda q: f"text({q})") as mock_text,
+        patch.object(_optional, "import_optional_dependency", return_value=object()),
+        patch.object(pandas, "read_sql_query", return_value="df"),
     ):
         sql_client._execute_pandas_query(conn, "RLIKE '^(?:cdl)'", chunksize=None)
-    fake_sqlalchemy.text.assert_called_once_with("RLIKE '^(?\\:cdl)'")
+    mock_text.assert_called_once_with("RLIKE '^(?\\:cdl)'")
 
 
 @pytest.mark.asyncio
