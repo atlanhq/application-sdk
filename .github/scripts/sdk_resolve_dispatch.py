@@ -280,10 +280,29 @@ def mine_summary(st: SSEState) -> dict[str, str]:
     return parse_summary(st.response_text) or parse_summary(st.raw_data)
 
 
+def run_completed(st: SSEState) -> bool:
+    """True when the resolver actually finished its work.
+
+    The transport `complete` event is the normal success signal, but mothership
+    sometimes ends the resolve stream cleanly (EOF) without it. The resolver
+    emits its Phase 4 `=== SDK RESOLVE SUMMARY ===` block as its very last action
+    (ORCHESTRATION Phase 4), so a mined summary carrying a terminal key is
+    end-of-run evidence independent of the sentinel — treat that as completed. A
+    stream truncated mid-work carries no summary block and is still a failure, so
+    this never masks a genuinely incomplete run.
+    """
+    if st.errored:
+        return False
+    if st.completed:
+        return st.status == "completed"
+    summary = mine_summary(st)
+    return any(k in summary for k in ("final_verdict", "merge_ready", "stopped_reason"))
+
+
 def render_step_summary(st: SSEState, pr_number: str, gha_run_url: str) -> str:
     """Build the Markdown written to GITHUB_STEP_SUMMARY — always renders."""
     summary = mine_summary(st)
-    ok = st.completed and st.status == "completed"
+    ok = run_completed(st)
     merge_ready = summary.get("merge_ready", "").lower() == "yes"
     if not ok:
         outcome = "❌ run failed"
@@ -336,6 +355,30 @@ def decide_exit(st: SSEState) -> tuple[int, str]:
             "::error::Stream ended without a single SSE event — likely VPN/network/proxy issue",
         )
     if not st.completed:
+        # No transport `complete` sentinel. If the resolver still emitted its
+        # Phase 4 summary block, it finished its work — the missing sentinel is a
+        # transport artifact (clean EOF), not a failed run. Without that evidence
+        # the stream truncated mid-work, which stays a failure.
+        if run_completed(st):
+            return (
+                0,
+                "::warning::Stream ended without a 'complete' event, but the "
+                "resolver emitted its Phase 4 summary — treating the run as "
+                "completed.",
+            )
+        if st.response_text:
+            # The agent streamed real work but the stream was cut before Phase 4
+            # (no summary, no terminal `complete`/`error`). This is a mid-run
+            # stream drop — typically a server/proxy connection cap on a
+            # long-lived response — not a resolver-logic bug. Name it so.
+            return (
+                1,
+                "::error::Stream ended mid-run without a 'complete' event — the "
+                "resolver was working but the stream was cut before its Phase 4 "
+                "summary (likely a server/proxy stream-duration cap on the "
+                "mothership connection, not a resolver bug). Re-trigger the "
+                "resolver to retry.",
+            )
         return 1, "::error::Stream ended without a 'complete' event"
     if st.status != "completed":
         return 1, f"::error::Sandbox final status={st.status} (expected 'completed')"
