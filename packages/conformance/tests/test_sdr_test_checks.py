@@ -1,8 +1,10 @@
 """Meta-tests for the T-series SDR test-quality checks (T002–T003, DISTR-752).
 
-T002 catches SDR apps that have no BaseSDRIntegrationTest subclass at all —
-there is no automated SDR test, so manifest defects and upload-path regressions
-are invisible to CI.
+T002 catches SDR apps that drive the SDR (agent-mode) path from no test at all,
+so manifest defects and upload-path regressions are invisible to CI.  Coverage
+is satisfied by either harness: an agent-mode e2e test (a BaseE2ETest subclass
+with ``mode = RunMode.AGENT``) or a legacy BaseSDRIntegrationTest subclass.  A
+direct-mode e2e test (``mode = RunMode.DIRECT``) is not SDR coverage.
 
 T003 catches BaseSDRIntegrationTest subclasses that use the legacy
 agent_spec_template instead of manifest_path.  The hand-crafted template
@@ -83,6 +85,8 @@ def test_t002_fires_when_sdr_app_has_no_sdr_test(tmp_path: Path) -> None:
     findings = _run(tmp_path)
     t002 = [f for f in findings if f.rule_id == "T002"]
     assert len(t002) == 1
+    # Message guides toward both accepted harnesses.
+    assert "RunMode.AGENT" in t002[0].message
     assert "BaseSDRIntegrationTest" in t002[0].message
     assert t002[0].file == "atlan.yaml"
     assert t002[0].line == 1
@@ -158,6 +162,67 @@ def test_t002_silent_when_subclass_in_nested_dir(tmp_path: Path) -> None:
     )
     findings = _run(tmp_path)
     assert not any(f.rule_id == "T002" for f in findings)
+
+
+# ── T002: agent-mode e2e harness satisfies coverage (BLDX) ───────────────────
+
+# Mirrors the migrated fleet (openapi/mysql/metabase): a BaseE2ETest subclass
+# via a generated *GeneratedE2EBase that sets mode = RunMode.AGENT.
+_AGENT_E2E_SRC = (
+    "from application_sdk.testing.e2e import RunMode\n"
+    "from app.generated._e2e_base import MyAppGeneratedE2EBase\n\n\n"
+    "class TestMyAppE2E(MyAppGeneratedE2EBase):\n"
+    "    mode = RunMode.AGENT\n"
+)
+_DIRECT_E2E_SRC = (
+    "from application_sdk.testing.e2e import RunMode\n"
+    "from app.generated._e2e_base import MyAppGeneratedE2EBase\n\n\n"
+    "class TestMyAppE2E(MyAppGeneratedE2EBase):\n"
+    "    mode = RunMode.DIRECT\n"
+)
+
+
+def test_t002_silent_when_agent_mode_e2e_present(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "tests/e2e/test_e2e.py": _AGENT_E2E_SRC,
+        },
+    )
+    findings = _run(tmp_path)
+    assert not any(f.rule_id == "T002" for f in findings)
+
+
+def test_t002_silent_when_agent_mode_annotated_assign(tmp_path: Path) -> None:
+    # `mode: RunMode = RunMode.AGENT` (AnnAssign form) also counts.
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "tests/e2e/test_e2e.py": (
+                "from application_sdk.testing.e2e import RunMode\n"
+                "from app.generated._e2e_base import MyAppGeneratedE2EBase\n\n\n"
+                "class TestMyAppE2E(MyAppGeneratedE2EBase):\n"
+                "    mode: RunMode = RunMode.AGENT\n"
+            ),
+        },
+    )
+    findings = _run(tmp_path)
+    assert not any(f.rule_id == "T002" for f in findings)
+
+
+def test_t002_fires_when_only_direct_mode_e2e(tmp_path: Path) -> None:
+    # A direct-mode e2e test does NOT exercise the SDR path — T002 must still fire.
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "tests/e2e/test_e2e.py": _DIRECT_E2E_SRC,
+        },
+    )
+    findings = _run(tmp_path)
+    assert any(f.rule_id == "T002" for f in findings)
 
 
 # ── T003: legacy agent_spec_template ────────────────────────────────────────
