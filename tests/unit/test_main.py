@@ -7,6 +7,7 @@ import asyncio
 import signal
 import sys
 from pathlib import Path
+from typing import Any
 from unittest import mock
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -24,6 +25,7 @@ from application_sdk.main import (
     _loop_exception_handler,
     _parse_all_component_yamls,
     _parse_workflow_max_timeout_hours,
+    _run_worker_with_restart,
     main,
     parse_args,
     run_combined_mode,
@@ -2248,3 +2250,151 @@ class TestLogProcessMemoryBaseline:
             _log_process_memory_baseline()
 
         mock_logger.info.assert_not_called()
+
+
+class _FakeWorker:
+    """Minimal async-context-manager stand-in for an AppWorker.
+
+    ``fail=True`` makes ``__aenter__`` raise the same shape of error temporalio
+    surfaces on a fatal poll. ``on_enter`` runs on enter (e.g. to set the
+    shutdown event so the supervisor's ``await shutdown_event.wait()`` returns).
+    """
+
+    def __init__(self, *, fail: bool, on_enter: Any = None) -> None:
+        self.fail = fail
+        self.on_enter = on_enter
+
+    async def __aenter__(self) -> _FakeWorker:
+        if self.on_enter is not None:
+            self.on_enter()
+        if self.fail:
+            raise RuntimeError("Activity worker failed")
+        return self
+
+    async def __aexit__(self, *args: Any) -> bool:
+        return False
+
+
+class TestRunWorkerWithRestart:
+    """Behavioral tests for the worker restart supervisor."""
+
+    async def test_clean_shutdown_runs_once_no_restart(self) -> None:
+        """A shutdown signal stops the loop without rebuilding the worker."""
+        shutdown = asyncio.Event()
+        built: list[_FakeWorker] = []
+
+        def build() -> _FakeWorker:
+            w = _FakeWorker(fail=False, on_enter=shutdown.set)
+            built.append(w)
+            return w
+
+        await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+
+        assert len(built) == 1
+
+    async def test_restarts_after_fatal_then_shuts_down(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fatal error rebuilds the worker; a fresh token is minted first."""
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        auth = AsyncMock()
+        calls = {"n": 0}
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _FakeWorker(fail=True)
+            return _FakeWorker(fail=False, on_enter=shutdown.set)
+
+        await _run_worker_with_restart(
+            build_worker=build,
+            shutdown_event=shutdown,
+            auth_manager=auth,
+            client=object(),
+        )
+
+        assert calls["n"] == 2
+        auth.force_refresh.assert_awaited_once()
+
+    async def test_gives_up_after_cap_and_reraises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A persistent failure fails loud once the restart cap is exceeded."""
+        monkeypatch.setattr("application_sdk.main._WORKER_MAX_CONSECUTIVE_RESTARTS", 2)
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            return _FakeWorker(fail=True)
+
+        with pytest.raises(RuntimeError, match="Activity worker failed"):
+            await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+
+        # attempts 1 and 2 restart; the 3rd pushes the streak past the cap.
+        assert calls["n"] == 3
+
+    async def test_shutdown_during_backoff_stops_promptly(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A shutdown set during the backoff wait ends the loop immediately."""
+        # Force a long backoff so the shutdown interrupts it deterministically.
+        monkeypatch.setattr("application_sdk.main.random.uniform", lambda *a: 10.0)
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            return _FakeWorker(fail=True)
+
+        task = asyncio.create_task(
+            _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+        )
+        await asyncio.sleep(0.05)
+        shutdown.set()
+        await asyncio.wait_for(task, timeout=2.0)
+
+        assert calls["n"] == 1
+
+    async def test_healthy_run_resets_failure_streak(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A worker that ran healthily before failing resets the streak.
+
+        With a cap of 2 but each run appearing to last past the healthy window,
+        the streak resets every time, so four failures never trip the cap and
+        the loop survives to a clean shutdown.
+        """
+        monkeypatch.setattr("application_sdk.main._WORKER_MAX_CONSECUTIVE_RESTARTS", 2)
+        monkeypatch.setattr("application_sdk.main._WORKER_HEALTHY_RUN_SECONDS", 1)
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        # Clock jumps 5s on every read → each run looks like it lasted 5s (>1s).
+        counter = {"t": 0.0}
+
+        def fake_monotonic() -> float:
+            counter["t"] += 5.0
+            return counter["t"]
+
+        monkeypatch.setattr("application_sdk.main.time.monotonic", fake_monotonic)
+
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            if calls["n"] <= 4:
+                return _FakeWorker(fail=True)
+            return _FakeWorker(fail=False, on_enter=shutdown.set)
+
+        # Must not raise despite 4 failures (cap is 2) because each resets.
+        await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+
+        assert calls["n"] == 5
