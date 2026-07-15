@@ -259,3 +259,57 @@ async def test_run_query_with_error(
             results.extend(batch)
     assert exc_info.value.message == "Error executing SQL query"
     assert isinstance(exc_info.value.cause, Exception)
+
+
+# ---------- colon-safe query execution (CONNECT-260) ----------
+
+
+@pytest.mark.asyncio
+@patch("sqlalchemy.text", side_effect=lambda q: q)  # type: ignore
+async def test_run_query_escapes_colons_client_side(
+    mock_text: MagicMock,
+    async_sql_client: AsyncBaseSQLClient,
+    mock_async_engine_with_connection,
+):
+    """The client-side execute path escapes literal colons before text()."""
+    mock_engine, mock_connection, _ = mock_async_engine_with_connection
+    async_sql_client.engine = mock_engine
+
+    mock_result = MagicMock()
+    mock_result.keys.side_effect = lambda: ["a"]
+    mock_result.cursor = MagicMock()
+    mock_result.cursor.fetchmany = MagicMock(side_effect=[[("v",)], []])
+    mock_connection.execute = AsyncMock(return_value=mock_result)
+    async_sql_client.use_server_side_cursor = False
+
+    async for _ in async_sql_client.run_query("RLIKE '^(?:cdl)'"):
+        pass
+
+    mock_text.assert_called_once_with("RLIKE '^(?\\:cdl)'")
+    mock_connection.execute.assert_called_once_with("RLIKE '^(?\\:cdl)'")
+
+
+@pytest.mark.asyncio
+@patch("sqlalchemy.text", side_effect=lambda q: q)  # type: ignore
+async def test_run_query_escapes_colons_server_side(
+    mock_text: MagicMock,
+    async_sql_client: AsyncBaseSQLClient,
+    mock_async_engine_with_connection,
+):
+    """The server-side stream path escapes literal colons before text()."""
+    mock_engine, mock_connection, mock_connection_with_options = (
+        mock_async_engine_with_connection
+    )
+    async_sql_client.engine = mock_engine
+
+    mock_result = MagicMock()
+    mock_result.keys.side_effect = lambda: ["a"]
+    mock_result.fetchmany = AsyncMock(side_effect=[[("v",)], []])
+    mock_connection_with_options.stream = AsyncMock(return_value=mock_result)
+    async_sql_client.use_server_side_cursor = True
+
+    async for _ in async_sql_client.run_query("RLIKE '^(?:cdl)'"):
+        pass
+
+    mock_text.assert_called_once_with("RLIKE '^(?\\:cdl)'")
+    mock_connection_with_options.stream.assert_called_once_with("RLIKE '^(?\\:cdl)'")
