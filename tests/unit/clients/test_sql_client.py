@@ -931,6 +931,35 @@ def test_escape_bind_colons(query: str, expected: str):
     assert _escape_bind_colons(query) == expected
 
 
+@pytest.mark.parametrize(
+    "literal",
+    [
+        "^(?:(?:cdl|das|dap|aif|app).*_prod|cdl_mads_dev)$",  # the CONNECT-260 regex
+        "(?:cdl)",  # colon before '('
+        "(?i)abc",  # inline flag
+        "[[:alpha:]]+",  # POSIX class
+        "12:30:00",  # time literal (colon before a digit)
+        "x::y",  # cast-style double colon
+        "a:9b",  # colon before a digit mid-string
+        "abc:",  # trailing colon
+        "name:cdl",  # colon before an identifier (the would-be bind param)
+    ],
+)
+def test_escaped_colon_round_trips_to_driver(literal: str):
+    """The load-bearing fact: escaping colons and wrapping in text() must deliver
+    the *original literal colon* to the database — not a backslash-corrupted
+    string — for every colon shape (regex, POSIX class, cast, time literal). All
+    four execution sites share this escape+text() path, so proving it once on a
+    real engine proves the semantics for every site."""
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine("sqlite://")
+    with engine.connect() as conn:
+        query = f"SELECT '{literal}' AS v"
+        returned = conn.execute(text(_escape_bind_colons(query))).fetchall()[0][0]
+    assert returned == literal
+
+
 def test_execute_pandas_query_colon_in_text_returns_rows(sql_client: BaseSQLClient):
     """A pre-rendered query with literal colons must run and return the correct
     rows on the SQLAlchemy read path — not merely avoid InvalidRequestError."""
