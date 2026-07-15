@@ -20,9 +20,11 @@ Temporal/emulator boot can exceed the unit job's tight timeout, while being
 SDR test-quality rules (DISTR-752):
 
 * ``T002`` — apps declaring ``self_deployed_runtime: true`` in ``atlan.yaml``
-  must have a ``BaseSDRIntegrationTest`` subclass in their test suite.  Without
-  one there is no test that validates manifest inputs (including ``agent_json``),
-  credential routing, or upload behaviour in an SDR-like environment.
+  must exercise the SDR (agent-mode) path from at least one test.  Two harnesses
+  satisfy this: an agent-mode e2e test (a ``BaseE2ETest`` subclass with
+  ``mode = RunMode.AGENT``) or a legacy ``BaseSDRIntegrationTest`` subclass.
+  Without either there is no test that validates agent-mode credential routing
+  or upload behaviour in an SDR-like environment.
 
 * ``T003`` — a ``BaseSDRIntegrationTest`` subclass that sets
   ``agent_spec_template`` (and not ``manifest_path``) bypasses manifest
