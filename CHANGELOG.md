@@ -1,5 +1,23 @@
 # Changelog
 
+## v3.22.1 (July 15, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.22.0...v3.22.1
+
+### Bug Fixes
+
+- fail fast when no worker polls the extract task queue (#2660) (by @cmgrote in [798f9a6](https://github.com/atlanhq/application-sdk/commit/798f9a6))
+- fail fast on invalid workflow input instead of retrying forever (#2690) (by @cmgrote in [aba1bd4](https://github.com/atlanhq/application-sdk/commit/aba1bd4))
+- per-leg task-queue isolation for the matrix e2e suites (#2691) (by @cmgrote in [4c55e40](https://github.com/atlanhq/application-sdk/commit/4c55e40))
+- embedded_dapr accepts a caller-supplied components_dir (#2689) (by @vaibhavatlan in [f6b3cb7](https://github.com/atlanhq/application-sdk/commit/f6b3cb7))
+- BaseE2ETest.agent_spec falls back to run-id name instead of raising (#2700) (by @cmgrote in [a501e09](https://github.com/atlanhq/application-sdk/commit/a501e09))
+- recognize AE 'Skipped' as a terminal DAG status (#2707) (by @cmgrote in [0bc35d5](https://github.com/atlanhq/application-sdk/commit/0bc35d5))
+- make AE submit idempotent — never re-POST or track a skipped duplicate (#2708) (by @cmgrote in [322e316](https://github.com/atlanhq/application-sdk/commit/322e316))
+- named credential refs for multi-credential apps + honest gate timeout (#2699) (by @fyzanshaik-atlan in [5601c68](https://github.com/atlanhq/application-sdk/commit/5601c68))
+- execute pre-rendered queries without SQLAlchemy bind-param parsing (colon-safe) (#2722) (by @omkargade04 in [f8ce303](https://github.com/atlanhq/application-sdk/commit/f8ce303))
+- forward Rust-core logs so Cloudflare 504 filter actually fires (BLDX-1277) (#2715) (by @praveenkmr in [6f947d3](https://github.com/atlanhq/application-sdk/commit/6f947d3))
+
+
 ## v3.22.0 (July 13, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.21.2...v3.22.0
