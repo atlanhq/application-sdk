@@ -7,12 +7,11 @@ Cross-artifact checks for SDR integration-test quality:
   in their test suite.  Without one there is no test that validates manifest
   inputs, credential routing, or upload behaviour in an SDR-like environment.
 
-* ``T003`` — SdrTestLegacyAgentSpec: a ``BaseSDRIntegrationTest`` subclass that
-  sets ``agent_spec_template`` but not ``manifest_path`` bypasses manifest
-  validation — the hand-crafted spec can satisfy SDR requirements even when the
-  committed ``manifest.json`` is broken, which is exactly the MSSQL regression
-  (atlan-mssql-app#177, DISTR-752).  Subclasses must switch to ``manifest_path``
-  so the test reads inputs from the committed manifest.
+* ``T003`` — DeprecatedSdrHarness: ``BaseSDRIntegrationTest`` is deprecated and
+  will be removed in v4.0.  Any subclass under ``tests/`` is flagged and told to
+  migrate to the agnostic e2e harness — a ``BaseE2ETest`` subclass (usually via a
+  generated ``*GeneratedE2EBase``) run in agent mode (``mode = RunMode.AGENT``),
+  which validates the self-deployed-runtime path end to end against a real tenant.
 
 ``scan_path`` is a no-op — T002 requires cross-file context (does *any* test
 file declare the subclass?) plus ``atlan.yaml`` for the SDR gate.  The runner
@@ -85,61 +84,6 @@ def _is_sdr_subclass(node: ast.ClassDef) -> bool:
     return bool(_base_names(node.bases) & _BASE_SDR_NAMES)
 
 
-def _is_nonempty_literal(val: ast.expr) -> bool:
-    """Return True when *val* is a non-empty literal (constitutes a real assignment).
-
-    Accepts Constant (truthy value), Dict (non-empty keys), List/Tuple/Set
-    (non-empty elts), JoinedStr (non-empty f-string), and any other expression
-    node (Name, Call, Subscript, …) — which is always considered non-empty.
-    """
-    if isinstance(val, ast.Constant):
-        return bool(val.value)
-    if isinstance(val, ast.Dict):
-        return bool(val.keys)
-    if isinstance(val, (ast.List, ast.Tuple, ast.Set)):
-        return bool(val.elts)
-    if isinstance(val, ast.JoinedStr):
-        return bool(val.values)
-    return True
-
-
-def _class_var_state(node: ast.ClassDef) -> tuple[bool, bool]:
-    """Return (has_agent_spec_template, has_manifest_path) for the class body.
-
-    A ClassVar is considered *set* when it is assigned any non-empty literal
-    in the class body (Constant, Dict, List, Tuple, JoinedStr, or any other
-    expression).  Handles both plain ``Assign`` and ``AnnAssign`` nodes so
-    that ``agent_spec_template: dict[str, Any] = {...}`` (which mirrors the
-    base-class annotation) is detected correctly.
-    """
-    has_agent_spec = False
-    has_manifest_path = False
-    for item in node.body:
-        if isinstance(item, ast.Assign):
-            for target in item.targets:
-                if not isinstance(target, ast.Name):
-                    continue
-                val = item.value
-                if not _is_nonempty_literal(val):
-                    continue
-                if target.id == "agent_spec_template":
-                    has_agent_spec = True
-                elif target.id == "manifest_path":
-                    has_manifest_path = True
-        elif isinstance(item, ast.AnnAssign):
-            target = item.target
-            val = item.value
-            if not isinstance(target, ast.Name) or val is None:
-                continue
-            if not _is_nonempty_literal(val):
-                continue
-            if target.id == "agent_spec_template":
-                has_agent_spec = True
-            elif target.id == "manifest_path":
-                has_manifest_path = True
-    return has_agent_spec, has_manifest_path
-
-
 def _is_sdr_app(root: Path) -> bool:
     atlan_yaml = root / "atlan.yaml"
     if not atlan_yaml.is_file():
@@ -153,7 +97,8 @@ def _is_sdr_app(root: Path) -> bool:
 
 
 def _scan_file(path: Path, root: Path) -> tuple[list[Finding], bool]:
-    """Scan one test file for T003 findings and detect any SDR subclass.
+    """Scan one test file: emit T003 for each deprecated-harness subclass and
+    report whether the file declares any SDR subclass (for the T002 gate).
 
     Returns ``(findings, has_sdr_subclass)``.
     """
@@ -183,26 +128,22 @@ def _scan_file(path: Path, root: Path) -> tuple[list[Finding], bool]:
         if not _is_sdr_subclass(node):
             continue
         has_sdr_subclass = True
-        has_agent_spec, has_manifest_path = _class_var_state(node)
-        if has_agent_spec and not has_manifest_path:
-            findings.append(
-                make_finding(
-                    filename=rel_str,
-                    rule_id=RULE_T003,
-                    node=node,
-                    message=(
-                        f"class {node.name!r} subclasses BaseSDRIntegrationTest and "
-                        "sets agent_spec_template but not manifest_path. The hand-crafted "
-                        "agent spec can satisfy SDR requirements even when the committed "
-                        "manifest.json is broken — the MSSQL regression (DISTR-752) slipped "
-                        "through exactly this way. Switch to manifest_path so the test reads "
-                        "inputs from the committed manifest and validates agent_json and "
-                        "all other DAG inputs. "
-                        "See application_sdk.testing.sdr.base.BaseSDRIntegrationTest."
-                    ),
-                    directives=directives,
-                )
+        findings.append(
+            make_finding(
+                filename=rel_str,
+                rule_id=RULE_T003,
+                node=node,
+                message=(
+                    f"class {node.name!r} subclasses BaseSDRIntegrationTest, which is "
+                    "deprecated and will be removed in v4.0. Migrate to the agnostic "
+                    "e2e harness: a BaseE2ETest subclass (from application_sdk.testing.e2e, "
+                    "usually via a generated *GeneratedE2EBase) with mode = RunMode.AGENT. "
+                    "Add the agent-mode e2e test first and confirm T002 passes, then delete "
+                    "this SDR test. See application_sdk.testing.e2e.BaseE2ETest."
+                ),
+                directives=directives,
             )
+        )
 
     return findings, has_sdr_subclass
 

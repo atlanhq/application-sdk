@@ -4,10 +4,9 @@ T002 catches SDR apps that have no BaseSDRIntegrationTest subclass at all —
 there is no automated SDR test, so manifest defects and upload-path regressions
 are invisible to CI.
 
-T003 catches BaseSDRIntegrationTest subclasses that use the legacy
-agent_spec_template instead of manifest_path.  The hand-crafted template
-bypasses manifest validation: the test can pass even when manifest.json is
-missing agent_json, which was exactly the MSSQL regression pattern (DISTR-752).
+T003 (DeprecatedSdrHarness) flags any BaseSDRIntegrationTest subclass under
+tests/: the harness is deprecated for the agnostic agent-mode e2e harness
+(BaseE2ETest with mode = RunMode.AGENT) and will be removed in v4.0.
 
 T002 gates on self_deployed_runtime: true in atlan.yaml.  T003 fires on any
 BaseSDRIntegrationTest subclass regardless of the atlan.yaml flag.
@@ -60,7 +59,7 @@ def test_t002_rule_metadata() -> None:
 
 def test_t003_rule_metadata() -> None:
     rule = get_rule("T003")
-    assert rule.name == "SdrTestLegacyAgentSpec"
+    assert rule.name == "DeprecatedSdrHarness"
     assert rule.tier == EnforcementTier.WARN
     assert rule.scope == RuleScope.APP
     assert rule.autofixable is False
@@ -160,86 +159,62 @@ def test_t002_silent_when_subclass_in_nested_dir(tmp_path: Path) -> None:
     assert not any(f.rule_id == "T002" for f in findings)
 
 
-# ── T003: legacy agent_spec_template ────────────────────────────────────────
+# ── T003: deprecated SDR harness ─────────────────────────────────────────────
 
 
-_T003_LEGACY_SRC = (
-    "from application_sdk.testing.sdr.base import BaseSDRIntegrationTest\n\n\n"
-    "class TestMySDR(BaseSDRIntegrationTest):\n"
-    '    agent_spec_template = \'{"agent": "spec"}\'\n'
-)
-
-_T003_MANIFEST_PATH_SRC = (
+_T003_SUBCLASS_SRC = (
     "from application_sdk.testing.sdr.base import BaseSDRIntegrationTest\n\n\n"
     "class TestMySDR(BaseSDRIntegrationTest):\n"
     "    manifest_path = 'app/generated/manifest.json'\n"
 )
 
-_T003_BOTH_SRC = (
-    "from application_sdk.testing.sdr.base import BaseSDRIntegrationTest\n\n\n"
-    "class TestMySDR(BaseSDRIntegrationTest):\n"
-    '    agent_spec_template = \'{"agent": "spec"}\'\n'
-    "    manifest_path = 'app/generated/manifest.json'\n"
-)
-
-_T003_NEITHER_SRC = (
-    "from application_sdk.testing.sdr.base import BaseSDRIntegrationTest\n\n\n"
-    "class TestMySDR(BaseSDRIntegrationTest):\n"
-    "    workflow_type = 'extraction'\n"
+_AGENT_MODE_E2E_SRC = (
+    "from application_sdk.testing.e2e import RunMode\n"
+    "from app.generated._e2e_base import MyAppGeneratedE2EBase\n\n\n"
+    "class TestMyAppE2E(MyAppGeneratedE2EBase):\n"
+    "    mode = RunMode.AGENT\n"
 )
 
 
-def test_t003_fires_on_legacy_agent_spec_only(tmp_path: Path) -> None:
-    _write(tmp_path, {"tests/test_sdr.py": _T003_LEGACY_SRC})
+def test_t003_fires_on_any_sdr_subclass(tmp_path: Path) -> None:
+    _write(tmp_path, {"tests/test_sdr.py": _T003_SUBCLASS_SRC})
     findings = _run(tmp_path)
     t003 = [f for f in findings if f.rule_id == "T003"]
     assert len(t003) == 1
-    assert "agent_spec_template" in t003[0].message
-    assert "manifest_path" in t003[0].message
-    assert t003[0].line >= 4  # class def line
+    # Message nudges toward the agent-mode e2e harness.
+    assert "deprecated" in t003[0].message
+    assert "RunMode.AGENT" in t003[0].message
 
 
-def test_t003_silent_when_manifest_path_set(tmp_path: Path) -> None:
-    _write(tmp_path, {"tests/test_sdr.py": _T003_MANIFEST_PATH_SRC})
+def test_t003_fires_even_with_manifest_path(tmp_path: Path) -> None:
+    # The whole harness is deprecated — manifest_path no longer exempts it.
+    src = (
+        "from application_sdk.testing.sdr.base import BaseSDRIntegrationTest\n\n\n"
+        "class TestMySDR(BaseSDRIntegrationTest):\n"
+        "    manifest_path = 'app/generated/manifest.json'\n"
+    )
+    _write(tmp_path, {"tests/test_sdr.py": src})
+    findings = [f for f in _run(tmp_path) if f.rule_id == "T003"]
+    assert len(findings) == 1
+
+
+def test_t003_silent_on_agent_mode_e2e(tmp_path: Path) -> None:
+    # The replacement harness must not be flagged.
+    _write(tmp_path, {"tests/e2e/test_e2e.py": _AGENT_MODE_E2E_SRC})
     findings = _run(tmp_path)
     assert not any(f.rule_id == "T003" for f in findings)
 
 
-def test_t003_silent_when_both_vars_set(tmp_path: Path) -> None:
-    # If manifest_path is also set, the test uses the manifest — not legacy.
-    _write(tmp_path, {"tests/test_sdr.py": _T003_BOTH_SRC})
-    findings = _run(tmp_path)
-    assert not any(f.rule_id == "T003" for f in findings)
-
-
-def test_t003_silent_when_neither_var_set(tmp_path: Path) -> None:
-    # A new subclass that sets neither is not using the legacy pattern.
-    _write(tmp_path, {"tests/test_sdr.py": _T003_NEITHER_SRC})
+def test_t003_silent_on_non_sdr_class(tmp_path: Path) -> None:
+    src = "class TestPlain:\n    def test_x(self):\n        pass\n"
+    _write(tmp_path, {"tests/test_plain.py": src})
     findings = _run(tmp_path)
     assert not any(f.rule_id == "T003" for f in findings)
 
 
 def test_t003_fires_regardless_of_atlan_yaml(tmp_path: Path) -> None:
-    # T003 does not gate on self_deployed_runtime — legacy spec is wrong either way.
-    _write(
-        tmp_path,
-        {
-            # no atlan.yaml
-            "tests/test_sdr.py": _T003_LEGACY_SRC,
-        },
-    )
-    findings = _run(tmp_path)
-    assert any(f.rule_id == "T003" for f in findings)
-
-
-def test_t003_fires_on_non_sdr_atlan_yaml(tmp_path: Path) -> None:
-    _write(
-        tmp_path,
-        {
-            "atlan.yaml": _NON_SDR_ATLAN_YAML,
-            "tests/test_sdr.py": _T003_LEGACY_SRC,
-        },
-    )
+    # T003 does not gate on self_deployed_runtime — the harness is deprecated either way.
+    _write(tmp_path, {"tests/test_sdr.py": _T003_SUBCLASS_SRC})  # no atlan.yaml
     findings = _run(tmp_path)
     assert any(f.rule_id == "T003" for f in findings)
 
@@ -252,7 +227,7 @@ def test_t003_finding_anchored_to_class_def_line(tmp_path: Path) -> None:
         "\n"
         "\n"
         "class TestMySDR(BaseSDRIntegrationTest):\n"
-        "    agent_spec_template = '{\"a\": 1}'\n"
+        "    manifest_path = 'app/generated/manifest.json'\n"
     )
     _write(tmp_path, {"tests/test_sdr.py": src})
     findings = [f for f in _run(tmp_path) if f.rule_id == "T003"]
@@ -263,13 +238,13 @@ def test_t003_finding_anchored_to_class_def_line(tmp_path: Path) -> None:
     assert findings[0].line == class_def_line
 
 
-def test_t003_fires_per_legacy_class(tmp_path: Path) -> None:
+def test_t003_fires_per_subclass(tmp_path: Path) -> None:
     src = (
         "from application_sdk.testing.sdr.base import BaseSDRIntegrationTest\n\n\n"
         "class TestAlpha(BaseSDRIntegrationTest):\n"
-        "    agent_spec_template = '{\"a\": 1}'\n\n\n"
+        "    manifest_path = 'a.json'\n\n\n"
         "class TestBeta(BaseSDRIntegrationTest):\n"
-        "    agent_spec_template = '{\"b\": 2}'\n"
+        "    manifest_path = 'b.json'\n"
     )
     _write(tmp_path, {"tests/test_sdr.py": src})
     findings = [f for f in _run(tmp_path) if f.rule_id == "T003"]
@@ -279,51 +254,14 @@ def test_t003_fires_per_legacy_class(tmp_path: Path) -> None:
 def test_t003_inline_suppression(tmp_path: Path) -> None:
     src = (
         "from application_sdk.testing.sdr.base import BaseSDRIntegrationTest\n\n\n"
-        "# conformance: ignore[T003] negative-path test uses hand-crafted spec intentionally\n"
+        "# conformance: ignore[T003] shim intentionally keeps the legacy harness during migration\n"
         "class TestMySDR(BaseSDRIntegrationTest):\n"
-        "    agent_spec_template = '{\"a\": 1}'\n"
+        "    manifest_path = 'app/generated/manifest.json'\n"
     )
     _write(tmp_path, {"tests/test_sdr.py": src})
     findings = [f for f in _run(tmp_path) if f.rule_id == "T003"]
     assert len(findings) == 1
     assert findings[0].suppressed is True
-
-
-def test_t003_fires_on_dict_literal_agent_spec(tmp_path: Path) -> None:
-    # Dict-literal is the canonical legacy form (base class is ClassVar[dict[str, Any]])
-    src = (
-        "from application_sdk.testing.sdr.base import BaseSDRIntegrationTest\n\n\n"
-        "class TestMySDR(BaseSDRIntegrationTest):\n"
-        '    agent_spec_template = {"connection_qualified_name": "default/mssql/1"}\n'
-    )
-    _write(tmp_path, {"tests/test_sdr.py": src})
-    findings = [f for f in _run(tmp_path) if f.rule_id == "T003"]
-    assert len(findings) == 1
-
-
-def test_t003_fires_on_annotated_dict_agent_spec(tmp_path: Path) -> None:
-    # Annotated assignment mirrors the base-class ClassVar annotation
-    src = (
-        "from application_sdk.testing.sdr.base import BaseSDRIntegrationTest\n"
-        "from typing import Any\n\n\n"
-        "class TestMySDR(BaseSDRIntegrationTest):\n"
-        '    agent_spec_template: dict[str, Any] = {"connection_qualified_name": "default/mssql/1"}\n'
-    )
-    _write(tmp_path, {"tests/test_sdr.py": src})
-    findings = [f for f in _run(tmp_path) if f.rule_id == "T003"]
-    assert len(findings) == 1
-
-
-def test_t003_silent_on_empty_agent_spec_string(tmp_path: Path) -> None:
-    # An empty string assignment is treated as "not set" — no legacy signal.
-    src = (
-        "from application_sdk.testing.sdr.base import BaseSDRIntegrationTest\n\n\n"
-        "class TestMySDR(BaseSDRIntegrationTest):\n"
-        "    agent_spec_template = ''\n"
-    )
-    _write(tmp_path, {"tests/test_sdr.py": src})
-    findings = _run(tmp_path)
-    assert not any(f.rule_id == "T003" for f in findings)
 
 
 def test_t003_silent_on_syntax_error(tmp_path: Path) -> None:
