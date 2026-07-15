@@ -71,12 +71,21 @@ _USER_AGENT = "atlan-sdk-full-dag-e2e/1.0 (+https://github.com/atlanhq/applicati
 # / ``poll_atlas_for_connection``; the per-request timeout just keeps
 # any one call from hanging the whole loop.
 _HTTP_TIMEOUT = 60
-# AE create and submit can take >60 s on the first call — the origin
-# server may be slow to respond, causing Cloudflare to return HTTP 504
-# at its own gateway timeout before urllib's 60 s window closes.  Using
-# 120 s lets Cloudflare's 504 arrive as an HTTP error (which the
-# existing 5xx retry loop handles) rather than a raw TimeoutError.
-_SUBMIT_TIMEOUT = 120
+# AE create and submit are slow, and — since submit is non-idempotent, we no
+# longer retry it on timeout (see submit_workflow) — the single POST must wait
+# long enough for AE to respond, or we lose the run entirely.
+#
+# Measured latency: a *solo* submit takes ~60 s end to end (mysql e2e, run
+# 29342337536: 14:48:43 submit → 14:49:44 run_id). Under the canonical-e2e
+# fan-out all three connectors submit within ~1 s of each other, and the
+# pile-up on the shared AE/Heracles instance pushes a submit past the old 120 s
+# cap — every fan-out failure was a raw TimeoutError at exactly 120 s with no
+# response (application-sdk#2657). 300 s gives that concurrent burst enough
+# headroom to return the real run_id. With no retry, a genuine hang still fails
+# cleanly at the cap — no duplicate-run risk. (The durable fix is an AE
+# idempotency key / lookup-by-slug so a lost submit response can be recovered;
+# tracked separately.)
+_SUBMIT_TIMEOUT = 300
 
 # Transient network-layer errors (DNS blips, read timeouts, connection resets)
 # are common during multi-minute polls over a VPN/loft tunnel to a tenant. Retry
