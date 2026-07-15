@@ -113,9 +113,12 @@ Threaded secrets the reusable workflow expects on the caller side:
 
 A single always-on job (`connector-tests`) on apps-sdk PRs fans out to the connector matrix:
 
-| Job on apps-sdk PR | Connector workflow dispatched | Gating |
+| Check on apps-sdk PR | What it is | Gating |
 |---|---|---|
-| `Connector Tests (<repo>)` (matrix over all registered connectors) | `tests.yaml` | _none — auto on every code-changing PR_ |
+| `Connector E2E dispatch (<repo>)` (matrix over all registered connectors) | SDK-side job that fires `tests.yaml` in each connector and exits — success means "dispatch succeeded", not "tests passed" | _none — auto on every code-changing PR_ |
+| `Connector E2E run / <repo>` | Check run tracking the actual connector run. Created (pending) by the dispatch job under the **atlan-app-fleet App** token; the connector's own run **completes it via callback** (`tests-reusable.yaml` `report-to-sdk`, same App — a check run can only be updated by its creating App). No busy-wait poll. | rolled up by `Connector Tests Gate` |
+
+> The two are deliberately split: the dispatch job can't stay pending for the whole (8+ min) connector run without polling, so a separate `run` check holds the "is it done?" state and is closed by a push callback. Both are owned by the fleet App so the cross-repo callback can complete them and they're attributed to the fleet App's check suite (not an arbitrary `github-actions` one). The `E2E Callback Watchdog` sweeps any `run` check left pending if a connector runner dies before its callback fires.
 
 The `tests.yaml` job in each connector runs unit + integration tests unconditionally. The full-DAG `e2e` job inside `tests.yaml` runs only when the SDK PR carries the `e2e` label — controlled via the `run_e2e` workflow input (`"true"` / `"false"`) passed by the dispatcher.
 

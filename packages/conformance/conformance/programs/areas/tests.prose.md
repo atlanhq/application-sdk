@@ -104,9 +104,24 @@ to residue):
   reading the test's I/O intent.
 
 - **T002 MissingSdrTestClass** — the app declares `self_deployed_runtime: true`
-  in `atlan.yaml` but no `BaseSDRIntegrationTest` subclass exists anywhere under
-  `tests/`.  Draft a new test file (e.g. `tests/integration/test_sdr.py`) with
-  a minimal subclass:
+  in `atlan.yaml` but no test drives the SDR (agent-mode) path.  Two harnesses
+  satisfy the rule; prefer the first:
+
+  **Preferred — agent-mode e2e test.**  A `BaseE2ETest` subclass (usually via the
+  generated `*GeneratedE2EBase`) with a class-level `mode = RunMode.AGENT`:
+
+  ```python
+  @pytest.mark.e2e
+  class TestMyAppE2E(MyAppGeneratedE2EBase):
+      mode = RunMode.AGENT
+  ```
+
+  This is what the migrated fleet (openapi/mysql/metabase) uses — env-guarded
+  (`ATLAN_BASE_URL`/`ATLAN_API_KEY`) and `e2e`-label-gated, so it validates the
+  live SDR path rather than running on every PR.
+
+  **Alternative — legacy SDR integration harness.**  A `BaseSDRIntegrationTest`
+  subclass, using `manifest_path` (not `agent_spec_template`, see T003):
 
   ```python
   class TestMyAppSDR(BaseSDRIntegrationTest):
@@ -114,11 +129,9 @@ to residue):
       workflow_type = "extraction"
   ```
 
-  Use `manifest_path` (not `agent_spec_template`) so the test reads inputs from
-  the committed manifest — see T003.  Apply `@pytest.mark.integration` (or the
-  repo's equivalent SDR marker) so T001 is satisfied and the integration CI job
-  picks it up.  Route to residue — the correct `manifest_path` and
-  `workflow_type` require reading the app's contract and generated manifests.
+  Route to residue — the correct harness, `manifest_path`/`workflow_type`, and
+  mustache/agent-spec wiring require reading the app's contract, generated
+  bases, and manifests.
 
   `classification` is always `"judgment"`.
 

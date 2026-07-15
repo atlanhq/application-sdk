@@ -69,36 +69,46 @@ hidden behaviour.
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-test-coverage` · **Autofixable:** — · **Since:** 0.9.0
 
-> SDR app declares self_deployed_runtime but has no BaseSDRIntegrationTest subclass
+> SDR app declares self_deployed_runtime but no test drives the SDR (agent-mode) path
 
-**Rationale:** An SDR app that declares self_deployed_runtime: true in atlan.yaml but has no
-BaseSDRIntegrationTest subclass has no automated test that validates SDR-specific
-behaviour: manifest inputs (agent_json, etc.), credential routing via the agent-mode
-dispatch path, and the ENABLE_ATLAN_UPLOAD upload gate. The MSSQL regression (DISTR-752)
-slipped through status-only CI exactly because no SDR test class validated
-manifest-derived inputs — the manifest was broken but all status checks passed.
+**Rationale:** An SDR app that declares self_deployed_runtime: true in atlan.yaml but has no test
+exercising the SDR (agent-mode) path has no automated coverage of the code paths that
+differ between standard and SDR deployments: agent-mode credential routing and upload
+behaviour. The MSSQL regression (DISTR-752) slipped through status-only CI exactly
+because no test drove the SDR path. Either harness satisfies this: an agent-mode e2e
+test (BaseE2ETest subclass with mode = RunMode.AGENT) or a legacy BaseSDRIntegrationTest
+subclass.
 
-For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one
-`BaseSDRIntegrationTest` subclass must be present somewhere under `tests/`.
+For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one test must
+drive the SDR (agent-mode) execution path. Two harnesses satisfy this rule:
 
-`BaseSDRIntegrationTest` (from `application_sdk.testing.sdr.base`) is the SDK's
-integration test harness for SDR apps.  It boots a Temporal dev server, injects
-credentials from the test environment, and validates that the end-to-end SDR workflow
-completes correctly — including manifest-derived inputs, credential routing, and the
-`ENABLE_ATLAN_UPLOAD` gate.  An SDR app without this harness has no automated coverage
-of the code paths that differ between standard and SDR deployments.
+**1. Agent-mode e2e test (recommended).**  A `BaseE2ETest` subclass (from
+`application_sdk.testing.e2e`, usually via a generated `*GeneratedE2EBase`) with a
+class-level `mode = RunMode.AGENT`. It submits a real workflow that runs through the
+agent-mode dispatch path end to end.  Note this test is environment- and label-gated, so
+it validates the live SDR path rather than running on every PR.
 
-**Remediation:** create a test class that:
+**2. Legacy `BaseSDRIntegrationTest` subclass.**  From
+`application_sdk.testing.sdr.base` — boots a local Temporal dev server and validates
+manifest-derived inputs in CI.  If you use this harness, set `manifest_path` (not the
+legacy `agent_spec_template`) so the test reads inputs from the committed manifest — see
+T003.
+
+An SDR app with neither has no automated coverage of the SDR-specific code paths.
+
+**Remediation** — either of:
 
 ```python
+# Preferred: agent-mode e2e
+@pytest.mark.e2e
+class TestMyAppE2E(MyAppGeneratedE2EBase):
+    mode = RunMode.AGENT
+
+# Or: legacy SDR integration harness
 class TestMyAppSDR(BaseSDRIntegrationTest):
     manifest_path = 'app/generated/manifest.json'
     workflow_type = 'extraction'
 ```
-
-Set `manifest_path` (not the legacy `agent_spec_template`) so the test reads inputs from
-the committed manifest and validates the `agent_json` slot — see T003 for the
-complementary rule.
 
 ---
 
