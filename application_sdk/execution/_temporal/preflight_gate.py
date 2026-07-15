@@ -349,18 +349,27 @@ async def _resolve_named_refs(
         if (guid := input.extraction_snapshot.get(field))
     }
     # A declared ref whose guid field is absent from the snapshot resolves to an
-    # empty group — fail-open-safe, but indistinguishable from a genuine
-    # not-found. Surface the field names (never secrets) so a typo in
-    # ``preflight_credential_refs`` is visible in logs rather than silent.
+    # empty group — fail-open-safe. The log level distinguishes the two causes
+    # (field names only, never secrets): some refs resolving and others absent is
+    # most likely a typo in a guid field name (warn); every ref absent is almost
+    # always a legitimate no-credential trigger, e.g. automation-trigger with
+    # empty metadata (debug, so it doesn't warn on every such run).
     missing = {
         name: field
         for name, field in input.credential_ref_fields.items()
         if name not in present
     }
-    if missing:
+    if missing and present:
         logger.warning(
-            "Declared preflight credential ref(s) have no value in the extraction "
-            "snapshot; verify the guid field names in preflight_credential_refs",
+            "Some declared preflight credential ref(s) have no value in the "
+            "extraction snapshot; verify the guid field names in "
+            "preflight_credential_refs",
+            missing_refs=missing,
+        )
+    elif missing:
+        logger.debug(
+            "All declared preflight credential refs are absent from the extraction "
+            "snapshot; resolving to empty groups",
             missing_refs=missing,
         )
     if not present:
@@ -368,7 +377,7 @@ async def _resolve_named_refs(
 
     resolver = CredentialResolver(_require_secret_store())
     for name, guid in present.items():
-        ref = CredentialRef(name=guid, credential_type="unknown", credential_guid=guid)
+        ref = CredentialRef(name=name, credential_type="unknown", credential_guid=guid)
         try:
             raw = await resolver.resolve_raw(ref) or {}
         except CredentialNotFoundError:

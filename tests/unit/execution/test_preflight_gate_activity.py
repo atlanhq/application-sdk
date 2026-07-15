@@ -837,11 +837,12 @@ class TestPreflightGateMultiCredential:
         assert handler.preflight_input is None
 
     async def test_absent_guids_skip_resolution_with_empty_groups(self) -> None:
-        # Fields declared but no guids in the snapshot (e.g. automation-trigger
-        # empty metadata) — resolve nothing, hand the handler empty groups.
+        # Fields declared but NO guids in the snapshot (e.g. automation-trigger
+        # empty metadata) — resolve nothing, hand the handler empty groups, and
+        # log at debug, not warning: all-absent is the benign no-credential path.
         handler = _StubHandler()
         gate = _gate(handler)
-        with _infra_patches(None):
+        with _infra_patches(None), mock.patch(f"{_GATE}.logger") as mock_logger:
             await gate(
                 PreflightGateInput(
                     credential_ref_fields=self._FIELDS,
@@ -851,3 +852,29 @@ class TestPreflightGateMultiCredential:
         pi = handler.preflight_input
         assert pi is not None
         assert pi.credentials_by_name == {"api": [], "object_store": []}
+        mock_logger.warning.assert_not_called()
+        mock_logger.debug.assert_called_once()
+
+    async def test_partial_missing_ref_warns_and_leaves_group_empty(self) -> None:
+        # Some refs resolve and one guid field is absent — the likely-typo case:
+        # warn (naming the missing field) and leave that group empty while the
+        # resolved ref still populates. Fail-open behavior is unchanged.
+        handler = _StubHandler()
+        gate = _gate(handler)
+        resolver = _resolver_by_guid({"guid-a": {"token": "t"}})
+        with _infra_patches(resolver), mock.patch(f"{_GATE}.logger") as mock_logger:
+            await gate(
+                PreflightGateInput(
+                    credential_ref_fields=self._FIELDS,
+                    extraction_snapshot={"api_credential_guid": "guid-a"},
+                )
+            )
+
+        pi = handler.preflight_input
+        assert pi is not None
+        assert {c.key: c.value for c in pi.credentials_by_name["api"]} == {"token": "t"}
+        assert pi.credentials_by_name["object_store"] == []
+        mock_logger.warning.assert_called_once()
+        assert mock_logger.warning.call_args.kwargs["missing_refs"] == {
+            "object_store": "object_store_credential_guid"
+        }
