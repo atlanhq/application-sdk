@@ -11,6 +11,16 @@ Per-file.  Heuristic, WARN-tier: flag an f-string that both (a) interpolates a
 ``*qualified_name`` / ``*_qn`` value and (b) contains a ``/`` path separator —
 i.e. is composing a slash-delimited qualifiedName.  This catches the whole chain
 (``db_qn = f"{connection_qn}/{db}"`` → ``schema_qn = f"{db_qn}/{schema}"`` …).
+
+An asset ``qualifiedName`` is always *rooted* at its parent qn: the interpolated
+qn value is the leading segment (``f"{connection_qn}/collections/{id}"``).  An
+object-store **key** merely *embeds* a qn after a literal namespace prefix
+(``f"persistent-artifacts/apps/…/{connection_qn}/publish-state"``,
+``f"argo-artifacts/{connection_qn}/current-state"``) — that is a storage path,
+not an asset identity, and pyatlan ``.creator()`` has nothing to say about it.
+So when the qn reference is preceded by a ``/``-bearing literal segment we treat
+the f-string as an object-store key and do **not** flag it — this removes the
+false positive without weakening detection of genuinely hand-rooted qualifiedNames.
 """
 
 from __future__ import annotations
@@ -25,19 +35,24 @@ from conformance.suite.schema.findings import Finding
 _QN_NAME = re.compile(r"(?i)(qualified_name|_qn$|^qn$)")
 
 
-def _references_qualified_name(joined: ast.JoinedStr) -> bool:
-    for part in joined.values:
-        if not isinstance(part, ast.FormattedValue):
-            continue
-        for sub in ast.walk(part.value):
-            ident: str | None = None
-            if isinstance(sub, ast.Name):
-                ident = sub.id
-            elif isinstance(sub, ast.Attribute):
-                ident = sub.attr
-            if ident and _QN_NAME.search(ident):
-                return True
+def _formatted_value_is_qn(part: ast.FormattedValue) -> bool:
+    """True when the interpolated expression references a qualifiedName value."""
+    for sub in ast.walk(part.value):
+        ident: str | None = None
+        if isinstance(sub, ast.Name):
+            ident = sub.id
+        elif isinstance(sub, ast.Attribute):
+            ident = sub.attr
+        if ident and _QN_NAME.search(ident):
+            return True
     return False
+
+
+def _references_qualified_name(joined: ast.JoinedStr) -> bool:
+    return any(
+        isinstance(part, ast.FormattedValue) and _formatted_value_is_qn(part)
+        for part in joined.values
+    )
 
 
 def _has_path_separator(joined: ast.JoinedStr) -> bool:
@@ -47,6 +62,28 @@ def _has_path_separator(joined: ast.JoinedStr) -> bool:
         and "/" in part.value
         for part in joined.values
     )
+
+
+def _is_object_store_key(joined: ast.JoinedStr) -> bool:
+    """True when the qn reference is *embedded* after a literal path segment.
+
+    An asset qualifiedName is rooted at its parent qn (``f"{parent_qn}/…"``);
+    an object-store key prefixes the qn with a literal namespace segment
+    (``f"persistent-artifacts/…/{connection_qn}/…"``).  We detect the latter by
+    finding a ``/``-bearing string literal that precedes the first qn reference.
+    """
+    seen_path_literal = False
+    for part in joined.values:
+        if (
+            isinstance(part, ast.Constant)
+            and isinstance(part.value, str)
+            and "/" in part.value
+        ):
+            seen_path_literal = True
+        elif isinstance(part, ast.FormattedValue) and _formatted_value_is_qn(part):
+            # First qn reference: it is a key iff a path literal came before it.
+            return seen_path_literal
+    return False
 
 
 def check_p028(
@@ -59,7 +96,11 @@ def check_p028(
     for node in ast.walk(tree):
         if not isinstance(node, ast.JoinedStr):
             continue
-        if _references_qualified_name(node) and _has_path_separator(node):
+        if (
+            _references_qualified_name(node)
+            and _has_path_separator(node)
+            and not _is_object_store_key(node)
+        ):
             findings.append(
                 make_finding(
                     filename=filename,

@@ -386,6 +386,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "grammar across the fleet, and a grammar change (tenant scoping, escaping)\n"
             "then breaks every connector independently with no single source of truth.\n"
             "\n"
+            "Not flagged — object-store keys: a qn reference preceded by a ``/``-bearing\n"
+            "literal segment (e.g.\n"
+            '``f"persistent-artifacts/.../{connection_qualified_name}/publish-state"``) is\n'
+            "a storage path that embeds a qn, not an asset qualifiedName rooted at its\n"
+            "parent qn, so it is not flagged.\n"
+            "\n"
             "Fix: construct assets through the pyatlan asset ``.creator()`` factories,\n"
             "which compute qualifiedName from typed parent references.  WARN tier —\n"
             "suppress with ``# conformance: ignore[P028] <reason>`` where a raw\n"
