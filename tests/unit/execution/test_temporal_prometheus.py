@@ -35,11 +35,17 @@ def test_get_or_create_runtime_creates_prometheus_singleton(_reset_singleton):
     _reset_singleton.assert_called_once()
 
 
-def test_get_or_create_runtime_disabled_uses_default(_reset_singleton):
-    """enable_prometheus=False uses Runtime.default() instead of Prometheus."""
+def test_get_or_create_runtime_disabled_builds_forwarding_runtime(_reset_singleton):
+    """enable_prometheus=False builds an explicit Runtime with log forwarding
+    (not Runtime.default(), which forwards nothing) and no Prometheus metrics."""
     rt = _get_or_create_runtime(enable_prometheus=False)
     assert rt is not None
-    _reset_singleton.default.assert_called_once()
+    _reset_singleton.default.assert_not_called()
+    _reset_singleton.assert_called_once()
+    telemetry = _reset_singleton.call_args.kwargs["telemetry"]
+    assert telemetry.metrics is None
+    assert telemetry.logging is not None
+    assert telemetry.logging.forwarding is not None
 
 
 def test_get_or_create_runtime_disabled_is_singleton(_reset_singleton):
@@ -47,7 +53,8 @@ def test_get_or_create_runtime_disabled_is_singleton(_reset_singleton):
     rt1 = _get_or_create_runtime(enable_prometheus=False)
     rt2 = _get_or_create_runtime(enable_prometheus=False)
     assert rt1 is rt2
-    _reset_singleton.default.assert_called_once()
+    _reset_singleton.default.assert_not_called()
+    _reset_singleton.assert_called_once()
 
 
 @patch(
@@ -89,5 +96,9 @@ async def test_create_temporal_client_disables_prometheus(
     mock_connect.assert_called_once()
     call_kwargs = mock_connect.call_args[1]
     assert "runtime" in call_kwargs
-    # Should have used Runtime.default(), not PrometheusConfig
-    _reset_singleton.default.assert_called_once()
+    # Builds an explicit forwarding Runtime, not Runtime.default(), and binds
+    # no Prometheus endpoint.
+    _reset_singleton.default.assert_not_called()
+    telemetry = _reset_singleton.call_args.kwargs["telemetry"]
+    assert telemetry.metrics is None
+    assert telemetry.logging is not None

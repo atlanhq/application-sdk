@@ -401,8 +401,12 @@ class _CloudflareTimeoutFilter(logging.Filter):
 
     Cloudflare closes idle long-poll connections with an HTTP 504 whose HTML body
     the Rust Temporal SDK misreads as an invalid gRPC compression flag (ASCII
-    '<' = 60).  The SDK logs this at ERROR and immediately retries — the worker
-    is unaffected.  See TFKB ERROR-NET-001.
+    '<' = 60).  The SDK logs this at WARN (retries 1–15) then ERROR (16+) and
+    immediately retries — the worker is unaffected.  See TFKB ERROR-NET-001.
+
+    Only fires once the Rust core forwards logs into Python logging via
+    ``LogForwardingConfig`` (see ``execution/_temporal/backend.py``); without
+    that forwarding these records go straight to stderr and never reach here.
 
     An INFO summary is emitted on the first occurrence and at most once per
     minute thereafter, so the pattern stays visible without flooding logs.
@@ -415,9 +419,13 @@ class _CloudflareTimeoutFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
-            if record.levelno != logging.ERROR or not record.name.startswith(
-                "temporalio"
-            ):
+            # Rust core emits this pattern at WARN for retries 1–15 and at ERROR
+            # for 16+ — same call site. Both must be caught, else the WARN half
+            # slips through unthrottled.
+            if record.levelno not in (
+                logging.WARNING,
+                logging.ERROR,
+            ) or not record.name.startswith("temporalio"):
                 return True
             msg = record.getMessage()
             if (

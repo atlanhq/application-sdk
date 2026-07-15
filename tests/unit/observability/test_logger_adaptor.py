@@ -2135,13 +2135,25 @@ class TestCloudflareTimeoutFilter:
         f = _CloudflareTimeoutFilter()
         assert f.filter(_make_temporalio_record(name="some.other.logger")) is True
 
-    def test_non_error_level_passes_through(self):
+    def test_warn_504_suppressed(self):
+        """Rust core emits this pattern at WARN (retries 1-15) too — must be
+        suppressed, not just the ERROR (16+) half."""
         from application_sdk.observability.logger_adaptor import (
             _CloudflareTimeoutFilter,
         )
 
         f = _CloudflareTimeoutFilter()
-        assert f.filter(_make_temporalio_record(level=logging.WARNING)) is True
+        with mock.patch("application_sdk.observability.logger_adaptor.get_logger"):
+            assert f.filter(_make_temporalio_record(level=logging.WARNING)) is False
+
+    def test_below_warn_level_passes_through(self):
+        """INFO/DEBUG records are never the 504 retry noise — pass untouched."""
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        assert f.filter(_make_temporalio_record(level=logging.INFO)) is True
 
     def test_different_temporalio_error_passes_through(self):
         from application_sdk.observability.logger_adaptor import (
