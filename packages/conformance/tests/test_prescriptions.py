@@ -2329,3 +2329,14 @@ def test_p028_still_fires_when_qn_is_rooted() -> None:
     # even though later literal segments contain slashes.
     src = 'qn = f"{connection_qn}/collections/{collection_id}"\n'
     assert "P028" in _ids(src)
+
+
+def test_p028_no_finding_on_dynamic_prefix_embedded_qn() -> None:
+    # Boundary case: a dynamic (non-literal) leading segment, then a bare "/"
+    # separator, then an embedded qn. The qn is NOT the leading segment, so this
+    # is object-store-key-shaped (a storage path with a runtime prefix), not a
+    # rooted asset qualifiedName — the discriminator exempts it. Pinned so a
+    # future refactor of the first-qn-ref early-return can't silently start
+    # flagging it (which would reintroduce a false positive on non-rooted keys).
+    src = 'k = f"{run_id}/{connection_qn}/current-state"\n'
+    assert "P028" not in _ids(src)
