@@ -133,19 +133,20 @@ under `### Findings` (all severities, **including `Nit`**).
 **Stopping condition — all three true → done (merge-ready), go to Phase 4:**
 1. CI green.
 2. Verdict `READY_TO_MERGE`.
-3. Every bullet under `### Findings` — **nits included** — is either fixed (so it
-   no longer appears) or one you have **recorded as proven-false with a
-   rationale** this run. A nit you merely dislike does not qualify: fix it or
-   prove it false — a lone open nit you have neither fixed nor rebutted does NOT
-   let you stop; keep looping. (Proven-false findings the read-only reviewer keeps
-   re-listing do **not** block merge-ready — that is what the nit-rebuttal branch
-   in 3d is for.)
+3. `### Findings` is empty — every finding, **nits included**, has been **fixed**
+   (so none remain listed). A finding you *disagree* with is not "done": you
+   never reach merge-ready by ignoring it or by unilaterally clearing it. Fix the
+   ones you agree with; anything you dispute goes through the disagreement path in
+   3d, which **ends the run** with your rationale in the Phase 4 summary — it does
+   NOT pass to merge-ready.
 
 The only other ways this loop ends are the explicit escalations (round-cap /
-re-raised **substantive** finding-after-dismiss / ci-stuck / ambiguous-fork /
-cross-repo / review-timeout) — a re-raised *nit* is rebutted-once and does **not**
-escalate (3d). Every escalation still runs Phase 4 and posts the report. **Never
-end the run with open findings and no Phase 4 report on the PR.**
+re-raised-after-dismiss — a finding you dismissed that the reviewer re-lists,
+**any severity, nits included** / ci-stuck / ambiguous-fork / cross-repo /
+review-timeout). Every escalation runs Phase 4 and posts the report, and a
+disagreement stop MUST carry your rationale in that summary. **Never end the run
+with open findings and no Phase 4 report, and never ship (merge-ready) over a
+finding you merely dispute — end with a documented rationale instead.**
 
 ### 3c′. Acknowledge on the PR — visible status (every round that has findings)
 A review comment landing on the PR is not, by itself, a signal that anyone is
@@ -185,15 +186,13 @@ For each bullet, incl. every nit:
 - If genuinely wrong: reply with a concrete rationale (why it's a false
   positive) instead of editing.
 - **Re-raised after you dismissed it** — the reviewer repeats a finding you
-  already dismissed with a rationale. Do NOT silently loop, and do NOT silently
-  capitulate:
-  - **Nit** → you disagree, so *raise it again*: reply restating your rationale
-    (add any new evidence), treat it as **proven-false**, and carry on toward
-    merge-ready. A nit never forces a human stop.
-  - **Substantive** (Important / Blocker / anything non-nit) → post one
-    **escalated rebuttal** laying out both positions plainly, then stop with
-    verdict `NEEDS_HUMAN` (`stopped_reason: re-raised-after-dismiss`) so a human
-    adjudicates. Re-argue **once** — never keep looping on it.
+  already dismissed with a rationale. You disagree and it's re-listed. Do NOT
+  silently loop, and do NOT silently ship over it: post your rebuttal on the PR
+  (re-argue **once**), then **end the run** with verdict `NEEDS_HUMAN`
+  (`stopped_reason: re-raised-after-dismiss`) and record the finding + your
+  rationale in the Phase 4 summary so a human adjudicates. This holds for
+  **every severity, nits included** — the resolver never merges over a
+  disagreement, and never argues a point more than once.
 - Genuinely ambiguous design fork with no clear winner **and no concrete `Path:`
   fix** → leave it, note it for human, keep going with the rest.
 
@@ -271,9 +270,10 @@ Print: `[Phase 4 complete] merge_ready=<yes|no>`
   triggers the reviewer's separate sandbox — block for its reply (Phase 3b)
   before ending the run or emitting the summary. Never exit the same turn you
   triggered the review.
-- **Converge or escalate.** Never loop forever — round cap, a re-raised
-  *substantive* finding, ambiguous forks, and review-timeout all stop cleanly
-  with a `NEEDS_HUMAN` report. A re-raised *nit* is rebutted-once and does not
-  stop the run.
+- **Converge or escalate.** Never loop forever — round-cap, a re-raised finding
+  you dismissed (**any severity, nits included**), ambiguous forks, ci-stuck, and
+  review-timeout all stop cleanly with a `NEEDS_HUMAN` report. Never ship over a
+  finding you dispute: end with the rationale in the summary and let a human
+  decide.
 - **Real state only.** Read `gh` before every decision; never simulate a CI or
   reviewer result.
