@@ -2295,3 +2295,37 @@ def test_p028_suppressed_inline() -> None:
     )
     fs = [f for f in scan_text(src, "x.py") if f.rule_id == "P028"]
     assert fs and all(f.suppressed for f in fs)
+
+
+def test_p028_no_finding_on_object_store_key_prefix() -> None:
+    # qn embedded AFTER a literal storage-namespace prefix → object-store key,
+    # not an asset qualifiedName. Must not fire.
+    src = (
+        'k = f"persistent-artifacts/apps/publish/state/'
+        '{connection_qualified_name}/publish-state"\n'
+    )
+    assert "P028" not in _ids(src)
+
+
+def test_p028_no_finding_on_argo_artifacts_key() -> None:
+    src = 'k = f"argo-artifacts/{connection_qualified_name}/current-state"\n'
+    assert "P028" not in _ids(src)
+
+
+def test_p028_no_finding_on_multiline_object_store_key() -> None:
+    # Implicitly-concatenated f-string (parenthesised) is one JoinedStr node;
+    # the leading literal still precedes the qn ref.
+    src = (
+        "k = (\n"
+        '    f"persistent-artifacts/apps/publish/state/"\n'
+        '    f"{connection_qn}/lineage/publish-state"\n'
+        ")\n"
+    )
+    assert "P028" not in _ids(src)
+
+
+def test_p028_still_fires_when_qn_is_rooted() -> None:
+    # qn is the leading segment → genuine hand-built qualifiedName, still flagged
+    # even though later literal segments contain slashes.
+    src = 'qn = f"{connection_qn}/collections/{collection_id}"\n'
+    assert "P028" in _ids(src)

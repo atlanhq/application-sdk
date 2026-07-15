@@ -938,6 +938,15 @@ Fix: construct assets through the pyatlan asset `.creator()` factories, which co
 qualifiedName from typed parent references.  WARN tier — suppress with `# conformance:
 ignore[P028] <reason>` where a raw qualifiedName string is genuinely required.
 
+**Not flagged — object-store keys.** An asset qualifiedName is always *rooted* at its
+parent qn (the interpolated qn is the leading segment: `f"{connection_qn}/collections/{id}"`).
+An object-store **key** merely embeds a qn *after* a literal namespace prefix
+(`f"persistent-artifacts/apps/…/{connection_qn}/publish-state"`,
+`f"argo-artifacts/{connection_qn}/current-state"`) — that is a storage path, not an asset
+identity, and `.creator()` has nothing to say about it. When the qn reference is preceded
+by a `/`-bearing literal segment the f-string is treated as an object-store key and is not
+flagged.
+
 ---
 
 ## P029 — `SdrManifestMissingAgentJson` {#p029}
