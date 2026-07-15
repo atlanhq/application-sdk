@@ -19,8 +19,11 @@ Follow `.mothership/pr-resolve/ORCHESTRATION.md` exactly. Print
 
 All THREE true, then stop and report:
 1. Required CI checks are green.
-2. The latest `@sdk-review` reports **zero findings** — including nits — except
-   any you have **proven false** with a recorded rationale.
+2. The latest `@sdk-review` reports **zero findings** — including nits — with
+   everything **fixed**. A finding you dispute does NOT count as cleared: you
+   never reach merge-ready over it. Dismiss it with a rationale, and if the
+   reviewer re-raises it, **end the run at `NEEDS_HUMAN`** with that rationale in
+   the summary (guardrail 2) — never ship over a disagreement.
 3. Reviewer verdict is `READY_TO_MERGE`.
 
 You never `gh pr merge`. Merging is the human gate (deliberate — the autonomous
@@ -28,11 +31,22 @@ auto-merge loop is what the SDK-evolution rebuild was undoing).
 
 ## Guardrails
 
+> **Paramount — a round is not over when you post `@sdk-review`.** That comment
+> only *triggers* the reviewer's separate sandbox; the review lands minutes
+> later. You MUST block until its reply arrives (ORCHESTRATION Phase 3b) and then
+> act on the findings. Never end the run, and never emit the Phase-4 summary, in
+> the same turn you posted the trigger or before you have consumed a review reply
+> this run. (This is the exact failure to never repeat: trigger the review, then
+> exit before it answers — leaving every finding unaddressed.)
+
 1. **Minimal, targeted fixes only** — address the finding; no drive-by refactor.
-2. **Prove-false is allowed, twice-is-human** — a finding you believe is wrong:
-   reply on the PR with a concrete rationale instead of editing. If the reviewer
-   re-raises the *same* finding after you dismissed it, do NOT loop — stop and
-   hand to a human (`NEEDS_HUMAN`).
+2. **Prove-false is allowed; a re-raised dismissal ends the run** — a finding you
+   believe is wrong: reply on the PR with a concrete rationale instead of
+   editing. If the reviewer re-raises the *same* finding after you dismissed it —
+   **any severity, nits included** — re-argue **once**, then **stop at
+   `NEEDS_HUMAN`** (`stopped_reason: re-raised-after-dismiss`) and record the
+   finding + your rationale in the `<!-- SDK_RESOLVE_SUMMARY -->`. Never loop on
+   it, and never silently ship over it — a human adjudicates the disagreement.
 3. **Expect the reset churn** — every push fires `reset-on-push` (strips
    `sdk-review-*` labels, resets the `sdk-review` status) and re-runs CI. That
    is normal. Key your loop off the *reviewer's findings + CI*, never off the
@@ -58,5 +72,9 @@ auto-merge loop is what the SDK-evolution rebuild was undoing).
     §3c′) *before* fixing — so the PR visibly shows resolve picked up the review
     and will re-run `@sdk-review` after pushing — and always close with the
     mandatory `<!-- SDK_RESOLVE_SUMMARY -->` comment (§Phase 4), on every exit
-    path. The stopping line is strict: keep looping until **zero findings,
-    nits included**, green CI, and `READY_TO_MERGE`; never stop on an open nit.
+    path. The stopping line is strict: keep looping until **every finding (nits
+    included) is fixed** → green CI + `READY_TO_MERGE`. The only other way to end
+    is a documented `NEEDS_HUMAN` stop — a finding you dispute that the reviewer
+    re-raises — with your rationale in the `<!-- SDK_RESOLVE_SUMMARY -->`. Never
+    stop on an open nit you have simply left unaddressed, and never ship
+    (merge-ready) over a finding you dispute.

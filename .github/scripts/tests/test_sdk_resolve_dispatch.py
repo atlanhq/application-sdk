@@ -211,13 +211,39 @@ def test_render_merge_ready():
 
 
 def test_render_stopped_short():
+    # merge_ready: no after real rounds (rounds: 3) → genuine hand-to-human.
     st = sr.SSEState()
     st.completed = True
     st.status = "completed"
     st.cost = "9.00"
     st.response_text = _SUMMARY_BLOCK.replace("merge_ready: yes", "merge_ready: no")
     out = sr.render_step_summary(st, "1234", "http://run")
-    assert "needs a human" in out
+    assert "stopped short — needs a human" in out
+    assert "exited before" not in out  # not the early-exit backstop
+
+
+def test_render_exited_before_any_round_is_flagged_distinctly():
+    # merge_ready: no with rounds: 0 is the "exited before the review returned"
+    # bug fingerprint — must render as a distinct, re-runnable outcome, NOT the
+    # generic stopped-short (which reads as normal triage and gets ignored).
+    st = sr.SSEState()
+    st.completed = True
+    st.status = "completed"
+    st.cost = "3.22"
+    st.response_text = _SUMMARY_BLOCK.replace(
+        "merge_ready: yes", "merge_ready: no"
+    ).replace("rounds: 3", "rounds: 0")
+    out = sr.render_step_summary(st, "1234", "http://run")
+    assert "exited before completing a review round" in out
+    assert "re-run" in out
+    assert "stopped short — needs a human" not in out
+
+
+def test_rounds_completed_parsing():
+    assert sr._rounds_completed({"rounds": "3"}) == 3
+    assert sr._rounds_completed({"rounds": " 0 "}) == 0
+    assert sr._rounds_completed({}) is None
+    assert sr._rounds_completed({"rounds": "n/a"}) is None
 
 
 def test_render_failed_run():
