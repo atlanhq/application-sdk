@@ -475,6 +475,9 @@ DEPENDENCY_LOGGERS = ["daft_io.stats", "tracing.span", "httpx"]
 
 # Configure external dependency loggers to reduce noise
 # Set httpx to WARNING to reduce verbose HTTP request logs (200 OK messages)
+# NOTE: the ``temporalio`` logger is pinned to WARNING separately below — it is
+# kept out of this list on purpose because its rationale differs (a prerequisite
+# for the 504 filter, not noise reduction).
 for logger_name in DEPENDENCY_LOGGERS:
     logging.getLogger(logger_name).setLevel(logging.WARNING)
 
@@ -484,6 +487,11 @@ for logger_name in DEPENDENCY_LOGGERS:
 # root level gate before the filter runs, so the filter's WARN branch would again
 # become dead code — the exact failure this fix removes. The suppression is the
 # filter's job, not a side effect of the root level.
+#
+# Side effect: because propagated records skip ancestor-logger level checks, every
+# non-504 ``temporalio`` WARN now reaches the handler regardless of ``LOG_LEVEL``
+# (e.g. ``LOG_LEVEL=ERROR`` still surfaces ``temporalio`` WARN). Intentional — the
+# filter, not the level gate, owns 504 suppression; only the 504 pattern is throttled.
 logging.getLogger("temporalio").setLevel(logging.WARNING)
 
 

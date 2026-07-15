@@ -62,7 +62,7 @@ def test_get_or_create_runtime_disabled_builds_forwarding_runtime(_reset_singlet
     """enable_prometheus=False builds an explicit Runtime with log forwarding
     (not Runtime.default(), which forwards nothing) and no Prometheus metrics."""
     rt = _get_or_create_runtime(enable_prometheus=False)
-    assert rt is not None
+    assert rt is _reset_singleton.return_value
     _reset_singleton.default.assert_not_called()
     _reset_singleton.assert_called_once()
     telemetry = _reset_singleton.call_args.kwargs["telemetry"]
