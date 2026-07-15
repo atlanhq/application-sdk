@@ -306,13 +306,14 @@ jobs:
     # — so it MUST be the creator too, or the callback's PATCH is rejected and
     # the check hangs until the watchdog. Creating it under the fleet App also
     # attributes it to the fleet App's check suite instead of an arbitrary
-    # github-actions suite. github.token keeps checks:write only for the
-    # dispatch-status housekeeping; a job-level permissions block replaces
-    # rather than merges with the workflow defaults, so contents:read is
-    # repeated here for the checkout step.
+    # github-actions suite. In callback mode every check write goes through the
+    # fleet token, so github.token needs only contents:read (the checkout) — the
+    # sole github.token check/PR-writing step (Post dispatched-run status) is
+    # wait-mode != 'callback' and never runs here. A job-level permissions block
+    # replaces rather than merges with the workflow defaults, so contents:read
+    # is spelled out explicitly.
     permissions:
       contents: read
-      checks: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
