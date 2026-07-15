@@ -242,6 +242,51 @@ def test_sdk_level_empty_eval_output_is_fatal(repo, monkeypatch, tmp_path, capsy
     assert "::error::pkl eval" in capsys.readouterr().out
 
 
+def _commit_root_yamls(repo: Path) -> tuple[str, str]:
+    """Commit root atlan.yaml/app.yaml (which the fixture omits) so clean_outputs
+    removes them — mirrors a connector whose contract eval does not re-emit the
+    root YAMLs. Returns their committed contents."""
+    atlan_yaml = "version: 1\nname: metabase\n"
+    app_yaml = "app: metabase\n"
+    (repo / "atlan.yaml").write_text(atlan_yaml)
+    (repo / "app.yaml").write_text(app_yaml)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "root yamls")
+    return atlan_yaml, app_yaml
+
+
+def test_app_level_restores_root_yaml_when_not_reemitted(repo, monkeypatch, capsys):
+    """Eval re-emits app/generated but not the committed root atlan.yaml/app.yaml
+    it also cleaned: those must be restored from HEAD, not left deleted (a later
+    sdr-e2e step hard-errors on a missing root app.yaml)."""
+    atlan_yaml, app_yaml = _commit_root_yamls(repo)
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+
+    assert mod.main([]) == 0
+
+    # app/generated regenerated, root YAMLs restored to their committed content.
+    assert (repo / "app" / "generated" / "manifest.json").read_text() == FRESH_MANIFEST
+    assert (repo / "atlan.yaml").read_text() == atlan_yaml
+    assert (repo / "app.yaml").read_text() == app_yaml
+    out = capsys.readouterr().out
+    assert "::warning::pkl eval did not re-emit" in out
+    assert "atlan.yaml" in out and "app.yaml" in out
+
+
+def test_sdk_level_missing_root_yaml_is_fatal(repo, monkeypatch, tmp_path, capsys):
+    """SDK-level: a cleaned root YAML the toolkit does not re-emit is fatal, same
+    policy split as the empty-app/generated case."""
+    _commit_root_yamls(repo)
+    toolkit = tmp_path / "sdk" / "contract-toolkit" / "src"
+    toolkit.mkdir(parents=True)
+    (toolkit / "PklProject").write_text('amends "pkl:Project"\n')
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+
+    assert mod.main(["--sdk-toolkit-src", str(toolkit)]) == 1
+    out = capsys.readouterr().out
+    assert "::error::pkl eval with the SDK PR's contract-toolkit did not" in out
+
+
 def test_drift_warns_on_newly_emitted_untracked_file(repo, monkeypatch, capsys):
     """A file the contract newly emits (untracked, invisible to `git diff`)
     must still count as drift — `git status --porcelain` sees it."""

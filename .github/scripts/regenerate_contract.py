@@ -244,7 +244,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if "app/generated" in cleaned and not Path("app/generated").is_dir():
         # Eval "succeeded" but emitted no app/generated at all — leaving the
-        # tests with no manifest is strictly worse than a stale one.
+        # tests with no manifest is strictly worse than a stale one. Treat as a
+        # failed regeneration: full revert to the committed artifacts (app-level)
+        # or fatal (SDK-level).
         if sdk_mode:
             print(
                 "::error::pkl eval with the SDK PR's contract-toolkit emitted no "
@@ -258,6 +260,31 @@ def main(argv: list[str] | None = None) -> int:
             "(prior behaviour)."
         )
         return 0
+
+    # Any other cleaned output eval did not re-emit — e.g. a committed root
+    # atlan.yaml/app.yaml this contract does not emit. Leaving a committed file
+    # deleted is strictly worse than the prior behaviour: a later sdr-e2e step
+    # hard-errors on a missing root app.yaml, resolves it *after* this step, and
+    # runs with check-drift off, so no drift warning would explain it. Restore
+    # just those from HEAD (app-level) — the freshly-regenerated app/generated is
+    # kept — or fail (SDK-level, same policy split as above).
+    missing = [path for path in cleaned if not Path(path).exists()]
+    if missing:
+        if sdk_mode:
+            print(
+                "::error::pkl eval with the SDK PR's contract-toolkit did not "
+                "re-emit expected output(s) for this connector contract: "
+                + ", ".join(missing)
+                + "."
+            )
+            return 1
+        restore_outputs(missing)
+        print(
+            "::warning::pkl eval did not re-emit "
+            + ", ".join(missing)
+            + " — restored from HEAD so the committed artifact(s) are not left "
+            "deleted (prior behaviour preserved)."
+        )
 
     _format_generated(Path("."))
 
