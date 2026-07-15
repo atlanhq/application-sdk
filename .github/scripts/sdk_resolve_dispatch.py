@@ -299,15 +299,34 @@ def run_completed(st: SSEState) -> bool:
     return any(k in summary for k in ("final_verdict", "merge_ready", "stopped_reason"))
 
 
+def _rounds_completed(summary: dict[str, str]) -> int | None:
+    """Parsed `rounds` count from the summary block, or None if absent/malformed."""
+    try:
+        return int(summary["rounds"].strip())
+    except (KeyError, ValueError, AttributeError):
+        return None
+
+
 def render_step_summary(st: SSEState, pr_number: str, gha_run_url: str) -> str:
     """Build the Markdown written to GITHUB_STEP_SUMMARY — always renders."""
     summary = mine_summary(st)
     ok = run_completed(st)
     merge_ready = summary.get("merge_ready", "").lower() == "yes"
+    # Backstop for the "exited before the review returned" failure mode: a run
+    # that completes not-merge-ready having finished ZERO review rounds never
+    # actually ran the review->fix loop (e.g. it posted @sdk-review then ended
+    # its turn before the reply landed). That is a resolver defect, not a genuine
+    # hand-to-human — flag it distinctly so it isn't mistaken for normal triage.
+    exited_early = ok and not merge_ready and _rounds_completed(summary) == 0
     if not ok:
         outcome = "❌ run failed"
     elif merge_ready:
         outcome = "✅ merge-ready (human merges)"
+    elif exited_early:
+        outcome = (
+            "⚠️ exited before completing a review round — the resolver did not run "
+            "the review→fix loop; safe to re-run `@sdk-resolve`"
+        )
     else:
         outcome = "⚠️ stopped short — needs a human"
     lines = [

@@ -93,25 +93,60 @@ TRIGGER_TIME=$(gh api "repos/atlanhq/application-sdk/issues/comments/$TRIGGER_ID
 > machine identity for programmatic re-triggers. If your sandbox token posts as
 > some other bot, the reviewer won't fire and 3b will time out.
 
-### 3b. Wait for the reply
-Poll every ~30s (up to ~40 min) for a comment created **after** `TRIGGER_TIME`,
-authored by a login containing `mothership`, whose body contains
-`<!-- SDK_REVIEW -->`. Take the last such comment across all pages. Never treat
-CI comments, human comments, or an older review as the reply.
+### 3b. Wait for the reply — BLOCKING; do NOT end your turn here
+
+Posting `@sdk-review` is **not** a stopping point — it only triggers the
+reviewer's *separate* sandbox, which typically replies in ~5–15 min. You MUST
+block here until that reply lands (or the per-round wait elapses). Run the poll
+as a **single long-running command** so the session stays alive and you cannot
+end your turn mid-wait:
+
+```bash
+# Blocks until the reviewer replies or ~40 min elapse. The heartbeat each
+# iteration keeps bytes flowing so neither mothership's idle_timeout (1800s) nor
+# the dispatch read watchdog (1900s) fires during a slow review.
+REPLY=""
+deadline=$(( $(date +%s) + 2400 ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  REPLY=$(gh pr view "$PR_NUMBER" --json comments --jq \
+    "[.comments[] | select(.createdAt > \"$TRIGGER_TIME\")
+       | select(.author.login | test(\"mothership\"))
+       | select(.body | contains(\"<!-- SDK_REVIEW -->\"))] | last | .url // empty")
+  [ -n "$REPLY" ] && break
+  echo "[3b] waiting for @sdk-review reply … $(date -u +%H:%M:%S)"
+  sleep 30
+done
+[ -z "$REPLY" ] && echo "[3b] no reply after 40 min — stopped_reason=review-timeout"
+```
+
+Take the **last** matching comment (never a CI comment, a human comment, the
+`@sdk-review` trigger you just posted, or an older review). If the wait elapses
+with no reply, that is a `NEEDS_HUMAN` stop with `stopped_reason: review-timeout`
+— still run Phase 4 and post the report. **Never** emit the Phase-4 summary
+block in the same turn you posted the trigger, and never emit it with
+`merge_ready: no` without having consumed at least one review reply this run.
 
 ### 3c. Read the verdict + findings
 From the reply body, read the `<!-- VERDICT: X -->` marker and every bullet
 under `### Findings` (all severities, **including `Nit`**).
 
-**Stopping condition — strict, nits included:** advance to Phase 4 as
-*merge-ready* ONLY when ALL THREE hold at once — `### Findings` is absent/empty
-(every severity; a single `Nit` still counts as an open finding), verdict is
-`READY_TO_MERGE`, and CI is green. This is stricter than the bot's own verdict,
-which tolerates nits — **here a lone nit does NOT let you stop; keep looping and
-fix it.** The only other ways this loop ends are the five explicit escalations
-(round-cap / re-raised-after-dismiss / ci-stuck / ambiguous-fork / cross-repo),
-and every one of them still runs Phase 4 and posts the report. **Never end the
-run with open findings and no Phase 4 report on the PR.**
+**Stopping condition — all three true → done (merge-ready), go to Phase 4:**
+1. CI green.
+2. Verdict `READY_TO_MERGE`.
+3. `### Findings` is empty — every finding, **nits included**, has been **fixed**
+   (so none remain listed). A finding you *disagree* with is not "done": you
+   never reach merge-ready by ignoring it or by unilaterally clearing it. Fix the
+   ones you agree with; anything you dispute goes through the disagreement path in
+   3d, which **ends the run** with your rationale in the Phase 4 summary — it does
+   NOT pass to merge-ready.
+
+The only other ways this loop ends are the explicit escalations (round-cap /
+re-raised-after-dismiss — a finding you dismissed that the reviewer re-lists,
+**any severity, nits included** / ci-stuck / ambiguous-fork / cross-repo /
+review-timeout). Every escalation runs Phase 4 and posts the report, and a
+disagreement stop MUST carry your rationale in that summary. **Never end the run
+with open findings and no Phase 4 report, and never ship (merge-ready) over a
+finding you merely dispute — end with a documented rationale instead.**
 
 ### 3c′. Acknowledge on the PR — visible status (every round that has findings)
 A review comment landing on the PR is not, by itself, a signal that anyone is
@@ -128,8 +163,9 @@ first time:
 STATUS_BODY="<!-- SDK_RESOLVE_STATUS -->
 🤖 **SDK Resolve — round ${R}.** Picked up the latest review: ${N} open finding(s)
 (${CRIT} blocking, ${NIT} nit). Fixing them now, then I'll push and re-run
-\`@sdk-review\` automatically — I keep looping until zero findings (nits included)
-+ green CI + \`READY_TO_MERGE\`. Progress: ${GHA_RUN_URL}"
+\`@sdk-review\` automatically — I keep looping until every finding (nits included)
+is fixed + green CI + \`READY_TO_MERGE\` (anything I dispute I hand back to a human
+with a rationale, rather than merging over it). Progress: ${GHA_RUN_URL}"
 
 CID=$(gh api "repos/atlanhq/application-sdk/issues/${PR_NUMBER}/comments" --paginate \
   --jq 'map(select(.body | contains("<!-- SDK_RESOLVE_STATUS -->"))) | last | .id // empty')
@@ -145,13 +181,21 @@ comment (guardrail 9) — only `@sdk-review` and prose.
 ### 3d. Fix every finding (or prove it false)
 For each bullet, incl. every nit:
 - Locate the file/line, read enough context, apply the **minimal** fix the
-  `Path:` clause describes.
+  `Path:` clause describes. A finding whose `Path:` clause spells out a concrete
+  fix is **fixable — apply it.** Do not punt a fixable finding to a human just
+  because it touches a design question the fix itself already answers.
 - If genuinely wrong: reply with a concrete rationale (why it's a false
-  positive) instead of editing. **If this exact finding was already dismissed
-  in a prior round and the reviewer re-raised it → stop, verdict `NEEDS_HUMAN`,
-  report it. Do not loop.**
-- Genuinely ambiguous design fork with no clear winner → leave it, note it for
-  human, keep going with the rest.
+  positive) instead of editing.
+- **Re-raised after you dismissed it** — the reviewer repeats a finding you
+  already dismissed with a rationale. You disagree and it's re-listed. Do NOT
+  silently loop, and do NOT silently ship over it: post your rebuttal on the PR
+  (re-argue **once**), then **end the run** with verdict `NEEDS_HUMAN`
+  (`stopped_reason: re-raised-after-dismiss`) and record the finding + your
+  rationale in the Phase 4 summary so a human adjudicates. This holds for
+  **every severity, nits included** — the resolver never merges over a
+  disagreement, and never argues a point more than once.
+- Genuinely ambiguous design fork with no clear winner **and no concrete `Path:`
+  fix** → leave it, note it for human, keep going with the rest.
 
 ### 3e. Commit, push, re-green CI (best-effort)
 `uv run pre-commit run --files <changed>` → relevant tests → commit specific
@@ -194,10 +238,10 @@ step 2 regardless, and do it before you exit.
    it's their turn, and includes: rounds taken, findings fixed vs dismissed (with
    dismissal rationales), final CI + verdict, and — if stopped short — exactly
    what remains and why (round-cap / re-raised-after-dismiss / ci-stuck /
-   ambiguous-fork / cross-repo). State plainly whether it's merge-ready (green +
-   zero findings incl. nits + `READY_TO_MERGE`) or needs their call. This is the
-   human-facing counterpart to the machine block in step 4 — post both, never
-   just one.
+   ambiguous-fork / cross-repo / review-timeout). State plainly whether it's
+   merge-ready (green + every finding fixed, nits included + `READY_TO_MERGE`) or
+   needs their call. This is the human-facing counterpart to the machine block in step
+   4 — post both, never just one.
 3. **Do NOT `gh pr merge`.** Leave the merge to a human.
 4. Emit this block verbatim (the dispatch script parses it):
    ```
@@ -209,7 +253,7 @@ step 2 regardless, and do it before you exit.
    ci: <green|red|noted-preexisting>
    final_verdict: <READY_TO_MERGE|NEEDS_HUMAN|NEEDS_FIXES|...>
    merge_ready: <yes|no>
-   stopped_reason: <converged|round-cap|re-raised-after-dismiss|ci-stuck|fork>
+   stopped_reason: <converged|round-cap|re-raised-after-dismiss|ci-stuck|fork|review-timeout>
    === END SUMMARY ===
    ```
 
@@ -219,11 +263,18 @@ Print: `[Phase 4 complete] merge_ready=<yes|no>`
 
 ## Principles
 
-- **Merge-ready, not merged.** Green CI + zero findings + `READY_TO_MERGE`, then
-  hand back to a human.
+- **Merge-ready, not merged.** Green CI + every finding fixed (nits included) +
+  `READY_TO_MERGE`, then hand back to a human.
 - **The reviewer stays read-only.** You are the only writer; it runs in its own
   sandbox and you consume its comment output.
-- **Converge or escalate.** Never loop forever — round cap, re-raise-after-
-  dismiss, and ambiguous forks all stop cleanly with a `NEEDS_HUMAN` report.
+- **A round isn't done until the review answers.** Posting `@sdk-review` only
+  triggers the reviewer's separate sandbox — block for its reply (Phase 3b)
+  before ending the run or emitting the summary. Never exit the same turn you
+  triggered the review.
+- **Converge or escalate.** Never loop forever — round-cap, a re-raised finding
+  you dismissed (**any severity, nits included**), ambiguous forks, ci-stuck, and
+  review-timeout all stop cleanly with a `NEEDS_HUMAN` report. Never ship over a
+  finding you dispute: end with the rationale in the summary and let a human
+  decide.
 - **Real state only.** Read `gh` before every decision; never simulate a CI or
   reviewer result.
