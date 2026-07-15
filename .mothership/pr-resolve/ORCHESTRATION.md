@@ -116,22 +116,31 @@ run with open findings and no Phase 4 report on the PR.**
 ### 3c′. Acknowledge on the PR — visible status (every round that has findings)
 A review comment landing on the PR is not, by itself, a signal that anyone is
 acting on it — from a watcher's side, the review just sits there. Close that gap:
-**before** you start fixing, post ONE concise plain-text status comment so the PR
+**before** you start fixing, surface ONE concise plain-text status so the PR
 visibly shows the handoff — that resolve has picked up *this* review and will
-re-run `@sdk-review` after it pushes. Carry a stable marker:
+re-run `@sdk-review` after it pushes.
+
+**Update a single status comment in place; don't post a fresh one each round**
+(a full loop can be ~8 rounds — 8 near-identical comments is noise). Find the
+prior status comment by its stable marker and PATCH it; only create one the
+first time:
 ```bash
-gh pr comment "$PR_NUMBER" --body "$(cat <<EOF
-<!-- SDK_RESOLVE_STATUS -->
+STATUS_BODY="<!-- SDK_RESOLVE_STATUS -->
 🤖 **SDK Resolve — round ${R}.** Picked up the latest review: ${N} open finding(s)
 (${CRIT} blocking, ${NIT} nit). Fixing them now, then I'll push and re-run
 \`@sdk-review\` automatically — I keep looping until zero findings (nits included)
-+ green CI + \`READY_TO_MERGE\`. Progress: ${GHA_RUN_URL}
-EOF
-)"
++ green CI + \`READY_TO_MERGE\`. Progress: ${GHA_RUN_URL}"
+
+CID=$(gh api "repos/atlanhq/application-sdk/issues/${PR_NUMBER}/comments" --paginate \
+  --jq 'map(select(.body | contains("<!-- SDK_RESOLVE_STATUS -->"))) | last | .id // empty')
+if [ -n "$CID" ]; then
+  gh api -X PATCH "repos/atlanhq/application-sdk/issues/comments/${CID}" -f body="$STATUS_BODY"
+else
+  gh pr comment "$PR_NUMBER" --body "$STATUS_BODY"
+fi
 ```
-Keep it factual and one comment per round (progress is the point). NEVER write
-the literal resolve trigger token in this or any comment (guardrail 9) — only
-`@sdk-review` and prose.
+Keep it factual. NEVER write the literal resolve trigger token in this or any
+comment (guardrail 9) — only `@sdk-review` and prose.
 
 ### 3d. Fix every finding (or prove it false)
 For each bullet, incl. every nit:
