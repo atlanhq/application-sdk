@@ -38,6 +38,13 @@ def _check_runs_body(runs: list[dict]) -> dict:
     return {"total_count": len(runs), "check_runs": runs}
 
 
+def _ndjson(runs: list[dict]) -> subprocess.CompletedProcess:
+    """What `gh api --paginate --jq '.check_runs[] | tojson'` produces: one
+    compact JSON object per line, across however many pages it took."""
+    text = "\n".join(json.dumps(r) for r in runs) + ("\n" if runs else "")
+    return subprocess.CompletedProcess(args=[], returncode=0, stdout=text, stderr="")
+
+
 def _completed_raw(status: int, body_text: str) -> subprocess.CompletedProcess:
     """Like _http_response, but for a raw (non-JSON-dict) body string —
     e.g. a GitHub error response's raw text."""
@@ -182,27 +189,104 @@ def test_wait_for_checks_uses_304_cache_without_losing_state(monkeypatch):
     assert calls["n"] == 1  # loop breaks right after the first (complete) poll
 
 
-def test_wait_for_checks_fails_loudly_when_truncated(monkeypatch):
-    # total_count exceeds what a single per_page=100 page returns — ETag
-    # caching can't safely span multiple pages (a page-1 match doesn't
-    # prove page 2 is unchanged), so this must fail closed rather than
-    # silently missing check runs that live past page 1.
+def test_list_all_check_runs_uses_paginate_and_parses_ndjson(monkeypatch):
+    captured = {}
+
     def fake_run(cmd, **kwargs):
-        body = {
-            "total_count": 150,
-            "check_runs": [
-                {"name": NAMES[0], "status": "completed", "conclusion": "success"}
-            ],
-        }
-        return _http_response(200, '"v1"', body)
+        captured["cmd"] = cmd
+        return _ndjson([{"id": 1, "name": NAMES[0]}, {"id": 2, "name": NAMES[1]}])
 
     monkeypatch.setattr(mod, "run", fake_run)
+
+    runs = mod.list_all_check_runs(REPO, SHA)
+
+    assert captured["cmd"][0] == "gh"
+    assert "--paginate" in captured["cmd"]
+    assert runs == [{"id": 1, "name": NAMES[0]}, {"id": 2, "name": NAMES[1]}]
+
+
+def test_list_all_check_runs_raises_on_failure(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="rate limited"
+        )
+
+    monkeypatch.setattr(mod, "run", fake_run)
+
     try:
-        mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None)
+        mod.list_all_check_runs(REPO, SHA)
         assert False, "expected SystemExit"
     except SystemExit as e:
-        assert "150 check runs" in str(e)
-        assert "pagination isn't supported" in str(e)
+        assert "rate limited" in str(e)
+
+
+def test_wait_for_checks_falls_back_to_full_pagination_when_truncated(monkeypatch):
+    # total_count exceeds what a single per_page=100 page returns — ETag
+    # caching can't safely span multiple pages (a page-1 match doesn't
+    # prove page 2 is unchanged), so this must switch to a full, uncached
+    # fetch and still resolve correctly rather than fail the gate closed.
+    calls = {"curl": 0, "gh": 0}
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "curl":
+            calls["curl"] += 1
+            body = {
+                "total_count": 150,
+                "check_runs": [
+                    {"name": NAMES[0], "status": "completed", "conclusion": "success"}
+                ],
+            }
+            return _http_response(200, '"v1"', body)
+        calls["gh"] += 1
+        # The full-pagination fallback sees the complete picture, including
+        # the second connector's check run that page 1 alone couldn't.
+        runs = [
+            {"name": n, "status": "completed", "conclusion": "success"} for n in NAMES
+        ]
+        return _ndjson(runs)
+
+    monkeypatch.setattr(mod, "run", fake_run)
+
+    ok = mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None)
+
+    assert ok is True
+    assert calls["curl"] == 1  # only the first attempt tries the cheap conditional path
+    assert calls["gh"] == 1
+
+
+def test_wait_for_checks_stays_in_full_pagination_mode_across_attempts(monkeypatch):
+    calls = {"curl": 0, "gh": 0}
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "curl":
+            calls["curl"] += 1
+            body = {
+                "total_count": 150,
+                "check_runs": [{"name": NAMES[0], "status": "in_progress"}],
+            }
+            return _http_response(200, '"v1"', body)
+        calls["gh"] += 1
+        if calls["gh"] < 2:
+            runs = [{"name": NAMES[0], "status": "in_progress"}]
+        else:
+            runs = [
+                {"name": n, "status": "completed", "conclusion": "success"}
+                for n in NAMES
+            ]
+        return _ndjson(runs)
+
+    monkeypatch.setattr(mod, "run", fake_run)
+
+    ok = mod.wait_for_checks(
+        REPO, SHA, NAMES, interval_seconds=1, timeout_seconds=10, sleep=lambda s: None
+    )
+
+    assert ok is True
+    # Only the very first attempt uses the cheap conditional path; every
+    # subsequent attempt (including the one that resolves) stays in full
+    # pagination mode rather than falling back to (incorrect) caching.
+    assert calls["curl"] == 1
+    assert calls["gh"] == 2
 
 
 def test_wait_for_checks_fails_on_bad_conclusion(monkeypatch):

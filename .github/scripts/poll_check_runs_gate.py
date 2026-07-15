@@ -106,6 +106,38 @@ def gh_api_conditional(path: str, *, etag: str | None = None):
     return status_code, new_etag, body_json
 
 
+def list_all_check_runs(repo: str, sha: str) -> list[dict]:
+    """Full, uncached fetch of every check run on `sha` across all pages.
+
+    Fallback for once a SHA carries more than one page (100) of check
+    runs — ETag conditional caching only covers a single page (a page-1
+    match doesn't prove page 2+ is unchanged), so once that ceiling is
+    crossed we switch to always re-fetching the complete list instead of
+    risking a silent miss of a failing check run that lives past page 1.
+    Costs more than the conditional path, but only in that (rare, at
+    today's matrix sizes) case — and it stays correct rather than failing
+    the gate closed for a SHA that's otherwise perfectly resolvable.
+    """
+    result = run(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{repo}/commits/{sha}/check-runs?per_page=100",
+            "--jq",
+            ".check_runs[] | tojson",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit(
+            f"::error::failed to list check runs for {repo}@{sha}: {result.stderr}"
+        )
+    return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+
+
 def wait_for_checks(
     repo: str,
     sha: str,
@@ -120,6 +152,10 @@ def wait_for_checks(
     path = f"repos/{repo}/commits/{sha}/check-runs?per_page=100"
     etag: str | None = None
     latest: dict[str, dict] = {}
+    # Flips on once a SHA is found to carry more than one page of check
+    # runs; from then on every attempt does a full uncached fetch instead
+    # of the cheaper conditional single-page GET (see list_all_check_runs).
+    paginate_fully = False
     # Ceiling division: a timeout that isn't an exact multiple of the
     # interval (e.g. 31s timeout / 30s interval) must still get its full
     # attempt within budget, not be truncated to fewer attempts than the
@@ -127,28 +163,36 @@ def wait_for_checks(
     max_attempts = max(1, math.ceil(timeout_seconds / interval_seconds))
 
     for attempt in range(1, max_attempts + 1):
-        status_code, etag, body = gh_api_conditional(path, etag=etag)
-        if status_code == 200 and body is not None:
-            check_runs = body.get("check_runs", [])
-            # Conditional caching (If-None-Match) only covers this single
-            # page — a page-1 ETag match doesn't prove pages 2+ are
-            # unchanged too, so paginating here would risk silently missing
-            # a failing check run on a later page. That's worse than
-            # failing loudly: fail closed instead of paginating "for free".
-            total_count = body.get("total_count", len(check_runs))
-            if total_count > len(check_runs):
-                raise SystemExit(
-                    f"::error::{repo}@{sha} has {total_count} check runs, more than "
-                    f"the {len(check_runs)} this poll fetches (per_page=100) — "
-                    "pagination isn't supported here since ETag caching can't "
-                    "safely cover multiple pages. Reduce the matrix size or "
-                    "extend poll_check_runs_gate.py."
-                )
+        if paginate_fully:
+            check_runs = list_all_check_runs(repo, sha)
             for check_run in check_runs:
                 if check_run.get("name") in expected_names:
                     latest[check_run["name"]] = check_run
-        elif status_code != 304:
-            raise SystemExit(f"::error::unexpected status {status_code} polling {path}")
+        else:
+            status_code, etag, body = gh_api_conditional(path, etag=etag)
+            if status_code == 200 and body is not None:
+                check_runs = body.get("check_runs", [])
+                total_count = body.get("total_count", len(check_runs))
+                if total_count > len(check_runs):
+                    # More check runs than a single page holds. ETag caching
+                    # only covers page 1 (a match there doesn't prove page
+                    # 2+ is unchanged), so from here on always fetch the
+                    # full, uncached list rather than risk silently missing
+                    # a failing check run past page 1.
+                    print(
+                        f"::warning::{repo}@{sha} has {total_count} check runs, "
+                        f"more than one page ({len(check_runs)}) — switching to "
+                        "full (uncached) pagination for the rest of this poll."
+                    )
+                    paginate_fully = True
+                    check_runs = list_all_check_runs(repo, sha)
+                for check_run in check_runs:
+                    if check_run.get("name") in expected_names:
+                        latest[check_run["name"]] = check_run
+            elif status_code != 304:
+                raise SystemExit(
+                    f"::error::unexpected status {status_code} polling {path}"
+                )
 
         missing = [n for n in expected_names if n not in latest]
         pending = [
