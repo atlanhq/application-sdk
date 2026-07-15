@@ -28,11 +28,22 @@ auto-merge loop is what the SDK-evolution rebuild was undoing).
 
 ## Guardrails
 
+> **Paramount — a round is not over when you post `@sdk-review`.** That comment
+> only *triggers* the reviewer's separate sandbox; the review lands minutes
+> later. You MUST block until its reply arrives (ORCHESTRATION Phase 3b) and then
+> act on the findings. Never end the run, and never emit the Phase-4 summary, in
+> the same turn you posted the trigger or before you have consumed a review reply
+> this run. (This is the exact failure to never repeat: trigger the review, then
+> exit before it answers — leaving every finding unaddressed.)
+
 1. **Minimal, targeted fixes only** — address the finding; no drive-by refactor.
-2. **Prove-false is allowed, twice-is-human** — a finding you believe is wrong:
-   reply on the PR with a concrete rationale instead of editing. If the reviewer
-   re-raises the *same* finding after you dismissed it, do NOT loop — stop and
-   hand to a human (`NEEDS_HUMAN`).
+2. **Prove-false is allowed; re-raise handling depends on severity** — a finding
+   you believe is wrong: reply on the PR with a concrete rationale instead of
+   editing. If the reviewer re-raises the *same* finding after you dismissed it:
+   a **nit** → *raise it again* (restate the rationale, treat as proven-false)
+   and proceed toward merge-ready — a nit never forces a stop; a **substantive**
+   finding → post one escalated rebuttal and stop at `NEEDS_HUMAN`. Re-argue
+   once, never loop.
 3. **Expect the reset churn** — every push fires `reset-on-push` (strips
    `sdk-review-*` labels, resets the `sdk-review` status) and re-runs CI. That
    is normal. Key your loop off the *reviewer's findings + CI*, never off the
