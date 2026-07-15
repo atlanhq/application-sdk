@@ -328,6 +328,27 @@ def _load_worker_eviction_max_retries() -> int:
 
 WORKER_EVICTION_MAX_RETRIES = _load_worker_eviction_max_retries()
 
+
+#: Feature flag: on a heartbeat timeout (the signature of an abrupt kill —
+#: spot reclaim, OOMKill, node loss), diagnose the cause via the infra-event
+#: service and record it on the workflow. Default OFF: the infra-event service
+#: is a separate build, and until it ships this must stay disabled. When off,
+#: activity execution is byte-for-byte identical to today. See
+#: docs/infra-failure-diagnosis.md.
+ENABLE_INFRA_FAILURE_DIAGNOSIS = (
+    os.getenv("ATLAN_ENABLE_INFRA_FAILURE_DIAGNOSIS", "false").lower() == "true"
+)
+
+#: Base URL of the infra-event service queried by the diagnose_infra_failure
+#: activity. Empty disables the HTTP client (diagnosis records NONE).
+INFRA_EVENT_SERVICE_URL = os.getenv("ATLAN_INFRA_EVENT_SERVICE_URL", "")
+
+#: Start-to-close timeout for the (short, one-HTTP-call) diagnose_infra_failure
+#: activity.
+INFRA_DIAGNOSIS_TIMEOUT_SECONDS = int(
+    os.getenv("ATLAN_INFRA_DIAGNOSIS_TIMEOUT_SECONDS", 30)
+)
+
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations
 USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))

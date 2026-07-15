@@ -477,7 +477,7 @@ class TestTaskPool:
         monkeypatch.setenv("ATLAN_TASK_QUEUE", "qi-app-queue")
 
         with patch(
-            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            "application_sdk.execution._temporal.infra_diagnosis.execute_activity_with_eviction_retry",
             new_callable=AsyncMock,
         ) as mock_exec:
             mock_exec.return_value = MagicMock()
@@ -509,7 +509,7 @@ class TestTaskPool:
         monkeypatch.setenv("ATLAN_TASK_QUEUE", "qi-app-queue")
 
         with patch(
-            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            "application_sdk.execution._temporal.infra_diagnosis.execute_activity_with_eviction_retry",
             new_callable=AsyncMock,
         ) as mock_exec:
             mock_exec.return_value = MagicMock()
@@ -536,7 +536,7 @@ class TestTaskPool:
         from application_sdk.app.base import _create_task_activity_wrapper
 
         with patch(
-            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            "application_sdk.execution._temporal.infra_diagnosis.execute_activity_with_eviction_retry",
             new_callable=AsyncMock,
         ) as mock_exec:
             mock_exec.return_value = MagicMock()
@@ -624,7 +624,7 @@ class TestTaskPool:
         monkeypatch.setenv("ATLAN_TASK_QUEUE", "base-queue")
 
         with patch(
-            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            "application_sdk.execution._temporal.infra_diagnosis.execute_activity_with_eviction_retry",
             new_callable=AsyncMock,
         ) as mock_exec:
             mock_exec.return_value = MagicMock()

@@ -150,10 +150,12 @@ nav:
       - adr/0009-separate-handler-worker-deployments.md
       - adr/0010-async-first-blocking-code.md
       - adr/0011-logging-level-guidelines.md
+      - adr/0017-infra-failure-routing-placement.md
   - Reference:
       - CLI: reference/cli.md
       - HTTP API: reference/http-api.md
       - Configuration: configuration.md
+      - Worker Eviction & SIGTERM: worker-eviction-and-sigterm.md
   - Postmortems:
       - Shutdown Drain Delay (2026-03-27): rca-shutdown-drain-delay-2026-03-27.md
   - API Reference: https://k.atlan.dev/application-sdk/main/api
