@@ -211,7 +211,20 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
     TEST_FILES=$(grep -cE '^(tests/|contract-toolkit/tests/)' /tmp/PR_FILES.txt || true)
     DOC_FILES=$(grep -cE '^(docs/|contract-toolkit/docs/|.*README\.md$)' /tmp/PR_FILES.txt || true)
     CONFIG_FILES=$(grep -cE '^(pyproject\.toml|uv\.lock|\.pre-commit|\.github/|helm/)' /tmp/PR_FILES.txt || true)
-    SOURCE_FILES=$((TOTAL_FILES - CONF_FILES - TEST_FILES - DOC_FILES - CONFIG_FILES))
+    # Agent-prompt / operational-meta files with NO Temporal/Dapr code surface:
+    # the mothership review+resolve playbooks, Claude Code config, and
+    # AGENTS/CLAUDE instruction files. Excluded from SOURCE_FILES below so a
+    # prompt-only PR is never routed into the full 3-agent SDK panel (the SDK
+    # correctness/quality/structure agents have no rules for reviewing prompts).
+    META_FILES=$(grep -cE '^(\.mothership/|\.claude/)|(^|/)(AGENTS|CLAUDE)\.md$' /tmp/PR_FILES.txt || true)
+    # SOURCE_FILES = files in NONE of the non-source buckets (conformance, tests,
+    # docs, config, meta). Computed by exclusion (grep -vc) rather than
+    # TOTAL - sum(buckets): a file matching two buckets (e.g. docs/CLAUDE.md is
+    # both DOC and META) would be subtracted twice by the arithmetic and could
+    # zero out a real source count, silently skipping code review. Mirrors the
+    # bucket patterns above (contract-toolkit is intentionally NOT excluded — CT
+    # PRs are routed by the first two rules before SOURCE_FILES is consulted).
+    SOURCE_FILES=$(grep -vcE '^(packages/conformance/|remediation/|tests/|contract-toolkit/tests/|docs/|contract-toolkit/docs/|pyproject\.toml|uv\.lock|\.pre-commit|\.github/|helm/|\.mothership/|\.claude/)|.*README\.md$|(^|/)(AGENTS|CLAUDE)\.md$' /tmp/PR_FILES.txt || true)
     CHANGED_LINES=$(grep -cE '^[+-]' /tmp/DIFF.patch 2>/dev/null || echo 0)
     # Security-sensitive paths NEVER take the fast path (a 3-line auth/secret
     # change is exactly where a subtle blocker hides).
@@ -223,6 +236,15 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
      (toolkit-review.md only; mandatory private consumer validation based on affected surface)
    - If `CT_FILES > 0 && (SDK_FILES > 0 || CONFIG_FILES > 0)` → `review_scope=mixed-sdk-toolkit`
      (standard SDK review agents + toolkit-review.md)
+   - If `META_FILES > 0 && SOURCE_FILES == 0 && CONFIG_FILES == 0 && CONF_FILES == 0
+     && CT_FILES == 0 && TEST_FILES == 0 && DOC_FILES == 0` → `review_scope=docs-only`
+     (agent-prompt / operational-meta files only — `.mothership/**`, `.claude/**`,
+     `AGENTS.md`, `CLAUDE.md` — carry no Temporal/Dapr code surface, so the SDK
+     domain agents have nothing to review. Take the docs-only skip path: submit
+     APPROVE, no Phase 2. Because META is excluded from `SOURCE_FILES`, a PR that
+     ALSO touches code routes on the real code — `config-only`, `full`, etc. — so
+     the meta files never drag prompt/markdown into the SDK correctness agents,
+     and code is never skipped just because prompts changed alongside it.)
    - If `SOURCE_FILES == 0 && CONF_FILES > 0 && CT_FILES == 0` → `review_scope=conformance-only`
      (`conformance.md` agent only — the conformance-suite specialist for
      `packages/conformance/**` + `remediation/**`: SARIF detector correctness,
@@ -233,7 +255,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    - If `SOURCE_FILES == 0 && TEST_FILES > 0` → `review_scope=tests-only`
      (QUALITY agent only — focused on test patterns, coverage, assertions)
    - If `SOURCE_FILES == 0 && DOC_FILES > 0 && TEST_FILES == 0` → `review_scope=docs-only`
-     (Skip Phase 2 — submit APPROVE with "Docs-only PR, no code review needed")
+     (Skip Phase 2 — submit APPROVE with "Docs/meta-only PR, no code review needed")
    - If `SOURCE_FILES == 0 && CONFIG_FILES > 0` → `review_scope=config-only`
      (`ci-config.md` agent only — the CI/workflow/deps/infra specialist, NOT
      the SDK CORRECTNESS agent. Reviews GHA injection/permissions/pinning,
