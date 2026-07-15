@@ -195,6 +195,15 @@ runs:
     # cross-repo dispatch outcome without clicking through to the
     # connector run. Uses updateComment in-place when a prior marker
     # exists so re-pushes don't spam the PR thread.
+    #
+    # This comments on THIS repo's PR (context.repo), so it uses the
+    # workflow's own GITHUB_TOKEN — NOT inputs.github-token, which is the
+    # fleet App token scoped to the *connector* repo (owner/repositories:
+    # <connector>) and therefore gets 403 "Resource not accessible by
+    # integration" when it tries to write an issue comment here. The calling
+    # workflow already grants `issues: write` + `pull-requests: write`
+    # (see pull_request.yaml permissions). All other steps below keep
+    # inputs.github-token — they legitimately act on the connector repo.
     - name: Post dispatched-run status to SDK PR
       if: always() && github.event_name == 'pull_request'
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
@@ -207,7 +216,7 @@ runs:
         DISPATCHED_STATUS: ${{ steps.status.outputs.status }}
         RENDERED_BODY_PATH: ${{ steps.dispatched_summary.outputs.body_path }}
       with:
-        github-token: ${{ inputs.github-token }}
+        github-token: ${{ github.token }}
         script: |
           const fs = require('fs');
           const repoName = process.env.REPO_NAME;
