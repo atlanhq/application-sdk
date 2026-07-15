@@ -13,18 +13,25 @@ name: E2E Callback Watchdog
 # pending check is confusing, so this sweeps them out periodically.
 #
 # 15-minute cadence, one call per open PR plus one per stale check found —
-# negligible against github.token's own rate-limit bucket regardless of how
+# negligible against the fleet App token's rate-limit bucket regardless of how
 # many connectors or PRs are open.
+#
+# The sweep runs as the atlan-app-fleet App (scoped to this repo), NOT
+# github.token: the 'Connector E2E run / <repo>' checks are created + completed
+# by that App, and a check run can only be updated by its creating App — so the
+# watchdog's PATCH (timeout_stale_check_runs.py) must use the same App or it is
+# rejected and the stuck checks can never be swept. Same ownership rule the
+# create/callback path relies on (see e2e-apps + tests-reusable report-to-sdk).
 
 on:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
 
+# github.token only needs contents:read for the checkout; the sweep's list +
+# PATCH calls all run under the fleet App token minted below.
 permissions:
   contents: read
-  pull-requests: read
-  checks: write
 
 concurrency:
   group: e2e-callback-watchdog
@@ -45,9 +52,21 @@ jobs:
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
 
+      # Same App that owns the check runs (see pull_request.yaml's "Mint fleet
+      # App token (SDK checks)" step) so the sweep's PATCH is accepted. Scoped
+      # to this repo; needs pull-requests:read + checks:write on the App.
+      - name: Mint fleet App token (SDK checks)
+        id: checks-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - name: Sweep for stale check runs
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.checks-app-token.outputs.token }}
         run: |
           python3 .github/scripts/timeout_stale_check_runs.py \
             --repo "${{ github.repository }}"
