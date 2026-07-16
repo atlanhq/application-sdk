@@ -4,12 +4,6 @@ Fixtures are built from real pyatlan_v9 asset creators and serialized with
 ``to_nested_bytes()`` — the same wire shape connectors write to
 ``transformed/<Entity>/entities.json`` — so the read-back path is exercised
 exactly as it runs in production.
-
-The referential-integrity (orphan) tests need the ``rocksdict``-backed
-``SpillableDict`` from the ``[storage]`` extra and are skipped without it — run
-``uv sync --extra storage`` (CI uses ``--all-extras``) for full local coverage.
-The rocksdict-absent fallback itself is covered unconditionally in
-``TestRocksdictAbsentFallback`` by patching ``SpillableDict`` to raise.
 """
 
 from __future__ import annotations
@@ -209,11 +203,32 @@ class TestReferentialIntegrity:
         assert len(report.orphans) == 1
         orphan = report.orphans[0]
         assert isinstance(orphan, ReferentialFailure)
+        assert orphan.missing_type_name == "Table"
+        assert orphan.missing_qualified_name == missing_parent_qn
+        assert orphan.reference_count == 1
+        # The representative referencing asset is the orphaned Column.
         assert orphan.type_name == "Column"
-        assert orphan.missing_parent_type_name == "Table"
-        assert orphan.missing_parent_qualified_name == missing_parent_qn
+        assert orphan.relationship == "table"
         assert not report.ok
         assert "ORPHAN" in report.format_report()
+
+    def test_one_missing_parent_dedups_across_children(self, tmp_path: Path) -> None:
+        # Two columns reference the same absent Table -> a single orphan entry
+        # with reference_count == 2 (reported once per missing target, not per
+        # child).
+        missing_parent_qn = f"{SCHEMA_QN}/T_MISSING"
+        _write(tmp_path, "Database", [_database()])
+        _write(tmp_path, "Schema", [_schema()])
+        _write(
+            tmp_path,
+            "Column",
+            [_column("C1", missing_parent_qn), _column("C2", missing_parent_qn)],
+        )
+
+        report = validate_transformed_dir(tmp_path / "transformed")
+        assert len(report.orphans) == 1
+        assert report.orphans[0].missing_qualified_name == missing_parent_qn
+        assert report.orphans[0].reference_count == 2
 
     def test_parentless_type_never_flagged(self, tmp_path: Path) -> None:
         # Database's parent (Connection) is created out of band and is not in the
@@ -238,19 +253,19 @@ class TestReferentialIntegrity:
         report = validate_transformed_dir(tmp_path / "transformed")
         assert len(report.orphans) == 1
         assert report.orphans[0].type_name == "Column"
-        assert report.orphans[0].missing_parent_type_name == "Table"
-        assert report.orphans[0].missing_parent_qualified_name == TABLE_QN
+        assert report.orphans[0].missing_type_name == "Table"
+        assert report.orphans[0].missing_qualified_name == TABLE_QN
 
 
 # ---------------------------------------------------------------------------
-# validate_transformed_dir — rocksdict-absent fallback (no [storage] extra)
+# rocksdict-absent fallback (covered unconditionally, no [storage] extra needed)
 # ---------------------------------------------------------------------------
 
 
 class TestRocksdictAbsentFallback:
     """When SpillableDict can't be constructed (rocksdict missing), the orphan
-    pass is skipped but per-asset validation must still run — unconditionally
-    tested by patching SpillableDict to raise ImportError."""
+    pass is skipped but per-asset validation must still run — tested by patching
+    SpillableDict to raise ImportError."""
 
     def test_falls_back_to_per_asset_only(self, tmp_path: Path) -> None:
         # A full hierarchy plus an orphan Column: with the orphan pass live this
@@ -267,9 +282,12 @@ class TestRocksdictAbsentFallback:
                 report = validate_transformed_dir(
                     tmp_path / "transformed", check_referential_integrity=True
                 )
-                # Warned about the skipped orphan pass, with the traceback.
+                # Warned that the orphan pass was skipped. The warning is emitted
+                # outside the except block (benign optional-dep condition), so it
+                # carries no exc_info traceback — by design, not L004-suppressed.
                 logger.warning.assert_called_once()
-                assert logger.warning.call_args.kwargs.get("exc_info") is True
+                assert "rocksdict" in logger.warning.call_args.args[0]
+                assert "exc_info" not in logger.warning.call_args.kwargs
 
         # Per-asset validation still ran across every record; no orphans flagged.
         assert report.orphans == []

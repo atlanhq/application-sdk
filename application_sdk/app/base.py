@@ -13,7 +13,16 @@ from abc import ABC
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import Any, ClassVar, Literal, Never, TypeVar, cast, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Literal,
+    Never,
+    TypeVar,
+    cast,
+    get_type_hints,
+)
 from uuid import UUID
 
 import obstore as obs
@@ -66,6 +75,9 @@ from application_sdk.errors.leaves import InvalidInputError as _InvalidInputErro
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
 
+if TYPE_CHECKING:
+    from application_sdk.validation import AssetValidationReport
+
 _task_logger = get_logger(__name__)
 
 try:
@@ -74,64 +86,82 @@ except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] pac
     _FRAMEWORK_VERSION = "unknown"
 
 
-def _warn_on_invalid_transformed_assets(local_path: str) -> None:
-    """Best-effort, warn-only validation of transformed asset NDJSON before upload.
+def _validate_transformed_assets_blocking(
+    local_path: str,
+) -> "AssetValidationReport | None":
+    """Blocking transformed-asset validation — runs off the event loop in a thread.
 
-    BLDX-1555 defense-in-depth at the SDR→Atlan boundary. When ``local_path``
-    holds transformed asset output, every record is validated against the
-    pyatlan_v9 ``.validate()`` backbone and a warning summarises any invalid
-    assets. The cross-record referential (orphan) pass is intentionally skipped
-    here: a real handoff may upload a partial or incremental subtree, so a parent
-    absent from *this* batch is not necessarily an orphan. That pass runs on the
-    integration-test path (:class:`BaseIntegrationTest` Step 7), which sees the
-    full run output. This **never** blocks the upload and **never** raises — a
-    defect in the scaffold must not break a real handoff — and it scans every
-    record (no sampling) so the summary is accurate.
-
-    This function is synchronous and CPU/IO-bound; ``upload()`` runs it in a
-    worker thread so it never blocks the async event loop.
-
-    No-ops when the flag is disabled or ``local_path`` does not point at a
-    ``transformed/`` asset subtree (e.g. a raw or non-asset upload).
+    Returns the report, or ``None`` when there is nothing to validate (flag off, or
+    ``local_path`` is not a ``transformed/`` asset subtree — e.g. a raw upload).
+    All the work here (filesystem walk, msgspec decode, RocksDB spill) is
+    synchronous and CPU/IO-bound, which is why the async wrapper offloads it.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
         VALIDATE_ASSETS_ON_UPLOAD,
     )
 
     if not VALIDATE_ASSETS_ON_UPLOAD or not local_path:
-        return
-    try:
-        from pathlib import Path  # noqa: PLC0415
+        return None
 
-        from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
-            validate_transformed_dir,
-        )
+    from pathlib import Path  # noqa: PLC0415
 
-        root = Path(local_path)
-        if root.is_dir():
-            transformed = root / "transformed"
-            if transformed.is_dir():
-                target = transformed
-            elif "transformed" in root.parts:
-                target = root
-            else:
-                return
+    from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
+        validate_transformed_dir,
+    )
+
+    root = Path(local_path)
+    if root.is_dir():
+        transformed = root / "transformed"
+        if transformed.is_dir():
+            target = transformed
         elif "transformed" in root.parts:
             target = root
         else:
-            return
+            return None
+    elif "transformed" in root.parts:
+        target = root
+    else:
+        return None
 
-        report = validate_transformed_dir(target, check_referential_integrity=False)
-        if not report.ok:
-            _task_logger.warning(
-                "Transformed-asset validation flagged issues before upload "
-                "(handoff continues): %s",
-                report.format_report(),
-            )
+    return validate_transformed_dir(target)
+
+
+async def _warn_on_invalid_transformed_assets(local_path: str) -> None:
+    """Best-effort, warn-only validation of transformed asset NDJSON before upload.
+
+    BLDX-1555 defense-in-depth at the SDR→Atlan boundary. When ``local_path``
+    holds transformed asset output, every record is validated against the
+    pyatlan_v9 ``.validate()`` backbone (plus the referential/orphan pass) and a
+    warning summarises any invalid or orphaned assets. This **never** blocks the
+    upload and **never** raises — a defect in the scaffold must not break a real
+    handoff — and it scans every record (no sampling) so the summary is accurate.
+
+    The scan is offloaded via :func:`application_sdk.execution.heartbeat.run_in_thread`
+    (the SDK's blocking-work escape hatch, ADR-0010) so it never blocks the event
+    loop or the activity's auto-heartbeat while a large batch is validated.
+    ``run_in_thread`` dispatches onto a dedicated ``sdk-blocking-*`` pool rather
+    than the shared default executor that Temporal's activity scheduling also
+    uses; sharing that pool risks a catastrophic worker deadlock (enforced by
+    conformance rule P031).
+    """
+    from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — deferred: app.base is imported by execution (circular)
+        run_in_thread,
+    )
+
+    try:
+        report = await run_in_thread(_validate_transformed_assets_blocking, local_path)
     except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
         _task_logger.warning(
             "Transformed-asset validation skipped due to an unexpected error",
             exc_info=True,
+        )
+        return
+
+    if report is not None and not report.ok:
+        _task_logger.warning(
+            "Transformed-asset validation flagged issues before upload "
+            "(handoff continues): %s",
+            report.format_report(),
         )
 
 
@@ -962,15 +992,6 @@ class App(ABC):
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED,
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED,
         )
-
-        # BLDX-1555 defense-in-depth: validate transformed assets against the
-        # pyatlan_v9 backbone before the handoff. Warn-only, best-effort — never
-        # blocks the upload. Offloaded to a worker thread so the exhaustive,
-        # synchronous scan never blocks the async event loop (contextvars are
-        # copied into the thread by the helper).
-        from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — deferred: execution imports app.base (circular at module load)
-            run_in_thread as _run_in_thread,
-        )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: app.base is imported by execution which imports storage
             normalize_key,
         )
@@ -978,7 +999,10 @@ class App(ABC):
             upload as _upload,
         )
 
-        await _run_in_thread(_warn_on_invalid_transformed_assets, input.local_path)
+        # BLDX-1555 defense-in-depth: validate transformed assets against the
+        # pyatlan_v9 backbone before the handoff. Warn-only, best-effort, and
+        # offloaded to a worker thread so it never blocks the event loop.
+        await _warn_on_invalid_transformed_assets(input.local_path)
 
         deployment = self.context.storage
         upstream = self.context.upstream_storage

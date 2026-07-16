@@ -17,14 +17,23 @@ Design constraints worth preserving if you edit this file:
   :func:`pyatlan_v9.model.transform.get_type` is what unlocks the rich
   ``for_creation`` hierarchy checks and the typed parent relationships the
   referential pass reads.
+* **Relationships are discovered, not hard-coded.** The referential pass reads
+  whatever relationship references each asset actually carries in the NDJSON
+  (enumerated generically off the Struct's relationship-typed fields) and
+  cross-validates that every referenced ``(typeName, qualifiedName)`` also
+  appears as an emitted asset. There is deliberately no per-type parent map —
+  Atlan has hundreds of relationships and the set changes constantly.
 * **Bounded memory.** The referential pass keys on the compound
-  ``(typeName, qualifiedName)`` and spills the present-set and the parent-lookup
-  queue to disk via :class:`~application_sdk.common.spillable_dict.SpillableDict`,
-  so a multi-million-asset batch never blows the heap.
+  ``(typeName, qualifiedName)`` and spills both the present-asset set and the
+  referenced-target set to disk via
+  :class:`~application_sdk.common.spillable_dict.SpillableDict`, so a
+  multi-million-asset batch never blows the heap.
 """
 
 from __future__ import annotations
 
+import functools
+import typing
 from dataclasses import dataclass, field
 from glob import glob
 from pathlib import Path
@@ -32,6 +41,7 @@ from typing import Iterator
 
 import msgspec
 from pyatlan_v9.model.assets import Asset
+from pyatlan_v9.model.assets.referenceable import RelatedReferenceable
 from pyatlan_v9.model.transform import get_type
 
 from application_sdk.common.spillable_dict import SpillableDict
@@ -63,14 +73,29 @@ class AssetValidationFailure:
 
 @dataclass(frozen=True)
 class ReferentialFailure:
-    """A child asset whose parent ``(typeName, qualifiedName)`` is absent from the batch."""
+    """A relationship reference whose target asset is absent from the batch.
 
+    Captures the missing target plus a representative referencing asset. A single
+    missing target (e.g. one un-emitted parent Table) is reported once, with
+    ``reference_count`` recording how many assets in the batch pointed at it.
+    """
+
+    missing_type_name: str
+    """``typeName`` of the referenced asset that is not present in the batch."""
+    missing_qualified_name: str
+    """``qualifiedName`` of the absent referenced asset."""
+    reference_count: int
+    """How many relationship references in the batch pointed at this target."""
     file: str
+    """NDJSON file of a representative referencing asset."""
     line: int
+    """1-based line of the representative referencing asset."""
     type_name: str
+    """``typeName`` of the representative referencing asset."""
     qualified_name: str
-    missing_parent_type_name: str
-    missing_parent_qualified_name: str
+    """``qualifiedName`` of the representative referencing asset."""
+    relationship: str
+    """The relationship attribute the reference came through (e.g. ``table``)."""
 
 
 @dataclass
@@ -122,9 +147,11 @@ class AssetValidationReport:
         for orphan in self.orphans[:max_items]:
             loc = _location(orphan.file, orphan.line)
             lines.append(
-                f"  ORPHAN [{orphan.type_name}] {orphan.qualified_name}{loc}: "
-                f"parent [{orphan.missing_parent_type_name}] "
-                f"{orphan.missing_parent_qualified_name} not present in batch"
+                f"  ORPHAN [{orphan.missing_type_name}] "
+                f"{orphan.missing_qualified_name} referenced but not present in "
+                f"batch — referenced by {orphan.reference_count} asset(s), e.g. "
+                f"[{orphan.type_name}] {orphan.qualified_name}{loc} "
+                f"via '{orphan.relationship}'"
             )
         extra_orphans = len(self.orphans) - max_items
         if extra_orphans > 0:
@@ -141,7 +168,7 @@ def _location(file: str, line: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Compound-key encoding + parent resolution
+# Compound-key encoding + generic relationship discovery
 # ---------------------------------------------------------------------------
 
 _KEY_SEP = "\x00"
@@ -153,30 +180,6 @@ def _compound_key(type_name: str, qualified_name: str) -> str:
     return f"{type_name}{_KEY_SEP}{qualified_name}"
 
 
-# Hierarchical parent relationship attributes per Atlas ``typeName``, in priority
-# order. Only parents that are expected to appear in the SAME transformed batch
-# belong here — a type absent from this map is treated as parent-less, so we never
-# raise a false-positive orphan (e.g. Database's parent Connection is created out
-# of band and is intentionally omitted). The parent's typeName is read from the
-# related object itself, so it is never hard-coded here. Types absent from this
-# map (BI, dbt, process families) get no orphan checking by design; expanding
-# coverage to them is tracked under CONNECT-292.
-_PARENT_RELATIONSHIP_ATTRS: dict[str, tuple[str, ...]] = {
-    "Schema": ("database",),
-    "Table": ("atlan_schema",),
-    "View": ("atlan_schema",),
-    "MaterialisedView": ("atlan_schema",),
-    "TablePartition": ("table",),
-    "Column": (
-        "table",
-        "view",
-        "materialised_view",
-        "table_partition",
-        "calculation_view",
-    ),
-}
-
-
 def _usable_str(value: object) -> str | None:
     """Return ``value`` when it is a non-empty ``str``, else ``None``.
 
@@ -186,21 +189,58 @@ def _usable_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _parent_key(asset: Asset, type_name: str) -> tuple[str, str] | None:
-    """Return the parent ``(typeName, qualifiedName)`` for ``asset``.
+def _annotation_is_relationship(annotation: object) -> bool:
+    """True when a field annotation references a ``RelatedReferenceable`` subclass.
 
-    ``None`` when the type has no in-batch parent or no parent reference is set
-    (the latter is a per-asset ``for_creation`` concern, caught by pass 1).
+    Handles the ``Union[RelatedX, None, UnsetType]`` / ``Union[List[RelatedX],
+    ...]`` shapes pyatlan_v9 uses for relationship fields by recursing into type
+    arguments.
     """
-    for attr in _PARENT_RELATIONSHIP_ATTRS.get(type_name, ()):
-        related = getattr(asset, attr, None)
-        if related is None:
+    if isinstance(annotation, type):
+        try:
+            return issubclass(annotation, RelatedReferenceable)
+        except TypeError:
+            return False
+    return any(_annotation_is_relationship(arg) for arg in typing.get_args(annotation))
+
+
+@functools.lru_cache(maxsize=None)
+def _relationship_field_names(cls: type) -> tuple[str, ...]:
+    """Relationship-typed field names for a concrete asset class (cached per class).
+
+    Derived from the class's own field annotations, so it tracks the real
+    relationship set — no hand-maintained list to drift.
+    """
+    return tuple(
+        f.name
+        for f in msgspec.structs.fields(cls)
+        if _annotation_is_relationship(f.type)
+    )
+
+
+def _iter_relationship_refs(asset: Asset) -> Iterator[tuple[str, str, str]]:
+    """Yield ``(relationship_field, target_typeName, target_qualifiedName)``.
+
+    Enumerates every relationship reference the asset actually carries — single
+    or list-valued — that identifies its target by qualifiedName. References that
+    only carry a guid (no qualifiedName) are skipped: they cannot be cross-checked
+    against the qualifiedName-keyed present-set.
+    """
+    for name in _relationship_field_names(type(asset)):
+        value = getattr(asset, name, None)
+        if isinstance(value, RelatedReferenceable):
+            candidates: tuple = (value,)
+        elif isinstance(value, list):
+            candidates = tuple(value)
+        else:
             continue
-        parent_qn = _usable_str(getattr(related, "qualified_name", None))
-        parent_tn = _usable_str(getattr(related, "type_name", None))
-        if parent_qn and parent_tn:
-            return parent_tn, parent_qn
-    return None
+        for ref in candidates:
+            if not isinstance(ref, RelatedReferenceable):
+                continue
+            target_tn = _usable_str(getattr(ref, "type_name", None))
+            target_qn = _usable_str(getattr(ref, "qualified_name", None))
+            if target_tn and target_qn:
+                yield name, target_tn, target_qn
 
 
 # ---------------------------------------------------------------------------
@@ -236,11 +276,8 @@ def _deserialize(raw: bytes) -> Asset:
 def validate_asset(asset: Asset, *, for_creation: bool = True) -> list[str]:
     """Run pyatlan_v9's ``.validate()`` and return its error messages.
 
-    Returns an empty list when the asset is valid. A failed validation is
-    reported as the returned messages rather than raised — pyatlan_v9 signals
-    validation failures with ``ValueError``, which is caught here. Any other
-    exception type indicates a genuine defect (not a validation failure) and is
-    left to propagate to the caller.
+    Returns an empty list when the asset is valid. Never raises — a failed
+    validation surfaces as the returned messages.
 
     Args:
         asset: A concrete pyatlan_v9 asset instance.
@@ -287,15 +324,18 @@ def validate_transformed_dir(
 
     Walks the NDJSON (``*.json``) files once. For each record it decodes the
     concrete pyatlan_v9 asset and runs :func:`validate_asset` (pass 1). When
-    ``check_referential_integrity`` is set, it also records each asset's compound
-    ``(typeName, qualifiedName)`` key and, after the walk, flags any child whose
-    referenced parent key is absent from the batch (pass 2). **Every line is
-    always scanned** — the report reflects the full batch, not a sample.
+    ``check_referential_integrity`` is set, that same walk records two things —
+    the compound ``(typeName, qualifiedName)`` of every emitted **asset**, and
+    the compound key of every asset **referenced by a relationship** — and a
+    second pass then flags every referenced target that is not itself present in
+    the batch (the orphan / dangling-parent case). Relationships are discovered
+    from the data, not a hard-coded list. **Every line is always scanned** — the
+    report reflects the full batch, not a sample.
 
     Args:
         path: A transformed-output directory (e.g. ``.../transformed``) or file.
         for_creation: Passed through to each asset's ``.validate()``.
-        check_referential_integrity: Run the orphan-detection second pass.
+        check_referential_integrity: Run the referential second pass.
 
     Returns:
         An :class:`AssetValidationReport` aggregating all axes of failure.
@@ -303,27 +343,28 @@ def validate_transformed_dir(
     report = AssetValidationReport()
     referential = check_referential_integrity
     present: SpillableDict | None = None
-    parent_lookups: SpillableDict | None = None
+    referenced: SpillableDict | None = None
     if referential:
         try:
             present = SpillableDict()
-            parent_lookups = SpillableDict()
+            referenced = SpillableDict()
         except ImportError:
-            # rocksdict is an optional (``[storage]``) dependency. Without it we
-            # can still run per-asset validation — only the cross-record orphan
-            # pass is skipped.
-            logger.warning(
-                "rocksdict unavailable — skipping referential-integrity (orphan) "
-                "validation; per-asset validation still runs",
-                exc_info=True,
-            )
+            # rocksdict is an optional (``[storage]``) dependency and its absence
+            # is benign — no traceback needed. We fall back to per-asset
+            # validation only; the warning below (outside the except so the
+            # ImportError stack isn't logged) tells the caller the orphan pass
+            # was skipped.
             referential = False
             if present is not None:
                 present.close()
                 present = None
+    if check_referential_integrity and not referential:
+        logger.warning(
+            "rocksdict unavailable — skipping referential-integrity (orphan) "
+            "validation; per-asset validation still runs"
+        )
 
     try:
-        lookup_index = 0
         for file_path, line_no, raw in _iter_ndjson_lines(path):
             report.total += 1
             try:
@@ -358,46 +399,62 @@ def validate_transformed_dir(
             else:
                 report.passed += 1
 
-            if referential and present is not None and parent_lookups is not None:
+            if referential and present is not None and referenced is not None:
                 if type_name and qualified_name:
                     present[_compound_key(type_name, qualified_name)] = True
-                parent = _parent_key(asset, type_name)
-                if parent is not None:
-                    parent_lookups[lookup_index] = (
-                        file_path,
-                        line_no,
-                        type_name,
-                        qualified_name,
-                        parent[0],
-                        parent[1],
-                    )
-                    lookup_index += 1
-
-        # Pass 2: the present-set is complete now, so parent membership is safe to
-        # check regardless of child/parent ordering within the batch.
-        if referential and present is not None and parent_lookups is not None:
-            for (
-                file_path,
-                line_no,
-                type_name,
-                qualified_name,
-                parent_tn,
-                parent_qn,
-            ) in parent_lookups.values():
-                if _compound_key(parent_tn, parent_qn) not in present:
-                    report.orphans.append(
-                        ReferentialFailure(
-                            file=file_path,
-                            line=line_no,
-                            type_name=type_name,
-                            qualified_name=qualified_name,
-                            missing_parent_type_name=parent_tn,
-                            missing_parent_qualified_name=parent_qn,
+                # Record every relationship target, deduped by target key: keep a
+                # representative referencing asset and count the references so a
+                # single missing parent is reported once, not once per child.
+                for rel_name, target_tn, target_qn in _iter_relationship_refs(asset):
+                    target_key = _compound_key(target_tn, target_qn)
+                    existing = referenced.get(target_key)
+                    if existing is None:
+                        referenced[target_key] = (
+                            target_tn,
+                            target_qn,
+                            1,
+                            file_path,
+                            line_no,
+                            type_name,
+                            qualified_name,
+                            rel_name,
                         )
+                    else:
+                        referenced[target_key] = (
+                            existing[:2] + (existing[2] + 1,) + existing[3:]
+                        )
+
+        # Pass 2: the present-set is complete, so cross-validate every referenced
+        # target against it regardless of emit order within the batch.
+        if referential and present is not None and referenced is not None:
+            for target_key in referenced.keys():
+                if target_key in present:
+                    continue
+                (
+                    target_tn,
+                    target_qn,
+                    count,
+                    file_path,
+                    line_no,
+                    type_name,
+                    qualified_name,
+                    rel_name,
+                ) = referenced[target_key]
+                report.orphans.append(
+                    ReferentialFailure(
+                        missing_type_name=target_tn,
+                        missing_qualified_name=target_qn,
+                        reference_count=count,
+                        file=file_path,
+                        line=line_no,
+                        type_name=type_name,
+                        qualified_name=qualified_name,
+                        relationship=rel_name,
                     )
+                )
     finally:
-        if parent_lookups is not None:
-            parent_lookups.close()
+        if referenced is not None:
+            referenced.close()
         if present is not None:
             present.close()
 
