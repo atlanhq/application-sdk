@@ -370,6 +370,19 @@ jobs:
       # commit gets the result changes. `hashFiles() == ''` is a step-level
       # expression, not inlined conditional shell, so it stays within the CI
       # authoring rule (no branching logic in `run:` blocks).
+      # Clear the incomplete pinned-ref checkout before re-checking out from
+      # main into the same path. `actions/checkout` already defaults to
+      # `clean: true`, so this is belt-and-suspenders — it makes the "one
+      # path, two checkouts" pattern self-evidently clean for future readers.
+      # Gated on the SAME condition as the fallback: on the happy path (pinned
+      # ref carries the scripts) it is skipped, so the good checkout is never
+      # deleted and the fallback stays skipped — the PR-self-test property is
+      # preserved. Straight-line `rm`, no branching in the shell, per the CI
+      # authoring rule.
+      - name: Clear the stale sparse checkout before falling back
+        if: hashFiles('application-sdk-scripts/.github/scripts/build_callback_summary.py') == ''
+        run: rm -rf application-sdk-scripts
+
       - name: Fall back to main callback scripts if pinned SHA predates them
         id: scripts-fallback
         if: hashFiles('application-sdk-scripts/.github/scripts/build_callback_summary.py') == ''
