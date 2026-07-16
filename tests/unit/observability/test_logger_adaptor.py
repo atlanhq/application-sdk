@@ -1658,6 +1658,14 @@ class TestBuildExtraDict:
         out = _build_extra_dict({"attempt": 7})
         assert out["attempt"] == "7"
 
+    def test_check_matrix_kept_for_gate_outcome_event(self):
+        # The preflight gate emits the per-check matrix as a JSON string;
+        # connector-pulse queries it from LogAttributes. Dropping it here
+        # would silently break the soft-fail pattern analysis (CNCT-81).
+        matrix = '[{"name":"auth","status":"not_ready","passed":false}]'
+        out = _build_extra_dict({"check_matrix": matrix})
+        assert out["check_matrix"] == matrix
+
     def test_atlan_dot_prefix_kept(self):
         # The LogInterceptor emits atlan.correlation_id; any future
         # atlan.* attribute must also pass through the gate.
