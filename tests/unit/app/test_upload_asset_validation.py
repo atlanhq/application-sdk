@@ -8,13 +8,17 @@ to a worker thread via ``run_in_thread``), so tests await it.
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from pyatlan_v9.model.assets import Column, Database, Schema, Table
 
 from application_sdk.app import base as base_module
 from application_sdk.app.base import _warn_on_invalid_transformed_assets
+
+_HAS_ROCKSDICT = importlib.util.find_spec("rocksdict") is not None
 
 CONN = "default/snow/123"
 SCHEMA_QN = f"{CONN}/DB/SCHEMA"
@@ -82,15 +86,12 @@ class TestWarnOnInvalidTransformedAssets:
             await _warn_on_invalid_transformed_assets(str(raw_file))
             logger.warning.assert_not_called()
 
-    async def test_orphan_pass_is_scoped_out_of_upload_hook(
-        self, tmp_path: Path
-    ) -> None:
-        # BLDX-1555 decision: the referential (orphan) pass is NOT run on the
-        # production upload hook — it assumes a complete batch, which incremental
-        # and partial uploads cannot guarantee, so it would false-positive. A
-        # Column whose parent Table is absent from the batch is otherwise valid,
-        # so the hook must stay silent (the orphan pass lives in the integration
-        # runner, where the full run output is known).
+    @pytest.mark.skipif(not _HAS_ROCKSDICT, reason="orphan pass needs rocksdict")
+    async def test_orphan_assets_warn_but_do_not_raise(self, tmp_path: Path) -> None:
+        # BLDX-1555 decision: the upload hook runs the full referential pass by
+        # default — extracts and transforms are full by design, so the batch is
+        # complete and the orphan pass is accurate. A Column whose parent Table is
+        # absent from the batch is an orphan -> warns, never raises.
         _valid_hierarchy(tmp_path)
         _write_transformed(
             tmp_path,
@@ -105,8 +106,10 @@ class TestWarnOnInvalidTransformedAssets:
             ],
         )
         with patch.object(base_module, "_task_logger") as logger:
+            # Must not raise.
             await _warn_on_invalid_transformed_assets(str(tmp_path))
-            logger.warning.assert_not_called()
+            logger.warning.assert_called_once()
+            assert "ORPHAN" in logger.warning.call_args.args[-1]
 
     async def test_transformed_dir_passed_directly_is_scanned(
         self, tmp_path: Path

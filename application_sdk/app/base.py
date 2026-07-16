@@ -123,12 +123,12 @@ def _validate_transformed_assets_blocking(
     else:
         return None
 
-    # Referential (orphan) integrity is scoped OFF on the production upload hook:
-    # the pass assumes every referenced parent is present in the same batch, which
-    # is false for incremental crawls (parents already in Atlan, not re-emitted)
-    # and single-file uploads, so it would false-positive here. The orphan pass
-    # stays on in the integration-test runner, where the full run output is known.
-    return validate_transformed_dir(target, check_referential_integrity=False)
+    # Referential (orphan) integrity runs by default on the upload hook: extracts
+    # and transforms are full by design by default, so every referenced parent is
+    # present in the same batch and the orphan pass is accurate. It is warn-only
+    # (never blocks, never raises), so even on an atypical partial batch the worst
+    # case is a spurious warning, not a failed handoff.
+    return validate_transformed_dir(target)
 
 
 async def _warn_on_invalid_transformed_assets(local_path: str) -> None:
@@ -136,12 +136,12 @@ async def _warn_on_invalid_transformed_assets(local_path: str) -> None:
 
     BLDX-1555 defense-in-depth at the SDR→Atlan boundary. When ``local_path``
     holds transformed asset output, every record is validated against the
-    pyatlan_v9 ``.validate()`` backbone and a warning summarises any invalid
-    assets. The referential/orphan pass is intentionally **not** run here — it
-    assumes a complete batch, which the prod upload path cannot guarantee. This
-    **never** blocks the upload and **never** raises — a defect in the scaffold
-    must not break a real handoff — and it scans every record (no sampling) so
-    the summary is accurate.
+    pyatlan_v9 ``.validate()`` backbone (plus the referential/orphan pass) and a
+    warning summarises any invalid or orphaned assets. Extracts and transforms are
+    full by design by default, so the batch is complete and the orphan pass is
+    accurate. This **never** blocks the upload and **never** raises — a defect in
+    the scaffold must not break a real handoff — and it scans every record (no
+    sampling) so the summary is accurate.
 
     The scan is offloaded via :func:`application_sdk.execution.heartbeat.run_in_thread`
     (the SDK's blocking-work escape hatch, ADR-0010) so it never blocks the event
