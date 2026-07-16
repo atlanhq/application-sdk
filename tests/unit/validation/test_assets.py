@@ -292,5 +292,31 @@ class TestRocksdictAbsentFallback:
         # Per-asset validation still ran across every record; no orphans flagged.
         assert report.orphans == []
         assert report.total == 4
+        # passed == total proves the per-asset pass actually ran (its stated
+        # intent), not just that nothing failed — a silent skip would leave
+        # passed at 0 while total/failed still looked clean.
+        assert report.passed == 4
         assert report.failed == 0
         assert report.ok
+
+
+# ---------------------------------------------------------------------------
+# single-file input (the _iter_ndjson_lines file branch, exercised directly)
+# ---------------------------------------------------------------------------
+
+
+class TestSingleFileInput:
+    def test_single_file_is_scanned(self, tmp_path: Path) -> None:
+        # Point validate_transformed_dir at one NDJSON file, not a directory —
+        # the file branch of _iter_ndjson_lines must scan it the same way.
+        bad = _table(name="BAD")
+        bad.qualified_name = None  # caught by pyatlan_v9 .validate()
+        _write(tmp_path, "Table", [_table(), bad])
+        entities = tmp_path / "transformed" / "Table" / "entities.json"
+
+        report = validate_transformed_dir(entities, check_referential_integrity=False)
+
+        assert report.total == 2
+        assert report.passed == 1
+        assert report.failed == 1
+        assert not report.ok

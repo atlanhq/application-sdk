@@ -123,7 +123,12 @@ def _validate_transformed_assets_blocking(
     else:
         return None
 
-    return validate_transformed_dir(target)
+    # Referential (orphan) integrity is scoped OFF on the production upload hook:
+    # the pass assumes every referenced parent is present in the same batch, which
+    # is false for incremental crawls (parents already in Atlan, not re-emitted)
+    # and single-file uploads, so it would false-positive here. The orphan pass
+    # stays on in the integration-test runner, where the full run output is known.
+    return validate_transformed_dir(target, check_referential_integrity=False)
 
 
 async def _warn_on_invalid_transformed_assets(local_path: str) -> None:
@@ -131,10 +136,12 @@ async def _warn_on_invalid_transformed_assets(local_path: str) -> None:
 
     BLDX-1555 defense-in-depth at the SDR→Atlan boundary. When ``local_path``
     holds transformed asset output, every record is validated against the
-    pyatlan_v9 ``.validate()`` backbone (plus the referential/orphan pass) and a
-    warning summarises any invalid or orphaned assets. This **never** blocks the
-    upload and **never** raises — a defect in the scaffold must not break a real
-    handoff — and it scans every record (no sampling) so the summary is accurate.
+    pyatlan_v9 ``.validate()`` backbone and a warning summarises any invalid
+    assets. The referential/orphan pass is intentionally **not** run here — it
+    assumes a complete batch, which the prod upload path cannot guarantee. This
+    **never** blocks the upload and **never** raises — a defect in the scaffold
+    must not break a real handoff — and it scans every record (no sampling) so
+    the summary is accurate.
 
     The scan is offloaded via :func:`application_sdk.execution.heartbeat.run_in_thread`
     (the SDK's blocking-work escape hatch, ADR-0010) so it never blocks the event
@@ -144,6 +151,15 @@ async def _warn_on_invalid_transformed_assets(local_path: str) -> None:
     uses; sharing that pool risks a catastrophic worker deadlock (enforced by
     conformance rule P031).
     """
+    from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
+        VALIDATE_ASSETS_ON_UPLOAD,
+    )
+
+    # Read the flag before the thread hop so a disabled feature costs nothing —
+    # no thread-pool dispatch on every upload. The blocking scan re-checks it too.
+    if not VALIDATE_ASSETS_ON_UPLOAD:
+        return
+
     from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — deferred: app.base is imported by execution (circular)
         run_in_thread,
     )

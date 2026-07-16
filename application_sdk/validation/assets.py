@@ -129,9 +129,13 @@ class AssetValidationReport:
         ``max_items`` caps how many failures/orphans are *listed*, never how many
         are examined — the headline counts always reflect the full batch.
         """
+        # ``failed`` (len(failures)) includes the undeserializable records, so
+        # report the two disjointly: "invalid" is the per-asset validation
+        # failures only, with undeserializable counted separately.
+        invalid = self.failed - self.undeserializable
         lines = [
             f"Asset validation: {self.passed}/{self.total} passed, "
-            f"{self.failed} invalid, {len(self.orphans)} orphaned, "
+            f"{invalid} invalid, {len(self.orphans)} orphaned, "
             f"{self.undeserializable} undeserializable"
         ]
         for failure in self.failures[:max_items]:
@@ -288,7 +292,7 @@ def validate_asset(asset: Asset, *, for_creation: bool = True) -> list[str]:
     """
     try:
         asset.validate(for_creation=for_creation)
-    except ValueError as exc:
+    except Exception as exc:  # noqa: BLE001 — "Never raises": any validate() error surfaces as a message, never aborts the batch
         return [str(exc)]
     return []
 
