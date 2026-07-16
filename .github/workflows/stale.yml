@@ -1,0 +1,60 @@
+name: Stale issues and PRs (Reusable)
+
+# Reusable workflow: marks stale issues and PRs. Called by every app repo's
+# own .github/workflows/stale.yml (scaffolded by
+# `atlan-application-sdk-conformance bootstrap`):
+#
+#   on:
+#     schedule:
+#       - cron: 0 0 * * 0
+#   jobs:
+#     call-stale-workflow:
+#       uses: atlanhq/application-sdk/.github/workflows/stale.yml@main
+#
+# This file did not exist until now -- every caller above has been failing
+# with a "workflow not found" startup error since the bootstrap template
+# was introduced. Mirrors this repo's own stale job (schedule.yaml),
+# including debug-only: true: that's a deliberate choice here (observe,
+# don't auto-close) so activating this for the first time across the whole
+# fleet doesn't immediately close a large accumulated backlog. Flip
+# debug-only off per-repo (via a fork of this file, or once this input is
+# added) if a caller wants real closure.
+
+on:
+  workflow_call:
+    secrets:
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller (none use 'secrets: inherit' yet) -- falls back to the default GITHUB_TOKEN, which is sufficient here."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Mark stale issues and PRs
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
+        with:
+          repo-token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          stale-issue-message: 'Stale Issue'
+          stale-pr-message: 'Stale Pull Request'
+          stale-issue-label: 'Stale'
+          stale-pr-label: 'Stale'
+          days-before-stale: 60
+          debug-only: 'true'
