@@ -130,7 +130,6 @@ if TYPE_CHECKING:
     from application_sdk.infrastructure._dapr.http import AsyncDaprClient
     from application_sdk.infrastructure.context import InfrastructureContext
     from application_sdk.infrastructure.secrets import SecretStore
-    from application_sdk.server.health import TemporalClientProtocol, WorkerHealthServer
 
 
 logger = get_logger(__name__)
@@ -973,31 +972,6 @@ async def _run_worker_with_restart(
                 logger.debug("Restart backoff elapsed; rebuilding worker")
 
 
-def _make_health_server(
-    config: AppConfig, client: "TemporalClientProtocol"
-) -> "WorkerHealthServer":
-    """Build a WorkerHealthServer wired for the worker liveness window.
-
-    Shared by :func:`run_worker_mode` and :func:`run_combined_mode` so the
-    liveness-window wiring (BLDX-1552) lives in one place. The per-mode
-    ``on_activity`` recorder is wired separately in each ``_build_worker()``
-    closure.
-    """
-    from application_sdk.constants import (  # noqa: PLC0415 — cold path: liveness window only in worker/combined mode
-        WORKER_LIVENESS_MAX_IDLE_SECONDS,
-    )
-    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
-        WorkerHealthServer,
-    )
-
-    health_server = WorkerHealthServer(
-        port=config.health_port,
-        max_idle_seconds=WORKER_LIVENESS_MAX_IDLE_SECONDS,
-    )
-    health_server.set_temporal_client(client)
-    return health_server
-
-
 async def run_worker_mode(config: AppConfig) -> None:
     """Run in worker mode (Temporal workflow execution).
 
@@ -1107,7 +1081,11 @@ async def run_worker_mode(config: AppConfig) -> None:
             type(handler_for_sdr).__name__,
         )
 
-    health_server = _make_health_server(config, client)
+    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health server only in worker mode
+        build_worker_health_server,
+    )
+
+    health_server = build_worker_health_server(port=config.health_port, client=client)
 
     # Worker-only mode pushes metrics to a Pushgateway since the process has
     # no /metrics endpoint to scrape. Combined mode (run_combined_mode below)
@@ -1389,7 +1367,11 @@ async def run_combined_mode(config: AppConfig) -> None:
 
     handler = handler_class()
 
-    health_server = _make_health_server(config, client)
+    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health server only in combined mode
+        build_worker_health_server,
+    )
+
+    health_server = build_worker_health_server(port=config.health_port, client=client)
 
     def _build_worker() -> Any:
         # Rebuilt on each supervisor restart — Worker instances are single-use.

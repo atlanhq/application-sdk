@@ -393,6 +393,38 @@ class WorkerHealthServer:
         await self.stop()
 
 
+def build_worker_health_server(
+    *, port: int, client: TemporalClientProtocol
+) -> WorkerHealthServer:
+    """Build a ``WorkerHealthServer`` wired for the worker liveness window.
+
+    Shared by ``run_worker_mode`` and ``run_combined_mode`` (``main.py``) so the
+    liveness-window wiring (BLDX-1552) lives beside ``WorkerHealthServer`` rather
+    than growing ``main.py``. The window comes from
+    ``ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS`` (default disabled). The per-mode
+    ``on_activity`` recorder is wired separately in each ``_build_worker()``
+    closure, since it depends on the mode's worker.
+
+    Args:
+        port: Port the health server binds to.
+        client: Temporal client used for the readiness check.
+
+    Returns:
+        A configured (not yet started) ``WorkerHealthServer``.
+    """
+    # Lazy so importing this module never pulls in the constants module.
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker/combined boot only
+        WORKER_LIVENESS_MAX_IDLE_SECONDS,
+    )
+
+    server = WorkerHealthServer(
+        port=port,
+        max_idle_seconds=WORKER_LIVENESS_MAX_IDLE_SECONDS,
+    )
+    server.set_temporal_client(client)
+    return server
+
+
 async def run_health_server(
     *,
     host: str = "0.0.0.0",

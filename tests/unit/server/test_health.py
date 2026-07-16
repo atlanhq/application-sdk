@@ -6,6 +6,7 @@ Tests that start a real local TCP server have been moved to
 tests/integration/server/test_health.py.
 """
 
+import math
 from datetime import timedelta
 
 import pytest
@@ -96,4 +97,19 @@ class TestCheckLive:
     async def test_zero_max_idle_seconds_disables_window(self):
         server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=0)
         # Disabled window: /live stays healthy even with no activity recorded.
+        assert (await server.check_live()).healthy is True
+
+    @pytest.mark.parametrize("bad_window", [-10, math.inf, math.nan])
+    @pytest.mark.asyncio
+    async def test_non_positive_or_non_finite_window_disables_check(
+        self, bad_window: float
+    ):
+        """The constructor normalizes negative / inf / nan windows to disabled
+        (mirrors the env loader). A stale last_activity must still be healthy so
+        the ``> 0`` / ``math.isfinite`` guard can't silently regress."""
+        server = WorkerHealthServer(
+            host="127.0.0.1", port=0, max_idle_seconds=bad_window
+        )
+        assert server._max_idle_seconds is None
+        server._last_activity = _utc_now() - timedelta(hours=1)
         assert (await server.check_live()).healthy is True

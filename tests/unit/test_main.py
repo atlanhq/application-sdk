@@ -1463,7 +1463,15 @@ class TestRunWorkerMode:
         ):
             await run_worker_mode(cfg)
 
+        from application_sdk.constants import WORKER_LIVENESS_MAX_IDLE_SECONDS
+
         assert captured["on_activity"] is health_cm.record_activity
+        # The liveness window must reach the constructor: a dropped kwarg would
+        # silently never activate /live yet leave the on_activity wiring intact.
+        assert (
+            worker_patches["health"].call_args.kwargs["max_idle_seconds"]
+            == WORKER_LIVENESS_MAX_IDLE_SECONDS
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -1747,7 +1755,15 @@ class TestRunCombinedMode:
         ):
             await run_combined_mode(cfg)
 
+        from application_sdk.constants import WORKER_LIVENESS_MAX_IDLE_SECONDS
+
         assert captured["on_activity"] is health_cm.record_activity
+        # The liveness window must reach the constructor: a dropped kwarg would
+        # silently never activate /live yet leave the on_activity wiring intact.
+        assert (
+            combined_patches["health"].call_args.kwargs["max_idle_seconds"]
+            == WORKER_LIVENESS_MAX_IDLE_SECONDS
+        )
 
 
 # --------------------------------------------------------------------------- #

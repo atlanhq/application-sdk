@@ -52,21 +52,6 @@ def test_records_on_heartbeat() -> None:
     passed_outbound.next.heartbeat.assert_called_once_with("progress", 42)
 
 
-def test_init_wraps_outbound_so_heartbeats_are_recorded() -> None:
-    calls: list[int] = []
-    next_inbound = MagicMock()
-
-    inbound = LivenessInterceptor(lambda: calls.append(1)).intercept_activity(
-        next_inbound
-    )
-    inbound.init(MagicMock())
-
-    # The outbound passed downstream must record on heartbeat.
-    (passed_outbound,), _ = next_inbound.init.call_args
-    passed_outbound.heartbeat()
-    assert calls == [1]
-
-
 @pytest.mark.asyncio
 async def test_record_callback_failure_never_blocks_activity() -> None:
     """A raising record callback must not fail the activity (best-effort guard)."""
