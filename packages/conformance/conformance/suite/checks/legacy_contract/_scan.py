@@ -66,6 +66,21 @@ _K002_IMPORT_RE = re.compile(
     r'\bimport\s+"(?:[^"]*/)?(?:Config|Credential|Renderers)\.pkl"'
 )
 
+# K002b exemption — a contract that *amends* Credential.pkl is a credential-config
+# sub-contract, not an App.pkl entrypoint, and legitimately imports Config.pkl for
+# its widget types.  Credential.pkl uses ``Config.*`` internally and, unlike
+# App.pkl, does NOT re-export those widgets as unqualified typealiases, so a
+# credential contract that referenced them without the import would fail
+# ``pkl eval`` ("Cannot find type TextInput").  K002b's premise — "these imports
+# are not needed because App.pkl re-exports them" — simply does not hold for a
+# Credential.pkl base, so the legacy-import check is skipped for such files.
+# (App.pkl- and NativeApp.pkl-amending contracts are unaffected: there the import
+# really is redundant / legacy and still fires.)  Same ``(?:[^"]*/)?`` anchoring
+# as K001 so only the exact ``Credential.pkl`` base matches.
+_K002_CREDENTIAL_BASE_RE = re.compile(
+    r'\bamends\s+"(?:[^"]*/)?Credential\.pkl"'
+)
+
 # ---------------------------------------------------------------------------
 # Block-comment stripping
 # ---------------------------------------------------------------------------
@@ -136,6 +151,17 @@ def scan_text(text: str, rel: str) -> list[Finding]:
     clean = _strip_block_comments(text)
     lines = clean.splitlines()
 
+    # A credential-config sub-contract (``amends Credential.pkl``) legitimately
+    # imports Config.pkl for its widget types, so the K002b legacy-import check
+    # does not apply to it (see _K002_CREDENTIAL_BASE_RE).  Detect the base once,
+    # honouring the same comment handling the main scan uses (skip ``//``-only
+    # lines, strip trailing comments) so a commented-out amends line is ignored.
+    base_is_credential = any(
+        _K002_CREDENTIAL_BASE_RE.search(_strip_line_comment(ln))
+        for ln in lines
+        if not ln.strip().startswith("//")
+    )
+
     findings: list[Finding] = []
 
     for lineno, line in enumerate(lines, start=1):
@@ -205,8 +231,10 @@ def scan_text(text: str, rel: str) -> list[Finding]:
             )
 
         # ── K002b: legacy import statements ──────────────────────────────
+        # Skipped for credential-config sub-contracts, which legitimately import
+        # Config.pkl for their widget types (see _K002_CREDENTIAL_BASE_RE).
         im = _K002_IMPORT_RE.search(code_only)
-        if im:
+        if im and not base_is_credential:
             import_str = im.group(0)
             col = im.start() + 1
             suppressed, justification = _make_pkl_finding_suppressed(

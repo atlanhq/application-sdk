@@ -315,6 +315,56 @@ def test_k002_renderers_import(tmp_path: Path) -> None:
     assert "Argo-era" in k002[0].message
 
 
+def test_k002_config_import_legitimate_when_amends_credential(
+    tmp_path: Path,
+) -> None:
+    """K002 must NOT fire for ``import "…Config.pkl"`` in a credential contract.
+
+    A contract that *amends* Credential.pkl is a credential-config sub-contract,
+    not an App.pkl entrypoint.  Credential.pkl uses ``Config.*`` internally but,
+    unlike App.pkl, does NOT re-export the widget types as unqualified
+    typealiases, so the import is required for ``pkl eval`` to resolve
+    ``Config.TextInput`` etc. — flagging it is a false positive.
+    """
+    content = dedent("""\
+        amends "@app-contract-toolkit/Credential.pkl"
+        import "@app-contract-toolkit/Config.pkl"
+
+        name = "csa-connectors-objectstore"
+        source = "Object Store"
+
+        options {
+          ["s3"] = new NestedCredentialInput {
+            inputs {
+              ["username"] = new Config.TextInput { title = "AWS access key" }
+            }
+          }
+        }
+    """)
+    findings = _scan_all(tmp_path, {"contract/csa-connectors-objectstore.pkl": content})
+    k002 = [f for f in findings if f.rule_id == "K002"]
+    assert k002 == [], f"Unexpected K002 firing on a credential contract: {k002}"
+
+
+def test_k002_import_fires_when_credential_amends_is_commented(
+    tmp_path: Path,
+) -> None:
+    """The Credential.pkl exemption honours comment handling.
+
+    A commented-out ``amends Credential.pkl`` line must NOT exempt an App.pkl
+    contract from K002b — otherwise a stray comment could silence real findings.
+    """
+    content = dedent("""\
+        amends "@app-contract-toolkit/App.pkl"
+        // amends "@app-contract-toolkit/Credential.pkl"
+        import "@app-contract-toolkit/Config.pkl"
+    """)
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    k002 = [f for f in findings if f.rule_id == "K002"]
+    assert len(k002) == 1
+    assert "Config.pkl" in k002[0].message
+
+
 def test_k002_not_fired_for_user_named_import(tmp_path: Path) -> None:
     """K002 must NOT fire for a user-named module that ends in 'Config.pkl'.
 
