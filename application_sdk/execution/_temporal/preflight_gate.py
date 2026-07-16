@@ -12,6 +12,7 @@ so the abort shows red in Temporal and attributes to preflight; ``READY`` and
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
@@ -263,6 +264,37 @@ def _dump_check(check: PreflightCheck) -> dict[str, Any]:
     return dumped
 
 
+def _check_matrix_json(checks: list[PreflightCheck]) -> str:
+    """Compact per-check matrix for the outcome event, as one JSON string.
+
+    Lands as a single ``LogAttributes`` value in ClickHouse, so connector-pulse
+    can pattern-match verdicts against workflow outcomes (``JSONExtract``) with
+    no schema change. Small fixed fields only — messages and evidence stay in
+    the Temporal activity result. A failed check without a stamped
+    :attr:`PreflightCheck.status` is emitted as ``"unset"`` and logged as a
+    warning, so un-migrated handlers surface as adoption gaps in the dashboard
+    instead of blending into real verdicts.
+    """
+    rows = []
+    for check in checks:
+        if check.status is None and not check.passed:
+            logger.warning(
+                "Preflight check %r failed without a per-check status; emitting "
+                "'unset' — stamp status=NOT_READY (blocking) or PARTIAL (advisory)",
+                check.name,
+            )
+        rows.append(
+            {
+                "name": check.name,
+                "status": check.status.value if check.status else "unset",
+                "passed": check.passed,
+                "error_code": check.error.code if check.error else "",
+                "duration_ms": check.duration_ms,
+            }
+        )
+    return json.dumps(rows, separators=(",", ":"))
+
+
 def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
     """Build the ``PreflightFailed`` ApplicationError for a NOT_READY verdict.
 
@@ -461,6 +493,7 @@ def build_preflight_gate_activity(
                 app_name=app_name,
                 entrypoint=entry,
                 checks=len(result.checks),
+                check_matrix=_check_matrix_json(result.checks),
             )
             raise block_error
         logger.info(
@@ -470,6 +503,7 @@ def build_preflight_gate_activity(
             app_name=app_name,
             entrypoint=entry,
             checks=len(result.checks),
+            check_matrix=_check_matrix_json(result.checks),
         )
         return result
 

@@ -5,6 +5,7 @@ Separate from the SDR activity tests — the gate is its own module/concern.
 
 from __future__ import annotations
 
+import json
 import warnings
 from contextlib import ExitStack, contextmanager
 from typing import Any
@@ -682,6 +683,113 @@ class TestPreflightGateOutcomeEvent:
         details = excinfo.value.details[0]
         assert details.code == "PREFLIGHT_CHECK_FAILED"
         assert details.category is FailureCategory.PRECONDITION
+
+    async def test_check_matrix_on_proceed(self) -> None:
+        # The matrix is the soft-fail pattern-analysis payload: per-check verdict,
+        # small fixed fields only, JSON-encoded so it lands as one LogAttributes value.
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    status=PreflightStatus.NOT_READY,
+                    error=AuthError(message="x"),
+                    duration_ms=312.0,
+                ),
+                PreflightCheck(name="tables", passed=True, duration_ms=95.0),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert isinstance(ev["check_matrix"], str)
+        assert json.loads(ev["check_matrix"]) == [
+            {
+                "name": "auth",
+                "status": "not_ready",
+                "passed": False,
+                "error_code": "AUTH",
+                "duration_ms": 312.0,
+            },
+            {
+                "name": "tables",
+                "status": "ready",  # derived READY for passed checks
+                "passed": True,
+                "error_code": "",
+                "duration_ms": 95.0,
+            },
+        ]
+
+    async def test_check_matrix_on_block(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    status=PreflightStatus.NOT_READY,
+                    error=AuthError(message="x"),
+                )
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        matrix = json.loads(_outcome_event(ml)["check_matrix"])
+        assert matrix[0]["name"] == "auth"
+        assert matrix[0]["status"] == "not_ready"
+
+    async def test_unset_status_on_failed_check_warns_and_emits_unset(self) -> None:
+        # Un-migrated handler: failed check without a stamped status shows up as
+        # an adoption gap ("unset") instead of blending into real verdicts.
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[PreflightCheck(name="tables", passed=False, message="advisory")],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        matrix = json.loads(_outcome_event(ml)["check_matrix"])
+        assert matrix[0]["status"] == "unset"
+        assert any("tables" in str(c) for c in ml.warning.call_args_list)
+
+    async def test_stamped_checks_do_not_warn(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[
+                PreflightCheck(
+                    name="tables", passed=False, status=PreflightStatus.PARTIAL
+                )
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        assert ml.warning.call_args_list == []
+
+    async def test_check_matrix_empty_checks(self) -> None:
+        out = PreflightOutput(status=PreflightStatus.READY, checks=[])
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        assert _outcome_event(ml)["check_matrix"] == "[]"
+
+    async def test_check_matrix_carries_no_messages(self) -> None:
+        # Messages/evidence stay in the Temporal activity result — the event row
+        # must stay small and free of user-facing text.
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    status=PreflightStatus.NOT_READY,
+                    message="human text",
+                    error=AuthError(message="secret-adjacent detail"),
+                )
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        (row,) = json.loads(_outcome_event(ml)["check_matrix"])
+        assert set(row) == {"name", "status", "passed", "error_code", "duration_ms"}
 
     async def test_verdict_log_replaced_by_outcome_event(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
