@@ -91,7 +91,12 @@ jobs:
       # which keeps it from re-removing entries) and scans the current base image.
       - name: Wait ${{ matrix.delay-minutes }}m (widen the out-of-band rebuild window)
         shell: bash
-        run: sleep $(( ${{ matrix.delay-minutes }} * 60 ))
+        env:
+          # Via env (not inlined in run:) so the expression can't be treated as
+          # a shell-injection surface. matrix values are trusted, but this is the
+          # idiom actionlint/CI standards expect.
+          DELAY_MINUTES: ${{ matrix.delay-minutes }}
+        run: sleep $(( DELAY_MINUTES * 60 ))
       # ref: main (not the release tag) so the fresh scan reflects main and the
       # allowlist-removal PR bases cleanly on main. Releases are cut from main,
       # so main HEAD ≈ the released state. Checked out as atlan-ci so the removal
