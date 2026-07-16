@@ -54,6 +54,16 @@ Used by the Temporal Worker Deployment controller (TWD). Leave empty unless your
 | `ATLAN_APP_BUILD_ID` | _(empty)_ | Build ID for worker versioning. Fallback: `TEMPORAL_BUILD_ID`. |
 | `ATLAN_APP_DEPLOYMENT_NAME` | _(empty)_ | Worker Deployment name (`<namespace>/<twd-name>`). Fallback: `TEMPORAL_DEPLOYMENT_NAME`. |
 
+### Worker Restart Supervisor
+
+Bounds the restart supervisor that rebuilds the worker after a fatal poll error (e.g. a transient auth failure) instead of exiting. Defaults are sensible; override only to tune restart behavior.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_WORKER_MAX_CONSECUTIVE_RESTARTS` | `10` | Consecutive worker-fatal failures tolerated before the supervisor gives up and re-raises, so a persistent misconfiguration still fails loud instead of hot-looping. The counter resets after a healthy run window. |
+| `ATLAN_WORKER_RESTART_BACKOFF_CAP_SECONDS` | `30` | Upper bound (seconds) for the full-jitter exponential backoff between worker restarts. The backoff is raced against shutdown so SIGTERM stays responsive. |
+| `ATLAN_WORKER_HEALTHY_RUN_SECONDS` | `300` | A worker that ran at least this long (seconds) before failing is treated as a fresh incident, resetting the consecutive-failure streak. |
+
 ### TLS
 
 | Variable | Default | Description |
