@@ -73,10 +73,14 @@ _K002_IMPORT_RE = re.compile(
 # credential contract that referenced them without the import would fail
 # ``pkl eval`` ("Cannot find type TextInput").  K002b's premise — "these imports
 # are not needed because App.pkl re-exports them" — simply does not hold for a
-# Credential.pkl base, so the legacy-import check is skipped for such files.
-# (App.pkl- and NativeApp.pkl-amending contracts are unaffected: there the import
-# really is redundant / legacy and still fires.)  Same ``(?:[^"]*/)?`` anchoring
-# as K001 so only the exact ``Credential.pkl`` base matches.
+# ``Config.pkl`` import on a Credential.pkl base, so K002b is skipped for that
+# specific import.  The exemption is scoped to ``Config.pkl`` only: Credential.pkl
+# itself imports and invokes ``Renderers.pkl`` internally, so an amending contract
+# has no reason to import ``Renderers.pkl`` (or ``Credential.pkl``) — such an import
+# is genuinely legacy and still fires K002b.  (App.pkl- and NativeApp.pkl-amending
+# contracts are unaffected: there every legacy import stays redundant / legacy and
+# still fires.)  Same ``(?:[^"]*/)?`` anchoring as K001 so only the exact
+# ``Credential.pkl`` base matches.
 _K002_CREDENTIAL_BASE_RE = re.compile(r'\bamends\s+"(?:[^"]*/)?Credential\.pkl"')
 
 # ---------------------------------------------------------------------------
@@ -151,9 +155,10 @@ def scan_text(text: str, rel: str) -> list[Finding]:
 
     # A credential-config sub-contract (``amends Credential.pkl``) legitimately
     # imports Config.pkl for its widget types, so the K002b legacy-import check
-    # does not apply to it (see _K002_CREDENTIAL_BASE_RE).  Detect the base once,
-    # honouring the same comment handling the main scan uses (skip ``//``-only
-    # lines, strip trailing comments) so a commented-out amends line is ignored.
+    # does not apply to its ``Config.pkl`` import (see _K002_CREDENTIAL_BASE_RE).
+    # Detect the base once, honouring the same comment handling the main scan uses
+    # (skip ``//``-only lines, strip trailing comments) so a commented-out amends
+    # line is ignored.
     base_is_credential = any(
         _K002_CREDENTIAL_BASE_RE.search(_strip_line_comment(ln))
         for ln in lines
@@ -229,10 +234,12 @@ def scan_text(text: str, rel: str) -> list[Finding]:
             )
 
         # ── K002b: legacy import statements ──────────────────────────────
-        # Skipped for credential-config sub-contracts, which legitimately import
-        # Config.pkl for their widget types (see _K002_CREDENTIAL_BASE_RE).
+        # Skipped only for the ``Config.pkl`` import on a credential-config
+        # sub-contract, which legitimately imports it for widget types (see
+        # _K002_CREDENTIAL_BASE_RE).  A ``Renderers.pkl`` / ``Credential.pkl``
+        # import on such a contract is still genuinely legacy and still fires.
         im = _K002_IMPORT_RE.search(code_only)
-        if im and not base_is_credential:
+        if im and not (base_is_credential and "Config.pkl" in im.group(0)):
             import_str = im.group(0)
             col = im.start() + 1
             suppressed, justification = _make_pkl_finding_suppressed(

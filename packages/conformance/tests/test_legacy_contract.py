@@ -365,6 +365,50 @@ def test_k002_import_fires_when_credential_amends_is_commented(
     assert "Config.pkl" in k002[0].message
 
 
+def test_k002_fires_for_renderers_import_on_credential_contract(
+    tmp_path: Path,
+) -> None:
+    """The exemption is scoped to ``Config.pkl`` only.
+
+    Credential.pkl imports and invokes ``Renderers.pkl`` itself, so an amending
+    contract has no reason to import ``Renderers.pkl``.  Such an import is
+    genuinely legacy, so K002b must still fire for it even on a credential base —
+    only the legitimate ``Config.pkl`` import is exempt.
+    """
+    content = dedent("""\
+        amends "@app-contract-toolkit/Credential.pkl"
+        import "@app-contract-toolkit/Config.pkl"
+        import "@app-contract-toolkit/Renderers.pkl"
+    """)
+    findings = _scan_all(tmp_path, {"contract/csa-connectors-objectstore.pkl": content})
+    k002 = [f for f in findings if f.rule_id == "K002"]
+    assert len(k002) == 1, f"Expected exactly the Renderers.pkl finding: {k002}"
+    assert "Renderers.pkl" in k002[0].message
+
+
+def test_k002_import_fires_when_credential_amends_is_block_commented(
+    tmp_path: Path,
+) -> None:
+    """The Credential.pkl exemption honours block-comment handling.
+
+    A block-comment-wrapped ``amends Credential.pkl`` must NOT exempt an App.pkl
+    contract from K002b — mirrors ``test_k001_not_fired_for_block_commented_amends``
+    for coverage symmetry (block comments are pre-stripped before
+    ``base_is_credential`` is computed).
+    """
+    content = dedent("""\
+        amends "@app-contract-toolkit/App.pkl"
+        /*
+        amends "@app-contract-toolkit/Credential.pkl"
+        */
+        import "@app-contract-toolkit/Config.pkl"
+    """)
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    k002 = [f for f in findings if f.rule_id == "K002"]
+    assert len(k002) == 1
+    assert "Config.pkl" in k002[0].message
+
+
 def test_k002_not_fired_for_user_named_import(tmp_path: Path) -> None:
     """K002 must NOT fire for a user-named module that ends in 'Config.pkl'.
 
