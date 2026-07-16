@@ -6,9 +6,13 @@ Tests that start a real local TCP server have been moved to
 tests/integration/server/test_health.py.
 """
 
+import math
+from datetime import timedelta
+from unittest.mock import patch
+
 import pytest
 
-from application_sdk.server.health import HealthStatus, WorkerHealthServer
+from application_sdk.server.health import HealthStatus, WorkerHealthServer, _utc_now
 
 # ---------------------------------------------------------------------------
 # HealthStatus
@@ -46,3 +50,84 @@ class TestWorkerHealthServerState:
         assert server._last_activity is None
         server.record_activity()
         assert server._last_activity is not None
+
+
+class TestCheckLive:
+    """check_live: optional activity-staleness window (default disabled)."""
+
+    @pytest.mark.asyncio
+    async def test_healthy_when_no_window(self):
+        """Default posture: no window — always healthy (never false-fails an
+        idle queue)."""
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        status = await server.check_live()
+        assert status.healthy is True
+
+    @pytest.mark.asyncio
+    async def test_idle_window_disabled_by_default(self):
+        """Even with a stale last_activity, no configured window means healthy."""
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        server._last_activity = _utc_now() - timedelta(hours=1)
+        status = await server.check_live()
+        assert status.healthy is True
+
+    @pytest.mark.asyncio
+    async def test_idle_window_unhealthy_when_stale(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=30)
+        stale = _utc_now() - timedelta(seconds=120)
+        server._last_activity = stale
+        status = await server.check_live()
+        assert status.healthy is False
+        assert status.details["idle_seconds"] > 30
+        # Pin the full operator-visible probe output, not just idle_seconds.
+        assert status.details["last_activity"] == stale.isoformat()
+        assert status.details["max_idle_seconds"] == 30
+        assert status.message == "No worker activity within liveness window"
+
+    @pytest.mark.asyncio
+    async def test_idle_window_healthy_at_exact_boundary(self):
+        """Equality is healthy: production compares with a strict ``>``, so
+        idle_seconds == max_idle_seconds must not fail the probe."""
+        server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=30)
+        now = _utc_now()
+        server._last_activity = now - timedelta(seconds=30)
+        # Freeze "now" so idle_seconds is exactly 30, not 30 + test elapsed time.
+        with patch("application_sdk.server.health._utc_now", return_value=now):
+            status = await server.check_live()
+        assert status.healthy is True
+
+    @pytest.mark.asyncio
+    async def test_idle_window_healthy_when_recent(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=300)
+        server.record_activity()
+        status = await server.check_live()
+        assert status.healthy is True
+
+    @pytest.mark.asyncio
+    async def test_idle_window_healthy_when_never_active(self):
+        """A configured window must not fail before any activity is recorded —
+        avoids killing a worker during its startup grace period."""
+        server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=30)
+        status = await server.check_live()
+        assert status.healthy is True
+
+    @pytest.mark.asyncio
+    async def test_zero_max_idle_seconds_disables_window(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=0)
+        # Disabled window: /live stays healthy even with no activity recorded.
+        assert (await server.check_live()).healthy is True
+
+    @pytest.mark.parametrize("bad_window", [-10, math.inf, math.nan])
+    @pytest.mark.asyncio
+    async def test_non_positive_or_non_finite_window_disables_check(
+        self, bad_window: float
+    ):
+        """The constructor normalizes negative / inf / nan windows to disabled
+        (mirrors the env loader). A stale last_activity must still be healthy so
+        the ``> 0`` / ``math.isfinite`` guard can't silently regress."""
+        server = WorkerHealthServer(
+            host="127.0.0.1", port=0, max_idle_seconds=bad_window
+        )
+        assert server._max_idle_seconds is None
+        server._last_activity = _utc_now() - timedelta(hours=1)
+        assert (await server.check_live()).healthy is True

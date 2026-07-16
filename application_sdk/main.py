@@ -1081,17 +1081,27 @@ async def run_worker_mode(config: AppConfig) -> None:
             type(handler_for_sdr).__name__,
         )
 
+    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health server only in worker mode
+        build_worker_health_server,
+    )
+
+    health_server = build_worker_health_server(port=config.health_port, client=client)
+
     # Worker-only mode pushes metrics to a Pushgateway since the process has
     # no /metrics endpoint to scrape. Combined mode (run_combined_mode below)
     # leaves enable_pushgateway=False so the FastAPI /metrics endpoint
     # exposes everything via in-process proxy.
     def _build_worker() -> Any:
         # Rebuilt on each supervisor restart — Worker instances are single-use.
+        # on_activity feeds the health server's liveness window (BLDX-1552): the
+        # /live probe can then observe a silently stalled poll loop that the
+        # restart supervisor cannot (it only fires when run() returns/raises).
         return create_worker(
             client,
             task_queue=config.task_queue,
             handler=handler_for_sdr,
             enable_pushgateway=True,
+            on_activity=health_server.record_activity,
         )
 
     # Log registrations
@@ -1116,13 +1126,6 @@ async def run_worker_mode(config: AppConfig) -> None:
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
-
-    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
-        WorkerHealthServer,
-    )
-
-    health_server = WorkerHealthServer(port=config.health_port)
-    health_server.set_temporal_client(client)
 
     logger.info("Worker started: app=%s queue=%s", app_name, config.task_queue)
     _log_process_memory_baseline()
@@ -1364,9 +1367,21 @@ async def run_combined_mode(config: AppConfig) -> None:
 
     handler = handler_class()
 
+    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health server only in combined mode
+        build_worker_health_server,
+    )
+
+    health_server = build_worker_health_server(port=config.health_port, client=client)
+
     def _build_worker() -> Any:
         # Rebuilt on each supervisor restart — Worker instances are single-use.
-        return create_worker(client, task_queue=config.task_queue, handler=handler)
+        # on_activity feeds the /live liveness window (BLDX-1552).
+        return create_worker(
+            client,
+            task_queue=config.task_queue,
+            handler=handler,
+            on_activity=health_server.record_activity,
+        )
 
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
@@ -1430,13 +1445,6 @@ async def run_combined_mode(config: AppConfig) -> None:
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
-
-    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
-        WorkerHealthServer,
-    )
-
-    health_server = WorkerHealthServer(port=config.health_port)
-    health_server.set_temporal_client(client)
 
     logger.info(
         "Combined mode started: app=%s queue=%s port=%d",
@@ -1798,6 +1806,11 @@ Environment Variables:
   ATLAN_HANDLER_PORT       Handler bind port (default: 8000)
                            Falls back to ATLAN_APP_HTTP_PORT (v2)
   ATLAN_HEALTH_PORT        Worker health check port (default: 8081)
+  ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS
+                           Optional /live idle window in seconds (default: 0 = disabled).
+                           When >0, /live fails if no worker activity within the window.
+                           Enable only for continuously-busy queues; a positive value
+                           false-positives on legitimately idle queues.
   ATLAN_LOG_LEVEL          Log level (default: INFO)
                            Falls back to LOG_LEVEL (v2)
 

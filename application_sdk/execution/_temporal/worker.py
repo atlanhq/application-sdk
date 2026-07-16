@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from temporalio.client import Client
 from temporalio.worker import Interceptor as TemporalInterceptor
@@ -290,6 +290,7 @@ def create_worker(
     graceful_shutdown_timeout_seconds: int | None = None,
     interceptors: list[TemporalInterceptor] | None = None,
     enable_pushgateway: bool = False,
+    on_activity: Callable[[], None] | None = None,
 ) -> AppWorker:
     """Create a Temporal worker for registered Apps.
 
@@ -334,6 +335,10 @@ def create_worker(
             performs a final push on exit. Combined deployments (server +
             worker in one process) should leave this False so /metrics
             doesn't double-count.
+        on_activity: Optional callback fired on every activity execution and
+            heartbeat. The main entry point wires this to
+            ``WorkerHealthServer.record_activity`` so the ``/live`` probe can
+            reflect real worker progress.
 
     Returns:
         AppWorker wrapping a configured Temporal Worker (not yet started).
@@ -469,6 +474,19 @@ def create_worker(
         MetricsInterceptor(),
         TraceInterceptor(),
     ]
+
+    # Liveness recording is appended after the SDK's own Log/Metrics/Trace
+    # interceptors but before the user-supplied interceptors and the
+    # OutputInterceptor, so a stall in any of those downstream interceptors
+    # still counts as "activity observed" — the goal is to detect a dead poll
+    # loop, not to gate on downstream success.
+    if on_activity is not None:
+        from application_sdk.execution._temporal.interceptors.liveness import (  # noqa: PLC0415 — cold path: only when a liveness callback is wired
+            LivenessInterceptor,
+        )
+
+        all_interceptors.append(LivenessInterceptor(on_activity))
+
     all_interceptors.extend(interceptors or [])
 
     if interceptor_settings.enable_output_interceptor:
