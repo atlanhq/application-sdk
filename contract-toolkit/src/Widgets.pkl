@@ -145,6 +145,12 @@ class ValidationRule {
 
   /// Treat strings containing only whitespace as a validation failure.
   whitespace: Boolean?
+
+  /// When the rule fires in the form UI (e.g. `"blur"`, `"change"`). Carried
+  /// verbatim to the frontend's form-rule config. Left as `String?` rather than
+  /// a closed enum so connectors aren't broken by a trigger value not yet
+  /// enumerated here; tighten to a union once the accepted set is confirmed.
+  trigger: String?
 }
 
 /// Opt-in JSON or regex validation for input widgets, emitted as the widget's
