@@ -69,6 +69,9 @@ class AssetValidationFailure:
     """``qualifiedName`` of the offending asset (best-effort)."""
     errors: list[str]
     """Messages surfaced by pyatlan_v9's ``.validate()`` (or a deserialize error)."""
+    deserialize_error: bool = False
+    """True when the record could not be decoded at all (counted in
+    ``undeserializable``), as opposed to a decoded asset that failed ``.validate()``."""
 
 
 @dataclass(frozen=True)
@@ -140,14 +143,26 @@ class AssetValidationReport:
         ]
         for failure in self.failures[:max_items]:
             loc = _location(failure.file, failure.line)
-            label = failure.qualified_name or "<no qualifiedName>"
-            lines.append(
-                f"  INVALID [{failure.type_name or '?'}] {label}{loc}: "
-                + "; ".join(failure.errors)
-            )
-        extra_failures = len(self.failures) - max_items
-        if extra_failures > 0:
-            lines.append(f"  ... and {extra_failures} more invalid assets")
+            if failure.deserialize_error:
+                label = failure.qualified_name or "<unparseable record>"
+                lines.append(
+                    f"  UNDESERIALIZABLE {label}{loc}: " + "; ".join(failure.errors)
+                )
+            else:
+                label = failure.qualified_name or "<no qualifiedName>"
+                lines.append(
+                    f"  INVALID [{failure.type_name or '?'}] {label}{loc}: "
+                    + "; ".join(failure.errors)
+                )
+        # Split the overflow so undeserializable records are not miscounted as
+        # "invalid assets" — matching the disjoint headline.
+        remaining = self.failures[max_items:]
+        extra_invalid = sum(1 for f in remaining if not f.deserialize_error)
+        extra_undeser = sum(1 for f in remaining if f.deserialize_error)
+        if extra_invalid > 0:
+            lines.append(f"  ... and {extra_invalid} more invalid assets")
+        if extra_undeser > 0:
+            lines.append(f"  ... and {extra_undeser} more undeserializable records")
         for orphan in self.orphans[:max_items]:
             loc = _location(orphan.file, orphan.line)
             lines.append(
@@ -362,6 +377,17 @@ def validate_transformed_dir(
             if present is not None:
                 present.close()
                 present = None
+        except Exception:
+            # A non-ImportError while allocating the spill-backed maps (e.g. the
+            # second allocation fails after the first succeeded) must not leak the
+            # first map's temp dir: close what was allocated, then re-raise.
+            if present is not None:
+                present.close()
+                present = None
+            if referenced is not None:
+                referenced.close()
+                referenced = None
+            raise
     if check_referential_integrity and not referential:
         logger.warning(
             "rocksdict unavailable — skipping referential-integrity (orphan) "
@@ -382,6 +408,7 @@ def validate_transformed_dir(
                         type_name="",
                         qualified_name="",
                         errors=[f"could not deserialize as an Atlan asset: {exc}"],
+                        deserialize_error=True,
                     )
                 )
                 continue

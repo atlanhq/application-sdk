@@ -99,7 +99,7 @@ class TestRunnerAssetValidation:
     def test_strict_scenario_override_raises(self, tmp_path: Path) -> None:
         _layout_with_orphan(tmp_path)
         suite = BaseIntegrationTest()  # class default is warn-first
-        with pytest.raises(AssertionError):
+        with pytest.raises(AssertionError, match="ORPHAN"):
             suite._validate_assets(
                 _scenario(asset_validation_strict=True), _RESPONSE, str(tmp_path)
             )

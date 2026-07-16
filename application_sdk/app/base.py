@@ -13,6 +13,7 @@ from abc import ABC
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -102,8 +103,6 @@ def _validate_transformed_assets_blocking(
 
     if not VALIDATE_ASSETS_ON_UPLOAD or not local_path:
         return None
-
-    from pathlib import Path  # noqa: PLC0415
 
     from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
         validate_transformed_dir,

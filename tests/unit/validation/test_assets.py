@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from pyatlan_v9.model.assets import Column, Database, Schema, Table, View
@@ -93,6 +93,13 @@ class TestValidateAsset:
         table.qualified_name = None
         # Must return messages, not raise.
         assert isinstance(validate_asset(table), list)
+
+    def test_never_raises_on_non_value_error(self) -> None:
+        # The widened ``except Exception`` must swallow more than the ValueError
+        # a real ``.validate()`` raises: any error surfaces as a message.
+        asset = Mock()
+        asset.validate.side_effect = RuntimeError("boom")
+        assert validate_asset(asset) == ["boom"]
 
     def test_for_creation_enforces_hierarchy_fields(self) -> None:
         # A bare Column (no parent refs) is valid at rest but not for creation.
