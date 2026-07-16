@@ -77,9 +77,7 @@ _K002_IMPORT_RE = re.compile(
 # (App.pkl- and NativeApp.pkl-amending contracts are unaffected: there the import
 # really is redundant / legacy and still fires.)  Same ``(?:[^"]*/)?`` anchoring
 # as K001 so only the exact ``Credential.pkl`` base matches.
-_K002_CREDENTIAL_BASE_RE = re.compile(
-    r'\bamends\s+"(?:[^"]*/)?Credential\.pkl"'
-)
+_K002_CREDENTIAL_BASE_RE = re.compile(r'\bamends\s+"(?:[^"]*/)?Credential\.pkl"')
 
 # ---------------------------------------------------------------------------
 # Block-comment stripping
