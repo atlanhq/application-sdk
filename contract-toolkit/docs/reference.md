@@ -2902,14 +2902,38 @@ deploy = new DeployConfig {
 
 ## Credential.pkl — Legacy Module
 
-For Argo-era apps only. Uses `Config.pkl` widget classes instead of `FieldSpec`. Do not use for new native apps.
+For Argo-era apps only. Do not use for new native apps (use `FieldSpec` instead). Still used
+by CSA connector credential configs.
+
+Widget classes come from the modern `Widgets.pkl` module (not the older `Config.pkl`), and
+Credential.pkl re-exports them as unqualified typealiases — mirroring App.pkl — so a credential
+contract writes `new TextInput { }`, `new PasswordInput { }`, `new NestedInput { }`, etc.
+directly, with no supplemental `import`:
 
 ```pkl
-class NestedCredentialInput extends Config.NestedInput {
+amends "@app-contract-toolkit/Credential.pkl"
+
+name = "my-connector"
+source = "My Source"
+options {
+  ["basic"] = new NestedCredentialInput {
+    optionLabel = "Basic"
+    inputs {
+      ["username"] = new TextInput { title = "User" }
+      ["password"] = new PasswordInput { title = "Password" }
+    }
+  }
+}
+```
+
+Internally:
+
+```pkl
+class NestedCredentialInput extends Widgets.NestedInput {
   hidden optionLabel: String       // Auth radio label
   title = ""
   hide = true
-  hidden inputs: Mapping<CredentialAttribute, Config.UIElement>
+  hidden inputs: Mapping<CredentialAttribute, Widgets.UIElement>
 }
 
 typealias CredentialAttribute = "host"|"port"|"connection"|"username"|"password"|"extra"|"name"|"connector"|"connectorType"
