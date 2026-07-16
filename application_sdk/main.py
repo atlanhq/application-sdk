@@ -929,6 +929,7 @@ async def _run_worker_with_restart(
                     "giving up and exiting",
                     consecutive_failures,
                     _WORKER_HEALTHY_RUN_SECONDS,
+                    exc_info=True,
                 )
                 raise
 
@@ -966,7 +967,9 @@ async def _run_worker_with_restart(
                 # Shutdown requested during backoff — stop.
                 return
             except TimeoutError:
-                pass
+                # Backoff elapsed without a shutdown request — the expected
+                # path; fall through to rebuild and restart the worker.
+                logger.debug("Restart backoff elapsed; rebuilding worker")
 
 
 async def run_worker_mode(config: AppConfig) -> None:
