@@ -71,7 +71,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
   actions: write
 
 jobs:
