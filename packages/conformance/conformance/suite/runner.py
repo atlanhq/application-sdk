@@ -50,6 +50,7 @@ from conformance.suite.checks import (
     orchestration,
     preflight,
     prescriptions,
+    release_contract,
     security,
     test_quality,
     test_structure,
@@ -218,6 +219,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=manifest_contract.discover,
         scan_path=manifest_contract.scan_path,
         scan_all=manifest_contract.scan_all,
+    ),
+    CheckRegistration(
+        series=release_contract.SERIES,
+        discover=release_contract.discover,
+        scan_path=release_contract.scan_path,
+        scan_all=release_contract.scan_all,
     ),
     CheckRegistration(
         series=sdr_checks.SERIES,

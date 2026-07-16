@@ -380,6 +380,70 @@ If `pkl` is unavailable, route to residue with a regenerate-locally note.
 
 ---
 
+**K011 AppIdMissingFromContract** — the generated `atlan.yaml` has no top-level
+`app_id`.  **This is a BLOCK-tier finding** — it fails the gate in default mode,
+because without `app_id` the marketplace publish POSTs an empty identity and the
+Global Marketplace returns 404, so the release is cut but never appears.
+`classification = "judgment"` — the fix needs the app's correct GM UUID, which
+is not derivable from the repo alone.  **requires `pkl`** (the value belongs in
+the pkl source, and the artifact is regenerated, never hand-edited).
+
+*Procedure:*
+
+1. Recover the app's UUID.  It is stable per app: read it from the Global
+   Marketplace admin UI (the app URL is `/admin/#/apps/<app_id>/versions`), from
+   the `app_id` line of a prior successful publish log, or from git history of
+   `atlan.yaml` before it was dropped (`git log -S 'app_id' -- atlan.yaml`).
+2. Add it to the `metadata` block in `contract/app.pkl` — its entries are
+   emitted as top-level `atlan.yaml` keys, exactly as `release_model` already is:
+
+   ```
+   metadata {
+     ["release_model"] = "semver"
+     ["app_id"] = "<your-app-uuid>"
+   }
+   ```
+3. Regenerate with `pkl eval -m . contract/app.pkl` (or `uv run poe generate`)
+   and stage the result; set `touched_files` the K003-step-4 way so a gate
+   rejection reverts every regenerated artifact.  Confirm `atlan.yaml` now
+   carries `app_id:`.  **Never hand-edit `atlan.yaml`** — it is a `pkl eval`
+   output (K005 guards its provenance banner).
+4. Suppression is almost never correct — a semver app with no `app_id` cannot
+   publish.  Only for a non-published app that still ships an `atlan.yaml`:
+   `# conformance: ignore[K011] <reason>` on the first line and route to residue.
+
+If the UUID cannot be recovered or `pkl` is unavailable, route to residue with a
+note naming what to look up.
+
+---
+
+**K012 GeneratePoeTaskMissing** — `pyproject.toml` defines no
+`[tool.poe.tasks.generate]` task, so the SDK Certify step's `uv run poe generate`
+aborts the publish (`Unrecognized task 'generate'`).  **This is a BLOCK-tier
+finding**.  `classification = "mechanical"`; **does not require `pkl`** (it is a
+`pyproject.toml` edit).
+
+*Procedure:*
+
+1. Read the repo's `Makefile` `generate` target (or the `pkl eval` invocation the
+   app already uses to regenerate) and mirror it as a poe task:
+
+   ```
+   [tool.poe.tasks]
+   generate = "pkl eval --project-dir contract -m . contract/app.pkl"
+   ```
+
+   Include every `.pkl` the `Makefile` evaluates (e.g. a credential contract such
+   as `contract/csa-connectors-objectstore.pkl`) so `poe generate` and
+   `make generate` stay equivalent.
+2. Verify with `uv run poe generate`: it must succeed and leave the generated
+   tree unchanged.  Stage `pyproject.toml` (and any regenerated artifacts).
+3. Suppress only for an app never published through the marketplace pipeline:
+   `# conformance: ignore[K012] <reason>` on the `[tool.poe.tasks]` header line
+   and route to residue.
+
+---
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline suppression comment — `// conformance: ignore[Kxxx]
 <8–40 word justification>` for the `.pkl`-source / `PklProject`-anchored rules
