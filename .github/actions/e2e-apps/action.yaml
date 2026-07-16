@@ -39,15 +39,57 @@ inputs:
       SDR path to forward application_sdk_ref so the connector can pin
       atlan-application-sdk to the apps-sdk PR's head SHA. Defaults to
       an empty object so codex-/return-dispatch always sees valid JSON.
+  wait-mode:
+    required: false
+    default: poll
+    description: |
+      'poll' (default, legacy): dispatch, then busy-poll the dispatched
+      run's status via the REST API every 60s for up to 2h, all against
+      the shared org PAT. 'callback': create an in_progress GitHub check
+      run on this repo's own SHA (owned by the fleet App via
+      checks-app-token, so the connector's callback can complete it),
+      dispatch + do a short bounded locate of the resulting run (so the
+      check has a real link to click, not just the connector's generic
+      Actions tab), then exit — the connector's own workflow completes
+      the check run directly when it finishes (see tests-reusable.yaml's
+      report-to-sdk job), so there is no waiting for the actual test
+      result on this side, only for the dispatch to become visible.
+      Requires check-run-name + check-sha.
+  checks-app-token:
+    required: false
+    default: ""
+    description: |
+      Required when wait-mode is 'callback'. A GitHub App installation token
+      scoped to THIS repo with checks:write, used to create + update the check
+      run. Must be the same App the connector's callback (tests-reusable.yaml
+      report-to-sdk) uses to complete it — a check run can only be updated by
+      the App that created it. Do NOT pass github.token here: github-actions
+      would own the check, the fleet-App callback could not complete it, and it
+      would be filed under an arbitrary github-actions check suite.
+  check-run-name:
+    required: false
+    default: ""
+    description: Required when wait-mode is 'callback'. Name of the check run to create, e.g. "Connector E2E run / atlan-mysql-app".
+  check-sha:
+    required: false
+    default: ""
+    description: Required when wait-mode is 'callback'. SHA on this repo to attach the check run to (the PR head or merge-queue SHA).
 
 runs:
   using: "composite"
   steps:
+    # Only callback mode needs the repo on disk (it runs .github/scripts/*.py
+    # directly). Poll mode's steps (codex-/return-dispatch, curl, gh api,
+    # github-script) never touch local files, and the calling job has
+    # already checked out the repo before invoking this local composite
+    # action anyway — so this would be a pure no-op there.
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      if: inputs.wait-mode == 'callback'
       with:
         ref: ${{ github.ref }}
 
     - name: Get the application-sdk commit SHA
+      if: inputs.wait-mode != 'callback'
       shell: bash
       run: |
         if [ "${{ github.event.pull_request.head.sha }}" ]; then
@@ -62,7 +104,91 @@ runs:
           echo "base_branch=${{ github.ref }}" >> $GITHUB_ENV
         fi
 
+    # ── callback mode: create the check, dispatch, exit — no polling ──────
+    - name: Validate callback-mode inputs
+      if: inputs.wait-mode == 'callback'
+      shell: bash
+      env:
+        CHECK_RUN_NAME: ${{ inputs.check-run-name }}
+        CHECK_SHA: ${{ inputs.check-sha }}
+        CHECKS_APP_TOKEN: ${{ inputs.checks-app-token }}
+      run: |
+        if [ -z "$CHECK_RUN_NAME" ] || [ -z "$CHECK_SHA" ] || [ -z "$CHECKS_APP_TOKEN" ]; then
+          echo "::error::wait-mode=callback requires check-run-name, check-sha, and checks-app-token"
+          exit 1
+        fi
+
+    - name: Create pending check run
+      id: create_check
+      if: inputs.wait-mode == 'callback'
+      shell: bash
+      env:
+        # Fleet App token (this repo), NOT github.token — the connector's
+        # callback completes this check with the same App, and a check run can
+        # only be updated by its creating App.
+        GH_TOKEN: ${{ inputs.checks-app-token }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ inputs.check-sha }}
+        NAME: ${{ inputs.check-run-name }}
+        REPO_NAME: ${{ inputs.repo-name }}
+      run: |
+        python3 .github/scripts/create_check_run.py \
+          --repo "$REPO" \
+          --sha "$SHA" \
+          --name "$NAME" \
+          --details-url "https://github.com/atlanhq/${REPO_NAME}/actions" \
+          --summary "Dispatched to ${REPO_NAME}; awaiting results — this check completes when that run finishes."
+
+    # Dispatches AND locates the resulting run (bounded: up to 600s, usually
+    # resolves in 1-3min) so the check above can get a real, clickable link
+    # instead of the connector's generic Actions tab. This is NOT the old
+    # busy-poll this callback pattern replaced — that polled run *status*
+    # for up to 2h; this only confirms the run exists and grabs its URL.
+    #
+    # continue-on-error: unlike poll mode, a failure here (e.g. locate
+    # timing out under a backlogged runner queue) must not fail this job —
+    # the check-run already exists and the connector's own callback will
+    # still complete it correctly regardless of whether we found a pretty
+    # link for it. Worst case the check keeps its generic fallback URL, or
+    # (rare: the dispatch call itself failed) the check surfaces that later
+    # via the gate/watchdog timeout rather than an immediate job failure —
+    # an acceptable trade for not duplicating return-dispatch's own
+    # well-tested dispatch+locate logic.
+    - name: Dispatch connector workflow + locate the run
+      id: return_dispatch_callback
+      if: inputs.wait-mode == 'callback'
+      continue-on-error: true
+      uses: codex-/return-dispatch@16fa9d14771c4d56ae0196bbda1d3c17f7f3650f # v3
+      with:
+        token: "${{ inputs.github-token }}"
+        ref: ${{ inputs.target-branch }}
+        repo: ${{ inputs.repo-name }}
+        owner: "atlanhq"
+        workflow: "${{ inputs.workflow }}"
+        workflow_timeout_seconds: 600
+        workflow_job_steps_retry_seconds: 60
+        distinct_id: "${{ inputs.check-sha }}"
+        workflow_inputs: ${{ inputs.workflow-inputs }}
+
+    - name: Update check run with dispatched run link
+      if: always() && inputs.wait-mode == 'callback' && steps.return_dispatch_callback.outputs.run_url != ''
+      continue-on-error: true
+      shell: bash
+      env:
+        # Same fleet App token that created the check (see Create step).
+        GH_TOKEN: ${{ inputs.checks-app-token }}
+        REPO: ${{ github.repository }}
+        CHECK_RUN_ID: ${{ steps.create_check.outputs.check_run_id }}
+        RUN_URL: ${{ steps.return_dispatch_callback.outputs.run_url }}
+      run: |
+        python3 .github/scripts/update_check_run_details_url.py \
+          --repo "$REPO" \
+          --check-run-id "$CHECK_RUN_ID" \
+          --details-url "$RUN_URL"
+
+    # ── poll mode (legacy): dispatch, busy-poll, fetch artifact, comment ──
     - name: Trigger E2E Integrations Tests
+      if: inputs.wait-mode != 'callback'
       uses: codex-/return-dispatch@16fa9d14771c4d56ae0196bbda1d3c17f7f3650f # v3
       id: return_dispatch
       with:
@@ -81,12 +207,14 @@ runs:
         workflow_inputs: ${{ inputs.workflow-inputs }}
 
     - name: Check the test logs using the below run URL
+      if: inputs.wait-mode != 'callback'
       shell: bash
       run: |
         echo ${{steps.return_dispatch.outputs.run_id}}
         echo ${{steps.return_dispatch.outputs.run_url}}
 
     - name: Check Workflow Status
+      if: inputs.wait-mode != 'callback'
       id: status
       shell: bash
       run: |
@@ -165,7 +293,7 @@ runs:
     # (dispatch failed, run cancelled before tests, etc.).
     - name: Fetch dispatched-run report body
       id: dispatched_summary
-      if: always() && steps.return_dispatch.outputs.run_id != ''
+      if: always() && inputs.wait-mode != 'callback' && steps.return_dispatch.outputs.run_id != ''
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -205,7 +333,7 @@ runs:
     # (see pull_request.yaml permissions). All other steps below keep
     # inputs.github-token — they legitimately act on the connector repo.
     - name: Post dispatched-run status to SDK PR
-      if: always() && github.event_name == 'pull_request'
+      if: always() && inputs.wait-mode != 'callback' && github.event_name == 'pull_request'
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
       env:
         REPO_NAME: ${{ inputs.repo-name }}
@@ -309,8 +437,11 @@ runs:
 
     # Re-emit the failure exit code AFTER the comment lands, so the job
     # still fails the PR check but the reviewer sees a comment either way.
+    # Only applies to poll mode: in callback mode this job's own success
+    # means "dispatched OK" — the actual pass/fail comes later via the
+    # check run the connector completes directly (report-to-sdk).
     - name: Fail job if dispatched run did not succeed
-      if: always()
+      if: always() && inputs.wait-mode != 'callback'
       shell: bash
       env:
         DISPATCHED_CONCLUSION: ${{ steps.status.outputs.conclusion }}

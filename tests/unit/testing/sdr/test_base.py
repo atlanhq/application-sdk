@@ -77,6 +77,18 @@ class _Suite(BaseSDRIntegrationTest):
     scenarios = []  # required so __init_subclass__ does not error
 
 
+def test_subclassing_emits_deprecation_warning() -> None:
+    """Subclassing warns: the SDR harness is deprecated for agent-mode e2e (v4.0).
+
+    Locks the machine-readable marker that drives the B001 conformance rule and
+    the committed deprecated-symbol manifest.
+    """
+    with pytest.warns(DeprecationWarning, match="BaseSDRIntegrationTest is deprecated"):
+
+        class _DeprecatedSuite(BaseSDRIntegrationTest):
+            scenarios = []
+
+
 def test_workflow_scenario_gets_agent_routing_args(workflow_scenario: Scenario) -> None:
     suite = _Suite()
     args = suite._build_scenario_args(workflow_scenario)

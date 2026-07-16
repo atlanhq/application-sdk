@@ -67,7 +67,7 @@ mode creates a Temporal Runtime that binds `127.0.0.1:9464`:
 | Value | Effect |
 |---|---|
 | `true` (default) | Rust core binds 9464 in worker/combined mode; combined FastAPI proxy + worker `TemporalCoreCollector` can read it |
-| `false` | Rust core uses `Runtime.default()` (no Prometheus listener); FastAPI `/metrics` still serves SDK + HTTP + python defaults but lacks the `temporal_*` Rust-core families |
+| `false` | Rust core builds an explicit `Runtime` with log forwarding but no Prometheus listener; FastAPI `/metrics` still serves SDK + HTTP + python defaults but lacks the `temporal_*` Rust-core families |
 
 `run_dev_combined()` proactively sets it to `false` in local dev so a
 hot-reload-restarted process doesn't fail to bind 9464 (which the

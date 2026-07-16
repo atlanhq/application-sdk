@@ -1,0 +1,72 @@
+name: E2E Callback Watchdog
+
+# Safety net for the cross-repo e2e callback pattern (see e2e-apps'
+# wait-mode: callback and tests-reusable.yaml's report-to-sdk job).
+#
+# Each connector reports back by PATCHing its own 'Connector E2E run / <repo>'
+# check run to completed the instant its run finishes — there's no polling
+# on the happy path. But if a connector runner dies before that callback
+# step runs (crash, force-cancel, runner reclaim), the check run is left
+# 'in_progress' forever. That's cosmetic, not a merge-blocking risk — the
+# required Connector Tests Gate (pull_request.yaml) has its own bounded
+# poll timeout regardless — but an abandoned PR showing a permanently
+# pending check is confusing, so this sweeps them out periodically.
+#
+# 15-minute cadence, one call per open PR plus one per stale check found —
+# negligible against the fleet App token's rate-limit bucket regardless of how
+# many connectors or PRs are open.
+#
+# The sweep runs as the atlan-app-fleet App (scoped to this repo), NOT
+# github.token: the 'Connector E2E run / <repo>' checks are created + completed
+# by that App, and a check run can only be updated by its creating App — so the
+# watchdog's PATCH (timeout_stale_check_runs.py) must use the same App or it is
+# rejected and the stuck checks can never be swept. Same ownership rule the
+# create/callback path relies on (see e2e-apps + tests-reusable report-to-sdk).
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+# github.token only needs contents:read for the checkout; the sweep's list +
+# PATCH calls all run under the fleet App token minted below.
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-callback-watchdog
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: Time out stuck connector check runs
+    runs-on: ubuntu-latest
+    # Without an explicit ceiling this inherits GitHub's 6h default. Paired
+    # with concurrency: cancel-in-progress: false, a hung run (stuck gh api
+    # call, network partition) would then queue up every subsequent 15-min
+    # cron tick behind it instead of just skipping a cycle.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      # Same App that owns the check runs (see pull_request.yaml's "Mint fleet
+      # App token (SDK checks)" step) so the sweep's PATCH is accepted. Scoped
+      # to this repo; needs pull-requests:read + checks:write on the App.
+      - name: Mint fleet App token (SDK checks)
+        id: checks-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
+      - name: Sweep for stale check runs
+        env:
+          GH_TOKEN: ${{ steps.checks-app-token.outputs.token }}
+        run: |
+          python3 .github/scripts/timeout_stale_check_runs.py \
+            --repo "${{ github.repository }}"

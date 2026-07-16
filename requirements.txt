@@ -32,10 +32,10 @@ azure-core==1.41.0
     # via azure-identity
 azure-identity==1.25.3
     # via atlan-application-sdk
-boto3==1.43.48
+boto3==1.43.49
     # via atlan-application-sdk
-boto3-stubs==1.43.48
-botocore==1.43.48
+boto3-stubs==1.43.49
+botocore==1.43.49
     # via
     #   boto3
     #   s3transfer
@@ -63,7 +63,7 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   loguru
     #   pytest
     #   typer
-coverage==7.15.1
+coverage==7.15.2
 cryptography==49.0.0
     # via
     #   authlib
@@ -82,9 +82,9 @@ email-validator==2.3.0
     # via
     #   fastapi
     #   pydantic
-fastapi==0.139.0
+fastapi==0.139.1
     # via atlan-application-sdk
-fastapi-cli==0.0.29
+fastapi-cli==0.0.31
     # via fastapi
 fastapi-cloud-cli==0.22.2
     # via fastapi-cli
@@ -92,7 +92,7 @@ fastar==0.11.0
     # via
     #   fastapi
     #   fastapi-cloud-cli
-filelock==3.29.7
+filelock==3.30.0
     # via
     #   python-discovery
     #   virtualenv
@@ -272,7 +272,7 @@ pyasn1==0.6.4
     # via pyasn1-modules
 pyasn1-modules==0.4.2
     # via google-auth
-pyatlan==9.10.0
+pyatlan==9.10.1
     # via atlan-application-sdk
 pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
     # via cffi
@@ -373,7 +373,7 @@ temporalio==1.30.0
 tenacity==9.1.4
     # via pyatlan
 trustme==1.2.1
-typer==0.26.8
+typer==0.27.0
     # via
     #   fastapi-cli
     #   fastapi-cloud-cli
