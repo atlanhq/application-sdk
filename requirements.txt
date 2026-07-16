@@ -358,7 +358,7 @@ rpds-py==2026.6.3
 s3transfer==0.19.1
     # via boto3
 semver==3.0.4
-sentry-sdk==2.65.0
+sentry-sdk==2.66.0
     # via fastapi-cloud-cli
 shellingham==1.5.4
     # via typer
