@@ -765,6 +765,27 @@ class TestPreflightGateOutcomeEvent:
             await _verdict_gate(out)(PreflightGateInput())
         assert ml.warning.call_args_list == []
 
+    async def test_check_matrix_nonfinite_duration_coerced(self) -> None:
+        # nan/inf serialize as bare NaN/Infinity tokens — invalid JSON that
+        # would poison the ClickHouse row. Coerced to 0.0, never raised (a
+        # raise here would fail the gate open and lose the whole event).
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    status=PreflightStatus.NOT_READY,
+                    duration_ms=float("nan"),
+                ),
+                PreflightCheck(name="tables", passed=True, duration_ms=float("inf")),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        matrix = json.loads(_outcome_event(ml)["check_matrix"])  # must parse
+        assert [row["duration_ms"] for row in matrix] == [0.0, 0.0]
+
     async def test_check_matrix_empty_checks(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
         with mock.patch(_LOGGER) as ml:

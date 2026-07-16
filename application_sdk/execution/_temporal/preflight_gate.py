@@ -13,6 +13,7 @@ so the abort shows red in Temporal and attributes to preflight; ``READY`` and
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
@@ -289,7 +290,12 @@ def _check_matrix_json(checks: list[PreflightCheck]) -> str:
                 "status": check.status.value if check.status else "unset",
                 "passed": check.passed,
                 "error_code": check.error.code if check.error else "",
-                "duration_ms": check.duration_ms,
+                # nan/inf would serialize as bare NaN/Infinity — invalid JSON
+                # that poisons the ClickHouse row. Coerce rather than raise:
+                # a raise here fails the gate open and loses the whole event.
+                "duration_ms": check.duration_ms
+                if math.isfinite(check.duration_ms)
+                else 0.0,
             }
         )
     return json.dumps(rows, separators=(",", ":"))
