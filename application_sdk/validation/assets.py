@@ -310,7 +310,8 @@ def validate_transformed_dir(
             # pass is skipped.
             logger.warning(
                 "rocksdict unavailable — skipping referential-integrity (orphan) "
-                "validation; per-asset validation still runs"
+                "validation; per-asset validation still runs",
+                exc_info=True,
             )
             referential = False
             if present is not None:
