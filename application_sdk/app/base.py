@@ -74,6 +74,60 @@ except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] pac
     _FRAMEWORK_VERSION = "unknown"
 
 
+def _warn_on_invalid_transformed_assets(local_path: str) -> None:
+    """Best-effort, warn-only validation of transformed asset NDJSON before upload.
+
+    BLDX-1555 defense-in-depth at the SDR→Atlan boundary. When ``local_path``
+    holds transformed asset output, every record is validated against the
+    pyatlan_v9 ``.validate()`` backbone (plus the referential/orphan pass) and a
+    warning summarises any invalid or orphaned assets. This **never** blocks the
+    upload and **never** raises — a defect in the scaffold must not break a real
+    handoff — and it scans every record (no sampling) so the summary is accurate.
+
+    No-ops when the flag is disabled or ``local_path`` does not point at a
+    ``transformed/`` asset subtree (e.g. a raw or non-asset upload).
+    """
+    from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
+        VALIDATE_ASSETS_ON_UPLOAD,
+    )
+
+    if not VALIDATE_ASSETS_ON_UPLOAD or not local_path:
+        return
+    try:
+        from pathlib import Path  # noqa: PLC0415
+
+        from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
+            validate_transformed_dir,
+        )
+
+        root = Path(local_path)
+        if root.is_dir():
+            transformed = root / "transformed"
+            if transformed.is_dir():
+                target = transformed
+            elif "transformed" in root.parts:
+                target = root
+            else:
+                return
+        elif "transformed" in root.parts:
+            target = root
+        else:
+            return
+
+        report = validate_transformed_dir(target)
+        if not report.ok:
+            _task_logger.warning(
+                "Transformed-asset validation flagged issues before upload "
+                "(handoff continues): %s",
+                report.format_report(),
+            )
+    except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
+        _task_logger.warning(
+            "Transformed-asset validation skipped due to an unexpected error",
+            exc_info=True,
+        )
+
+
 # Type variable for require() method
 T = TypeVar("T")
 HT = TypeVar("HT", bound=HeartbeatDetails)
@@ -907,6 +961,11 @@ class App(ABC):
         from application_sdk.storage.transfer import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
             upload as _upload,
         )
+
+        # BLDX-1555 defense-in-depth: validate transformed assets against the
+        # pyatlan_v9 backbone before the handoff. Warn-only, best-effort — never
+        # blocks the upload.
+        _warn_on_invalid_transformed_assets(input.local_path)
 
         deployment = self.context.storage
         upstream = self.context.upstream_storage

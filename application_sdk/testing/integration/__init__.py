@@ -61,6 +61,16 @@ For detailed documentation, see:
 # Models
 # =============================================================================
 
+# Asset-write validation primitive (source of truth: application_sdk.validation),
+# re-exported for convenience when authoring integration tests.
+from application_sdk.validation import (
+    AssetValidationFailure,
+    AssetValidationReport,
+    ReferentialFailure,
+    validate_asset,
+    validate_transformed_dir,
+)
+
 from .assertions import (  # Basic assertions; Collection assertions; Numeric assertions; String assertions; Type assertions; Combinators; Custom
     all_of,
     any_of,
@@ -176,4 +186,10 @@ __all__ = [
     "format_validation_report",
     "get_normalised_dataframe",
     "get_schema_file_paths",
+    # Asset-write Validation (pyatlan_v9 backbone)
+    "validate_asset",
+    "validate_transformed_dir",
+    "AssetValidationReport",
+    "AssetValidationFailure",
+    "ReferentialFailure",
 ]

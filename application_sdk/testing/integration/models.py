@@ -129,6 +129,13 @@ class Scenario:
             Maps to PreflightInput.checks_to_run. Empty list = run all checks.
         preflight_timeout: Timeout in seconds for preflight checks.
             Maps to PreflightInput.timeout_seconds. Defaults to 60.
+        validate_assets: Override the test class's ``validate_assets`` for this
+            scenario. ``None`` (default) inherits the class setting (on by default
+            for workflow scenarios with a resolvable extracted-output path).
+        asset_validation_strict: Override the test class's
+            ``asset_validation_strict``. ``None`` (default) inherits the class
+            setting (warn-first: failures are logged, not raised). Set ``True`` to
+            fail the scenario on any invalid or orphaned asset.
     """
 
     name: str
@@ -156,6 +163,8 @@ class Scenario:
     connection_config: dict[str, Any] | None = None
     checks_to_run: list[str] | None = None
     preflight_timeout: int = 60
+    validate_assets: bool | None = None
+    asset_validation_strict: bool | None = None
 
     def __post_init__(self):
         """Validate the scenario after initialization."""
