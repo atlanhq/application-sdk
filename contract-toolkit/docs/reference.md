@@ -2939,6 +2939,36 @@ class NestedCredentialInput extends Widgets.NestedInput {
 typealias CredentialAttribute = "host"|"port"|"connection"|"username"|"password"|"extra"|"name"|"connector"|"connectorType"
 ```
 
+### Migration (breaking): `Config.*` widgets → bare widget names
+
+Credential.pkl previously sourced its widget classes from the legacy `Config.pkl`, so
+credential contracts imported `Config.pkl` and wrote qualified `new Config.TextInput { }`.
+Widget classes now come from `Widgets.pkl`, and `Config.UIElement` / `Widgets.UIElement` are
+nominally distinct classes. A credential contract that still assigns `Config.*` widgets fails
+`pkl eval` on the next toolkit-version bump:
+
+```
+Expected value of type Widgets#UIElement, but got Config#TextInput
+```
+
+This is a **source-level breaking change** for credential contracts (generated JSON output is
+unchanged). To migrate a contract, drop the `Config.pkl` import and unqualify the widget names:
+
+```diff
+ amends "@app-contract-toolkit/Credential.pkl"
+-import "@app-contract-toolkit/Config.pkl"
+ ...
+-  ["username"] = new Config.TextInput { title = "User" }
+-  ["password"] = new Config.PasswordInput { title = "Password" }
++  ["username"] = new TextInput { title = "User" }
++  ["password"] = new PasswordInput { title = "Password" }
+```
+
+The same rename applies to every `Config.*` widget a contract uses (`Config.NestedInput` →
+`NestedInput`, `Config.Radio` → `Radio`, `Config.UIRule` → `UIRule`, and so on). The toolkit
+bump and the consumer migrations must land together — bumping the toolkit before a consumer is
+migrated breaks that consumer's `pkl eval`.
+
 ---
 
 ## Renderers.pkl — Legacy Renderers
