@@ -130,7 +130,7 @@ if TYPE_CHECKING:
     from application_sdk.infrastructure._dapr.http import AsyncDaprClient
     from application_sdk.infrastructure.context import InfrastructureContext
     from application_sdk.infrastructure.secrets import SecretStore
-    from application_sdk.server.health import WorkerHealthServer
+    from application_sdk.server.health import TemporalClientProtocol, WorkerHealthServer
 
 
 logger = get_logger(__name__)
@@ -973,7 +973,9 @@ async def _run_worker_with_restart(
                 logger.debug("Restart backoff elapsed; rebuilding worker")
 
 
-def _make_health_server(config: AppConfig, client: Any) -> "WorkerHealthServer":
+def _make_health_server(
+    config: AppConfig, client: "TemporalClientProtocol"
+) -> "WorkerHealthServer":
     """Build a WorkerHealthServer wired for the worker liveness window.
 
     Shared by :func:`run_worker_mode` and :func:`run_combined_mode` so the

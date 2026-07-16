@@ -81,3 +81,25 @@ async def test_record_callback_failure_never_blocks_activity() -> None:
 
     assert result == "done"
     next_inbound.execute_activity.assert_awaited_once()
+
+
+def test_record_callback_failure_never_blocks_heartbeat() -> None:
+    """A raising record callback must not fail a heartbeat (best-effort guard).
+
+    Symmetric to the execute_activity guard: a callback that blows up on the
+    outbound ``heartbeat()`` path must be swallowed, and the heartbeat must
+    still be forwarded downstream.
+    """
+    next_inbound = MagicMock()
+
+    def _boom() -> None:
+        raise RuntimeError("record blew up")
+
+    inbound = LivenessInterceptor(_boom).intercept_activity(next_inbound)
+    inbound.init(MagicMock())
+    (passed_outbound,), _ = next_inbound.init.call_args
+
+    # Must not raise even though the record callback does.
+    passed_outbound.heartbeat("progress", 42)
+
+    passed_outbound.next.heartbeat.assert_called_once_with("progress", 42)
