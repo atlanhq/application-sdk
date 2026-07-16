@@ -146,10 +146,14 @@ class ValidationRule {
   /// Treat strings containing only whitespace as a validation failure.
   whitespace: Boolean?
 
-  /// When the rule fires in the form UI (e.g. `"blur"`, `"change"`). Carried
-  /// verbatim to the frontend's form-rule config. Left as `String?` rather than
-  /// a closed enum so connectors aren't broken by a trigger value not yet
-  /// enumerated here; tighten to a union once the accepted set is confirmed.
+  /// The intended form-UI trigger for the rule (e.g. `"blur"`, `"change"`),
+  /// carried verbatim into the widget's `ui.rules` for parity with the legacy
+  /// `Dynamic` shape. The setup-form UI does not currently honor a per-rule
+  /// `trigger` — validation timing is set by the widget, not the rule — so this
+  /// is a passthrough / migration-parity field and does not change when
+  /// validation fires today. Left as `String?` rather than a closed enum so
+  /// connectors aren't broken by a trigger value not yet enumerated here;
+  /// tighten to a union once the accepted set is confirmed.
   trigger: String?
 }
 
