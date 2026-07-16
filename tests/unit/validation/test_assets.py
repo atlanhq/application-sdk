@@ -92,7 +92,7 @@ class TestValidateAsset:
         table = _table()
         table.qualified_name = None
         # Must return messages, not raise.
-        assert isinstance(validate_asset(table), list)
+        assert validate_asset(table) != []
 
     def test_never_raises_on_non_value_error(self) -> None:
         # The widened ``except Exception`` must swallow more than the ValueError
@@ -152,7 +152,8 @@ class TestPerAssetValidation:
 
         rendered = report.format_report()
         assert "1/3 passed" in rendered
-        assert "invalid" in rendered
+        assert "1 invalid" in rendered
+        assert "1 undeserializable" in rendered
 
     def test_missing_directory_is_empty_pass(self, tmp_path: Path) -> None:
         report = validate_transformed_dir(
@@ -176,6 +177,25 @@ class TestPerAssetValidation:
         rendered = report.format_report(max_items=5)
         assert "30 invalid" in rendered
         assert "and 25 more invalid assets" in rendered
+
+    def test_format_report_caps_undeserializable_overflow(self, tmp_path: Path) -> None:
+        # Several undeserializable (truncated JSON) lines with a low max_items:
+        # the undeserializable overflow line renders its own count, disjoint
+        # from the invalid overflow branch.
+        _write(
+            tmp_path,
+            "Table",
+            [],
+            extra_lines=[b'{"typeName":"Table","attributes":'] * 8,  # truncated JSON
+        )
+
+        report = validate_transformed_dir(
+            tmp_path / "transformed", check_referential_integrity=False
+        )
+        assert report.undeserializable == 8
+        rendered = report.format_report(max_items=3)
+        assert "8 undeserializable" in rendered
+        assert "and 5 more undeserializable records" in rendered
 
 
 # ---------------------------------------------------------------------------
