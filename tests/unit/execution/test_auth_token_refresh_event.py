@@ -710,3 +710,25 @@ class TestRefreshLoop:
             await asyncio.wait_for(manager._refresh_loop(client), timeout=2.0)
 
         assert call_count["n"] >= 2
+
+
+class TestForceRefresh:
+    """Tests for TemporalAuthManager.force_refresh."""
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_do_refresh_with_same_client(self) -> None:
+        """force_refresh awaits _do_refresh exactly once with the passed client.
+
+        The restart supervisor relies on this delegation to mint a fresh token
+        before rebuilding a worker, so verify the thin wrapper forwards its
+        argument rather than dropping or mutating it.
+        """
+        manager = _make_manager()
+        client = mock.MagicMock(name="Client")
+
+        with mock.patch.object(
+            manager, "_do_refresh", new=mock.AsyncMock()
+        ) as mock_refresh:
+            await manager.force_refresh(client)
+
+        mock_refresh.assert_awaited_once_with(client)
