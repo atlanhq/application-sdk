@@ -87,8 +87,12 @@ jobs:
     steps:
       # Straight-line delay before checkout (per docs/standards/ci.md — no
       # branching shell). Done before checkout so the delayed pass checks out
-      # main AS OF t+60m (picking up the t+0 pass's already-merged removal PR,
-      # which keeps it from re-removing entries) and scans the current base image.
+      # main AS OF t+60m and scans the current base image. Best-effort, it also
+      # picks up the t+0 pass's removal PR *if that PR has merged by then*; if
+      # auto-merge is still pending (slow required checks / merge queue), the
+      # delayed pass opens a second removal PR on its own RECONCILE_PASS branch.
+      # Harmless: both passes are idempotent on the merged allowlist — whichever
+      # removal PR merges first wins, and a human closes the stale one.
       - name: Wait ${{ matrix.delay-minutes }}m (widen the out-of-band rebuild window)
         shell: bash
         env:
