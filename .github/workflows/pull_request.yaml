@@ -107,10 +107,20 @@ jobs:
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
         with:
           fetch-depth: 0
+      - name: Mint fleet App token
+        id: app-token
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
       - uses: webiny/action-conventional-commits@7f91b1595ca1951cdb671ddc9f07a49081ec5b69 # v1.4.2
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
         with:
-          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
       - name: Skip on fork PR / merge_group
         if: github.event_name == 'merge_group' || github.event.pull_request.head.repo.fork == true
         run: echo "Commit-convention check not applicable here (fork PR or merge_group); PR title is enforced by Validate PR title."
@@ -154,11 +164,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
       - uses: "./.github/actions/trivy-container"
         with:
           chainguard-username: ${{ secrets.CHAINGUARD_USERNAME }}
           chainguard-password: ${{ secrets.CHAINGUARD_PASSWORD }}
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           fail-on-vulns: 'true'
 
   # NOTE: SDK unit / integration / storage-emulator tests moved to
@@ -244,6 +263,15 @@ jobs:
           registry: cgr.dev
           username: ${{ secrets.CHAINGUARD_USERNAME }}
           password: ${{ secrets.CHAINGUARD_PASSWORD }}
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
       - name: Build, scan, and push PR base image
         uses: ./.github/actions/secure-build-push-apps
         with:
@@ -255,10 +283,7 @@ jobs:
           # build (sdr-e2e) is single-platform too. Keeps the rebuild fast.
           platforms: linux/amd64
           tags: ${{ steps.ref.outputs.image }}
-          build-args: |
-            ACCESS_TOKEN_USR=$GITHUB_ACTOR
-            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600
           COMPOSE_HTTP_TIMEOUT: 600

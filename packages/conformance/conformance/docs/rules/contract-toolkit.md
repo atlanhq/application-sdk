@@ -115,6 +115,17 @@ imported explicitly by App.pkl consumers (App.pkl imports it internally and type
 `connector` as `Connectors.Type` but does not re-export the constants), so the import is
 required, not legacy.
 
+Note: the legacy-**import** check skips the `import "…Config.pkl"` line on a contract that
+`amends "…/Credential.pkl"` (a credential-config sub-contract, not an App.pkl entrypoint).
+Credential.pkl uses `Config.*` internally but, unlike App.pkl, does **not** re-export the
+widget types as unqualified typealiases, so such a contract genuinely needs
+`import "…Config.pkl"` for `pkl eval` to resolve `Config.TextInput` etc. — flagging it
+would be a false positive.  The exemption covers `Config.pkl` only: a credential contract
+carrying `import "…Renderers.pkl"` or `import "…Credential.pkl"` is still genuinely legacy
+(Credential.pkl imports Renderers.pkl itself) and still fires.  (App.pkl- and
+NativeApp.pkl-amending contracts are unaffected: there every legacy import is
+redundant/legacy and still fires.)
+
 **Note:** if the contract also has a K001 finding (still amending a legacy module),
 address K001 first — many K002 knobs disappear automatically when the module changes,
 because App.pkl simply lacks those properties.
