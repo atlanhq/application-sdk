@@ -956,6 +956,19 @@ async def run_worker_mode(config: AppConfig) -> None:
             type(handler_for_sdr).__name__,
         )
 
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: liveness window only in worker mode
+        WORKER_LIVENESS_MAX_IDLE_SECONDS,
+    )
+    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
+        WorkerHealthServer,
+    )
+
+    health_server = WorkerHealthServer(
+        port=config.health_port,
+        max_idle_seconds=WORKER_LIVENESS_MAX_IDLE_SECONDS,
+    )
+    health_server.set_temporal_client(client)
+
     # Worker-only mode pushes metrics to a Pushgateway since the process has
     # no /metrics endpoint to scrape. Combined mode (run_combined_mode below)
     # leaves enable_pushgateway=False so the FastAPI /metrics endpoint
@@ -965,7 +978,12 @@ async def run_worker_mode(config: AppConfig) -> None:
         task_queue=config.task_queue,
         handler=handler_for_sdr,
         enable_pushgateway=True,
+        on_activity=health_server.record_activity,
     )
+    # The /live probe fails once the worker run loop dies, so a livenessProbe
+    # can recycle a zombie pod (dead poll loop, process alive). Complements the
+    # run_until_shutdown race below, which exits the process non-zero directly.
+    health_server.set_liveness_probe(worker.is_run_loop_alive)
 
     # Log registrations
     for registered_app in AppRegistry.get_instance().list_apps():
@@ -990,17 +1008,13 @@ async def run_worker_mode(config: AppConfig) -> None:
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
 
-    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
-        WorkerHealthServer,
-    )
-
-    health_server = WorkerHealthServer(port=config.health_port)
-    health_server.set_temporal_client(client)
-
     logger.info("Worker started: app=%s queue=%s", app_name, config.task_queue)
     _log_process_memory_baseline()
-    async with health_server, worker:
-        await shutdown_event.wait()
+    async with health_server:
+        # Races the worker's poll loop against the shutdown signal. Returns on a
+        # graceful SIGTERM/SIGINT; raises if the run loop dies on its own so the
+        # process exits non-zero and Kubernetes recycles the pod (BLDX-1552).
+        await worker.run_until_shutdown(shutdown_event)
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
@@ -1230,7 +1244,26 @@ async def run_combined_mode(config: AppConfig) -> None:
 
     handler = handler_class()
 
-    worker = create_worker(client, task_queue=config.task_queue, handler=handler)
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: liveness window only in worker/combined mode
+        WORKER_LIVENESS_MAX_IDLE_SECONDS,
+    )
+    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
+        WorkerHealthServer,
+    )
+
+    health_server = WorkerHealthServer(
+        port=config.health_port,
+        max_idle_seconds=WORKER_LIVENESS_MAX_IDLE_SECONDS,
+    )
+    health_server.set_temporal_client(client)
+
+    worker = create_worker(
+        client,
+        task_queue=config.task_queue,
+        handler=handler,
+        on_activity=health_server.record_activity,
+    )
+    health_server.set_liveness_probe(worker.is_run_loop_alive)
 
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
@@ -1295,13 +1328,6 @@ async def run_combined_mode(config: AppConfig) -> None:
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
 
-    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
-        WorkerHealthServer,
-    )
-
-    health_server = WorkerHealthServer(port=config.health_port)
-    health_server.set_temporal_client(client)
-
     logger.info(
         "Combined mode started: app=%s queue=%s port=%d",
         app_name,
@@ -1309,11 +1335,34 @@ async def run_combined_mode(config: AppConfig) -> None:
         config.handler_port,
     )
     _log_process_memory_baseline()
-    async with health_server, worker:
-        await asyncio.gather(
-            uvicorn_server.serve(),
-            shutdown_event.wait(),
+    async with health_server:
+        serve_task = asyncio.create_task(uvicorn_server.serve(), name="uvicorn-serve")
+        # Races the worker poll loop against the shutdown signal; returns on a
+        # graceful SIGTERM and raises if the run loop dies on its own (BLDX-1552).
+        supervise_task = asyncio.create_task(
+            worker.run_until_shutdown(shutdown_event), name="worker-supervise"
         )
+        await asyncio.wait(
+            {serve_task, supervise_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        # A first completion that is not a graceful shutdown means one leg died
+        # on its own — the worker zombied, or uvicorn crashed. Trip the shutdown
+        # path so the surviving leg winds down gracefully, then surface the
+        # failure below instead of leaving a half-dead process running.
+        if not shutdown_event.is_set():
+            shutdown_event.set()
+            uvicorn_server.should_exit = True
+
+        # Let both legs finish draining: run_until_shutdown drains the worker on
+        # the shutdown signal; uvicorn returns from serve() once should_exit set.
+        results = await asyncio.gather(
+            serve_task, supervise_task, return_exceptions=True
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
@@ -1655,6 +1704,11 @@ Environment Variables:
   ATLAN_HANDLER_PORT       Handler bind port (default: 8000)
                            Falls back to ATLAN_APP_HTTP_PORT (v2)
   ATLAN_HEALTH_PORT        Worker health check port (default: 8081)
+  ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS
+                           Optional /live idle window in seconds (default: 0 = disabled).
+                           When >0, /live fails if no worker activity within the window.
+                           Enable only for continuously-busy queues; a positive value
+                           false-positives on legitimately idle queues.
   ATLAN_LOG_LEVEL          Log level (default: INFO)
                            Falls back to LOG_LEVEL (v2)
 

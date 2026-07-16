@@ -8,9 +8,10 @@ named activities.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from temporalio.client import Client
 from temporalio.worker import Interceptor as TemporalInterceptor
@@ -77,6 +78,7 @@ class AppWorker:
         self._primary_app_name = primary_app_name
         self._task_queue = task_queue
         self._pusher: PushGatewayClient | None = None
+        self._run_task: asyncio.Task[None] | None = None
 
     async def _start_metrics_push(self) -> None:
         if not self._enable_pushgateway:
@@ -186,6 +188,104 @@ class AppWorker:
         finally:
             await self._stop_metrics_push()
 
+    def is_run_loop_alive(self) -> bool:
+        """Whether the worker run loop is still running.
+
+        Returns ``True`` before the run loop is started via
+        :meth:`run_until_shutdown` and while it is running; ``False`` once it
+        has terminated (completed or raised). Consumed by the ``/live`` health
+        probe to fail fast when the run loop has died.
+
+        Note: this does not catch a *silently parked* poll loop — the run task
+        can still be pending while the underlying gRPC poll stream is dead. It
+        detects the case where ``run()`` returns or raises. The optional
+        activity-staleness window (``ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS``)
+        is the complementary proxy for that harder case.
+        """
+        if self._run_task is None:
+            return True
+        return not self._run_task.done()
+
+    async def run_until_shutdown(self, shutdown_event: asyncio.Event) -> None:
+        """Run the worker until a shutdown signal, surfacing unexpected death.
+
+        Runs the Temporal worker's poll loop as a background task and races it
+        against ``shutdown_event`` (set by the SIGTERM/SIGINT handler). Returns
+        normally on a graceful shutdown signal. If the run loop instead
+        completes or raises while no shutdown was requested — the zombie-worker
+        failure mode where the poll loop dies but the process would otherwise
+        linger idle — raises :class:`WorkerRunLoopExited` (or the run loop's own
+        exception) so the caller can exit non-zero and let Kubernetes recycle
+        the pod within seconds instead of waiting out a long per-activity
+        heartbeat timeout.
+        """
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415 — cold path: worker supervision only
+            WorkerRunLoopExited,
+        )
+
+        await _emit_worker_start_event(**self._start_event_params)
+        # Metrics is best-effort: never block the worker on a metrics failure.
+        try:
+            await self._start_metrics_push()
+        except Exception:
+            logger.error(
+                "Pushgateway pusher start failed — worker will run without metrics",
+                exc_info=True,
+            )
+
+        run_task = asyncio.create_task(self._worker.run(), name="temporal-worker-run")
+        self._run_task = run_task
+        shutdown_task = asyncio.create_task(
+            shutdown_event.wait(), name="worker-shutdown-wait"
+        )
+        try:
+            done, _pending = await asyncio.wait(
+                {run_task, shutdown_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if run_task in done:
+                # The run loop terminated on its own. If a shutdown was also
+                # signalled (a race at SIGTERM), treat it as a clean stop;
+                # otherwise this is the zombie failure mode — surface it.
+                run_exc = run_task.exception()
+                if shutdown_event.is_set():
+                    if run_exc is not None:
+                        raise run_exc
+                    return
+                if run_exc is not None:
+                    logger.error(
+                        "Worker run loop terminated with an error and no shutdown "
+                        "was requested; exiting so Kubernetes recycles the pod",
+                        exc_info=run_exc,
+                    )
+                    raise run_exc
+                logger.error(
+                    "Worker run loop exited without a shutdown signal; exiting so "
+                    "Kubernetes recycles the pod"
+                )
+                raise WorkerRunLoopExited()
+
+            # Graceful shutdown signalled. Yield first so in-flight activity
+            # result RPCs flush (see SHUTDOWN_DRAIN_DELAY_SECONDS), then stop the
+            # worker and wait for the run loop to finish draining.
+            await asyncio.sleep(SHUTDOWN_DRAIN_DELAY_SECONDS)
+            await self._worker.shutdown()
+            await run_task
+        finally:
+            shutdown_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await shutdown_task
+            # Only drain run_task here if it is still pending (e.g. this
+            # coroutine was cancelled from the outside, as combined mode does
+            # when the HTTP server exits). A run_task that already finished has
+            # had its result/exception retrieved above.
+            if not run_task.done():
+                run_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await run_task
+            await self._stop_metrics_push()
+
 
 async def _emit_worker_start_event(
     task_queue: str,
@@ -290,6 +390,7 @@ def create_worker(
     graceful_shutdown_timeout_seconds: int | None = None,
     interceptors: list[TemporalInterceptor] | None = None,
     enable_pushgateway: bool = False,
+    on_activity: Callable[[], None] | None = None,
 ) -> AppWorker:
     """Create a Temporal worker for registered Apps.
 
@@ -334,6 +435,10 @@ def create_worker(
             performs a final push on exit. Combined deployments (server +
             worker in one process) should leave this False so /metrics
             doesn't double-count.
+        on_activity: Optional callback fired on every activity execution and
+            heartbeat. The main entry point wires this to
+            ``WorkerHealthServer.record_activity`` so the ``/live`` probe can
+            reflect real worker progress.
 
     Returns:
         AppWorker wrapping a configured Temporal Worker (not yet started).
@@ -469,6 +574,17 @@ def create_worker(
         MetricsInterceptor(),
         TraceInterceptor(),
     ]
+
+    # Liveness recording runs before product-feature interceptors so a stalled
+    # downstream interceptor still counts as "activity observed" — the goal is
+    # to detect a dead poll loop, not to gate on downstream success.
+    if on_activity is not None:
+        from application_sdk.execution._temporal.interceptors.liveness import (  # noqa: PLC0415 — cold path: only when a liveness callback is wired
+            LivenessInterceptor,
+        )
+
+        all_interceptors.append(LivenessInterceptor(on_activity))
+
     all_interceptors.extend(interceptors or [])
 
     if interceptor_settings.enable_output_interceptor:

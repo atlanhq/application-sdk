@@ -1438,6 +1438,60 @@ class TestRunWorkerMode:
         with pytest.raises(RuntimeError, match="temporal down"):
             await run_worker_mode(cfg)
 
+    async def test_worker_run_loop_death_propagates(self, worker_patches) -> None:
+        """A run loop that dies without a shutdown signal raises out of
+        run_worker_mode so main() exits non-zero and k8s recycles the pod
+        (BLDX-1552)."""
+        from application_sdk.execution._temporal._activity_errors import (
+            WorkerRunLoopExited,
+        )
+
+        fake_worker = MagicMock()
+        fake_worker.run_until_shutdown = AsyncMock(side_effect=WorkerRunLoopExited())
+        fake_worker.is_run_loop_alive = MagicMock(return_value=False)
+
+        cfg = AppConfig(mode="worker", app_module="pkg:FakeApp")
+        with (
+            patch(
+                "application_sdk.execution._temporal.worker.create_worker",
+                return_value=fake_worker,
+            ),
+            pytest.raises(WorkerRunLoopExited),
+        ):
+            await run_worker_mode(cfg)
+
+        fake_worker.run_until_shutdown.assert_awaited_once()
+
+    async def test_liveness_probe_and_activity_recorder_wired(
+        self, worker_patches
+    ) -> None:
+        """run_worker_mode wires the health server's record_activity into
+        create_worker and its liveness probe to the worker (BLDX-1552)."""
+        health_cm = _make_async_cm()
+        worker_patches["health"].return_value = health_cm
+
+        fake_worker = MagicMock()
+        fake_worker.run_until_shutdown = AsyncMock(return_value=None)
+        fake_worker.is_run_loop_alive = MagicMock(return_value=True)
+
+        captured: dict = {}
+
+        def _capture_create_worker(*args, **kwargs):
+            captured["on_activity"] = kwargs.get("on_activity")
+            return fake_worker
+
+        cfg = AppConfig(mode="worker", app_module="pkg:FakeApp")
+        with patch(
+            "application_sdk.execution._temporal.worker.create_worker",
+            side_effect=_capture_create_worker,
+        ):
+            await run_worker_mode(cfg)
+
+        assert captured["on_activity"] is health_cm.record_activity
+        health_cm.set_liveness_probe.assert_called_once_with(
+            fake_worker.is_run_loop_alive
+        )
+
 
 # --------------------------------------------------------------------------- #
 # run_handler_mode                                                            #

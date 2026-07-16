@@ -6,9 +6,11 @@ Tests that start a real local TCP server have been moved to
 tests/integration/server/test_health.py.
 """
 
+from datetime import timedelta
+
 import pytest
 
-from application_sdk.server.health import HealthStatus, WorkerHealthServer
+from application_sdk.server.health import HealthStatus, WorkerHealthServer, _utc_now
 
 # ---------------------------------------------------------------------------
 # HealthStatus
@@ -46,3 +48,76 @@ class TestWorkerHealthServerState:
         assert server._last_activity is None
         server.record_activity()
         assert server._last_activity is not None
+
+
+class TestCheckLive:
+    """check_live: liveness probe (run-loop death) + optional idle window."""
+
+    @pytest.mark.asyncio
+    async def test_healthy_when_no_probe_and_no_window(self):
+        """Default posture: no probe, no window — always healthy (never
+        false-fails an idle queue)."""
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        status = await server.check_live()
+        assert status.healthy is True
+
+    @pytest.mark.asyncio
+    async def test_unhealthy_when_run_loop_dead(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        server.set_liveness_probe(lambda: False)
+        status = await server.check_live()
+        assert status.healthy is False
+        assert "not alive" in status.message
+
+    @pytest.mark.asyncio
+    async def test_healthy_when_run_loop_alive(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        server.set_liveness_probe(lambda: True)
+        status = await server.check_live()
+        assert status.healthy is True
+
+    @pytest.mark.asyncio
+    async def test_idle_window_disabled_by_default(self):
+        """Even with a stale last_activity, no configured window means healthy."""
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        server._last_activity = _utc_now() - timedelta(hours=1)
+        status = await server.check_live()
+        assert status.healthy is True
+
+    @pytest.mark.asyncio
+    async def test_idle_window_unhealthy_when_stale(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=30)
+        server._last_activity = _utc_now() - timedelta(seconds=120)
+        status = await server.check_live()
+        assert status.healthy is False
+        assert status.details["idle_seconds"] > 30
+
+    @pytest.mark.asyncio
+    async def test_idle_window_healthy_when_recent(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=300)
+        server.record_activity()
+        status = await server.check_live()
+        assert status.healthy is True
+
+    @pytest.mark.asyncio
+    async def test_idle_window_healthy_when_never_active(self):
+        """A configured window must not fail before any activity is recorded —
+        avoids killing a worker during its startup grace period."""
+        server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=30)
+        assert server._last_activity is None
+        status = await server.check_live()
+        assert status.healthy is True
+
+    @pytest.mark.asyncio
+    async def test_zero_max_idle_seconds_disables_window(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=0)
+        assert server._max_idle_seconds is None
+
+    @pytest.mark.asyncio
+    async def test_dead_run_loop_takes_precedence_over_idle_window(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=300)
+        server.set_liveness_probe(lambda: False)
+        server.record_activity()  # recent — window would pass
+        status = await server.check_live()
+        assert status.healthy is False
+        assert "not alive" in status.message
