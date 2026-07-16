@@ -89,13 +89,11 @@ class TestCheckLive:
         """A configured window must not fail before any activity is recorded —
         avoids killing a worker during its startup grace period."""
         server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=30)
-        assert server._last_activity is None
         status = await server.check_live()
         assert status.healthy is True
 
     @pytest.mark.asyncio
     async def test_zero_max_idle_seconds_disables_window(self):
         server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=0)
-        assert server._max_idle_seconds is None
         # Disabled window: /live stays healthy even with no activity recorded.
         assert (await server.check_live()).healthy is True

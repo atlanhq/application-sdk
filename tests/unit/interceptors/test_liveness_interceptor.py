@@ -9,8 +9,6 @@ import pytest
 
 from application_sdk.execution._temporal.interceptors.liveness import (
     LivenessInterceptor,
-    _LivenessActivityInboundInterceptor,
-    _LivenessActivityOutboundInterceptor,
 )
 
 
@@ -26,7 +24,9 @@ async def test_records_on_activity_execution() -> None:
     next_inbound = MagicMock()
     next_inbound.execute_activity = AsyncMock(return_value="done")
 
-    inbound = _LivenessActivityInboundInterceptor(next_inbound, lambda: calls.append(1))
+    inbound = LivenessInterceptor(lambda: calls.append(1)).intercept_activity(
+        next_inbound
+    )
     result = await inbound.execute_activity(_MockExecuteActivityInput())
 
     assert result == "done"
@@ -36,32 +36,48 @@ async def test_records_on_activity_execution() -> None:
 
 def test_records_on_heartbeat() -> None:
     calls: list[int] = []
-    next_outbound = MagicMock()
+    next_inbound = MagicMock()
 
-    outbound = _LivenessActivityOutboundInterceptor(
-        next_outbound, lambda: calls.append(1)
+    # Drive the public path: intercept_activity() -> inbound; init() installs the
+    # recording outbound wrapper downstream, which we then exercise via heartbeat.
+    inbound = LivenessInterceptor(lambda: calls.append(1)).intercept_activity(
+        next_inbound
     )
-    outbound.heartbeat("progress", 42)
+    inbound.init(MagicMock())
+    (passed_outbound,), _ = next_inbound.init.call_args
+
+    passed_outbound.heartbeat("progress", 42)
 
     assert calls == [1]
-    next_outbound.heartbeat.assert_called_once_with("progress", 42)
+    passed_outbound.next.heartbeat.assert_called_once_with("progress", 42)
 
 
 def test_init_wraps_outbound_so_heartbeats_are_recorded() -> None:
     calls: list[int] = []
     next_inbound = MagicMock()
 
-    inbound = _LivenessActivityInboundInterceptor(next_inbound, lambda: calls.append(1))
+    inbound = LivenessInterceptor(lambda: calls.append(1)).intercept_activity(
+        next_inbound
+    )
     inbound.init(MagicMock())
 
-    # The outbound passed downstream must be our recording wrapper.
+    # The outbound passed downstream must record on heartbeat.
     (passed_outbound,), _ = next_inbound.init.call_args
-    assert isinstance(passed_outbound, _LivenessActivityOutboundInterceptor)
     passed_outbound.heartbeat()
     assert calls == [1]
 
 
-def test_intercept_activity_returns_recording_inbound() -> None:
-    interceptor = LivenessInterceptor(lambda: None)
-    wrapped = interceptor.intercept_activity(MagicMock())
-    assert isinstance(wrapped, _LivenessActivityInboundInterceptor)
+@pytest.mark.asyncio
+async def test_record_callback_failure_never_blocks_activity() -> None:
+    """A raising record callback must not fail the activity (best-effort guard)."""
+    next_inbound = MagicMock()
+    next_inbound.execute_activity = AsyncMock(return_value="done")
+
+    def _boom() -> None:
+        raise RuntimeError("record blew up")
+
+    inbound = LivenessInterceptor(_boom).intercept_activity(next_inbound)
+    result = await inbound.execute_activity(_MockExecuteActivityInput())
+
+    assert result == "done"
+    next_inbound.execute_activity.assert_awaited_once()

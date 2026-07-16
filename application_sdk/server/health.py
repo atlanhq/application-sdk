@@ -30,6 +30,7 @@ Usage::
 
 import asyncio
 import contextlib
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http import HTTPStatus
@@ -144,8 +145,17 @@ class WorkerHealthServer:
         self._started_at: datetime | None = None
         self._last_activity: datetime | None = None
         self._request_count: int = 0
+        # Reject non-finite windows to match the env loader
+        # (``_load_worker_liveness_max_idle_seconds``): an ``inf`` window is set
+        # but can never trip (``idle > inf`` is always False) and ``nan``
+        # comparisons are always False too — both are silently useless, so treat
+        # them as disabled.
         self._max_idle_seconds: float | None = (
-            max_idle_seconds if max_idle_seconds and max_idle_seconds > 0 else None
+            max_idle_seconds
+            if max_idle_seconds
+            and max_idle_seconds > 0
+            and math.isfinite(max_idle_seconds)
+            else None
         )
 
     def set_temporal_client(self, client: TemporalClientProtocol) -> None:

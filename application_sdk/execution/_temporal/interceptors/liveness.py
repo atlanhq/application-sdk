@@ -29,6 +29,10 @@ from temporalio.worker import (
     Interceptor,
 )
 
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
+
 
 class _LivenessActivityOutboundInterceptor(ActivityOutboundInterceptor):
     def __init__(
@@ -38,7 +42,13 @@ class _LivenessActivityOutboundInterceptor(ActivityOutboundInterceptor):
         self._record = record
 
     def heartbeat(self, *details: Any) -> None:
-        self._record()
+        try:
+            self._record()
+        # conformance: ignore[E004] best-effort liveness recording; never block the activity on the callback
+        except Exception:
+            logger.warning(
+                "Liveness record callback failed on heartbeat", exc_info=True
+            )
         self.next.heartbeat(*details)
 
 
@@ -53,7 +63,13 @@ class _LivenessActivityInboundInterceptor(ActivityInboundInterceptor):
         self.next.init(_LivenessActivityOutboundInterceptor(outbound, self._record))
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
-        self._record()
+        try:
+            self._record()
+        # conformance: ignore[E004] best-effort liveness recording; never block the activity on the callback
+        except Exception:
+            logger.warning(
+                "Liveness record callback failed on activity execute", exc_info=True
+            )
         return await self.next.execute_activity(input)
 
 
