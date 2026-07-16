@@ -436,6 +436,13 @@ if DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED:
         "App.upload writes to both deployment and upstream stores per run.",
         _DEPLOYMENT_ARTIFACT_DUAL_WRITE,
     )
+#: BLDX-1555 defense-in-depth: when True, ``App.upload()`` validates transformed
+#: asset NDJSON against the pyatlan_v9 ``.validate()`` backbone before handing it
+#: across the SDR→Atlan boundary. Warn-only — invalid/orphaned assets are logged,
+#: never block the upload. Set to "false" to disable the check entirely.
+VALIDATE_ASSETS_ON_UPLOAD: bool = (
+    os.getenv("ATLAN_VALIDATE_ASSETS_ON_UPLOAD", "true").lower() == "true"
+)
 # Dapr Client Configuration
 #: Maximum gRPC message length in bytes for Dapr client.
 #:

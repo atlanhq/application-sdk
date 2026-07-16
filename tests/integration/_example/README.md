@@ -209,6 +209,28 @@ Test workflow execution:
 - Invalid configurations
 - Timeout handling
 
+## Asset Validation (on by default)
+
+Every **workflow** scenario also validates the transformed assets it produced
+against the `pyatlan_v9` `.validate()` backbone, plus a referential-integrity
+(orphan) pass that flags child assets whose parent `(typeName, qualifiedName)`
+is missing from the batch. This runs automatically once an extracted-output path
+is resolvable — set `extracted_output_base_path` on the scenario or the test
+class (the same path used for baseline comparison / pandera schemas).
+
+It is **warn-first**: failures are logged, not raised, so a connector with
+pre-existing invalid output does not immediately go red. Once a connector is
+clean, opt into hard-fail:
+
+```python
+class MyConnectorTest(BaseIntegrationTest):
+    extracted_output_base_path = "./local/tmp/artifacts/apps/myapp/workflows"
+    asset_validation_strict = True   # fail the scenario on any invalid/orphaned asset
+    scenarios = scenarios
+```
+
+Turn the check off for a class or a single scenario with `validate_assets = False`.
+
 ## Assertion Examples
 
 ```python

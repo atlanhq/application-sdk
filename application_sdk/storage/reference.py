@@ -113,10 +113,10 @@ async def _sha256_hex_file_async(path: Path) -> str:
     calling it directly on the event loop blocks the loop for the full
     read+hash. A blocked loop cannot run the SDK's auto-heartbeat coroutine, so
     activities that verify many/large files heartbeat-time-out even while making
-    progress. Uses ``run_in_thread`` (dedicated pool) rather than
-    ``asyncio.to_thread`` (asyncio's default executor) so this doesn't
-    contend with Temporal's own use of the default executor — same reason
-    directory listing is offloaded this way in ``persist``.
+    progress. Uses ``run_in_thread`` (the SDK's dedicated blocking pool) rather
+    than the shared default executor, so this doesn't contend with Temporal's own
+    use of that executor — same reason directory listing is offloaded this way in
+    ``persist``. See conformance rule P031.
     """
     return await run_in_thread(_sha256_hex_file, path)
 

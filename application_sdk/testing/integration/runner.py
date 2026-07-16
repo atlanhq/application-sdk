@@ -39,6 +39,7 @@ import pytest
 import requests as http_requests
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.validation import validate_transformed_dir
 
 from .client import IntegrationTestClient
 from .comparison import compare_metadata, load_actual_output, load_expected_data
@@ -188,6 +189,20 @@ def _check_server_health(server_url: str, timeout: int = 5) -> bool:
         return False
 
 
+def _needs_asset_validation(
+    *, validate_assets: bool, api_type: APIType, asset_base_path: str | None
+) -> bool:
+    """Gate for Step 7 asset validation.
+
+    Asset validation runs only for enabled workflow scenarios that have a
+    resolvable extracted-output path; a missing path skips silently (there is
+    nothing to read) rather than failing.
+    """
+    return bool(
+        validate_assets and api_type == APIType.WORKFLOW and bool(asset_base_path)
+    )
+
+
 class BaseIntegrationTest:
     """Base class for integration tests.
 
@@ -245,6 +260,16 @@ class BaseIntegrationTest:
 
     # Base path for pandera YAML schemas (used by data validation)
     schema_base_path: str = ""
+
+    # Asset-write validation (BLDX-1555). Default-on: every workflow scenario
+    # with a resolvable extracted-output path has its transformed assets checked
+    # against pyatlan_v9's .validate() backbone plus a referential-integrity
+    # (orphan) pass. Warn-first by default — failures are logged, not raised —
+    # so the fleet gets the signal without red builds; flip
+    # ``asset_validation_strict`` to True (per class or scenario) to hard-fail
+    # once a connector is clean.
+    validate_assets: bool = True
+    asset_validation_strict: bool = False
 
     # Internal state
     client: IntegrationTestClient
@@ -574,7 +599,24 @@ class BaseIntegrationTest:
             schema_path = scenario.schema_base_path or self.schema_base_path
             needs_pandera = bool(schema_path) and scenario.api_type == APIType.WORKFLOW
 
-            if needs_metadata or needs_pandera:
+            # Asset validation is default-on for workflow scenarios, but only when
+            # an extracted-output path is resolvable (otherwise there is nothing to
+            # read); missing config skips silently rather than failing.
+            validate_assets = (
+                scenario.validate_assets
+                if scenario.validate_assets is not None
+                else self.validate_assets
+            )
+            asset_base_path = (
+                scenario.extracted_output_base_path or self.extracted_output_base_path
+            )
+            needs_asset_validation = _needs_asset_validation(
+                validate_assets=validate_assets,
+                api_type=scenario.api_type,
+                asset_base_path=asset_base_path,
+            )
+
+            if needs_metadata or needs_pandera or needs_asset_validation:
                 self._ensure_workflow_completed(scenario, response)
 
             # Step 5: Validate metadata output if expected_data is set
@@ -584,6 +626,10 @@ class BaseIntegrationTest:
             # Step 6: Validate data with pandera if schema_base_path is set
             if needs_pandera:
                 self._validate_pandera_schemas(scenario, response, schema_path)
+
+            # Step 7: Validate transformed assets against the pyatlan_v9 backbone
+            if needs_asset_validation:
+                self._validate_assets(scenario, response, asset_base_path)
 
             logger.info("Scenario %s passed", scenario.name)
 
@@ -835,6 +881,71 @@ class BaseIntegrationTest:
             len(results),
             total_records,
         )
+
+    def _validate_assets(
+        self,
+        scenario: Scenario,
+        response: dict[str, Any],
+        base_path: str,
+    ) -> None:
+        """Validate transformed assets against the pyatlan_v9 ``.validate()`` backbone.
+
+        Cycles through every transformed-output record for the completed workflow,
+        runs per-asset validation plus a referential-integrity (orphan) pass, and
+        reports the outcome. Warn-first by default: failures are logged, not raised.
+        Set ``asset_validation_strict`` (on the scenario or the test class) to
+        turn failures into an ``AssertionError``.
+
+        Args:
+            scenario: The scenario being validated.
+            response: The workflow start API response containing workflow_id/run_id.
+            base_path: Resolved extracted-output base directory (non-empty).
+
+        Raises:
+            AssertionError: Only when strict mode is enabled and validation fails.
+        """
+        data = response.get("data", {})
+        workflow_id = data.get("workflow_id")
+        run_id = data.get("run_id")
+        if not workflow_id or not run_id:
+            logger.info(
+                "Skipping asset validation for scenario '%s': "
+                "response missing workflow_id or run_id",
+                scenario.name,
+            )
+            return
+
+        transformed_path = os.path.join(
+            base_path, workflow_id, run_id, scenario.output_subdirectory
+        )
+        logger.info(
+            "Validating transformed assets for scenario '%s' at %s",
+            scenario.name,
+            transformed_path,
+        )
+        report = validate_transformed_dir(transformed_path)
+
+        if report.ok:
+            logger.info(
+                "Asset validation passed for scenario '%s': %d/%d assets valid",
+                scenario.name,
+                report.passed,
+                report.total,
+            )
+            return
+
+        strict = (
+            scenario.asset_validation_strict
+            if scenario.asset_validation_strict is not None
+            else self.asset_validation_strict
+        )
+        message = (
+            f"Asset validation failed for scenario '{scenario.name}':\n\n"
+            + report.format_report()
+        )
+        if strict:
+            raise AssertionError(message)
+        logger.warning("%s", message)
 
     def _poll_workflow_completion(
         self,

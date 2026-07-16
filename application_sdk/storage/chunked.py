@@ -196,8 +196,8 @@ async def _fetch_chunk(
         # lseek+write instead of pwrite (Windows lacks pwrite). Safe only
         # because asyncio is single-threaded: no await between the two
         # calls means no other coroutine can interleave on the fd position.
-        # WARNING: if _fetch_chunk is ever moved into a thread (e.g. via
-        # asyncio.to_thread), lseek+write becomes a data race — two threads
+        # WARNING: if _fetch_chunk is ever moved into a worker thread (e.g. via
+        # run_in_thread), lseek+write becomes a data race — two threads
         # could interleave their seeks and corrupt each other's writes.
         # Use os.pwrite (or a per-thread fd) instead if that happens.
         os.lseek(fd, offset, os.SEEK_SET)
