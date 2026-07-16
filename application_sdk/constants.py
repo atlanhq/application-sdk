@@ -51,6 +51,7 @@ Example:
     >>> print(f"Running application {APPLICATION_NAME}")
 """
 
+import math
 import os
 import warnings
 from enum import Enum
@@ -338,7 +339,8 @@ WORKER_EVICTION_MAX_RETRIES = _load_worker_eviction_max_retries()
 #: has terminated unexpectedly — a signal that never false-positives. Enable the
 #: window ONLY for continuously-busy queues: on a legitimately idle queue no
 #: activity is recorded and a positive window would kill a healthy worker.
-#: Malformed values fall back to 0.
+#: Malformed or non-finite values (e.g. ``"abc"``, ``"inf"``, ``"nan"``) fall
+#: back to 0.
 def _load_worker_liveness_max_idle_seconds() -> float:
     raw = os.getenv("ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS", "0")
     try:
@@ -346,6 +348,16 @@ def _load_worker_liveness_max_idle_seconds() -> float:
     except ValueError:
         warnings.warn(
             f"ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS={raw!r} is not a valid number; "
+            "falling back to 0 (disabled)",
+            stacklevel=2,
+        )
+        return 0.0
+    # Reject inf/nan: an ``inf`` window is set but can never trip (``idle > inf``
+    # is always False), and ``nan`` comparisons are always False too — both are
+    # silently useless. Fall back to 0 (disabled) with a warning instead.
+    if not math.isfinite(value):
+        warnings.warn(
+            f"ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS={raw!r} is not finite; "
             "falling back to 0 (disabled)",
             stacklevel=2,
         )

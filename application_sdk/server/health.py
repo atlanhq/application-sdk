@@ -130,7 +130,12 @@ class WorkerHealthServer:
                 poll loop has silently stalled. Leave ``None``/``0`` (the
                 default) to disable the window — enable it only for
                 continuously-busy queues, since a positive value false-positives
-                on a legitimately idle queue (see BLDX-1552).
+                on a legitimately idle queue (see BLDX-1552). Note the window is
+                refreshed at activity start and on every ``activity.heartbeat()``:
+                even on a busy queue, an activity that runs longer than the
+                window without heartbeating will trip ``/live`` mid-execution, so
+                set the window strictly larger than the longest non-heartbeating
+                activity.
         """
         self.host = host
         self.port = port
@@ -383,6 +388,7 @@ async def run_health_server(
     host: str = "0.0.0.0",
     port: int = 8081,
     temporal_client: TemporalClientProtocol | None = None,
+    max_idle_seconds: float | None = None,
 ) -> WorkerHealthServer:
     """Create and start a health server.
 
@@ -393,6 +399,9 @@ async def run_health_server(
         host: Host to bind to.
         port: Port to listen on.
         temporal_client: Optional Temporal client for readiness checks.
+        max_idle_seconds: Optional liveness window forwarded to
+            :class:`WorkerHealthServer`. Leave ``None``/``0`` (the default) to
+            disable the window (see the constructor for the enable-time caveat).
 
     Returns:
         Running WorkerHealthServer instance.
@@ -406,7 +415,7 @@ async def run_health_server(
         # ... run worker ...
         await server.stop()
     """
-    server = WorkerHealthServer(host=host, port=port)
+    server = WorkerHealthServer(host=host, port=port, max_idle_seconds=max_idle_seconds)
 
     if temporal_client:
         server.set_temporal_client(temporal_client)
