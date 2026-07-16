@@ -19,6 +19,16 @@ name: Stale issues and PRs (Reusable)
 # fleet doesn't immediately close a large accumulated backlog. Flip
 # debug-only off per-repo (via a fork of this file, or once this input is
 # added) if a caller wants real closure.
+#
+# When flipping debug-only off, mind write permissions: the permissions block
+# below declares the maximum this reusable workflow can use, but for a caller
+# invoked via `uses:` those are capped by the caller's token, not escalated. On
+# the fallback path (secrets.GITHUB_TOKEN, which every current caller uses), a
+# caller whose default token is read-only would have these writes capped and
+# actions/stale would 403 on the first label/comment. Before real closure, the
+# caller must either grant `issues: write` / `pull-requests: write` at its job
+# level or pass the fleet App token (via `secrets: inherit`), which carries its
+# own permissions. Harmless while debug-only: true, since no writes happen.
 
 on:
   workflow_call:
@@ -37,6 +47,9 @@ permissions:
 jobs:
   stale:
     runs-on: ubuntu-latest
+    # actions/stale finishes in seconds; cap the job so a hung GitHub API call or
+    # rate-limit wait can't hold a runner up to the 6-hour default.
+    timeout-minutes: 10
     steps:
       - name: Mint fleet App token
         id: app-token
@@ -45,8 +58,12 @@ jobs:
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          repositories: ${{ github.event.repository.name }}
+          # No owner/repositories: with both omitted, create-github-app-token
+          # scopes the token to the current repository. Callers trigger this
+          # on: schedule, whose event payload does not populate
+          # github.event.repository, so deriving the repo name from the event
+          # would resolve empty -- the current-repo default is reliable on any
+          # event and is exactly the scope this job needs.
 
       - name: Mark stale issues and PRs
         uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
