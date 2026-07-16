@@ -2275,6 +2275,37 @@ class _FakeWorker:
         return False
 
 
+class _CancelThenFailWorker:
+    """Models temporalio's *real* fatal-poll seam.
+
+    Unlike ``_FakeWorker(fail=True)`` (which raises from ``__aenter__``),
+    temporalio surfaces a fatal poll by cancelling the ``async with`` body task
+    mid-``await`` and re-raising the fatal error from ``__aexit__`` only when
+    ``exc_type is CancelledError``. That leaves a residual cancellation on the
+    task, which the supervisor must clear with ``uncancel()`` before its backoff
+    ``wait_for`` — the exact line ``_FakeWorker`` never exercises.
+    """
+
+    def __init__(self, *, on_exit: Any = None) -> None:
+        self.on_exit = on_exit
+
+    async def __aenter__(self) -> _CancelThenFailWorker:
+        # Cancel the task running the `async with` body so the following
+        # `await shutdown_event.wait()` is torn down mid-await.
+        task = asyncio.current_task()
+        assert task is not None
+        task.cancel()
+        return self
+
+    async def __aexit__(self, exc_type: Any, *args: Any) -> bool:
+        if self.on_exit is not None:
+            self.on_exit()
+        if exc_type is asyncio.CancelledError:
+            # temporalio re-raises the fatal error from __aexit__ on the seam.
+            raise RuntimeError("Activity worker failed")
+        return False
+
+
 class TestRunWorkerWithRestart:
     """Behavioral tests for the worker restart supervisor."""
 
@@ -2318,6 +2349,34 @@ class TestRunWorkerWithRestart:
 
         assert calls["n"] == 2
         auth.force_refresh.assert_awaited_once()
+
+    async def test_restarts_on_cancellation_seam_without_propagating_cancel(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fatal error arriving via the temporalio cancellation seam self-heals.
+
+        The first worker cancels the body task and re-raises the fatal error
+        from ``__aexit__`` (exercising the supervisor's ``uncancel()`` guard);
+        the supervisor must clear the residual cancel, restart, and reach a
+        clean shutdown without ever letting ``CancelledError`` escape.
+        """
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+
+        def build() -> Any:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _CancelThenFailWorker()
+            return _FakeWorker(fail=False, on_enter=shutdown.set)
+
+        # Must complete normally: no CancelledError propagates out, and the
+        # supervisor rebuilt the worker after the seam failure.
+        await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+
+        assert calls["n"] == 2
 
     async def test_gives_up_after_cap_and_reraises(
         self, monkeypatch: pytest.MonkeyPatch
