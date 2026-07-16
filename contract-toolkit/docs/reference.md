@@ -2969,6 +2969,22 @@ The same rename applies to every `Config.*` widget a contract uses (`Config.Nest
 bump and the consumer migrations must land together — bumping the toolkit before a consumer is
 migrated breaks that consumer's `pkl eval`.
 
+**Validation rules.** Under `Config.pkl`, `validationRules` was `Listing<Dynamic>`, so contracts
+wrote `new Dynamic { pattern = …; message = …; trigger = "blur" }`. `Widgets.pkl` types it as
+`Listing<ValidationRule>` (a real class, re-exported from `Credential.pkl`), so replace the
+untyped `new Dynamic` with `new ValidationRule` — the fields (`required`, `message`, `pattern`,
+`trigger`, …) are unchanged, so the generated JSON is identical:
+
+```diff
+ validationRules {
+-  new Dynamic { pattern = "^arn:aws:.+"; message = "Enter a valid ARN"; trigger = "blur" }
++  new ValidationRule { pattern = "^arn:aws:.+"; message = "Enter a valid ARN"; trigger = "blur" }
+ }
+```
+
+`ValidationRule` carries an optional `trigger` field precisely so this migration preserves the
+`"trigger"` key the legacy `Dynamic` emitted.
+
 ---
 
 ## Renderers.pkl — Legacy Renderers
