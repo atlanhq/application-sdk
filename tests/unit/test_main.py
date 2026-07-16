@@ -1440,6 +1440,41 @@ class TestRunWorkerMode:
         with pytest.raises(RuntimeError, match="temporal down"):
             await run_worker_mode(cfg)
 
+    async def test_activity_recorder_wired_into_worker(self, worker_patches) -> None:
+        """run_worker_mode wires the health server's record_activity into
+        create_worker (via the _build_worker factory) so the /live liveness
+        window reflects real worker progress (BLDX-1552)."""
+        health_cm = _make_async_cm()
+        worker_patches["health"].return_value = health_cm
+
+        captured: dict = {}
+
+        def _capture_create_worker(*args, **kwargs):
+            captured["on_activity"] = kwargs.get("on_activity")
+            return _make_async_cm()
+
+        cfg = AppConfig(mode="worker", app_module="pkg:FakeApp")
+        with (
+            patch(
+                "application_sdk.execution._temporal.worker.create_worker",
+                side_effect=_capture_create_worker,
+            ),
+            patch.object(asyncio.Event, "wait", new=AsyncMock(return_value=None)),
+        ):
+            await run_worker_mode(cfg)
+
+        from application_sdk.constants import WORKER_LIVENESS_MAX_IDLE_SECONDS
+
+        # Identity check only — that the exact recorder is wired through; the
+        # callback's runtime behavior is exercised by the interceptor tests.
+        assert captured["on_activity"] is health_cm.record_activity
+        # The liveness window must reach the constructor: a dropped kwarg would
+        # silently never activate /live yet leave the on_activity wiring intact.
+        assert (
+            worker_patches["health"].call_args.kwargs["max_idle_seconds"]
+            == WORKER_LIVENESS_MAX_IDLE_SECONDS
+        )
+
 
 # --------------------------------------------------------------------------- #
 # run_handler_mode                                                            #
@@ -1649,7 +1684,7 @@ class TestRunCombinedMode:
             patch(
                 "application_sdk.server.health.WorkerHealthServer",
                 return_value=_make_async_cm(),
-            ),
+            ) as mock_health,
             patch(
                 "application_sdk.main._flush_observability",
                 new_callable=AsyncMock,
@@ -1665,6 +1700,7 @@ class TestRunCombinedMode:
                 "create_svc": mock_create_svc,
                 "close_infra": mock_close_infra,
                 "uvicorn_server": uvicorn_server,
+                "health": mock_health,
             }
 
     async def test_combined_runs_to_completion(self, combined_patches) -> None:
@@ -1697,6 +1733,41 @@ class TestRunCombinedMode:
         ):
             await run_combined_mode(cfg)
         no_create.assert_not_awaited()
+
+    async def test_activity_recorder_wired_into_worker(self, combined_patches) -> None:
+        """run_combined_mode wires the health server's record_activity into
+        create_worker (via the _build_worker factory) so the /live liveness
+        window reflects real worker progress in combined mode (BLDX-1552).
+
+        Mirrors TestRunWorkerMode.test_activity_recorder_wired_into_worker so a
+        dropped kwarg can't silently disable the liveness window in combined mode."""
+        health_cm = _make_async_cm()
+        combined_patches["health"].return_value = health_cm
+
+        captured: dict = {}
+
+        def _capture_create_worker(*args, **kwargs):
+            captured["on_activity"] = kwargs.get("on_activity")
+            return _make_async_cm()
+
+        cfg = AppConfig(mode="combined", app_module="pkg:FakeApp")
+        with patch(
+            "application_sdk.execution._temporal.worker.create_worker",
+            side_effect=_capture_create_worker,
+        ):
+            await run_combined_mode(cfg)
+
+        from application_sdk.constants import WORKER_LIVENESS_MAX_IDLE_SECONDS
+
+        # Identity check only — that the exact recorder is wired through; the
+        # callback's runtime behavior is exercised by the interceptor tests.
+        assert captured["on_activity"] is health_cm.record_activity
+        # The liveness window must reach the constructor: a dropped kwarg would
+        # silently never activate /live yet leave the on_activity wiring intact.
+        assert (
+            combined_patches["health"].call_args.kwargs["max_idle_seconds"]
+            == WORKER_LIVENESS_MAX_IDLE_SECONDS
+        )
 
 
 # --------------------------------------------------------------------------- #

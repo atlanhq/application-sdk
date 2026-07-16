@@ -15,6 +15,11 @@ observability set:
 * ``EventInterceptor`` (``events.py``) — v3 lifecycle event publishing.
 * ``OutputInterceptor`` (``outputs.py``) — UI metrics / artifacts collection.
 * ``RedisLockInterceptor`` (``lock.py``) — distributed activity locks.
+
+``LivenessInterceptor`` (``liveness.py``) is intentionally NOT re-exported here:
+it is SDK-internal and wired only by ``create_worker`` when an ``on_activity``
+callback is supplied. Exposing it as a public interceptor would let callers add
+it manually and bypass the opt-in wiring — leave it out of ``__all__``.
 """
 
 from application_sdk.execution._temporal.interceptors.log import LogInterceptor

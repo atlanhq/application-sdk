@@ -51,6 +51,7 @@ Example:
     >>> print(f"Running application {APPLICATION_NAME}")
 """
 
+import math
 import os
 import warnings
 from enum import Enum
@@ -327,6 +328,44 @@ def _load_worker_eviction_max_retries() -> int:
 
 
 WORKER_EVICTION_MAX_RETRIES = _load_worker_eviction_max_retries()
+
+
+#: Optional liveness window (seconds) for the worker ``/live`` probe. When set
+#: to a positive value, ``check_live()`` reports unhealthy if no worker activity
+#: (activity execution or heartbeat) has been recorded within this window, so a
+#: k8s livenessProbe recycles a pod whose poll loop has silently stalled.
+#:
+#: Default ``0`` (disabled): the probe then fails only when the worker run loop
+#: has terminated unexpectedly — a signal that never false-positives. Enable the
+#: window ONLY for continuously-busy queues: on a legitimately idle queue no
+#: activity is recorded and a positive window would kill a healthy worker.
+#: Malformed or non-finite values (e.g. ``"abc"``, ``"inf"``, ``"nan"``) fall
+#: back to 0.
+def _load_worker_liveness_max_idle_seconds() -> float:
+    raw = os.getenv("ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS", "0")
+    try:
+        value = float(raw)
+    except ValueError:
+        warnings.warn(
+            f"ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS={raw!r} is not a valid number; "
+            "falling back to 0 (disabled)",
+            stacklevel=2,
+        )
+        return 0.0
+    # Reject inf/nan: an ``inf`` window is set but can never trip (``idle > inf``
+    # is always False), and ``nan`` comparisons are always False too — both are
+    # silently useless. Fall back to 0 (disabled) with a warning instead.
+    if not math.isfinite(value):
+        warnings.warn(
+            f"ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS={raw!r} is not finite; "
+            "falling back to 0 (disabled)",
+            stacklevel=2,
+        )
+        return 0.0
+    return max(0.0, value)
+
+
+WORKER_LIVENESS_MAX_IDLE_SECONDS = _load_worker_liveness_max_idle_seconds()
 
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations
