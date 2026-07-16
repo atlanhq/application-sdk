@@ -79,10 +79,17 @@ def _warn_on_invalid_transformed_assets(local_path: str) -> None:
 
     BLDX-1555 defense-in-depth at the SDR→Atlan boundary. When ``local_path``
     holds transformed asset output, every record is validated against the
-    pyatlan_v9 ``.validate()`` backbone (plus the referential/orphan pass) and a
-    warning summarises any invalid or orphaned assets. This **never** blocks the
-    upload and **never** raises — a defect in the scaffold must not break a real
-    handoff — and it scans every record (no sampling) so the summary is accurate.
+    pyatlan_v9 ``.validate()`` backbone and a warning summarises any invalid
+    assets. The cross-record referential (orphan) pass is intentionally skipped
+    here: a real handoff may upload a partial or incremental subtree, so a parent
+    absent from *this* batch is not necessarily an orphan. That pass runs on the
+    integration-test path (:class:`BaseIntegrationTest` Step 7), which sees the
+    full run output. This **never** blocks the upload and **never** raises — a
+    defect in the scaffold must not break a real handoff — and it scans every
+    record (no sampling) so the summary is accurate.
+
+    This function is synchronous and CPU/IO-bound; ``upload()`` runs it in a
+    worker thread so it never blocks the async event loop.
 
     No-ops when the flag is disabled or ``local_path`` does not point at a
     ``transformed/`` asset subtree (e.g. a raw or non-asset upload).
@@ -114,7 +121,7 @@ def _warn_on_invalid_transformed_assets(local_path: str) -> None:
         else:
             return
 
-        report = validate_transformed_dir(target)
+        report = validate_transformed_dir(target, check_referential_integrity=False)
         if not report.ok:
             _task_logger.warning(
                 "Transformed-asset validation flagged issues before upload "
@@ -955,6 +962,15 @@ class App(ABC):
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED,
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED,
         )
+
+        # BLDX-1555 defense-in-depth: validate transformed assets against the
+        # pyatlan_v9 backbone before the handoff. Warn-only, best-effort — never
+        # blocks the upload. Offloaded to a worker thread so the exhaustive,
+        # synchronous scan never blocks the async event loop (contextvars are
+        # copied into the thread by the helper).
+        from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — deferred: execution imports app.base (circular at module load)
+            run_in_thread as _run_in_thread,
+        )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: app.base is imported by execution which imports storage
             normalize_key,
         )
@@ -962,10 +978,7 @@ class App(ABC):
             upload as _upload,
         )
 
-        # BLDX-1555 defense-in-depth: validate transformed assets against the
-        # pyatlan_v9 backbone before the handoff. Warn-only, best-effort — never
-        # blocks the upload.
-        _warn_on_invalid_transformed_assets(input.local_path)
+        await _run_in_thread(_warn_on_invalid_transformed_assets, input.local_path)
 
         deployment = self.context.storage
         upstream = self.context.upstream_storage

@@ -4,22 +4,26 @@ Fixtures are built from real pyatlan_v9 asset creators and serialized with
 ``to_nested_bytes()`` — the same wire shape connectors write to
 ``transformed/<Entity>/entities.json`` — so the read-back path is exercised
 exactly as it runs in production.
+
+The referential-integrity (orphan) tests need the ``rocksdict``-backed
+``SpillableDict`` from the ``[storage]`` extra and are skipped without it — run
+``uv sync --extra storage`` (CI uses ``--all-extras``) for full local coverage.
+The rocksdict-absent fallback itself is covered unconditionally in
+``TestRocksdictAbsentFallback`` by patching ``SpillableDict`` to raise.
 """
 
 from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from pyatlan_v9.model.assets import Column, Database, Schema, Table, View
 
-from application_sdk.validation import (
-    AssetValidationReport,
-    ReferentialFailure,
-    validate_asset,
-    validate_transformed_dir,
-)
+from application_sdk.validation import AssetValidationReport, ReferentialFailure
+from application_sdk.validation import assets as assets_module
+from application_sdk.validation import validate_asset, validate_transformed_dir
 
 _HAS_ROCKSDICT = importlib.util.find_spec("rocksdict") is not None
 requires_rocksdict = pytest.mark.skipif(
@@ -236,3 +240,39 @@ class TestReferentialIntegrity:
         assert report.orphans[0].type_name == "Column"
         assert report.orphans[0].missing_parent_type_name == "Table"
         assert report.orphans[0].missing_parent_qualified_name == TABLE_QN
+
+
+# ---------------------------------------------------------------------------
+# validate_transformed_dir — rocksdict-absent fallback (no [storage] extra)
+# ---------------------------------------------------------------------------
+
+
+class TestRocksdictAbsentFallback:
+    """When SpillableDict can't be constructed (rocksdict missing), the orphan
+    pass is skipped but per-asset validation must still run — unconditionally
+    tested by patching SpillableDict to raise ImportError."""
+
+    def test_falls_back_to_per_asset_only(self, tmp_path: Path) -> None:
+        # A full hierarchy plus an orphan Column: with the orphan pass live this
+        # would report one orphan, so orphans == [] proves the pass was skipped.
+        _write(tmp_path, "Database", [_database()])
+        _write(tmp_path, "Schema", [_schema()])
+        _write(tmp_path, "Table", [_table()])
+        _write(tmp_path, "Column", [_column("C1", f"{SCHEMA_QN}/T_MISSING")])
+
+        with patch.object(
+            assets_module, "SpillableDict", side_effect=ImportError("no rocksdict")
+        ):
+            with patch.object(assets_module, "logger") as logger:
+                report = validate_transformed_dir(
+                    tmp_path / "transformed", check_referential_integrity=True
+                )
+                # Warned about the skipped orphan pass, with the traceback.
+                logger.warning.assert_called_once()
+                assert logger.warning.call_args.kwargs.get("exc_info") is True
+
+        # Per-asset validation still ran across every record; no orphans flagged.
+        assert report.orphans == []
+        assert report.total == 4
+        assert report.failed == 0
+        assert report.ok

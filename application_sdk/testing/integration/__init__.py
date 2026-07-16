@@ -186,7 +186,8 @@ __all__ = [
     "format_validation_report",
     "get_normalised_dataframe",
     "get_schema_file_paths",
-    # Asset-write Validation (pyatlan_v9 backbone)
+    # Asset-write Validation (pyatlan_v9 backbone) — canonical source is
+    # application_sdk.validation; re-exported here for test-authoring convenience.
     "validate_asset",
     "validate_transformed_dir",
     "AssetValidationReport",

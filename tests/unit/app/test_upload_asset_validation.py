@@ -7,17 +7,13 @@ Temporal runtime is needed.
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 from pyatlan_v9.model.assets import Column, Database, Schema, Table
 
 from application_sdk.app import base as base_module
 from application_sdk.app.base import _warn_on_invalid_transformed_assets
-
-_HAS_ROCKSDICT = importlib.util.find_spec("rocksdict") is not None
 
 CONN = "default/snow/123"
 SCHEMA_QN = f"{CONN}/DB/SCHEMA"
@@ -31,6 +27,13 @@ def _write_transformed(base: Path, entity: str, assets: list) -> None:
         for asset in assets:
             handle.write(asset.to_nested_bytes())
             handle.write(b"\n")
+
+
+def _invalid_table() -> Table:
+    # Per-asset invalid: qualified_name cleared, caught by pyatlan_v9 .validate().
+    table = Table.creator(name="T1", schema_qualified_name=SCHEMA_QN)
+    table.qualified_name = None
+    return table
 
 
 def _valid_hierarchy(base: Path) -> None:
@@ -67,10 +70,13 @@ class TestWarnOnInvalidTransformedAssets:
             _warn_on_invalid_transformed_assets("")
             logger.warning.assert_not_called()
 
-    @pytest.mark.skipif(not _HAS_ROCKSDICT, reason="orphan pass needs rocksdict")
-    def test_orphan_assets_warn_but_do_not_raise(self, tmp_path: Path) -> None:
+    def test_orphan_not_flagged_on_upload_path(self, tmp_path: Path) -> None:
+        # The upload hook runs per-asset validation only (BLDX-1555): a real
+        # handoff may upload a partial/incremental subtree, so a parent absent
+        # from this batch is not treated as an orphan here. The orphan Column is
+        # per-asset valid, so no warning fires. (The orphan pass runs on the
+        # integration-test path, which sees the full run output.)
         _valid_hierarchy(tmp_path)
-        # Column pointing at a Table that is not present -> orphan.
         _write_transformed(
             tmp_path,
             "Column",
@@ -84,10 +90,24 @@ class TestWarnOnInvalidTransformedAssets:
             ],
         )
         with patch.object(base_module, "_task_logger") as logger:
-            # Must not raise.
             _warn_on_invalid_transformed_assets(str(tmp_path))
+            logger.warning.assert_not_called()
+
+    def test_transformed_dir_passed_directly_is_scanned(self, tmp_path: Path) -> None:
+        # local_path IS the transformed/ dir (not its parent). The "transformed"
+        # in root.parts branch must still target and scan it.
+        _write_transformed(tmp_path, "Table", [_invalid_table()])
+        with patch.object(base_module, "_task_logger") as logger:
+            _warn_on_invalid_transformed_assets(str(tmp_path / "transformed"))
             logger.warning.assert_called_once()
-            assert "ORPHAN" in logger.warning.call_args.args[-1]
+
+    def test_file_path_under_transformed_is_scanned(self, tmp_path: Path) -> None:
+        # local_path is a single file whose path contains a transformed/ segment.
+        _write_transformed(tmp_path, "Table", [_invalid_table()])
+        entities = tmp_path / "transformed" / "Table" / "entities.json"
+        with patch.object(base_module, "_task_logger") as logger:
+            _warn_on_invalid_transformed_assets(str(entities))
+            logger.warning.assert_called_once()
 
     def test_valid_assets_do_not_warn(self, tmp_path: Path) -> None:
         _valid_hierarchy(tmp_path)

@@ -189,6 +189,20 @@ def _check_server_health(server_url: str, timeout: int = 5) -> bool:
         return False
 
 
+def _needs_asset_validation(
+    *, validate_assets: bool, api_type: APIType, asset_base_path: str | None
+) -> bool:
+    """Gate for Step 7 asset validation.
+
+    Asset validation runs only for enabled workflow scenarios that have a
+    resolvable extracted-output path; a missing path skips silently (there is
+    nothing to read) rather than failing.
+    """
+    return bool(
+        validate_assets and api_type == APIType.WORKFLOW and bool(asset_base_path)
+    )
+
+
 class BaseIntegrationTest:
     """Base class for integration tests.
 
@@ -596,10 +610,10 @@ class BaseIntegrationTest:
             asset_base_path = (
                 scenario.extracted_output_base_path or self.extracted_output_base_path
             )
-            needs_asset_validation = (
-                validate_assets
-                and scenario.api_type == APIType.WORKFLOW
-                and bool(asset_base_path)
+            needs_asset_validation = _needs_asset_validation(
+                validate_assets=validate_assets,
+                api_type=scenario.api_type,
+                asset_base_path=asset_base_path,
             )
 
             if needs_metadata or needs_pandera or needs_asset_validation:

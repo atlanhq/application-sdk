@@ -158,8 +158,9 @@ def _compound_key(type_name: str, qualified_name: str) -> str:
 # belong here — a type absent from this map is treated as parent-less, so we never
 # raise a false-positive orphan (e.g. Database's parent Connection is created out
 # of band and is intentionally omitted). The parent's typeName is read from the
-# related object itself, so it is never hard-coded here. Extend as more asset
-# families adopt referential validation.
+# related object itself, so it is never hard-coded here. Types absent from this
+# map (BI, dbt, process families) get no orphan checking by design; expanding
+# coverage to them is tracked under CONNECT-292.
 _PARENT_RELATIONSHIP_ATTRS: dict[str, tuple[str, ...]] = {
     "Schema": ("database",),
     "Table": ("atlan_schema",),
@@ -235,8 +236,11 @@ def _deserialize(raw: bytes) -> Asset:
 def validate_asset(asset: Asset, *, for_creation: bool = True) -> list[str]:
     """Run pyatlan_v9's ``.validate()`` and return its error messages.
 
-    Returns an empty list when the asset is valid. Never raises — a failed
-    validation surfaces as the returned messages.
+    Returns an empty list when the asset is valid. A failed validation is
+    reported as the returned messages rather than raised — pyatlan_v9 signals
+    validation failures with ``ValueError``, which is caught here. Any other
+    exception type indicates a genuine defect (not a validation failure) and is
+    left to propagate to the caller.
 
     Args:
         asset: A concrete pyatlan_v9 asset instance.

@@ -15,6 +15,8 @@ from pyatlan_v9.model.assets import Column, Database, Schema, Table
 
 from application_sdk.testing.integration import BaseIntegrationTest, Scenario, equals
 from application_sdk.testing.integration import runner as runner_module
+from application_sdk.testing.integration.models import APIType
+from application_sdk.testing.integration.runner import _needs_asset_validation
 
 _HAS_ROCKSDICT = importlib.util.find_spec("rocksdict") is not None
 requires_rocksdict = pytest.mark.skipif(
@@ -131,3 +133,30 @@ class TestRunnerAssetValidationGuards:
             # No workflow_id/run_id -> skip silently, no raise, no warning.
             suite._validate_assets(_scenario(), {"data": {}}, str(tmp_path))
             logger.warning.assert_not_called()
+
+
+class TestNeedsAssetValidationGate:
+    """The outer Step-7 gate that decides whether _validate_assets runs at all."""
+
+    def test_enabled_workflow_with_path_runs(self) -> None:
+        assert _needs_asset_validation(
+            validate_assets=True, api_type=APIType.WORKFLOW, asset_base_path="/tmp/out"
+        )
+
+    def test_disabled_flag_skips(self) -> None:
+        assert not _needs_asset_validation(
+            validate_assets=False, api_type=APIType.WORKFLOW, asset_base_path="/tmp/out"
+        )
+
+    def test_non_workflow_api_skips(self) -> None:
+        assert not _needs_asset_validation(
+            validate_assets=True, api_type=APIType.AUTH, asset_base_path="/tmp/out"
+        )
+
+    def test_missing_base_path_skips(self) -> None:
+        assert not _needs_asset_validation(
+            validate_assets=True, api_type=APIType.WORKFLOW, asset_base_path=None
+        )
+        assert not _needs_asset_validation(
+            validate_assets=True, api_type=APIType.WORKFLOW, asset_base_path=""
+        )
