@@ -141,6 +141,19 @@ def test_k011_nested_app_id_does_not_satisfy(tmp_path: Path) -> None:
     assert "K011" in _ids(findings)
 
 
+def test_k011_fires_on_empty_or_null_value(tmp_path: Path) -> None:
+    # A present app_id set to empty-quotes or a YAML null literal still POSTs an
+    # empty/None identity and hits the same 404 — treat it as missing.
+    for i, empty in enumerate(
+        ('app_id: ""', "app_id: ''", "app_id: null", "app_id: ~")
+    ):
+        sub = tmp_path / f"case{i}"
+        sub.mkdir()
+        body = f"name: openapi\n{empty}\nrelease_model: semver\n"
+        findings = _app_repo(sub, atlan=body)
+        assert "K011" in _ids(findings), empty
+
+
 def test_k011_suppressed_by_directive(tmp_path: Path) -> None:
     body = "# conformance: ignore[K011] non-published app\n" + _ATLAN_WITHOUT_APP_ID
     findings = _app_repo(tmp_path, atlan=body)
@@ -177,6 +190,21 @@ def test_k012_anchored_on_poe_tasks_header(tmp_path: Path) -> None:
     assert k012
     assert k012[0].file == "pyproject.toml"
     assert k012[0].line == 4  # the [tool.poe.tasks] header line
+
+
+def test_k012_fires_on_empty_generate_command(tmp_path: Path) -> None:
+    # A present but empty generate task is not a runnable target — 'uv run poe
+    # generate' still fails, so K012 must fire.
+    body = '[tool.poe.tasks]\nstart-deps = "echo none"\ngenerate = ""\n'
+    findings = _app_repo(tmp_path, pyproject=body)
+    assert "K012" in _ids(findings)
+
+
+def test_k012_fires_on_malformed_pyproject(tmp_path: Path) -> None:
+    # A malformed pyproject.toml is treated as "no tasks declared": the check
+    # neither crashes nor false-negatives, so K012 fires.
+    findings = _app_repo(tmp_path, pyproject="[tool.poe.tasks\nbroken = \n")
+    assert "K012" in _ids(findings)
 
 
 def test_k012_silent_when_no_pyproject(tmp_path: Path) -> None:

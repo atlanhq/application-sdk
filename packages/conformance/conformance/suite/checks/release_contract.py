@@ -42,8 +42,16 @@ __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
 # Top-level ``app_id:`` key in atlan.yaml. A top-level YAML key starts in
 # column 0 (no leading whitespace), so ``^`` under re.MULTILINE anchors it; a
 # nested ``app_id:`` under some other mapping is not the manifest-level
-# identity the publish step reads and must not satisfy the rule.
-_APP_ID_RE = re.compile(r"^app_id:[ \t]*\S+", re.MULTILINE)
+# identity the publish step reads and must not satisfy the rule. The value is
+# captured so a present-but-empty/null value can be rejected too (see
+# ``_app_id_missing``).
+_APP_ID_RE = re.compile(r"^app_id:[ \t]*(.*)$", re.MULTILINE)
+
+# YAML values that carry a non-whitespace token yet still POST an empty/None
+# identity to the Global Marketplace and hit the same 404 K011 exists to
+# prevent: empty quotes and the YAML null literals. A present ``app_id`` set to
+# any of these is treated as missing.
+_EMPTY_APP_ID_VALUES = frozenset({'""', "''", "null", "Null", "NULL", "~"})
 
 # ``[tool.poe.tasks]`` table header — used only to anchor the K012 finding on a
 # meaningful line; absence just falls back to line 1.
@@ -68,6 +76,21 @@ def _line_of(text: str, pattern: re.Pattern[str], default: int = 1) -> int:
     return text.count("\n", 0, match.start()) + 1
 
 
+def _app_id_missing(text: str) -> bool:
+    """True when atlan.yaml carries no usable top-level ``app_id``.
+
+    Fires on a dropped key (the observed regression), a bare ``app_id:`` with no
+    value, and a present-but-empty value (``""``, ``''``, or a YAML null literal
+    ``null``/``Null``/``NULL``/``~``) — each POSTs an empty/None identity to the
+    Global Marketplace and returns the same 404.
+    """
+    match = _APP_ID_RE.search(text)
+    if match is None:
+        return True
+    value = match.group(1).strip()
+    return not value or value in _EMPTY_APP_ID_VALUES
+
+
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     """Emit K011 (missing app_id) and K012 (missing generate poe task).
 
@@ -86,7 +109,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     atlan = root / "atlan.yaml"
     if atlan.is_file():
         text = atlan.read_text(encoding="utf-8")
-        if _APP_ID_RE.search(text) is None:
+        if _app_id_missing(text):
             findings.append(
                 make_toml_finding(
                     rule_id="K011",
@@ -120,7 +143,10 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         tool = data.get("tool")
         poe = tool.get("poe") if isinstance(tool, dict) else None
         tasks = poe.get("tasks") if isinstance(poe, dict) else None
-        if not isinstance(tasks, dict) or "generate" not in tasks:
+        # A present but empty ``generate`` (e.g. ``generate = ""`` or an empty
+        # task table) is not a runnable target, so ``uv run poe generate`` still
+        # fails — treat a falsy value the same as an absent key.
+        if not isinstance(tasks, dict) or not tasks.get("generate"):
             findings.append(
                 make_toml_finding(
                     rule_id="K012",
