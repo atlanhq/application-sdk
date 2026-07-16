@@ -8,6 +8,7 @@ tests/integration/server/test_health.py.
 
 import math
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 
@@ -73,10 +74,27 @@ class TestCheckLive:
     @pytest.mark.asyncio
     async def test_idle_window_unhealthy_when_stale(self):
         server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=30)
-        server._last_activity = _utc_now() - timedelta(seconds=120)
+        stale = _utc_now() - timedelta(seconds=120)
+        server._last_activity = stale
         status = await server.check_live()
         assert status.healthy is False
         assert status.details["idle_seconds"] > 30
+        # Pin the full operator-visible probe output, not just idle_seconds.
+        assert status.details["last_activity"] == stale.isoformat()
+        assert status.details["max_idle_seconds"] == 30
+        assert status.message == "No worker activity within liveness window"
+
+    @pytest.mark.asyncio
+    async def test_idle_window_healthy_at_exact_boundary(self):
+        """Equality is healthy: production compares with a strict ``>``, so
+        idle_seconds == max_idle_seconds must not fail the probe."""
+        server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=30)
+        now = _utc_now()
+        server._last_activity = now - timedelta(seconds=30)
+        # Freeze "now" so idle_seconds is exactly 30, not 30 + test elapsed time.
+        with patch("application_sdk.server.health._utc_now", return_value=now):
+            status = await server.check_live()
+        assert status.healthy is True
 
     @pytest.mark.asyncio
     async def test_idle_window_healthy_when_recent(self):

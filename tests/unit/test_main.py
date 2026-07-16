@@ -1465,6 +1465,8 @@ class TestRunWorkerMode:
 
         from application_sdk.constants import WORKER_LIVENESS_MAX_IDLE_SECONDS
 
+        # Identity check only — that the exact recorder is wired through; the
+        # callback's runtime behavior is exercised by the interceptor tests.
         assert captured["on_activity"] is health_cm.record_activity
         # The liveness window must reach the constructor: a dropped kwarg would
         # silently never activate /live yet leave the on_activity wiring intact.
@@ -1757,6 +1759,8 @@ class TestRunCombinedMode:
 
         from application_sdk.constants import WORKER_LIVENESS_MAX_IDLE_SECONDS
 
+        # Identity check only — that the exact recorder is wired through; the
+        # callback's runtime behavior is exercised by the interceptor tests.
         assert captured["on_activity"] is health_cm.record_activity
         # The liveness window must reach the constructor: a dropped kwarg would
         # silently never activate /live yet leave the on_activity wiring intact.

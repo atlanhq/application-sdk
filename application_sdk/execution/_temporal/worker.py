@@ -475,9 +475,11 @@ def create_worker(
         TraceInterceptor(),
     ]
 
-    # Liveness recording runs before product-feature interceptors so a stalled
-    # downstream interceptor still counts as "activity observed" — the goal is
-    # to detect a dead poll loop, not to gate on downstream success.
+    # Liveness recording is appended after the SDK's own Log/Metrics/Trace
+    # interceptors but before the user-supplied interceptors and the
+    # OutputInterceptor, so a stall in any of those downstream interceptors
+    # still counts as "activity observed" — the goal is to detect a dead poll
+    # loop, not to gate on downstream success.
     if on_activity is not None:
         from application_sdk.execution._temporal.interceptors.liveness import (  # noqa: PLC0415 — cold path: only when a liveness callback is wired
             LivenessInterceptor,

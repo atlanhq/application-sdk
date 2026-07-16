@@ -412,7 +412,9 @@ def build_worker_health_server(
     Returns:
         A configured (not yet started) ``WorkerHealthServer``.
     """
-    # Lazy so importing this module never pulls in the constants module.
+    # Lazy import: defers the os.getenv read behind WORKER_LIVENESS_MAX_IDLE_SECONDS
+    # (evaluated at constants-module import time) until a worker/combined boot
+    # actually builds the health server.
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker/combined boot only
         WORKER_LIVENESS_MAX_IDLE_SECONDS,
     )
