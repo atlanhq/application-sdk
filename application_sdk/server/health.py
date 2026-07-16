@@ -33,7 +33,7 @@ import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http import HTTPStatus
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -125,10 +125,12 @@ class WorkerHealthServer:
             port: Port to listen on.
             max_idle_seconds: Optional liveness window. When a positive value is
                 supplied, ``check_live`` reports unhealthy if no worker activity
-                has been recorded within this many seconds. Leave ``None``/``0``
-                (the default) to disable the window — the liveness check then
-                fails only when the worker run loop has died, which never
-                false-positives on a legitimately idle queue.
+                (activity execution or heartbeat) has been recorded within this
+                many seconds, so a k8s ``livenessProbe`` can recycle a pod whose
+                poll loop has silently stalled. Leave ``None``/``0`` (the
+                default) to disable the window — enable it only for
+                continuously-busy queues, since a positive value false-positives
+                on a legitimately idle queue (see BLDX-1552).
         """
         self.host = host
         self.port = port
@@ -140,7 +142,6 @@ class WorkerHealthServer:
         self._max_idle_seconds: float | None = (
             max_idle_seconds if max_idle_seconds and max_idle_seconds > 0 else None
         )
-        self._liveness_probe: Callable[[], bool] | None = None
 
     def set_temporal_client(self, client: TemporalClientProtocol) -> None:
         """Set the Temporal client for readiness checks.
@@ -149,21 +150,6 @@ class WorkerHealthServer:
             client: Temporal client to use for connectivity checks.
         """
         self._temporal_client = client
-
-    def set_liveness_probe(self, probe: Callable[[], bool]) -> None:
-        """Register a callable reporting whether the worker run loop is alive.
-
-        ``check_live`` fails when this returns ``False`` — i.e. the worker's
-        ``run()`` coroutine has terminated (completed or raised) — so a
-        Kubernetes ``livenessProbe`` recycles the pod instead of leaving a dead
-        worker process idle. The main entry point wires this to
-        ``AppWorker.is_run_loop_alive``.
-
-        Args:
-            probe: Zero-arg callable returning ``True`` while the run loop is
-                alive, ``False`` once it has died.
-        """
-        self._liveness_probe = probe
 
     def record_activity(self) -> None:
         """Record that the worker performed activity.
@@ -215,28 +201,20 @@ class WorkerHealthServer:
     async def check_live(self) -> HealthStatus:
         """Liveness check - is the worker still doing work?
 
-        Kubernetes uses this to decide whether to restart the pod. Fails when:
-
-        1. A liveness probe is registered and reports the worker run loop has
-           died (``set_liveness_probe``). This is the authoritative,
-           false-positive-free signal and is always evaluated when wired.
-        2. A liveness window is configured (``max_idle_seconds``) and no worker
-           activity has been recorded within it. This is an opt-in proxy for a
-           silently stalled poll loop; it is disabled by default because it
-           false-positives on legitimately idle queues.
+        Kubernetes uses this to decide whether to restart the pod. Fails only
+        when a liveness window is configured (``max_idle_seconds``) and no
+        worker activity has been recorded within it — an opt-in proxy for a
+        silently stalled poll loop, disabled by default because it
+        false-positives on legitimately idle queues (see BLDX-1552). The
+        restart supervisor in ``main.py`` already recovers a worker whose
+        ``run()`` returns/raises, so this probe targets the harder case where
+        the poll loop parks without the worker ever exiting.
 
         Returns healthy otherwise.
         """
         last_activity_iso = (
             self._last_activity.isoformat() if self._last_activity else None
         )
-
-        if self._liveness_probe is not None and not self._liveness_probe():
-            return HealthStatus(
-                healthy=False,
-                message="Worker run loop is not alive",
-                details={"last_activity": last_activity_iso},
-            )
 
         if self._max_idle_seconds is not None and self._last_activity is not None:
             idle_seconds = (_utc_now() - self._last_activity).total_seconds()

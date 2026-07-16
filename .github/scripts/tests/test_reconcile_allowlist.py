@@ -186,6 +186,36 @@ def test_resolution_phrase():
 
 
 # ---------------------------------------------------------------------------
+# removal_branch — the on-release workflow runs two passes (t+0, t+60m) under
+# one GITHUB_RUN_ID, so RECONCILE_PASS must keep their removal branches distinct
+# (else the second pass pushes an existing branch and fails).
+# ---------------------------------------------------------------------------
+
+
+def test_removal_branch_disambiguates_passes(monkeypatch):
+    monkeypatch.setenv("GITHUB_RUN_ID", "999")
+    monkeypatch.setenv("RECONCILE_PASS", "0")
+    b0 = rec.removal_branch("2026-07-16")
+    monkeypatch.setenv("RECONCILE_PASS", "60")
+    b60 = rec.removal_branch("2026-07-16")
+    assert b0 == "chore/allowlist-remove-999-0"
+    assert b60 == "chore/allowlist-remove-999-60"
+    assert b0 != b60  # same run, different pass → distinct branches
+
+
+def test_removal_branch_without_pass_tag(monkeypatch):
+    monkeypatch.setenv("GITHUB_RUN_ID", "999")
+    monkeypatch.delenv("RECONCILE_PASS", raising=False)
+    assert rec.removal_branch("2026-07-16") == "chore/allowlist-remove-999"
+
+
+def test_removal_branch_falls_back_to_run_date(monkeypatch):
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.delenv("RECONCILE_PASS", raising=False)
+    assert rec.removal_branch("2026-07-16") == "chore/allowlist-remove-2026-07-16"
+
+
+# ---------------------------------------------------------------------------
 # scan_files_present + main() fail-safe — never reconcile against a phantom
 # empty scan. On `release: released` the release workflow scans fresh into the
 # CWD; if that scan produced nothing (failed/absent results), reconciling would

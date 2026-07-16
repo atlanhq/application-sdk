@@ -267,6 +267,22 @@ def _resolution_phrase(debounce: int) -> str:
     return f"{debounce} consecutive clean scans"
 
 
+def removal_branch(run_date: str) -> str:
+    """Branch name for the allowlist-removal PR — unique per run AND per pass.
+
+    GITHUB_RUN_ID keeps it unique across same-day reconcile runs. But the
+    on-release workflow runs two passes (t+0 and t+~1h, to catch a base-image
+    rebuild that lands just after the release) under the SAME GITHUB_RUN_ID, so
+    RECONCILE_PASS disambiguates them — otherwise both passes could push the
+    same branch and the second would fail. Falls back to run_date when neither
+    env var is set (e.g. local runs)."""
+    suffix = os.environ.get("GITHUB_RUN_ID", run_date) or run_date
+    pass_tag = os.environ.get("RECONCILE_PASS", "")
+    if pass_tag:
+        suffix = f"{suffix}-{pass_tag}"
+    return f"chore/allowlist-remove-{suffix}"
+
+
 def open_removal_pr(
     repo: str, removed: list[str], run_date: str, debounce: int, runner: Runner
 ) -> None:
@@ -276,9 +292,7 @@ def open_removal_pr(
         data.pop(cve, None)
     Path(ALLOWLIST_PATH).write_text(json.dumps(data, indent=2) + "\n")
 
-    # GITHUB_RUN_ID keeps the branch unique across same-day reconcile runs.
-    suffix = os.environ.get("GITHUB_RUN_ID", run_date) or run_date
-    branch = f"chore/allowlist-remove-{suffix}"
+    branch = removal_branch(run_date)
     joined = ", ".join(removed)
     runner(["git", "checkout", "-b", branch], check=True)
     runner(["git", "add", ALLOWLIST_PATH], check=True)

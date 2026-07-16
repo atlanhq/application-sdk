@@ -67,24 +67,6 @@ class WorkerInterceptorDuplicateError(InvalidInputError):
 
 
 @dataclass(kw_only=True)
-class WorkerRunLoopExited(InternalError):
-    """The Temporal worker's run loop terminated without a shutdown signal.
-
-    Raised by ``AppWorker.run_until_shutdown`` when the worker's ``run()``
-    coroutine completes or raises while no SIGTERM/SIGINT shutdown was
-    requested — the "zombie worker" failure mode where the poll loop dies but
-    the process would otherwise linger idle. Propagating this out of the
-    entry point makes the process exit non-zero so Kubernetes recycles the
-    pod within seconds instead of waiting out a long per-activity heartbeat
-    timeout.
-    """
-
-    code: ClassVar[str] = "INTERNAL_WORKER_RUN_LOOP_EXITED"
-    message: str = "Worker run loop exited unexpectedly without a shutdown signal"
-    component: str | None = "temporal_worker"
-
-
-@dataclass(kw_only=True)
 class WorkerActivityNameCollisionError(InvalidInputError):
     """An app task registers an activity name the SDK reserves for the preflight gate.
 

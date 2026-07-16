@@ -14,7 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
 
     steps:
       - name: Checkout code
@@ -58,10 +57,23 @@ jobs:
           git tag -a "v${{ env.VERSION }}" -m "Release v${{ env.VERSION }}"
           git push origin "v${{ env.VERSION }}"
 
+      - name: Mint fleet App token
+        # A real (non-github-actions[bot]) identity is required so the
+        # Release created below re-fires harbor-release.yaml's
+        # `on: release: [published]` trigger.
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - name: Delete existing GitHub Release (if any)
         run: gh release delete "v${{ env.VERSION }}" --yes 2>/dev/null || true
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Create GitHub Release
         id: create_release
@@ -72,7 +84,7 @@ jobs:
           body_path: .github/release_notes.md
           draft: false
           prerelease: ${{ contains(env.VERSION, 'rc') }}
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       # TODO: Uncomment in case we need to publish to TestPyPI
       # Available at: https://test.pypi.org/project/atlan-application-sdk/
