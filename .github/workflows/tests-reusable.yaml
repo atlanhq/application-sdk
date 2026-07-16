@@ -345,10 +345,10 @@ jobs:
           repositories: application-sdk
 
       # Pinned to the exact SHA that dispatched this run (not `main`): that
-      # SHA is what created the check run we're about to complete, so the
-      # callback script version can never drift from it. Also required for
-      # this PR itself to be testable pre-merge — the callback scripts don't
-      # exist on `main` until this PR lands.
+      # SHA is what created the check run we're about to complete, so a PR
+      # that *modifies* the callback scripts self-tests its own version (the
+      # scripts don't exist on `main` until such a PR lands — the fallback
+      # below is skipped whenever the pinned ref already carries them).
       - name: Checkout application-sdk callback script
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -358,6 +358,38 @@ jobs:
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
+
+      # A dispatching SDK PR branch that forked *before* the callback scripts
+      # merged (and never picked up main since) checks out a ref that lacks
+      # build_callback_summary.py — the callback then hard-fails on a missing
+      # file even though the connector tests passed, leaving the check stuck
+      # in_progress until the 130-min watchdog flips it to timed_out (a red
+      # result for a green run). Fall back to main's scripts for those stale
+      # refs. Only the *script source* falls back — the check run still
+      # completes on the dispatching SHA via `--sha`, so nothing about which
+      # commit gets the result changes. `hashFiles() == ''` is a step-level
+      # expression, not inlined conditional shell, so it stays within the CI
+      # authoring rule (no branching logic in `run:` blocks).
+      - name: Fall back to main callback scripts if pinned SHA predates them
+        id: scripts-fallback
+        if: hashFiles('application-sdk-scripts/.github/scripts/build_callback_summary.py') == ''
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+
+      # `outcome == 'success'` is true only when the fallback step actually
+      # ran (skipped when the pinned ref already had the scripts), so the
+      # warning fires exactly on the stale-ref path.
+      - name: Warn that the dispatching SDK ref was stale
+        if: steps.scripts-fallback.outcome == 'success'
+        env:
+          SDK_REF: ${{ inputs.application-sdk-ref }}
+        run: echo "::warning::Dispatching application-sdk ref ${SDK_REF} predates the callback scripts; used main's copy instead. Merge main into that SDK branch to silence this."
 
       - name: Download connector e2e results
         if: needs.e2e.result != 'skipped'
