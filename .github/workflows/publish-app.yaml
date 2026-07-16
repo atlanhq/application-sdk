@@ -53,14 +53,24 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
-        description: "Org-level PAT for GHCR login and gh CLI auth"
+        description: >-
+          Fallback PAT for gh CLI auth (workflow-dispatch trigger/poll of the
+          caller's own build workflow, and the atlan-cli-releases download),
+          used if the fleet App token can't be minted. Not used for GHCR --
+          the actual image build+push happens in the caller's own separate
+          build workflow, authenticated there with its own secrets.
       APP_PUBLISH_TOKEN:
         required: true
         description: "API token for marketplace publish"
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
 
 permissions:
   contents: read
-  packages: write
   actions: write
 
 jobs:
@@ -75,9 +85,22 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      - name: Mint fleet App token
+        # Used for gh CLI auth only (release download + the workflow-dispatch
+        # trigger/poll the atlan CLI shells out to for the caller's own build
+        # workflow) -- no GHCR interaction happens in this file.
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
+
       - name: Install Atlan CLI
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         run: |
           set -euo pipefail
 
@@ -106,7 +129,7 @@ jobs:
 
       - name: Publish
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
           REF: ${{ inputs.ref || github.ref }}
