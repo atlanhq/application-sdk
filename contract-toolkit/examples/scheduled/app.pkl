@@ -58,7 +58,8 @@ schedules {
 // Event triggers on the same entrypoint → one AE workflow carrying both `schedules`
 // and `events` in a single `triggers` block. Each renders to AE's EventTrigger shape;
 // `name` must be unique within the entrypoint (enforced at eval time). `ackPaths` are
-// JSONPaths against the run's node outputs (empty → fire-and-forget).
+// JSONPaths against the run's node outputs; AE requires them non-empty — the default
+// `[""]` is fire-and-forget (auto-ack), never an empty list.
 events {
   new EventTriggerSpec {
     name = "cdc-user-entity"
@@ -77,7 +78,7 @@ events {
       name = "atlan-kafka"
       topic = "example.cdc.group"
     }
-    // triggerConfig defaults (maxRetries=3, no ackPaths → fire-and-forget)
+    // triggerConfig defaults: maxRetries=3, ackPaths=[""] (fire-and-forget)
     status = "PAUSED"
   }
 }

@@ -66,7 +66,9 @@
         },
         "trigger_config": {
           "max_retries": 3,
-          "ack_paths": []
+          "ack_paths": [
+            ""
+          ]
         },
         "status": "PAUSED"
       }

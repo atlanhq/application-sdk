@@ -228,10 +228,13 @@ facts {
     appManifest["triggers"]["events"][0]["trigger_config"]["ack_paths"][0] == "$.extract.outputs.ack_path"
   }
 
-  ["App event defaults are ACTIVE, maxRetries 3, no ack_paths"] {
+  ["App event defaults: maxRetries 3, fire-and-forget ack_paths [\"\"] (AE-valid, not [])"] {
     appManifest["triggers"]["events"][1]["status"] == "PAUSED"
     appManifest["triggers"]["events"][1]["trigger_config"]["max_retries"] == 3
-    appManifest["triggers"]["events"][1]["trigger_config"]["ack_paths"].length == 0
+    // AE requires ack_paths non-empty; omitting ackPaths renders the fire-and-forget
+    // [""] (a single empty string), never [].
+    appManifest["triggers"]["events"][1]["trigger_config"]["ack_paths"].length == 1
+    appManifest["triggers"]["events"][1]["trigger_config"]["ack_paths"][0] == ""
   }
 
   ["App carries schedules and events in one triggers block"] {

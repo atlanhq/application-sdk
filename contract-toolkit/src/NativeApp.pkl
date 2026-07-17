@@ -2475,7 +2475,10 @@ local manifestData: Mapping<String, Any> = new Mapping {
               }
               ["trigger_config"] = new Mapping {
                 ["max_retries"] = e.triggerConfig.maxRetries
-                ["ack_paths"] = e.triggerConfig.ackPaths
+                // AE rejects an empty ack_paths; render the fire-and-forget [""] when
+                // none is declared, never [].
+                ["ack_paths"] = if (e.triggerConfig.ackPaths.isEmpty) new Listing { "" }
+                                else e.triggerConfig.ackPaths
               }
               ["status"] = e.status
             }
@@ -2506,7 +2509,12 @@ class EventSource {
 
 /// Per-trigger delivery config. Mirrors AE's `TriggerConfig`: `max_retries` bounds
 /// redelivery; `ack_paths` are JSONPaths (against the run's node outputs) to the ack
-/// parquet — an empty list means fire-and-forget.
+/// parquet AE marks processed after the run settles.
+///
+/// AE **requires `ack_paths` non-empty** and rejects `[]`. Set real JSONPath(s) (e.g.
+/// `"$.extract.outputs.ack_path"`) so events are acked only after your DAG produces the
+/// ack parquet. Leave it empty to opt into fire-and-forget — the toolkit then renders
+/// `[""]` (AE's fire-and-forget form: auto-ack without reading a parquet), never `[]`.
 class EventTriggerConfig {
   maxRetries: Int(this >= 0) = 3
   ackPaths: Listing<String> = new Listing {}
