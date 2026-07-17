@@ -76,7 +76,6 @@ jobs:
         run: |
           python3 .github/scripts/discover_org_consumers.py \
             --owner atlanhq \
-            --query "atlan-application-sdk filename:pyproject.toml" \
             --exclude atlanhq/application-sdk
 
   renovate:

@@ -1,12 +1,25 @@
 #!/usr/bin/env python3
-"""Discover atlanhq repos that depend on atlan-application-sdk, via GitHub code
-search. Used by reusable-renovate-dispatch.yaml to build its fan-out matrix.
+"""Discover the atlan-*-app repos the self-hosted Renovate runner should manage:
+those whose ``renovate.json`` extends the shared fleet preset.
 
-Extracted from an inline shell if/else per docs/standards/ci.md (no branching
-logic in workflow YAML `run:` blocks).
+Deterministic by design. Enumerates repos with ``gh repo list`` (stable) rather
+than ``gh search code`` (best-effort and nondeterministic — during a fleet
+rehearsal it returned anywhere from 30 to ~90 results across calls and silently
+dropped a real consumer). It then keeps only repos whose ``renovate.json``
+extends ``application-sdk//renovate-config/default.json``. Repos that have not
+adopted the preset are left out (the runner also sets ``onboarding=false``, so an
+un-adopted repo is never onboarded even if it slipped in).
+
+The atlan-*-app name filter naturally excludes ``application-sdk`` and the
+read-only connector mirror monorepos (``connectors-sql`` / ``-api`` /
+``-pipeline``), which also extend the preset but must not be managed here;
+``--exclude`` is kept as a belt-and-suspenders override.
+
+Extracted from inline shell per docs/standards/ci.md (no branching logic in
+workflow ``run:`` blocks); unit-tested in tests/test_discover_org_consumers.py.
 
 Environment:
-    GH_TOKEN   bearer token for `gh` CLI (App installation token or PAT)
+    GH_TOKEN   bearer token for `gh` CLI (atlan-app-fleet installation token)
 """
 
 from __future__ import annotations
@@ -14,23 +27,34 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from typing import Callable, Optional
 
 RunFn = Callable[[list], str]
 
+# Every consumer's renovate.json extends the shared preset via this path; its
+# presence is the definitive "on the fleet Renovate policy" signal.
+PRESET_MARKER = "application-sdk//renovate-config/default.json"
+
+# Fleet membership is the atlan-*-app naming convention. This deliberately
+# excludes application-sdk and the connector mirror monorepos, none of which
+# match the pattern.
+DEFAULT_NAME_PATTERN = r"^atlan-[a-z0-9-]+-app$"
+
 
 def _run_gh(args: list) -> str:
+    """Run `gh` and return stdout, or "" on any failure (missing file, auth,
+    network). Callers treat "" as 'no data'."""
     result = subprocess.run(["gh", *args], capture_output=True, text=True)
     if result.returncode != 0:
-        return "[]"
+        return ""
     return result.stdout
 
 
 def parse_repos(raw_output: str) -> list:
-    """Parse gh search code's --jq-filtered stdout into a repo list, tolerating
-    empty/malformed output (network errors, auth errors, no matches)."""
+    """Parse a JSON array of repo names, tolerating empty/malformed output."""
     try:
         repos = json.loads(raw_output)
     except json.JSONDecodeError:
@@ -38,60 +62,102 @@ def parse_repos(raw_output: str) -> list:
     return repos if isinstance(repos, list) else []
 
 
-def discover_repos(owner: str, query: str, run: RunFn = _run_gh) -> list:
+def list_candidate_repos(owner: str, name_pattern: str, run: RunFn = _run_gh) -> list:
+    """All non-archived `owner` repos whose bare name matches `name_pattern`, as
+    'owner/name'. Uses `gh repo list` (deterministic), not code search."""
     raw = run(
         [
-            "search",
-            "code",
-            "--owner",
+            "repo",
+            "list",
             owner,
-            query,
-            "--json",
-            "repository",
-            "--jq",
-            "[.[].repository.nameWithOwner] | unique",
+            "--no-archived",
             "--limit",
-            "100",
+            "1000",
+            "--json",
+            "nameWithOwner",
+            "--jq",
+            "[.[].nameWithOwner]",
         ]
     )
-    return parse_repos(raw)
+    pat = re.compile(name_pattern)
+    return [r for r in parse_repos(raw) if pat.match(r.split("/", 1)[-1])]
+
+
+def extends_preset(repo: str, marker: str, run: RunFn = _run_gh) -> bool:
+    """True if repo's default-branch renovate.json contains `marker` (i.e.
+    extends the shared preset). Fetches the raw file; a missing file / no access
+    yields "" -> False."""
+    content = run(
+        [
+            "api",
+            "-H",
+            "Accept: application/vnd.github.raw",
+            f"repos/{repo}/contents/renovate.json",
+        ]
+    )
+    return marker in content
+
+
+def discover_fleet(
+    owner: str,
+    name_pattern: str,
+    marker: str,
+    excludes: set,
+    run: RunFn = _run_gh,
+) -> list:
+    """The sorted list of 'owner/name' repos matching the name pattern, not
+    excluded, and extending the preset."""
+    candidates = list_candidate_repos(owner, name_pattern, run=run)
+    fleet = [
+        r
+        for r in candidates
+        if r not in excludes and extends_preset(r, marker, run=run)
+    ]
+    return sorted(fleet)
 
 
 def main(argv: Optional[list] = None, run: RunFn = _run_gh) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--owner", required=True, help="org to search, e.g. 'atlanhq'")
     parser.add_argument(
-        "--query",
-        required=True,
-        help="gh search code query, e.g. 'atlan-application-sdk filename:pyproject.toml'",
+        "--owner", required=True, help="org to enumerate, e.g. 'atlanhq'"
+    )
+    parser.add_argument(
+        "--name-pattern",
+        default=DEFAULT_NAME_PATTERN,
+        help=f"regex the bare repo name must match (default: {DEFAULT_NAME_PATTERN}).",
+    )
+    parser.add_argument(
+        "--preset-marker",
+        default=PRESET_MARKER,
+        help="string required in a repo's renovate.json to count it as on the "
+        f"fleet Renovate policy (default: {PRESET_MARKER}).",
     )
     parser.add_argument(
         "--exclude",
         action="append",
         default=None,
         metavar="OWNER/REPO",
-        help="Repo (owner/repo) to drop from the discovered list; repeatable. "
-        "Used to keep a repo on a different Renovate engine — e.g. the "
-        "self-hosted fleet runner excludes atlanhq/application-sdk, which stays "
-        "on the Mend-hosted app.",
+        help="Repo (owner/repo) to drop even if it matches; repeatable. Keeps a "
+        "repo on a different engine (e.g. atlanhq/application-sdk stays on the "
+        "Mend-hosted app).",
     )
     args = parser.parse_args(argv)
 
-    repos = discover_repos(args.owner, args.query, run=run)
-
     excluded = set(args.exclude or [])
-    if excluded:
-        repos = [r for r in repos if r not in excluded]
+    repos = discover_fleet(
+        args.owner, args.name_pattern, args.preset_marker, excluded, run=run
+    )
 
     if not repos:
         print(
-            "::warning::No consumer repos discovered. Check the atlan-app-fleet App installation/permissions.",
+            "::warning::No fleet repos discovered (no atlan-*-app extends the preset). "
+            "Check the atlan-app-fleet App installation/permissions.",
             file=sys.stderr,
         )
     else:
-        print(f"Discovered {len(repos)} consumer repos", file=sys.stderr)
+        print(f"Discovered {len(repos)} fleet repos", file=sys.stderr)
 
     with open(os.environ["GITHUB_OUTPUT"], "a") as f:
         f.write(f"repos={json.dumps(repos)}\n")
