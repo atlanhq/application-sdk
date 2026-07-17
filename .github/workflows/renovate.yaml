@@ -113,10 +113,17 @@ jobs:
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
 
-      # application-sdk itself — provides the pkl-sync driver (SDK_SCRIPTS) and
-      # the self-hosted admin config. Renovate clones each target repo into its
-      # own base dir (a temp dir), so this checkout is never disturbed.
+      # application-sdk itself — provides the pkl-sync driver and the self-hosted
+      # admin config. Renovate clones each target repo into its own base dir (a
+      # temp dir), so this checkout is never disturbed.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Install the pkl-sync driver as a bare PATH command. postUpgradeTasks
+      # commands are NOT shell-expanded by Renovate, so the preset invokes
+      # `renovate-pkl-sync` directly (no ${VAR} path to expand). The script's
+      # `#!/usr/bin/env python3` shebang makes it directly executable.
+      - name: Install pkl-sync driver on PATH
+        run: sudo install -m 0755 .github/scripts/renovate_pkl_sync.py /usr/local/bin/renovate-pkl-sync
 
       # Provides `uv`/`uvx` — used by Renovate's native uv manager to refresh
       # uv.lock AND by the driver's `uvx ruff` formatting of generated Python.
@@ -144,11 +151,9 @@ jobs:
       - name: Run Renovate
         env:
           RENOVATE_TOKEN: ${{ steps.app-token.outputs.token }}
-          # Admin config: platform, autodiscover=false, allowedPostUpgradeCommands,
-          # and customEnvVariables (which surfaces SDK_SCRIPTS to postUpgradeTasks).
+          # Admin config: platform, autodiscover=false, allowedCommands allowlist,
+          # and the github-actions manager disable.
           RENOVATE_CONFIG_FILE: ${{ github.workspace }}/renovate-config/self-hosted.js
-          # Resolves ${SDK_SCRIPTS} in the shared preset's postUpgradeTasks command.
-          SDK_SCRIPTS: ${{ github.workspace }}/.github/scripts
           LOG_LEVEL: debug
           # Pass the matrix repo through the environment rather than interpolating
           # it into the shell string, so the value can never be parsed as shell.
