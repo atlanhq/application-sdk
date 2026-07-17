@@ -45,6 +45,7 @@ from application_sdk.handler.contracts import (
     SqlMetadataOutput,
 )
 from application_sdk.infrastructure.credential_vault import CredentialVaultError
+from application_sdk.observability.logger_adaptor import CHECK_MATRIX_KEY, GATE_MODE_KEY
 
 _UNSET = object()
 
@@ -702,10 +703,10 @@ class TestPreflightGateOutcomeEvent:
         assert result.status is PreflightStatus.NOT_READY  # verdict untouched
         ev = _outcome_event(ml)
         assert ev["outcome"] == "would_block"
-        assert ev["gate_mode"] == "soft"
+        assert ev[GATE_MODE_KEY] == "soft"
         # reason still carries the primary failure's code, same as a hard block
         assert ev["reason"] == "AUTH"
-        assert json.loads(ev["check_matrix"])[0]["name"] == "auth"
+        assert json.loads(ev[CHECK_MATRIX_KEY])[0]["name"] == "auth"
 
     async def test_hard_block_emits_gate_mode_hard(self) -> None:
         out = PreflightOutput(
@@ -716,20 +717,22 @@ class TestPreflightGateOutcomeEvent:
             await _verdict_gate(out)(PreflightGateInput())
         ev = _outcome_event(ml)
         assert ev["outcome"] == "blocked"
-        assert ev["gate_mode"] == "hard"
+        assert ev[GATE_MODE_KEY] == "hard"
 
-    async def test_proceeded_carries_gate_mode(self) -> None:
+    async def test_proceeded_carries_gate_mode_hard(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
         with mock.patch(_LOGGER) as ml:
             await _verdict_gate(out)(PreflightGateInput())
-        assert _outcome_event(ml)["gate_mode"] == "hard"
+        assert _outcome_event(ml)[GATE_MODE_KEY] == "hard"
 
+    async def test_proceeded_carries_gate_mode_soft(self) -> None:
+        out = PreflightOutput(status=PreflightStatus.READY, checks=[])
         with mock.patch(_LOGGER) as ml:
             await _verdict_gate(out, enforce=False)(PreflightGateInput())
         ev = _outcome_event(ml)
         # a soft app's healthy runs proceed normally, still tagged soft
         assert ev["outcome"] == "proceeded"
-        assert ev["gate_mode"] == "soft"
+        assert ev[GATE_MODE_KEY] == "soft"
 
     async def test_check_matrix_on_proceed(self) -> None:
         # The matrix is the pattern-analysis payload: small fixed fields only,
@@ -749,8 +752,8 @@ class TestPreflightGateOutcomeEvent:
         with mock.patch(_LOGGER) as ml:
             await _verdict_gate(out)(PreflightGateInput())
         ev = _outcome_event(ml)
-        assert isinstance(ev["check_matrix"], str)
-        assert json.loads(ev["check_matrix"]) == [
+        assert isinstance(ev[CHECK_MATRIX_KEY], str)
+        assert json.loads(ev[CHECK_MATRIX_KEY]) == [
             {
                 "name": "auth",
                 "passed": False,
@@ -779,7 +782,7 @@ class TestPreflightGateOutcomeEvent:
         )
         with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        matrix = json.loads(_outcome_event(ml)["check_matrix"])
+        matrix = json.loads(_outcome_event(ml)[CHECK_MATRIX_KEY])
         # Pin the full row on the block path too, so error_code/duration_ms drift
         # is caught here as well as on the proceed path.
         assert matrix == [
@@ -804,14 +807,14 @@ class TestPreflightGateOutcomeEvent:
         )
         with mock.patch(_LOGGER) as ml:
             await _verdict_gate(out)(PreflightGateInput())
-        matrix = json.loads(_outcome_event(ml)["check_matrix"])  # must parse
+        matrix = json.loads(_outcome_event(ml)[CHECK_MATRIX_KEY])  # must parse
         assert [row["duration_ms"] for row in matrix] == [0.0, 0.0]
 
     async def test_check_matrix_empty_checks(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
         with mock.patch(_LOGGER) as ml:
             await _verdict_gate(out)(PreflightGateInput())
-        assert _outcome_event(ml)["check_matrix"] == "[]"
+        assert _outcome_event(ml)[CHECK_MATRIX_KEY] == "[]"
 
     async def test_check_matrix_carries_no_messages(self) -> None:
         # Messages/evidence stay in the Temporal activity result — the event row
@@ -829,7 +832,7 @@ class TestPreflightGateOutcomeEvent:
         )
         with mock.patch(_LOGGER) as ml:
             await _verdict_gate(out)(PreflightGateInput())
-        (row,) = json.loads(_outcome_event(ml)["check_matrix"])
+        (row,) = json.loads(_outcome_event(ml)[CHECK_MATRIX_KEY])
         assert set(row) == {"name", "passed", "error_code", "duration_ms"}
 
     async def test_verdict_log_replaced_by_outcome_event(self) -> None:

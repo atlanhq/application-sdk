@@ -26,6 +26,7 @@ from application_sdk.app.registry import (
 from application_sdk.constants import (
     APP_BUILD_ID,
     APP_DEPLOYMENT_NAME,
+    PREFLIGHT_GATE_MODE_ENV,
     SHUTDOWN_DRAIN_DELAY_SECONDS,
 )
 from application_sdk.execution._temporal.activities import get_all_task_activities
@@ -56,7 +57,7 @@ def _resolve_gate_enforcement(app_cls: type | None) -> bool:
     soft — a run is never blocked by accident, blocking is always a deliberate
     opt-in.
     """
-    val = os.environ.get("ATLAN_PREFLIGHT_GATE_MODE")
+    val = os.environ.get(PREFLIGHT_GATE_MODE_ENV)
     if val:
         return val.strip().lower() == "hard"
     declared = getattr(app_cls, "preflight_gate_mode", "soft")

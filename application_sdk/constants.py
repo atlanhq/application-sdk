@@ -104,6 +104,11 @@ WORKFLOW_OUTPUT_PATH_TEMPLATE = (
 # Temporary Path (used to store intermediate files)
 TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 
+# Preflight gate posture override (deploy-time ops lever). Read at worker build;
+# only the literal "hard" enforces, any other value falls back to soft. See
+# application_sdk.execution._temporal.worker._resolve_gate_enforcement.
+PREFLIGHT_GATE_MODE_ENV = "ATLAN_PREFLIGHT_GATE_MODE"
+
 # Directory where contract-toolkit generated files (configmaps, manifest, Python types) live.
 # Convention: app/generated/ inside the repo (importable as app.generated).
 # In Docker (WORKDIR=/app, app code at /app/app/) this resolves to /app/app/generated.

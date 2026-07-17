@@ -1029,3 +1029,17 @@ class TestResolveGateEnforcement:
         # a set-but-unknown env value decides (falls back to soft), it does not
         # fall through to the declared attribute
         assert _resolve_gate_enforcement(_Hard) is False
+
+    def test_empty_env_defers_to_declared(self, monkeypatch) -> None:
+        # An empty env value (a blank ConfigMap entry) is falsy under `if val:`,
+        # so it is not treated as an override — resolution falls through to the
+        # declared attribute rather than forcing soft.
+        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", "")
+
+        class _Hard(App):
+            preflight_gate_mode = "hard"
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        assert _resolve_gate_enforcement(_Hard) is True

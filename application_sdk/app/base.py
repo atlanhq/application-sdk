@@ -585,7 +585,7 @@ class App(ABC):
     tags: ClassVar[dict[str, str] | None] = None
     passthrough_modules: ClassVar[set[str] | None] = None
 
-    preflight_gate_mode: ClassVar[str] = "soft"
+    preflight_gate_mode: ClassVar[Literal["hard", "soft"]] = "soft"
     """Preflight gate posture. ``"soft"`` (default) never blocks — a
     ``NOT_READY`` verdict lets the run proceed and is emitted as
     ``outcome="would_block"`` on the gate outcome event so it is always
@@ -1683,6 +1683,12 @@ async def _run_preflight_gate(
     deterministic workflow forwards only secret-free references. Dispatch is to
     the one app-level handler, with ``entrypoint`` threaded through for internal
     branching.
+
+    The ``no_verdict`` outcome event emitted here (fail-open path) omits
+    ``gate_mode``, unlike the ``blocked``/``would_block``/``proceeded`` events
+    the activity emits: the workflow layer never sees ``enforce`` (it is baked
+    into the activity closure at worker build), so the mode is not available to
+    stamp on this row.
     """
     if not workflow.patched("preflight-gate"):
         return
