@@ -45,9 +45,20 @@ jobs:
   discover:
     name: Discover consumer repos
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       repos: ${{ steps.discover.outputs.repos }}
     steps:
+      # Fail-fast on an accidental unscoped live dispatch: a live run
+      # (dry_run != 'full') with no `repos` scope would fan out real PRs across
+      # the entire discovered fleet. Scheduled runs are unaffected — they carry
+      # the safe 'full' default. Remove this guard when the fleet goes live.
+      - name: Guard against unscoped live dispatch
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run != 'full' && inputs.repos == '' }}
+        run: |
+          echo "::error::Refusing an unscoped live run (dry_run='${{ inputs.dry_run }}', empty 'repos'): this would open live PRs across the entire discovered fleet. Scope the 'repos' input to a pilot set, or use dry_run='full'."
+          exit 1
+
       - name: Mint fleet App token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
@@ -75,6 +86,9 @@ jobs:
     # discovered fleet. Ternary lives in a GitHub expression; no shell branching.
     if: ${{ (inputs.repos != '' && inputs.repos != '[]') || needs.discover.outputs.repos != '[]' }}
     runs-on: ubuntu-latest
+    # Cap a hung renovate/gh call so a stuck matrix job frees the runner well
+    # before GitHub's 6h default rather than occupying it for hours.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       # Cap concurrency to keep the shared fleet-App GitHub API budget under the
@@ -136,6 +150,9 @@ jobs:
           # Resolves ${SDK_SCRIPTS} in the shared preset's postUpgradeTasks command.
           SDK_SCRIPTS: ${{ github.workspace }}/.github/scripts
           LOG_LEVEL: debug
+          # Pass the matrix repo through the environment rather than interpolating
+          # it into the shell string, so the value can never be parsed as shell.
+          TARGET_REPO: ${{ matrix.repo }}
         # Positional arg = the single repository this job handles. The consumer's
         # own renovate.json (extending renovate-config/default.json) is read as usual.
-        run: renovate "${{ matrix.repo }}"
+        run: renovate "$TARGET_REPO"
