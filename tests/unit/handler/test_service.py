@@ -2626,6 +2626,46 @@ class TestManifestEndpoint:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_manifest_entrypoint_param_falls_back_to_flat_single_entrypoint(
+        self, tmp_path: Path
+    ) -> None:
+        """``?entrypoint=<name>`` on a FLAT single-entrypoint app serves the root manifest.
+
+        Single-entrypoint apps emit a flat manifest at
+        ``CONTRACT_GENERATED_DIR/manifest.json`` (no ``<ep>/`` subdir). Heracles/AE
+        always sends ``?entrypoint=<name>`` on package-workflow submit, which routes
+        straight to ``_serve_entrypoint_manifest`` — a nested-only lookup. Without
+        the flat fallback the app 404s ("No manifest found for entrypoint 'openapi'")
+        and the platform surfaces a 500, blocking every run (observed on the openapi
+        connector's first submit). Regression guard for that path.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Flat layout: manifest at the ROOT, no per-entrypoint subdir.
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"execution_mode": "linear", "source": "flat-root"})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="openapi", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest?entrypoint=openapi")
+            assert response.status_code == 200
+            assert response.json()["source"] == "flat-root"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_manifest_root_file_wins_over_default_entrypoint_fallback(
         self, tmp_path: Path
     ) -> None:
