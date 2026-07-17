@@ -479,6 +479,15 @@ class App(ABC):
     tags: ClassVar[dict[str, str] | None] = None
     passthrough_modules: ClassVar[set[str] | None] = None
 
+    preflight_gate_mode: ClassVar[str] = "hard"
+    """Preflight gate posture. ``"hard"`` (default) blocks the run when the
+    handler's verdict is ``NOT_READY``; ``"soft"`` never blocks — the dodged
+    block is emitted as ``outcome="would_block"`` on the gate outcome event and
+    the worker warns at boot. Set ``"soft"`` only while the app's checks are not
+    yet trusted, and revert once they are. The ``ATLAN_PREFLIGHT_GATE_MODE``
+    env var overrides this at deploy time; any value other than ``"soft"``
+    resolves to hard. See the adopt-preflight-gate skill."""
+
     # Marker to track if class has been registered
     _app_registered: ClassVar[bool] = False
 

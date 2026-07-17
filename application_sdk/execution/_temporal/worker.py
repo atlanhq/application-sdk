@@ -45,6 +45,23 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def _resolve_gate_enforcement(app_cls: type | None) -> bool:
+    """Resolve the preflight gate's posture for one app.
+
+    ``True`` = hard (block on ``NOT_READY``); ``False`` = soft (emit
+    ``would_block``, proceed). Precedence: ``ATLAN_PREFLIGHT_GATE_MODE`` env
+    (deploy-time ops lever, no app release needed) > the app's declared
+    ``App.preflight_gate_mode`` (git-blamed opt-out) > hard default. Only the
+    literal ``"soft"`` softens; an unknown or malformed value fails safe to
+    hard — the safety net is never dropped by accident.
+    """
+    val = os.environ.get("ATLAN_PREFLIGHT_GATE_MODE")
+    if val:
+        return val.strip().lower() != "soft"
+    declared = getattr(app_cls, "preflight_gate_mode", "hard")
+    return str(declared).strip().lower() != "soft"
+
+
 class AppWorker:
     """Wraps Temporal Worker to emit worker_start on startup and to push
     metrics on shutdown for short-lived deployments.
@@ -402,10 +419,21 @@ def create_worker(
             field="task_name",
         )
 
-    task_activities = [
-        *task_activities,
-        *(build_preflight_gate_activity(gate_handler, name) for name in gate_app_names),
-    ]
+    name_to_app_cls = {m.name: m.app_cls for m in sdr_registered_apps}
+    gate_activities = []
+    for name in gate_app_names:
+        enforce = _resolve_gate_enforcement(name_to_app_cls.get(name))
+        if not enforce:
+            logger.warning(
+                "Preflight gate is SOFT for app %r — NOT_READY will NOT block "
+                "runs; dodged blocks are emitted as outcome=would_block. Opt "
+                "back into hard gating once the app's checks are trusted.",
+                name,
+            )
+        gate_activities.append(
+            build_preflight_gate_activity(gate_handler, name, enforce=enforce)
+        )
+    task_activities = [*task_activities, *gate_activities]
 
     # SDR (the control-plane test_auth/preflight_check/fetch_metadata workflows)
     # requires a REAL handler — never the bare DefaultHandler sentinel. Both the
