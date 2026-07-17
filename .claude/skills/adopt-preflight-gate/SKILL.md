@@ -2,21 +2,18 @@
 name: adopt-preflight-gate
 description: >
   Bump a v3 app to the latest application-sdk and adopt the SDK-native
-  preflight gate in its soft-fail observation window (CNCT-81). The gate runs
-  the app's preflight_check handler as the mandatory first activity of every
-  extraction workflow and aborts the run when the verdict is NOT_READY. During
-  the observation window the app never returns overall NOT_READY: blocking
-  intent is recorded per-check via PreflightCheck.status while the aggregate
-  is softened to PARTIAL so runs proceed and the check matrix is collected in
-  connector-pulse; the hard-fail flip later is a one-line aggregate revert.
-  Classifies the app's rollout bucket, fixes name collisions, audits the
-  handler's status logic against the new semantics, runs an interactive
-  check-design session with the developer (visualized as a decision tree:
-  which checks block, which are advisory, what is missing), hunts for hidden
-  preflight logic by behavior (not name) and consolidates it into the handler
-  so both surfaces run one implementation, adopts typed check errors, and
-  updates tests. Interactive: every blocking/advisory/consolidation decision
-  belongs to the developer; the skill proposes, never imposes.
+  preflight gate safely. The gate runs the app's preflight_check handler as the
+  mandatory first activity of every extraction workflow and aborts the run when
+  the verdict is NOT_READY — a behavior change from the HTTP-only era ("Run
+  Anyway" does not exist at the gate). Classifies the app's rollout bucket,
+  fixes name collisions, audits the handler's status logic against the new
+  semantics, runs an interactive check-design session with the developer
+  (visualized as a decision tree: which checks block, which are advisory, what
+  is missing), hunts for hidden preflight logic by behavior (not name) and
+  consolidates it into the handler so both surfaces run one implementation,
+  adopts typed check errors, and updates tests. Interactive: every
+  blocking/advisory/consolidation decision belongs to the developer; the
+  skill proposes, never imposes.
 mandatory_triggers:
   - "/adopt-preflight-gate"
   - "adopt the preflight gate"
@@ -27,7 +24,7 @@ optional_triggers:
   - "preflight gate migration"
   - "will this app break on SDK bump"
 owner: connector-platform-team
-last_updated: "2026-07-17"
+last_updated: "2026-07-14"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
@@ -48,11 +45,9 @@ This skill is for **v3 apps only** (subclasses `App`, `@entrypoint` methods,
 `application_sdk.workflows`/`handlers` imports), STOP and run `/upgrade-v3`
 first; this skill picks up after.
 
-Reference implementation for everything below: **atlan-mysql-app** — PR #340
-(gate adoption: short-circuiting auth check with typed error, advisory tables
-check) and PR #414 (soft-fail pattern: per-check `status` stamps, softened
-aggregate with the revert comment). Read its `app/handler.py` before proposing
-changes.
+Reference implementation for everything below: **atlan-mysql-app** (PR #340) —
+short-circuiting auth check with typed error, advisory tables check, PARTIAL
+status. Read its `app/handler.py` before proposing changes.
 
 ## What changed (context you state to the developer up front)
 
@@ -60,33 +55,20 @@ changes.
   workflow. It calls the app's one `Handler.preflight_check`.
 - `PreflightOutput.status` is the gate decision: `NOT_READY` **aborts the run**
   (typed `PreflightFailed`, red activity); `READY` and `PARTIAL` proceed.
-- **Per-check verdict is a contract field**: `PreflightCheck.status` reuses the
-  same enum per check — `NOT_READY` = failed and was supposed to block,
-  `PARTIAL` = failed, advisory by design, `READY` = passed (derived
-  automatically for passed checks). Mandatory on failed checks: a failed check
-  without a stamp is emitted as `"unset"` in the gate's check matrix and logs a
-  warning — the app shows up as an adoption gap in connector-pulse.
-  Contradictions (`READY` on a failed check, `NOT_READY`/`PARTIAL` on a passed
-  one) raise at construction.
-- **The soft-fail observation window (CNCT-81)**: during the window the
-  handler NEVER returns overall `NOT_READY`. Would-block paths keep their
-  short-circuit control flow but return overall `PARTIAL`, with the check
-  stamped `status=NOT_READY` so blocking intent is preserved in the data. The
-  gate emits the per-check matrix (`check_matrix` on the "Preflight gate
-  outcome" event) to connector-pulse, which correlates it with workflow
-  outcomes to harden checks. The hard-fail flip later is per-app: revert the
-  aggregate lines back to `NOT_READY`; per-check statuses never change.
-- Ordering is still expressed by **control flow**: required checks
-  short-circuit (return early), advisory checks run after and only influence
-  the aggregate. The `status` field records intent; the short-circuit records
-  dependency.
+  `PARTIAL` is display-only — use it for "advisory check failed, run anyway".
+- There is no per-check `blocking` flag. Importance is expressed by **control
+  flow**: required checks short-circuit (return `NOT_READY` early), advisory
+  checks run and only influence `PARTIAL`.
 - **Raising does not block.** A raise from the handler is a gate plumbing
   failure → the SDK fails open (logs loudly, run proceeds). Blocks happen only
   via the returned status.
 - A failed check should carry `error=<SDK leaf>(...).to_failure_details()` —
-  category/code/audience/suggested_action flow to the Automation Engine,
-  dashboards, and the check matrix's `error_code`. Untyped failures fall back
-  to the `PREFLIGHT_CHECK_FAILED` sentinel.
+  category/code/audience/suggested_action flow to the Automation Engine and
+  dashboards. Untyped failures fall back to the `PREFLIGHT_CHECK_FAILED`
+  sentinel.
+- Behavior change to say plainly: a handler that returns `NOT_READY` today will
+  start **blocking scheduled runs** on bump. That is usually the intent — but
+  it is why phase 2 below exists.
 
 ## The design principle every decision flows from
 
@@ -173,27 +155,21 @@ Run these detections and report the bucket(s) before changing anything:
 
 ## Phase 1 — Bump and boot
 
-1. Make the `pyproject.toml` constraint span the release that ships
-   `PreflightCheck.status`: raise the floor to that release if the current one
-   excludes it, and keep the upper bound at `<4` (the feature ships within the
-   current major). Then `uv lock --upgrade-package atlan-application-sdk` and
-   `uv sync --all-extras --all-groups`.
-2. **Verify the installed SDK actually has the field before touching handler
-   code**:
-   `uv run python -c "from application_sdk.handler.contracts import PreflightCheck; print('status' in PreflightCheck.model_fields)"`
-   must print `True`. Pydantic silently drops unknown kwargs — handler code
-   written with `status=` stamps against an older SDK does not error, it just
-   emits `"unset"` for every check and quietly guts the observation-window
-   data. This check is the difference between a working adoption and an
-   invisible no-op.
-3. **Boot the worker.** Boot is the collision detector.
-4. Collision fix (if bucket 1): delete the app's `@task preflight`, its call
+1. Pull the latest gate-capable `atlan-application-sdk` **without raising the
+   floor** in `pyproject.toml`: `uv lock --upgrade-package atlan-application-sdk`
+   then `uv sync --all-extras --all-groups`. This upgrades the lockfile to the
+   newest release the existing constraint allows — the gate and the
+   multi-credential primitive ship within the current major, so the declared
+   floor does not need to move. Only edit the pyproject constraint if the
+   existing floor actually excludes the release you need.
+2. **Boot the worker.** Boot is the collision detector.
+3. Collision fix (if bucket 1): delete the app's `@task preflight`, its call
    site in the workflow, and any now-orphaned private preflight input/output
    contracts. THEN — mandatory — **diff the deleted activity's checks against
    `Handler.preflight_check`**: every check the activity performed must exist
    in the handler (the gate runs the handler, so coverage moves — it must not
    vanish). Fold gaps into the handler before proceeding.
-5. Run the app's existing test suite; fix fallout from the bump before
+4. Run the app's existing test suite; fix fallout from the bump before
    touching preflight logic, so phase-2 diffs stay clean.
 
 ## Phase 2 — Interactive check-design session
@@ -270,29 +246,18 @@ tier short-circuits the tiers after it.
 ```
 proposed:
 
-[connectivity]  ──fail──> check status=not_ready, stop  (error=SourceUnavailableError)
+[connectivity]  ──fail──> NOT_READY  (error=SourceUnavailableError, stop)
      │ pass
-[auth]          ──fail──> check status=not_ready, stop  (error=AuthError)
+[auth]          ──fail──> NOT_READY  (error=AuthError, stop)
      │ pass
-[read access]   ──fail──> check status=not_ready, stop  (error=AppPermissionDeniedError)
+[read access]   ──fail──> NOT_READY  (error=AppPermissionDeniedError, stop)
      │ pass
-     ├─[server version]   ──fail──> check status=partial, continue   (advisory)
-     └─[optional feature] ──fail──> check status=partial, continue   (advisory)
+     ├─[server version]   ──fail──> mark failed, continue   (advisory)
+     └─[optional feature] ──fail──> mark failed, continue   (advisory)
 
-overall status, observation window (CNCT-81):
-        PARTIAL on any failure path — including the short-circuits above;
-        READY only when everything passed. Never NOT_READY.
-overall status, after the hard-fail flip (one-line revert per short-circuit):
-        NOT_READY via the short-circuits; PARTIAL if only advisory failed;
-        READY otherwise. Per-check statuses identical in both eras.
+status: NOT_READY only via a short-circuit above;
+        PARTIAL if any advisory check failed; READY otherwise.
 ```
-
-The blocking/advisory decision the developer makes here lands in TWO places:
-the short-circuit position (ordering/dependency) and the per-check
-`status=` stamp (recorded intent). The stamp is what connector-pulse's
-pattern analysis reads when correlating "would have blocked" against actual
-workflow outcomes — it is the data that earns the check its blocking status
-back at flip time.
 
 ### 2d. Suggest missing checks
 
@@ -313,35 +278,10 @@ Compare against the family baseline and propose (never force) additions:
 
 Write the handler to the agreed tree. Requirements:
 
-- **One implementation, no forks.** The softened aggregate applies inside the
-  single `preflight_check` — never a gate-only or UI-only variant. Handler
-  (Test-Connection), gate activity, and SDR all execute the same function and
-  must return the same verdict for the same source state. Any "if gate then X
-  else Y" branching is the drift anti-pattern this feature exists to kill.
 - Checks append to a list as they run; short-circuits return the list built so
-  far. Every check carries its `status=` stamp; every would-block path returns
-  the softened aggregate with the canonical revert comment:
-
-  ```python
-  checks.append(PreflightCheck(
-      name="auth", passed=False,
-      status=PreflightStatus.NOT_READY,   # intent: this was fatal
-      error=AuthError(...).to_failure_details(),
-  ))
-  # Observation window (CNCT-81): revert to NOT_READY at hard-fail flip;
-  # per-check statuses stay as they are.
-  return PreflightOutput(status=PreflightStatus.PARTIAL, checks=checks)
-  ```
-
-  The comment is the flip's grep target — keep the wording, one comment per
-  softened return site.
-- Advisory failures stamp `status=PreflightStatus.PARTIAL`; passed checks need
-  no stamp (the contract derives `READY`).
-- Window invariant: the aggregate is never `NOT_READY` — regardless of how
-  many checks fail.
+  far (`PreflightOutput(status=NOT_READY, checks=checks)`).
 - Status logic is explicit — never `all(c.passed)` when any check is advisory.
-- Time each check and set `duration_ms`; the UI shows it and pulse charts
-  check-cost distributions from it.
+- Time each check and set `duration_ms`; the UI shows it.
 - `error=` only on failed checks, statically-clean form:
   `error=AuthError(message="...", suggested_action="...", cause=exc).to_failure_details()`
 - `message` = one clean sentence, no hosts/credentials/stack traces (the
@@ -478,47 +418,23 @@ on the installed SDK, the upgrade didn't land — re-run phase 1 before adopting
 
 Update or write unit tests so every verdict path is pinned. Minimum matrix:
 
-1. All checks pass → `READY`, full check list, every check `status == READY`,
-   durations set.
-2. Each required check failing → overall `PARTIAL` (observation window), the
-   failed check `status == NOT_READY`, short-circuit proven (later checks
-   absent from the list), `error` present with the agreed category/audience
-   and `suggested_action`.
+1. All checks pass → `READY`, full check list, durations set.
+2. Each required check failing → `NOT_READY`, short-circuit proven (later
+   checks absent from the list), `error` present with the agreed
+   category/audience and `suggested_action`.
 3. Advisory-only failure → `PARTIAL`, run-proceeding semantics documented in
-   the test name, failed advisory check present with `passed=False` and
-   `status == PARTIAL`.
-4. **Window invariant** — the worst case (every check failing) still returns
-   overall `status != NOT_READY`. This is also the guard against a premature
-   de-pin: handler code stamping `status=` against a pre-feature SDK fails
-   these assertions instead of silently emitting `"unset"`.
-5. No `blocking=`/`category=`/`suggested_action=` kwargs anywhere (grep-clean
+   the test name, failed advisory check present with `passed=False`.
+4. No `blocking=`/`category=`/`suggested_action=` kwargs anywhere (grep-clean
    — those fields no longer exist on `PreflightCheck`).
-6. Gate-path input shape: `preflight_check` called with a `PreflightInput`
+5. Gate-path input shape: `preflight_check` called with a `PreflightInput`
    built only from contract fields + credentials (no form-only keys) behaves
    correctly — this is the regression test for the phase-0 silent-drift audit.
-
-At the hard-fail flip, only case 2 and 4's expected aggregates change
-(`PARTIAL` → `NOT_READY`; invariant test deleted) — per-check assertions stay
-untouched. Write the tests so that revert is exactly that small.
 
 Then the full app suite green, pre-commit clean, and one final worker boot.
 Do not claim done with anything less.
 
 ## Pitfalls (each observed live during the rollout — check all of them)
 
-- Returning overall `NOT_READY` during the observation window → blocks
-  scheduled customer runs and defeats the data-collection window. The window
-  invariant test exists to make this impossible to ship.
-- Failed check without a `status=` stamp → the gate warns and emits `"unset"`
-  in the check matrix; the app shows up as an adoption gap in pulse and its
-  rows are useless for the hardening analysis.
-- Handler code with `status=` stamps against a pre-feature SDK → pydantic
-  drops the kwarg silently; nothing errors, everything emits `"unset"`. The
-  phase-1 field check and the test-matrix status assertions are the two
-  guards.
-- Forking gate behavior from UI behavior (a gate-only softened aggregate, a
-  UI-only verdict tweak) → the drift anti-pattern in new clothes. One
-  function, one verdict.
 - `all(c.passed)` status logic → advisory checks silently promoted to
   run-blocking.
 - Raise-to-block → does nothing but fail open; blocks are returned, not raised.
@@ -561,11 +477,7 @@ fleet has ~80 apps and this skill has met seven of them.
 
 ## Done means
 
-Bucket reported → bumped and booting (installed SDK carries
-`PreflightCheck.status`) → check tree agreed with the developer and
-implemented → every check stamped, every softened return carrying the
-CNCT-81 revert comment, window invariant holding → typed errors on failed
-checks → test matrix green → suite + pre-commit green. Summarize the final
-tree in the PR description — including which checks are stamped blocking vs
-advisory — so reviewers see the intended hard-fail structure at a glance even
-though the aggregate is soft.
+Bucket reported → bumped and booting → check tree agreed with the developer
+and implemented → typed errors on failed checks → test matrix green → suite +
+pre-commit green. Summarize the final tree in the PR description so reviewers
+see the blocking structure at a glance.
