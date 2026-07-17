@@ -12,12 +12,12 @@ so the abort shows red in Temporal and attributes to preflight; ``READY`` and
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
+import orjson
 from pydantic import BaseModel, Field, ValidationError
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
@@ -295,7 +295,7 @@ def _check_matrix_json(checks: list[PreflightCheck]) -> str:
                 else 0.0,
             }
         )
-    return json.dumps(rows, separators=(",", ":"))
+    return orjson.dumps(rows).decode()
 
 
 def _build_block_error(result: PreflightOutput, app_name: str) -> Any:

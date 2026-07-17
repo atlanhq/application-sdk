@@ -258,6 +258,53 @@ class TestCreateWorker:
         assert gate_names == list(dict.fromkeys(gate_names))  # no duplicate names
         assert len(gate_names) == 1
 
+    def test_hard_app_registers_gate_and_logs_boot_line(self) -> None:
+        """An app declaring ``preflight_gate_mode = "hard"`` drives the
+        ``create_worker`` glue end to end: the ``name -> app_cls`` map resolves
+        ``enforce=True``, the gate activity registers under ``{app}:preflight``,
+        and the boot INFO line fires so the hard posture is visible in logs."""
+
+        class _HardGateApp(App):
+            preflight_gate_mode = "hard"
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        app_name = AppRegistry.get_instance().list_all()[0].name
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured["activities"] = list(kwargs.get("activities", []))
+            return mock.MagicMock()
+
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.worker.Worker",
+                side_effect=capture_worker,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.worker.logger"
+            ) as mock_logger,
+        ):
+            create_worker(client)
+
+        gate_names = [
+            getattr(a, "__temporal_activity_definition").name
+            for a in captured["activities"]
+            if hasattr(a, "__temporal_activity_definition")
+            and getattr(a, "__temporal_activity_definition").name.endswith(":preflight")
+        ]
+        assert f"{app_name}:preflight" in gate_names
+
+        hard_boot_calls = [
+            call
+            for call in mock_logger.info.call_args_list
+            if call.args and "HARD" in call.args[0] and app_name in call.args
+        ]
+        assert len(hard_boot_calls) == 1
+
     def test_task_named_preflight_collides_with_gate(self) -> None:
         """A bare @task named `preflight` registers as {app}:preflight, colliding
         with the injected gate. create_worker must fail with a descriptive error,
