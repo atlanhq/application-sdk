@@ -51,15 +51,16 @@ def _resolve_gate_enforcement(app_cls: type | None) -> bool:
     ``True`` = hard (block on ``NOT_READY``); ``False`` = soft (emit
     ``would_block``, proceed). Precedence: ``ATLAN_PREFLIGHT_GATE_MODE`` env
     (deploy-time ops lever, no app release needed) > the app's declared
-    ``App.preflight_gate_mode`` (git-blamed opt-out) > hard default. Only the
-    literal ``"soft"`` softens; an unknown or malformed value fails safe to
-    hard — the safety net is never dropped by accident.
+    ``App.preflight_gate_mode`` (git-blamed opt-in) > soft default. Only the
+    literal ``"hard"`` enforces; an unknown or malformed value falls back to
+    soft — a run is never blocked by accident, blocking is always a deliberate
+    opt-in.
     """
     val = os.environ.get("ATLAN_PREFLIGHT_GATE_MODE")
     if val:
-        return val.strip().lower() != "soft"
-    declared = getattr(app_cls, "preflight_gate_mode", "hard")
-    return str(declared).strip().lower() != "soft"
+        return val.strip().lower() == "hard"
+    declared = getattr(app_cls, "preflight_gate_mode", "soft")
+    return str(declared).strip().lower() == "hard"
 
 
 class AppWorker:
@@ -428,11 +429,11 @@ def create_worker(
     gate_activities = []
     for name in gate_app_names:
         enforce = _resolve_gate_enforcement(name_to_app_cls.get(name))
-        if not enforce:
-            logger.warning(
-                "Preflight gate is SOFT for app %r — NOT_READY will NOT block "
-                "runs; dodged blocks are emitted as outcome=would_block. Opt "
-                "back into hard gating once the app's checks are trusted.",
+        if enforce:
+            logger.info(
+                "Preflight gate is HARD for app %r — a NOT_READY verdict WILL "
+                "abort the run before extraction. This is the per-app opt-in; "
+                "the default posture is soft (report only, never block).",
                 name,
             )
         gate_activities.append(

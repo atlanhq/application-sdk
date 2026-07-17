@@ -936,10 +936,10 @@ class TestWorkerPoolQueueResolution:
 
 
 class TestResolveGateEnforcement:
-    """Gate posture resolution: env > App.preflight_gate_mode > hard default.
+    """Gate posture resolution: env > App.preflight_gate_mode > soft default.
 
-    Only the literal "soft" softens; anything unknown fails safe to hard so
-    the safety net is never dropped by a typo.
+    Only the literal "hard" enforces; anything unknown falls back to soft so
+    a run is never blocked by a typo — blocking is always a deliberate opt-in.
     """
 
     def setup_method(self) -> None:
@@ -950,51 +950,18 @@ class TestResolveGateEnforcement:
         AppRegistry.reset()
         TaskRegistry.reset()
 
-    def test_default_hard_when_nothing_declared(self, monkeypatch) -> None:
+    def test_default_soft_when_nothing_declared(self, monkeypatch) -> None:
         monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
 
         class _Plain(App):
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
-        assert _resolve_gate_enforcement(_Plain) is True
-        assert _resolve_gate_enforcement(None) is True
+        assert _resolve_gate_enforcement(_Plain) is False
+        assert _resolve_gate_enforcement(None) is False
 
-    def test_declared_soft_softens(self, monkeypatch) -> None:
+    def test_declared_hard_enforces(self, monkeypatch) -> None:
         monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
-
-        class _Soft(App):
-            preflight_gate_mode = "soft"
-
-            async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                return _WorkerOutput()
-
-        assert _resolve_gate_enforcement(_Soft) is False
-
-    def test_declared_value_case_and_whitespace_insensitive(self, monkeypatch) -> None:
-        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
-
-        class _Loud(App):
-            preflight_gate_mode = "  SOFT  "
-
-            async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                return _WorkerOutput()
-
-        assert _resolve_gate_enforcement(_Loud) is False
-
-    def test_malformed_declared_fails_safe_to_hard(self, monkeypatch) -> None:
-        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
-
-        class _Typo(App):
-            preflight_gate_mode = "off"  # not "soft" -> hard
-
-            async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                return _WorkerOutput()
-
-        assert _resolve_gate_enforcement(_Typo) is True
-
-    def test_env_soft_wins_over_declared_hard(self, monkeypatch) -> None:
-        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", "soft")
 
         class _Hard(App):
             preflight_gate_mode = "hard"
@@ -1002,10 +969,32 @@ class TestResolveGateEnforcement:
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
-        assert _resolve_gate_enforcement(_Hard) is False
+        assert _resolve_gate_enforcement(_Hard) is True
+
+    def test_declared_value_case_and_whitespace_insensitive(self, monkeypatch) -> None:
+        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
+
+        class _Loud(App):
+            preflight_gate_mode = "  HARD  "
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        assert _resolve_gate_enforcement(_Loud) is True
+
+    def test_malformed_declared_falls_back_to_soft(self, monkeypatch) -> None:
+        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
+
+        class _Typo(App):
+            preflight_gate_mode = "on"  # not "hard" -> soft
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        assert _resolve_gate_enforcement(_Typo) is False
 
     def test_env_hard_wins_over_declared_soft(self, monkeypatch) -> None:
-        # ops can force the net back up without waiting on an app release
+        # ops can force the net up without waiting on an app release
         monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", "hard")
 
         class _Soft(App):
@@ -1016,14 +1005,27 @@ class TestResolveGateEnforcement:
 
         assert _resolve_gate_enforcement(_Soft) is True
 
-    def test_malformed_env_fails_safe_to_hard(self, monkeypatch) -> None:
-        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", "disabled")
+    def test_env_soft_wins_over_declared_hard(self, monkeypatch) -> None:
+        # ops can drop the net without waiting on an app release
+        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", "soft")
 
-        class _Soft(App):
-            preflight_gate_mode = "soft"
+        class _Hard(App):
+            preflight_gate_mode = "hard"
 
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
-        # a set-but-unknown env value decides (fail safe), it does not fall through
-        assert _resolve_gate_enforcement(_Soft) is True
+        assert _resolve_gate_enforcement(_Hard) is False
+
+    def test_malformed_env_falls_back_to_soft(self, monkeypatch) -> None:
+        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", "enabled")
+
+        class _Hard(App):
+            preflight_gate_mode = "hard"
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        # a set-but-unknown env value decides (falls back to soft), it does not
+        # fall through to the declared attribute
+        assert _resolve_gate_enforcement(_Hard) is False

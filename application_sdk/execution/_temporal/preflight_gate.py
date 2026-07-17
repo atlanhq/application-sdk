@@ -445,7 +445,7 @@ def build_preflight_gate_activity(
     handler: Handler,
     app_name: str,
     *,
-    enforce: bool = True,
+    enforce: bool = False,
 ) -> Callable[..., Awaitable[Any]]:
     """Build the injected preflight-gate activity (``{app}:preflight``).
 
@@ -454,13 +454,13 @@ def build_preflight_gate_activity(
     the HTTP and SDR paths use (:func:`bind_invocation_context`).
 
     ``enforce`` is the gate's posture for this app, resolved once at worker
-    build (see ``_resolve_gate_enforcement`` in the worker). Hard (``True``,
-    the default) raises on a ``NOT_READY`` verdict and aborts the run. Soft
-    (``False``) never raises: the verdict stays honest ``NOT_READY``, the run
+    build (see ``_resolve_gate_enforcement`` in the worker). Soft (``False``,
+    the default) never raises: the verdict stays honest ``NOT_READY``, the run
     proceeds, and the dodged block is emitted as ``outcome="would_block"`` so
     connector-pulse can rank apps whose checks would have blocked real runs.
-    The handler is never consulted about posture — verdict and enforcement are
-    deliberately separate concerns.
+    Hard (``True``) is the per-app opt-in: it raises on a ``NOT_READY`` verdict
+    and aborts the run. The handler is never consulted about posture — verdict
+    and enforcement are deliberately separate concerns.
     """
 
     @activity.defn(name=preflight_gate_activity_name(app_name))

@@ -3,9 +3,10 @@ name: adopt-preflight-gate
 description: >
   Bump a v3 app to the latest application-sdk and adopt the SDK-native
   preflight gate safely. The gate runs the app's preflight_check handler as the
-  mandatory first activity of every extraction workflow and aborts the run when
-  the verdict is NOT_READY — a behavior change from the HTTP-only era ("Run
-  Anyway" does not exist at the gate). Classifies the app's rollout bucket,
+  mandatory first activity of every extraction workflow and always reports the
+  verdict; by default it is soft (a NOT_READY verdict is reported but the run
+  proceeds), and blocking real runs on NOT_READY is a per-app opt-in
+  (preflight_gate_mode = "hard"). Classifies the app's rollout bucket,
   fixes name collisions, audits the handler's status logic against the new
   semantics, runs an interactive check-design session with the developer
   (visualized as a decision tree: which checks block, which are advisory, what
@@ -53,9 +54,11 @@ status. Read its `app/handler.py` before proposing changes.
 
 - The SDK injects `{app}:preflight` as the first activity of every extraction
   workflow. It calls the app's one `Handler.preflight_check`.
-- `PreflightOutput.status` is the gate decision: `NOT_READY` **aborts the run**
-  (typed `PreflightFailed`, red activity); `READY` and `PARTIAL` proceed.
-  `PARTIAL` is display-only — use it for "advisory check failed, run anyway".
+- `PreflightOutput.status` is the gate verdict: `NOT_READY` is always reported
+  (as `outcome="would_block"`), and **aborts the run** only when the app has
+  opted into hard mode (`preflight_gate_mode = "hard"`, typed `PreflightFailed`,
+  red activity); `READY` and `PARTIAL` proceed. `PARTIAL` is display-only — use
+  it for "advisory check failed, run anyway".
 - There is no per-check `blocking` flag. Importance is expressed by **control
   flow**: required checks short-circuit (return `NOT_READY` early), advisory
   checks run and only influence `PARTIAL`.
@@ -66,44 +69,45 @@ status. Read its `app/handler.py` before proposing changes.
   category/code/audience/suggested_action flow to the Automation Engine and
   dashboards. Untyped failures fall back to the `PREFLIGHT_CHECK_FAILED`
   sentinel.
-- Behavior change to say plainly: a handler that returns `NOT_READY` today will
-  start **blocking scheduled runs** on bump. That is usually the intent — but
-  it is why phase 2 below exists, and why the gate has a per-app soft mode
-  (next section) for apps whose checks are not trusted yet.
+- Behavior to say plainly: by default the gate is **soft** — a handler that
+  returns `NOT_READY` does **not** block the run; the verdict is always
+  reported (as `outcome="would_block"`) but the run proceeds. Blocking real
+  runs is a per-app opt-in (`preflight_gate_mode = "hard"`, next section) taken
+  once the app's checks are trusted.
 
-## Soft mode — the gate-level opt-out (CNCT-81)
+## Hard mode — the gate-level opt-in (CNCT-81)
 
 Enforcement is a **gate** property, not a handler property. The handler always
 returns the honest verdict; the gate decides what to do with `NOT_READY`:
 
-- **hard** (default): raise `PreflightFailed`, run aborts. Correct for every
-  app whose checks are trusted.
-- **soft**: never raise — the run proceeds and the dodged block is emitted as
-  `outcome="would_block"` (with `gate_mode="soft"` and the per-check
-  `check_matrix`) on the gate outcome event. connector-pulse ranks soft apps
-  by how often they would have blocked real runs; that list is the
-  "go fix your checks" queue.
+- **soft** (default): never raise — the run proceeds and the dodged block is
+  emitted as `outcome="would_block"` (with `gate_mode="soft"` and the per-check
+  `check_matrix`) on the gate outcome event. The verdict is always reported, so
+  connector-pulse can rank apps by how often they *would* have blocked real
+  runs; that list is the "your checks are ready to enforce" queue.
+- **hard**: raise `PreflightFailed`, run aborts on `NOT_READY`. The opt-in for
+  every app whose checks are trusted to gate real runs.
 
-Opting out is deliberately loud and deliberately small:
+Opting in is deliberately explicit and deliberately small:
 
 ```python
 class MyApp(App):
-    preflight_gate_mode = "soft"   # git-blamed admission: checks not trusted yet
+    preflight_gate_mode = "hard"   # git-blamed: checks are trusted to block runs
 ```
 
-or, ops-side without an app release: `ATLAN_PREFLIGHT_GATE_MODE=soft` on the
+or, ops-side without an app release: `ATLAN_PREFLIGHT_GATE_MODE=hard` on the
 worker deployment (env wins over the attribute; any value other than the
-literal `soft` resolves to hard — malformed config never drops the net). The
-worker logs a WARNING per soft app at boot.
+literal `hard` resolves to soft — malformed config never blocks a run by
+accident). The worker logs an INFO line per hard app at boot.
 
 Rules the skill enforces during adoption:
 
 - Never soften the handler to dodge the gate. Returning `PARTIAL` for a
   failure that should block hides the truth from every surface; posture
   belongs on the App class, verdicts belong in the handler.
-- Soft is a temporary state with an exit: when pulse shows the app's
-  `would_block` rows track real workflow failures (checks are right), delete
-  the `preflight_gate_mode` line — that is the whole hard-fail flip.
+- Soft is the default landing state with an exit: when pulse shows the app's
+  `would_block` rows track real workflow failures (checks are right), add
+  `preflight_gate_mode = "hard"` — that is the whole hard-fail flip.
 - An app with no `preflight_check` handler needs no posture: the DefaultHandler
   never returns `NOT_READY`, so the gate never has anything to enforce.
 
