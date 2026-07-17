@@ -271,23 +271,16 @@ def _check_matrix_json(checks: list[PreflightCheck]) -> str:
     Lands as a single ``LogAttributes`` value in ClickHouse, so connector-pulse
     can pattern-match verdicts against workflow outcomes (``JSONExtract``) with
     no schema change. Small fixed fields only — messages and evidence stay in
-    the Temporal activity result. A failed check without a stamped
-    :attr:`PreflightCheck.status` is emitted as ``"unset"`` and logged as a
-    warning, so un-migrated handlers surface as adoption gaps in the dashboard
-    instead of blending into real verdicts.
+    the Temporal activity result. Blocking intent is not a per-check field: it
+    is observable from the outcome itself (``would_block``/``blocked`` means
+    the aggregate was NOT_READY; a failed check on a ``proceeded`` run is
+    advisory by the handler's own choice).
     """
     rows = []
     for check in checks:
-        if check.status is None and not check.passed:
-            logger.warning(
-                "Preflight check %r failed without a per-check status; emitting "
-                "'unset' — stamp status=NOT_READY (blocking) or PARTIAL (advisory)",
-                check.name,
-            )
         rows.append(
             {
                 "name": check.name,
-                "status": check.status.value if check.status else "unset",
                 "passed": check.passed,
                 "error_code": check.error.code if check.error else "",
                 # nan/inf would serialize as bare NaN/Infinity — invalid JSON

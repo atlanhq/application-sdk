@@ -18,14 +18,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from pydantic import (
-    AliasChoices,
-    BaseModel,
-    ConfigDict,
-    Field,
-    field_validator,
-    model_validator,
-)
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
@@ -334,18 +327,6 @@ class PreflightCheck(BaseModel):
     passed: bool = False
     """Whether the check passed."""
 
-    status: PreflightStatus | None = None
-    """This check's own verdict — records blocking intent independently of the
-    overall :attr:`PreflightOutput.status`.
-
-    ``NOT_READY`` = failed and was supposed to block; ``PARTIAL`` = failed,
-    advisory by design; ``READY`` = passed (derived automatically for passed
-    checks). Mandatory on failed checks: an unset status on a failure is
-    emitted as ``"unset"`` in the gate's check matrix and logged as a warning,
-    so un-migrated handlers surface as adoption gaps instead of blending in.
-    Must be consistent with :attr:`passed` (``READY`` iff passed) — a
-    contradiction raises at construction."""
-
     message: str = ""
     """Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
     is unset. If ``error`` is set, its ``message``/``suggested_action`` win and
@@ -371,19 +352,6 @@ class PreflightCheck(BaseModel):
         if isinstance(value, AppError):
             return value.to_failure_details()
         return value
-
-    @model_validator(mode="after")
-    def _reconcile_status(self) -> PreflightCheck:
-        if self.status is None:
-            if self.passed:
-                self.status = PreflightStatus.READY
-            return self
-        if (self.status is PreflightStatus.READY) != self.passed:
-            raise ValueError(
-                f"status={self.status.value!r} contradicts passed={self.passed}: "
-                "READY requires a passed check; NOT_READY/PARTIAL require a failed one"
-            )
-        return self
 
     @property
     def resolved_message(self) -> str:
