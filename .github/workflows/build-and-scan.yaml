@@ -153,20 +153,32 @@ jobs:
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Install Trivy
-        # This job logs into GHCR with the PAT above whenever inputs.image is
-        # set (the build-and-publish-app.yaml call path), so minting a
-        # separate App token just for this single release-lookup call isn't
-        # worth the complexity -- use the PAT uniformly in this job instead.
-        env:
-          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
-        run: |
-          TRIVY_VERSION=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            https://api.github.com/repos/aquasecurity/trivy/releases/latest \
-            | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
-          curl -sL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
-            -o /tmp/trivy.tar.gz
-          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
-          sudo mv /tmp/trivy /usr/local/bin/trivy
+        # Install via the official setup-trivy action with a PINNED version —
+        # the same recipe already used by scheduled-trivy-scan.yml and the
+        # sdk-trivy-scan composite (same action SHA, same v0.70.0 pin). This
+        # replaces a hand-rolled install that resolved the version from
+        # api.github.com/.../trivy/releases/latest at scan time: when that call
+        # returned anything but the expected JSON (a transient GitHub API 5xx,
+        # a rate limit, an outage), the version came back empty, the download
+        # URL degraded to .../download/v/trivy__Linux-64bit.tar.gz, curl saved
+        # the error page, and `tar` failed with "gzip: stdin: not in gzip
+        # format". Because the security gate `needs` this job and publish
+        # `needs` the gate, a momentary GitHub blip silently failed the
+        # marketplace publish for every app on the fleet — no vulnerability
+        # involved (this job also runs with fail_on_findings=false).
+        #
+        # Note this is the install-only setup-trivy action, NOT the all-in-one
+        # aquasecurity/trivy-action (#1130): the latter's pinned release bundles
+        # an older Trivy that under-reports on Chainguard/Wolfi base images.
+        #
+        # The version is pinned deliberately (scan results drift with Trivy's
+        # vuln-DB schema) and kept in lockstep with the fleet's other scans;
+        # the aquasecurity/trivy packageRule in renovate-config/default.json
+        # disables auto-bumps so a change here is always a conscious decision.
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.70.0
+          cache: true
 
       - name: Run Trivy scan
         env:
