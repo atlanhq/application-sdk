@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**10 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts)
+**12 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -25,6 +25,8 @@ Suppress a finding on the violating line or the line directly above it:
 | [K008](#k008) | `ToolkitSourceNonCanonical` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
 | [K009](#k009) | `UnresolvedScaffoldPlaceholder` | `block` | `app` | `contract-toolkit` | — | 0.12.0 |
 | [K010](#k010) | `E2EScaffoldingMissing` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
+| [K011](#k011) | `AppIdMissingFromContract` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
+| [K012](#k012) | `GeneratePoeTaskMissing` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
 
 ---
 
@@ -435,5 +437,86 @@ single-entrypoint path.
 
 **Suppress** with `// conformance: ignore[K010] <reason>` on the `amends` line of
 `contract/app.pkl` when the app legitimately ships no E2E scaffolding.
+
+---
+
+## K011 — `AppIdMissingFromContract` {#k011}
+
+**Tier:** `block` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.14.0
+
+> atlan.yaml is present but declares no top-level app_id — the marketplace publish will 404
+
+**Rationale:** app_id is the stable identity that maps the app to its Global Marketplace record. The
+release publish step (build-and-publish-app.yaml -> .github/scripts/parse_atlan_yaml.py)
+reads the top-level app_id out of the generated atlan.yaml and POSTs it to the GM; an
+empty value makes the GM return 404 creating the version, so the GitHub Release is cut
+and the image is pushed to GHCR but the version never appears in the marketplace. This
+is a silent, release-time-only failure: nothing in the app's own PR CI notices, and it
+stays broken across every subsequent release until someone reads the failed publish log.
+It regressed on a live connector when atlan.yaml became fully pkl-generated and the
+app_id, previously hand-carried in the file, was dropped because the pkl metadata block
+never declared it. BLOCK-tier because the only outcome of shipping without it is a
+broken release.
+
+The committed `atlan.yaml` has no top-level `app_id:` key. `app_id` is the app's Global
+Marketplace identity; the release publish step POSTs it to the GM, and an empty value
+returns a 404 so the release never reaches the marketplace even though the tag, the
+GitHub Release, and the GHCR image all succeed.
+
+`atlan.yaml` is generated from `contract/app.pkl` and must not be hand-edited (K005
+guards its provenance banner). Restore `app_id` at its source, in the pkl `metadata`
+block — its entries are emitted as top-level `atlan.yaml` keys, exactly as
+`release_model` already is:
+
+    metadata {       ["release_model"] = "semver"       ["app_id"] = "<your-app-uuid>"
+}
+
+Find `<your-app-uuid>` in the Global Marketplace admin UI (the app URL —
+`/admin/#/apps/<app_id>/versions`) or in the `app_id` of a prior successful publish log.
+Then regenerate with `pkl eval -m . contract/app.pkl` (or `uv run poe generate`) and
+commit the updated `atlan.yaml`.
+
+**Suppress** with `# conformance: ignore[K011] <reason>` on the first line of
+`atlan.yaml` (or the line above) — but a suppression is almost never correct here: a
+semver app with no `app_id` cannot publish. It exists only for the rare non-published
+app that still ships an `atlan.yaml`.
+
+---
+
+## K012 — `GeneratePoeTaskMissing` {#k012}
+
+**Tier:** `block` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.14.0
+
+> pyproject.toml defines no [tool.poe.tasks.generate] task — the SDK Certify step will abort the publish
+
+**Rationale:** The SDK build-and-publish Certify step runs `uv run poe generate` to prove the committed
+generated artifacts match what regenerating the contract today would produce, and it
+hard-fails (exit 1) when the task does not exist -- `Error: Unrecognized task
+'generate'`. That aborts Certify before the publish job runs, so a missing task blocks
+every marketplace release. Apps whose contract generation lived only in a Makefile
+target (`make generate`) had no poe task of that name, so the check passed locally yet
+the release died in CI. A one-line poe alias mirroring the Makefile target closes the
+gap. BLOCK-tier because, like K011, the only outcome of the missing piece is a broken
+release rather than degraded quality.
+
+`pyproject.toml` has a contract (a `contract/` directory exists) but `[tool.poe.tasks]`
+defines no `generate` task. The SDK Certify step (`build-and-publish-app.yaml`) runs `uv
+run poe generate` and fails the whole publish run with `Unrecognized task 'generate'`
+when the task is absent.
+
+Add a `generate` poe task that regenerates the contract artifacts, mirroring the repo's
+`Makefile` target — for the common single-contract layout:
+
+    [tool.poe.tasks]     generate = "pkl eval --project-dir contract -m .
+contract/app.pkl"
+
+Include every `.pkl` the `Makefile` evaluates (e.g. a credential contract such as
+`contract/csa-connectors-objectstore.pkl`) so `poe generate` and `make generate` stay
+equivalent. Verify with `uv run poe generate` — it must succeed and leave the generated
+tree unchanged.
+
+**Suppress** with `# conformance: ignore[K012] <reason>` on the `[tool.poe.tasks]`
+header line (or the line above). Only justified for an app that is genuinely never
+published through the marketplace pipeline.
 
 ---

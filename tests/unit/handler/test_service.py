@@ -1972,6 +1972,108 @@ class TestConfigMapEndpoints:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_configmap_default_fallback_serves_flat_single_entrypoint_form(
+        self, tmp_path: Path
+    ) -> None:
+        """App-id request resolves a FLAT single-entrypoint form configmap.
+
+        Single-entrypoint apps emit their form flat in CONTRACT_GENERATED_DIR
+        (e.g. ``openapi.json`` beside ``manifest.json``), not nested under an
+        ``<ep.name>/`` dir like multi-entrypoint bundles. The marketplace UI
+        requests the configmap by app-id (``atlan-openapi``), which never
+        matches the flat form stem (``openapi``), so the handler must fall
+        through the default-entrypoint search into the FLAT dir.
+
+        Regression: previously only the nested ``<ep.name>/`` dir was searched,
+        so a flat single-entrypoint app returned 404 and its setup wizard
+        rendered blank even though the form was present (observed in prod:
+        ``ConfigMap not found: requested=atlan-openapi
+        available=['manifest', 'openapi']``).
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Flat layout: form + manifest + a credential template at the ROOT, with
+        # NO per-entrypoint subdir. The credential file sorts before the form
+        # (c < o) and must be skipped — exercising the csa-connectors- exclusion.
+        (tmp_path / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (tmp_path / "csa-connectors-objectstore.json").write_text(
+            json.dumps({"config": {"key": "credential-schema"}})
+        )
+        (tmp_path / "openapi.json").write_text(
+            json.dumps({"config": {"key": "flat-form"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="openapi", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-openapi")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["metadata"]["name"] == "atlan-openapi"
+            parsed_config = json.loads(data["data"]["config"])
+            assert parsed_config["key"] == "flat-form"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_default_fallback_prefers_nested_over_flat_form(
+        self, tmp_path: Path
+    ) -> None:
+        """Nested ``<ep.name>/`` form wins over a flat sibling for the same app.
+
+        Pins the documented search order in :func:`get_configmap`: the
+        default-entrypoint fallback searches the nested per-entrypoint dir
+        BEFORE the flat ``CONTRACT_GENERATED_DIR``. Without both layouts present
+        in one test, swapping the two ``search_dir`` candidates (flat before
+        nested) would pass the whole suite, since the flat and nested regression
+        tests each supply only one layout.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Both layouts present for the same app-id request: a nested
+        # per-entrypoint form (ep.name == "crawler") and a flat form at the
+        # root. The nested one must win.
+        nested_dir = tmp_path / "crawler"
+        nested_dir.mkdir()
+        (nested_dir / "openapi.json").write_text(
+            json.dumps({"config": {"key": "nested-form"}})
+        )
+        (tmp_path / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (tmp_path / "openapi.json").write_text(
+            json.dumps({"config": {"key": "flat-form"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="openapi", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-openapi")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "nested-form"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_configmap_default_fallback_returns_404_when_only_excluded_files(
         self, tmp_path: Path
     ) -> None:
@@ -2521,6 +2623,46 @@ class TestManifestEndpoint:
             response = client.get("/workflows/v1/manifest")
             assert response.status_code == 200
             assert response.json()["ep"] == "crawler"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_entrypoint_param_falls_back_to_flat_single_entrypoint(
+        self, tmp_path: Path
+    ) -> None:
+        """``?entrypoint=<name>`` on a FLAT single-entrypoint app serves the root manifest.
+
+        Single-entrypoint apps emit a flat manifest at
+        ``CONTRACT_GENERATED_DIR/manifest.json`` (no ``<ep>/`` subdir). Heracles/AE
+        always sends ``?entrypoint=<name>`` on package-workflow submit, which routes
+        straight to ``_serve_entrypoint_manifest`` — a nested-only lookup. Without
+        the flat fallback the app 404s ("No manifest found for entrypoint 'openapi'")
+        and the platform surfaces a 500, blocking every run (observed on the openapi
+        connector's first submit). Regression guard for that path.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Flat layout: manifest at the ROOT, no per-entrypoint subdir.
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"execution_mode": "linear", "source": "flat-root"})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="openapi", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest?entrypoint=openapi")
+            assert response.status_code == 200
+            assert response.json()["source"] == "flat-root"
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 

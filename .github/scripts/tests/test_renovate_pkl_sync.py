@@ -7,6 +7,8 @@ in renovate-pkl-sync.yaml:
   * --regenerate true, eval OK   -> artifacts regenerated + committed
   * --regenerate true, eval fails -> degrade to lock-only, artifacts untouched
   * no contract/app.pkl -> skip regeneration (re-resolve only)
+  * no contract/PklProject -> whole run is a safe no-op (no pkl, no commit)
+  * --no-commit         -> regenerate in-tree but leave staging/commit to caller
   * nothing changed     -> no commit
 
 `pkl` and `uvx` are stubbed; `git` runs for real against a throwaway repo in
@@ -50,6 +52,14 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A throwaway repo with a contract, a committed (stale) lock, and stale
     generated artifacts — the state of a Renovate branch before sync."""
     (tmp_path / "contract").mkdir()
+    (tmp_path / "contract" / "PklProject").write_text(
+        'amends "pkl:Project"\n'
+        "dependencies {\n"
+        '  ["app-contract-toolkit"] {\n'
+        '    uri = "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@0.14.1"\n'
+        "  }\n"
+        "}\n"
+    )
     (tmp_path / "contract" / "app.pkl").write_text(
         'amends "@app-contract-toolkit/App.pkl"\n'
     )
@@ -288,6 +298,41 @@ def test_no_changes_makes_no_commit(repo, monkeypatch):
     assert mod.main(["--regenerate", "false"]) == 0
 
     assert _commit_count(repo) == before  # no new commit
+
+
+def test_no_commit_regenerates_but_does_not_commit(repo, monkeypatch):
+    """--no-commit: artifacts are re-resolved/regenerated in the working tree
+    but the driver makes NO git commit — Renovate's postUpgradeTasks stages the
+    fileFilters matches into the branch itself."""
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo, eval_rc=0))
+    before = _commit_count(repo)
+
+    assert mod.main(["--regenerate", "true", "--no-commit"]) == 0
+
+    # Working tree WAS updated ...
+    assert (repo / "app" / "generated" / "manifest.json").read_text() == FRESH_MANIFEST
+    assert (repo / "atlan.yaml").exists()
+    assert "0.14.2" in (repo / "contract" / "PklProject.deps.json").read_text()
+    # ... but nothing was committed (the changes sit unstaged for the caller).
+    assert _commit_count(repo) == before
+
+
+def test_missing_pkl_project_is_noop(repo, monkeypatch):
+    """A repo/branch with no contract/PklProject is a safe no-op: the driver
+    returns 0 without invoking `pkl project resolve` (which would be fatal) and
+    without committing."""
+    (repo / "contract" / "PklProject").unlink()
+    before = _commit_count(repo)
+
+    def fail_if_called(cmd, *, check=False):
+        if cmd[0] == "pkl":
+            pytest.fail(f"pkl must not run when PklProject is absent: {cmd}")
+        return subprocess.run(cmd, check=check, text=True, capture_output=True)
+
+    monkeypatch.setattr(mod, "run", fail_if_called)
+
+    assert mod.main(["--regenerate", "true"]) == 0
+    assert _commit_count(repo) == before
 
 
 def test_format_generated_covers_all_py_not_just_input(tmp_path, monkeypatch):

@@ -40,7 +40,7 @@
 #   freshness is guaranteed by the ruleset's dismiss_stale_reviews_on_push.
 #
 # Approval conditions (ALL must hold — see step comments in the bash below):
-#   1. PR author is renovate[bot]
+#   1. PR author is a Renovate bot (renovate[bot] or atlan-app-fleet[bot] during cutover)
 #   2. PR is open and not a draft
 #   3. Current HEAD SHA matches the evaluated SHA (race guard)
 #   4. Every changed file is under .github/, uv.lock, requirements.txt,
@@ -160,9 +160,12 @@ jobs:
             DRAFT=$(printf '%s'  "$PR_META"   | jq -r .draft)
             HEAD_SHA=$(printf '%s' "$PR_META" | jq -r .head_sha)
 
-            # a. Author must be renovate[bot].
-            if [ "$AUTHOR" != "renovate[bot]" ]; then
-              echo "PR #${PR_NUM}: author is '${AUTHOR}', not renovate[bot] — skipping."
+            # a. Author must be a Renovate bot. Both engines are accepted during
+            #    the fleet cutover: renovate[bot] (Mend-hosted) and
+            #    atlan-app-fleet[bot] (self-hosted runner). Narrow to just
+            #    atlan-app-fleet[bot] once Mend is uninstalled (PR2 Stage 4).
+            if [ "$AUTHOR" != "renovate[bot]" ] && [ "$AUTHOR" != "atlan-app-fleet[bot]" ]; then
+              echo "PR #${PR_NUM}: author is '${AUTHOR}', not a Renovate bot — skipping."
               continue
             fi
 
