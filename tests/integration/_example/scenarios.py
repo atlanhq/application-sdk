@@ -115,6 +115,11 @@ preflight_scenarios = [
 # =============================================================================
 # Workflow Scenarios
 # =============================================================================
+#
+# Asset validation runs automatically on workflow scenarios (warn-first) once an
+# extracted-output path is resolvable — see the "Asset Validation" section of
+# README.md. Set ``asset_validation_strict=True`` (class or scenario) to hard-fail
+# once your connector's output is clean, or ``validate_assets=False`` to opt out.
 
 workflow_scenarios = [
     # Valid workflow - credentials auto-loaded
