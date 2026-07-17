@@ -526,6 +526,23 @@ async def upload(
 
     elif local_path and src.is_dir():
         # ── Directory (local exists) ──────────────────────────────────────
+        # A locally-present directory may be *incomplete* (BLDX-1554): when the
+        # parallel transform activities that populated this tree were scheduled
+        # across multiple worker pods, only the subset produced on *this* pod is
+        # on local disk. Uploading just the local files would silently drop whole
+        # entity types from the target — the failure mode that produced orphaned
+        # child entities downstream.
+        #
+        # To keep the target copy complete regardless of pod placement, reconcile
+        # against the source (deployment) store: upload every local file AND
+        # stream any file that exists in the source store but is missing locally.
+        # This extends the local-absent fallback (below) — which the docstring
+        # already promises for "cross-pod KEDA-scaled SDR workers" — to the
+        # partially-present case. Reconciliation runs only when a *distinct*
+        # source store is supplied (i.e. an SDR hand-off where upstream !=
+        # deployment); in non-SDR uploads ``_source_store`` is ``None`` / the
+        # same store, so local disk stays authoritative and behaviour is
+        # unchanged.
         prefix = _derive_target_key(
             storage_path,
             _app_prefix,
@@ -537,7 +554,41 @@ async def upload(
         # run_in_thread keeps the blocking fsync + scandir off the event loop,
         # using the dedicated pool rather than asyncio's default executor.
         files = await run_in_thread(safe_list_directory, src)
-        if raise_on_empty and not files:
+        local_rels = {str(fp.relative_to(src)).replace(os.sep, "/") for fp in files}
+
+        # (source_key, target_key) pairs for files present in the source store
+        # but absent from this pod's local copy.
+        reconcile_pairs: list[tuple[str, str]] = []
+        if (
+            source_resolved is not None
+            and source_resolved is not resolved
+            and _source_ref is not None
+            and _source_ref.storage_path
+        ):
+            from pathlib import PurePosixPath  # noqa: PLC0415 — stdlib; lazy use only
+
+            from application_sdk.storage.batch import list_keys  # noqa: PLC0415
+
+            source_norm = normalize_key(_source_ref.storage_path)
+            if source_norm and ".." in PurePosixPath(source_norm).parts:
+                from application_sdk.storage.errors import (  # noqa: PLC0415
+                    UnsafeUploadPathError,
+                )
+
+                raise UnsafeUploadPathError(unsafe_path=_source_ref.storage_path)
+            source_dir_prefix = source_norm.rstrip("/") + "/"
+            for source_key in await list_keys(
+                source_dir_prefix, source_resolved, normalize=False
+            ):
+                if _is_sidecar(source_key):
+                    continue
+                rel = source_key.removeprefix(source_dir_prefix)
+                if rel in local_rels:
+                    continue  # present locally — uploaded from the fast path below
+                target_key = f"{prefix}/{rel}" if prefix else rel
+                reconcile_pairs.append((source_key, target_key))
+
+        if raise_on_empty and not files and not reconcile_pairs:
             from application_sdk.storage.errors import (  # noqa: PLC0415
                 StorageEmptyUploadError,
             )
@@ -569,9 +620,19 @@ async def upload(
                 )
                 return ok
 
+        async def _bounded_reconcile(source_key: str, target_key: str) -> bool:
+            # source_resolved is non-None whenever reconcile_pairs is populated.
+            assert source_resolved is not None
+            async with sem:
+                ok, _ = await _upload_from_store(
+                    source_resolved, source_key, resolved, target_key
+                )
+                return ok
+
         # conformance: ignore[E010] results checked immediately below: errs filters BaseException, first is re-raised and rest are logged
         results = await asyncio.gather(
             *[_bounded_upload(fp, k) for fp, k in zip(files, keys)],
+            *[_bounded_reconcile(sk, tk) for sk, tk in reconcile_pairs],
             return_exceptions=True,
         )
         errs = [r for r in results if isinstance(r, BaseException)]
@@ -580,9 +641,18 @@ async def upload(
                 _logger.error("concurrent upload failure (suppressed)", exc_info=extra)
             raise errs[0]
         n = sum(1 for ok in results if ok)
+        total_files = len(files) + len(reconcile_pairs)
         reason = "uploaded" if n > 0 else "skipped:hash_match"
+        if reconcile_pairs:
+            _logger.info(
+                "upload dir reconciled against source store: %d local + %d "
+                "streamed from source (prefix=%s)",
+                len(files),
+                len(reconcile_pairs),
+                prefix,
+            )
         return _make_upload_output(
-            str(src), prefix, len(files), _tier, n, reason, is_dir=True
+            str(src), prefix, total_files, _tier, n, reason, is_dir=True
         )
 
     elif (

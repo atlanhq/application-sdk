@@ -569,3 +569,145 @@ class TestUploadDirectoryListingRace:
         )
 
         assert out.ref.file_count == 2
+
+
+class TestUploadDirectorySourceStoreReconcile:
+    """BLDX-1554: a *partially*-present local directory must be reconciled
+    against the source (deployment) store so the target (upstream) copy is
+    complete — the SDR cross-pod hand-off guarantee.
+
+    Scenario: the parallel ``transform_*`` activities that populate
+    ``transformed/`` are placed on different worker pods. The pod that runs the
+    final ``App.upload`` holds only the entity types it happened to transform;
+    the rest live only in the deployment store (persisted per-pod by the
+    activity interceptor). Uploading local-only would drop whole types.
+    """
+
+    async def _seed(self, store, key: str, data: bytes) -> None:
+        from application_sdk.storage.ops import _put
+
+        await _put(key, data, store, normalize=False)
+
+    async def _target_keys(self, store) -> set[str]:
+        from application_sdk.storage.batch import list_keys
+        from application_sdk.storage.transfer import _is_sidecar
+
+        return {
+            k for k in await list_keys("", store, normalize=False) if not _is_sidecar(k)
+        }
+
+    async def test_partial_local_dir_reconciled_from_source(self, tmp_path) -> None:
+        from application_sdk.contracts.types import FileReference
+
+        source = create_memory_store()  # deployment store — has ALL types
+        target = create_memory_store()  # upstream store — what publish reads
+        src_prefix = "artifacts/apps/mysql/wf/run/transformed"
+        await self._seed(source, f"{src_prefix}/table/entities.json", b"TABLES")
+        await self._seed(source, f"{src_prefix}/column/entities.json", b"COLUMNS")
+
+        # This pod only ran transform_columns → local dir holds ONLY column/.
+        local = tmp_path / "transformed"
+        (local / "column").mkdir(parents=True)
+        (local / "column" / "entities.json").write_bytes(b"COLUMNS")
+
+        out = await upload(
+            str(local),
+            storage_path="dest/transformed",
+            store=target,
+            _source_ref=FileReference(local_path=str(local), storage_path=src_prefix),
+            _source_store=source,
+        )
+
+        keys = await self._target_keys(target)
+        assert "dest/transformed/column/entities.json" in keys  # uploaded from local
+        assert "dest/transformed/table/entities.json" in keys  # streamed from source
+        assert out.ref.file_count == 2
+
+    async def test_union_local_only_and_source_only(self, tmp_path) -> None:
+        """Union semantics: a local-only file (no source copy, e.g. a
+        stream-writing connector) still uploads, and a source-only file is
+        streamed. Neither is dropped."""
+        from application_sdk.contracts.types import FileReference
+
+        source = create_memory_store()
+        target = create_memory_store()
+        src_prefix = "pfx/transformed"
+        await self._seed(
+            source, f"{src_prefix}/table/entities.json", b"T"
+        )  # source-only
+
+        local = tmp_path / "transformed"
+        (local / "column").mkdir(parents=True)
+        (local / "column" / "entities.json").write_bytes(b"C")  # local-only
+
+        await upload(
+            str(local),
+            storage_path="d/transformed",
+            store=target,
+            _source_ref=FileReference(local_path=str(local), storage_path=src_prefix),
+            _source_store=source,
+        )
+
+        keys = await self._target_keys(target)
+        assert "d/transformed/column/entities.json" in keys  # local-only preserved
+        assert "d/transformed/table/entities.json" in keys  # source-only streamed
+
+    async def test_no_source_store_uploads_local_only(self, tmp_path) -> None:
+        """Non-SDR (no source store): behaviour is unchanged — only local files
+        are uploaded and no source-store lookup happens."""
+        target = create_memory_store()
+        local = tmp_path / "transformed"
+        (local / "column").mkdir(parents=True)
+        (local / "column" / "entities.json").write_bytes(b"C")
+
+        await upload(str(local), storage_path="d/transformed", store=target)
+
+        keys = await self._target_keys(target)
+        assert keys == {"d/transformed/column/entities.json"}
+
+    async def test_empty_local_dir_reconciles_without_raising(self, tmp_path) -> None:
+        """An empty local dir with a populated source store must NOT trip
+        raise_on_empty — the union is non-empty, and files stream from source."""
+        from application_sdk.contracts.types import FileReference
+
+        source = create_memory_store()
+        target = create_memory_store()
+        src_prefix = "pfx/transformed"
+        await self._seed(source, f"{src_prefix}/table/entities.json", b"T")
+
+        local = tmp_path / "transformed"
+        local.mkdir()  # exists but empty (this pod ran no transform)
+
+        await upload(
+            str(local),
+            storage_path="d/transformed",
+            store=target,
+            raise_on_empty=True,
+            _source_ref=FileReference(local_path=str(local), storage_path=src_prefix),
+            _source_store=source,
+        )
+
+        keys = await self._target_keys(target)
+        assert "d/transformed/table/entities.json" in keys
+
+    async def test_empty_local_and_empty_source_raises(self, tmp_path) -> None:
+        """raise_on_empty still fires when both local and source are empty."""
+        from application_sdk.contracts.types import FileReference
+        from application_sdk.storage.errors import StorageEmptyUploadError
+
+        source = create_memory_store()
+        target = create_memory_store()
+        local = tmp_path / "transformed"
+        local.mkdir()
+
+        with pytest.raises(StorageEmptyUploadError):
+            await upload(
+                str(local),
+                storage_path="d/transformed",
+                store=target,
+                raise_on_empty=True,
+                _source_ref=FileReference(
+                    local_path=str(local), storage_path="pfx/transformed"
+                ),
+                _source_store=source,
+            )
