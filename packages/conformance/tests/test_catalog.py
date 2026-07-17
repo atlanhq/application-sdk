@@ -176,6 +176,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # it has no such dependency to grade (BLDX-1479). K009: unresolved scaffold
     # placeholder in a generated artifact; K010: missing generated E2E scaffolding
     # — both are app-repo generated-output concerns (BLDX-1479).
+    # K011/K012: release-readiness — the generated atlan.yaml's app_id and the
+    # pyproject generate poe task only exist on a consumer app that publishes to
+    # the marketplace; the SDK has no contract/ dir, no atlan.yaml, and no
+    # marketplace publish, so neither rule applies to it (CONNECT release-pipeline).
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -220,6 +224,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K008",
         "K009",
         "K010",
+        "K011",
+        "K012",
         "P004",
         "P005",
         "P008",
@@ -482,9 +488,10 @@ def test_catalog_b_series_present() -> None:
 def test_catalog_k_series_present() -> None:
     """The K-series contract-toolkit rules are K001/K002 (source), the
     generated-artifact freshness rules K003/K004/K005 (BLDX-1414), the
-    manifest-vs-contract field validation rule K006 (BLDX-1527), and the toolkit
+    manifest-vs-contract field validation rule K006 (BLDX-1527), the toolkit
     hygiene rules K007–K010 (version floor, source provenance, unresolved
-    placeholder, missing E2E scaffolding) (BLDX-1479)."""
+    placeholder, missing E2E scaffolding) (BLDX-1479), and the release-readiness
+    guards K011/K012 (atlan.yaml app_id, generate poe task)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
     expected = {
@@ -498,6 +505,8 @@ def test_catalog_k_series_present() -> None:
         "K008",
         "K009",
         "K010",
+        "K011",
+        "K012",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"
