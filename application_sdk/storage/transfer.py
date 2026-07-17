@@ -391,6 +391,45 @@ _FALLBACK_PREFIX_REQUIRED = (
 )
 
 
+async def _list_source_data_keys(
+    source_storage_path: str, source_store: ObjectStore
+) -> tuple[str, list[str]]:
+    """List non-sidecar data keys under an SDR source-store directory.
+
+    Shared by the partial-local reconcile branch and the local-absent
+    deployment-store fallback in :func:`upload`, so the ``..`` path-traversal
+    guard and the source-listing sequence stay identical between them (a future
+    change to path validation can't drift between the two).
+
+    Returns the normalised ``source_dir_prefix`` (trailing slash) and the data
+    keys beneath it, sidecar (``.sha256``) keys excluded.
+
+    Raises:
+        UnsafeUploadPathError: If the normalised source path contains ``..``.
+    """
+    from pathlib import PurePosixPath  # noqa: PLC0415 — stdlib; lazy use only
+
+    from application_sdk.storage.batch import list_keys  # noqa: PLC0415
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        normalize_key,
+    )
+
+    source_norm = normalize_key(source_storage_path)
+    if source_norm and ".." in PurePosixPath(source_norm).parts:
+        from application_sdk.storage.errors import (  # noqa: PLC0415
+            UnsafeUploadPathError,
+        )
+
+        raise UnsafeUploadPathError(unsafe_path=source_storage_path)
+    source_dir_prefix = source_norm.rstrip("/") + "/"
+    keys = [
+        k
+        for k in await list_keys(source_dir_prefix, source_store, normalize=False)
+        if not _is_sidecar(k)
+    ]
+    return source_dir_prefix, keys
+
+
 async def upload(
     local_path: str,
     storage_path: str | None = None,
@@ -424,6 +463,14 @@ async def upload(
        stream from *_source_store* to the target.  ``_upload_from_store`` performs
        a cross-store SHA-256 sidecar check before transferring bytes so a second
        call for the same file short-circuits (idempotent replay support).
+    3. **Partial-local reconcile** — if *local_path* is a directory that exists
+       but holds only a subset of the tree (e.g. transform activities scheduled
+       across pods), upload the local files AND stream any file present in
+       *_source_store* but missing locally, so the target copy is complete
+       regardless of pod placement.  This fires one ``list_keys`` LIST against
+       the source store per SDR directory upload — including when the local
+       copy is already complete — since partial-ness cannot be detected without
+       listing.  The LIST is bounded and off the per-file transfer path.
 
     ``App.upload()`` automatically derives *_source_ref* from *local_path* and
     always passes ``_source_store=self.context.storage``, so all existing call
@@ -565,23 +612,10 @@ async def upload(
             and _source_ref is not None
             and _source_ref.storage_path
         ):
-            from pathlib import PurePosixPath  # noqa: PLC0415 — stdlib; lazy use only
-
-            from application_sdk.storage.batch import list_keys  # noqa: PLC0415
-
-            source_norm = normalize_key(_source_ref.storage_path)
-            if source_norm and ".." in PurePosixPath(source_norm).parts:
-                from application_sdk.storage.errors import (  # noqa: PLC0415
-                    UnsafeUploadPathError,
-                )
-
-                raise UnsafeUploadPathError(unsafe_path=_source_ref.storage_path)
-            source_dir_prefix = source_norm.rstrip("/") + "/"
-            for source_key in await list_keys(
-                source_dir_prefix, source_resolved, normalize=False
-            ):
-                if _is_sidecar(source_key):
-                    continue
+            source_dir_prefix, source_keys = await _list_source_data_keys(
+                _source_ref.storage_path, source_resolved
+            )
+            for source_key in source_keys:
                 rel = source_key.removeprefix(source_dir_prefix)
                 if rel in local_rels:
                     continue  # present locally — uploaded from the fast path below
@@ -661,26 +695,12 @@ async def upload(
         and source_resolved is not None
     ):
         # ── Deployment-store fallback (local path absent) ──────────────────
-        from pathlib import PurePosixPath  # noqa: PLC0415 — stdlib; lazy use only
-
-        from application_sdk.storage.batch import list_keys  # noqa: PLC0415
-
-        source_norm = normalize_key(_source_ref.storage_path)
-        if source_norm and ".." in PurePosixPath(source_norm).parts:
-            from application_sdk.storage.errors import (  # noqa: PLC0415
-                UnsafeUploadPathError,
-            )
-
-            raise UnsafeUploadPathError(unsafe_path=_source_ref.storage_path)
-
-        source_dir_prefix = source_norm.rstrip("/") + "/"
-        data_dir_keys = [
-            k
-            for k in await list_keys(
-                source_dir_prefix, source_resolved, normalize=False
-            )
-            if not _is_sidecar(k)
-        ]
+        source_dir_prefix, data_dir_keys = await _list_source_data_keys(
+            _source_ref.storage_path, source_resolved
+        )
+        # Normalised source key for the single-file fallback below;
+        # _list_source_data_keys returns the directory prefix (trailing slash).
+        source_norm = source_dir_prefix.rstrip("/")
 
         if data_dir_keys:
             # ── Directory fallback ─────────────────────────────────────────
