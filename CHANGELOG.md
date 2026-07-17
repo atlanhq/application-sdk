@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.23.0 (July 17, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.22.1...v3.23.0
+
+### Features
+
+- pyatlan_v9-backed asset-write validation scaffold (BLDX-1555) (#2753) (by @cmgrote in [4d45073](https://github.com/atlanhq/application-sdk/commit/4d45073))
+
+### Bug Fixes
+
+- restart on fatal poll error instead of exiting (#2712) (by @mothership-ai[bot] in [df19f35](https://github.com/atlanhq/application-sdk/commit/df19f35))
+- detect and recover from zombie worker (dead poll loop) (#2746) (by @cmgrote in [5c49815](https://github.com/atlanhq/application-sdk/commit/5c49815))
+- resolve flat single-entrypoint configmap for app-id requests (fleet-wide blank setup wizard) (#2759) (by @cmgrote in [06a1e02](https://github.com/atlanhq/application-sdk/commit/06a1e02))
+
+
 ## v3.22.1 (July 15, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.22.0...v3.22.1
