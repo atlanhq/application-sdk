@@ -2026,6 +2026,54 @@ class TestConfigMapEndpoints:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_configmap_default_fallback_prefers_nested_over_flat_form(
+        self, tmp_path: Path
+    ) -> None:
+        """Nested ``<ep.name>/`` form wins over a flat sibling for the same app.
+
+        Pins the documented search order in :func:`get_configmap`: the
+        default-entrypoint fallback searches the nested per-entrypoint dir
+        BEFORE the flat ``CONTRACT_GENERATED_DIR``. Without both layouts present
+        in one test, swapping the two ``search_dir`` candidates (flat before
+        nested) would pass the whole suite, since the flat and nested regression
+        tests each supply only one layout.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Both layouts present for the same app-id request: a nested
+        # per-entrypoint form (ep.name == "crawler") and a flat form at the
+        # root. The nested one must win.
+        nested_dir = tmp_path / "crawler"
+        nested_dir.mkdir()
+        (nested_dir / "openapi.json").write_text(
+            json.dumps({"config": {"key": "nested-form"}})
+        )
+        (tmp_path / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (tmp_path / "openapi.json").write_text(
+            json.dumps({"config": {"key": "flat-form"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="openapi", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-openapi")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "nested-form"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_configmap_default_fallback_returns_404_when_only_excluded_files(
         self, tmp_path: Path
     ) -> None:

@@ -405,6 +405,21 @@ _storage: ObjectStore | None = None
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 
+# Non-form JSON siblings that live in CONTRACT_GENERATED_DIR next to the
+# generated setup-form configmaps. Credential templates are emitted per
+# object-store family (`atlan-connectors-*.json`, `csa-connectors-*.json`).
+# Centralised so the form-discovery exclusion vocabulary is named in one place
+# instead of re-spelled inline (adding the next connector family prefix here
+# then covers every form-discovery site).
+_CREDENTIAL_TEMPLATE_PREFIXES = ("atlan-connectors-", "csa-connectors-")
+
+
+def _is_form_configmap(stem: str) -> bool:
+    """True when a generated JSON stem is a setup-form configmap, i.e. neither
+    the DAG ``manifest`` nor a credential template."""
+    return stem != "manifest" and not stem.startswith(_CREDENTIAL_TEMPLATE_PREFIXES)
+
+
 # Allowlist regex for entrypoint names: letter-start, then letters/digits/hyphens/underscores.
 # Identical to the @entrypoint decorator constraint. Used as a path-traversal guard
 # in get_manifest() before any filesystem path is constructed.
@@ -1757,9 +1772,9 @@ def _register_workflow_routes(
                 # form file was present — a blank setup wizard in the UI.
                 #
                 # Pick the form file by excluding the well-known non-form
-                # siblings: `manifest.json` (DAG manifest) and the
-                # `{atlan,csa}-connectors-*.json` credential templates. Sorted
-                # for determinism.
+                # siblings (`manifest.json` and the `{atlan,csa}-connectors-*`
+                # credential templates) via `_is_form_configmap`. Sorted for
+                # determinism.
                 for search_dir in (
                     CONTRACT_GENERATED_DIR / ep.name,
                     CONTRACT_GENERATED_DIR,
@@ -1767,10 +1782,7 @@ def _register_workflow_routes(
                     if not search_dir.is_dir():
                         continue
                     for json_file in sorted(search_dir.glob("*.json")):
-                        stem = json_file.stem
-                        if stem == "manifest" or stem.startswith(
-                            ("atlan-connectors-", "csa-connectors-")
-                        ):
+                        if not _is_form_configmap(json_file.stem):
                             continue
                         target = json_file
                         break
