@@ -46,17 +46,19 @@ from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
-# Sidecar suffix / predicate are owned by ``storage.batch`` — the single source
-# of truth for what counts as a sidecar vs. a data key (see
-# ``batch.SIDECAR_SUFFIX`` / ``list_data_keys``). Imported at top level, unlike
-# the other storage-sibling imports in this module which are lazy: ``storage/
-# __init__`` imports ``batch`` before any code can import ``transfer``, so
-# ``batch`` is always initialised here — no circular risk. ``_is_sidecar`` is
-# re-exported for external importers of ``transfer._is_sidecar``.
+# Sidecar suffix / predicate and the sidecar-excluding lister are owned by
+# ``storage.batch`` — the single source of truth for what counts as a sidecar
+# vs. a data key (see ``batch.SIDECAR_SUFFIX`` / ``list_data_keys``). Imported at
+# top level, unlike the other storage-sibling imports in this module which are
+# lazy: ``storage/__init__`` imports ``batch`` before any code can import
+# ``transfer``, so ``batch`` is always initialised here — no circular risk.
+# ``_is_sidecar`` is re-exported for external importers of
+# ``transfer._is_sidecar``.
 from application_sdk.storage.batch import SIDECAR_SUFFIX as _SHA256_SUFFIX
 from application_sdk.storage.batch import (  # noqa: F401 — re-export for back-compat
     is_sidecar_key as _is_sidecar,
 )
+from application_sdk.storage.batch import list_data_keys
 
 _logger = get_logger(__name__)
 
@@ -415,7 +417,6 @@ async def _list_source_data_keys(
     """
     from pathlib import PurePosixPath  # noqa: PLC0415 — stdlib; lazy use only
 
-    from application_sdk.storage.batch import list_data_keys  # noqa: PLC0415
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         normalize_key,
     )
@@ -657,8 +658,14 @@ async def upload(
                 return ok
 
         async def _bounded_reconcile(source_key: str, target_key: str) -> bool:
-            # source_resolved is non-None whenever reconcile_pairs is populated.
-            assert source_resolved is not None
+            # source_resolved is non-None whenever reconcile_pairs is populated
+            # (guarded where reconcile_pairs is built). Explicit check rather than
+            # ``assert`` so it is not stripped under ``python -O`` and narrows the
+            # type for the ``_upload_from_store`` call below.
+            if source_resolved is None:  # pragma: no cover — structurally unreachable
+                raise RuntimeError(
+                    "reconcile requires a resolved source store but none was set"
+                )
             async with sem:
                 ok, _ = await _upload_from_store(
                     source_resolved, source_key, resolved, target_key

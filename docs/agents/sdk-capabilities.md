@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.23.0
-source-sha:    3d75efc0b518fa406dbcf3f52e00f097859f3bac
-source-date:   2026-07-17T09:38:05+01:00
+source-sha:    af9979895ada4f7b4eb26b2d6387761059f87e3e
+source-date:   2026-07-17T09:18:33+00:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 31 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 33 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -2172,6 +2172,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Return ``(size_bytes, e_tag)`` for *key*, or ``None`` if not found.
 - **Defined in:** `application_sdk/storage/ops.py`
 
+#### `is_sidecar_key`
+
+- **Import:** `from application_sdk.storage import is_sidecar_key`
+- **Signature:** `is_sidecar_key(key: str)`
+- **Summary:** Return ``True`` if *key* is a SHA-256 sidecar rather than a data object.
+- **Defined in:** `application_sdk/storage/batch.py`
+
 #### `list_data_keys`
 
 - **Import:** `from application_sdk.storage import list_data_keys`
@@ -2241,6 +2248,15 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Signature:** `verify_object_store_access(infra: InfrastructureContext)`
 - **Summary:** In SDR mode, verify read+write access to every configured object store.
 - **Defined in:** `application_sdk/storage/preflight.py`
+
+### Constants and Enums
+
+#### `SIDECAR_SUFFIX`
+
+- **Import:** `from application_sdk.storage import SIDECAR_SUFFIX`
+- **Signature:** `SIDECAR_SUFFIX`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/batch.py`
 
 ## `application_sdk.templates`
 
