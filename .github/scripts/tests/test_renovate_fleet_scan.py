@@ -28,16 +28,19 @@ def test_resolve_scope_single_repo_when_repo_set():
 
 def test_build_search_query_full_fleet():
     q = rfs.build_search_query("org:atlanhq", "is:open")
-    assert q == "org:atlanhq is:pr author:app/renovate is:open"
+    assert (
+        q == "org:atlanhq is:pr author:app/renovate author:app/atlan-app-fleet is:open"
+    )
 
 
 def test_build_search_query_single_repo():
     q = rfs.build_search_query(
         "repo:atlanhq/atlan-mysql-app", "is:merged merged:>=2026-06-01"
     )
-    assert (
-        q
-        == "repo:atlanhq/atlan-mysql-app is:pr author:app/renovate is:merged merged:>=2026-06-01"
+    assert q == (
+        "repo:atlanhq/atlan-mysql-app is:pr "
+        "author:app/renovate author:app/atlan-app-fleet "
+        "is:merged merged:>=2026-06-01"
     )
 
 
