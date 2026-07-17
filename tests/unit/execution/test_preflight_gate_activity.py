@@ -795,9 +795,9 @@ class TestPreflightGateOutcomeEvent:
         ]
 
     async def test_check_matrix_nonfinite_duration_coerced(self) -> None:
-        # nan/inf serialize as bare NaN/Infinity tokens — invalid JSON that
-        # would poison the ClickHouse row. Coerced to 0.0, never raised (a
-        # raise here would fail the gate open and lose the whole event).
+        # orjson emits null for nan/inf; we normalize to 0.0 so the ClickHouse
+        # row stays numeric, never raised (a raise here would fail the gate
+        # open and lose the whole event).
         out = PreflightOutput(
             status=PreflightStatus.PARTIAL,
             checks=[
