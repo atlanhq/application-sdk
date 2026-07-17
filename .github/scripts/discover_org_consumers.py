@@ -43,6 +43,14 @@ PRESET_MARKER = "application-sdk//renovate-config/default.json"
 # match the pattern.
 DEFAULT_NAME_PATTERN = r"^atlan-[a-z0-9-]+-app$"
 
+# `gh repo list` returns at most --limit repos, ordered most-recently-pushed
+# first, so a cap below the org's repo count would silently drop an
+# infrequently-pushed atlan-*-app from the window. Set well above atlanhq's
+# total repo count (hundreds, not thousands); list_candidate_repos emits a loud
+# ::warning:: if the org ever grows into this cap, turning a silent drop into an
+# observable signal rather than quietly undercutting determinism.
+REPO_LIST_LIMIT = 5000
+
 
 def _run_gh(args: list) -> str:
     """Run `gh` and return stdout, or "" on any failure (missing file, auth,
@@ -72,15 +80,23 @@ def list_candidate_repos(owner: str, name_pattern: str, run: RunFn = _run_gh) ->
             owner,
             "--no-archived",
             "--limit",
-            "1000",
+            str(REPO_LIST_LIMIT),
             "--json",
             "nameWithOwner",
             "--jq",
             "[.[].nameWithOwner]",
         ]
     )
+    all_repos = parse_repos(raw)
+    if len(all_repos) >= REPO_LIST_LIMIT:
+        print(
+            f"::warning::gh repo list returned {len(all_repos)} repos, hitting the "
+            f"--limit {REPO_LIST_LIMIT} cap; discovery may be truncated and a "
+            "consumer silently dropped. Raise REPO_LIST_LIMIT.",
+            file=sys.stderr,
+        )
     pat = re.compile(name_pattern)
-    return [r for r in parse_repos(raw) if pat.match(r.split("/", 1)[-1])]
+    return [r for r in all_repos if pat.match(r.split("/", 1)[-1])]
 
 
 def extends_preset(repo: str, marker: str, run: RunFn = _run_gh) -> bool:

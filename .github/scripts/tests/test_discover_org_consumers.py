@@ -69,6 +69,19 @@ def test_list_candidate_repos_filters_to_app_pattern():
     assert got == ["atlanhq/atlan-mysql-app", "atlanhq/atlan-hello-world-app"]
 
 
+def test_list_candidate_repos_warns_when_repo_list_hits_cap(monkeypatch, capsys):
+    # If the org ever grows into the --limit cap, discovery may be truncated and
+    # a consumer silently dropped. That must surface as a loud ::warning::, not a
+    # quiet miss. Shrink the cap so the stub can trip it deterministically.
+    monkeypatch.setattr(doc, "REPO_LIST_LIMIT", 2)
+    run = _fake_gh(
+        ["atlanhq/atlan-mysql-app", "atlanhq/atlan-hello-world-app"],  # == cap
+        {},
+    )
+    doc.list_candidate_repos("atlanhq", doc.DEFAULT_NAME_PATTERN, run=run)
+    assert "::warning::" in capsys.readouterr().err
+
+
 def test_extends_preset_true_false_and_missing():
     run = _fake_gh(
         [],
