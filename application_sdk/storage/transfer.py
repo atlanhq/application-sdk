@@ -50,14 +50,10 @@ from application_sdk.observability.logger_adaptor import get_logger
 # ``storage.batch`` — the single source of truth for what counts as a sidecar
 # vs. a data key (see ``batch.SIDECAR_SUFFIX`` / ``list_data_keys``). Imported at
 # top level, unlike the other storage-sibling imports in this module which are
-# lazy: ``storage/__init__`` imports ``batch`` before any code can import
-# ``transfer``, so ``batch`` is always initialised here — no circular risk.
-# ``_is_sidecar`` is re-exported for external importers of
-# ``transfer._is_sidecar``.
+# lazy: ``batch`` depends only on ``storage.ops`` (``batch → ops``) and never on
+# ``transfer``, so ``transfer → batch`` is unconditionally acyclic — the import
+# is safe regardless of module load order.
 from application_sdk.storage.batch import SIDECAR_SUFFIX as _SHA256_SUFFIX
-from application_sdk.storage.batch import (  # noqa: F401 — re-export for back-compat
-    is_sidecar_key as _is_sidecar,
-)
 from application_sdk.storage.batch import (
     list_data_keys,
     list_data_keys_with_meta,

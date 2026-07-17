@@ -741,7 +741,11 @@ class TestUploadDirectorySourceStoreReconcile:
         (local / "column").mkdir(parents=True)
         (local / "column" / "entities.json").write_bytes(b"C")
 
-        with patch("application_sdk.storage.batch.list_keys") as spy:
+        # Patch the reconcile branch's actual call site (``transfer.list_data_keys``,
+        # invoked via ``_list_source_data_keys``) rather than the lower-level
+        # ``batch.list_keys`` it delegates to — a direct guard that survives an
+        # inlining refactor of ``list_data_keys``.
+        with patch("application_sdk.storage.transfer.list_data_keys") as spy:
             await upload(
                 str(local),
                 storage_path="d/transformed",
@@ -839,7 +843,7 @@ class TestUploadDirectorySourceStoreReconcile:
 
         missing_local = str(tmp_path / "never-created" / "transformed")
 
-        await upload(
+        out = await upload(
             missing_local,
             storage_path="d/transformed",
             store=target,
@@ -852,6 +856,41 @@ class TestUploadDirectorySourceStoreReconcile:
         keys = await self._target_keys(target)
         assert "d/transformed/table/entities.json" in keys
         assert "d/transformed/column/entities.json" in keys
+        # Both source files are streamed and counted (distinct code path from the
+        # partial-dir reconcile — assert the count as every sibling test does).
+        assert out.ref.file_count == 2
+
+    async def test_empty_source_storage_path_skips_reconcile(self, tmp_path) -> None:
+        """When ``_source_ref`` carries an empty ``storage_path`` the reconcile
+        guard (``and _source_ref.storage_path``) is false, so reconciliation is
+        skipped even though a distinct source store is supplied: only local files
+        land and the source store is never listed."""
+        from application_sdk.contracts.types import FileReference
+
+        source = create_memory_store()  # distinct store, but never consulted
+        target = create_memory_store()
+        # A source-only file that must NOT be streamed because reconcile is skipped.
+        await self._seed(source, "pfx/transformed/table/entities.json", b"T")
+
+        local = tmp_path / "transformed"
+        (local / "column").mkdir(parents=True)
+        (local / "column" / "entities.json").write_bytes(b"C")
+
+        with patch("application_sdk.storage.transfer.list_data_keys") as spy:
+            out = await upload(
+                str(local),
+                storage_path="d/transformed",
+                store=target,
+                _source_ref=FileReference(local_path=str(local), storage_path=""),
+                _source_store=source,
+            )
+
+        keys = await self._target_keys(target)
+        assert "d/transformed/column/entities.json" in keys  # local landed
+        assert "d/transformed/table/entities.json" not in keys  # not reconciled
+        assert out.ref.file_count == 1
+        # Empty source prefix → the reconcile source-store LIST never fired.
+        spy.assert_not_called()
 
 
 def test_reconcile_prefix_alignment_holds_across_helpers() -> None:
