@@ -234,3 +234,79 @@ class TestWarnOnInvalidTransformedAssets:
                 await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
             logger.warning.assert_called_once()
             assert logger.warning.call_args.kwargs.get("exc_info") is True
+            # The matrix is built as an eager arg to _task_logger.info(...), so a
+            # raise there is hit before .info() is called — no partial outcome
+            # event is emitted (mirrors test_unexpected_scan_error_is_swallowed).
+            logger.info.assert_not_called()
+
+
+def _failure(i: int):
+    from application_sdk.validation.assets import AssetValidationFailure
+
+    return AssetValidationFailure(
+        file="entities.json",
+        line=i,
+        type_name="Table",
+        qualified_name=f"{TABLE_QN}_{i}",
+        errors=[f"bad {i}"],
+    )
+
+
+def _orphan(i: int):
+    from application_sdk.validation.assets import ReferentialFailure
+
+    return ReferentialFailure(
+        missing_type_name="Table",
+        missing_qualified_name=f"{SCHEMA_QN}/T_MISSING_{i}",
+        reference_count=1,
+        file="entities.json",
+        line=i,
+        type_name="Column",
+        qualified_name=f"{SCHEMA_QN}/T_MISSING_{i}/C1",
+        relationship="table",
+    )
+
+
+def test_matrix_is_bounded_to_max_rows_per_axis() -> None:
+    """The matrix caps at ``_VALIDATION_MATRIX_MAX_ROWS`` rows *per axis*, so a
+    pathological batch cannot produce an unbounded LogAttributes value. The report
+    still carries the true totals — only the drill-down sample is bounded."""
+    from application_sdk.validation.assets import AssetValidationReport
+
+    cap = base_module._VALIDATION_MATRIX_MAX_ROWS
+    n = cap + 5
+    report = AssetValidationReport(
+        total=2 * n,
+        passed=0,
+        failures=[_failure(i) for i in range(n)],
+        orphans=[_orphan(i) for i in range(n)],
+    )
+
+    matrix = json.loads(base_module._validation_matrix_json(report))
+    invalid_rows = [r for r in matrix if r["kind"] == "invalid"]
+    orphan_rows = [r for r in matrix if r["kind"] == "orphan"]
+    assert len(invalid_rows) == cap
+    assert len(orphan_rows) == cap
+    assert len(matrix) == 2 * cap
+    # Scalar totals are unbounded (full batch), only the matrix is sampled.
+    assert report.failed == n
+    assert len(report.orphans) == n
+
+
+def test_asset_validation_outcome_keys_in_allowlist() -> None:
+    """The PR's core promise — the structured outcome attributes reach OTLP /
+    ClickHouse — holds only while these keys stay allowlisted. Pin the six new
+    validation-outcome keys the emitter relies on (mirrors the storage-op and
+    file_ref allowlist guards in tests/unit/observability/test_logger_adaptor.py)."""
+    from application_sdk.observability.logger_adaptor import _KNOWN_EXTRA_KEYS
+
+    required = {
+        ASSET_VALIDATION_MATRIX_KEY,
+        "assets_total",
+        "assets_passed",
+        "assets_invalid",
+        "assets_orphaned",
+        "assets_undeserializable",
+    }
+    missing = required - _KNOWN_EXTRA_KEYS
+    assert not missing, f"_KNOWN_EXTRA_KEYS missing validation keys: {missing}"
