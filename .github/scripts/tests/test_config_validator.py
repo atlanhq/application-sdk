@@ -749,7 +749,7 @@ class TestInvalidScalarType:
         # Chart schema types resources.limits.cpu as integer|string, so an int
         # here must NOT be flagged — mirroring the chart avoids false positives.
         validate_config(
-            'resources:\n'
+            "resources:\n"
             '  requests: {cpu: "1", memory: 1Gi}\n'
             "  limits:   {cpu: 2,   memory: 2Gi}\n"
         )
