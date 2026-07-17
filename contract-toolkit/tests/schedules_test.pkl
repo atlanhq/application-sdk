@@ -53,6 +53,28 @@ local appWithSchedules = (App) {
       status = "PAUSED"
     }
   }
+
+  events {
+    new App.EventTriggerSpec {
+      name = "cdc-user-entity"
+      source = new App.EventSource {
+        name = "atlan-kafka"
+        topic = "app.cdc.user_entity"
+      }
+      triggerConfig = new App.EventTriggerConfig {
+        maxRetries = 5
+        ackPaths { "$.extract.outputs.ack_path" }
+      }
+    }
+    new App.EventTriggerSpec {
+      name = "cdc-group-disabled"
+      source = new App.EventSource {
+        name = "atlan-kafka"
+        topic = "app.cdc.group"
+      }
+      status = "PAUSED"
+    }
+  }
 }
 
 local appNoSchedules = (App) {
@@ -88,6 +110,19 @@ local nativeWithSchedules = (NativeApp) {
     new NativeApp.ScheduleSpec {
       name = "policy-eval-daily"
       cronExpression = "0 0 * * *"
+    }
+  }
+
+  events {
+    new NativeApp.EventTriggerSpec {
+      name = "cdc-user-entity"
+      source = new NativeApp.EventSource {
+        name = "atlan-kafka"
+        topic = "native.cdc.user_entity"
+      }
+      triggerConfig = new NativeApp.EventTriggerConfig {
+        ackPaths { "$.sync.outputs.ack_path" }
+      }
     }
   }
 }
@@ -127,7 +162,27 @@ facts {
     appManifest["triggers"]["schedules"][1]["status"] == "PAUSED"
   }
 
-  ["App omits triggers when no schedules are declared"] {
+  ["App renders triggers.events from declared events (AE EventTrigger shape)"] {
+    appManifest["triggers"]["events"].length == 2
+    appManifest["triggers"]["events"][0]["name"] == "cdc-user-entity"
+    appManifest["triggers"]["events"][0]["source"]["name"] == "atlan-kafka"
+    appManifest["triggers"]["events"][0]["source"]["topic"] == "app.cdc.user_entity"
+    appManifest["triggers"]["events"][0]["trigger_config"]["max_retries"] == 5
+    appManifest["triggers"]["events"][0]["trigger_config"]["ack_paths"][0] == "$.extract.outputs.ack_path"
+  }
+
+  ["App event defaults are ACTIVE, maxRetries 3, no ack_paths"] {
+    appManifest["triggers"]["events"][1]["status"] == "PAUSED"
+    appManifest["triggers"]["events"][1]["trigger_config"]["max_retries"] == 3
+    appManifest["triggers"]["events"][1]["trigger_config"]["ack_paths"].length == 0
+  }
+
+  ["App carries schedules and events in one triggers block"] {
+    appManifest["triggers"].containsKey("schedules")
+    appManifest["triggers"].containsKey("events")
+  }
+
+  ["App omits triggers when neither schedules nor events are declared"] {
     !appNoSchedManifest.containsKey("triggers")
   }
 
@@ -143,7 +198,15 @@ facts {
     nativeManifest["triggers"]["schedules"][0]["status"] == "ACTIVE"
   }
 
-  ["NativeApp omits triggers when no schedules are declared"] {
+  ["NativeApp renders triggers.events from declared events"] {
+    nativeManifest["triggers"]["events"].length == 1
+    nativeManifest["triggers"]["events"][0]["name"] == "cdc-user-entity"
+    nativeManifest["triggers"]["events"][0]["source"]["topic"] == "native.cdc.user_entity"
+    nativeManifest["triggers"]["events"][0]["trigger_config"]["ack_paths"][0] == "$.sync.outputs.ack_path"
+    nativeManifest["triggers"]["events"][0]["status"] == "ACTIVE"
+  }
+
+  ["NativeApp omits triggers when neither schedules nor events are declared"] {
     !nativeNoSchedManifest.containsKey("triggers")
   }
 }
