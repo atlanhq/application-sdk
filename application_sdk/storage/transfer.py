@@ -46,6 +46,18 @@ from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
+# Sidecar suffix / predicate are owned by ``storage.batch`` — the single source
+# of truth for what counts as a sidecar vs. a data key (see
+# ``batch.SIDECAR_SUFFIX`` / ``list_data_keys``). Imported at top level, unlike
+# the other storage-sibling imports in this module which are lazy: ``storage/
+# __init__`` imports ``batch`` before any code can import ``transfer``, so
+# ``batch`` is always initialised here — no circular risk. ``_is_sidecar`` is
+# re-exported for external importers of ``transfer._is_sidecar``.
+from application_sdk.storage.batch import SIDECAR_SUFFIX as _SHA256_SUFFIX
+from application_sdk.storage.batch import (  # noqa: F401 — re-export for back-compat
+    is_sidecar_key as _is_sidecar,
+)
+
 _logger = get_logger(__name__)
 
 if TYPE_CHECKING:
@@ -56,14 +68,8 @@ if TYPE_CHECKING:
     from application_sdk.contracts.storage import DownloadOutput, UploadOutput
 
 
-_SHA256_SUFFIX = ".sha256"
-
-
-def _is_sidecar(key: str) -> bool:
-    return key.endswith(_SHA256_SUFFIX)
-
-
 def _sidecar_key(key: str) -> str:
+    """Object-store key of the SHA-256 sidecar written alongside *key*."""
     return key + _SHA256_SUFFIX
 
 
@@ -409,7 +415,7 @@ async def _list_source_data_keys(
     """
     from pathlib import PurePosixPath  # noqa: PLC0415 — stdlib; lazy use only
 
-    from application_sdk.storage.batch import list_keys  # noqa: PLC0415
+    from application_sdk.storage.batch import list_data_keys  # noqa: PLC0415
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         normalize_key,
     )
@@ -422,11 +428,7 @@ async def _list_source_data_keys(
 
         raise UnsafeUploadPathError(unsafe_path=source_storage_path)
     source_dir_prefix = source_norm.rstrip("/") + "/"
-    keys = [
-        k
-        for k in await list_keys(source_dir_prefix, source_store, normalize=False)
-        if not _is_sidecar(k)
-    ]
+    keys = await list_data_keys(source_dir_prefix, source_store, normalize=False)
     return source_dir_prefix, keys
 
 
@@ -800,8 +802,8 @@ async def download(
         DownloadOutput,
     )
     from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        list_data_keys_with_meta,
         list_keys,
-        list_keys_with_meta,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _resolve_store,
@@ -874,10 +876,8 @@ async def download(
         # ── Directory / prefix ─────────────────────────────────────────────
         prefix = norm_path.rstrip("/") + "/"
         # Listing carries per-object sizes, so large files chunk without a
-        # per-file HEAD (BLDX-1513).
-        all_items = await list_keys_with_meta(prefix, resolved, normalize=False)
-        # Exclude SHA-256 sidecars from the listing.
-        data_items = [(k, s, e) for k, s, e in all_items if not _is_sidecar(k)]
+        # per-file HEAD (BLDX-1513). SHA-256 sidecars are excluded by the helper.
+        data_items = await list_data_keys_with_meta(prefix, resolved, normalize=False)
 
         if local_path is not None:
             dest_dir = Path(local_path)
