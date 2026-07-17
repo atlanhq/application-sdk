@@ -2,15 +2,21 @@
 
 Exercises the module-level ``_warn_on_invalid_transformed_assets`` helper
 directly — it is pure with respect to the object store, so no App context or
-Temporal runtime is needed. The helper is async (it offloads the blocking scan
-to a worker thread via ``run_in_thread``), so tests await it.
+Temporal runtime is needed. The helper is async (it offloads the scan to an
+isolated child process via ``run_in_process``, CNCT-85), so tests await it.
+
+The scan function is pickled by reference into a spawn child, so test doubles
+for it must be module-level functions in this file — mocks and closures cannot
+cross the process boundary.
 """
 
 from __future__ import annotations
 
+import ctypes
 import importlib.util
+import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from pyatlan_v9.model.assets import Column, Database, Schema, Table
@@ -32,6 +38,18 @@ def _write_transformed(base: Path, entity: str, assets: list) -> None:
         for asset in assets:
             handle.write(asset.to_nested_bytes())
             handle.write(b"\n")
+
+
+def _raise_runtime_error(path, **kwargs):
+    raise RuntimeError("boom")
+
+
+def _segfault(path, **kwargs):
+    ctypes.string_at(0)  # guaranteed SIGSEGV: read from address 0
+
+
+def _hang(path, **kwargs):
+    time.sleep(3600)
 
 
 def _invalid_table() -> Table:
@@ -137,11 +155,42 @@ class TestWarnOnInvalidTransformedAssets:
 
     async def test_unexpected_error_is_swallowed(self, tmp_path: Path) -> None:
         _valid_hierarchy(tmp_path)
-        boom = MagicMock(side_effect=RuntimeError("boom"))
         with patch.object(base_module, "_task_logger") as logger:
-            with patch("application_sdk.validation.validate_transformed_dir", boom):
-                # Must not propagate the RuntimeError.
+            with patch(
+                "application_sdk.validation.validate_transformed_dir",
+                _raise_runtime_error,
+            ):
+                # Must not propagate the RuntimeError (raised in the child,
+                # re-raised here from the future).
                 await _warn_on_invalid_transformed_assets(str(tmp_path))
             # Swallowed with a warning + traceback, upload continues.
             logger.warning.assert_called_once()
             assert logger.warning.call_args.kwargs.get("exc_info") is True
+
+    async def test_native_crash_warns_and_continues(self, tmp_path: Path) -> None:
+        # CNCT-85: a segfault in the decode path (e.g. a native msgspec bug) is
+        # not a Python exception — it must kill only the validation child, never
+        # the worker. The hook logs and the handoff proceeds.
+        _valid_hierarchy(tmp_path)
+        with patch.object(base_module, "_task_logger") as logger:
+            with patch(
+                "application_sdk.validation.validate_transformed_dir", _segfault
+            ):
+                await _warn_on_invalid_transformed_assets(str(tmp_path))
+            logger.warning.assert_called_once()
+            assert "subprocess died" in logger.warning.call_args.args[0]
+
+    async def test_hung_validation_times_out_and_continues(
+        self, tmp_path: Path
+    ) -> None:
+        # Warn-only validation must not be able to stall a handoff: a hung scan
+        # is killed at the timeout and the upload proceeds.
+        _valid_hierarchy(tmp_path)
+        with patch.object(base_module, "_task_logger") as logger:
+            with (
+                patch("application_sdk.validation.validate_transformed_dir", _hang),
+                patch("application_sdk.constants.VALIDATE_ASSETS_TIMEOUT_SECONDS", 1.0),
+            ):
+                await _warn_on_invalid_transformed_assets(str(tmp_path))
+            logger.warning.assert_called_once()
+            assert "timed out" in logger.warning.call_args.args[0]

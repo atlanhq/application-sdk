@@ -450,6 +450,13 @@ if DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED:
 VALIDATE_ASSETS_ON_UPLOAD: bool = (
     os.getenv("ATLAN_VALIDATE_ASSETS_ON_UPLOAD", "true").lower() == "true"
 )
+#: Upper bound in seconds for one upload's asset-validation scan. The scan runs
+#: in an isolated child process; past this bound the child is killed and the
+#: upload proceeds with a warning — warn-only validation must not be able to
+#: stall a handoff any more than it may crash one.
+VALIDATE_ASSETS_TIMEOUT_SECONDS: float = float(
+    os.getenv("ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS", "600")
+)
 # Dapr Client Configuration
 #: Maximum gRPC message length in bytes for Dapr client.
 #:

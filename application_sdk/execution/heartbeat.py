@@ -12,9 +12,12 @@ import asyncio
 import concurrent.futures
 import contextvars
 import functools
+import multiprocessing
 import os
+import threading
 import time
 from collections.abc import Callable
+from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Protocol, TypeVar
 
 from application_sdk.observability import (
@@ -297,3 +300,110 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
         _BLOCKING_EXECUTOR,
         functools.partial(ctx.run, functools.partial(func, *args, **kwargs)),
     )
+
+
+# Executor for work that must not be able to take the worker down with it.
+#
+# Why a process, not a thread?
+#   A native fault (SIGSEGV in a C extension) is not a Python exception: it
+#   bypasses every try/except and kills the whole process. In a thread that
+#   means the Temporal worker dies mid-poll. In a child process the kernel
+#   kills only the child, and the parent observes an ordinary, catchable
+#   BrokenProcessPool.
+#
+# Why spawn, not fork?
+#   fork() in a multi-threaded process (a Temporal worker always is) copies a
+#   single thread but every lock, in whatever state the other threads left
+#   them — a deadlock/corruption factory. spawn starts a clean interpreter.
+#
+# Lazy, single-worker, discarded on crash or timeout and re-created on the
+# next call. Created only when run_in_process is first used, so processes
+# that never need isolation never pay for the child.
+_PROCESS_EXECUTOR: concurrent.futures.ProcessPoolExecutor | None = None
+_PROCESS_EXECUTOR_LOCK = threading.Lock()
+
+
+def _get_process_executor() -> concurrent.futures.ProcessPoolExecutor:
+    global _PROCESS_EXECUTOR
+    with _PROCESS_EXECUTOR_LOCK:
+        if _PROCESS_EXECUTOR is None:
+            _PROCESS_EXECUTOR = concurrent.futures.ProcessPoolExecutor(
+                max_workers=1,
+                mp_context=multiprocessing.get_context("spawn"),
+            )
+        return _PROCESS_EXECUTOR
+
+
+def _discard_process_executor() -> None:
+    """Drop the pool (and kill its child) so the next call starts fresh."""
+    global _PROCESS_EXECUTOR
+    with _PROCESS_EXECUTOR_LOCK:
+        executor, _PROCESS_EXECUTOR = _PROCESS_EXECUTOR, None
+    if executor is None:
+        return
+    # Kill the children BEFORE shutdown(): a dead child is the pool's
+    # well-trodden unwind path — the manager thread sees it, marks the pool
+    # broken, and every internal thread exits. The reverse order (shutdown,
+    # then kill) strands a manager/feeder thread on a lock and hangs
+    # interpreter exit. shutdown() never kills a *running* child (e.g. one
+    # hung past a timeout) and ProcessPoolExecutor exposes no supported kill,
+    # so reach for the internal process table (None once the pool is broken);
+    # on a future CPython that renames it, the child leaks until it finishes —
+    # degraded, not fatal.
+    for process in list((getattr(executor, "_processes", None) or {}).values()):
+        process.kill()
+    executor.shutdown(wait=False, cancel_futures=True)
+
+
+async def run_in_process(
+    func: Callable[..., T], *args: Any, timeout: float | None = None, **kwargs: Any
+) -> T:
+    """Run ``func`` in an isolated child process (native-crash containment).
+
+    Unlike :func:`run_in_thread`, this survives faults that are not Python
+    exceptions: if ``func`` segfaults a C extension, only the child dies and
+    the caller gets a catchable :class:`BrokenProcessPool`. Use it for work
+    whose failure must never take the worker process down (e.g. the warn-only
+    upload validation scan, which decodes third-party native code).
+
+    Constraints that :func:`run_in_thread` does not have:
+
+    - ``func``, ``args``, ``kwargs`` and the return value must be picklable;
+      ``func`` must be a module-level function (pickled by reference).
+    - ContextVars do **not** propagate — the child is a fresh interpreter.
+      Have the child return data and log from the parent.
+    - The child imports ``func``'s module on first use (one-time cost,
+      amortized by the pooled worker).
+
+    Args:
+        func: Module-level function to run in the child.
+        timeout: Seconds to wait before killing the child and raising
+            ``TimeoutError``. ``None`` waits forever.
+
+    Raises:
+        BrokenProcessPool: The child died abnormally (native crash). The pool
+            is discarded; the next call gets a fresh child.
+        TimeoutError: ``timeout`` elapsed. The child is killed and the pool
+            discarded.
+    """
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(
+        _get_process_executor(), functools.partial(func, *args, **kwargs)
+    )
+    if timeout is not None:
+        # Not asyncio.wait_for: on timeout it cancels the future and then waits
+        # for the cancellation to land — but a running executor call cannot be
+        # cancelled, so wait_for would hang exactly when the child hangs.
+        # asyncio.wait just stops waiting; we then kill the child ourselves.
+        done, _ = await asyncio.wait({future}, timeout=timeout)
+        if not done:
+            _discard_process_executor()
+            # The kill resolves the abandoned future with BrokenProcessPool;
+            # consume it so asyncio never logs "exception was never retrieved".
+            future.add_done_callback(lambda f: None if f.cancelled() else f.exception())
+            raise TimeoutError(f"run_in_process timed out after {timeout}s")
+    try:
+        return await future
+    except BrokenProcessPool:
+        _discard_process_executor()
+        raise

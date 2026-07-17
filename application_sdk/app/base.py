@@ -11,19 +11,11 @@ import threading
 import warnings
 from abc import ABC
 from collections.abc import Callable
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    ClassVar,
-    Literal,
-    Never,
-    TypeVar,
-    cast,
-    get_type_hints,
-)
+from typing import Any, ClassVar, Literal, Never, TypeVar, cast, get_type_hints
 from uuid import UUID
 
 import obstore as obs
@@ -76,9 +68,6 @@ from application_sdk.errors.leaves import InvalidInputError as _InvalidInputErro
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
 
-if TYPE_CHECKING:
-    from application_sdk.validation import AssetValidationReport
-
 _task_logger = get_logger(__name__)
 
 try:
@@ -87,47 +76,25 @@ except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] pac
     _FRAMEWORK_VERSION = "unknown"
 
 
-def _validate_transformed_assets_blocking(
-    local_path: str,
-) -> "AssetValidationReport | None":
-    """Blocking transformed-asset validation — runs off the event loop in a thread.
+def _resolve_transformed_target(local_path: str) -> "Path | None":
+    """Locate the ``transformed/`` asset subtree under ``local_path``, if any.
 
-    Returns the report, or ``None`` when there is nothing to validate (flag off, or
-    ``local_path`` is not a ``transformed/`` asset subtree — e.g. a raw upload).
-    All the work here (filesystem walk, msgspec decode, RocksDB spill) is
-    synchronous and CPU/IO-bound, which is why the async wrapper offloads it.
+    Returns the path to validate, or ``None`` when there is nothing to validate
+    (``local_path`` is not a ``transformed/`` asset subtree — e.g. a raw upload).
     """
-    from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
-        VALIDATE_ASSETS_ON_UPLOAD,
-    )
-
-    if not VALIDATE_ASSETS_ON_UPLOAD or not local_path:
+    if not local_path:
         return None
-
-    from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
-        validate_transformed_dir,
-    )
-
     root = Path(local_path)
     if root.is_dir():
         transformed = root / "transformed"
         if transformed.is_dir():
-            target = transformed
-        elif "transformed" in root.parts:
-            target = root
-        else:
-            return None
-    elif "transformed" in root.parts:
-        target = root
-    else:
+            return transformed
+        if "transformed" in root.parts:
+            return root
         return None
-
-    # Referential (orphan) integrity runs by default on the upload hook: extracts
-    # and transforms are full by design by default, so every referenced parent is
-    # present in the same batch and the orphan pass is accurate. It is warn-only
-    # (never blocks, never raises), so even on an atypical partial batch the worst
-    # case is a spurious warning, not a failed handoff.
-    return validate_transformed_dir(target)
+    if "transformed" in root.parts:
+        return root
+    return None
 
 
 async def _warn_on_invalid_transformed_assets(local_path: str) -> None:
@@ -142,29 +109,61 @@ async def _warn_on_invalid_transformed_assets(local_path: str) -> None:
     the scaffold must not break a real handoff — and it scans every record (no
     sampling) so the summary is accurate.
 
-    The scan is offloaded via :func:`application_sdk.execution.heartbeat.run_in_thread`
-    (the SDK's blocking-work escape hatch, ADR-0010) so it never blocks the event
-    loop or the activity's auto-heartbeat while a large batch is validated.
-    ``run_in_thread`` dispatches onto a dedicated ``sdk-blocking-*`` pool rather
-    than the shared default executor that Temporal's activity scheduling also
-    uses; sharing that pool risks a catastrophic worker deadlock (enforced by
-    conformance rule P031).
+    The scan runs in an isolated child process via
+    :func:`application_sdk.execution.heartbeat.run_in_process`, for two reasons.
+    It keeps the event loop and the activity's auto-heartbeat free while a large
+    batch is validated (ADR-0010). More importantly, it makes the never-raises
+    contract hold even against *native* faults: the decode exercises third-party
+    C extensions (msgspec via pyatlan_v9), and a segfault there is not a Python
+    exception — in-process it would kill the whole Temporal worker (as one did,
+    CNCT-85). In the child it kills only the child; the parent logs the warning
+    and the handoff proceeds. The timeout bounds the scan for the same reason —
+    a hung validation must not stall an upload forever.
+
+    Referential (orphan) integrity runs by default on this hook: extracts and
+    transforms are full by design by default, so every referenced parent is
+    present in the same batch and the orphan pass is accurate. Even on an
+    atypical partial batch the worst case is a spurious warning.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
         VALIDATE_ASSETS_ON_UPLOAD,
+        VALIDATE_ASSETS_TIMEOUT_SECONDS,
     )
 
-    # Read the flag before the thread hop so a disabled feature costs nothing —
-    # no thread-pool dispatch on every upload. The blocking scan re-checks it too.
+    # Cheap checks stay in-parent so a disabled feature or a raw upload never
+    # pays for a child-process dispatch.
     if not VALIDATE_ASSETS_ON_UPLOAD:
+        return
+    target = _resolve_transformed_target(local_path)
+    if target is None:
         return
 
     from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — deferred: app.base is imported by execution (circular)
-        run_in_thread,
+        run_in_process,
+    )
+    from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
+        validate_transformed_dir,
     )
 
     try:
-        report = await run_in_thread(_validate_transformed_assets_blocking, local_path)
+        report = await run_in_process(
+            validate_transformed_dir,
+            str(target),
+            timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
+        )
+    except BrokenProcessPool:
+        _task_logger.warning(
+            "Transformed-asset validation subprocess died (likely a native fault "
+            "in a decode dependency); upload continues unvalidated"
+        )
+        return
+    except TimeoutError:
+        _task_logger.warning(
+            "Transformed-asset validation timed out after %ss; upload continues "
+            "unvalidated",
+            VALIDATE_ASSETS_TIMEOUT_SECONDS,
+        )
+        return
     except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
         _task_logger.warning(
             "Transformed-asset validation skipped due to an unexpected error",
