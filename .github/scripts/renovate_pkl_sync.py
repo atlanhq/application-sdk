@@ -12,8 +12,11 @@ Two responsibilities:
      (``app/generated/**`` + ``atlan.yaml`` / ``app.yaml``) via ``pkl eval`` so
      a toolkit bump that changes generated output lands as a self-contained PR.
 
-Then it stages and commits whatever changed; the caller workflow runs
-``git push``.
+Then, unless ``--no-commit`` is passed, it stages and commits whatever changed;
+the caller workflow runs ``git push``. With ``--no-commit`` it generates only and
+leaves staging/commit to the caller — used by Renovate's ``postUpgradeTasks``,
+which commits the ``fileFilters`` matches into the upgrade branch itself. A repo
+with no ``contract/PklProject`` is a safe no-op (nothing to resolve).
 
 Why this is a script and not inlined YAML: it carries all the conditional
 logic (opt-in gate, missing-contract skip, eval-failure fallback,
@@ -251,11 +254,37 @@ def main(argv: list[str] | None = None) -> int:
         help="'true' (default) to also regenerate app/generated/** via pkl "
         "eval; 'false' to re-resolve the lock only.",
     )
+    parser.add_argument(
+        "--no-commit",
+        action="store_true",
+        help="Generate/re-resolve artifacts but do NOT git-add or commit them. "
+        "Use when the caller commits the changed files itself — e.g. Renovate's "
+        "postUpgradeTasks, which stages whatever the `fileFilters` match into the "
+        "upgrade branch. Without this flag the driver stages and commits (the "
+        "GitHub Actions glue-workflow behaviour).",
+    )
     args = parser.parse_args(argv)
     regenerate_enabled = args.regenerate == "true"
 
+    # Safe no-op on any repo/branch without a Pkl contract. Under Renovate the
+    # postUpgradeTask is scoped to the app-contract-toolkit manager, but
+    # executionMode=branch still invokes this once per matched branch, and a
+    # contract-less repo (application-sdk itself, or an app with no contract/)
+    # has no PklProject to resolve. Bail before `pkl project resolve`, which is
+    # fatal on a missing project — a contract-less repo must never fail the task.
+    pkl_project = Path(args.contract_dir) / "PklProject"
+    if not pkl_project.exists():
+        print(f"::notice::No {pkl_project} — nothing to sync (skipped).")
+        return 0
+
     resolve(args.contract_dir)
     regenerated = regenerate(args.contract_dir) if regenerate_enabled else False
+    if args.no_commit:
+        # Renovate commits the fileFilters matches itself; the driver only
+        # generates. Leaving git untouched here also keeps the git identity /
+        # commit-message concern entirely on the caller side.
+        print("--no-commit: staging and commit left to the caller.")
+        return 0
     message = COMMIT_MESSAGE_REGEN if regenerated else COMMIT_MESSAGE_LOCK_ONLY
     stage_and_commit(message)
     return 0

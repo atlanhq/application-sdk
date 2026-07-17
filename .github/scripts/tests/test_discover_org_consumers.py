@@ -103,6 +103,23 @@ def test_main_writes_github_output(tmp_path, monkeypatch, capsys):
     assert "Discovered 1 consumer repos" in err
 
 
+def test_main_excludes_named_repos(tmp_path, monkeypatch):
+    output_file = tmp_path / "github_output"
+    output_file.write_text("")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+
+    def fake_run(args):
+        return '["atlanhq/application-sdk", "atlanhq/atlan-mysql-app"]'
+
+    rc = doc.main(
+        ["--owner", "atlanhq", "--query", "q", "--exclude", "atlanhq/application-sdk"],
+        run=fake_run,
+    )
+    assert rc == 0
+    # application-sdk (stays on Mend) is dropped; the app repo remains.
+    assert output_file.read_text() == 'repos=["atlanhq/atlan-mysql-app"]\n'
+
+
 def test_main_warns_when_no_repos_discovered(tmp_path, monkeypatch, capsys):
     output_file = tmp_path / "github_output"
     output_file.write_text("")

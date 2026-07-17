@@ -67,9 +67,23 @@ def main(argv: Optional[list] = None, run: RunFn = _run_gh) -> int:
         required=True,
         help="gh search code query, e.g. 'atlan-application-sdk filename:pyproject.toml'",
     )
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=None,
+        metavar="OWNER/REPO",
+        help="Repo (owner/repo) to drop from the discovered list; repeatable. "
+        "Used to keep a repo on a different Renovate engine — e.g. the "
+        "self-hosted fleet runner excludes atlanhq/application-sdk, which stays "
+        "on the Mend-hosted app.",
+    )
     args = parser.parse_args(argv)
 
     repos = discover_repos(args.owner, args.query, run=run)
+
+    excluded = set(args.exclude or [])
+    if excluded:
+        repos = [r for r in repos if r not in excluded]
 
     if not repos:
         print(
