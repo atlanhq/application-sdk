@@ -34,21 +34,14 @@ module.exports = {
   "github-actions": { enabled: false },
 
   // Authorize ONLY the pkl-sync driver as a post-upgrade command. (This option
-  // was renamed from `allowedPostUpgradeCommands` to `allowedCommands`.) The
-  // allowlist is matched against the raw command string in the shared preset's
-  // postUpgradeTasks (before ${SDK_SCRIPTS} expansion). Child processes the
-  // driver itself spawns (pkl, uvx ruff, git) need no entry here — the allowlist
-  // vets only the top-level commands Renovate is asked to run.
+  // was renamed from `allowedPostUpgradeCommands` to `allowedCommands`.) It is
+  // matched against the raw command string in the shared preset's
+  // postUpgradeTasks. The command is a bare PATH executable with NO ${VARS}:
+  // Renovate does not shell-expand post-upgrade commands, so any ${VAR} would be
+  // passed literally (the pilot caught exactly that). The workflow installs the
+  // driver as /usr/local/bin/renovate-pkl-sync. Child processes the driver
+  // spawns (pkl, uvx ruff, git) need no entry — only top-level commands are vetted.
   allowedCommands: [
-    '^python3 ".*/renovate_pkl_sync\\.py" --contract-dir contract --regenerate (true|false) --no-commit$',
+    "^renovate-pkl-sync --contract-dir contract --regenerate (true|false) --no-commit$",
   ],
-
-  // Resolves the ${SDK_SCRIPTS} reference in the preset's postUpgradeTasks
-  // command to the checked-out application-sdk/.github/scripts directory. The
-  // workflow exports SDK_SCRIPTS before invoking renovate; the `|| ""` keeps
-  // this a string (Renovate rejects a non-string customEnvVariables value) if
-  // the config is ever loaded without it set (e.g. renovate-config-validator).
-  customEnvVariables: {
-    SDK_SCRIPTS: process.env.SDK_SCRIPTS || "",
-  },
 };
