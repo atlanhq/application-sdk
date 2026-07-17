@@ -409,8 +409,10 @@ CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 # generated setup-form configmaps. Credential templates are emitted per
 # object-store family (`atlan-connectors-*.json`, `csa-connectors-*.json`).
 # Centralised so the form-discovery exclusion vocabulary is named in one place
-# instead of re-spelled inline (adding the next connector family prefix here
-# then covers every form-discovery site).
+# instead of re-spelled inline; `_is_form_configmap` applies it in the
+# get_configmap default-entrypoint fallback, so adding the next connector-family
+# prefix here updates that site without re-spelling the list. `list_configmaps`
+# still uses its own `manifest`-only exclusion (a separate, deliberate decision).
 _CREDENTIAL_TEMPLATE_PREFIXES = ("atlan-connectors-", "csa-connectors-")
 
 
