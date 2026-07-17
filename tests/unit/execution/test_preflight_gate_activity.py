@@ -694,7 +694,12 @@ class TestPreflightGateOutcomeEvent:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[
-                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    error=AuthError(message="x"),
+                    duration_ms=312.0,
+                )
             ],
         )
         with mock.patch(_LOGGER) as ml:
@@ -706,7 +711,16 @@ class TestPreflightGateOutcomeEvent:
         assert ev[GATE_MODE_KEY] == "soft"
         # reason still carries the primary failure's code, same as a hard block
         assert ev["reason"] == "AUTH"
-        assert json.loads(ev[CHECK_MATRIX_KEY])[0]["name"] == "auth"
+        # Pin the full row on the would_block path too, mirroring the block path,
+        # so an error_code/duration_ms field drop is caught here as well.
+        assert json.loads(ev[CHECK_MATRIX_KEY]) == [
+            {
+                "name": "auth",
+                "passed": False,
+                "error_code": "AUTH",
+                "duration_ms": 312.0,
+            }
+        ]
 
     async def test_hard_block_emits_gate_mode_hard(self) -> None:
         out = PreflightOutput(

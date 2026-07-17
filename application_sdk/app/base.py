@@ -592,8 +592,9 @@ class App(ABC):
     reported. ``"hard"`` is the opt-in that blocks the run when the handler's
     verdict is ``NOT_READY`` (the worker logs at boot). Set ``"hard"`` once the
     app's checks are trusted to gate real runs. The ``ATLAN_PREFLIGHT_GATE_MODE``
-    env var overrides this at deploy time; any value other than ``"hard"``
-    resolves to soft. See the adopt-preflight-gate skill."""
+    env var overrides this at deploy time; any set value other than ``"hard"``
+    resolves to soft. An empty or unset value is not an override — resolution
+    falls through to this declared attribute. See the adopt-preflight-gate skill."""
 
     # Marker to track if class has been registered
     _app_registered: ClassVar[bool] = False

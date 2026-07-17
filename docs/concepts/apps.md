@@ -300,8 +300,10 @@ class MyConnector(App):
 ```
 
 Ops can override the posture without an app release via `ATLAN_PREFLIGHT_GATE_MODE=hard` on the
-worker deployment. The env var wins over the attribute; any value other than the literal `hard`
-resolves to soft, so malformed config never blocks a run by accident. The worker logs an INFO line
+worker deployment. The env var wins over the attribute; any set value other than the literal `hard`
+resolves to soft, so malformed config never blocks a run by accident. An empty or unset value is
+not an override — resolution falls through to the declared `preflight_gate_mode` attribute. The
+worker logs an INFO line
 per hard app at boot. Start soft, then flip to `hard` once connector-pulse `would_block` rows show
 the checks track real workflow failures. See the `adopt-preflight-gate` skill for the full adoption
 flow.
