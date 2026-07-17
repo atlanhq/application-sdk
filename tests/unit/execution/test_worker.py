@@ -682,6 +682,47 @@ class TestAppWorker:
         assert result is mock_inner
 
 
+class TestLivenessInterceptorWiring:
+    """create_worker wires the LivenessInterceptor only when on_activity given."""
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @staticmethod
+    def _interceptor_types(on_activity) -> list[str]:
+        class _LivenessApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        captured: list = []
+
+        def capture_worker(*args, **kwargs):
+            captured.extend(kwargs.get("interceptors", []))
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client, on_activity=on_activity)
+
+        return [type(i).__name__ for i in captured]
+
+    def test_liveness_interceptor_registered_when_callback_supplied(self) -> None:
+        types = self._interceptor_types(lambda: None)
+        assert "LivenessInterceptor" in types
+
+    def test_no_liveness_interceptor_without_callback(self) -> None:
+        types = self._interceptor_types(None)
+        assert "LivenessInterceptor" not in types
+
+
 class TestShutdownDrainDelay:
     """Tests for the drain delay that prevents SIGTERM from preempting
     in-flight activity completion RPCs.

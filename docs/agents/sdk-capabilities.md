@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.22.0
-source-sha:    dc280df56bb7c41a9c0a2f4f619899a96245e654
-source-date:   2026-07-15T16:08:32+05:30
+sdk-version:   3.22.1
+source-sha:    fcb1b72edbd9346ff1484d8ccffd9338686a92ad
+source-date:   2026-07-17T02:17:42+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2700,6 +2700,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `name: str` `= Field(..., min_length=1)` — Check name (e.g., 'connectivity', 'permissions').
   - `passed: bool` `= False` — Whether the check passed.
+  - `status: PreflightStatus | None` — This check's own verdict — records blocking intent independently of the
   - `message: str` `= ''` — Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
   - `error: FailureDetails | None` — Typed failure for a failed check — set only on failed checks.
   - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.

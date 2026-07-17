@@ -64,7 +64,7 @@ jobs:
 
       - name: "Upload SARIF to Security tab"
         if: steps.download.outcome == 'success'
-        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4
         with:
           sarif_file: ${{ matrix.slug }}-upload.sarif
           ref: refs/heads/${{ github.event.workflow_run.head_branch }}
