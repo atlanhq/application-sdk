@@ -46,7 +46,7 @@ from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
-# Sidecar suffix / predicate and the sidecar-excluding lister are owned by
+# Sidecar suffix / predicate and the batch key listers are owned by
 # ``storage.batch`` — the single source of truth for what counts as a sidecar
 # vs. a data key (see ``batch.SIDECAR_SUFFIX`` / ``list_data_keys``). Imported at
 # top level, unlike the other storage-sibling imports in this module which are
@@ -58,7 +58,11 @@ from application_sdk.storage.batch import SIDECAR_SUFFIX as _SHA256_SUFFIX
 from application_sdk.storage.batch import (  # noqa: F401 — re-export for back-compat
     is_sidecar_key as _is_sidecar,
 )
-from application_sdk.storage.batch import list_data_keys
+from application_sdk.storage.batch import (
+    list_data_keys,
+    list_data_keys_with_meta,
+    list_keys,
+)
 
 _logger = get_logger(__name__)
 
@@ -807,10 +811,6 @@ async def download(
     """
     from application_sdk.contracts.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
         DownloadOutput,
-    )
-    from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        list_data_keys_with_meta,
-        list_keys,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _resolve_store,
