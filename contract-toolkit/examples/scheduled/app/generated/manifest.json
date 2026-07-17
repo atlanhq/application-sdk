@@ -42,6 +42,34 @@
         "timezone": "UTC",
         "status": "PAUSED"
       }
+    ],
+    "events": [
+      {
+        "name": "cdc-user-entity",
+        "source": {
+          "name": "atlan-kafka",
+          "topic": "example.cdc.user_entity"
+        },
+        "trigger_config": {
+          "max_retries": 3,
+          "ack_paths": [
+            "$.extract.outputs.ack_path"
+          ]
+        },
+        "status": "ACTIVE"
+      },
+      {
+        "name": "cdc-group-disabled",
+        "source": {
+          "name": "atlan-kafka",
+          "topic": "example.cdc.group"
+        },
+        "trigger_config": {
+          "max_retries": 3,
+          "ack_paths": []
+        },
+        "status": "PAUSED"
+      }
     ]
   }
 }
