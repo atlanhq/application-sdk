@@ -258,11 +258,17 @@ class TestCreateWorker:
         assert gate_names == list(dict.fromkeys(gate_names))  # no duplicate names
         assert len(gate_names) == 1
 
-    def test_hard_app_registers_gate_and_logs_boot_line(self) -> None:
+    def test_hard_app_registers_gate_and_logs_boot_line(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """An app declaring ``preflight_gate_mode = "hard"`` drives the
         ``create_worker`` glue end to end: the ``name -> app_cls`` map resolves
         ``enforce=True``, the gate activity registers under ``{app}:preflight``,
         and the boot INFO line fires so the hard posture is visible in logs."""
+        # _resolve_gate_enforcement reads env first, so a non-"hard" ambient
+        # value would resolve this app to soft and suppress the boot line —
+        # clear it to isolate the test from the environment (sibling pattern).
+        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
 
         class _HardGateApp(App):
             preflight_gate_mode = "hard"
