@@ -13,9 +13,10 @@
 module.exports = {
   platform: "github",
 
-  // The matrix passes exactly one "owner/repo" per job via RENOVATE_REPOSITORIES.
-  // Never autodiscover: it is unreliable with GitHub App installation tokens, and
-  // an explicit per-job repo keeps each run's GitHub API budget isolated.
+  // The matrix passes exactly one "owner/repo" per job as a positional CLI
+  // argument (`renovate "$TARGET_REPO"`). Never autodiscover: it is unreliable
+  // with GitHub App installation tokens, and an explicit per-job repo keeps each
+  // run's GitHub API budget isolated.
   autodiscover: false,
 
   // Disable the github-actions manager for the fleet run. GitHub requires an App
