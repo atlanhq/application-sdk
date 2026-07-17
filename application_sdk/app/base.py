@@ -153,8 +153,9 @@ async def _warn_on_invalid_transformed_assets(local_path: str) -> None:
         )
     except BrokenProcessPool:
         _task_logger.warning(
-            "Transformed-asset validation subprocess died (likely a native fault "
-            "in a decode dependency); upload continues unvalidated"
+            "Transformed-asset validation subprocess died or was discarded "
+            "(a native fault in a decode dependency, or a concurrent "
+            "validation's timeout); upload continues unvalidated"
         )
         return
     except TimeoutError:

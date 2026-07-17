@@ -12,7 +12,8 @@ cross the process boundary.
 
 from __future__ import annotations
 
-import ctypes
+import asyncio
+import faulthandler
 import importlib.util
 import time
 from pathlib import Path
@@ -45,11 +46,20 @@ def _raise_runtime_error(path, **kwargs):
 
 
 def _segfault(path, **kwargs):
-    ctypes.string_at(0)  # guaranteed SIGSEGV: read from address 0
+    # Not ctypes.string_at(0): on Windows ctypes converts the access violation
+    # to OSError instead of dying. faulthandler's test hook faults for real on
+    # every platform.
+    faulthandler._sigsegv()
 
 
 def _hang(path, **kwargs):
     time.sleep(3600)
+
+
+def _hang_if_marked(path, **kwargs):
+    if "hangme" in str(path):
+        time.sleep(3600)
+    return None
 
 
 def _invalid_table() -> Table:
@@ -179,6 +189,33 @@ class TestWarnOnInvalidTransformedAssets:
                 await _warn_on_invalid_transformed_assets(str(tmp_path))
             logger.warning.assert_called_once()
             assert "subprocess died" in logger.warning.call_args.args[0]
+
+    async def test_concurrent_upload_survives_anothers_timeout(
+        self, tmp_path: Path
+    ) -> None:
+        # Reviewer finding on the first cut of CNCT-85: with the shared
+        # single-worker pool, a second upload's validation queued behind a
+        # hung one was cancelled by the first one's timeout discard, and the
+        # CancelledError (a BaseException) escaped the warn-only guards into
+        # upload(). Both callers must complete without raising.
+        hang_dir = tmp_path / "hangme"
+        ok_dir = tmp_path / "ok"
+        for base in (hang_dir, ok_dir):
+            _valid_hierarchy(base)
+        with patch.object(base_module, "_task_logger") as logger:
+            with (
+                patch(
+                    "application_sdk.validation.validate_transformed_dir",
+                    _hang_if_marked,
+                ),
+                patch("application_sdk.constants.VALIDATE_ASSETS_TIMEOUT_SECONDS", 1.0),
+            ):
+                await asyncio.gather(
+                    _warn_on_invalid_transformed_assets(str(hang_dir)),
+                    _warn_on_invalid_transformed_assets(str(ok_dir)),
+                )
+            messages = [call.args[0] for call in logger.warning.call_args_list]
+            assert any("timed out" in message for message in messages)
 
     async def test_hung_validation_times_out_and_continues(
         self, tmp_path: Path

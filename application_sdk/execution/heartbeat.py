@@ -343,16 +343,20 @@ def _discard_process_executor() -> None:
         return
     # Kill the children BEFORE shutdown(): a dead child is the pool's
     # well-trodden unwind path — the manager thread sees it, marks the pool
-    # broken, and every internal thread exits. The reverse order (shutdown,
-    # then kill) strands a manager/feeder thread on a lock and hangs
-    # interpreter exit. shutdown() never kills a *running* child (e.g. one
-    # hung past a timeout) and ProcessPoolExecutor exposes no supported kill,
-    # so reach for the internal process table (None once the pool is broken);
-    # on a future CPython that renames it, the child leaks until it finishes —
-    # degraded, not fatal.
+    # broken, resolves every still-queued work item with BrokenProcessPool,
+    # and every internal thread exits. The reverse order (shutdown, then kill)
+    # strands a manager/feeder thread on a lock and hangs interpreter exit.
+    # No cancel_futures=True: cancelling a *foreign* caller's queued future
+    # would surface as CancelledError (a BaseException) in that innocent
+    # caller; the broken-pool resolution reaches it as a catchable
+    # BrokenProcessPool instead. shutdown() never kills a *running* child
+    # (e.g. one hung past a timeout) and ProcessPoolExecutor exposes no
+    # supported kill, so reach for the internal process table (None once the
+    # pool is broken); on a future CPython that renames it, the child leaks
+    # until it finishes — degraded, not fatal.
     for process in list((getattr(executor, "_processes", None) or {}).values()):
         process.kill()
-    executor.shutdown(wait=False, cancel_futures=True)
+    executor.shutdown(wait=False)
 
 
 async def run_in_process(
@@ -381,8 +385,10 @@ async def run_in_process(
             ``TimeoutError``. ``None`` waits forever.
 
     Raises:
-        BrokenProcessPool: The child died abnormally (native crash). The pool
-            is discarded; the next call gets a fresh child.
+        BrokenProcessPool: The child died abnormally (native crash), or a
+            concurrent caller's timeout discarded the shared pool while this
+            call was queued. The pool is discarded; the next call gets a
+            fresh child.
         TimeoutError: ``timeout`` elapsed. The child is killed and the pool
             discarded.
     """
@@ -407,3 +413,14 @@ async def run_in_process(
     except BrokenProcessPool:
         _discard_process_executor()
         raise
+    except asyncio.CancelledError:
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            raise  # real cancellation of the caller — must propagate
+        # Foreign cancellation: a concurrent caller's timeout discarded the
+        # shared pool while this call was still queued. From this caller's
+        # perspective that is exactly a broken pool — surface it as the
+        # catchable exception the contract promises, never CancelledError.
+        raise BrokenProcessPool(
+            "process pool was discarded while this call was queued"
+        ) from None
