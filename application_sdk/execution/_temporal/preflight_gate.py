@@ -440,12 +440,23 @@ async def _resolve_gate_credentials(
 def build_preflight_gate_activity(
     handler: Handler,
     app_name: str,
+    *,
+    enforce: bool = True,
 ) -> Callable[..., Awaitable[Any]]:
     """Build the injected preflight-gate activity (``{app}:preflight``).
 
     Registered unconditionally by the worker (independent of the SDR opt-out)
     because the gate is mandatory. Binds the same per-invocation handler context
     the HTTP and SDR paths use (:func:`bind_invocation_context`).
+
+    ``enforce`` is the gate's posture for this app, resolved once at worker
+    build (see ``_resolve_gate_enforcement`` in the worker). Hard (``True``,
+    the default) raises on a ``NOT_READY`` verdict and aborts the run. Soft
+    (``False``) never raises: the verdict stays honest ``NOT_READY``, the run
+    proceeds, and the dodged block is emitted as ``outcome="would_block"`` so
+    connector-pulse can rank apps whose checks would have blocked real runs.
+    The handler is never consulted about posture — verdict and enforcement are
+    deliberately separate concerns.
     """
 
     @activity.defn(name=preflight_gate_activity_name(app_name))
@@ -483,18 +494,24 @@ def build_preflight_gate_activity(
         # ``reason`` is the status on proceed, the primary FailureDetails.code on a
         # block. Activity execution is at-least-once, so a retry after a lost
         # completion can re-emit — consumers dedupe on (workflow_run_id, outcome).
+        gate_mode = "hard" if enforce else "soft"
         if result.status is PreflightStatus.NOT_READY:
             block_error = _build_block_error(result, app_name)
             logger.info(
                 PREFLIGHT_OUTCOME_EVENT,
-                outcome="blocked",
+                outcome="blocked" if enforce else "would_block",
                 reason=block_error.details[0].code,
                 app_name=app_name,
                 entrypoint=entry,
                 checks=len(result.checks),
                 check_matrix=_check_matrix_json(result.checks),
+                gate_mode=gate_mode,
             )
-            raise block_error
+            if enforce:
+                raise block_error
+            # Soft: the verdict stays honest NOT_READY; the gate just does not
+            # enforce it. The would_block row above is the loud record.
+            return result
         logger.info(
             PREFLIGHT_OUTCOME_EVENT,
             outcome="proceeded",
@@ -503,6 +520,7 @@ def build_preflight_gate_activity(
             entrypoint=entry,
             checks=len(result.checks),
             check_matrix=_check_matrix_json(result.checks),
+            gate_mode=gate_mode,
         )
         return result
 

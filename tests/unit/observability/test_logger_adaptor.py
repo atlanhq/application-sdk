@@ -1661,10 +1661,16 @@ class TestBuildExtraDict:
     def test_check_matrix_kept_for_gate_outcome_event(self):
         # The preflight gate emits the per-check matrix as a JSON string;
         # connector-pulse queries it from LogAttributes. Dropping it here
-        # would silently break the soft-fail pattern analysis (CNCT-81).
-        matrix = '[{"name":"auth","status":"not_ready","passed":false}]'
+        # would silently break the would_block pattern analysis (CNCT-81).
+        matrix = '[{"name":"auth","passed":false,"error_code":"AUTH"}]'
         out = _build_extra_dict({"check_matrix": matrix})
         assert out["check_matrix"] == matrix
+
+    def test_gate_mode_kept_for_gate_outcome_event(self):
+        # gate_mode distinguishes hard/soft apps in the same ClickHouse query;
+        # dropping it would make would_block rows unattributable to posture.
+        out = _build_extra_dict({"gate_mode": "soft"})
+        assert out["gate_mode"] == "soft"
 
     def test_atlan_dot_prefix_kept(self):
         # The LogInterceptor emits atlan.correlation_id; any future

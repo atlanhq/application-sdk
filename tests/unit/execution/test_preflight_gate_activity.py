@@ -83,8 +83,10 @@ class _VerdictHandler(DefaultHandler):
         return self._output
 
 
-def _verdict_gate(output: PreflightOutput):
-    return build_preflight_gate_activity(_VerdictHandler(output), app_name="myapp")
+def _verdict_gate(output: PreflightOutput, *, enforce: bool = True):
+    return build_preflight_gate_activity(
+        _VerdictHandler(output), app_name="myapp", enforce=enforce
+    )
 
 
 def _outcome_event(mock_logger) -> dict | None:
@@ -683,6 +685,51 @@ class TestPreflightGateOutcomeEvent:
         details = excinfo.value.details[0]
         assert details.code == "PREFLIGHT_CHECK_FAILED"
         assert details.category is FailureCategory.PRECONDITION
+
+    async def test_soft_not_ready_returns_and_emits_would_block(self) -> None:
+        # Soft gate: the verdict stays honest NOT_READY, the gate just doesn't
+        # enforce it — no raise, the run proceeds, and the dodged block is the
+        # queryable would_block row connector-pulse ranks smelly apps by.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            result = await _verdict_gate(out, enforce=False)(PreflightGateInput())
+        assert result is out
+        assert result.status is PreflightStatus.NOT_READY  # verdict untouched
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "would_block"
+        assert ev["gate_mode"] == "soft"
+        # reason still carries the primary failure's code, same as a hard block
+        assert ev["reason"] == "AUTH"
+        assert json.loads(ev["check_matrix"])[0]["name"] == "auth"
+
+    async def test_hard_block_emits_gate_mode_hard(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="auth", passed=False, message="bad creds")],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "blocked"
+        assert ev["gate_mode"] == "hard"
+
+    async def test_proceeded_carries_gate_mode(self) -> None:
+        out = PreflightOutput(status=PreflightStatus.READY, checks=[])
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        assert _outcome_event(ml)["gate_mode"] == "hard"
+
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out, enforce=False)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        # a soft app's healthy runs proceed normally, still tagged soft
+        assert ev["outcome"] == "proceeded"
+        assert ev["gate_mode"] == "soft"
 
     async def test_check_matrix_on_proceed(self) -> None:
         # The matrix is the pattern-analysis payload: small fixed fields only,

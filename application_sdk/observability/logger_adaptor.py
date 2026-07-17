@@ -103,6 +103,7 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "entrypoint",
         "checks",
         "check_matrix",
+        "gate_mode",
         # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",
         "app_name",
