@@ -589,12 +589,9 @@ class TestUploadDirectorySourceStoreReconcile:
         await _put(key, data, store, normalize=False)
 
     async def _target_keys(self, store) -> set[str]:
-        from application_sdk.storage.batch import list_keys
-        from application_sdk.storage.transfer import _is_sidecar
+        from application_sdk.storage.batch import list_data_keys
 
-        return {
-            k for k in await list_keys("", store, normalize=False) if not _is_sidecar(k)
-        }
+        return set(await list_data_keys("", store, normalize=False))
 
     async def _read(self, store, key: str) -> bytes | None:
         from application_sdk.storage.ops import _get_bytes

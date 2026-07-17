@@ -181,6 +181,11 @@ async def list_data_keys(
     deployment-store fallback, …) share one definition of "data key". See
     :func:`list_data_keys_with_meta` when per-object size/etag is also needed.
 
+    Unlike :func:`list_keys`, this does not expose a ``suffix`` filter: the sole
+    narrowing here is the sidecar exclusion. That omission is intentional — no
+    call site needs an additional suffix filter, so callers hand-filter the
+    returned list on the rare occasion they want one.
+
     Args:
         prefix: Key prefix to list under (see :func:`list_keys`).
         store: Object store, or ``None`` to resolve from infrastructure context.
@@ -207,6 +212,9 @@ async def list_data_keys_with_meta(
     Drops SHA-256 sidecars from :func:`list_keys_with_meta` so download /
     materialize paths that need per-object size + etag (to chunk large objects
     without a per-file HEAD) share the same sidecar-exclusion rule.
+
+    Like :func:`list_data_keys`, this intentionally does not expose a ``suffix``
+    filter; sidecar exclusion is the only narrowing.
 
     Returns:
         Sorted list of ``(key, size_bytes, e_tag)`` for data objects only.
