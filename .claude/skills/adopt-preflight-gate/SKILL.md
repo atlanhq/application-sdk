@@ -24,7 +24,7 @@ optional_triggers:
   - "preflight gate migration"
   - "will this app break on SDK bump"
 owner: connector-platform-team
-last_updated: "2026-07-14"
+last_updated: "2026-07-17"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
@@ -68,7 +68,44 @@ status. Read its `app/handler.py` before proposing changes.
   sentinel.
 - Behavior change to say plainly: a handler that returns `NOT_READY` today will
   start **blocking scheduled runs** on bump. That is usually the intent — but
-  it is why phase 2 below exists.
+  it is why phase 2 below exists, and why the gate has a per-app soft mode
+  (next section) for apps whose checks are not trusted yet.
+
+## Soft mode — the gate-level opt-out (CNCT-81)
+
+Enforcement is a **gate** property, not a handler property. The handler always
+returns the honest verdict; the gate decides what to do with `NOT_READY`:
+
+- **hard** (default): raise `PreflightFailed`, run aborts. Correct for every
+  app whose checks are trusted.
+- **soft**: never raise — the run proceeds and the dodged block is emitted as
+  `outcome="would_block"` (with `gate_mode="soft"` and the per-check
+  `check_matrix`) on the gate outcome event. connector-pulse ranks soft apps
+  by how often they would have blocked real runs; that list is the
+  "go fix your checks" queue.
+
+Opting out is deliberately loud and deliberately small:
+
+```python
+class MyApp(App):
+    preflight_gate_mode = "soft"   # git-blamed admission: checks not trusted yet
+```
+
+or, ops-side without an app release: `ATLAN_PREFLIGHT_GATE_MODE=soft` on the
+worker deployment (env wins over the attribute; any value other than the
+literal `soft` resolves to hard — malformed config never drops the net). The
+worker logs a WARNING per soft app at boot.
+
+Rules the skill enforces during adoption:
+
+- Never soften the handler to dodge the gate. Returning `PARTIAL` for a
+  failure that should block hides the truth from every surface; posture
+  belongs on the App class, verdicts belong in the handler.
+- Soft is a temporary state with an exit: when pulse shows the app's
+  `would_block` rows track real workflow failures (checks are right), delete
+  the `preflight_gate_mode` line — that is the whole hard-fail flip.
+- An app with no `preflight_check` handler needs no posture: the DefaultHandler
+  never returns `NOT_READY`, so the gate never has anything to enforce.
 
 ## The design principle every decision flows from
 
