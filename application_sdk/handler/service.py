@@ -1742,19 +1742,39 @@ def _register_workflow_routes(
                 )
                 ep = None
             if ep is not None:
-                # Form configmaps for an entrypoint live under
-                # CONTRACT_GENERATED_DIR/<ep.name>/ (see EntryPointMetadata
-                # docstring: kebab name on the wire and on disk). Pick the
-                # form file by excluding the two well-known non-form siblings:
-                # `manifest.json` (DAG manifest) and `atlan-connectors-*.json`
-                # (credential template). Sorted for determinism.
-                entrypoint_dir = CONTRACT_GENERATED_DIR / ep.name
-                if entrypoint_dir.is_dir():
-                    for json_file in sorted(entrypoint_dir.glob("*.json")):
+                # Locate the entrypoint's form configmap across BOTH generated
+                # layouts:
+                #   * multi-entrypoint (bundle) apps nest each entrypoint's form
+                #     under CONTRACT_GENERATED_DIR/<ep.name>/ (see
+                #     EntryPointMetadata: kebab name on the wire and on disk);
+                #   * single-entrypoint apps emit it FLAT in CONTRACT_GENERATED_DIR
+                #     itself (e.g. `openapi.json` alongside `manifest.json`).
+                # Search the nested dir first, then fall back to the flat dir, so
+                # an app-id request (e.g. "atlan-openapi", which the marketplace
+                # UI builds instead of the form stem) resolves for either shape.
+                # Previously only the nested layout was searched, so a flat
+                # single-entrypoint app 404'd on an app-id request even though its
+                # form file was present — a blank setup wizard in the UI.
+                #
+                # Pick the form file by excluding the well-known non-form
+                # siblings: `manifest.json` (DAG manifest) and the
+                # `{atlan,csa}-connectors-*.json` credential templates. Sorted
+                # for determinism.
+                for search_dir in (
+                    CONTRACT_GENERATED_DIR / ep.name,
+                    CONTRACT_GENERATED_DIR,
+                ):
+                    if not search_dir.is_dir():
+                        continue
+                    for json_file in sorted(search_dir.glob("*.json")):
                         stem = json_file.stem
-                        if stem == "manifest" or stem.startswith("atlan-connectors-"):
+                        if stem == "manifest" or stem.startswith(
+                            ("atlan-connectors-", "csa-connectors-")
+                        ):
                             continue
                         target = json_file
+                        break
+                    if target is not None:
                         break
 
         if target is not None:
