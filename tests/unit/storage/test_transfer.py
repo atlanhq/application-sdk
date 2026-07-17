@@ -825,3 +825,65 @@ class TestUploadDirectorySourceStoreReconcile:
         assert "d/transformed/table/entities.json" in all_target_keys
         # The source sidecar was not streamed as data, so no double-sidecar lands.
         assert "d/transformed/table/entities.json.sha256.sha256" not in all_target_keys
+
+    async def test_absent_local_dir_streams_complete_set_from_source(
+        self, tmp_path
+    ) -> None:
+        """Local path *entirely* absent (the upload pod ran none of the
+        transforms): every file is streamed from the source store. Guards the
+        local-absent fallback branch that the partial-dir reconcile sits beside."""
+        from application_sdk.contracts.types import FileReference
+
+        source = create_memory_store()
+        target = create_memory_store()
+        src_prefix = "pfx/transformed"
+        await self._seed(source, f"{src_prefix}/table/entities.json", b"T")
+        await self._seed(source, f"{src_prefix}/column/entities.json", b"C")
+
+        missing_local = str(tmp_path / "never-created" / "transformed")
+
+        await upload(
+            missing_local,
+            storage_path="d/transformed",
+            store=target,
+            _source_ref=FileReference(
+                local_path=missing_local, storage_path=src_prefix
+            ),
+            _source_store=source,
+        )
+
+        keys = await self._target_keys(target)
+        assert "d/transformed/table/entities.json" in keys
+        assert "d/transformed/column/entities.json" in keys
+
+
+def test_reconcile_prefix_alignment_holds_across_helpers() -> None:
+    """Regression guard for the load-bearing assumption behind the directory
+    reconcile: the source prefix the reconcile lists under
+    (``normalize_key(local_dir)``, as ``App.upload`` derives ``_source_ref``)
+    must match the keys the activity interceptor persists each transform output
+    at (``get_object_store_prefix(local_dir/<type>/entities.json)``). If these
+    two helpers ever diverge for ``TEMPORARY_PATH`` paths, the reconcile would
+    silently find nothing and the SDR hand-off would regress — while the
+    store-level tests above (self-consistent prefixes) stay green.
+    """
+    import os
+
+    from application_sdk.constants import TEMPORARY_PATH
+    from application_sdk.execution._temporal.activity_utils import (
+        get_object_store_prefix,
+    )
+    from application_sdk.storage.ops import normalize_key
+
+    base = os.path.join(
+        TEMPORARY_PATH, "artifacts/apps/x/workflows/wf-1/run-1/transformed"
+    )
+    source_dir_prefix = normalize_key(base).rstrip("/") + "/"
+    for typename in ("database", "schema", "table", "column"):
+        persisted = get_object_store_prefix(
+            os.path.join(base, typename, "entities.json")
+        )
+        assert persisted.startswith(
+            source_dir_prefix
+        ), f"{persisted!r} not under {source_dir_prefix!r}"
+        assert persisted.removeprefix(source_dir_prefix) == f"{typename}/entities.json"
