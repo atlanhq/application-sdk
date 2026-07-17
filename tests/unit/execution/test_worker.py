@@ -942,6 +942,14 @@ class TestResolveGateEnforcement:
     the safety net is never dropped by a typo.
     """
 
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
     def test_default_hard_when_nothing_declared(self, monkeypatch) -> None:
         monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
 

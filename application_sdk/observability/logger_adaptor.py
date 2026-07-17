@@ -51,6 +51,12 @@ from application_sdk.observability.utils import (
 )
 from application_sdk.version import __version__ as _SDK_VERSION
 
+# Preflight gate outcome-event keys, shared with the emitter
+# (``application_sdk.execution._temporal.preflight_gate``) so a rename is a
+# single edit that keeps the emit call-site and the allowlist below in sync.
+CHECK_MATRIX_KEY = "check_matrix"
+GATE_MODE_KEY = "gate_mode"
+
 # SDK-side allowlist that gates which kwargs reach OTLP.  When a logger is called
 # with structured kwargs (e.g. ``_log().info("Downloaded", storage_path=key)``),
 # loguru places the kwargs on ``record["extra"]`` rather than in the message
@@ -102,8 +108,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "reason",
         "entrypoint",
         "checks",
-        "check_matrix",
-        "gate_mode",
+        CHECK_MATRIX_KEY,
+        GATE_MODE_KEY,
         # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",
         "app_name",

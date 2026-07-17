@@ -42,7 +42,11 @@ with workflow.unsafe.imports_passed_through():
         PreflightStatus,
     )
     from application_sdk.infrastructure.context import get_infrastructure
-    from application_sdk.observability.logger_adaptor import get_logger
+    from application_sdk.observability.logger_adaptor import (
+        CHECK_MATRIX_KEY,
+        GATE_MODE_KEY,
+        get_logger,
+    )
 
 logger = get_logger(__name__)
 
@@ -504,8 +508,10 @@ def build_preflight_gate_activity(
                 app_name=app_name,
                 entrypoint=entry,
                 checks=len(result.checks),
-                check_matrix=_check_matrix_json(result.checks),
-                gate_mode=gate_mode,
+                **{
+                    CHECK_MATRIX_KEY: _check_matrix_json(result.checks),
+                    GATE_MODE_KEY: gate_mode,
+                },
             )
             if enforce:
                 raise block_error
@@ -519,8 +525,10 @@ def build_preflight_gate_activity(
             app_name=app_name,
             entrypoint=entry,
             checks=len(result.checks),
-            check_matrix=_check_matrix_json(result.checks),
-            gate_mode=gate_mode,
+            **{
+                CHECK_MATRIX_KEY: _check_matrix_json(result.checks),
+                GATE_MODE_KEY: gate_mode,
+            },
         )
         return result
 

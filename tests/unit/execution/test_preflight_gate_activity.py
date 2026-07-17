@@ -769,14 +769,27 @@ class TestPreflightGateOutcomeEvent:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[
-                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    error=AuthError(message="x"),
+                    duration_ms=312.0,
+                )
             ],
         )
         with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
         matrix = json.loads(_outcome_event(ml)["check_matrix"])
-        assert matrix[0]["name"] == "auth"
-        assert matrix[0]["passed"] is False
+        # Pin the full row on the block path too, so error_code/duration_ms drift
+        # is caught here as well as on the proceed path.
+        assert matrix == [
+            {
+                "name": "auth",
+                "passed": False,
+                "error_code": "AUTH",
+                "duration_ms": 312.0,
+            }
+        ]
 
     async def test_check_matrix_nonfinite_duration_coerced(self) -> None:
         # nan/inf serialize as bare NaN/Infinity tokens — invalid JSON that
