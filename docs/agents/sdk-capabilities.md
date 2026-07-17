@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.22.0
-source-sha:    dc280df56bb7c41a9c0a2f4f619899a96245e654
-source-date:   2026-07-15T16:08:32+05:30
+sdk-version:   3.23.0
+source-sha:    3d75efc0b518fa406dbcf3f52e00f097859f3bac
+source-date:   2026-07-17T09:38:05+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 29 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 31 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -2171,6 +2171,20 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Signature:** `get_file_meta(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Return ``(size_bytes, e_tag)`` for *key*, or ``None`` if not found.
 - **Defined in:** `application_sdk/storage/ops.py`
+
+#### `list_data_keys`
+
+- **Import:** `from application_sdk.storage import list_data_keys`
+- **Signature:** `list_data_keys(prefix: str = '', store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
+- **Summary:** List data object keys under *prefix*, excluding SHA-256 sidecars.
+- **Defined in:** `application_sdk/storage/batch.py`
+
+#### `list_data_keys_with_meta`
+
+- **Import:** `from application_sdk.storage import list_data_keys_with_meta`
+- **Signature:** `list_data_keys_with_meta(prefix: str = '', store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
+- **Summary:** Like :func:`list_data_keys`, but return ``(key, size_bytes, e_tag)`` tuples.
+- **Defined in:** `application_sdk/storage/batch.py`
 
 #### `list_keys`
 
