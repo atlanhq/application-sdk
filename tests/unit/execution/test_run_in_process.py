@@ -72,4 +72,4 @@ async def test_foreign_timeout_discard_never_cancels_a_queued_caller():
     )
     assert isinstance(hung, TimeoutError)
     assert not isinstance(queued, asyncio.CancelledError)
-    assert isinstance(queued, BrokenProcessPool) or queued == "echo:queued"
+    assert isinstance(queued, BrokenProcessPool)

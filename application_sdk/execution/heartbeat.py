@@ -6,6 +6,10 @@ Two modes of heartbeating are supported:
    intervals — zero developer effort.
 2. Manual (developer-controlled): developer calls heartbeat() with progress info
    for resume-on-retry support.
+
+This module is also the SDK's blocking-work seam: ``run_in_thread`` offloads
+blocking calls so they don't starve the heartbeat loop (ADR-0010), and
+``run_in_process`` isolates work whose native faults must not kill the worker.
 """
 
 import asyncio
