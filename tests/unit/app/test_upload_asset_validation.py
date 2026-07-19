@@ -215,7 +215,13 @@ class TestWarnOnInvalidTransformedAssets:
                     _warn_on_invalid_transformed_assets(str(ok_dir)),
                 )
             messages = [call.args[0] for call in logger.warning.call_args_list]
+            # First caller: its hung scan is killed at the timeout.
             assert any("timed out" in message for message in messages)
+            # Second caller: queued behind the hung one on the single-worker
+            # pool, so the timeout's pool-discard resolves it as a
+            # BrokenProcessPool — it warns and continues, never raising
+            # CancelledError into upload().
+            assert any("subprocess died" in message for message in messages)
 
     async def test_hung_validation_times_out_and_continues(
         self, tmp_path: Path

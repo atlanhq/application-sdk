@@ -11,7 +11,6 @@ import threading
 import warnings
 from abc import ABC
 from collections.abc import Callable
-from concurrent.futures.process import BrokenProcessPool
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -137,6 +136,10 @@ async def _warn_on_invalid_transformed_assets(local_path: str) -> None:
     target = _resolve_transformed_target(local_path)
     if target is None:
         return
+
+    from concurrent.futures.process import (  # noqa: PLC0415 — deferred: co-located with the run_in_process call it guards
+        BrokenProcessPool,
+    )
 
     from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — deferred: app.base is imported by execution (circular)
         run_in_process,
