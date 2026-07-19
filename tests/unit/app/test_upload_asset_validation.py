@@ -210,18 +210,25 @@ class TestWarnOnInvalidTransformedAssets:
                 ),
                 patch("application_sdk.constants.VALIDATE_ASSETS_TIMEOUT_SECONDS", 1.0),
             ):
-                await asyncio.gather(
+                results = await asyncio.gather(
                     _warn_on_invalid_transformed_assets(str(hang_dir)),
                     _warn_on_invalid_transformed_assets(str(ok_dir)),
                 )
+            # The bug was the second caller (queued behind the hung one on the
+            # single-worker pool) getting a CancelledError from the first
+            # caller's timeout discard, which escaped the warn-only guards into
+            # upload(). Assert the outcome directly: both callers return None
+            # (warn-and-continue), neither raises. gather() without
+            # return_exceptions would already propagate any raise, but naming
+            # the contract makes the "survives" property explicit.
+            assert results == [None, None]
             messages = [call.args[0] for call in logger.warning.call_args_list]
-            # First caller: its hung scan is killed at the timeout.
+            # The hung caller is always killed at its timeout; the starved
+            # second caller also warns and continues (either its own timeout or
+            # the pool discard, whichever fires first), so both warned exactly
+            # once and neither raised.
             assert any("timed out" in message for message in messages)
-            # Second caller: queued behind the hung one on the single-worker
-            # pool, so the timeout's pool-discard resolves it as a
-            # BrokenProcessPool — it warns and continues, never raising
-            # CancelledError into upload().
-            assert any("subprocess died" in message for message in messages)
+            assert len(messages) == 2
 
     async def test_hung_validation_times_out_and_continues(
         self, tmp_path: Path
