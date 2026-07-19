@@ -32,10 +32,10 @@ azure-core==1.41.0
     # via azure-identity
 azure-identity==1.25.3
     # via atlan-application-sdk
-boto3==1.43.50
+boto3==1.43.51
     # via atlan-application-sdk
-boto3-stubs==1.43.50
-botocore==1.43.50
+boto3-stubs==1.43.51
+botocore==1.43.51
     # via
     #   boto3
     #   s3transfer
@@ -92,7 +92,7 @@ fastar==0.11.0
     # via
     #   fastapi
     #   fastapi-cloud-cli
-filelock==3.30.2
+filelock==3.31.0
     # via
     #   python-discovery
     #   virtualenv
@@ -126,7 +126,7 @@ httpx-retries==0.4.6
     # via
     #   atlan-application-sdk
     #   pyatlan
-hypothesis==6.156.6
+hypothesis==6.156.9
 identify==2.6.19
     # via pre-commit
 idna==3.18
@@ -247,7 +247,7 @@ packaging==26.2
     #   pytest-rerunfailures
 pastel==0.2.1
     # via poethepoet
-platformdirs==4.10.0
+platformdirs==4.10.1
     # via
     #   python-discovery
     #   virtualenv
@@ -349,7 +349,7 @@ rich-toolkit==0.20.3
     # via
     #   fastapi-cli
     #   fastapi-cloud-cli
-rignore==0.7.6
+rignore==0.8.0
     # via fastapi-cloud-cli
 rpds-py==2026.6.3
     # via
@@ -432,7 +432,7 @@ virtualenv==21.6.1
     # via pre-commit
 watchfiles==1.2.0
     # via uvicorn
-websockets==16.1
+websockets==16.1.1
     # via uvicorn
 win32-setctime==1.2.0 ; sys_platform == 'win32'
     # via loguru
