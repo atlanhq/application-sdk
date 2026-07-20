@@ -1134,7 +1134,8 @@ class App(ABC):
 
         # BLDX-1555 defense-in-depth: validate transformed assets against the
         # pyatlan_v9 backbone before the handoff. Warn-only, best-effort, and
-        # offloaded to a worker thread so it never blocks the event loop.
+        # run in an isolated child process (CNCT-85) so a native decode fault
+        # kills only the child and never blocks or crashes the event loop.
         await _warn_on_invalid_transformed_assets(input.local_path, self._app_name)
 
         deployment = self.context.storage

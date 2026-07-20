@@ -480,9 +480,15 @@ async def run_best_effort(
             "%s subprocess died or was discarded (a native fault in a "
             "dependency, or a concurrent call's timeout); continuing without it",
             label,
+            exc_info=True,
         )
     except TimeoutError:
-        logger.warning("%s timed out after %ss; continuing without it", label, timeout)
+        logger.warning(
+            "%s timed out after %ss; continuing without it",
+            label,
+            timeout,
+            exc_info=True,
+        )
     except Exception:  # noqa: BLE001 — best-effort work must never break the caller
         logger.warning("%s skipped due to an unexpected error", label, exc_info=True)
     return None
