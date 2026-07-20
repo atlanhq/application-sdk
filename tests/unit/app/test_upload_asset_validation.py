@@ -243,7 +243,7 @@ class TestWarnOnInvalidTransformedAssets:
             logger.info.assert_not_called()
 
 
-def _failure(i: int):
+def _failure(i: int, *, deserialize_error: bool = False, error: str | None = None):
     from application_sdk.validation.assets import AssetValidationFailure
 
     return AssetValidationFailure(
@@ -251,7 +251,8 @@ def _failure(i: int):
         line=i,
         type_name="Table",
         qualified_name=f"{TABLE_QN}_{i}",
-        errors=[f"bad {i}"],
+        errors=[error if error is not None else f"bad {i}"],
+        deserialize_error=deserialize_error,
     )
 
 
@@ -294,6 +295,44 @@ def test_matrix_is_bounded_to_max_rows_per_axis() -> None:
     # Scalar totals are unbounded (full batch), only the matrix is sampled.
     assert report.failed == n
     assert len(report.orphans) == n
+
+
+def test_matrix_marks_undeserializable_rows() -> None:
+    """A failure carrying ``deserialize_error=True`` must surface in the matrix as
+    ``kind="undeserializable"`` (the branch the emitter splits on), never
+    ``"invalid"`` — so a dashboard can tell decode failures from per-asset
+    ``.validate()`` failures. The scalar tests only assert the ``0`` count, so
+    without this the matrix branch is unexercised."""
+    from application_sdk.validation.assets import AssetValidationReport
+
+    report = AssetValidationReport(
+        total=1,
+        passed=0,
+        failures=[_failure(0, deserialize_error=True)],
+        orphans=[],
+    )
+
+    matrix = json.loads(base_module._validation_matrix_json(report))
+    assert [r["kind"] for r in matrix] == ["undeserializable"]
+
+
+def test_matrix_truncates_long_error_to_maxlen() -> None:
+    """Per-row error text is clipped to ``_VALIDATION_MATRIX_ERROR_MAXLEN`` so a
+    single pathological ``.validate()`` message cannot bloat the ClickHouse
+    attribute. Pin the length so a future refactor of the slice can't silently
+    drop the guard."""
+    from application_sdk.validation.assets import AssetValidationReport
+
+    maxlen = base_module._VALIDATION_MATRIX_ERROR_MAXLEN
+    report = AssetValidationReport(
+        total=1,
+        passed=0,
+        failures=[_failure(0, error="x" * (maxlen + 50))],
+        orphans=[],
+    )
+
+    matrix = json.loads(base_module._validation_matrix_json(report))
+    assert len(matrix[0]["error"]) == maxlen
 
 
 def test_asset_validation_outcome_keys_in_allowlist() -> None:
