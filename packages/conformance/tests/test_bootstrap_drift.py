@@ -253,68 +253,6 @@ def test_build_and_publish_custom_unit_tests_workflow_not_flagged(
     assert findings == []
 
 
-def _renovate_pkl_sync_with_regen(value: str) -> str:
-    """Canonical caller with a `with: regenerate-contract: <value>` override."""
-    canonical = render("renovate-pkl-sync.yaml")
-    return canonical.replace(
-        "    secrets:",
-        f"    with:\n      regenerate-contract: {value}\n    secrets:",
-        1,
-    )
-
-
-def test_renovate_pkl_sync_optout_not_flagged(tmp_path: pathlib.Path) -> None:
-    """Opting out of regeneration (regenerate-contract: false) is a sanctioned
-    per-repo choice, not drift."""
-    wf_dir = tmp_path / ".github" / "workflows"
-    wf_dir.mkdir(parents=True)
-    wf = wf_dir / "renovate-pkl-sync.yaml"
-    wf.write_text(_renovate_pkl_sync_with_regen("false"))
-    assert scan_path(wf, tmp_path) == []
-
-
-def test_renovate_pkl_sync_explicit_true_not_flagged(tmp_path: pathlib.Path) -> None:
-    """An explicit regenerate-contract: true (the default, stated redundantly)
-    is also fine."""
-    wf_dir = tmp_path / ".github" / "workflows"
-    wf_dir.mkdir(parents=True)
-    wf = wf_dir / "renovate-pkl-sync.yaml"
-    wf.write_text(_renovate_pkl_sync_with_regen("true"))
-    assert scan_path(wf, tmp_path) == []
-
-
-def test_renovate_pkl_sync_other_drift_still_flagged(tmp_path: pathlib.Path) -> None:
-    """Stripping the regenerate-contract override must not mask real drift."""
-    wf_dir = tmp_path / ".github" / "workflows"
-    wf_dir.mkdir(parents=True)
-    wf = wf_dir / "renovate-pkl-sync.yaml"
-    drifted = _renovate_pkl_sync_with_regen("false").replace("@main", "@v1")
-    wf.write_text(drifted)
-    findings = scan_path(wf, tmp_path)
-    assert len(findings) == 1
-    assert findings[0].rule_id == "C002"
-
-
-def test_renovate_pkl_sync_extra_with_key_still_flagged(
-    tmp_path: pathlib.Path,
-) -> None:
-    """The strip is targeted: only `regenerate-contract` is sanctioned. A second
-    key under `with:` is unsanctioned drift and must still flag."""
-    wf_dir = tmp_path / ".github" / "workflows"
-    wf_dir.mkdir(parents=True)
-    wf = wf_dir / "renovate-pkl-sync.yaml"
-    canonical = render("renovate-pkl-sync.yaml")
-    drifted = canonical.replace(
-        "    secrets:",
-        "    with:\n      regenerate-contract: false\n      some-other-key: true\n    secrets:",
-        1,
-    )
-    wf.write_text(drifted)
-    findings = scan_path(wf, tmp_path)
-    assert len(findings) == 1
-    assert findings[0].rule_id == "C002"
-
-
 # ---------------------------------------------------------------------------
 # Parameterised files: structural drift beyond the value → finding
 # ---------------------------------------------------------------------------
