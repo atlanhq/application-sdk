@@ -307,8 +307,11 @@ class AuthOutput(BaseModel):
 class PreflightStatus(SerializableEnum):
     """Overall preflight verdict — decides the gate.
 
-    ``NOT_READY`` blocks the run; ``READY`` and ``PARTIAL`` proceed. ``PARTIAL``
-    is display-only (some advisory check failed but the run may continue). Also
+    ``NOT_READY`` blocks the run only when the app has opted into hard mode
+    (``preflight_gate_mode = "hard"``); the default posture is soft, where a
+    ``NOT_READY`` verdict is reported (``outcome="would_block"``) but the run
+    proceeds. ``READY`` and ``PARTIAL`` always proceed. ``PARTIAL`` is
+    display-only (some advisory check failed but the run may continue). Also
     surfaced to the Sage UI, the connector-pulse dashboard, and the Automation
     Engine event.
     """
@@ -442,8 +445,9 @@ class PreflightOutput(BaseModel):
     """Output from the preflight_check handler operation."""
 
     status: PreflightStatus
-    """Overall verdict — decides the gate. ``NOT_READY`` blocks the run;
-    ``READY``/``PARTIAL`` proceed. The handler computes this itself."""
+    """Overall verdict — decides the gate. ``NOT_READY`` blocks the run only in
+    hard mode (per-app opt-in); the default soft posture reports it and
+    proceeds. ``READY``/``PARTIAL`` proceed. The handler computes this itself."""
 
     checks: list[PreflightCheck] = []
     """Individual check results (display + failure attribution)."""

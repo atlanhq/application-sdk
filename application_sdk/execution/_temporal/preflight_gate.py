@@ -12,10 +12,12 @@ so the abort shows red in Temporal and attributes to preflight; ``READY`` and
 
 from __future__ import annotations
 
+import math
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
+import orjson
 from pydantic import BaseModel, Field, ValidationError
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
@@ -40,7 +42,11 @@ with workflow.unsafe.imports_passed_through():
         PreflightStatus,
     )
     from application_sdk.infrastructure.context import get_infrastructure
-    from application_sdk.observability.logger_adaptor import get_logger
+    from application_sdk.observability.logger_adaptor import (
+        CHECK_MATRIX_KEY,
+        GATE_MODE_KEY,
+        get_logger,
+    )
 
 logger = get_logger(__name__)
 
@@ -263,6 +269,36 @@ def _dump_check(check: PreflightCheck) -> dict[str, Any]:
     return dumped
 
 
+def _check_matrix_json(checks: list[PreflightCheck]) -> str:
+    """Compact per-check matrix for the outcome event, as one JSON string.
+
+    Lands as a single ``LogAttributes`` value in ClickHouse, so connector-pulse
+    can pattern-match verdicts against workflow outcomes (``JSONExtract``) with
+    no schema change. Small fixed fields only — messages and evidence stay in
+    the Temporal activity result. Blocking intent is not a per-check field: it
+    is observable from the outcome itself (``would_block``/``blocked`` means
+    the aggregate was NOT_READY; a failed check on a ``proceeded`` run is
+    advisory by the handler's own choice).
+    """
+    rows = []
+    for check in checks:
+        rows.append(
+            {
+                "name": check.name,
+                "passed": check.passed,
+                "error_code": check.error.code if check.error else "",
+                # orjson emits null for nan/inf; we normalize to 0.0 so the
+                # ClickHouse row stays numeric for downstream JSONExtract, and
+                # never raise — a raise here fails the gate open and loses the
+                # whole event.
+                "duration_ms": check.duration_ms
+                if math.isfinite(check.duration_ms)
+                else 0.0,
+            }
+        )
+    return orjson.dumps(rows).decode()
+
+
 def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
     """Build the ``PreflightFailed`` ApplicationError for a NOT_READY verdict.
 
@@ -409,12 +445,23 @@ async def _resolve_gate_credentials(
 def build_preflight_gate_activity(
     handler: Handler,
     app_name: str,
+    *,
+    enforce: bool = False,
 ) -> Callable[..., Awaitable[Any]]:
     """Build the injected preflight-gate activity (``{app}:preflight``).
 
     Registered unconditionally by the worker (independent of the SDR opt-out)
     because the gate is mandatory. Binds the same per-invocation handler context
     the HTTP and SDR paths use (:func:`bind_invocation_context`).
+
+    ``enforce`` is the gate's posture for this app, resolved once at worker
+    build (see ``_resolve_gate_enforcement`` in the worker). Soft (``False``,
+    the default) never raises: the verdict stays honest ``NOT_READY``, the run
+    proceeds, and the dodged block is emitted as ``outcome="would_block"`` so
+    connector-pulse can rank apps whose checks would have blocked real runs.
+    Hard (``True``) is the per-app opt-in: it raises on a ``NOT_READY`` verdict
+    and aborts the run. The handler is never consulted about posture — verdict
+    and enforcement are deliberately separate concerns.
     """
 
     @activity.defn(name=preflight_gate_activity_name(app_name))
@@ -452,17 +499,26 @@ def build_preflight_gate_activity(
         # ``reason`` is the status on proceed, the primary FailureDetails.code on a
         # block. Activity execution is at-least-once, so a retry after a lost
         # completion can re-emit — consumers dedupe on (workflow_run_id, outcome).
+        gate_mode = "hard" if enforce else "soft"
         if result.status is PreflightStatus.NOT_READY:
             block_error = _build_block_error(result, app_name)
             logger.info(
                 PREFLIGHT_OUTCOME_EVENT,
-                outcome="blocked",
+                outcome="blocked" if enforce else "would_block",
                 reason=block_error.details[0].code,
                 app_name=app_name,
                 entrypoint=entry,
                 checks=len(result.checks),
+                **{
+                    CHECK_MATRIX_KEY: _check_matrix_json(result.checks),
+                    GATE_MODE_KEY: gate_mode,
+                },
             )
-            raise block_error
+            if enforce:
+                raise block_error
+            # Soft: the verdict stays honest NOT_READY; the gate just does not
+            # enforce it. The would_block row above is the loud record.
+            return result
         logger.info(
             PREFLIGHT_OUTCOME_EVENT,
             outcome="proceeded",
@@ -470,6 +526,10 @@ def build_preflight_gate_activity(
             app_name=app_name,
             entrypoint=entry,
             checks=len(result.checks),
+            **{
+                CHECK_MATRIX_KEY: _check_matrix_json(result.checks),
+                GATE_MODE_KEY: gate_mode,
+            },
         )
         return result
 

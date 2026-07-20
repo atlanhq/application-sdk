@@ -1869,10 +1869,23 @@ def _register_workflow_routes(
         }
         ep_manifest = registry.get(entrypoint_name)
         if ep_manifest is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No manifest found for entrypoint {entrypoint_name!r}",
-            )
+            # Multi-entrypoint (bundle) apps nest each entrypoint's manifest
+            # under <ep.name>/manifest.json (matched above). Single-entrypoint
+            # apps emit it FLAT at CONTRACT_GENERATED_DIR/manifest.json, with no
+            # per-entrypoint subdir. Heracles/AE always sends ?entrypoint=<name>
+            # on package-workflow submit, so without this fallback a flat
+            # single-entrypoint app 404s ("No manifest found for entrypoint")
+            # and the platform surfaces it as a 500 on submit — blocking every
+            # run. Mirrors the flat-layout fallback in get_configmap and the
+            # no-?entrypoint branch of get_manifest.
+            flat_manifest = CONTRACT_GENERATED_DIR / "manifest.json"
+            if flat_manifest.is_file():
+                ep_manifest = flat_manifest
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No manifest found for entrypoint {entrypoint_name!r}",
+                )
         raw = ep_manifest.read_bytes()
         # app_name is baked into the generated manifest by the contract toolkit
         # (from the contract `name`); only the per-deployment token is substituted here.
