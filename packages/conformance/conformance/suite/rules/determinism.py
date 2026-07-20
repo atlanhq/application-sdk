@@ -1,4 +1,4 @@
-"""Determinism / async-correctness rule definitions (P020–P024, P031).
+"""Determinism / async-correctness rule definitions (P020–P024, P031, P036).
 
 App and SDK code must respect the SDK's async and determinism expectations in the
 execution path.  Temporal **workflow** code (an ``App`` subclass's ``run`` /
@@ -274,5 +274,57 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P031] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p031",
+    ),
+    RuleDefinition(
+        id="P036",
+        scope=RuleScope.BOTH,
+        name="HandRolledProcessIsolation",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="async-correctness",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.15.0",
+        rationale=(
+            "A native fault — a SIGSEGV in a C extension — is not a Python "
+            "exception: it bypasses every try/except and, in a worker thread, "
+            "kills the whole Temporal worker mid-poll. The SDK exposes a "
+            "sanctioned child-process seam for this: run_fault_isolated() runs "
+            "the work in an isolated process so the fault is contained as a "
+            "catchable BrokenProcessPool, and run_best_effort() layers "
+            "warn-and-continue on top for non-essential work. Hand-rolling a "
+            "ProcessPoolExecutor or multiprocessing child re-implements that seam "
+            "without its crash containment, timeout, spawn-not-fork safety, and "
+            "width management, and fragments the worker's process model — the "
+            "class of bug behind the CNCT-85 worker crash."
+        ),
+        short_description=(
+            "Bare ProcessPoolExecutor / multiprocessing child instead of the "
+            "run_fault_isolated() / run_best_effort() seam"
+        ),
+        full_description=(
+            "Code constructs a process-based execution primitive directly —\n"
+            "``ProcessPoolExecutor(...)`` or ``multiprocessing.Process(...)`` /\n"
+            "``Pool(...)`` — instead of routing crash-prone or best-effort native\n"
+            "work through the SDK's sanctioned child-process seam. Use\n"
+            "``run_fault_isolated()`` (raises a catchable ``BrokenProcessPool`` on a\n"
+            "native crash) or ``run_best_effort()`` (logs and continues) from\n"
+            "``application_sdk.execution.heartbeat``.\n"
+            "\n"
+            "Matching is construction-anchored and import-resolved (so an aliased\n"
+            "``from concurrent.futures import ProcessPoolExecutor as PPE; PPE(...)``\n"
+            "is caught). ``multiprocessing.get_context(...).Process()`` on a runtime\n"
+            "receiver is not statically resolvable and is not flagged;\n"
+            "``ThreadPoolExecutor`` is a thread pool, out of scope here (thread\n"
+            "offload onto the shared default executor is governed by P031).\n"
+            "``application_sdk/execution/heartbeat.py`` is exempt — that is where the\n"
+            "seam's own pool lives.\n"
+            "\n"
+            "Remediation is a restructure (route through the seam), so findings route\n"
+            "to residue.  Land as ``WARN``; suppress a reviewed exception (e.g. a\n"
+            "deliberate CPU-bound pool that never touches the worker) with\n"
+            "``# conformance: ignore[P036] <reason>``.\n"
+        ),
+        help_uri=f"{_HELP_BASE}#p036",
     ),
 )

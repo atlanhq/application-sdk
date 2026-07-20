@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**35 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025) (all AST-based / cross-artifact)
+**36 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -58,6 +58,7 @@ reassigned.
 | [P033](#p033) | `DuplicateInWorkflowPreflight` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P034](#p034) | `UntypedPreflightCheckFailure` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P035](#p035) | `PreflightMetadataContractParity` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
+| [P036](#p036) | `HandRolledProcessIsolation` | `warn` | `both` | `async-correctness` | — | 0.15.0 |
 
 ---
 
@@ -934,18 +935,14 @@ hand-building it duplicates the grammar across the fleet, and a grammar change (
 scoping, escaping) then breaks every connector independently with no single source of
 truth.
 
+Not flagged — object-store keys: a qn reference preceded by a `/`-bearing literal
+segment (e.g. `f"persistent-artifacts/.../{connection_qualified_name}/publish-state"`)
+is a storage path that embeds a qn, not an asset qualifiedName rooted at its parent qn,
+so it is not flagged.
+
 Fix: construct assets through the pyatlan asset `.creator()` factories, which compute
 qualifiedName from typed parent references.  WARN tier — suppress with `# conformance:
 ignore[P028] <reason>` where a raw qualifiedName string is genuinely required.
-
-**Not flagged — object-store keys.** An asset qualifiedName is always *rooted* at its
-parent qn (the interpolated qn is the leading segment: `f"{connection_qn}/collections/{id}"`).
-An object-store **key** merely embeds a qn *after* a literal namespace prefix
-(`f"persistent-artifacts/apps/…/{connection_qn}/publish-state"`,
-`f"argo-artifacts/{connection_qn}/current-state"`) — that is a storage path, not an asset
-identity, and `.creator()` has nothing to say about it. When the qn reference is preceded
-by a `/`-bearing literal segment the f-string is treated as an object-store key and is not
-flagged.
 
 ---
 
@@ -1162,5 +1159,41 @@ because `model_dump` emits field names, not aliases. The rule does not fire when
 entrypoint Input contract is resolvable or when a contract (or an in-repo ancestor) opts
 into extra keys via either `model_config` form: `ConfigDict(extra="allow")` or
 `{"extra": "allow"}`.
+
+---
+
+## P036 — `HandRolledProcessIsolation` {#p036}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.15.0
+
+> Bare ProcessPoolExecutor / multiprocessing child instead of the run_fault_isolated() / run_best_effort() seam
+
+**Rationale:** A native fault — a SIGSEGV in a C extension — is not a Python exception: it bypasses
+every try/except and, in a worker thread, kills the whole Temporal worker mid-poll. The
+SDK exposes a sanctioned child-process seam for this: run_fault_isolated() runs the work
+in an isolated process so the fault is contained as a catchable BrokenProcessPool, and
+run_best_effort() layers warn-and-continue on top for non-essential work. Hand-rolling a
+ProcessPoolExecutor or multiprocessing child re-implements that seam without its crash
+containment, timeout, spawn-not-fork safety, and width management, and fragments the
+worker's process model — the class of bug behind the CNCT-85 worker crash.
+
+Code constructs a process-based execution primitive directly —
+`ProcessPoolExecutor(...)` or `multiprocessing.Process(...)` / `Pool(...)` — instead of
+routing crash-prone or best-effort native work through the SDK's sanctioned
+child-process seam. Use `run_fault_isolated()` (raises a catchable `BrokenProcessPool`
+on a native crash) or `run_best_effort()` (logs and continues) from
+`application_sdk.execution.heartbeat`.
+
+Matching is construction-anchored and import-resolved (so an aliased `from
+concurrent.futures import ProcessPoolExecutor as PPE; PPE(...)` is caught).
+`multiprocessing.get_context(...).Process()` on a runtime receiver is not statically
+resolvable and is not flagged; `ThreadPoolExecutor` is a thread pool, out of scope here
+(thread offload onto the shared default executor is governed by P031).
+`application_sdk/execution/heartbeat.py` is exempt — that is where the seam's own pool
+lives.
+
+Remediation is a restructure (route through the seam), so findings route to residue.
+Land as `WARN`; suppress a reviewed exception (e.g. a deliberate CPU-bound pool that
+never touches the worker) with `# conformance: ignore[P036] <reason>`.
 
 ---
