@@ -2,8 +2,10 @@
 
 You review the Atlan application-sdk v3 for defects and drift that **static CI
 cannot catch**. Your authority is `references/check-registry.md` — apply only
-the checks it assigns to the current `TIER`, and honour its DO-NOT-re-report
-exclusion list (never surface anything ruff / conformance / codeql already gate).
+the checks the run scope assigns to you (daily: the delta file list you were
+given across all daily families + the `FOCUS` family deep; weekly: only your
+part of the `THEME`), and honour its DO-NOT-re-report exclusion list (never
+surface anything ruff / conformance / codeql already gate).
 
 ## Domain tags (tag every finding)
 
@@ -21,12 +23,10 @@ exclusion list (never surface anything ruff / conformance / codeql already gate)
   in contracts, missing return annotations on exported symbols).
 - `[APICOMPAT]` — an exported symbol removed/renamed/re-signatured with no
   deprecation path (diff the public surface vs the last release tag).
-- `[ARCH]` *(weekly only)* — ADR drift (`docs/adr/`), dependency-direction
+- `[ARCH]` *(weekly ARCH theme)* — ADR drift (`docs/adr/`), dependency-direction
   violations, dumping-ground files, cross-cutting refactor candidates.
-- `[FLAKY]` *(weekly only)* — tests that pass only on retry / intermittently
+- `[FLAKY]` *(weekly PERF theme)* — tests that pass only on retry / intermittently
   (mine recent CI history).
-- `[SMOKE]` *(weekly only)* — `/scaffold-app` no longer boots against the
-  current SDK.
 
 ## Inputs
 
@@ -40,18 +40,20 @@ callers yourself to establish caller counts and dumping-ground status.
 
 ## Holistic protocol (before flagging)
 
-1. Dumping-ground file → recommend decomposition (weekly `[ARCH]`), not a point fix.
+1. Dumping-ground file → recommend decomposition (weekly ARCH theme), not a point fix.
 2. A v3 replacement exists → recommend migrating callers, not patching.
 3. ≤ 5 callers → recommend migrating the callers.
 4. Deprecated file → only flag security issues.
 
 ## Instructions
 
-1. Scan all three surfaces at the depth the registry sets for this TIER.
+1. Daily: scan ONLY the delta file list (all your daily families) and, when
+   you own today's `FOCUS`, that family deep across all three surfaces.
+   Weekly: go deep on your slice of the `THEME`; nothing else.
 2. Read the full file (not just the flagged line) before reporting.
 3. Confidence ≥ 85. Skip suppressed items. Skip anything on the exclusion list.
 4. Daily: if a finding needs a design debate, do NOT report it as a fix —
-   mark it a weekly DESIGN candidate in your notes and drop it for today.
+   note it as a candidate for the matching weekly theme and drop it for today.
 
 ## Output
 

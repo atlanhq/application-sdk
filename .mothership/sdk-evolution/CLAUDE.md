@@ -6,10 +6,10 @@ Your job: find what CI **cannot** catch — semantic bugs, docs staleness, weak
 tests, design drift, better Temporal usage, and SDK-improvement opportunities —
 then open Linear tickets + PRs for validated findings. One pipeline, two tiers.
 
-Mothership clones this repo on `main` into `/workspace/application-sdk` and
-runs you with a prompt carrying the run context (`RUN_DATE`, `TIER`,
-`GHA_RUN_URL`, and weekly `CONSUMER_PR_CAP`). Follow
-`.mothership/sdk-evolution/ORCHESTRATION.md` exactly. Print
+Mothership clones this repo into `/workspace/application-sdk` and runs you
+with a prompt carrying the run context (`RUN_DATE`, `TIER`, `GHA_RUN_URL`,
+plus daily `FOCUS` or weekly `THEME` — and `CONSUMER_PR_CAP` on the CONSUMERS
+theme). Follow `.mothership/sdk-evolution/ORCHESTRATION.md` exactly. Print
 `[Stage N complete] …` after each stage so the run is observable.
 
 ## Read first (source of truth)
@@ -26,14 +26,15 @@ reads the freshly-cloned source directly.
 
 ## Tiers
 
-- **daily** (Mon–Sat) — fast, high-confidence, whole SDK but shallow. Only
-  what a senior engineer would merge without a design debate.
-- **weekly** (Sunday) — the daily superset plus the deep and cross-repo work:
-  architecture/ADR drift, Temporal-concept ADR PRs, `/audit-consumers` across
-  v3 apps, toolkit deep review. No fixed PR cap — bounded by the time budget.
-
-Both tiers cover all three surfaces: `application_sdk/`, `packages/conformance/`,
-`contract-toolkit/`.
+- **daily** (Mon–Sat) — the light pass: the last-36h **commit delta** across
+  all daily check families + today's **`FOCUS`** family deep across all three
+  surfaces (`application_sdk/`, `packages/conformance/`, `contract-toolkit/`).
+  Only what a senior engineer would merge without a design debate. Quiet day →
+  cheap early exit; that is a success, not a shortfall.
+- **weekly** (Sunday) — ONE design deep-dive on **`THEME`** (rotation:
+  ARCH → TEMPORAL → CONSUMERS → TOOLKIT → DX → PERF). Output contract: one
+  well-argued DESIGN PR/ADR + at most 3 incidental small FIX PRs. Weekly does
+  NOT run the daily families.
 
 ## SDK v3 architecture context
 
@@ -60,8 +61,10 @@ Both tiers cover all three surfaces: `application_sdk/`, `packages/conformance/`
 8. **One `@sdk-review` pass, human merges** — no auto-complete/auto-merge loop
    while trust is being re-earned.
 9. **Conformance proposals ship rule + remediation in the SAME PR.**
-10. **Observability is the contract** — a run with no Linear parent + no step
-    summary is a failed run. This is why the cron was disabled before.
+10. **Observability is the contract** — a run that ends without the Stage 7
+    summary block AND the completion-marker comment is a failed run, even if
+    it opened PRs. This is why the cron was disabled before. (Zero-survivor
+    runs skip the Linear parent ticket — the summary + marker are the record.)
 
 ## Rules
 

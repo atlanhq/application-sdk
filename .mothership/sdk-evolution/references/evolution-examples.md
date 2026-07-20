@@ -83,3 +83,8 @@ then it's DESIGN, not FIX.
 EXAMPLE: `contract-toolkit/examples/` references a removed/renamed symbol.
 DOCSITE: a docs.atlan.com guide does the same. **skip-when:** the reference is
 still valid, or intentionally shows a deprecated-but-supported path.
+
+## SMOKE *(weekly TOOLKIT theme)* — scaffold golden-path
+`/scaffold-app` output no longer boots against the current SDK (import error,
+missing contract, changed entrypoint signature). **skip-when:** the failure is
+environmental (missing local Dapr/Temporal), not an SDK break.

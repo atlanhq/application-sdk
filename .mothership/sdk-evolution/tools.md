@@ -82,6 +82,32 @@ input) AND @-mention both in a comment so Linear pings them. Apply on:
 
 Do NOT tag them on routine FIX tickets — those go to `@sdk-review`.
 
+## Completion marker (Stage 7 — the stream-drop backstop)
+
+Mothership's SSE stream to GitHub Actions can drop while the sandbox keeps
+working. The dispatch script recovers the outcome by polling a pinned tracking
+issue — so Stage 7 MUST post the summary there, every run:
+
+```bash
+ISSUE=$(gh issue list --repo atlanhq/application-sdk \
+  --label sdk-evolution-marker --state all --limit 1 \
+  --json number --jq '.[0].number')
+if [ -z "$ISSUE" ]; then   # first run ever: create label + issue
+  gh label create sdk-evolution-marker --repo atlanhq/application-sdk \
+    --description "SDK Evolution run completion markers" || true
+  ISSUE=$(gh issue create --repo atlanhq/application-sdk \
+    --title "SDK Evolution — run markers" --label sdk-evolution-marker \
+    --body "Completion markers posted by SDK Evolution runs (Stage 7). One comment per run; the dispatch workflow polls these after an SSE stream drop. Do not close." \
+    | grep -oE '[0-9]+$')
+fi
+gh issue comment "$ISSUE" --repo atlanhq/application-sdk --body "marker: sdk-evolution-<TIER>-<RUN_DATE>
+
+<summary block verbatim>"
+```
+
+The `marker:` line must match the dispatch `source_id` exactly:
+`sdk-evolution-<TIER>-<RUN_DATE>` (e.g. `sdk-evolution-daily-2026-07-21`).
+
 ## Handoff — single review pass (Stage 6)
 
 ```bash

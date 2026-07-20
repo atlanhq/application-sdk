@@ -4,8 +4,10 @@
 One dispatcher for both tiers of the pipeline (see
 `.mothership/sdk-evolution/ORCHESTRATION.md`):
 
-  * daily   — fast, high-confidence pass over the whole SDK (Mon–Sat)
-  * weekly  — the Sunday superset: design/ADR PRs, /audit-consumers, toolkit
+  * daily   — light pass (Mon–Sat): last-36h commit delta across all daily
+              check families + ONE rotating deep-focus family per weekday.
+  * weekly  — ONE rotating design theme (Sunday): a single deep design
+              investigation producing one DESIGN PR/ADR.
 
 The inline SSE-parsing shell that used to live in sdk-evolution-cron.yml is
 gone; this tested script owns it per docs/standards/ci.md. Beyond streaming, it
@@ -13,22 +15,38 @@ writes a **GITHUB_STEP_SUMMARY** (found / killed / PRs / cost + Linear parent
 link) — the missing observability that got the cron disabled. It parses the
 `=== SDK EVOLUTION SUMMARY ===` block the agent emits (ORCHESTRATION Stage 7).
 
-Flow: resolve tier → health-check mothership (retries) → build prompt + payload
-→ POST /api/sandbox/execute and stream SSE → render the step summary → exit
-non-zero on a sandbox error / incomplete stream / non-'completed' final status.
+Stream-drop backstop: mothership's SSE stream can drop mid-run while the
+sandbox keeps working (a prior verification run completed all stages after the
+stream died). When the stream ends without a `complete` event — and no `error`
+event was seen — this script polls the pinned completion-marker issue
+(label `sdk-evolution-marker`) where ORCHESTRATION Stage 7 posts the summary
+block as a comment tagged `marker: <source_id>`. Marker found → the run really
+completed; recover the metrics from the comment and exit 0.
+
+Flow: resolve tier/focus/theme → health-check mothership (retries) → build
+prompt + payload → POST /api/sandbox/execute and stream SSE → (on stream drop)
+poll the completion marker → render the step summary → exit non-zero on a
+sandbox error / unrecovered incomplete stream / non-'completed' final status.
 
 Environment:
     MOTHERSHIP_URL      base URL (e.g. https://mothership.atlan.dev)
     HARNESS_TOKEN       bearer for /api/sandbox/execute
     TIER                daily | weekly | auto (auto → weekly on Sunday UTC)
-    CONSUMER_PR_CAP     weekly only: max consumer migration PRs per run
+    FOCUS               daily only: check family override, or auto (by weekday)
+    THEME               weekly only: design theme override, or auto (by ISO week)
+    CONSUMER_PR_CAP     weekly CONSUMERS theme only: max consumer PRs per run
+    BASE_BRANCH         branch the sandbox clones (default main; override to
+                        verify a PR branch's playbook before merge)
     GHA_RUN_URL         this workflow run's URL
     RUN_DATE            ISO date (computed if absent)
+    GH_TOKEN            GitHub token for the completion-marker poll
+    GITHUB_REPOSITORY   owner/repo for the marker poll (GHA sets this)
     GITHUB_STEP_SUMMARY path GitHub Actions gives us to render the run summary
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import re
@@ -43,6 +61,27 @@ HEALTH_RETRIES = 5
 HEALTH_BACKOFF_SECONDS = 5
 STREAM_TIMEOUT_SECONDS = 7200
 DEFAULT_CONSUMER_PR_CAP = 5
+
+# Daily rotating deep-focus family by weekday (Mon=0 … Sat=5). Sunday is the
+# weekly tier; a daily run forced on a Sunday gets the Monday focus.
+FOCUS_BY_WEEKDAY = {
+    0: "BUG",
+    1: "DOCS",
+    2: "TEST",
+    3: "TYPES+APICOMPAT",
+    4: "STALE+MANIFEST+LOG",
+    5: "CONF",
+    6: "BUG",
+}
+DAILY_FOCUSES = frozenset(FOCUS_BY_WEEKDAY.values())
+
+# Weekly design themes, rotated by ISO week number (~6-week full cycle).
+WEEKLY_THEMES = ("ARCH", "TEMPORAL", "CONSUMERS", "TOOLKIT", "DX", "PERF")
+
+# Completion-marker backstop (see module docstring).
+MARKER_LABEL = "sdk-evolution-marker"
+MARKER_POLL_ATTEMPTS = 45
+MARKER_POLL_INTERVAL_SECONDS = 60
 
 SUMMARY_START = "=== SDK EVOLUTION SUMMARY ==="
 SUMMARY_END = "=== END SUMMARY ==="
@@ -76,23 +115,69 @@ def resolve_tier(tier: str, run_date: str) -> str:
     return "weekly" if is_sunday else "daily"
 
 
+def resolve_focus(focus: str, run_date: str) -> str:
+    """Resolve the daily deep-focus family: explicit override, else by weekday."""
+    focus = (focus or "auto").strip().upper()
+    if focus in DAILY_FOCUSES:
+        return focus
+    try:
+        weekday = time.strptime(run_date, "%Y-%m-%d").tm_wday
+    except (ValueError, TypeError):
+        return FOCUS_BY_WEEKDAY[0]
+    return FOCUS_BY_WEEKDAY[weekday]
+
+
+def resolve_theme(theme: str, run_date: str) -> str:
+    """Resolve the weekly design theme: explicit override, else by ISO week."""
+    theme = (theme or "auto").strip().upper()
+    if theme in WEEKLY_THEMES:
+        return theme
+    try:
+        parsed = time.strptime(run_date, "%Y-%m-%d")
+        iso_week = dt.date(parsed.tm_year, parsed.tm_mon, parsed.tm_mday).isocalendar()[
+            1
+        ]
+    except (ValueError, TypeError):
+        return WEEKLY_THEMES[0]
+    return WEEKLY_THEMES[iso_week % len(WEEKLY_THEMES)]
+
+
 def build_prompt(
-    tier: str, run_date: str, gha_run_url: str, consumer_pr_cap: int
+    tier: str,
+    run_date: str,
+    gha_run_url: str,
+    consumer_pr_cap: int,
+    focus: str = "",
+    theme: str = "",
 ) -> str:
-    weekly_note = (
-        f"\nThis is a WEEKLY run — also do the deep + cross-repo stages "
-        f"(ARCH/TEMPORAL/CONSUMERS/TOOLKIT/DX). CONSUMER_PR_CAP={consumer_pr_cap} "
-        f"caps consumer migration PRs; rotate the remainder to next week.\n"
-        if tier == "weekly"
-        else "\nThis is a DAILY run — fast, high-confidence pass only. Do NOT open "
-        "design debates; note weekly DESIGN candidates and move on.\n"
-    )
-    # CONSUMER_PR_CAP only applies to the weekly consumer audit — daily ignores
-    # it, so keep it out of the daily prompt header.
-    cap_line = f"\n  CONSUMER_PR_CAP:  {consumer_pr_cap}" if tier == "weekly" else ""
+    if tier == "weekly":
+        cap_note = (
+            f" CONSUMER_PR_CAP={consumer_pr_cap} caps consumer migration PRs; "
+            f"rotate the remainder to the next CONSUMERS week."
+            if theme == "CONSUMERS"
+            else ""
+        )
+        tier_note = (
+            f"\nThis is a WEEKLY run — ONE design deep-dive on THEME={theme}. "
+            f"Produce exactly one well-argued DESIGN PR/ADR (+ child ticket, "
+            f"needs-design-review) for this theme; at most 3 incidental small "
+            f"FIX PRs found en route. Do NOT run the daily families.{cap_note}\n"
+        )
+        extra_lines = f"\n  THEME:            {theme}"
+        if theme == "CONSUMERS":
+            extra_lines += f"\n  CONSUMER_PR_CAP:  {consumer_pr_cap}"
+    else:
+        tier_note = (
+            f"\nThis is a DAILY run — the light pass. Scan ONLY (a) the commit "
+            f"delta of the last 36 hours across all daily check families, and "
+            f"(b) today's FOCUS={focus} family deep across all three surfaces. "
+            f"Quiet delta + clean focus scan → early-exit via Stage 7. Do NOT "
+            f"open design debates; note weekly DESIGN candidates and move on.\n"
+        )
+        extra_lines = f"\n  FOCUS:            {focus}"
     return f"""You are running the SDK Evolution pipeline in a Cloudflare sandbox.
 
-Repository cloned at: /workspace/application-sdk (on main).
+Repository cloned at: /workspace/application-sdk.
 Working directory: cd /workspace/application-sdk
 
 Read and follow the orchestration EXACTLY:
@@ -104,24 +189,28 @@ Read and follow the orchestration EXACTLY:
 Run metadata (use these verbatim):
   TIER:             {tier}
   RUN_DATE:         {run_date}
-  GHA_RUN_URL:      {gha_run_url}{cap_line}
-{weekly_note}
+  GHA_RUN_URL:      {gha_run_url}{extra_lines}
+{tier_note}
 GITHUB_TOKEN is pre-injected by the sandbox. Use `gh` for all GitHub operations.
 Linear proxy access: use the $PROXY_BASE and $PROXY_JWT env vars (see tools.md).
 
-Cover all three surfaces (application_sdk/, packages/conformance/,
-contract-toolkit/). Honour the check-registry DO-NOT-re-report list — never
-re-raise anything ruff / conformance CI / codeql / trivy already gates.
+Honour the check-registry DO-NOT-re-report list — never re-raise anything
+ruff / conformance CI / codeql / trivy already gates.
 
-Create a Linear parent ticket and put a link to GHA_RUN_URL at the top of its
-description and in the Stage 7 summary. Hand every surviving PR to a SINGLE
-@sdk-review pass (NOT auto-complete). At the very end, print the
-`=== SDK EVOLUTION SUMMARY ===` block from ORCHESTRATION Stage 7 verbatim so the
-workflow can surface it."""
+Hand every surviving PR to a SINGLE @sdk-review pass (NOT auto-complete). At
+the very end (Stage 7), print the `=== SDK EVOLUTION SUMMARY ===` block
+verbatim AND post it as a completion-marker comment (see ORCHESTRATION
+Stage 7) so the workflow can surface the outcome even if this stream drops."""
 
 
 def build_payload(
-    tier: str, run_date: str, gha_run_url: str, consumer_pr_cap: int
+    tier: str,
+    run_date: str,
+    gha_run_url: str,
+    consumer_pr_cap: int,
+    focus: str = "",
+    theme: str = "",
+    base_branch: str = "main",
 ) -> dict[str, Any]:
     return {
         "mode": "direct",
@@ -129,14 +218,18 @@ def build_payload(
         "source": "github-cron",
         "source_id": f"sdk-evolution-{tier}-{run_date}",
         "repositories": ["atlanhq/application-sdk"],
-        "base_branch": "main",
+        "base_branch": base_branch,
         "snapshot": "_base",
-        "prompt": build_prompt(tier, run_date, gha_run_url, consumer_pr_cap),
+        "prompt": build_prompt(
+            tier, run_date, gha_run_url, consumer_pr_cap, focus, theme
+        ),
         "max_timeout_seconds": STREAM_TIMEOUT_SECONDS,
         "idle_timeout_seconds": 1800,
         "metadata": {
             "tier": tier,
             "run_date": run_date,
+            "focus": focus,
+            "theme": theme,
             "consumer_pr_cap": consumer_pr_cap,
         },
     }
@@ -286,19 +379,109 @@ def mine_summary(st: SSEState) -> dict[str, str]:
     return parse_summary(st.response_text) or parse_summary(st.raw_data)
 
 
+def _gh_api(
+    url: str, token: str, opener: Callable[..., Any] = urllib.request.urlopen
+) -> Any:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    with opener(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8", "replace"))
+
+
+def fetch_marker_summary(
+    repo: str,
+    source_id: str,
+    run_date: str,
+    token: str,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> dict[str, str] | None:
+    """One poll attempt for the completion marker.
+
+    Looks for a comment containing `marker: <source_id>` on the pinned
+    tracking issue (label `sdk-evolution-marker`). Returns the parsed summary
+    block from that comment (may be empty when the block is malformed — the
+    marker alone still proves Stage 7 ran), or None when not found yet.
+    Network/API failures count as not-found so the poll loop keeps trying.
+    """
+    base = f"https://api.github.com/repos/{repo}"
+    try:
+        issues = _gh_api(
+            f"{base}/issues?labels={MARKER_LABEL}&state=all&per_page=5",
+            token,
+            opener,
+        )
+        for issue in issues if isinstance(issues, list) else []:
+            number = issue.get("number")
+            if number is None:
+                continue
+            comments = _gh_api(
+                f"{base}/issues/{number}/comments"
+                f"?since={run_date}T00:00:00Z&per_page=100",
+                token,
+                opener,
+            )
+            for comment in reversed(comments if isinstance(comments, list) else []):
+                body = comment.get("body") or ""
+                if f"marker: {source_id}" in body:
+                    return parse_summary(body)
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+        print(f"::warning::Completion-marker poll attempt failed: {e}")
+    return None
+
+
+def poll_completion_marker(
+    repo: str,
+    source_id: str,
+    run_date: str,
+    token: str,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+    sleeper: Callable[[float], None] = time.sleep,
+    attempts: int = MARKER_POLL_ATTEMPTS,
+) -> dict[str, str] | None:
+    """Poll for the Stage 7 completion marker after an SSE stream drop.
+
+    The sandbox often outlives the stream; give it up to
+    attempts × MARKER_POLL_INTERVAL_SECONDS to finish and post the marker.
+    Returns the recovered summary dict (possibly empty), or None on timeout.
+    """
+    for attempt in range(1, attempts + 1):
+        found = fetch_marker_summary(repo, source_id, run_date, token, opener)
+        if found is not None:
+            print(f"Completion marker found on poll attempt {attempt}")
+            return found
+        if attempt < attempts:
+            sleeper(MARKER_POLL_INTERVAL_SECONDS)
+    return None
+
+
 def render_step_summary(
-    st: SSEState, tier: str, run_date: str, gha_run_url: str
+    st: SSEState,
+    tier: str,
+    run_date: str,
+    gha_run_url: str,
+    recovered: dict[str, str] | None = None,
 ) -> str:
     """Build the Markdown written to GITHUB_STEP_SUMMARY — always renders."""
-    summary = mine_summary(st)
-    outcome = (
-        "✅ completed" if (st.completed and st.status == "completed") else "❌ failed"
-    )
+    summary = mine_summary(st) or (recovered or {})
+    if st.completed and st.status == "completed":
+        outcome = "✅ completed"
+        cost = st.cost or "n/a"
+    elif recovered is not None:
+        outcome = "⚠️ completed (recovered via completion marker — SSE stream dropped)"
+        cost = "n/a (stream dropped before the cost event)"
+    else:
+        outcome = "❌ failed"
+        cost = st.cost or "n/a"
     lines = [
         f"# SDK Evolution — {tier} — {run_date}",
         "",
         f"**Outcome:** {outcome}  ",
-        f"**Cost:** {st.cost or 'n/a'} USD  ",
+        f"**Cost:** {cost} USD  ",
     ]
     parent = summary.get("parent_ticket")
     if parent:
@@ -333,8 +516,10 @@ def write_step_summary(content: str) -> None:
         print(f"::warning::Could not write step summary: {e}")
 
 
-def decide_exit(st: SSEState) -> tuple[int, str]:
-    """Map the final stream state to (exit_code, message)."""
+def decide_exit(
+    st: SSEState, recovered: dict[str, str] | None = None
+) -> tuple[int, str]:
+    """Map the final stream state (+ marker recovery) to (exit_code, message)."""
     if st.errored:
         return 1, f"::error::Sandbox error: code={st.err_code} message={st.err_msg}"
     if not st.got_event:
@@ -343,7 +528,15 @@ def decide_exit(st: SSEState) -> tuple[int, str]:
             "::error::Stream ended without a single SSE event — likely VPN/network/proxy issue",
         )
     if not st.completed:
-        return 1, "::error::Stream ended without a 'complete' event"
+        if recovered is not None:
+            return 0, (
+                "SDK Evolution completed (outcome recovered via completion "
+                "marker after an SSE stream drop)."
+            )
+        return 1, (
+            "::error::Stream ended without a 'complete' event and no "
+            "completion marker appeared"
+        )
     if st.status != "completed":
         return 1, f"::error::Sandbox final status={st.status} (expected 'completed')"
     return 0, f"SDK Evolution completed successfully (cost={st.cost})."
@@ -392,14 +585,32 @@ def main() -> int:
     gha_run_url = os.environ.get("GHA_RUN_URL", "")
     run_date = os.environ.get("RUN_DATE") or time.strftime("%Y-%m-%d", time.gmtime())
     tier = resolve_tier(os.environ.get("TIER", "auto"), run_date)
+    focus = (
+        resolve_focus(os.environ.get("FOCUS", "auto"), run_date)
+        if tier == "daily"
+        else ""
+    )
+    theme = (
+        resolve_theme(os.environ.get("THEME", "auto"), run_date)
+        if tier == "weekly"
+        else ""
+    )
     consumer_pr_cap = _consumer_pr_cap()
-    print(f"Dispatching SDK Evolution: tier={tier} run_date={run_date}")
+    base_branch = os.environ.get("BASE_BRANCH") or "main"
+    print(
+        f"Dispatching SDK Evolution: tier={tier} run_date={run_date}"
+        + (f" focus={focus}" if focus else "")
+        + (f" theme={theme}" if theme else "")
+        + (f" base_branch={base_branch}" if base_branch != "main" else "")
+    )
 
     if not check_health(base_url):
         print("::error::Cannot reach mothership after retries")
         return 1
 
-    payload = build_payload(tier, run_date, gha_run_url, consumer_pr_cap)
+    payload = build_payload(
+        tier, run_date, gha_run_url, consumer_pr_cap, focus, theme, base_branch
+    )
     req = urllib.request.Request(
         f"{base_url}/api/sandbox/execute",
         data=json.dumps(payload).encode(),
@@ -419,8 +630,23 @@ def main() -> int:
         st.err_code = "http_error"
         st.err_msg = str(e)
 
-    write_step_summary(render_step_summary(st, tier, run_date, gha_run_url))
-    code, message = decide_exit(st)
+    recovered: dict[str, str] | None = None
+    if st.got_event and not st.errored and not st.completed:
+        gh_token = os.environ.get("GH_TOKEN", "")
+        repo = os.environ.get("GITHUB_REPOSITORY", "atlanhq/application-sdk")
+        if gh_token:
+            print(
+                "::warning::SSE stream ended without a 'complete' event — "
+                "polling for the run's completion marker"
+            )
+            recovered = poll_completion_marker(
+                repo, str(payload["source_id"]), run_date, gh_token
+            )
+        else:
+            print("::warning::GH_TOKEN not set — cannot poll the completion marker")
+
+    write_step_summary(render_step_summary(st, tier, run_date, gha_run_url, recovered))
+    code, message = decide_exit(st, recovered)
     print(message)
     return code
 

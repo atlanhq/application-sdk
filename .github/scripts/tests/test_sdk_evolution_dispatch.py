@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import sys
 from pathlib import Path
@@ -38,31 +39,88 @@ def test_auto_with_bad_date_falls_back_to_daily():
 
 
 # ---------------------------------------------------------------------------
+# focus / theme resolution
+# ---------------------------------------------------------------------------
+
+
+def test_explicit_focus_is_respected():
+    assert sd.resolve_focus("DOCS", "2026-07-06") == "DOCS"
+    assert sd.resolve_focus("types+apicompat", "2026-07-06") == "TYPES+APICOMPAT"
+
+
+def test_auto_focus_rotates_by_weekday():
+    # 2026-07-06 Mon, 2026-07-07 Tue, 2026-07-08 Wed, 2026-07-11 Sat.
+    assert sd.resolve_focus("auto", "2026-07-06") == "BUG"
+    assert sd.resolve_focus("auto", "2026-07-07") == "DOCS"
+    assert sd.resolve_focus("auto", "2026-07-08") == "TEST"
+    assert sd.resolve_focus("auto", "2026-07-11") == "CONF"
+
+
+def test_focus_bad_date_or_unknown_falls_back_to_bug():
+    assert sd.resolve_focus("auto", "not-a-date") == "BUG"
+    assert sd.resolve_focus("NOT-A-FAMILY", "not-a-date") == "BUG"
+
+
+def test_explicit_theme_is_respected():
+    assert sd.resolve_theme("toolkit", "2026-07-05") == "TOOLKIT"
+
+
+def test_auto_theme_rotates_by_iso_week():
+    for date_str in ("2026-07-05", "2026-07-12"):
+        y, m, d = (int(x) for x in date_str.split("-"))
+        expected = sd.WEEKLY_THEMES[
+            dt.date(y, m, d).isocalendar()[1] % len(sd.WEEKLY_THEMES)
+        ]
+        assert sd.resolve_theme("auto", date_str) == expected
+    # Consecutive Sundays advance the rotation by exactly one slot.
+    a = sd.WEEKLY_THEMES.index(sd.resolve_theme("auto", "2026-07-05"))
+    b = sd.WEEKLY_THEMES.index(sd.resolve_theme("auto", "2026-07-12"))
+    assert b == (a + 1) % len(sd.WEEKLY_THEMES)
+
+
+def test_theme_bad_date_falls_back_to_first():
+    assert sd.resolve_theme("auto", "not-a-date") == sd.WEEKLY_THEMES[0]
+
+
+# ---------------------------------------------------------------------------
 # payload / prompt shape
 # ---------------------------------------------------------------------------
 
 
 def test_payload_shape_carries_tier():
-    p = sd.build_payload("weekly", "2026-07-05", "http://run", 7)
+    p = sd.build_payload("weekly", "2026-07-05", "http://run", 7, theme="ARCH")
     assert p["mode"] == "direct" and p["stream"] is True
     assert p["source_id"] == "sdk-evolution-weekly-2026-07-05"
     assert p["repositories"] == ["atlanhq/application-sdk"]
+    assert p["base_branch"] == "main"
     assert p["metadata"]["tier"] == "weekly"
+    assert p["metadata"]["theme"] == "ARCH"
     assert p["metadata"]["consumer_pr_cap"] == 7
 
 
+def test_payload_base_branch_override():
+    # Verification runs point the sandbox at a PR branch's playbook pre-merge.
+    p = sd.build_payload("daily", "d", "u", 5, focus="BUG", base_branch="my-branch")
+    assert p["base_branch"] == "my-branch"
+    assert p["metadata"]["focus"] == "BUG"
+
+
 def test_prompt_differs_by_tier():
-    weekly = sd.build_prompt("weekly", "d", "u", 5)
-    daily = sd.build_prompt("daily", "d", "u", 5)
-    assert "WEEKLY run" in weekly and "CONSUMER_PR_CAP=5" in weekly
-    assert "DAILY run" in daily
+    weekly = sd.build_prompt("weekly", "d", "u", 5, theme="TEMPORAL")
+    daily = sd.build_prompt("daily", "d", "u", 5, focus="DOCS")
+    assert "WEEKLY run" in weekly and "THEME=TEMPORAL" in weekly
+    assert "DAILY run" in daily and "FOCUS=DOCS" in daily
+    assert "THEME:" in weekly and "FOCUS:" in daily
+    assert "FOCUS:" not in weekly and "THEME:" not in daily
     assert "check-registry.md" in daily  # both tiers point at the registry
 
 
-def test_consumer_pr_cap_metadata_is_weekly_only():
-    # The CONSUMER_PR_CAP metadata row is clutter on daily (daily ignores it).
-    assert "CONSUMER_PR_CAP:" in sd.build_prompt("weekly", "d", "u", 5)
-    assert "CONSUMER_PR_CAP:" not in sd.build_prompt("daily", "d", "u", 5)
+def test_consumer_pr_cap_is_consumers_theme_only():
+    # The cap only governs the weekly CONSUMERS audit — clutter elsewhere.
+    consumers = sd.build_prompt("weekly", "d", "u", 5, theme="CONSUMERS")
+    assert "CONSUMER_PR_CAP:  5" in consumers and "CONSUMER_PR_CAP=5" in consumers
+    assert "CONSUMER_PR_CAP" not in sd.build_prompt("weekly", "d", "u", 5, theme="ARCH")
+    assert "CONSUMER_PR_CAP" not in sd.build_prompt("daily", "d", "u", 5, focus="BUG")
 
 
 def test_main_missing_required_env_returns_1(monkeypatch):
@@ -276,3 +334,146 @@ def test_health_retries_then_fails():
 
     assert sd.check_health("http://m", opener=opener, sleeper=lambda _: None) is False
     assert calls["n"] == sd.HEALTH_RETRIES
+
+
+# ---------------------------------------------------------------------------
+# completion-marker backstop (SSE stream drop)
+# ---------------------------------------------------------------------------
+
+_MARKER_BODY = f"marker: sdk-evolution-daily-2026-07-08\n\n{_SUMMARY_BLOCK}"
+
+
+class _ApiResp:
+    def __init__(self, obj):
+        self._obj = obj
+
+    def read(self):
+        return json.dumps(self._obj).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _api_opener(issues, comments):
+    """Fake urlopen routing the two GitHub API calls the poll makes."""
+
+    def opener(req, timeout=0):
+        url = req.full_url
+        if "/comments" in url:
+            return _ApiResp(comments)
+        assert "labels=sdk-evolution-marker" in url
+        return _ApiResp(issues)
+
+    return opener
+
+
+def test_fetch_marker_summary_found():
+    opener = _api_opener(issues=[{"number": 42}], comments=[{"body": _MARKER_BODY}])
+    got = sd.fetch_marker_summary(
+        "o/r", "sdk-evolution-daily-2026-07-08", "2026-07-08", "tok", opener
+    )
+    assert got is not None and got["discovered"] == "12"
+
+
+def test_fetch_marker_summary_wrong_source_id_is_not_found():
+    opener = _api_opener(issues=[{"number": 42}], comments=[{"body": _MARKER_BODY}])
+    got = sd.fetch_marker_summary(
+        "o/r", "sdk-evolution-weekly-2026-07-05", "2026-07-05", "tok", opener
+    )
+    assert got is None
+
+
+def test_fetch_marker_found_but_malformed_block_still_counts():
+    # The marker alone proves Stage 7 ran; metrics are best-effort.
+    opener = _api_opener(
+        issues=[{"number": 42}],
+        comments=[{"body": "marker: sdk-evolution-daily-2026-07-08"}],
+    )
+    got = sd.fetch_marker_summary(
+        "o/r", "sdk-evolution-daily-2026-07-08", "2026-07-08", "tok", opener
+    )
+    assert got == {}
+
+
+def test_fetch_marker_no_tracking_issue():
+    opener = _api_opener(issues=[], comments=[])
+    assert sd.fetch_marker_summary("o/r", "sid", "2026-07-08", "tok", opener) is None
+
+
+def test_fetch_marker_api_error_counts_as_not_found():
+    def opener(req, timeout=0):
+        raise OSError("boom")
+
+    assert sd.fetch_marker_summary("o/r", "sid", "2026-07-08", "tok", opener) is None
+
+
+def test_poll_marker_found_on_later_attempt():
+    calls = {"n": 0}
+    found_opener = _api_opener(
+        issues=[{"number": 42}], comments=[{"body": _MARKER_BODY}]
+    )
+
+    def opener(req, timeout=0):
+        calls["n"] += 1
+        if calls["n"] <= 2:  # first attempt: issue exists, no comment yet
+            return _api_opener(issues=[{"number": 42}], comments=[])(req, timeout)
+        return found_opener(req, timeout)
+
+    got = sd.poll_completion_marker(
+        "o/r",
+        "sdk-evolution-daily-2026-07-08",
+        "2026-07-08",
+        "tok",
+        opener=opener,
+        sleeper=lambda _: None,
+        attempts=5,
+    )
+    assert got is not None and got["fix_prs"] == "3"
+
+
+def test_poll_marker_times_out():
+    opener = _api_opener(issues=[{"number": 42}], comments=[])
+    slept = {"n": 0}
+
+    def sleeper(_):
+        slept["n"] += 1
+
+    got = sd.poll_completion_marker(
+        "o/r", "sid", "2026-07-08", "tok", opener=opener, sleeper=sleeper, attempts=3
+    )
+    assert got is None
+    assert slept["n"] == 2  # no sleep after the final attempt
+
+
+def test_decide_exit_incomplete_stream_recovered_by_marker():
+    st = _stream("event: action", 'data: {"action_name": "grep"}')
+    code, msg = sd.decide_exit(st, recovered={"fix_prs": "3"})
+    assert code == 0 and "completion marker" in msg
+    # An empty recovered dict (marker found, block malformed) still passes.
+    assert sd.decide_exit(st, recovered={})[0] == 0
+    # No recovery → the original failure.
+    assert sd.decide_exit(st, recovered=None)[0] == 1
+
+
+def test_decide_exit_error_wins_over_recovery():
+    st = _stream("event: error", 'data: {"code": "boom", "message": "kaboom"}')
+    assert sd.decide_exit(st, recovered={"fix_prs": "3"})[0] == 1
+
+
+def test_render_step_summary_recovered_run():
+    st = sd.SSEState()
+    st.got_event = True  # stream started, then dropped
+    out = sd.render_step_summary(
+        st,
+        "daily",
+        "2026-07-08",
+        "http://run",
+        recovered=sd.parse_summary(_SUMMARY_BLOCK),
+    )
+    assert "recovered via completion marker" in out
+    assert "| discovered | 12 |" in out
+    assert "BLDX-9" in out
+    assert "❌ failed" not in out

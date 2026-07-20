@@ -7,13 +7,18 @@
 # logic lives there, not on mothership.
 #
 # ONE pipeline, two tiers (the orchestration branches on TIER):
-#   daily  (Mon–Sat) — fast, high-confidence pass over the whole SDK.
-#   weekly (Sunday)  — the daily superset: design/ADR PRs, /audit-consumers
-#                      across v3 apps (bounded consumer PRs), toolkit deep review.
-# Both tiers cover application_sdk/, packages/conformance/ and contract-toolkit/.
+#   daily  (Mon–Sat) — light pass: last-36h commit delta across all daily check
+#                      families + ONE rotating deep-focus family per weekday.
+#   weekly (Sunday)  — ONE rotating design theme (ARCH → TEMPORAL → CONSUMERS →
+#                      TOOLKIT → DX → PERF), producing one DESIGN PR/ADR.
 #
 # The dispatch + SSE-stream parsing + GITHUB_STEP_SUMMARY rendering live in the
 # tested sdk_evolution_dispatch.py (see docs/standards/ci.md) — NOT inlined here.
+# The script also owns the stream-drop backstop: if mothership's SSE stream
+# drops mid-run (the sandbox usually keeps working), it polls the pinned
+# completion-marker issue (label `sdk-evolution-marker`) where the run's
+# Stage 7 posts its summary — so a dropped stream no longer fails a run that
+# actually completed. That backstop needs `issues: read` + GH_TOKEN below.
 #
 # SCHEDULE IS DISABLED until a manual run proves the step summary + Linear
 # parent link render (that observability gap is exactly why the previous cron
@@ -30,7 +35,7 @@ name: SDK Evolution
 
 on:
   # Re-enable once a manual run proves the run is observable (job summary +
-  # Linear parent link). Weekly (Sunday) is the superset; Mon–Sat are daily.
+  # Linear parent link). Sunday is the weekly design theme; Mon–Sat are daily.
   # schedule:
   #   - cron: '0 2 * * 0'      # Sunday 2am UTC  → weekly
   #   - cron: '0 2 * * 1-6'    # Mon–Sat 2am UTC → daily
@@ -45,21 +50,54 @@ on:
           - auto
           - daily
           - weekly
+      focus:
+        description: 'Daily only: deep-focus family override (auto = by weekday)'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - BUG
+          - DOCS
+          - TEST
+          - TYPES+APICOMPAT
+          - STALE+MANIFEST+LOG
+          - CONF
+      theme:
+        description: 'Weekly only: design theme override (auto = by ISO week)'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - ARCH
+          - TEMPORAL
+          - CONSUMERS
+          - TOOLKIT
+          - DX
+          - PERF
       consumer_pr_cap:
-        description: 'Weekly only: max consumer migration PRs per run (rest rotate to next week)'
+        description: 'Weekly CONSUMERS theme only: max consumer migration PRs per run'
         required: false
         default: '5'
+        type: string
+      base_branch:
+        description: 'Branch the sandbox clones (override to verify a PR branch pre-merge)'
+        required: false
+        default: 'main'
         type: string
 
 permissions:
   contents: read
+  issues: read
 
 jobs:
   trigger:
     runs-on: ubuntu-latest
     # The sandbox runs up to 2h (max_timeout_seconds: 7200); the dispatch
-    # script's stream timeout matches.
-    timeout-minutes: 130
+    # script's stream timeout matches, and the marker-poll backstop adds up
+    # to 45 min after a stream drop.
+    timeout-minutes: 175
     steps:
       - name: Checkout repo (for local globalprotect-connect action)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -91,14 +129,19 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
 
-      # Manual runs pass the chosen input; scheduled runs pass 'auto' and the
-      # tested dispatch script resolves it by weekday (weekly on Sunday, else
-      # daily) — keeping tier logic in one tested place, not the YAML.
+      # Manual runs pass the chosen inputs; scheduled runs pass 'auto' and the
+      # tested dispatch script resolves tier by weekday, the daily focus by
+      # weekday and the weekly theme by ISO week — keeping all of that logic
+      # in one tested place, not the YAML.
       - name: Dispatch SDK Evolution to mothership Rover Direct API
         env:
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
           HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           TIER: ${{ inputs.tier || 'auto' }}
+          FOCUS: ${{ inputs.focus || 'auto' }}
+          THEME: ${{ inputs.theme || 'auto' }}
           CONSUMER_PR_CAP: ${{ inputs.consumer_pr_cap || '5' }}
+          BASE_BRANCH: ${{ inputs.base_branch || 'main' }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 .github/scripts/sdk_evolution_dispatch.py

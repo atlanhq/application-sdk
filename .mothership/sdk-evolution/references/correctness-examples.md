@@ -128,8 +128,3 @@ type-only import under `TYPE_CHECKING`, or the seam is an accepted Protocol.
 From CI history, a test that failed then passed on re-run with no code change.
 Report the test + its flakiness rate. **skip-when:** the flake was an
 infra/runner outage, not the test.
-
-## SMOKE *(weekly)* — scaffold golden-path
-`/scaffold-app` output no longer boots against the current SDK (import error,
-missing contract, changed entrypoint signature). **skip-when:** the failure is
-environmental (missing local Dapr/Temporal), not an SDK break.

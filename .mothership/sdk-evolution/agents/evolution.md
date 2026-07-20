@@ -2,34 +2,39 @@
 
 You don't find bugs — you find OPPORTUNITIES to make the SDK better and CRUFT
 to remove, plus patterns that should become **conformance rules**. Your
-authority is `references/check-registry.md`; apply only the checks it assigns to
-the current `TIER`.
+authority is `references/check-registry.md`; apply only the checks the run
+scope assigns to you (daily: `[CONF]` on the delta / the Saturday `CONF`
+focus deep-scan; weekly: only your `THEME`).
 
 ## Domain tags
 
-- `[CONF]` *(always)* — a recurring, detectable pattern (≥ 3 findings this run)
-  that CI does **not** yet gate → propose a conformance rule (scope `sdk`
-  daily, `app` weekly). Rule + remediation ship in the SAME PR. Check
+- `[CONF]` *(daily — focus: Sat)* — a recurring, detectable pattern (≥ 3
+  findings this run or noted by recent runs) that CI does **not** yet gate →
+  propose a conformance rule (scope `sdk`; scope `app` on the CONSUMERS
+  theme). Rule + remediation ship in the SAME PR. Check
   `packages/conformance` first — never duplicate an existing rule.
-- `[DX]` *(weekly)* — API ergonomics: confusing param names, > 5 required
-  params, inconsistent sibling APIs, missing convenience/batch methods.
-- `[CENTRAL]` *(weekly)* — boilerplate repeated in ≥ 3 places → one SDK
+- `[DX]` *(weekly DX theme)* — API ergonomics: confusing param names, > 5
+  required params, inconsistent sibling APIs, missing convenience/batch methods.
+- `[CENTRAL]` *(weekly DX theme)* — boilerplate repeated in ≥ 3 places → one SDK
   abstraction; logic in the wrong layer; scattered config parsing.
-- `[TEMPORAL]` *(weekly)* — more idiomatic Temporal usage (signals/queries/
-  child-workflows/continue-as-new/heartbeat + retry defaults, determinism
-  boundaries) → proposes an **ADR PR** against `docs/adr/`.
-- `[TOOLKIT]` *(weekly)* — `contract-toolkit/` improvements; must go through the
-  `toolkit-feature-workflow` downstream-compat validation.
-- `[EXAMPLE]` *(weekly)* — `contract-toolkit/examples/` drift from current APIs.
-- `[FLEET]` *(weekly)* — from `/audit-consumers` data, which v3 apps are N SDK
-  versions behind; surface adoption laggards.
-- `[BOILERPLATE]` *(weekly)* — v3 app code reimplementing SDK-provided
-  functionality → migration PR that deletes it and calls the SDK (and, when the
-  reinvention recurs, a new app-scope conformance rule).
-- `[APPHEALTH]` *(weekly)* — v3 apps that no longer build / boot / pass CI
-  against the current SDK.
-- `[DOCSITE]` *(weekly)* — docs.atlan.com SDK guides referencing removed/renamed
-  symbols (via the `write-docs` lens).
+- `[DOCSITE]` *(weekly DX theme)* — docs.atlan.com SDK guides referencing
+  removed/renamed symbols (via the `write-docs` lens).
+- `[TEMPORAL]` *(weekly TEMPORAL theme)* — more idiomatic Temporal usage
+  (signals/queries/child-workflows/continue-as-new/heartbeat + retry defaults,
+  determinism boundaries) → proposes an **ADR PR** against `docs/adr/`.
+- `[TOOLKIT]` *(weekly TOOLKIT theme)* — `contract-toolkit/` improvements; must
+  go through the `toolkit-feature-workflow` downstream-compat validation.
+- `[EXAMPLE]` *(weekly TOOLKIT theme)* — `contract-toolkit/examples/` drift
+  from current APIs.
+- `[SMOKE]` *(weekly TOOLKIT theme)* — `/scaffold-app` no longer boots against
+  the current SDK.
+- `[BOILERPLATE]` *(weekly CONSUMERS theme)* — v3 app code reimplementing
+  SDK-provided functionality → migration PR that deletes it and calls the SDK
+  (and, when the reinvention recurs, a new app-scope conformance rule).
+- `[FLEET]` *(weekly CONSUMERS theme)* — from `/audit-consumers` data, which v3
+  apps are N SDK versions behind; surface adoption laggards.
+- `[APPHEALTH]` *(weekly CONSUMERS theme)* — v3 apps that no longer build /
+  boot / pass CI against the current SDK.
 
 ## Inputs
 

@@ -1,27 +1,53 @@
 # SDK Evolution — Check Registry
 
-One registry, tier-mapped. This replaces the old per-domain rule files. Every
-check declares its **tier** (`daily` / `weekly`), the **surface** it runs
-against, and its **exit** (FIX PR, DESIGN PR/ticket, or a conformance-rule
-proposal).
+One registry, tier-mapped. Every check declares its **tier** (`daily` /
+`weekly`), the **surface** it runs against, and its **exit** (FIX PR, DESIGN
+PR/ticket, or a conformance-rule proposal).
 
-> **daily** = the fast, high-confidence pass that runs Mon–Sat. Whole SDK, but
-> shallow: only report what a senior engineer would fix without a design debate.
-> **weekly** = the Sunday superset. Everything daily does, plus the deep,
-> design-level and cross-repo work. Weekly is the expensive run.
+> **daily** = the light Mon–Sat pass: the last-36h **commit delta** gets ALL
+> daily families; today's **`FOCUS`** family additionally goes deep across all
+> three surfaces. Only report what a senior engineer would fix without a
+> design debate.
+> **weekly** = ONE Sunday design deep-dive on **`THEME`**. Weekly does NOT run
+> the daily families.
 
 **Worked examples** (concrete BAD → GOOD + skip-when per check) live alongside
 this file — each discovery agent reads its own set:
 `correctness-examples.md`, `safety-examples.md`, `evolution-examples.md`. This
 file is the index (what/when/exit); those are the precision anchors.
 
-## Surfaces (all three, every run)
+## Daily focus rotation (set by the dispatch script, override via `FOCUS`)
 
-| Surface | Path | Daily depth | Weekly depth |
+| Weekday | FOCUS (deep scan, all three surfaces) |
+|---|---|
+| Mon | `BUG` |
+| Tue | `DOCS` |
+| Wed | `TEST` |
+| Thu | `TYPES+APICOMPAT` |
+| Fri | `STALE+MANIFEST+LOG` |
+| Sat | `CONF` |
+
+`SEC` is not a focus day — it applies to **every** daily delta scan (a
+security defect must never wait for its weekday).
+
+## Weekly theme rotation (set by the dispatch script via ISO week, override via `THEME`)
+
+| THEME | Covers (old check names) | Owning agent |
+|---|---|---|
+| `ARCH` | ARCH — ADR drift, dependency direction, dumping-ground files | correctness-quality |
+| `TEMPORAL` | TEMPORAL — idiomatic Temporal adoption → ADR PR | evolution |
+| `CONSUMERS` | CONSUMERS + BOILERPLATE + FLEET + APPHEALTH — v3 app audit | evolution |
+| `TOOLKIT` | TOOLKIT + EXAMPLE + SMOKE — toolkit deep review + scaffold check | evolution |
+| `DX` | DX + CENTRAL + DOCSITE — ergonomics, centralization, docs-site drift | evolution |
+| `PERF` | PERF + PERFTREND + DEPDRIFT + FLAKY — hot paths, trends, dep drift, flaky tests | safety (+ correctness-quality for FLAKY) |
+
+## Surfaces
+
+| Surface | Path | Daily | Weekly |
 |---|---|---|---|
-| SDK source | `application_sdk/` | full, shallow | full, deep |
-| Conformance | `packages/conformance/` | rule-proposal only | rule-proposal + `/remediate` |
-| Contract toolkit | `contract-toolkit/` | lint + docstring drift | full review via `toolkit-feature-workflow` (downstream-compat) |
+| SDK source | `application_sdk/` | delta + FOCUS deep | as the THEME requires |
+| Conformance | `packages/conformance/` | delta + FOCUS deep (CONF = rule proposals) | as the THEME requires |
+| Contract toolkit | `contract-toolkit/` | delta + FOCUS deep | TOOLKIT theme: full review via `toolkit-feature-workflow` |
 
 ---
 
@@ -45,12 +71,14 @@ not a PR — it is a **conformance-rule proposal** (check `CONF` below).
 
 ---
 
-## DAILY checks
+## DAILY check families
 
 Confidence bar is high (≥ 85). If it needs a design debate, it is not a daily
-FIX — downgrade it to a weekly DESIGN candidate and move on.
+FIX — note it for the matching weekly THEME and move on. Every family below
+runs on the **delta scan**; the FOCUS family additionally runs deep,
+everywhere.
 
-### BUG — semantic correctness `[daily]`
+### BUG — semantic correctness `[focus: Mon]`
 Runtime-correctness defects static analysis misses. Priority order:
 1. Temporal **determinism** violations — `random`/`time`/wall-clock/IO inside
    `run()` / `@entrypoint` (must be in a `@task`).
@@ -62,9 +90,18 @@ Runtime-correctness defects static analysis misses. Priority order:
 7. None/Optional mishandling; mutable default arguments.
 8. Off-by-one, inverted conditions, wrong comparison operators.
 
-**Exit:** small clean fix → FIX PR (write a failing test FIRST). Larger → weekly DESIGN.
+**Exit:** small clean fix → FIX PR (write a failing test FIRST). Larger → note
+for the ARCH theme.
 
-### DOCS — documentation quality & staleness `[daily]`
+### SEC — security `[every daily delta scan]`
+Security defects logic scanners miss: credential handling flaws, multi-tenant
+isolation gaps, missing validation at system boundaries, path traversal,
+error-info disclosure, unsafe deserialization reachable at runtime. Always
+Critical or High — never Medium.
+
+**Exit:** FIX PR (failing test first).
+
+### DOCS — documentation quality & staleness `[focus: Tue]`
 - Docstring drift: params/returns/raises out of sync with the signature.
 - Broken or non-running code examples in `docs/` and docstrings.
 - Stale version refs, dead internal links, references to removed v2 symbols.
@@ -72,7 +109,7 @@ Runtime-correctness defects static analysis misses. Priority order:
 
 **Exit:** FIX PR (docs are low-risk). Group per doc area.
 
-### TEST — test *quality* (not existence) `[daily]`
+### TEST — test *quality* (not existence) `[focus: Wed]`
 Existence of some test is not the check — CI coverage already tracks that.
 Flag tests that pass but don't protect:
 - Assertion-free or vague (`assert result`, `assert x is not None`).
@@ -83,23 +120,38 @@ Flag tests that pass but don't protect:
 
 **Exit:** FIX PR. Group per module.
 
-### STALE — deprecation / dead-code / TODO aging `[daily]`
+### TYPES — public-surface type safety `[focus: Thu]`
+Gradual-typing erosion pyright doesn't error on: a public/exported signature
+that newly widens to `Any`, bare `dict`/`list`, or `Dict[str, Any]` in a
+contract, or a missing return annotation on an exported symbol.
+
+**Exit:** FIX PR.
+
+### APICOMPAT — public API break detection `[focus: Thu]`
+An exported symbol (in an `__all__`) removed, renamed, or with a changed
+signature and **no deprecation path** — a silent break for connectors. Diff the
+public surface against the last release tag.
+
+**Exit:** FIX PR (restore + deprecate) — or note for the ARCH theme if the
+break is intended.
+
+### STALE — deprecation / dead-code / TODO aging `[focus: Fri]`
 - `warnings.warn(..., DeprecationWarning)` older than 3 months where all
   callers have migrated → remove the shim.
 - Zero-caller functions/classes (skip if exported, used in tests, or in
   `_temporal`/`_dapr`/`_redis` internals).
 - TODO/FIXME/HACK older than 6 months with no linked ticket → file or fix.
 
-**Exit:** small removal → FIX PR; broad cleanup → weekly DESIGN.
+**Exit:** small removal → FIX PR; broad cleanup → note for the ARCH theme.
 
-### MANIFEST — capability-manifest content freshness `[daily]`
+### MANIFEST — capability-manifest content freshness `[focus: Fri]`
 Presence is CI-gated; **content drift** is not. If a public symbol's signature
 or contract changed but `docs/agents/sdk-capabilities.md` still shows the old
 shape, regenerate via `/capability-manifest`.
 
 **Exit:** FIX PR (regeneration only).
 
-### LOG — observability signal quality `[daily]`
+### LOG — observability signal quality `[focus: Fri]`
 Not the L-series log-*level* lint (conformance owns that). Flag log **signal**
 defects: exceptions swallowed with no log, stack traces dropped on re-raise,
 ERROR used for non-failures, or INFO chatter that buries real lifecycle events.
@@ -107,23 +159,10 @@ Apply the `signal-over-noise` lens.
 
 **Exit:** FIX PR.
 
-### TYPES — public-surface type safety `[daily]`
-Gradual-typing erosion pyright doesn't error on: a public/exported signature
-that newly widens to `Any`, bare `dict`/`list`, or `Dict[str, Any]` in a
-contract, or a missing return annotation on an exported symbol.
-
-**Exit:** FIX PR.
-
-### APICOMPAT — public API break detection `[daily]`
-An exported symbol (in an `__all__`) removed, renamed, or with a changed
-signature and **no deprecation path** — a silent break for connectors. Diff the
-public surface against the last release tag.
-
-**Exit:** FIX PR (restore + deprecate) — or DESIGN if the break is intended.
-
-### CONF — SDK-level conformance rule proposal `[daily]`
-When ≥ 3 findings this run share one detectable pattern that CI does **not**
-yet gate, propose a conformance rule instead of N point fixes.
+### CONF — SDK-level conformance rule proposal `[focus: Sat]`
+When ≥ 3 findings (this run or noted by recent runs) share one detectable
+pattern that CI does **not** yet gate, propose a conformance rule instead of N
+point fixes.
 - Scope = `sdk` (runs against SDK source).
 - **Rule + remediation ship in the SAME PR** (per the `/conformance` discipline).
 - Do not duplicate an existing rule — check `packages/conformance` first.
@@ -132,11 +171,13 @@ yet gate, propose a conformance rule instead of N point fixes.
 
 ---
 
-## WEEKLY checks (superset — daily + the below)
+## WEEKLY themes — what "deep" means per theme
 
-Budget is larger; fan-out and cross-repo work live here.
+The weekly output contract: **one** DESIGN PR/ADR (+ child ticket,
+`needs-design-review`) + at most 3 incidental FIX PRs. Pick the single most
+valuable design change the theme surfaces; fold or KILL the rest.
 
-### ARCH — architecture / ADR drift `[weekly]`
+### ARCH — architecture / ADR drift
 Check against the ADR library in `docs/adr/`:
 - Dependency direction `app/ → execution/ → infrastructure/` (never reverse).
 - Direct `temporalio` / `DaprClient` imports outside the `_temporal`/`_dapr`/`_redis` seams.
@@ -145,110 +186,51 @@ Check against the ADR library in `docs/adr/`:
 - **Cross-cutting refactor detection:** a single file producing ≥ 5 findings →
   ONE holistic DESIGN ticket, not five point fixes.
 
-**Exit:** DESIGN PR/ticket, `needs-design-review`.
-
-### TEMPORAL — better Temporal-concept adoption → ADR PR `[weekly]`
+### TEMPORAL — better Temporal-concept adoption → ADR PR
 Where the SDK could model workflows more idiomatically:
 - Signals / queries / updates instead of polling or side-channel state.
 - Child workflows / `continue-as-new` for unbounded or long histories.
 - Correct heartbeat + activity retry-policy defaults.
 - Tightening determinism boundaries.
+The DESIGN output is an **ADR PR** against `docs/adr/` with a prototype diff
+where feasible.
 
-**Exit:** an **ADR PR** against `docs/adr/` proposing the change, with a
-prototype diff where feasible. `needs-design-review`.
-
-### CONSUMERS — v3 app audit → evolution + boilerplate removal + conformance `[weekly]`
+### CONSUMERS — v3 app audit (+ fleet health & version drift)
 Run `/audit-consumers --sdk-major 3` (grep-based, read-only discovery) across
-`atlanhq/` **v3 apps only** (v2 / other majors are skipped). Four angles:
+`atlanhq/` **v3 apps only**. Four angles:
 - **Boilerplate removal** — app code that reimplements something the SDK
-  ALREADY provides (retry/backoff, pagination, credential resolution,
-  state/object store, logging setup, heartbeating, typed errors, config
-  parsing, …). Raise a migration PR that **deletes the app code and calls the
-  SDK** instead — smaller app surface, one canonical path.
-- **Missing guardrail → new check** — when the same reinvention recurs and no
-  rule catches it, add an **app-scope conformance rule** (scope = `app`, rule +
-  remediation same PR) so future apps can't drift back into it.
+  ALREADY provides → migration PR that deletes it and calls the SDK.
+- **Missing guardrail → new check** — recurring reinvention no rule catches →
+  an **app-scope conformance rule** (rule + remediation same PR).
 - **SDK gap → evolution** — a pattern ≥ 3 apps reinvent that the SDK does NOT
-  yet provide → DESIGN proposal for a new SDK utility.
-- **Migration PRs** raised against app repos with `--raise-prs`, limited by
-  `CONSUMER_PR_CAP` per run (external-repo safety knob for the 2h budget);
-  rotate the remainder to following weeks.
+  provide → this week's DESIGN proposal.
+- **APPHEALTH / FLEET** — per-app build/boot/CI status against the current SDK
+  and version-drift laggards → a fleet-health section on the parent ticket.
+Migration PRs use `--raise-prs`, capped at `CONSUMER_PR_CAP`; rotate the
+remainder to the next CONSUMERS week.
 
-**Exit:** SDK DESIGN tickets + app conformance PR(s) + boilerplate-removal PRs
-(≤ cap) against v3 app repos.
-
-### APPHEALTH — v3 app fleet health `[weekly]`
-Are the v3 apps actually running? For each discovered **v3** app, check whether
-it still **builds / boots / passes its own CI against the CURRENT SDK** — so a
-broken or stalled fleet is visible instead of silent. Surface apps that are red,
-or pinned to an old SDK major/minor and drifting.
-
-**Exit:** a fleet-health section on the parent ticket + a DESIGN ticket per app
-that is broken against the current SDK.
-
-### TOOLKIT — contract-toolkit deep review `[weekly]`
+### TOOLKIT — contract-toolkit deep review
 Review `contract-toolkit/` through the `toolkit-feature-workflow` lens:
 classify affected generated surfaces and run the **mandatory downstream-compat
 validation** before proposing changes. Never review it like plain SDK source.
+Include: `contract-toolkit/examples/` freshness (EXAMPLE) and the
+`/scaffold-app` golden-path boot check (SMOKE).
 
-**Exit:** FIX PR for safe changes; DESIGN for anything touching generated contracts.
-
-### DX / CENTRAL — ergonomics & centralization `[weekly]`
-- Repeated boilerplate in ≥ 3 places → propose one SDK abstraction.
+### DX — ergonomics, centralization & docs-site drift
+- Repeated boilerplate in ≥ 3 places → propose one SDK abstraction (CENTRAL).
 - Confusing param names, > 5 required params, inconsistent sibling APIs.
 - Missing convenience/batch methods connectors keep reimplementing.
+- docs.atlan.com SDK guides referencing removed/renamed symbols (DOCSITE, via
+  the `write-docs` lens).
 
-**Exit:** DESIGN PR with proposed implementation.
-
-### PERF — performance review `[weekly]`
-Only worth-checked hot paths (skip low-frequency / zero-caller code):
-blocking-in-async on hot paths, missing timeouts, unbounded memory, N+1,
-missing pooling, sync large-file IO. Static perf lint is not the job here.
-
-**Exit:** FIX PR (with a benchmark note) or DESIGN.
-
-### EXAMPLE — example-app freshness `[weekly]`
-`contract-toolkit/examples/` still builds and reflects current SDK APIs; no
-references to removed symbols.
-
-**Exit:** FIX PR.
-
-### FLEET — v3 adoption & version drift `[weekly]`
-From the `/audit-consumers` discovery data, which `atlanhq/` v3 apps are N SDK
-versions behind. Surface the laggards so adoption is visible; complements the
-conformance fleet dashboard.
-
-**Exit:** a summary section on the parent ticket (+ a DESIGN ticket where a
-migration is actually needed).
-
-### DEPDRIFT — dependency / runtime version staleness `[weekly]`
-Beyond CVE scanning (trivy/grype own that): direct deps, and the **Dapr** and
-**Temporal** SDK versions, materially behind upstream stable — or a pin that is
-blocking a security-relevant upgrade.
-
-**Exit:** bump PR — or DESIGN if the upgrade needs source changes.
-
-### PERFTREND — performance regression trend `[weekly]`
-Run the micro-benchmark suite and compare against the previous weekly run; flag
-regressions over a threshold instead of one-shot guesses. Static perf lint is
-not the job (that's the `PERF` check).
-
-**Exit:** DESIGN ticket with the measured delta.
-
-### FLAKY — flaky-test detection `[weekly]`
-Mine recent CI history for tests that pass only on retry or intermittently —
-the unit suite hides these because a green re-run looks clean.
-
-**Exit:** FIX PR (stabilise) — or DESIGN if it exposes a real race.
-
-### SMOKE — golden-path scaffold check `[weekly]`
-Does `/scaffold-app` still produce an app that boots against the current SDK?
-Catches integration breakage the unit suite misses.
-
-**Exit:** FIX PR.
-
-### DOCSITE — published-docs drift `[weekly]`
-Cross-check the docs.atlan.com SDK guides against the real APIs (via the
-`write-docs` lens); flag guides that reference removed/renamed symbols.
-
-**Exit:** DESIGN ticket (published-docs changes are reviewed).
+### PERF — performance, trends, dependencies & flaky tests
+- Hot-path review: blocking-in-async, missing timeouts, unbounded memory, N+1,
+  missing pooling, sync large-file IO. Only worth-checked hot paths — skip
+  low-frequency / zero-caller code (that worth-check lives in
+  `safety-examples.md`).
+- PERFTREND: run the micro-benchmark suite vs the previous PERF week; flag
+  regressions over a threshold instead of one-shot guesses.
+- DEPDRIFT: direct deps and the **Dapr**/**Temporal** SDK versions materially
+  behind upstream stable, or a pin blocking a security-relevant upgrade
+  (beyond CVE scanning, which trivy/grype own).
+- FLAKY: mine recent CI history for tests that pass only on retry.
