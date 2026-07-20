@@ -35,6 +35,12 @@ def _raise_value_error() -> None:
     raise ValueError("boom")
 
 
+def _pid() -> int:
+    import os
+
+    return os.getpid()
+
+
 # ---------------------------------------------------------------------------
 # run_fault_isolated — the mechanism: isolates, and RAISES on failure
 # ---------------------------------------------------------------------------
@@ -88,6 +94,28 @@ async def test_foreign_discard_never_cancels_a_concurrent_caller():
     assert isinstance(hung, TimeoutError)
     assert not isinstance(foreign, asyncio.CancelledError)
     assert isinstance(foreign, BrokenProcessPool)
+
+
+# ---------------------------------------------------------------------------
+# max_workers — the concurrency lever (default parallel; opt-in serialise)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_max_workers_1_serialises_into_a_single_child():
+    # Opt-in sequentialisation: a width-1 pool has exactly one child, so
+    # concurrent max_workers=1 callers all run in that same child (serialised),
+    # provably the same PID — no parallel decode.
+    pids = await asyncio.gather(
+        *(run_fault_isolated(_pid, max_workers=1) for _ in range(4))
+    )
+    assert len(set(pids)) == 1
+
+
+@pytest.mark.asyncio
+async def test_max_workers_below_one_is_rejected():
+    with pytest.raises(ValueError):
+        await run_fault_isolated(_pid, max_workers=0)
 
 
 # ---------------------------------------------------------------------------

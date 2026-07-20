@@ -323,41 +323,45 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
 #   single thread but every lock, in whatever state the other threads left
 #   them — a deadlock/corruption factory. spawn starts a clean interpreter.
 #
-# Lazy, discarded on crash or timeout and re-created on the next call. Created
-# only when run_fault_isolated is first used, so processes that never need
-# isolation never pay for a child.
+# Lazy and cached by width: callers passing the same max_workers share one
+# ProcessPoolExecutor of that width, created on first use; distinct widths get
+# distinct pools, so discarding one width's pool on a crash never disturbs
+# another's. Processes that never need isolation never pay for a child.
 #
-# Concurrency: the pool runs several children so concurrent best-effort callers
-# decode in PARALLEL, not serialised behind one child. Isolation here is purely
-# fault containment — NOT a serialisation crutch to dodge the msgspec 0.20.0
-# concurrent-decode segfault: that bug is same-process (a shared in-process
-# decoder across threads); separate child processes don't share that state, and
-# once msgspec 0.21.1 lands even same-process concurrent decode is safe. Capped
-# low because each spawn child re-imports the decode stack (pyatlan/msgspec),
-# which costs memory under a pod limit. (A crash in any one child breaks the
-# whole ProcessPoolExecutor — inherent to the executor — so concurrent callers
-# then see BrokenProcessPool; for best-effort work that is a benign skip.)
-_PROCESS_EXECUTOR: concurrent.futures.ProcessPoolExecutor | None = None
-_PROCESS_EXECUTOR_LOCK = threading.Lock()
-_PROCESS_POOL_MAX_WORKERS = min(4, (os.cpu_count() or 1))
+# Concurrency: the default pool runs several children so concurrent best-effort
+# callers decode in PARALLEL, not serialised behind one child. Isolation here is
+# purely fault containment — NOT a serialisation crutch to dodge the msgspec
+# 0.20.0 concurrent-decode segfault: that bug is same-process (a shared
+# in-process decoder across threads); separate child processes don't share that
+# state, and once msgspec 0.21.1 lands even same-process concurrent decode is
+# safe. The default width is capped low because each spawn child re-imports the
+# decode stack (pyatlan/msgspec), which costs memory under a pod limit. A caller
+# that wants to bound — or serialise (max_workers=1) — its own work passes an
+# explicit width. (A crash in any one child breaks the whole ProcessPoolExecutor
+# — inherent to the executor — so concurrent callers on that width then see
+# BrokenProcessPool; for best-effort work that is a benign skip.)
+_DEFAULT_PROCESS_POOL_MAX_WORKERS = min(4, (os.cpu_count() or 1))
+_PROCESS_EXECUTORS: dict[int, concurrent.futures.ProcessPoolExecutor] = {}
+_PROCESS_EXECUTORS_LOCK = threading.Lock()
 
 
-def _get_process_executor() -> concurrent.futures.ProcessPoolExecutor:
-    global _PROCESS_EXECUTOR
-    with _PROCESS_EXECUTOR_LOCK:
-        if _PROCESS_EXECUTOR is None:
-            _PROCESS_EXECUTOR = concurrent.futures.ProcessPoolExecutor(
-                max_workers=_PROCESS_POOL_MAX_WORKERS,
+def _get_process_executor(max_workers: int) -> concurrent.futures.ProcessPoolExecutor:
+    with _PROCESS_EXECUTORS_LOCK:
+        executor = _PROCESS_EXECUTORS.get(max_workers)
+        if executor is None:
+            executor = concurrent.futures.ProcessPoolExecutor(
+                max_workers=max_workers,
                 mp_context=multiprocessing.get_context("spawn"),
             )
-        return _PROCESS_EXECUTOR
+            _PROCESS_EXECUTORS[max_workers] = executor
+        return executor
 
 
-def _discard_process_executor() -> None:
-    """Drop the pool (and kill its child) so the next call starts fresh."""
-    global _PROCESS_EXECUTOR
-    with _PROCESS_EXECUTOR_LOCK:
-        executor, _PROCESS_EXECUTOR = _PROCESS_EXECUTOR, None
+def _discard_process_executor(max_workers: int) -> None:
+    """Drop the width-``max_workers`` pool (and kill its children) so the next
+    call at that width starts fresh."""
+    with _PROCESS_EXECUTORS_LOCK:
+        executor = _PROCESS_EXECUTORS.pop(max_workers, None)
     if executor is None:
         return
     # Kill the children BEFORE shutdown(): a dead child is the pool's
@@ -379,7 +383,11 @@ def _discard_process_executor() -> None:
 
 
 async def run_fault_isolated(
-    func: Callable[..., T], *args: Any, timeout: float | None = None, **kwargs: Any
+    func: Callable[..., T],
+    *args: Any,
+    timeout: float | None = None,
+    max_workers: int | None = None,
+    **kwargs: Any,
 ) -> T:
     """Run ``func`` in an isolated child process (native-crash containment).
 
@@ -408,18 +416,28 @@ async def run_fault_isolated(
         func: Module-level function to run in the child.
         timeout: Seconds to wait before killing the child and raising
             ``TimeoutError``. ``None`` waits forever.
+        max_workers: Width of the (width-keyed) process pool this call runs on.
+            ``None`` (default) uses ``min(4, cpu_count)`` so concurrent callers
+            decode in parallel. Pass ``1`` to opt into sequential execution —
+            all ``max_workers=1`` callers share a single child and queue behind
+            one another; pass another integer to bound concurrency at a
+            different width. Must be >= 1.
 
     Raises:
         BrokenProcessPool: The child died abnormally (native crash), or a
-            concurrent caller's timeout discarded the shared pool while this
-            call was queued. The pool is discarded; the next call gets a
-            fresh child.
+            concurrent caller on the same pool discarded it (timeout) while this
+            call was in flight. That pool is discarded; the next call at this
+            width gets a fresh child.
         TimeoutError: ``timeout`` elapsed. The child is killed and the pool
             discarded.
+        ValueError: ``max_workers`` is < 1.
     """
+    workers = _DEFAULT_PROCESS_POOL_MAX_WORKERS if max_workers is None else max_workers
+    if workers < 1:
+        raise ValueError(f"max_workers must be >= 1, got {workers}")
     loop = asyncio.get_running_loop()
     future = loop.run_in_executor(
-        _get_process_executor(), functools.partial(func, *args, **kwargs)
+        _get_process_executor(workers), functools.partial(func, *args, **kwargs)
     )
     if timeout is not None:
         # Not asyncio.wait_for: on timeout it cancels the future and then waits
@@ -428,7 +446,7 @@ async def run_fault_isolated(
         # asyncio.wait just stops waiting; we then kill the child ourselves.
         done, _ = await asyncio.wait({future}, timeout=timeout)
         if not done:
-            _discard_process_executor()
+            _discard_process_executor(workers)
             # The kill resolves the abandoned future with BrokenProcessPool;
             # consume it so asyncio never logs "exception was never retrieved".
             future.add_done_callback(lambda f: None if f.cancelled() else f.exception())
@@ -436,7 +454,7 @@ async def run_fault_isolated(
     try:
         return await future
     except BrokenProcessPool:
-        _discard_process_executor()
+        _discard_process_executor(workers)
         raise
     except asyncio.CancelledError:
         task = asyncio.current_task()
@@ -457,6 +475,7 @@ async def run_best_effort(
     label: str,
     logger: AtlanLoggerAdapter,
     timeout: float | None = None,
+    max_workers: int | None = None,
     **kwargs: Any,
 ) -> T | None:
     """Run non-essential native work fault-isolated; never let it break the caller.
@@ -481,12 +500,17 @@ async def run_best_effort(
         logger: The caller's logger, so the warning is attributed to the
             caller's module (OTel source) rather than this one.
         timeout: Seconds before the child is killed and the run is skipped.
+        max_workers: Pool width, forwarded to :func:`run_fault_isolated`. ``None``
+            uses the default ``min(4, cpu_count)``; pass ``1`` to serialise this
+            work.
 
     Returns:
         ``func``'s result, or ``None`` if the run crashed, timed out, or errored.
     """
     try:
-        return await run_fault_isolated(func, *args, timeout=timeout, **kwargs)
+        return await run_fault_isolated(
+            func, *args, timeout=timeout, max_workers=max_workers, **kwargs
+        )
     except BrokenProcessPool:
         logger.warning(
             "%s subprocess died or was discarded (a native fault in a "
