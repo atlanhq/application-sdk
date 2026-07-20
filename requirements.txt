@@ -92,7 +92,7 @@ fastar==0.11.0
     # via
     #   fastapi
     #   fastapi-cloud-cli
-filelock==3.31.0
+filelock==3.31.1
     # via
     #   python-discovery
     #   virtualenv
@@ -438,7 +438,7 @@ win32-setctime==1.2.0 ; sys_platform == 'win32'
     # via loguru
 wrapt==2.2.2
     # via opentelemetry-instrumentation
-yarl==1.24.2
+yarl==1.24.5
     # via aiohttp
 zipp==4.1.0
     # via importlib-metadata
