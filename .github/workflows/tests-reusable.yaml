@@ -197,7 +197,7 @@ jobs:
         shell: bash
         run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -263,7 +263,7 @@ jobs:
         shell: bash
         run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -350,7 +350,7 @@ jobs:
       # scripts don't exist on `main` until such a PR lands — the fallback
       # below is skipped whenever the pinned ref already carries them).
       - name: Checkout application-sdk callback script
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: ${{ inputs.application-sdk-ref }}
@@ -386,7 +386,7 @@ jobs:
       - name: Fall back to main callback scripts if pinned SHA predates them
         id: scripts-fallback
         if: hashFiles('application-sdk-scripts/.github/scripts/build_callback_summary.py') == ''
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: main
