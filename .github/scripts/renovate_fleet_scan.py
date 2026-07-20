@@ -90,10 +90,10 @@ def resolve_scope(org: str, repo: Optional[str]) -> str:
     return f"repo:{repo}" if repo else f"org:{org}"
 
 
-# Renovate PR authors to scan. During the fleet cutover both engines coexist:
-# the Mend-hosted app (app/renovate) and the self-hosted runner
-# (app/atlan-app-fleet). GitHub PR search OR's multiple author: qualifiers.
-# Narrow to ("app/atlan-app-fleet",) once Mend is uninstalled (PR2 Stage 4).
+# Renovate PR authors to scan. The self-hosted runner (app/atlan-app-fleet)
+# covers the app fleet; application-sdk itself still uses the Mend-hosted app
+# (app/renovate) for its own workflow-action updates, so keep both. GitHub PR
+# search OR's multiple author: qualifiers.
 RENOVATE_PR_AUTHORS = ("app/renovate", "app/atlan-app-fleet")
 
 
