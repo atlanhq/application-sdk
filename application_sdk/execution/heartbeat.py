@@ -323,11 +323,23 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
 #   single thread but every lock, in whatever state the other threads left
 #   them — a deadlock/corruption factory. spawn starts a clean interpreter.
 #
-# Lazy, single-worker, discarded on crash or timeout and re-created on the
-# next call. Created only when run_fault_isolated is first used, so processes
-# that never need isolation never pay for the child.
+# Lazy, discarded on crash or timeout and re-created on the next call. Created
+# only when run_fault_isolated is first used, so processes that never need
+# isolation never pay for a child.
+#
+# Concurrency: the pool runs several children so concurrent best-effort callers
+# decode in PARALLEL, not serialised behind one child. Isolation here is purely
+# fault containment — NOT a serialisation crutch to dodge the msgspec 0.20.0
+# concurrent-decode segfault: that bug is same-process (a shared in-process
+# decoder across threads); separate child processes don't share that state, and
+# once msgspec 0.21.1 lands even same-process concurrent decode is safe. Capped
+# low because each spawn child re-imports the decode stack (pyatlan/msgspec),
+# which costs memory under a pod limit. (A crash in any one child breaks the
+# whole ProcessPoolExecutor — inherent to the executor — so concurrent callers
+# then see BrokenProcessPool; for best-effort work that is a benign skip.)
 _PROCESS_EXECUTOR: concurrent.futures.ProcessPoolExecutor | None = None
 _PROCESS_EXECUTOR_LOCK = threading.Lock()
+_PROCESS_POOL_MAX_WORKERS = min(4, (os.cpu_count() or 1))
 
 
 def _get_process_executor() -> concurrent.futures.ProcessPoolExecutor:
@@ -335,7 +347,7 @@ def _get_process_executor() -> concurrent.futures.ProcessPoolExecutor:
     with _PROCESS_EXECUTOR_LOCK:
         if _PROCESS_EXECUTOR is None:
             _PROCESS_EXECUTOR = concurrent.futures.ProcessPoolExecutor(
-                max_workers=1,
+                max_workers=_PROCESS_POOL_MAX_WORKERS,
                 mp_context=multiprocessing.get_context("spawn"),
             )
         return _PROCESS_EXECUTOR

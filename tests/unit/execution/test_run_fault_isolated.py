@@ -67,22 +67,27 @@ async def test_timeout_kills_hung_child_and_pool_recycles():
 
 
 @pytest.mark.asyncio
-async def test_foreign_timeout_discard_never_cancels_a_queued_caller():
-    """A caller queued behind a timing-out one must see a catchable exception.
+async def test_foreign_discard_never_cancels_a_concurrent_caller():
+    """A caller whose child is discarded by *another* caller's timeout must see
+    a catchable exception, never CancelledError.
 
-    With the single-worker pool, the second call is provably still queued when
-    the first one's timeout discards the pool. That must surface to the second
-    caller as BrokenProcessPool (catchable), never CancelledError (a
-    BaseException that would escape a warn-only except-Exception guard).
+    The pool is now multi-worker (concurrent decode is allowed), so both calls
+    run at once. Both hang; the first has a short timeout and, on firing,
+    discards the shared pool — killing the second's still-running child. The
+    second must surface as BrokenProcessPool (catchable), never CancelledError
+    (a BaseException that would escape a warn-only except-Exception guard). The
+    second's own long timeout never fires. (On a single-core box the pool is
+    1-wide and the second is queued rather than running, but the required
+    outcome — BrokenProcessPool, not CancelledError — is identical.)
     """
-    hung, queued = await asyncio.gather(
+    hung, foreign = await asyncio.gather(
         run_fault_isolated(_sleep_forever, timeout=0.5),
-        run_fault_isolated(_echo, "queued"),
+        run_fault_isolated(_sleep_forever, timeout=30),
         return_exceptions=True,
     )
     assert isinstance(hung, TimeoutError)
-    assert not isinstance(queued, asyncio.CancelledError)
-    assert isinstance(queued, BrokenProcessPool)
+    assert not isinstance(foreign, asyncio.CancelledError)
+    assert isinstance(foreign, BrokenProcessPool)
 
 
 # ---------------------------------------------------------------------------

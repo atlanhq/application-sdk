@@ -73,12 +73,6 @@ def _hang(path, **kwargs):
     time.sleep(3600)
 
 
-def _hang_if_marked(path, **kwargs):
-    if "hangme" in str(path):
-        time.sleep(3600)
-    return None
-
-
 def _invalid_table() -> Table:
     # Per-asset invalid: qualified_name cleared, caught by pyatlan_v9 .validate().
     table = Table.creator(name="T1", schema_qualified_name=SCHEMA_QN)
@@ -141,9 +135,9 @@ def _outcome_event(logger: MagicMock) -> dict:
 class TestWarnOnInvalidTransformedAssets:
     @pytest.fixture(autouse=True)
     def _enable_validation(self):
-        # The production default is OFF (CNCT-85, see constants). These tests
-        # exercise the enabled behavior, so force the flag on; the disabled-path
-        # test re-patches it False for its own body.
+        # Force the flag on so these tests are independent of the env default
+        # (this branch defaults it ON; main currently defaults it OFF). The
+        # disabled-path test re-patches it False for its own body.
         with patch("application_sdk.constants.VALIDATE_ASSETS_ON_UPLOAD", True):
             yield
 
@@ -345,43 +339,37 @@ class TestWarnOnInvalidTransformedAssets:
             assert "timed out" in logger.warning.call_args.args[0]
             logger.info.assert_not_called()
 
-    async def test_concurrent_upload_survives_anothers_timeout(
+    async def test_concurrent_uploads_both_survive_timeouts(
         self, tmp_path: Path
     ) -> None:
-        # Reviewer finding on the first cut of CNCT-85: with the shared
-        # single-worker pool, a second upload's validation queued behind a
-        # hung one was cancelled by the first one's timeout discard, and the
-        # CancelledError (a BaseException) escaped the warn-only guards into
-        # upload(). Both callers must complete without raising.
-        hang_dir = tmp_path / "hangme"
-        ok_dir = tmp_path / "ok"
-        for base in (hang_dir, ok_dir):
+        # Reviewer finding on the first cut of CNCT-85: when one caller's timeout
+        # discarded the shared pool, a concurrent caller's future could surface
+        # as CancelledError (a BaseException) and escape the warn-only guards
+        # into upload(). The pool is now multi-worker, so both run concurrently.
+        # Run two validations that both hang past the timeout: each is either
+        # killed by its own timeout or by the other's pool-discard — either way
+        # it must warn-and-continue (return None), never raise.
+        dir_a = tmp_path / "a"
+        dir_b = tmp_path / "b"
+        for base in (dir_a, dir_b):
             _valid_hierarchy(base)
         with patch.object(base_module, "_task_logger") as logger:
             with (
-                patch(
-                    "application_sdk.validation.validate_transformed_dir",
-                    _hang_if_marked,
-                ),
+                patch("application_sdk.validation.validate_transformed_dir", _hang),
                 patch("application_sdk.constants.VALIDATE_ASSETS_TIMEOUT_SECONDS", 1.0),
             ):
                 results = await asyncio.gather(
-                    _warn_on_invalid_transformed_assets(str(hang_dir), APP),
-                    _warn_on_invalid_transformed_assets(str(ok_dir), APP),
+                    _warn_on_invalid_transformed_assets(str(dir_a), APP),
+                    _warn_on_invalid_transformed_assets(str(dir_b), APP),
                 )
-            # The bug was the second caller (queued behind the hung one on the
-            # single-worker pool) getting a CancelledError from the first
-            # caller's timeout discard, which escaped the warn-only guards into
-            # upload(). Assert the outcome directly: both callers return None
-            # (warn-and-continue), neither raises. gather() without
-            # return_exceptions would already propagate any raise, but naming
-            # the contract makes the "survives" property explicit.
+            # Both callers warn-and-continue (return None), neither raises.
+            # gather() without return_exceptions would already propagate any
+            # raise, but naming the contract makes the "survives" property
+            # explicit — in particular that no CancelledError leaked out.
             assert results == [None, None]
             messages = [call.args[0] for call in logger.warning.call_args_list]
-            # The hung caller is always killed at its timeout; the starved
-            # second caller also warns and continues (either its own timeout or
-            # the pool discard, whichever fires first), so both warned exactly
-            # once and neither raised.
+            # Both hung, so both were killed and warned exactly once; at least
+            # the first to fire reports its own timeout.
             assert any("timed out" in message for message in messages)
             assert len(messages) == 2
 
@@ -391,25 +379,25 @@ class TestWarnOnInvalidTransformedAssets:
         # THE regression for the CNCT-85 root cause, and the gap the pre-3.23.0
         # suite never covered. That suite decoded real assets only one call at a
         # time, and its *concurrency* coverage patched the decoder away
-        # (_hang_if_marked / _segfault). So real msgspec was never exercised
-        # under concurrent submission — the exact condition that killed the
-        # worker in production: msgspec 0.20.0's concurrent-decode segfault on
-        # py3.13, triggered when multiple upload validations decoded assets on
-        # the worker's shared thread pool at once.
+        # (_hang / _segfault). So real msgspec was never exercised under
+        # concurrent submission — the exact condition that killed the worker in
+        # production: msgspec 0.20.0's concurrent-decode segfault on py3.13, when
+        # multiple upload validations decoded assets in the same worker process
+        # at once.
         #
         # This test closes that gap with NO decoder patch: it fans out many
-        # validations of real pyatlan_v9 batches concurrently. It asserts the
-        # fix's core claim end-to-end — process isolation serialises the decode
-        # into a single spawn child, so concurrent *submission* never becomes
-        # concurrent *decode*, the trigger is gone, every scan completes, and
-        # the parent (the "worker") is still alive afterwards.
+        # validations of real pyatlan_v9 batches concurrently. The isolation
+        # here is purely fault containment — the pool is multi-worker, so these
+        # decodes genuinely run in PARALLEL across child processes (no artificial
+        # serialisation). That is safe because separate processes don't share the
+        # in-process decoder state the 0.20.0 bug needs, and once msgspec 0.21.1
+        # lands even same-process concurrent decode is safe. Every scan completes
+        # and the parent (the "worker") is still alive afterwards.
         #
-        # NOTE: this only reproduces the original crash on the toxic combination
-        # (py3.13 + msgspec 0.20.x). On other interpreters/versions it still
-        # passes — as a coverage assertion it is only meaningful when CI runs it
-        # on the SAME Python as the container image (3.13). That is why the e2e
-        # job must pin the interpreter to the image's version, not the runner
-        # default (3.11).
+        # NOTE: on other interpreters/versions this always passes; as a
+        # regression it is most meaningful when CI runs it on the SAME Python as
+        # the container image (3.13). That is why the e2e job pins the
+        # interpreter to the image's version, not the runner default.
         concurrency = 8
         dirs = []
         for i in range(concurrency):
