@@ -19,6 +19,14 @@ module.exports = {
   // run's GitHub API budget isolated.
   autodiscover: false,
 
+  // Belt-and-suspenders scope guard. Discovery only passes repos whose
+  // renovate.json already extends the shared preset, but if a non-adopter ever
+  // slips into the matrix, never open an unsolicited onboarding PR: skip it.
+  // requireConfig=required + onboarding=false => a repo with no renovate.json is
+  // skipped cleanly (no onboarding PR, no default-config run).
+  onboarding: false,
+  requireConfig: "required",
+
   // Disable the github-actions manager for the fleet run. GitHub requires an App
   // token to hold `workflows: write` to modify any file under .github/workflows/,
   // and the atlan-app-fleet App deliberately does NOT hold it (fleet-wide
