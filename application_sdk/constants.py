@@ -448,14 +448,16 @@ if DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED:
 #: across the SDR→Atlan boundary. Warn-only — invalid/orphaned assets are logged,
 #: never block the upload.
 #:
-#: TEMPORARILY DEFAULTED OFF (CNCT-85): the warn-only scan runs the pyatlan/msgspec
-#: decode inside the worker, where a native fault (msgspec 0.20.0 concurrent-decode
-#: segfault on py3.13) bypasses the try/except and kills the worker. The full fix
-#: (process isolation, PR #2769) depends on downstream pyatlan changes; until it
-#: lands the path is disabled by default. Set to "true" to re-enable. Revert this
-#: default (and drop this note) once #2769 merges.
+#: Defaulted ON (CNCT-85). The scan runs the pyatlan/msgspec decode in an isolated
+#: child process (``run_best_effort`` over ``run_fault_isolated``), so a native
+#: fault — e.g. the msgspec 0.20.0 concurrent-decode segfault on py3.13 — is
+#: contained to the child and surfaces as a swallowed best-effort skip, never
+#: killing the worker. This branch (PR #2769) is intended to merge only once the
+#: msgspec 0.21.1 bump is in place, at which point concurrent decode is itself
+#: safe and on-by-default validation is the right posture. Set to "false" to
+#: disable per-deployment.
 VALIDATE_ASSETS_ON_UPLOAD: bool = (
-    os.getenv("ATLAN_VALIDATE_ASSETS_ON_UPLOAD", "false").lower() == "true"
+    os.getenv("ATLAN_VALIDATE_ASSETS_ON_UPLOAD", "true").lower() == "true"
 )
 #: Upper bound in seconds for one upload's asset-validation scan. The scan runs
 #: in an isolated child process; past this bound the child is killed and the

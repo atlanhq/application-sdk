@@ -332,9 +332,10 @@ or when the path is not a `transformed/` subtree (e.g. a raw upload), no outcome
 See [Monitoring](monitoring.md#asset-validation-outcome-event) for the attribute list as it reaches
 OTLP.
 
-> **Temporarily disabled by default (CNCT-85).** The check is currently off by default while the
-> process-isolation fix ([#2769](https://github.com/atlanhq/application-sdk/pull/2769)) awaits
-> downstream changes. Set `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=true` to opt back in.
+> **On by default (CNCT-85).** The scan runs in an isolated child process
+> (process-isolation fix [#2769](https://github.com/atlanhq/application-sdk/pull/2769)), so a native
+> fault in the decode path is contained and downgraded to a best-effort skip rather than killing the
+> worker. Set `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false` to disable per-deployment.
 
 ## Passthrough Modules
 
