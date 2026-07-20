@@ -139,6 +139,14 @@ def _outcome_event(logger: MagicMock) -> dict:
 
 
 class TestWarnOnInvalidTransformedAssets:
+    @pytest.fixture(autouse=True)
+    def _enable_validation(self):
+        # The production default is OFF (CNCT-85, see constants). These tests
+        # exercise the enabled behavior, so force the flag on; the disabled-path
+        # test re-patches it False for its own body.
+        with patch("application_sdk.constants.VALIDATE_ASSETS_ON_UPLOAD", True):
+            yield
+
     async def test_disabled_flag_is_noop(self, tmp_path: Path) -> None:
         _valid_hierarchy(tmp_path)
         with patch.object(base_module, "_task_logger") as logger:
