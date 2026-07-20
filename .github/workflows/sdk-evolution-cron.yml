@@ -135,6 +135,9 @@ jobs:
       # in one tested place, not the YAML.
       - name: Dispatch SDK Evolution to mothership Rover Direct API
         env:
+          # Unbuffered so SSE progress lines appear live in the GHA log
+          # instead of flushing in one block at process exit.
+          PYTHONUNBUFFERED: '1'
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
           HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
           GH_TOKEN: ${{ github.token }}
