@@ -108,16 +108,17 @@ async def _warn_on_invalid_transformed_assets(local_path: str) -> None:
     the scaffold must not break a real handoff — and it scans every record (no
     sampling) so the summary is accurate.
 
-    The scan runs in an isolated child process via
-    :func:`application_sdk.execution.heartbeat.run_in_process`, for two reasons.
+    The scan runs via
+    :func:`application_sdk.execution.heartbeat.run_best_effort`, for two reasons.
     It keeps the event loop and the activity's auto-heartbeat free while a large
     batch is validated (ADR-0010). More importantly, it makes the never-raises
     contract hold even against *native* faults: the decode exercises third-party
     C extensions (msgspec via pyatlan_v9), and a segfault there is not a Python
     exception — in-process it would kill the whole Temporal worker (as one did,
-    CNCT-85). In the child it kills only the child; the parent logs the warning
-    and the handoff proceeds. The timeout bounds the scan for the same reason —
-    a hung validation must not stall an upload forever.
+    CNCT-85). ``run_best_effort`` isolates the scan in a child process, so a
+    crash kills only the child; it then logs the warning and the handoff
+    proceeds. The timeout bounds the scan for the same reason — a hung
+    validation must not stall an upload forever.
 
     Referential (orphan) integrity runs by default on this hook: extracts and
     transforms are full by design by default, so every referenced parent is
@@ -137,43 +138,23 @@ async def _warn_on_invalid_transformed_assets(local_path: str) -> None:
     if target is None:
         return
 
-    from concurrent.futures.process import (  # noqa: PLC0415 — deferred: co-located with the run_in_process call it guards
-        BrokenProcessPool,
-    )
-
     from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — deferred: app.base is imported by execution (circular)
-        run_in_process,
+        run_best_effort,
     )
     from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
         validate_transformed_dir,
     )
 
-    try:
-        report = await run_in_process(
-            validate_transformed_dir,
-            str(target),
-            timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
-        )
-    except BrokenProcessPool:
-        _task_logger.warning(
-            "Transformed-asset validation subprocess died or was discarded "
-            "(a native fault in a decode dependency, or a concurrent "
-            "validation's timeout); upload continues unvalidated"
-        )
-        return
-    except TimeoutError:
-        _task_logger.warning(
-            "Transformed-asset validation timed out after %ss; upload continues "
-            "unvalidated",
-            VALIDATE_ASSETS_TIMEOUT_SECONDS,
-        )
-        return
-    except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
-        _task_logger.warning(
-            "Transformed-asset validation skipped due to an unexpected error",
-            exc_info=True,
-        )
-        return
+    # Best-effort: run_best_effort isolates the scan in a child process and, on
+    # any native crash / timeout / error, logs a warning and returns None — the
+    # upload is never blocked, failed, or crashed by the validation scaffold.
+    report = await run_best_effort(
+        validate_transformed_dir,
+        str(target),
+        label="Transformed-asset validation",
+        logger=_task_logger,
+        timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
+    )
 
     if report is not None and not report.ok:
         _task_logger.warning(

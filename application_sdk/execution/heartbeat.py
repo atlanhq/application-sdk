@@ -7,9 +7,12 @@ Two modes of heartbeating are supported:
 2. Manual (developer-controlled): developer calls heartbeat() with progress info
    for resume-on-retry support.
 
-This module is also the SDK's blocking-work seam: ``run_in_thread`` offloads
-blocking calls so they don't starve the heartbeat loop (ADR-0010), and
-``run_in_process`` isolates work whose native faults must not kill the worker.
+This module is also the SDK's offload seam, with three sanctioned primitives:
+``run_in_thread`` offloads blocking calls so they don't starve the heartbeat
+loop (ADR-0010); ``run_fault_isolated`` runs work in a child process so a native
+fault can't kill the worker; and ``run_best_effort`` is the policy layer over it
+for non-essential work — it isolates *and* swallows failures so best-effort work
+can never break the caller.
 """
 
 import asyncio
@@ -27,7 +30,7 @@ from typing import Any, Protocol, TypeVar
 from application_sdk.observability import (
     resource_sampler as _resource_sampler,  # module alias kept so tests can patch _resource_sampler.sample()
 )
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
 from application_sdk.observability.resource_sampler import parse_pod_memory_limit
 
 logger = get_logger(__name__)
@@ -321,7 +324,7 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
 #   them — a deadlock/corruption factory. spawn starts a clean interpreter.
 #
 # Lazy, single-worker, discarded on crash or timeout and re-created on the
-# next call. Created only when run_in_process is first used, so processes
+# next call. Created only when run_fault_isolated is first used, so processes
 # that never need isolation never pay for the child.
 _PROCESS_EXECUTOR: concurrent.futures.ProcessPoolExecutor | None = None
 _PROCESS_EXECUTOR_LOCK = threading.Lock()
@@ -363,16 +366,22 @@ def _discard_process_executor() -> None:
     executor.shutdown(wait=False)
 
 
-async def run_in_process(
+async def run_fault_isolated(
     func: Callable[..., T], *args: Any, timeout: float | None = None, **kwargs: Any
 ) -> T:
     """Run ``func`` in an isolated child process (native-crash containment).
 
-    Unlike :func:`run_in_thread`, this survives faults that are not Python
-    exceptions: if ``func`` segfaults a C extension, only the child dies and
-    the caller gets a catchable :class:`BrokenProcessPool`. Use it for work
-    whose failure must never take the worker process down (e.g. the warn-only
-    upload validation scan, which decodes third-party native code).
+    The mechanism layer. Unlike :func:`run_in_thread`, this survives faults that
+    are not Python exceptions: if ``func`` segfaults a C extension, only the
+    child dies and the caller gets a catchable :class:`BrokenProcessPool`. Use it
+    for work whose native fault must never take the worker process down.
+
+    This *raises* on failure (``BrokenProcessPool`` / ``TimeoutError``) — the
+    caller decides what to do. For non-essential work that should be silently
+    skipped on failure, prefer :func:`run_best_effort`, which wraps this and
+    swallows failures. Essential work — where a failure should fail the activity
+    — should not be isolated per-call at all; run it in-process or via
+    :func:`run_in_thread` and let Temporal/k8s recover a crash.
 
     Constraints that :func:`run_in_thread` does not have:
 
@@ -411,7 +420,7 @@ async def run_in_process(
             # The kill resolves the abandoned future with BrokenProcessPool;
             # consume it so asyncio never logs "exception was never retrieved".
             future.add_done_callback(lambda f: None if f.cancelled() else f.exception())
-            raise TimeoutError(f"run_in_process timed out after {timeout}s")
+            raise TimeoutError(f"run_fault_isolated timed out after {timeout}s")
     try:
         return await future
     except BrokenProcessPool:
@@ -428,3 +437,52 @@ async def run_in_process(
         raise BrokenProcessPool(
             "process pool was discarded while this call was queued"
         ) from None
+
+
+async def run_best_effort(
+    func: Callable[..., T],
+    *args: Any,
+    label: str,
+    logger: AtlanLoggerAdapter,
+    timeout: float | None = None,
+    **kwargs: Any,
+) -> T | None:
+    """Run non-essential native work fault-isolated; never let it break the caller.
+
+    The policy layer over :func:`run_fault_isolated`. Runs ``func`` in an
+    isolated child process and, on *any* failure — a native crash
+    (``BrokenProcessPool``), a ``timeout``, or an ordinary exception — logs a
+    warning via ``logger`` and returns ``None`` rather than propagating. This is
+    the SDK's sanctioned home for *best-effort* native work: work whose result is
+    used when present and safely skipped when absent, and which must never crash
+    or fail the worker (e.g. the warn-only upload validation scan). Essential
+    work — where a failure *should* fail the activity — must not use this.
+
+    A genuine caller cancellation (``asyncio.CancelledError`` from cooperative
+    task cancellation) is deliberately **not** swallowed — it propagates.
+
+    Args:
+        func: Module-level function to run in the child. Same picklability /
+            ContextVar constraints as :func:`run_fault_isolated`.
+        label: Human label for the work, interpolated into the warning
+            (e.g. ``"Transformed-asset validation"``).
+        logger: The caller's logger, so the warning is attributed to the
+            caller's module (OTel source) rather than this one.
+        timeout: Seconds before the child is killed and the run is skipped.
+
+    Returns:
+        ``func``'s result, or ``None`` if the run crashed, timed out, or errored.
+    """
+    try:
+        return await run_fault_isolated(func, *args, timeout=timeout, **kwargs)
+    except BrokenProcessPool:
+        logger.warning(
+            "%s subprocess died or was discarded (a native fault in a "
+            "dependency, or a concurrent call's timeout); continuing without it",
+            label,
+        )
+    except TimeoutError:
+        logger.warning("%s timed out after %ss; continuing without it", label, timeout)
+    except Exception:  # noqa: BLE001 — best-effort work must never break the caller
+        logger.warning("%s skipped due to an unexpected error", label, exc_info=True)
+    return None
