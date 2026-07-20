@@ -67,7 +67,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout PR head
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The PR branch HEAD, not the synthetic merge commit — we diff exactly
           # what the contributor committed against a fresh regeneration.
@@ -102,7 +102,7 @@ jobs:
       # tree (CWD) and only reads .sdk-scripts for its own code — never staged,
       # and outside OUTPUT_PATHS so it can't register as drift.
       - name: Fetch freshness driver
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: main
