@@ -232,6 +232,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "``Connectors.Type`` but does not re-export the constants), so the "
             "import is required, not legacy.\n"
             "\n"
+            "Note: a contract that **amends** ``Credential.pkl`` (a "
+            "credential-config sub-contract, not an App.pkl entrypoint) is "
+            '**not** flagged for its ``import "…Config.pkl"`` line.  '
+            "Credential.pkl uses ``Config.*`` internally but, unlike App.pkl, "
+            "does not re-export the widget types as unqualified typealiases, so "
+            "such a contract genuinely needs the import for ``pkl eval`` to "
+            "resolve ``Config.TextInput`` etc. — flagging it would be a false "
+            "positive.  The exemption covers ``Config.pkl`` only: a credential "
+            'contract carrying ``import "…Renderers.pkl"`` or '
+            '``import "…Credential.pkl"`` is still legacy and still fires.\n'
+            "\n"
             "**Note:** if the contract also has a K001 finding (still amending a "
             "legacy module), address K001 first — many K002 knobs disappear "
             "automatically when the module changes, because App.pkl simply "
