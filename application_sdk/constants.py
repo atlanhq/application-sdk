@@ -465,6 +465,7 @@ VALIDATE_ASSETS_TIMEOUT_SECONDS: float = float(
 #: drill-down samples are bounded (so a pathological batch cannot produce an
 #: unbounded WARNING body or ``LogAttributes`` value).
 ASSET_VALIDATION_MAX_ITEMS_PER_AXIS: int = 25
+
 # Dapr Client Configuration
 #: Maximum gRPC message length in bytes for Dapr client.
 #:
