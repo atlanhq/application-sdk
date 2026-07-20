@@ -26,6 +26,7 @@ from application_sdk.app.registry import (
 from application_sdk.constants import (
     APP_BUILD_ID,
     APP_DEPLOYMENT_NAME,
+    PREFLIGHT_GATE_MODE_ENV,
     SHUTDOWN_DRAIN_DELAY_SECONDS,
 )
 from application_sdk.execution._temporal.activities import get_all_task_activities
@@ -43,6 +44,24 @@ if TYPE_CHECKING:
     from application_sdk.observability.pushgateway import PushGatewayClient
 
 logger = get_logger(__name__)
+
+
+def _resolve_gate_enforcement(app_cls: type | None) -> bool:
+    """Resolve the preflight gate's posture for one app.
+
+    ``True`` = hard (block on ``NOT_READY``); ``False`` = soft (emit
+    ``would_block``, proceed). Precedence: ``ATLAN_PREFLIGHT_GATE_MODE`` env
+    (deploy-time ops lever, no app release needed) > the app's declared
+    ``App.preflight_gate_mode`` (git-blamed opt-in) > soft default. Only the
+    literal ``"hard"`` enforces; an unknown or malformed value falls back to
+    soft — a run is never blocked by accident, blocking is always a deliberate
+    opt-in.
+    """
+    val = os.environ.get(PREFLIGHT_GATE_MODE_ENV)
+    if val:
+        return val.strip().lower() == "hard"
+    declared = getattr(app_cls, "preflight_gate_mode", "soft")
+    return str(declared).strip().lower() == "hard"
 
 
 class AppWorker:
@@ -407,10 +426,21 @@ def create_worker(
             field="task_name",
         )
 
-    task_activities = [
-        *task_activities,
-        *(build_preflight_gate_activity(gate_handler, name) for name in gate_app_names),
-    ]
+    name_to_app_cls = {m.name: m.app_cls for m in sdr_registered_apps}
+    gate_activities = []
+    for name in gate_app_names:
+        enforce = _resolve_gate_enforcement(name_to_app_cls.get(name))
+        if enforce:
+            logger.info(
+                "Preflight gate is HARD for app %r — a NOT_READY verdict WILL "
+                "abort the run before extraction. This is the per-app opt-in; "
+                "the default posture is soft (report only, never block).",
+                name,
+            )
+        gate_activities.append(
+            build_preflight_gate_activity(gate_handler, name, enforce=enforce)
+        )
+    task_activities = [*task_activities, *gate_activities]
 
     # SDR (the control-plane test_auth/preflight_check/fetch_metadata workflows)
     # requires a REAL handler — never the bare DefaultHandler sentinel. Both the

@@ -569,3 +569,357 @@ class TestUploadDirectoryListingRace:
         )
 
         assert out.ref.file_count == 2
+
+
+class TestUploadDirectorySourceStoreReconcile:
+    """BLDX-1554: a *partially*-present local directory must be reconciled
+    against the source (deployment) store so the target (upstream) copy is
+    complete — the SDR cross-pod hand-off guarantee.
+
+    Scenario: the parallel ``transform_*`` activities that populate
+    ``transformed/`` are placed on different worker pods. The pod that runs the
+    final ``App.upload`` holds only the entity types it happened to transform;
+    the rest live only in the deployment store (persisted per-pod by the
+    activity interceptor). Uploading local-only would drop whole types.
+    """
+
+    async def _seed(self, store, key: str, data: bytes) -> None:
+        from application_sdk.storage.ops import _put
+
+        await _put(key, data, store, normalize=False)
+
+    async def _target_keys(self, store) -> set[str]:
+        from application_sdk.storage.batch import list_data_keys
+
+        return set(await list_data_keys("", store, normalize=False))
+
+    async def _read(self, store, key: str) -> bytes | None:
+        from application_sdk.storage.ops import _get_bytes
+
+        return await _get_bytes(key, store, normalize=False)
+
+    async def test_partial_local_dir_reconciled_from_source(self, tmp_path) -> None:
+        from application_sdk.contracts.types import FileReference
+
+        source = create_memory_store()  # deployment store — has ALL types
+        target = create_memory_store()  # upstream store — what publish reads
+        src_prefix = "artifacts/apps/mysql/wf/run/transformed"
+        await self._seed(source, f"{src_prefix}/table/entities.json", b"TABLES")
+        # Source holds a STALE copy of the local-present file; local must win the
+        # ``if rel in local_rels: continue`` skip (local is authoritative).
+        await self._seed(source, f"{src_prefix}/column/entities.json", b"COLUMNS_STALE")
+
+        # This pod only ran transform_columns → local dir holds ONLY column/.
+        local = tmp_path / "transformed"
+        (local / "column").mkdir(parents=True)
+        (local / "column" / "entities.json").write_bytes(b"COLUMNS_FRESH")
+
+        out = await upload(
+            str(local),
+            storage_path="dest/transformed",
+            store=target,
+            _source_ref=FileReference(local_path=str(local), storage_path=src_prefix),
+            _source_store=source,
+        )
+
+        keys = await self._target_keys(target)
+        assert "dest/transformed/column/entities.json" in keys  # uploaded from local
+        assert "dest/transformed/table/entities.json" in keys  # streamed from source
+        assert out.ref.file_count == 2
+        # The local copy wins the collision — the stale source copy is not streamed.
+        assert (
+            await self._read(target, "dest/transformed/column/entities.json")
+            == b"COLUMNS_FRESH"
+        )
+
+    async def test_union_local_only_and_source_only(self, tmp_path) -> None:
+        """Union semantics: a local-only file (no source copy, e.g. a
+        stream-writing connector) still uploads, and a source-only file is
+        streamed. Neither is dropped."""
+        from application_sdk.contracts.types import FileReference
+
+        source = create_memory_store()
+        target = create_memory_store()
+        src_prefix = "pfx/transformed"
+        await self._seed(
+            source, f"{src_prefix}/table/entities.json", b"T"
+        )  # source-only
+
+        local = tmp_path / "transformed"
+        (local / "column").mkdir(parents=True)
+        (local / "column" / "entities.json").write_bytes(b"C")  # local-only
+
+        out = await upload(
+            str(local),
+            storage_path="d/transformed",
+            store=target,
+            _source_ref=FileReference(local_path=str(local), storage_path=src_prefix),
+            _source_store=source,
+        )
+
+        keys = await self._target_keys(target)
+        assert "d/transformed/column/entities.json" in keys  # local-only preserved
+        assert "d/transformed/table/entities.json" in keys  # source-only streamed
+        # file_count = 1 local + 1 reconciled from source (disjoint union).
+        assert out.ref.file_count == 2
+
+    async def test_no_source_store_uploads_local_only(self, tmp_path) -> None:
+        """Non-SDR (no source store): behaviour is unchanged — only local files
+        are uploaded and no source-store lookup happens."""
+        target = create_memory_store()
+        local = tmp_path / "transformed"
+        (local / "column").mkdir(parents=True)
+        (local / "column" / "entities.json").write_bytes(b"C")
+
+        await upload(str(local), storage_path="d/transformed", store=target)
+
+        keys = await self._target_keys(target)
+        assert keys == {"d/transformed/column/entities.json"}
+
+    async def test_empty_local_dir_reconciles_without_raising(self, tmp_path) -> None:
+        """An empty local dir with a populated source store must NOT trip
+        raise_on_empty — the union is non-empty, and files stream from source."""
+        from application_sdk.contracts.types import FileReference
+
+        source = create_memory_store()
+        target = create_memory_store()
+        src_prefix = "pfx/transformed"
+        await self._seed(source, f"{src_prefix}/table/entities.json", b"T")
+
+        local = tmp_path / "transformed"
+        local.mkdir()  # exists but empty (this pod ran no transform)
+
+        out = await upload(
+            str(local),
+            storage_path="d/transformed",
+            store=target,
+            raise_on_empty=True,
+            _source_ref=FileReference(local_path=str(local), storage_path=src_prefix),
+            _source_store=source,
+        )
+
+        keys = await self._target_keys(target)
+        assert "d/transformed/table/entities.json" in keys
+        # 0 local + 1 reconciled from source.
+        assert out.ref.file_count == 1
+
+    async def test_empty_local_and_empty_source_raises(self, tmp_path) -> None:
+        """raise_on_empty still fires when both local and source are empty."""
+        from application_sdk.contracts.types import FileReference
+        from application_sdk.storage.errors import StorageEmptyUploadError
+
+        source = create_memory_store()
+        target = create_memory_store()
+        local = tmp_path / "transformed"
+        local.mkdir()
+
+        with pytest.raises(StorageEmptyUploadError):
+            await upload(
+                str(local),
+                storage_path="d/transformed",
+                store=target,
+                raise_on_empty=True,
+                _source_ref=FileReference(
+                    local_path=str(local), storage_path="pfx/transformed"
+                ),
+                _source_store=source,
+            )
+
+    async def test_same_store_identity_skips_reconcile(self, tmp_path) -> None:
+        """When the source store IS the target store (non-SDR: the guard
+        ``source_resolved is not resolved`` is false), reconciliation is skipped
+        entirely — only local files land and the source store is never listed."""
+        from application_sdk.contracts.types import FileReference
+
+        store = create_memory_store()
+        src_prefix = "pfx/transformed"
+        # A source-only file sits in the same store; it must NOT be copied to the
+        # target prefix because reconcile does not run.
+        await self._seed(store, f"{src_prefix}/table/entities.json", b"T")
+
+        local = tmp_path / "transformed"
+        (local / "column").mkdir(parents=True)
+        (local / "column" / "entities.json").write_bytes(b"C")
+
+        # Patch the reconcile branch's actual call site (``transfer.list_data_keys``,
+        # invoked via ``_list_source_data_keys``) rather than the lower-level
+        # ``batch.list_keys`` it delegates to — a direct guard that survives an
+        # inlining refactor of ``list_data_keys``.
+        with patch("application_sdk.storage.transfer.list_data_keys") as spy:
+            await upload(
+                str(local),
+                storage_path="d/transformed",
+                store=store,
+                _source_ref=FileReference(
+                    local_path=str(local), storage_path=src_prefix
+                ),
+                _source_store=store,  # same object → identity guard trips
+            )
+
+        keys = await self._target_keys(store)
+        # Local file landed under the target prefix; source-only file was NOT
+        # reconciled into it (it still exists only at its original src_prefix).
+        assert "d/transformed/column/entities.json" in keys
+        assert "d/transformed/table/entities.json" not in keys
+        # The reconcile branch's source-store LIST never fired.
+        spy.assert_not_called()
+
+    async def test_source_ref_path_traversal_blocked(self, tmp_path) -> None:
+        """The reconcile branch applies the same ``..`` traversal guard on
+        ``_source_ref.storage_path`` as the local-absent fallback."""
+        from application_sdk.contracts.types import FileReference
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        source = create_memory_store()
+        target = create_memory_store()
+
+        # Non-empty local dir → we reach the reconcile block (distinct source).
+        local = tmp_path / "transformed"
+        (local / "column").mkdir(parents=True)
+        (local / "column" / "entities.json").write_bytes(b"C")
+
+        with pytest.raises(UnsafeUploadPathError):
+            await upload(
+                str(local),
+                storage_path="d/transformed",
+                store=target,
+                _source_ref=FileReference(
+                    local_path=str(local), storage_path="pfx/../etc"
+                ),
+                _source_store=source,
+            )
+
+    async def test_source_sidecar_keys_skipped(self, tmp_path) -> None:
+        """A SHA-256 sidecar key in the source store is not treated as a data
+        file during reconcile: it is neither counted nor streamed as its own
+        object (which would land a ``.sha256.sha256`` double-sidecar)."""
+        from application_sdk.contracts.types import FileReference
+
+        source = create_memory_store()
+        target = create_memory_store()
+        src_prefix = "pfx/transformed"
+        await self._seed(source, f"{src_prefix}/table/entities.json", b"T")
+        # A sidecar next to the data file — must be excluded from reconcile.
+        await self._seed(
+            source, f"{src_prefix}/table/entities.json.sha256", b"deadbeef"
+        )
+
+        local = tmp_path / "transformed"
+        (local / "column").mkdir(parents=True)
+        (local / "column" / "entities.json").write_bytes(b"C")
+
+        out = await upload(
+            str(local),
+            storage_path="d/transformed",
+            store=target,
+            _source_ref=FileReference(local_path=str(local), storage_path=src_prefix),
+            _source_store=source,
+        )
+
+        # Only the 1 local + 1 source *data* file are counted; the source sidecar
+        # was filtered out, not counted as a third streamed file.
+        assert out.ref.file_count == 2
+
+        from application_sdk.storage.batch import list_keys
+
+        all_target_keys = await list_keys("", target, normalize=False)
+        assert "d/transformed/table/entities.json" in all_target_keys
+        # The source sidecar was not streamed as data, so no double-sidecar lands.
+        assert "d/transformed/table/entities.json.sha256.sha256" not in all_target_keys
+
+    async def test_absent_local_dir_streams_complete_set_from_source(
+        self, tmp_path
+    ) -> None:
+        """Local path *entirely* absent (the upload pod ran none of the
+        transforms): every file is streamed from the source store. Guards the
+        local-absent fallback branch that the partial-dir reconcile sits beside."""
+        from application_sdk.contracts.types import FileReference
+
+        source = create_memory_store()
+        target = create_memory_store()
+        src_prefix = "pfx/transformed"
+        await self._seed(source, f"{src_prefix}/table/entities.json", b"T")
+        await self._seed(source, f"{src_prefix}/column/entities.json", b"C")
+
+        missing_local = str(tmp_path / "never-created" / "transformed")
+
+        out = await upload(
+            missing_local,
+            storage_path="d/transformed",
+            store=target,
+            _source_ref=FileReference(
+                local_path=missing_local, storage_path=src_prefix
+            ),
+            _source_store=source,
+        )
+
+        keys = await self._target_keys(target)
+        assert "d/transformed/table/entities.json" in keys
+        assert "d/transformed/column/entities.json" in keys
+        # Both source files are streamed and counted (distinct code path from the
+        # partial-dir reconcile — assert the count as every sibling test does).
+        assert out.ref.file_count == 2
+
+    async def test_empty_source_storage_path_skips_reconcile(self, tmp_path) -> None:
+        """When ``_source_ref`` carries an empty ``storage_path`` the reconcile
+        guard (``and _source_ref.storage_path``) is false, so reconciliation is
+        skipped even though a distinct source store is supplied: only local files
+        land and the source store is never listed."""
+        from application_sdk.contracts.types import FileReference
+
+        source = create_memory_store()  # distinct store, but never consulted
+        target = create_memory_store()
+        # A source-only file that must NOT be streamed because reconcile is skipped.
+        await self._seed(source, "pfx/transformed/table/entities.json", b"T")
+
+        local = tmp_path / "transformed"
+        (local / "column").mkdir(parents=True)
+        (local / "column" / "entities.json").write_bytes(b"C")
+
+        with patch("application_sdk.storage.transfer.list_data_keys") as spy:
+            out = await upload(
+                str(local),
+                storage_path="d/transformed",
+                store=target,
+                _source_ref=FileReference(local_path=str(local), storage_path=""),
+                _source_store=source,
+            )
+
+        keys = await self._target_keys(target)
+        assert "d/transformed/column/entities.json" in keys  # local landed
+        assert "d/transformed/table/entities.json" not in keys  # not reconciled
+        assert out.ref.file_count == 1
+        # Empty source prefix → the reconcile source-store LIST never fired.
+        spy.assert_not_called()
+
+
+def test_reconcile_prefix_alignment_holds_across_helpers() -> None:
+    """Regression guard for the load-bearing assumption behind the directory
+    reconcile: the source prefix the reconcile lists under
+    (``normalize_key(local_dir)``, as ``App.upload`` derives ``_source_ref``)
+    must match the keys the activity interceptor persists each transform output
+    at (``get_object_store_prefix(local_dir/<type>/entities.json)``). If these
+    two helpers ever diverge for ``TEMPORARY_PATH`` paths, the reconcile would
+    silently find nothing and the SDR hand-off would regress — while the
+    store-level tests above (self-consistent prefixes) stay green.
+    """
+    import os
+
+    from application_sdk.constants import TEMPORARY_PATH
+    from application_sdk.execution._temporal.activity_utils import (
+        get_object_store_prefix,
+    )
+    from application_sdk.storage.ops import normalize_key
+
+    base = os.path.join(
+        TEMPORARY_PATH, "artifacts/apps/x/workflows/wf-1/run-1/transformed"
+    )
+    source_dir_prefix = normalize_key(base).rstrip("/") + "/"
+    for typename in ("database", "schema", "table", "column"):
+        persisted = get_object_store_prefix(
+            os.path.join(base, typename, "entities.json")
+        )
+        assert persisted.startswith(
+            source_dir_prefix
+        ), f"{persisted!r} not under {source_dir_prefix!r}"
+        assert persisted.removeprefix(source_dir_prefix) == f"{typename}/entities.json"

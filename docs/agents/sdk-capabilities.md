@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.22.0
-source-sha:    dc280df56bb7c41a9c0a2f4f619899a96245e654
-source-date:   2026-07-15T16:08:32+05:30
+sdk-version:   3.23.0
+source-sha:    fc856c0cd89c08315c80b0131d706e08fed2ec17
+source-date:   2026-07-17T11:37:53+00:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 29 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 33 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -2172,6 +2172,27 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Return ``(size_bytes, e_tag)`` for *key*, or ``None`` if not found.
 - **Defined in:** `application_sdk/storage/ops.py`
 
+#### `is_sidecar_key`
+
+- **Import:** `from application_sdk.storage import is_sidecar_key`
+- **Signature:** `is_sidecar_key(key: str)`
+- **Summary:** Return ``True`` if *key* is a SHA-256 sidecar rather than a data object.
+- **Defined in:** `application_sdk/storage/batch.py`
+
+#### `list_data_keys`
+
+- **Import:** `from application_sdk.storage import list_data_keys`
+- **Signature:** `list_data_keys(prefix: str = '', store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
+- **Summary:** List data object keys under *prefix*, excluding SHA-256 sidecars.
+- **Defined in:** `application_sdk/storage/batch.py`
+
+#### `list_data_keys_with_meta`
+
+- **Import:** `from application_sdk.storage import list_data_keys_with_meta`
+- **Signature:** `list_data_keys_with_meta(prefix: str = '', store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
+- **Summary:** Like :func:`list_data_keys`, but return ``(key, size_bytes, e_tag)`` tuples.
+- **Defined in:** `application_sdk/storage/batch.py`
+
 #### `list_keys`
 
 - **Import:** `from application_sdk.storage import list_keys`
@@ -2227,6 +2248,15 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Signature:** `verify_object_store_access(infra: InfrastructureContext)`
 - **Summary:** In SDR mode, verify read+write access to every configured object store.
 - **Defined in:** `application_sdk/storage/preflight.py`
+
+### Constants and Enums
+
+#### `SIDECAR_SUFFIX`
+
+- **Import:** `from application_sdk.storage import SIDECAR_SUFFIX`
+- **Signature:** `SIDECAR_SUFFIX`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/batch.py`
 
 ## `application_sdk.templates`
 
@@ -2727,7 +2757,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import PreflightOutput`
 - **Summary:** Output from the preflight_check handler operation.
 - **Fields:**
-  - `status: PreflightStatus` — Overall verdict — decides the gate. ``NOT_READY`` blocks the run;
+  - `status: PreflightStatus` — Overall verdict — decides the gate. ``NOT_READY`` blocks the run only in
   - `checks: list[PreflightCheck]` `= []` — Individual check results (display + failure attribution).
   - `message: str` `= ''` — Human-readable summary. Seeds the gate's abort reason when set.
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.

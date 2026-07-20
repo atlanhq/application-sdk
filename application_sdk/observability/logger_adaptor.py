@@ -51,6 +51,12 @@ from application_sdk.observability.utils import (
 )
 from application_sdk.version import __version__ as _SDK_VERSION
 
+# Preflight gate outcome-event keys, shared with the emitter
+# (``application_sdk.execution._temporal.preflight_gate``) so a rename is a
+# single edit that keeps the emit call-site and the allowlist below in sync.
+CHECK_MATRIX_KEY = "check_matrix"
+GATE_MODE_KEY = "gate_mode"
+
 # Transformed-asset validation outcome-event key, shared with the emitter
 # (``application_sdk.app.base._warn_on_invalid_transformed_assets``) so a rename
 # is a single edit that keeps the emit call-site and the allowlist below in sync.
@@ -110,6 +116,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "reason",
         "entrypoint",
         "checks",
+        CHECK_MATRIX_KEY,
+        GATE_MODE_KEY,
         # ── Transformed-asset validation outcome event ───────────────────
         ASSET_VALIDATION_MATRIX_KEY,
         "assets_total",

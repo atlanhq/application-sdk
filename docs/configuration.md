@@ -44,6 +44,7 @@ Injected by the Local Marketplace into the Helm release at deploy time, and expo
 | `ATLAN_TEMPORAL_NAMESPACE` | `default` | Temporal namespace. **v2-compat fallback:** `ATLAN_WORKFLOW_NAMESPACE`. |
 | `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when both are set, or just the app name when only `ATLAN_APPLICATION_NAME` is set, or `{ClassName}-queue` (kebab-case) when neither is set. |
 | `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `127.0.0.1:9464` | Bind address for the Temporal SDK Prometheus endpoint (~40 built-in metrics). Loopback-only by default — operators should not scrape this port directly; combined-mode FastAPI `/metrics` proxies it in-process. See [Monitoring](concepts/monitoring.md). |
+| `ATLAN_PREFLIGHT_GATE_MODE` | _(unset)_ | Deploy-time preflight gate posture override, read once at worker build. Only the literal `hard` enforces (blocks a `NOT_READY` run); any other set value resolves to soft. Empty or unset defers to the app's declared `App.preflight_gate_mode`. Set on the worker deployment; no app release needed. See [Apps](concepts/apps.md#preflight-gate-posture). |
 
 ### Worker Versioning
 

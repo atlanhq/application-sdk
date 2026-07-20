@@ -90,9 +90,18 @@ def resolve_scope(org: str, repo: Optional[str]) -> str:
     return f"repo:{repo}" if repo else f"org:{org}"
 
 
+# Renovate PR authors to scan. During the fleet cutover both engines coexist:
+# the Mend-hosted app (app/renovate) and the self-hosted runner
+# (app/atlan-app-fleet). GitHub PR search OR's multiple author: qualifiers.
+# Narrow to ("app/atlan-app-fleet",) once Mend is uninstalled (PR2 Stage 4).
+RENOVATE_PR_AUTHORS = ("app/renovate", "app/atlan-app-fleet")
+
+
 def build_search_query(scope: str, extra: str) -> str:
-    """Build a GitHub search-syntax query, e.g. 'org:atlanhq is:pr author:app/renovate is:open'."""
-    return f"{scope} is:pr author:app/renovate {extra}".strip()
+    """Build a GitHub search-syntax query, e.g.
+    'org:atlanhq is:pr author:app/renovate author:app/atlan-app-fleet is:open'."""
+    authors = " ".join(f"author:{a}" for a in RENOVATE_PR_AUTHORS)
+    return f"{scope} is:pr {authors} {extra}".strip()
 
 
 def build_graphql_payload(search_query: str, fields: str, after: Optional[str]) -> dict:

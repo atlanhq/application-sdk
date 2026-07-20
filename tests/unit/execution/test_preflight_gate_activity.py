@@ -5,6 +5,7 @@ Separate from the SDR activity tests — the gate is its own module/concern.
 
 from __future__ import annotations
 
+import json
 import warnings
 from contextlib import ExitStack, contextmanager
 from typing import Any
@@ -44,6 +45,7 @@ from application_sdk.handler.contracts import (
     SqlMetadataOutput,
 )
 from application_sdk.infrastructure.credential_vault import CredentialVaultError
+from application_sdk.observability.logger_adaptor import CHECK_MATRIX_KEY, GATE_MODE_KEY
 
 _UNSET = object()
 
@@ -82,8 +84,10 @@ class _VerdictHandler(DefaultHandler):
         return self._output
 
 
-def _verdict_gate(output: PreflightOutput):
-    return build_preflight_gate_activity(_VerdictHandler(output), app_name="myapp")
+def _verdict_gate(output: PreflightOutput, *, enforce: bool = True):
+    return build_preflight_gate_activity(
+        _VerdictHandler(output), app_name="myapp", enforce=enforce
+    )
 
 
 def _outcome_event(mock_logger) -> dict | None:
@@ -682,6 +686,168 @@ class TestPreflightGateOutcomeEvent:
         details = excinfo.value.details[0]
         assert details.code == "PREFLIGHT_CHECK_FAILED"
         assert details.category is FailureCategory.PRECONDITION
+
+    async def test_soft_not_ready_returns_and_emits_would_block(self) -> None:
+        # Soft gate: the verdict stays honest NOT_READY, the gate just doesn't
+        # enforce it — no raise, the run proceeds, and the dodged block is the
+        # queryable would_block row connector-pulse ranks smelly apps by.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    error=AuthError(message="x"),
+                    duration_ms=312.0,
+                )
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            result = await _verdict_gate(out, enforce=False)(PreflightGateInput())
+        assert result is out
+        assert result.status is PreflightStatus.NOT_READY  # verdict untouched
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "would_block"
+        assert ev[GATE_MODE_KEY] == "soft"
+        # reason still carries the primary failure's code, same as a hard block
+        assert ev["reason"] == "AUTH"
+        # Pin the full row on the would_block path too, mirroring the block path,
+        # so an error_code/duration_ms field drop is caught here as well.
+        assert json.loads(ev[CHECK_MATRIX_KEY]) == [
+            {
+                "name": "auth",
+                "passed": False,
+                "error_code": "AUTH",
+                "duration_ms": 312.0,
+            }
+        ]
+
+    async def test_hard_block_emits_gate_mode_hard(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="auth", passed=False, message="bad creds")],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "blocked"
+        assert ev[GATE_MODE_KEY] == "hard"
+
+    async def test_proceeded_carries_gate_mode_hard(self) -> None:
+        out = PreflightOutput(status=PreflightStatus.READY, checks=[])
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        assert _outcome_event(ml)[GATE_MODE_KEY] == "hard"
+
+    async def test_proceeded_carries_gate_mode_soft(self) -> None:
+        out = PreflightOutput(status=PreflightStatus.READY, checks=[])
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out, enforce=False)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        # a soft app's healthy runs proceed normally, still tagged soft
+        assert ev["outcome"] == "proceeded"
+        assert ev[GATE_MODE_KEY] == "soft"
+
+    async def test_check_matrix_on_proceed(self) -> None:
+        # The matrix is the pattern-analysis payload: small fixed fields only,
+        # JSON-encoded so it lands as one LogAttributes value in ClickHouse.
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    error=AuthError(message="x"),
+                    duration_ms=312.0,
+                ),
+                PreflightCheck(name="tables", passed=True, duration_ms=95.0),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert isinstance(ev[CHECK_MATRIX_KEY], str)
+        assert json.loads(ev[CHECK_MATRIX_KEY]) == [
+            {
+                "name": "auth",
+                "passed": False,
+                "error_code": "AUTH",
+                "duration_ms": 312.0,
+            },
+            {
+                "name": "tables",
+                "passed": True,
+                "error_code": "",
+                "duration_ms": 95.0,
+            },
+        ]
+
+    async def test_check_matrix_on_block(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    error=AuthError(message="x"),
+                    duration_ms=312.0,
+                )
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        matrix = json.loads(_outcome_event(ml)[CHECK_MATRIX_KEY])
+        # Pin the full row on the block path too, so error_code/duration_ms drift
+        # is caught here as well as on the proceed path.
+        assert matrix == [
+            {
+                "name": "auth",
+                "passed": False,
+                "error_code": "AUTH",
+                "duration_ms": 312.0,
+            }
+        ]
+
+    async def test_check_matrix_nonfinite_duration_coerced(self) -> None:
+        # orjson emits null for nan/inf; we normalize to 0.0 so the ClickHouse
+        # row stays numeric, never raised (a raise here would fail the gate
+        # open and lose the whole event).
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[
+                PreflightCheck(name="auth", passed=False, duration_ms=float("nan")),
+                PreflightCheck(name="tables", passed=True, duration_ms=float("inf")),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        matrix = json.loads(_outcome_event(ml)[CHECK_MATRIX_KEY])  # must parse
+        assert [row["duration_ms"] for row in matrix] == [0.0, 0.0]
+
+    async def test_check_matrix_empty_checks(self) -> None:
+        out = PreflightOutput(status=PreflightStatus.READY, checks=[])
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        assert _outcome_event(ml)[CHECK_MATRIX_KEY] == "[]"
+
+    async def test_check_matrix_carries_no_messages(self) -> None:
+        # Messages/evidence stay in the Temporal activity result — the event row
+        # must stay small and free of user-facing text.
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    message="human text",
+                    error=AuthError(message="secret-adjacent detail"),
+                )
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        (row,) = json.loads(_outcome_event(ml)[CHECK_MATRIX_KEY])
+        assert set(row) == {"name", "passed", "error_code", "duration_ms"}
 
     async def test_verdict_log_replaced_by_outcome_event(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])

@@ -682,6 +682,17 @@ class App(ABC):
     tags: ClassVar[dict[str, str] | None] = None
     passthrough_modules: ClassVar[set[str] | None] = None
 
+    preflight_gate_mode: ClassVar[Literal["hard", "soft"]] = "soft"
+    """Preflight gate posture. ``"soft"`` (default) never blocks — a
+    ``NOT_READY`` verdict lets the run proceed and is emitted as
+    ``outcome="would_block"`` on the gate outcome event so it is always
+    reported. ``"hard"`` is the opt-in that blocks the run when the handler's
+    verdict is ``NOT_READY`` (the worker logs at boot). Set ``"hard"`` once the
+    app's checks are trusted to gate real runs. The ``ATLAN_PREFLIGHT_GATE_MODE``
+    env var overrides this at deploy time; any set value other than ``"hard"``
+    resolves to soft. An empty or unset value is not an override — resolution
+    falls through to this declared attribute. See the adopt-preflight-gate skill."""
+
     # Marker to track if class has been registered
     _app_registered: ClassVar[bool] = False
 
@@ -1770,6 +1781,12 @@ async def _run_preflight_gate(
     deterministic workflow forwards only secret-free references. Dispatch is to
     the one app-level handler, with ``entrypoint`` threaded through for internal
     branching.
+
+    The ``no_verdict`` outcome event emitted here (fail-open path) omits
+    ``gate_mode``, unlike the ``blocked``/``would_block``/``proceeded`` events
+    the activity emits: the workflow layer never sees ``enforce`` (it is baked
+    into the activity closure at worker build), so the mode is not available to
+    stamp on this row.
     """
     if not workflow.patched("preflight-gate"):
         return
