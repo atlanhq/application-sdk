@@ -46,6 +46,31 @@ def test_run_seam_defaults_are_real_gh_wrapper():
     assert inspect.signature(doc.main).parameters["run"].default is doc._run_gh
 
 
+def test_run_gh_success_returns_stdout(monkeypatch):
+    class _Result:
+        returncode = 0
+        stdout = "hello"
+        stderr = ""
+
+    monkeypatch.setattr(doc.subprocess, "run", lambda *a, **k: _Result())
+    assert doc._run_gh(["repo", "list"]) == "hello"
+
+
+def test_run_gh_failure_returns_empty_and_warns_stderr(monkeypatch, capsys):
+    # A real auth/scope/network failure must surface `gh`'s stderr in the log
+    # (diagnosable) rather than silently collapsing to "no data".
+    class _Result:
+        returncode = 1
+        stdout = ""
+        stderr = "HTTP 401: Bad credentials"
+
+    monkeypatch.setattr(doc.subprocess, "run", lambda *a, **k: _Result())
+    assert doc._run_gh(["api", "repos/x/contents/renovate.json"]) == ""
+    err = capsys.readouterr().err
+    assert "::warning::" in err
+    assert "HTTP 401: Bad credentials" in err
+
+
 def test_parse_repos_valid_and_malformed():
     assert doc.parse_repos('["a", "b"]') == ["a", "b"]
     assert doc.parse_repos("[]") == []

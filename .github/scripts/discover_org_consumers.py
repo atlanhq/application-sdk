@@ -54,9 +54,19 @@ REPO_LIST_LIMIT = 5000
 
 def _run_gh(args: list) -> str:
     """Run `gh` and return stdout, or "" on any failure (missing file, auth,
-    network). Callers treat "" as 'no data'."""
+    network). Callers treat "" as 'no data'.
+
+    On failure, echo `gh`'s stderr to this process's stderr before returning ""
+    so a real auth/scope/network error (e.g. a 401 that would otherwise look
+    identical to an empty fleet) is diagnosable from the workflow log, rather
+    than silently collapsing to "no data"."""
     result = subprocess.run(["gh", *args], capture_output=True, text=True)
     if result.returncode != 0:
+        if result.stderr:
+            print(
+                f"::warning::gh {args[0]} failed: {result.stderr.strip()}",
+                file=sys.stderr,
+            )
         return ""
     return result.stdout
 
