@@ -8,8 +8,10 @@
 # fleet dashboard data to Kryptonite (k.atlan.dev/renovate-dashboard/).
 #
 # Mirrors the conformance dashboard job in update-dashboard.yaml for the S3
-# deployment pattern. Fleet discovery uses discover_org_consumers.py (the same
-# script the self-hosted renovate.yaml runner uses).
+# deployment pattern. This dashboard runs its own inline `gh search code`
+# discovery (see the discovery step below); the self-hosted renovate.yaml runner
+# instead uses the deterministic discover_org_consumers.py. Both target the same
+# signal — repos whose renovate.json extends the shared preset.
 #
 # Two modes:
 #   Full-fleet (schedule / workflow_dispatch without repo input):
