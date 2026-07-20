@@ -50,7 +50,10 @@ from application_sdk.app.context import (
 from application_sdk.app.entrypoint import EntryPointMetadata
 from application_sdk.app.registry import AppMetadata, resolve_pool_queue
 from application_sdk.app.task import get_task_metadata, is_task, task
-from application_sdk.constants import LOCAL_WORKFLOW_ID
+from application_sdk.constants import (
+    ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
+    LOCAL_WORKFLOW_ID,
+)
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
     CleanupInput,
@@ -101,14 +104,14 @@ except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] pac
 # adding only once a third such event exists.
 ASSET_VALIDATION_EVENT = "Transformed-asset validation outcome"
 
-# Cap on how many failure/orphan rows the matrix carries. The event's scalar
-# counts always reflect the full batch; the matrix is a bounded drill-down sample
-# so a pathological batch can't produce an unbounded LogAttributes value. This is
-# the single rows-per-axis cap for both surfaces this module emits: it is passed
-# explicitly to ``format_report(max_items=...)`` below, so the human-readable
-# WARNING listing and the structured matrix stay in lockstep instead of relying on
-# two independent literals happening to match.
-_VALIDATION_MATRIX_MAX_ROWS = 25
+# Cap on how many failure/orphan rows the matrix carries, aliased from the single
+# source of truth in ``constants`` so the structured matrix and the human-readable
+# ``format_report()`` listing (which defaults to the same constant) can never
+# drift. The event's scalar counts always reflect the full batch; the matrix is a
+# bounded drill-down sample so a pathological batch can't produce an unbounded
+# LogAttributes value. Passed explicitly to ``format_report(max_items=...)`` below
+# to make the shared cap obvious at the call site.
+_VALIDATION_MATRIX_MAX_ROWS = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
 
 # Per-row error message cap (chars). pyatlan_v9 ``.validate()`` messages can be
 # long; truncate so a single row can't bloat the ClickHouse attribute.
@@ -123,8 +126,10 @@ def _validation_matrix_json(report: "AssetValidationReport") -> str:
     change (mirrors the preflight gate's ``check_matrix``). Small fixed fields
     only, bounded to :data:`_VALIDATION_MATRIX_MAX_ROWS` rows per axis — the
     headline counts on the event carry the full totals, and the human-readable
-    ``format_report()`` still rides in the WARNING body for flagged runs. Never
-    raises: the caller wraps the emit, but keep this defensive too.
+    ``format_report()`` still rides in the WARNING body for flagged runs. Not
+    internally guarded (``orjson.dumps`` can raise): the sole caller,
+    :func:`_warn_on_invalid_transformed_assets`, wraps the whole emit in
+    ``try/except``, so a raise here is caught there and never blocks the upload.
     """
     rows: list[dict[str, Any]] = []
     for f in report.failures[:_VALIDATION_MATRIX_MAX_ROWS]:

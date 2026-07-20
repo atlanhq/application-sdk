@@ -152,7 +152,10 @@ class TestWarnOnInvalidTransformedAssets:
             invalid_rows = [r for r in matrix if r["kind"] == "invalid"]
             assert len(invalid_rows) == 1
             assert invalid_rows[0]["type_name"] == "Table"
-            assert invalid_rows[0]["error"]  # first .validate() message, non-empty
+            # _invalid_table() clears qualified_name, so the row must carry the
+            # asset's actual .validate() message — pin a stable substring of it
+            # rather than a bare truthiness check.
+            assert "qualified_name is required" in invalid_rows[0]["error"]
 
     @pytest.mark.skipif(not _HAS_ROCKSDICT, reason="orphan pass needs rocksdict")
     async def test_orphan_assets_warn_but_do_not_raise(self, tmp_path: Path) -> None:

@@ -450,6 +450,15 @@ if DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED:
 VALIDATE_ASSETS_ON_UPLOAD: bool = (
     os.getenv("ATLAN_VALIDATE_ASSETS_ON_UPLOAD", "true").lower() == "true"
 )
+#: The single "rows per axis" cap for transformed-asset validation output —
+#: shared by both surfaces so they can never drift: the human-readable
+#: ``AssetValidationReport.format_report(max_items=...)`` listing and the
+#: structured ``asset_validation_matrix`` telemetry the upload activity emits.
+#: The event's scalar counts always reflect the full batch; only these
+#: drill-down samples are bounded (so a pathological batch cannot produce an
+#: unbounded WARNING body or ``LogAttributes`` value).
+ASSET_VALIDATION_MAX_ITEMS_PER_AXIS: int = 25
+
 # Dapr Client Configuration
 #: Maximum gRPC message length in bytes for Dapr client.
 #:

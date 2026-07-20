@@ -45,6 +45,7 @@ from pyatlan_v9.model.assets.referenceable import RelatedReferenceable
 from pyatlan_v9.model.transform import get_type
 
 from application_sdk.common.spillable_dict import SpillableDict
+from application_sdk.constants import ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -126,11 +127,16 @@ class AssetValidationReport:
         """Count of per-asset validation failures."""
         return len(self.failures)
 
-    def format_report(self, *, max_items: int = 25) -> str:
+    def format_report(
+        self, *, max_items: int = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
+    ) -> str:
         """Render a human-readable summary.
 
-        ``max_items`` caps how many failures/orphans are *listed*, never how many
-        are examined — the headline counts always reflect the full batch.
+        ``max_items`` caps how many failures/orphans are *listed* (per axis),
+        never how many are examined — the headline counts always reflect the full
+        batch. Defaults to :data:`~application_sdk.constants.ASSET_VALIDATION_MAX_ITEMS_PER_AXIS`,
+        the same cap the upload activity applies to the structured
+        ``asset_validation_matrix`` telemetry, so the two surfaces stay in lockstep.
         """
         # ``failed`` (len(failures)) includes the undeserializable records, so
         # report the two disjointly: "invalid" is the per-asset validation
