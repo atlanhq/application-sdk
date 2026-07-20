@@ -15,13 +15,14 @@ writes a **GITHUB_STEP_SUMMARY** (found / killed / PRs / cost + Linear parent
 link) — the missing observability that got the cron disabled. It parses the
 `=== SDK EVOLUTION SUMMARY ===` block the agent emits (ORCHESTRATION Stage 7).
 
-Stream-drop backstop: mothership's SSE stream can drop mid-run while the
-sandbox keeps working (a prior verification run completed all stages after the
-stream died). When the stream ends without a `complete` event — and no `error`
-event was seen — this script polls the pinned completion-marker issue
-(label `sdk-evolution-marker`) where ORCHESTRATION Stage 7 posts the summary
-block as a comment tagged `marker: <source_id>`. Marker found → the run really
-completed; recover the metrics from the comment and exit 0.
+Stream-drop backstop: mothership's SSE stream can end abnormally while the
+sandbox keeps working (observed twice: a silent drop, and a spurious empty
+`error` event — both after the run had completed all stages). On any abnormal
+ending this script polls the pinned Linear marker ticket (`MARKER_TICKET`)
+where ORCHESTRATION Stage 7 posts the summary block as a comment tagged
+`marker: <source_id>`. Marker found → the run really completed; recover the
+metrics from the comment and exit 0. Linear (not a GitHub issue) is the
+tracking surface by design — the pipeline must not create GitHub issues.
 
 Flow: resolve tier/focus/theme → health-check mothership (retries) → build
 prompt + payload → POST /api/sandbox/execute and stream SSE → (on stream drop)
@@ -39,8 +40,8 @@ Environment:
                         verify a PR branch's playbook before merge)
     GHA_RUN_URL         this workflow run's URL
     RUN_DATE            ISO date (computed if absent)
-    GH_TOKEN            GitHub token for the completion-marker poll
-    GITHUB_REPOSITORY   owner/repo for the marker poll (GHA sets this)
+    LINEAR_API_KEY      Linear API key for the completion-marker poll
+    MARKER_TICKET       pinned Linear ticket identifier holding run markers
     GITHUB_STEP_SUMMARY path GitHub Actions gives us to render the run summary
 """
 
@@ -79,9 +80,17 @@ DAILY_FOCUSES = frozenset(FOCUS_BY_WEEKDAY.values())
 WEEKLY_THEMES = ("ARCH", "TEMPORAL", "CONSUMERS", "TOOLKIT", "DX", "PERF")
 
 # Completion-marker backstop (see module docstring).
-MARKER_LABEL = "sdk-evolution-marker"
+LINEAR_API_URL = "https://api.linear.app/graphql"
 MARKER_POLL_ATTEMPTS = 45
 MARKER_POLL_INTERVAL_SECONDS = 60
+MARKER_QUERY = """\
+query($issue: String!, $needle: String!) {
+  issue(id: $issue) {
+    comments(filter: { body: { contains: $needle } }, first: 5) {
+      nodes { body }
+    }
+  }
+}"""
 
 SUMMARY_START = "=== SDK EVOLUTION SUMMARY ==="
 SUMMARY_END = "=== END SUMMARY ==="
@@ -149,6 +158,7 @@ def build_prompt(
     consumer_pr_cap: int,
     focus: str = "",
     theme: str = "",
+    marker_ticket: str = "",
 ) -> str:
     if tier == "weekly":
         cap_note = (
@@ -175,6 +185,8 @@ def build_prompt(
             f"open design debates; note weekly DESIGN candidates and move on.\n"
         )
         extra_lines = f"\n  FOCUS:            {focus}"
+    if marker_ticket:
+        extra_lines += f"\n  MARKER_TICKET:    {marker_ticket}"
     return f"""You are running the SDK Evolution pipeline in a Cloudflare sandbox.
 
 Repository cloned at: /workspace/application-sdk.
@@ -199,8 +211,10 @@ ruff / conformance CI / codeql / trivy already gates.
 
 Hand every surviving PR to a SINGLE @sdk-review pass (NOT auto-complete). At
 the very end (Stage 7), print the `=== SDK EVOLUTION SUMMARY ===` block
-verbatim AND post it as a completion-marker comment (see ORCHESTRATION
-Stage 7) so the workflow can surface the outcome even if this stream drops."""
+verbatim AND post it as a completion-marker comment on the MARKER_TICKET
+Linear issue (see ORCHESTRATION Stage 7) so the workflow can surface the
+outcome even if this stream drops. NEVER create GitHub issues — all tracking
+lives in Linear."""
 
 
 def build_payload(
@@ -211,6 +225,7 @@ def build_payload(
     focus: str = "",
     theme: str = "",
     base_branch: str = "main",
+    marker_ticket: str = "",
 ) -> dict[str, Any]:
     return {
         "mode": "direct",
@@ -221,7 +236,7 @@ def build_payload(
         "base_branch": base_branch,
         "snapshot": "_base",
         "prompt": build_prompt(
-            tier, run_date, gha_run_url, consumer_pr_cap, focus, theme
+            tier, run_date, gha_run_url, consumer_pr_cap, focus, theme, marker_ticket
         ),
         "max_timeout_seconds": STREAM_TIMEOUT_SECONDS,
         "idle_timeout_seconds": 1800,
@@ -383,78 +398,71 @@ def mine_summary(st: SSEState) -> dict[str, str]:
     return parse_summary(st.response_text) or parse_summary(st.raw_data)
 
 
-def _gh_api(
-    url: str, token: str, opener: Callable[..., Any] = urllib.request.urlopen
+def _linear_query(
+    query: str,
+    variables: dict[str, str],
+    api_key: str,
+    opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> Any:
     req = urllib.request.Request(
-        url,
+        LINEAR_API_URL,
+        data=json.dumps({"query": query, "variables": variables}).encode(),
         headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "Authorization": api_key,
         },
+        method="POST",
     )
     with opener(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8", "replace"))
 
 
 def fetch_marker_summary(
-    repo: str,
+    marker_ticket: str,
     source_id: str,
-    run_date: str,
-    token: str,
+    api_key: str,
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> dict[str, str] | None:
     """One poll attempt for the completion marker.
 
-    Looks for a comment containing `marker: <source_id>` on the pinned
-    tracking issue (label `sdk-evolution-marker`). Returns the parsed summary
-    block from that comment (may be empty when the block is malformed — the
-    marker alone still proves Stage 7 ran), or None when not found yet.
-    Network/API failures count as not-found so the poll loop keeps trying.
+    Looks for a comment containing `marker: <source_id>` on the pinned Linear
+    marker ticket. Returns the parsed summary block from that comment (may be
+    empty when the block is malformed — the marker alone still proves Stage 7
+    ran), or None when not found yet. Network/API failures count as not-found
+    so the poll loop keeps trying.
     """
-    base = f"https://api.github.com/repos/{repo}"
+    needle = f"marker: {source_id}"
     try:
-        issues = _gh_api(
-            f"{base}/issues?labels={MARKER_LABEL}&state=all&per_page=5",
-            token,
-            opener,
+        data = _linear_query(
+            MARKER_QUERY, {"issue": marker_ticket, "needle": needle}, api_key, opener
         )
-        for issue in issues if isinstance(issues, list) else []:
-            number = issue.get("number")
-            if number is None:
-                continue
-            comments = _gh_api(
-                f"{base}/issues/{number}/comments"
-                f"?since={run_date}T00:00:00Z&per_page=100",
-                token,
-                opener,
-            )
-            for comment in reversed(comments if isinstance(comments, list) else []):
-                body = comment.get("body") or ""
-                if f"marker: {source_id}" in body:
-                    return parse_summary(body)
+        issue = ((data or {}).get("data") or {}).get("issue") or {}
+        nodes = (issue.get("comments") or {}).get("nodes") or []
+        for node in nodes:
+            body = node.get("body") or ""
+            if needle in body:
+                return parse_summary(body)
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
         print(f"::warning::Completion-marker poll attempt failed: {e}")
     return None
 
 
 def poll_completion_marker(
-    repo: str,
+    marker_ticket: str,
     source_id: str,
-    run_date: str,
-    token: str,
+    api_key: str,
     opener: Callable[..., Any] = urllib.request.urlopen,
     sleeper: Callable[[float], None] = time.sleep,
     attempts: int = MARKER_POLL_ATTEMPTS,
 ) -> dict[str, str] | None:
-    """Poll for the Stage 7 completion marker after an SSE stream drop.
+    """Poll for the Stage 7 completion marker after an abnormal stream ending.
 
     The sandbox often outlives the stream; give it up to
     attempts × MARKER_POLL_INTERVAL_SECONDS to finish and post the marker.
     Returns the recovered summary dict (possibly empty), or None on timeout.
     """
     for attempt in range(1, attempts + 1):
-        found = fetch_marker_summary(repo, source_id, run_date, token, opener)
+        found = fetch_marker_summary(marker_ticket, source_id, api_key, opener)
         if found is not None:
             print(f"Completion marker found on poll attempt {attempt}")
             return found
@@ -615,6 +623,7 @@ def main() -> int:
     )
     consumer_pr_cap = _consumer_pr_cap()
     base_branch = os.environ.get("BASE_BRANCH") or "main"
+    marker_ticket = os.environ.get("MARKER_TICKET", "")
     print(
         f"Dispatching SDK Evolution: tier={tier} run_date={run_date}"
         + (f" focus={focus}" if focus else "")
@@ -627,7 +636,14 @@ def main() -> int:
         return 1
 
     payload = build_payload(
-        tier, run_date, gha_run_url, consumer_pr_cap, focus, theme, base_branch
+        tier,
+        run_date,
+        gha_run_url,
+        consumer_pr_cap,
+        focus,
+        theme,
+        base_branch,
+        marker_ticket,
     )
     req = urllib.request.Request(
         f"{base_url}/api/sandbox/execute",
@@ -653,18 +669,21 @@ def main() -> int:
     # (got_event); a failed POST can't have produced a marker.
     recovered: dict[str, str] | None = None
     if st.got_event and not clean_success(st):
-        gh_token = os.environ.get("GH_TOKEN", "")
-        repo = os.environ.get("GITHUB_REPOSITORY", "atlanhq/application-sdk")
-        if gh_token:
+        linear_key = os.environ.get("LINEAR_API_KEY", "")
+        marker_ticket = os.environ.get("MARKER_TICKET", "")
+        if linear_key and marker_ticket:
             print(
-                "::warning::Stream ended abnormally — polling for the run's "
-                "completion marker"
+                "::warning::Stream ended abnormally — polling the Linear "
+                "marker ticket for the run's completion marker"
             )
             recovered = poll_completion_marker(
-                repo, str(payload["source_id"]), run_date, gh_token
+                marker_ticket, str(payload["source_id"]), linear_key
             )
         else:
-            print("::warning::GH_TOKEN not set — cannot poll the completion marker")
+            print(
+                "::warning::LINEAR_API_KEY / MARKER_TICKET not set — cannot "
+                "poll the completion marker"
+            )
 
     write_step_summary(render_step_summary(st, tier, run_date, gha_run_url, recovered))
     code, message = decide_exit(st, recovered)

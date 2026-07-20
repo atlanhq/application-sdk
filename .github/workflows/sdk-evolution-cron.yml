@@ -15,10 +15,10 @@
 # The dispatch + SSE-stream parsing + GITHUB_STEP_SUMMARY rendering live in the
 # tested sdk_evolution_dispatch.py (see docs/standards/ci.md) — NOT inlined here.
 # The script also owns the stream-drop backstop: if mothership's SSE stream
-# drops mid-run (the sandbox usually keeps working), it polls the pinned
-# completion-marker issue (label `sdk-evolution-marker`) where the run's
-# Stage 7 posts its summary — so a dropped stream no longer fails a run that
-# actually completed. That backstop needs `issues: read` + GH_TOKEN below.
+# ends abnormally (the sandbox usually keeps working), it polls the pinned
+# Linear marker ticket (MARKER_TICKET below) where the run's Stage 7 posts its
+# summary — so a bad stream no longer fails a run that actually completed.
+# All run tracking lives in Linear; the pipeline creates NO GitHub issues.
 #
 # SCHEDULE IS DISABLED until a manual run proves the step summary + Linear
 # parent link render (that observability gap is exactly why the previous cron
@@ -89,7 +89,6 @@ on:
 
 permissions:
   contents: read
-  issues: read
 
 jobs:
   trigger:
@@ -140,7 +139,11 @@ jobs:
           PYTHONUNBUFFERED: '1'
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
           HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
-          GH_TOKEN: ${{ github.token }}
+          # Completion-marker backstop: the run posts its Stage 7 summary as a
+          # comment on this pinned Linear ticket; on an abnormal stream ending
+          # the dispatch script polls it via LINEAR_API_KEY.
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          MARKER_TICKET: BLDX-1565
           TIER: ${{ inputs.tier || 'auto' }}
           FOCUS: ${{ inputs.focus || 'auto' }}
           THEME: ${{ inputs.theme || 'auto' }}

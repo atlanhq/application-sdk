@@ -357,76 +357,78 @@ class _ApiResp:
         return False
 
 
-def _api_opener(issues, comments):
-    """Fake urlopen routing the two GitHub API calls the poll makes."""
+def _linear_opener(comment_bodies, issue_present=True):
+    """Fake urlopen answering the Linear GraphQL marker query."""
 
     def opener(req, timeout=0):
-        url = req.full_url
-        if "/comments" in url:
-            return _ApiResp(comments)
-        assert "labels=sdk-evolution-marker" in url
-        return _ApiResp(issues)
+        assert req.full_url == sd.LINEAR_API_URL
+        sent = json.loads(req.data.decode())
+        assert sent["variables"]["issue"]
+        if not issue_present:
+            return _ApiResp({"data": {"issue": None}})
+        needle = sent["variables"]["needle"]
+        nodes = [{"body": b} for b in comment_bodies if needle in b]
+        return _ApiResp({"data": {"issue": {"comments": {"nodes": nodes}}}})
 
     return opener
 
 
 def test_fetch_marker_summary_found():
-    opener = _api_opener(issues=[{"number": 42}], comments=[{"body": _MARKER_BODY}])
     got = sd.fetch_marker_summary(
-        "o/r", "sdk-evolution-daily-2026-07-08", "2026-07-08", "tok", opener
+        "BLDX-1565",
+        "sdk-evolution-daily-2026-07-08",
+        "key",
+        _linear_opener([_MARKER_BODY]),
     )
     assert got is not None and got["discovered"] == "12"
 
 
 def test_fetch_marker_summary_wrong_source_id_is_not_found():
-    opener = _api_opener(issues=[{"number": 42}], comments=[{"body": _MARKER_BODY}])
     got = sd.fetch_marker_summary(
-        "o/r", "sdk-evolution-weekly-2026-07-05", "2026-07-05", "tok", opener
+        "BLDX-1565",
+        "sdk-evolution-weekly-2026-07-05",
+        "key",
+        _linear_opener([_MARKER_BODY]),
     )
     assert got is None
 
 
 def test_fetch_marker_found_but_malformed_block_still_counts():
     # The marker alone proves Stage 7 ran; metrics are best-effort.
-    opener = _api_opener(
-        issues=[{"number": 42}],
-        comments=[{"body": "marker: sdk-evolution-daily-2026-07-08"}],
-    )
     got = sd.fetch_marker_summary(
-        "o/r", "sdk-evolution-daily-2026-07-08", "2026-07-08", "tok", opener
+        "BLDX-1565",
+        "sdk-evolution-daily-2026-07-08",
+        "key",
+        _linear_opener(["marker: sdk-evolution-daily-2026-07-08"]),
     )
     assert got == {}
 
 
-def test_fetch_marker_no_tracking_issue():
-    opener = _api_opener(issues=[], comments=[])
-    assert sd.fetch_marker_summary("o/r", "sid", "2026-07-08", "tok", opener) is None
+def test_fetch_marker_no_tracking_ticket():
+    opener = _linear_opener([], issue_present=False)
+    assert sd.fetch_marker_summary("BLDX-0", "sid", "key", opener) is None
 
 
 def test_fetch_marker_api_error_counts_as_not_found():
     def opener(req, timeout=0):
         raise OSError("boom")
 
-    assert sd.fetch_marker_summary("o/r", "sid", "2026-07-08", "tok", opener) is None
+    assert sd.fetch_marker_summary("BLDX-1565", "sid", "key", opener) is None
 
 
 def test_poll_marker_found_on_later_attempt():
     calls = {"n": 0}
-    found_opener = _api_opener(
-        issues=[{"number": 42}], comments=[{"body": _MARKER_BODY}]
-    )
+    found = _linear_opener([_MARKER_BODY])
+    empty = _linear_opener([])
 
     def opener(req, timeout=0):
         calls["n"] += 1
-        if calls["n"] <= 2:  # first attempt: issue exists, no comment yet
-            return _api_opener(issues=[{"number": 42}], comments=[])(req, timeout)
-        return found_opener(req, timeout)
+        return (empty if calls["n"] <= 2 else found)(req, timeout)
 
     got = sd.poll_completion_marker(
-        "o/r",
+        "BLDX-1565",
         "sdk-evolution-daily-2026-07-08",
-        "2026-07-08",
-        "tok",
+        "key",
         opener=opener,
         sleeper=lambda _: None,
         attempts=5,
@@ -435,17 +437,33 @@ def test_poll_marker_found_on_later_attempt():
 
 
 def test_poll_marker_times_out():
-    opener = _api_opener(issues=[{"number": 42}], comments=[])
     slept = {"n": 0}
 
     def sleeper(_):
         slept["n"] += 1
 
     got = sd.poll_completion_marker(
-        "o/r", "sid", "2026-07-08", "tok", opener=opener, sleeper=sleeper, attempts=3
+        "BLDX-1565",
+        "sid",
+        "key",
+        opener=_linear_opener([]),
+        sleeper=sleeper,
+        attempts=3,
     )
     assert got is None
     assert slept["n"] == 2  # no sleep after the final attempt
+
+
+def test_prompt_carries_marker_ticket():
+    daily = sd.build_prompt(
+        "daily", "d", "u", 5, focus="BUG", marker_ticket="BLDX-1565"
+    )
+    weekly = sd.build_prompt(
+        "weekly", "d", "u", 5, theme="ARCH", marker_ticket="BLDX-1565"
+    )
+    assert "MARKER_TICKET:    BLDX-1565" in daily
+    assert "MARKER_TICKET:    BLDX-1565" in weekly
+    assert "NEVER create GitHub issues" in daily
 
 
 def test_decide_exit_incomplete_stream_recovered_by_marker():

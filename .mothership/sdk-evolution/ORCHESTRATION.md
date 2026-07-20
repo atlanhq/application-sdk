@@ -55,7 +55,7 @@ header — do NOT re-derive them.
      exclusion list.
    - `.mothership/sdk-evolution/agents/*.md` — the three discovery agents.
    - `.mothership/sdk-evolution/tools.md` — Linear + GitHub + `@sdk-review`
-     + the completion-marker issue.
+     + the completion-marker ticket (`MARKER_TICKET`).
 3. **Build the suppression list** — query Linear for open tickets in the
    "App SDK v3.0" project (see tools.md). Extract file paths + rule IDs from
    each open ticket; skip re-raising them. On proxy failure → empty suppression
@@ -301,20 +301,12 @@ job is to make the numbers real AND durable:
    === END SUMMARY ===
    ```
 3. **Post the completion marker** (the stream-drop backstop — see tools.md →
-   Completion marker). Find the pinned tracking issue by label and comment the
-   marker line + the SAME summary block:
-   ```bash
-   ISSUE=$(gh issue list --repo atlanhq/application-sdk \
-     --label sdk-evolution-marker --state all --limit 1 \
-     --json number --jq '.[0].number')
-   # First run ever: create it (label + issue) if $ISSUE is empty — see tools.md.
-   gh issue comment "$ISSUE" --repo atlanhq/application-sdk \
-     --body "marker: sdk-evolution-<TIER>-<RUN_DATE>
-
-   <the summary block verbatim>"
-   ```
-   If mothership's SSE stream to GitHub Actions drops mid-run, this comment is
-   how the workflow still learns the run completed. **Never skip it.**
+   Completion marker). Comment `marker: sdk-evolution-<TIER>-<RUN_DATE>` + the
+   SAME summary block on the pinned **Linear** ticket given as `MARKER_TICKET`
+   in the prompt header (via the Linear proxy). Do NOT use a GitHub issue —
+   the pipeline never creates GitHub issues. If mothership's SSE stream to
+   GitHub Actions ends abnormally mid-run, this comment is how the workflow
+   still learns the run completed. **Never skip it.**
 4. Consistency audit: every child ticket has a PR link + "In Review" OR
    "Canceled" + reason. No orphans. Parent reflects the aggregate.
 5. Security audit: no secrets/tokens/internal URLs in any PR or ticket body.
