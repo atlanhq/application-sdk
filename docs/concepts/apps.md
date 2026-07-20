@@ -279,6 +279,35 @@ from application_sdk.storage import verify_object_store_access, ObjectStorePrefl
 Both symbols are exported from `application_sdk.storage`. The function is normally called by
 the SDK boot path — connectors do not need to call it manually.
 
+### Preflight Gate Posture
+
+Distinct from the SDR object-store preflight above, a connector can run a `preflight_check`
+handler as the first activity of every extraction workflow. Enforcement is a **gate** property,
+not a handler property: the handler always returns the honest verdict, and the gate decides what
+to do with a `NOT_READY` verdict. The posture is set per app via the `preflight_gate_mode`
+`ClassVar`:
+
+- **soft** (default): never blocks — a `NOT_READY` verdict lets the run proceed and is emitted as
+  `outcome="would_block"` (with `gate_mode="soft"` and the per-check `check_matrix`) on the gate
+  outcome event. The verdict is always reported, so connector-pulse can rank apps by how often they
+  *would* have blocked real runs — that list is the "checks are ready to enforce" queue.
+- **hard**: blocks the run when the verdict is `NOT_READY` (raises `PreflightFailed`). This is the
+  opt-in for apps whose checks are trusted to gate real runs.
+
+```python
+class MyConnector(App):
+    preflight_gate_mode = "hard"   # checks are trusted to block runs
+```
+
+Ops can override the posture without an app release via `ATLAN_PREFLIGHT_GATE_MODE=hard` on the
+worker deployment. The env var wins over the attribute; any set value other than the literal `hard`
+resolves to soft, so malformed config never blocks a run by accident. An empty or unset value is
+not an override — resolution falls through to the declared `preflight_gate_mode` attribute. The
+worker logs an INFO line
+per hard app at boot. Start soft, then flip to `hard` once connector-pulse `would_block` rows show
+the checks track real workflow failures. See the `adopt-preflight-gate` skill for the full adoption
+flow.
+
 ## Passthrough Modules
 
 If your app imports third-party libraries that must be available inside the Temporal sandbox, declare them as a class-level attribute:

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.23.0
-source-sha:    af9979895ada4f7b4eb26b2d6387761059f87e3e
-source-date:   2026-07-17T09:18:33+00:00
+source-sha:    fc856c0cd89c08315c80b0131d706e08fed2ec17
+source-date:   2026-07-17T11:37:53+00:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2757,7 +2757,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import PreflightOutput`
 - **Summary:** Output from the preflight_check handler operation.
 - **Fields:**
-  - `status: PreflightStatus` — Overall verdict — decides the gate. ``NOT_READY`` blocks the run;
+  - `status: PreflightStatus` — Overall verdict — decides the gate. ``NOT_READY`` blocks the run only in
   - `checks: list[PreflightCheck]` `= []` — Individual check results (display + failure attribution).
   - `message: str` `= ''` — Human-readable summary. Seeds the gate's abort reason when set.
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.

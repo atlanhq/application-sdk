@@ -207,6 +207,10 @@ jobs:
         env:
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
           HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
+          # Lets the dispatch script poll the PR for the resolver's out-of-band
+          # Phase-4 hand-off comment when our SSE stream is cut before it lands
+          # (transport false-negative backstop). Read-only use of the PR comments.
+          GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
           MAX_ROUNDS: ${{ inputs.max_rounds || '8' }}
           # Human reviewers to request + tag when the PR reaches merge-ready

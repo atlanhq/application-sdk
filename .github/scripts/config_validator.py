@@ -17,6 +17,15 @@ Rules enforced:
   7. requests <= limits per resource.
   8. vpa.minAllowed         <= vpa.maxAllowed per resource.
   9. keda.minReplicaCount   <= keda.maxReplicaCount.
+ 10. Scalar fields the chart schema types strictly carry the declared type:
+     vpa.{min,max}Allowed.{cpu,memory}, resources.requests.{cpu,memory},
+     resources.limits.memory and applicationVersion must be strings;
+     keda.temporal.targetQueueSize must be an integer. A wrong scalar type
+     parses fine for rules 2-9 but fails the chart's values.schema.json at
+     Helm-apply time — blocking the release and freezing the TWD — so we catch
+     it in CI. resources.limits.cpu (schema allows integer|string) and the
+     serverResources/workerResources blocks (partly unconstrained) are
+     deliberately excluded to avoid false positives.
 
 Rules 4-7 hit `resources` always; `serverResources`/`workerResources` only when
 `splitDeploymentEnabled=true` (chart ignores them otherwise).
@@ -525,6 +534,88 @@ def _check_keda(cfg: dict) -> list[Violation]:
     return []
 
 
+# Scalar-type contract mirrored from the atlan-app chart's values.schema.json.
+# The chart's JSON schema rejects a wrong scalar type at Helm-apply time, which
+# blocks the release and (for TWC apps) freezes the worker deployment because
+# the TWD is never re-rendered. Catching it here fails the PR instead. Only
+# fields the chart types UNAMBIGUOUSLY are listed: resources.limits.cpu (schema
+# allows integer|string) and the server/workerResources blocks (partly
+# unconstrained) are omitted so we never flag a value the chart would accept.
+# Source of truth: atlan repo subcharts/atlan-app/values.schema.json.
+_STRING_TYPED_FIELDS: tuple[str, ...] = (
+    "applicationVersion",
+    "vpa.minAllowed.cpu",
+    "vpa.minAllowed.memory",
+    "vpa.maxAllowed.cpu",
+    "vpa.maxAllowed.memory",
+    "resources.requests.cpu",
+    "resources.requests.memory",
+    "resources.limits.memory",
+)
+_INT_TYPED_FIELDS: tuple[str, ...] = ("keda.temporal.targetQueueSize",)
+
+
+def _lookup(cfg: dict, path: str) -> tuple[Any, bool]:
+    """Resolve a dotted path. Returns (value, present); present is False when
+    any segment is missing or an intermediate node is not a mapping."""
+    node: Any = cfg
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None, False
+        node = node[part]
+    return node, True
+
+
+def _check_scalar_types(cfg: dict) -> list[Violation]:
+    """Type-check scalars the chart schema types strictly.
+
+    A bare `cpu: 4` (int) or a quoted `targetQueueSize: "25"` (str) satisfies
+    every magnitude rule but fails the chart's values.schema.json at deploy,
+    blocking the release. Emit invalid_type so it fails in CI instead. Kept
+    separate from the magnitude rules so those still run and report normally.
+    """
+    errs: list[Violation] = []
+    for path in _STRING_TYPED_FIELDS:
+        val, present = _lookup(cfg, path)
+        if not present or isinstance(val, str):
+            continue
+        leaf = path.rsplit(".", 1)[-1]
+        errs.append(
+            Violation(
+                field=path,
+                actual=val,
+                expected="string (quoted)",
+                rule="invalid_type",
+                fix=(
+                    f'Quote {path} as a string, e.g. {leaf}: "{val}". The chart '
+                    f"requires a string here; a bare {type(val).__name__} fails "
+                    "Helm schema validation at deploy time and blocks the release."
+                ),
+            )
+        )
+    for path in _INT_TYPED_FIELDS:
+        val, present = _lookup(cfg, path)
+        if not present:
+            continue
+        # bool is an int subclass — reject it explicitly (the chart schema does).
+        if isinstance(val, bool) or not isinstance(val, int):
+            errs.append(
+                Violation(
+                    field=path,
+                    actual=val,
+                    expected="integer (unquoted)",
+                    rule="invalid_type",
+                    fix=(
+                        f"Set {path} to an unquoted integer (got "
+                        f"{type(val).__name__}). The chart requires an integer "
+                        "here; the wrong type fails Helm schema validation at "
+                        "deploy time and blocks the release."
+                    ),
+                )
+            )
+    return errs
+
+
 def validate_config(config_yaml: Any, sdk_version: str | None = None) -> None:
     """Run all guardrail rules. Accepts YAML string or already-parsed dict.
 
@@ -568,6 +659,7 @@ def validate_config(config_yaml: Any, sdk_version: str | None = None) -> None:
     errs += bool_errs
     vpa_parsed, vpa_parse_errs = _parse_vpa(cfg)
     errs += vpa_parse_errs
+    errs += _check_scalar_types(cfg)
     errs += _check_split_requires_twc(cfg, bools, parsed_sdk)
     errs += _check_twc_sdk_floor(bools, parsed_sdk)
     errs += _check_vpa(cfg, vpa_parsed)
