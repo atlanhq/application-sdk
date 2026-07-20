@@ -2,6 +2,31 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.15.0] - 2026-07-20
+
+### Features
+
+- add K011/K012 release-readiness guards (#2756) ([98b66b0](https://github.com/atlanhq/application-sdk/commit/98b66b0))
+
+### Bug fixes
+
+- contract-toolkit conformance prose/rules → self-hosted runner (#2792) ([a8d86c2](https://github.com/atlanhq/application-sdk/commit/a8d86c2))
+- stop shipping the renovate-pkl-sync glue to new repos (PR2 Stage 4b) (#2790) ([cac4e79](https://github.com/atlanhq/application-sdk/commit/cac4e79))
+- K002 skips legacy-import check for Credential.pkl contracts (#2742) ([cf2ec85](https://github.com/atlanhq/application-sdk/commit/cf2ec85))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2786) ([7c58823](https://github.com/atlanhq/application-sdk/commit/7c58823))
+- chore(deps): lock file maintenance (#2775) ([ddba13e](https://github.com/atlanhq/application-sdk/commit/ddba13e))
+- chore(deps): lock file maintenance (#2772) ([7a17675](https://github.com/atlanhq/application-sdk/commit/7a17675))
+- chore(deps): lock file maintenance (#2771) ([e38d6a1](https://github.com/atlanhq/application-sdk/commit/e38d6a1))
+- chore(deps): lock file maintenance (#2755) ([b22cade](https://github.com/atlanhq/application-sdk/commit/b22cade))
+- chore(deps): lock file maintenance (#2752) ([d88272f](https://github.com/atlanhq/application-sdk/commit/d88272f))
+- chore(deps): lock file maintenance (#2750) ([cb70168](https://github.com/atlanhq/application-sdk/commit/cb70168))
+- chore(deps): lock file maintenance (#2748) ([2ef8474](https://github.com/atlanhq/application-sdk/commit/2ef8474))
+- chore(deps): lock file maintenance (#2740) ([afcd63d](https://github.com/atlanhq/application-sdk/commit/afcd63d))
+- chore(deps): lock file maintenance (#2730) ([25f8c08](https://github.com/atlanhq/application-sdk/commit/25f8c08))
+
 ## [0.14.0] - 2026-07-15
 
 ### Features
