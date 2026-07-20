@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.22.1
-source-sha:    1a1728dae053a3a345604253c298f864cea636cf
-source-date:   2026-07-17T00:53:35Z
+sdk-version:   3.23.0
+source-sha:    fc856c0cd89c08315c80b0131d706e08fed2ec17
+source-date:   2026-07-17T11:37:53+00:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 29 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 33 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -2172,6 +2172,27 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Return ``(size_bytes, e_tag)`` for *key*, or ``None`` if not found.
 - **Defined in:** `application_sdk/storage/ops.py`
 
+#### `is_sidecar_key`
+
+- **Import:** `from application_sdk.storage import is_sidecar_key`
+- **Signature:** `is_sidecar_key(key: str)`
+- **Summary:** Return ``True`` if *key* is a SHA-256 sidecar rather than a data object.
+- **Defined in:** `application_sdk/storage/batch.py`
+
+#### `list_data_keys`
+
+- **Import:** `from application_sdk.storage import list_data_keys`
+- **Signature:** `list_data_keys(prefix: str = '', store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
+- **Summary:** List data object keys under *prefix*, excluding SHA-256 sidecars.
+- **Defined in:** `application_sdk/storage/batch.py`
+
+#### `list_data_keys_with_meta`
+
+- **Import:** `from application_sdk.storage import list_data_keys_with_meta`
+- **Signature:** `list_data_keys_with_meta(prefix: str = '', store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
+- **Summary:** Like :func:`list_data_keys`, but return ``(key, size_bytes, e_tag)`` tuples.
+- **Defined in:** `application_sdk/storage/batch.py`
+
 #### `list_keys`
 
 - **Import:** `from application_sdk.storage import list_keys`
@@ -2227,6 +2248,15 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Signature:** `verify_object_store_access(infra: InfrastructureContext)`
 - **Summary:** In SDR mode, verify read+write access to every configured object store.
 - **Defined in:** `application_sdk/storage/preflight.py`
+
+### Constants and Enums
+
+#### `SIDECAR_SUFFIX`
+
+- **Import:** `from application_sdk.storage import SIDECAR_SUFFIX`
+- **Signature:** `SIDECAR_SUFFIX`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/batch.py`
 
 ## `application_sdk.templates`
 

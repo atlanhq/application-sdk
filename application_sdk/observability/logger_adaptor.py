@@ -57,6 +57,14 @@ from application_sdk.version import __version__ as _SDK_VERSION
 CHECK_MATRIX_KEY = "check_matrix"
 GATE_MODE_KEY = "gate_mode"
 
+# Transformed-asset validation outcome-event key, shared with the emitter
+# (``application_sdk.app.base._warn_on_invalid_transformed_assets``) so a rename
+# is a single edit that keeps the emit call-site and the allowlist below in sync.
+# The compact per-failure matrix lands as one JSON string LogAttributes value in
+# ClickHouse (JSONExtract-able); the scalar counts sit alongside it as their own
+# attributes.
+ASSET_VALIDATION_MATRIX_KEY = "asset_validation_matrix"
+
 # SDK-side allowlist that gates which kwargs reach OTLP.  When a logger is called
 # with structured kwargs (e.g. ``_log().info("Downloaded", storage_path=key)``),
 # loguru places the kwargs on ``record["extra"]`` rather than in the message
@@ -110,6 +118,13 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "checks",
         CHECK_MATRIX_KEY,
         GATE_MODE_KEY,
+        # ── Transformed-asset validation outcome event ───────────────────
+        ASSET_VALIDATION_MATRIX_KEY,
+        "assets_total",
+        "assets_passed",
+        "assets_invalid",
+        "assets_orphaned",
+        "assets_undeserializable",
         # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",
         "app_name",

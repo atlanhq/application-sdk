@@ -800,6 +800,50 @@ Include the delta status in the review summary (and inline body
 where applicable) so the author sees at a glance what was fixed vs
 what remains.
 
+### 2e′. Nit convergence — keep the write-side resolver's loop terminating
+
+`@sdk-resolve` (the write counterpart, `.mothership/pr-resolve/`) drives a PR by
+looping review→fix→push until `### Findings` is **empty** (nits included). That
+loop only terminates if the *nit* stream is **bounded, diff-local, and
+actionable**. A reviewer that surfaces a fresh batch of pre-existing optional
+nits every pass — or lists observations it recommends no action on — makes that
+loop non-terminating: it spins round after round until the sandbox dies with no
+hand-off. The three rules below keep nits convergent.
+
+**They apply to `Nit`-tier findings ONLY.** Critical / High / Important
+findings — and any regression a pushed fix introduces — are ALWAYS raised, on
+any line, including code the resolver just pushed. Never diff-scope, defer, or
+suppress a real bug for convergence; the whole-file/reachability review of the
+higher tiers is unchanged.
+
+1. **Diff-scope nits.** A `Nit` is valid only on a line the PR's diff **adds or
+   modifies**. A nit on pre-existing, untouched code — even in a file the PR
+   changed, and even when you were handed the whole file for reachability
+   context — is out of scope for THIS PR; withdraw it silently (no inline
+   comment, no finding). A PR is not the place to polish code it didn't write.
+
+2. **Re-review monotonicity.** On a re-review (`/tmp/PRIOR_REVIEW.md` non-empty),
+   a **new** `Nit` may be raised only on a hunk that **changed since the prior
+   review's HEAD**. A line that was reviewable last round and drew no nit must
+   not draw a new nit this round — you already saw it and passed it. This
+   forbids mining a fresh set of optional nits each pass ("polish the earlier
+   pass didn't call out"). Still-present prior nits are carried per §2e;
+   Critical/Important/regressions remain exempt.
+
+3. **Actionability gate.** A `Nit` is a finding only if it names a concrete fix
+   the author can apply. An observation whose only path forward is *"no action
+   needed"*, *"accept the tool/manifest quirk"*, *"keep as-is — defensible
+   either way"*, or a pure either/or style preference is **not a finding** — do
+   NOT list it under `### Findings`. Put it in `### Strengths`/prose if it's
+   worth a mention, never as a finding. A finding the resolver cannot act on can
+   never be cleared, so listing it would wedge the loop forever.
+
+Net effect: once the author's real fixes land, a re-review of the same
+substantive change returns an **empty** `### Findings` with `READY_TO_MERGE`, and
+the resolver converges — typically in 2–3 rounds — handing over a clean PR.
+`MAX_ROUNDS` stays the backstop for the rare case where a fix legitimately keeps
+spawning new work.
+
 ### 2f. Guardrails G1-G8
 
 Check consolidated findings. Any G1/G2/G3/G5 → BLOCKED.
@@ -828,7 +872,10 @@ MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 `READY_TO_MERGE` is strict: a single Important finding forces
 `NEEDS_FIXES`. Nits do not block. If you believe an Important should
 be downgraded, downgrade it explicitly in §2e with a one-line reason
-— do not silently approve over the top of it.
+— do not silently approve over the top of it. Before listing any
+`Nit`, apply the §2e′ convergence rules (diff-scope, re-review
+monotonicity, actionability) — they keep the write-side resolver's
+`### Findings`-empty loop terminating.
 
 Print: `[Phase 2 complete] <N> findings across <C> classes, verdict=<verdict>`
 

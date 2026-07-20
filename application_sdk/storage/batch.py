@@ -153,6 +153,79 @@ async def list_keys_with_meta(
         ) from exc
 
 
+# Suffix of the tiny SHA-256 integrity/dedup sidecar written alongside every
+# uploaded object by ``storage.transfer`` (``{key}.sha256``). Sidecars are
+# implementation detail — never a data object — so directory listings that
+# enumerate content exclude them. This is the single source of truth for what
+# counts as a sidecar vs. a data key; all listing filters go through
+# :func:`is_sidecar_key` / :func:`list_data_keys` rather than re-testing the
+# literal suffix inline.
+SIDECAR_SUFFIX = ".sha256"
+
+
+def is_sidecar_key(key: str) -> bool:
+    """Return ``True`` if *key* is a SHA-256 sidecar rather than a data object."""
+    return key.endswith(SIDECAR_SUFFIX)
+
+
+async def list_data_keys(
+    prefix: str = "",
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    normalize: bool = True,
+) -> list[str]:
+    """List data object keys under *prefix*, excluding SHA-256 sidecars.
+
+    Thin wrapper over :func:`list_keys` that drops ``{key}.sha256`` sidecar
+    entries, so callers enumerating a directory's *content* (upload reconcile,
+    deployment-store fallback, …) share one definition of "data key". See
+    :func:`list_data_keys_with_meta` when per-object size/etag is also needed.
+
+    Unlike :func:`list_keys`, this does not expose a ``suffix`` filter: the sole
+    narrowing here is the sidecar exclusion. That omission is intentional — no
+    call site needs an additional suffix filter, so callers hand-filter the
+    returned list on the rare occasion they want one.
+
+    Args:
+        prefix: Key prefix to list under (see :func:`list_keys`).
+        store: Object store, or ``None`` to resolve from infrastructure context.
+        normalize: When ``True`` (default), normalise *prefix* before use.
+
+    Returns:
+        Sorted list of data object keys with sidecars removed.
+    """
+    return [
+        k
+        for k in await list_keys(prefix, store, normalize=normalize)
+        if not is_sidecar_key(k)
+    ]
+
+
+async def list_data_keys_with_meta(
+    prefix: str = "",
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    normalize: bool = True,
+) -> list[tuple[str, int, str | None]]:
+    """Like :func:`list_data_keys`, but return ``(key, size_bytes, e_tag)`` tuples.
+
+    Drops SHA-256 sidecars from :func:`list_keys_with_meta` so download /
+    materialize paths that need per-object size + etag (to chunk large objects
+    without a per-file HEAD) share the same sidecar-exclusion rule.
+
+    Like :func:`list_data_keys`, this intentionally does not expose a ``suffix``
+    filter; sidecar exclusion is the only narrowing.
+
+    Returns:
+        Sorted list of ``(key, size_bytes, e_tag)`` for data objects only.
+    """
+    return [
+        (k, s, e)
+        for k, s, e in await list_keys_with_meta(prefix, store, normalize=normalize)
+        if not is_sidecar_key(k)
+    ]
+
+
 async def delete_prefix(
     prefix: str,
     store: ObjectStore | None = None,

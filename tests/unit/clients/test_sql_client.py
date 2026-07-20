@@ -445,6 +445,45 @@ def test_get_sqlalchemy_connection_string_basic_auth(sql_client_with_db_config):
     assert conn_str == expected
 
 
+@pytest.mark.parametrize(
+    "password",
+    [
+        "my pass",  # space — the CONNECT-361 regression: quote_plus made this '+'
+        "sp ace+plus",  # space AND a literal '+'
+        "p@ss:w/rd",  # userinfo-significant chars @ : /
+        "100%sure",  # percent
+        "хм пароль",  # non-ASCII with a space
+    ],
+)
+def test_connection_string_password_survives_sqlalchemy_decode(
+    sql_client_with_db_config, password
+):
+    """Passwords with special characters must reach the driver unchanged.
+
+    ``get_auth_token`` encodes the password into the userinfo of a SQLAlchemy
+    URL. SQLAlchemy decodes that userinfo with ``urllib.parse.unquote``
+    (percent-only, NOT ``unquote_plus``), so encoding a space as ``+`` (what
+    ``quote_plus`` did) reached the driver as a literal ``+`` — the root cause of
+    CONNECT-361. ``sqlalchemy.engine.url.make_url`` is exactly the parser
+    ``create_engine`` uses internally, so asserting the round-trip through it
+    proves the driver receives the original password without needing a live DB.
+    """
+    from sqlalchemy.engine.url import make_url  # noqa: PLC0415 — optional dep
+
+    sql_client_with_db_config.credentials = {
+        "username": "test_user",
+        "password": password,
+        "host": "localhost",
+        "port": 5432,
+        "database": "test_db",
+        "authType": "basic",
+    }
+
+    conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
+
+    assert make_url(conn_str).password == password
+
+
 def test_get_sqlalchemy_connection_string_iam_user(sql_client_with_db_config):
     """Test connection string generation with IAM user authentication"""
     credentials = {
