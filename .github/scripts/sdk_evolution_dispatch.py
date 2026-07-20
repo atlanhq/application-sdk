@@ -333,7 +333,11 @@ def process_line(line: str, st: SSEState) -> str | None:
         st.errored = True
         st.err_code = _jget(data, "code", default="unknown")
         st.err_msg = _jget(data, "message")
-        return f"[error]     code={st.err_code} message={st.err_msg}"
+        # An empty/unrecognised payload leaves us blind on what actually broke
+        # (seen in production: an error event with no code/message after the
+        # sandbox had already completed) — keep the raw payload for triage.
+        raw_note = "" if st.err_msg else f" raw={data[:300]}"
+        return f"[error]     code={st.err_code} message={st.err_msg}{raw_note}"
     if st.event == "complete":
         st.completed = True
         st.status = _jget(data, "status", default="unknown")
@@ -468,12 +472,15 @@ def render_step_summary(
 ) -> str:
     """Build the Markdown written to GITHUB_STEP_SUMMARY — always renders."""
     summary = mine_summary(st) or (recovered or {})
-    if st.completed and st.status == "completed":
+    if clean_success(st):
         outcome = "✅ completed"
         cost = st.cost or "n/a"
     elif recovered is not None:
-        outcome = "⚠️ completed (recovered via completion marker — SSE stream dropped)"
-        cost = "n/a (stream dropped before the cost event)"
+        outcome = (
+            "⚠️ completed (recovered via completion marker — "
+            "the SSE stream ended abnormally)"
+        )
+        cost = st.cost or "n/a (stream ended before the cost event)"
     else:
         outcome = "❌ failed"
         cost = st.cost or "n/a"
@@ -516,10 +523,28 @@ def write_step_summary(content: str) -> None:
         print(f"::warning::Could not write step summary: {e}")
 
 
+def clean_success(st: SSEState) -> bool:
+    """True when the stream itself proved success (complete + status ok)."""
+    return st.completed and st.status == "completed" and not st.errored
+
+
 def decide_exit(
     st: SSEState, recovered: dict[str, str] | None = None
 ) -> tuple[int, str]:
-    """Map the final stream state (+ marker recovery) to (exit_code, message)."""
+    """Map the final stream state (+ marker recovery) to (exit_code, message).
+
+    The completion marker is ground truth: it can only exist if the run's
+    Stage 7 executed, so it overrides transport-level failures (silent stream
+    drops AND spurious error events — both observed in production after the
+    sandbox had already finished its work).
+    """
+    if clean_success(st):
+        return 0, f"SDK Evolution completed successfully (cost={st.cost})."
+    if recovered is not None:
+        return 0, (
+            "SDK Evolution completed (outcome recovered via completion "
+            "marker; the SSE stream ended abnormally)."
+        )
     if st.errored:
         return 1, f"::error::Sandbox error: code={st.err_code} message={st.err_msg}"
     if not st.got_event:
@@ -528,18 +553,11 @@ def decide_exit(
             "::error::Stream ended without a single SSE event — likely VPN/network/proxy issue",
         )
     if not st.completed:
-        if recovered is not None:
-            return 0, (
-                "SDK Evolution completed (outcome recovered via completion "
-                "marker after an SSE stream drop)."
-            )
         return 1, (
             "::error::Stream ended without a 'complete' event and no "
             "completion marker appeared"
         )
-    if st.status != "completed":
-        return 1, f"::error::Sandbox final status={st.status} (expected 'completed')"
-    return 0, f"SDK Evolution completed successfully (cost={st.cost})."
+    return 1, f"::error::Sandbox final status={st.status} (expected 'completed')"
 
 
 def check_health(
@@ -630,14 +648,17 @@ def main() -> int:
         st.err_code = "http_error"
         st.err_msg = str(e)
 
+    # Any abnormal ending (silent drop, spurious error event, error status)
+    # gets a marker poll — but only if the sandbox was actually started
+    # (got_event); a failed POST can't have produced a marker.
     recovered: dict[str, str] | None = None
-    if st.got_event and not st.errored and not st.completed:
+    if st.got_event and not clean_success(st):
         gh_token = os.environ.get("GH_TOKEN", "")
         repo = os.environ.get("GITHUB_REPOSITORY", "atlanhq/application-sdk")
         if gh_token:
             print(
-                "::warning::SSE stream ended without a 'complete' event — "
-                "polling for the run's completion marker"
+                "::warning::Stream ended abnormally — polling for the run's "
+                "completion marker"
             )
             recovered = poll_completion_marker(
                 repo, str(payload["source_id"]), run_date, gh_token

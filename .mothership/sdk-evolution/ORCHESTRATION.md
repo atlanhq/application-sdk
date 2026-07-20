@@ -211,10 +211,13 @@ important work lands first: security > bug > docs/test > stale > improvement.
 FIX PRs.
 
 ### 4d. DESIGN PR (weekly theme output)
-Same mechanics, plus: title `[DESIGN] <THEME>: <title> [<TICKET_ID>]`,
-labels `Autonomous SDK Evolution` + `needs-design-review`, and the body MUST
-include **Problem / Why it matters / Approaches considered (A/B/C) /
-Recommendation / How to review**. `[CONF]` proposals additionally carry the
+Same mechanics, plus: labels `Autonomous SDK Evolution` +
+`needs-design-review` (the label marks DESIGN status — NOT the title), and the
+body MUST include **Problem / Why it matters / Approaches considered (A/B/C) /
+Recommendation / How to review**. The title must satisfy the repo's
+`Validate PR title` gate (Conventional Commits + path scoping): docs/ADR-only
+proposals → `chore(adr): <title> [<TICKET_ID>]`; proposals carrying SDK source
+prototype code → `feat(<scope>): …` / `fix(<scope>): …`. `[CONF]` proposals additionally carry the
 rule **and its remediation counterpart in this same PR** + the catalog entry.
 
 **Tag the reviewers on every `needs-design-review` ticket** (see tools.md →

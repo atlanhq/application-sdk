@@ -458,9 +458,33 @@ def test_decide_exit_incomplete_stream_recovered_by_marker():
     assert sd.decide_exit(st, recovered=None)[0] == 1
 
 
-def test_decide_exit_error_wins_over_recovery():
+def test_decide_exit_marker_overrides_spurious_error_event():
+    # Production case: the sandbox finished Stage 7 (marker posted), then the
+    # stream carried an empty `error` event. Marker is ground truth → success.
     st = _stream("event: error", 'data: {"code": "boom", "message": "kaboom"}')
-    assert sd.decide_exit(st, recovered={"fix_prs": "3"})[0] == 1
+    code, msg = sd.decide_exit(st, recovered={"fix_prs": "3"})
+    assert code == 0 and "completion marker" in msg
+    # Without a marker, the error stays an error.
+    assert sd.decide_exit(st, recovered=None)[0] == 1
+
+
+def test_decide_exit_marker_overrides_error_status():
+    st = _stream("event: complete", 'data: {"status": "error"}')
+    assert sd.decide_exit(st, recovered={})[0] == 0
+    assert sd.decide_exit(st, recovered=None)[0] == 1
+
+
+def test_error_event_with_empty_payload_logs_raw():
+    st = sd.SSEState()
+    st.event = "error"
+    st.got_event = True
+    msg = sd.process_line('data: {"detail": "sandbox evicted"}', st)
+    assert msg is not None and "raw=" in msg and "sandbox evicted" in msg
+    # A well-formed error payload stays concise (no raw dump).
+    st2 = sd.SSEState()
+    st2.event = "error"
+    msg2 = sd.process_line('data: {"code": "boom", "message": "kaboom"}', st2)
+    assert msg2 is not None and "raw=" not in msg2
 
 
 def test_render_step_summary_recovered_run():
