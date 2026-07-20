@@ -96,11 +96,18 @@ except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] pac
 # row joins to the workflow outcome in ClickHouse — mirrors the preflight gate's
 # outcome event. Scalar counts land as top-level LogAttributes; the per-failure
 # drill-down rides in the ``asset_validation_matrix`` JSON attribute.
+# Peer of ``PREFLIGHT_OUTCOME_EVENT`` (execution/_temporal/preflight_gate.py):
+# same outcome-event pattern. No shared registry for these names yet — worth
+# adding only once a third such event exists.
 ASSET_VALIDATION_EVENT = "Transformed-asset validation outcome"
 
 # Cap on how many failure/orphan rows the matrix carries. The event's scalar
 # counts always reflect the full batch; the matrix is a bounded drill-down sample
-# so a pathological batch can't produce an unbounded LogAttributes value.
+# so a pathological batch can't produce an unbounded LogAttributes value. This is
+# the single rows-per-axis cap for both surfaces this module emits: it is passed
+# explicitly to ``format_report(max_items=...)`` below, so the human-readable
+# WARNING listing and the structured matrix stay in lockstep instead of relying on
+# two independent literals happening to match.
 _VALIDATION_MATRIX_MAX_ROWS = 25
 
 # Per-row error message cap (chars). pyatlan_v9 ``.validate()`` messages can be
@@ -267,7 +274,7 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
             _task_logger.warning(
                 "Transformed-asset validation flagged issues before upload "
                 "(handoff continues): %s",
-                report.format_report(),
+                report.format_report(max_items=_VALIDATION_MATRIX_MAX_ROWS),
             )
     except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
         _task_logger.warning(
