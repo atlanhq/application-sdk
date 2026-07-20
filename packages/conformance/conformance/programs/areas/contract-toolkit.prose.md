@@ -102,8 +102,8 @@ The freshness rules (K003/K004/K005) are remediated by running a pkl command
 **remediable only when the `pkl` toolchain is available** in the environment.
 When `pkl` is not installed, the fix cannot be applied or gate-verified — route
 the finding to **residue** with a note to regenerate locally (or let the
-`renovate-pkl-sync` / CI freshness gate handle it), rather than hand-editing the
-artifact.
+self-hosted Renovate runner's `postUpgradeTasks` / CI freshness gate handle it),
+rather than hand-editing the artifact.
 
 ---
 
@@ -197,8 +197,8 @@ deterministic re-resolve), but it **requires `pkl`**.
    just `finding.file`, if the `pkl-eval` gate rejects this fix.
 
 If `pkl` is unavailable, do not hand-edit the lock JSON — route to residue with a
-note to re-resolve locally (the `renovate-pkl-sync` workflow does this
-automatically on renovate bumps).
+note to re-resolve locally (the self-hosted Renovate runner does this
+automatically on renovate bumps, via `postUpgradeTasks`).
 
 ---
 
@@ -309,7 +309,8 @@ published one.  `classification = "mechanical"`; **requires `pkl`**.
    <reason>` on the `uri` line and route to residue.
 
 If `pkl` is unavailable, route to residue with a bump-and-resolve-locally note
-(the `renovate-pkl-sync` workflow does this automatically on renovate bumps).
+(the self-hosted Renovate runner does this automatically on renovate bumps, via
+`postUpgradeTasks`).
 
 ---
 

@@ -117,17 +117,6 @@ imported explicitly by App.pkl consumers (App.pkl imports it internally and type
 `connector` as `Connectors.Type` but does not re-export the constants), so the import is
 required, not legacy.
 
-Note: the legacy-**import** check skips the `import "…Config.pkl"` line on a contract that
-`amends "…/Credential.pkl"` (a credential-config sub-contract, not an App.pkl entrypoint).
-Credential.pkl uses `Config.*` internally but, unlike App.pkl, does **not** re-export the
-widget types as unqualified typealiases, so such a contract genuinely needs
-`import "…Config.pkl"` for `pkl eval` to resolve `Config.TextInput` etc. — flagging it
-would be a false positive.  The exemption covers `Config.pkl` only: a credential contract
-carrying `import "…Renderers.pkl"` or `import "…Credential.pkl"` is still genuinely legacy
-(Credential.pkl imports Renderers.pkl itself) and still fires.  (App.pkl- and
-NativeApp.pkl-amending contracts are unaffected: there every legacy import is
-redundant/legacy and still fires.)
-
 **Note:** if the contract also has a K001 finding (still amending a legacy module),
 address K001 first — many K002 knobs disappear automatically when the module changes,
 because App.pkl simply lacks those properties.
@@ -158,10 +147,11 @@ comment-only line directly above it.
 pkl actually fetched, with its checksum.  When someone bumps the pin in PklProject but
 does not re-resolve, the lock stays behind: pkl eval regenerates from the OLD toolkit,
 so the committed generated artifacts silently reflect a version the contract no longer
-claims.  Renovate's renovate-pkl-sync workflow keeps these two in sync on bot bumps, but
-a manual pin edit bypasses it entirely.  Comparing the two files is a pure,
-deterministic text check that needs no pkl toolchain, so it catches the drift the moment
-it lands (BLDX-1414).
+claims.  The self-hosted Renovate runner keeps these two in sync on bot bumps
+(regenerating the lock and artifacts in the same PR via postUpgradeTasks), but a manual
+pin edit bypasses it entirely.  Comparing the two files is a pure, deterministic text
+check that needs no pkl toolchain, so it catches the drift the moment it lands
+(BLDX-1414).
 
 A dependency pinned in `contract/PklProject` resolves to a different version in
 `contract/PklProject.deps.json` (or the lock file is missing / does not contain the
@@ -177,9 +167,9 @@ with a re-resolve.
     pkl project resolve   # rewrites contract/PklProject.deps.json     pkl eval -m .
 contract/app.pkl   # regenerates the artifacts
 
-On a `renovate/**` branch this happens automatically via the `renovate-pkl-sync`
-workflow; on a manual bump run the commands above (or `uv run poe generate` where the
-app defines it).
+On a `renovate/**` branch the self-hosted Renovate runner does this automatically in the
+same PR (via postUpgradeTasks); on a manual bump run the commands above (or `uv run poe
+generate` where the app defines it).
 
 The version match is prefix-aware: a broad pin such as `@0` is satisfied by any resolved
 `0.y.z` and is never flagged — only a fully-specified pin (`@0.16.0`) that disagrees
@@ -335,7 +325,8 @@ guessing from a broad pin.
 
 **Fix:** bump the `@<version>` in `contract/PklProject` to the latest, run `pkl project
 resolve` to refresh the lock, then regenerate with `pkl eval -m . contract/app.pkl`. On
-a `renovate/**` branch this happens automatically via renovate-pkl-sync.
+a `renovate/**` branch the self-hosted Renovate runner does this automatically via
+postUpgradeTasks.
 
 **Suppress** with `// conformance: ignore[K007] <reason>` on the `uri` line (or the
 comment-only line directly above it) when a deliberate lag is justified.
