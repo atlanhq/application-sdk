@@ -244,12 +244,12 @@ Retrieve a specific manifest with:
 GET /workflows/v1/manifest?entrypoint=<entry-point-name>
 ```
 
-Behaviour:
+Behaviour (with `?entrypoint=<entry-point-name>`):
 - Returns 400 if `<entry-point-name>` fails validation (`^[a-zA-Z][a-zA-Z0-9_-]*$`).
-- Returns 404 if the subfolder or `manifest.json` is missing.
+- Returns 404 if that entry point's subfolder or `manifest.json` is missing.
 - The `?entrypoint=` token is the same kebab-case identifier used on `POST /workflows/v1/start` — one naming convention, two endpoints.
 
-For single-entry-point apps, `GET /workflows/v1/manifest` (no query param) is unchanged.
+Without a query param, `GET /workflows/v1/manifest` serves the app's **default** entry point's manifest. If no default is marked, it falls back to the explicit (non-implicit) entry points in alphabetical order — so a `run()` + `@entrypoint(s)` app (whose implicit `run` has no manifest dir) resolves to its first explicit entry point (e.g. `crawler`) with a **200** rather than 404. It 404s only when no candidate has a servable `manifest.json`. For single-entry-point apps this is just that app's manifest, as before.
 
 > **Configmap discovery** also benefits from the subfolder layout: the handler uses `rglob("*.json")` so configmap files can live inside per-entry subfolders alongside the manifests.
 
