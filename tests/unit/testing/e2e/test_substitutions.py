@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e.substitutions import (
@@ -103,7 +104,7 @@ class TestSQLMustacheSubstitutionsAliases:
             include_filter='{"^def$":[".*"]}',
             exclude_filter="{}",
             exclude_table_regex="",
-            preflight_check=True,
+            preflight_check="true",
         )
 
     def test_sql_keys_present(self) -> None:
@@ -115,6 +116,21 @@ class TestSQLMustacheSubstitutionsAliases:
         assert "{{exclude-filter}}" in dumped
         assert "{{exclude-table-regex}}" in dumped
         assert "{{preflight-check}}" in dumped
+
+    def test_preflight_check_renders_as_string(self) -> None:
+        """Regression: {{preflight-check}} must render as a STR, not a bool.
+
+        Connectors whose generated ExtractionInput types ``preflight_check: str``
+        (glue/dremio/iceberg/clickhouse) fail pydantic decode if handed a bool.
+        """
+        dumped = self._make_sql_subs().model_dump(by_alias=True, mode="json")
+        assert dumped["{{preflight-check}}"] == "true"
+        assert isinstance(dumped["{{preflight-check}}"], str)
+        # the field must reject a bool so a regression surfaces at construction
+        with pytest.raises(ValidationError):
+            SQLMustacheSubstitutions(
+                connection=self._make_sql_subs().connection, preflight_check=True
+            )
 
     def test_sql_inherits_base_keys(self) -> None:
         subs = self._make_sql_subs()

@@ -107,6 +107,28 @@ class NoWorkerOnTaskQueueError(PreconditionError):
 
 
 @dataclass(kw_only=True)
+class DAGProgressStalledError(PreconditionError):
+    """A DAG node ran without any state transition for the progress window.
+
+    Distinct from :class:`NoWorkerOnTaskQueueError`, which guards the *start*
+    (no node ever leaves ``Pending``). This guards *forward progress*: a node
+    that has begun but sits ``Running`` — with no node in the DAG changing state
+    — for ``dag_progress_stall_seconds`` almost always means it is wedged (e.g.
+    an extract stuck on a slow/failing upload). Rather than let the harness poll
+    the full ``ae_poll_timeout_seconds`` (often 90 min) and require a manual
+    cancel, we fail fast with the last-seen node states so the wedge is visible.
+    The window is set comfortably above legitimately slow single nodes (lineage
+    on deep queues can sit Running for many minutes), so a healthy run never
+    trips it.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_DAG_PROGRESS_STALLED"
+    expected_state: str | None = (
+        "at least one DAG node state transition within the progress window"
+    )
+
+
+@dataclass(kw_only=True)
 class AtlanAEWorkflowAlreadyActiveError(PreconditionError):
     """A run for the AE workflow is already active, so a new submit was rejected.
 

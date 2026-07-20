@@ -1,0 +1,21 @@
+# Full-DAG SDR e2e queue-alignment overlay (SDK-owned).
+#
+# Layered (opt-in via the sdr-e2e action's `full-dag: true` input) on top of the
+# SDK CI overrides and below any app overlay + the two-store overlay. Replaces
+# the byte-identical per-app overlay every agent-mode full-DAG app used to carry.
+#
+# The full-DAG harness's extract node dispatches to the Temporal queue
+#   atlan-<agent_name>  (agent_name = <app>-e2e-full-ci-<run_id>)
+# and the CI worker registers on
+#   atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}
+# so pinning ATLAN_DEPLOYMENT_NAME to the same per-run suffix is what makes the
+# two queues line up. If they diverge the extract is never picked up and the
+# harness's stall-guard trips. The compose service is always `atlan-app` (the
+# configurator's fixed name), so this file is app-agnostic — nothing to template.
+services:
+  atlan-app:
+    environment:
+      - ATLAN_DEPLOYMENT_NAME=e2e-full-ci-${GITHUB_RUN_ID}
+      # Full-DAG worker boot waits on the Dapr sidecar; give it more slack than
+      # the 60s default so a cold CI runner doesn't false-fail the health gate.
+      - ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT=120

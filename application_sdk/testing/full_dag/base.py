@@ -495,6 +495,19 @@ class BaseFullDAGE2ETest:
         )
         return dag
 
+    def agent_json(self) -> dict | None:
+        """Override to supply a custom agent_json shape (keypair/token/iam).
+
+        Returns ``None`` by default → the harness builds the basic
+        username/password shape from ``agent_spec()`` + ``database_spec()``.
+        Mirrors :meth:`application_sdk.testing.e2e.base.BaseE2ETest.agent_json`
+        so a connector on this deprecated ``full_dag`` path can customize
+        agent-mode routing without overriding ``_mustache_substitutions``.
+        Only consulted in AGENT mode. (``full_dag`` is deprecated — prefer
+        ``application_sdk.testing.e2e``, whose agent-json routing is richer.)
+        """
+        return None
+
     def _mustache_substitutions(self) -> dict:
         """Build the ``{{...}}`` → runtime-value map for seed-DAG fills.
 
@@ -536,6 +549,14 @@ class BaseFullDAGE2ETest:
                 "basic.username": (f"SDR_{self.connector_short_name.upper()}_USERNAME"),
                 "basic.password": (f"SDR_{self.connector_short_name.upper()}_PASSWORD"),
             }
+            # Transition hook (mirrors testing.e2e.BaseE2ETest.agent_json): a
+            # connector needing a non-basic shape (keypair/token/iam) overrides
+            # agent_json() instead of this whole method. Default None keeps the
+            # inline basic shape above — so agent-mode routing on this deprecated
+            # path is no longer silently basic-only.
+            override = self.agent_json()
+            if override is not None:
+                agent_json = override
         else:
             agent_json = None
 
@@ -548,7 +569,11 @@ class BaseFullDAGE2ETest:
             "{{include-filter}}": self.include_filter,
             "{{exclude-filter}}": self.exclude_filter,
             "{{exclude-table-regex}}": "",
-            "{{preflight-check}}": True,
+            # Some generated contracts type preflight_check as `str` (not bool);
+            # submit the string form so the worker's payload-decode/validate
+            # step accepts it. A bool here trips
+            # "Failed decoding arguments" on those contracts.
+            "{{preflight-check}}": "true",
         }
 
     def _apply_mustache_subs(self, obj, subs: dict):

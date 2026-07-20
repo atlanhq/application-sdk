@@ -35,6 +35,8 @@ from __future__ import annotations
 import os
 import secrets
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
@@ -50,7 +52,11 @@ from application_sdk.testing.e2e._errors import (
     MissingHarnessClassAttrError,
     MissingHarnessEnvError,
 )
-from application_sdk.testing.e2e.client import AEWorkflowClient, DAGRunResult
+from application_sdk.testing.e2e.client import (
+    AEWorkflowClient,
+    DAGNodeStatus,
+    DAGRunResult,
+)
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import (
     AgentSpec,
@@ -61,6 +67,14 @@ from application_sdk.testing.e2e.payload import (
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 
 logger = get_logger(__name__)
+
+# Node statuses that are a genuine failure and are never tolerated by the
+# skip-tolerant DAG gate (see BaseE2ETest._core_dag_ok). Pending/Scheduled are
+# NOT here (they are in-flight or an AE-Skipped node downgraded on an older
+# service); Skipped/Omitted are intentional non-runs, not failures.
+_HARD_FAIL_NODE_STATUSES = frozenset(
+    {DAGNodeStatus.FAILED, DAGNodeStatus.ERROR, DAGNodeStatus.CANCELLED}
+)
 
 
 @dataclass(frozen=True)
@@ -147,6 +161,24 @@ class BaseE2ETest:
     mode: ClassVar[RunMode] = RunMode.DIRECT
     app_service_url: ClassVar[str] = ""
 
+    # --- source-availability tier --------------------------------------
+    # Sourcing is the app owner's responsibility. When a connector has NO
+    # extraction source provisioned in CI (no free container, and no
+    # app-owner-supplied credentials), the full-DAG e2e can't extract
+    # anything, so it degrades to a worker-up-only check: assert the app
+    # worker deployed and serves /server/health, then stop — no extraction,
+    # publish, or Atlas assertions. The full DAG runs only when a source is
+    # present. Flipped per-run by the E2E_SOURCE_AVAILABLE env var (set from
+    # the sdr-e2e action's `source-available` input); default True so
+    # connectors that already have a source run the full DAG unchanged.
+    source_available: ClassVar[bool] = True
+    # Health endpoint the worker-up tier probes. The CI worker container
+    # serves it on localhost:8000 (the sdr-e2e action gates on the same URL
+    # before pytest). Override via E2E_WORKER_HEALTH_URL for other topologies.
+    worker_health_url: ClassVar[str] = "http://localhost:8000/server/health"
+    worker_health_timeout_seconds: ClassVar[int] = 120
+    worker_health_poll_interval_seconds: ClassVar[int] = 3
+
     # --- optional class attrs ------------------------------------------
     connection_type: ClassVar[str] = ""
     connection_category: ClassVar[str] = "warehouse"
@@ -157,8 +189,26 @@ class BaseE2ETest:
     ae_workflow_slug: ClassVar[str] = ""
     ae_workflow_name_override: ClassVar[str] = ""
     manifest_path: ClassVar[str] = "app/generated/manifest.json"
+    # App-entrypoint for AE's server-side manifest fetch on multi-entrypoint
+    # connectors (crawler/miner, extract/lineage, per-flavor). Leave empty to
+    # auto-derive from ``manifest_path`` (``.../generated/<ep>/manifest.json`` ->
+    # ``<ep>``); set explicitly when ``manifest_path`` is empty (legacy seed DAG)
+    # or the entrypoint name differs from the manifest subdir. Empty resolved value
+    # => single-entrypoint app, no selector sent (AE fetches the bare manifest).
+    entrypoint: ClassVar[str] = ""
     tenant_deployment_name: ClassVar[str] = "production"
     extract_workflow_type: ClassVar[str] = ""
+    # Credential-config name for the ``credential-guid.credential-type`` routing
+    # row + the credential body's ``connectorConfigName`` backfill. Empty =>
+    # build_ae_payload defaults it to ``f"atlan-connectors-{connector_short_name}"``.
+    connector_config_name: ClassVar[str] = ""
+    # Typed substitutions model the harness instantiates for the seed DAG's
+    # ``{{...}}`` fills. A connector that declares extra manifest mustache keys
+    # only has to point this at its own ``MustacheSubstitutions`` subclass (whose
+    # typed fields carry the connector's config defaults) — the base fills the
+    # universal fields and the subclass's extra fields fall to their defaults,
+    # so no ``_mustache_substitutions()`` override is needed just to add params.
+    substitutions_class: ClassVar[type[MustacheSubstitutions]] = MustacheSubstitutions
 
     ae_poll_interval_seconds: ClassVar[int] = 10
     ae_poll_timeout_seconds: ClassVar[int] = 600
@@ -182,6 +232,14 @@ class BaseE2ETest:
     # (negligible at the 180/10 defaults; only noticeable if a subclass sets a
     # grace close to the interval).
     ae_stall_grace_seconds: ClassVar[int] = 180
+    # DAG-progress watchdog: fail fast if a node has started but no DAG node
+    # changes state for this window (a node wedged Running that the one-time
+    # ae_stall_grace_seconds latch above cannot catch — e.g. an extract stuck on
+    # a slow/failing object-store upload). Set wide enough to clear a
+    # legitimately slow single node (lineage on deep queues can sit Running for
+    # several minutes) while still turning a hang into a self-terminating
+    # failure well before ae_poll_timeout_seconds. 0 disables it.
+    dag_progress_stall_seconds: ClassVar[int] = 1800
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
     # Asset counts use a much shorter poll window: Elasticsearch is eventually
@@ -206,6 +264,19 @@ class BaseE2ETest:
     # themselves assert zero (only non-positive floors/exacts).
     require_nonempty_assets: ClassVar[bool] = True
     expect_lineage: ClassVar[bool] = True
+
+    # Crawler-pipeline nodes that MUST genuinely succeed for the run to count as
+    # a pass under the skip-tolerant gate (see ``_core_dag_ok``). Only consulted
+    # when ``expect_lineage`` is False: with lineage disabled the AE legitimately
+    # Skips the qi + lineage nodes, so requiring every DAG node to reach
+    # Succeeded (the strict ``all_nodes_succeeded`` gate) false-fails a crawl
+    # whose extract -> publish path fully succeeded. Default is the universal
+    # crawler core; connectors whose DAG has an explicit fan-out node can extend
+    # it (e.g. ``("branch", "extract", "publish")`` for snowflake). Names are
+    # matched EXACTLY against the AE DAG node names — a differently-named node
+    # mismatches and fails CLOSED (the gate errors; never a false pass). Override
+    # to match a connector whose extract/publish nodes carry other names.
+    required_dag_nodes: ClassVar[tuple[str, ...]] = ("extract", "publish")
 
     # Opt-in: validate the LOCATION (qualifiedName hierarchy) of published
     # assets, not just their counts. Maps typeName -> the number of path
@@ -253,6 +324,32 @@ class BaseE2ETest:
                     message=f"{type(self).__name__}: class attribute '{required}' must be set",
                     field=required,
                 )
+
+        # Source-availability tier. When no extraction source is provisioned
+        # for this connector in CI, degrade to a worker-up-only check (see the
+        # class attr + test_full_dag_runs_end_to_end / assert_worker_up) and
+        # skip the AE/tenant wiring entirely — the worker-up tier needs neither
+        # a tenant nor credentials. E2E_SOURCE_AVAILABLE (from the sdr-e2e
+        # action's `source-available` input) overrides the class default.
+        # Empty / whitespace-only is treated as UNSET (fall back to the class
+        # default), not as False — only an explicit falsey value flips it off,
+        # so a blank env var can't silently degrade a source-having connector.
+        env_source = os.environ.get("E2E_SOURCE_AVAILABLE")
+        self.source_available = (
+            type(self).source_available
+            if env_source is None or not env_source.strip()
+            else env_source.strip().lower() in ("1", "true", "yes")
+        )
+        if not self.source_available:
+            logger.warning(
+                "%s: no extraction source provisioned (E2E_SOURCE_AVAILABLE"
+                "=false) — the full-DAG e2e degrades to a worker-up-only check; "
+                "extraction, publish, and Atlas assertions are skipped. "
+                "Provision a source in the app repo (a CI container, or "
+                "app-owner-supplied credentials) to run the full DAG.",
+                type(self).__name__,
+            )
+            return
 
         # ADR-0014 two-store posture (sdr-e2e's `enable-two-store` input,
         # threaded through as this env var) only changes anything on the
@@ -573,7 +670,7 @@ class BaseE2ETest:
         ``.model_dump(by_alias=True)`` exactly once when seeding the DAG.
         """
         spec = self.connection_spec()
-        return MustacheSubstitutions.model_validate(
+        return self.substitutions_class.model_validate(
             {
                 "connection": ConnectionRef.model_validate(
                     {"typeName": "Connection", "attributes": spec.attributes()}
@@ -590,6 +687,35 @@ class BaseE2ETest:
         instance.
         """
         return None
+
+    def agent_json(self) -> dict[str, Any] | None:
+        """Agent-mode routing block forwarded to :func:`build_ae_payload`.
+
+        Default None — no flat ``agent-json.*`` / ``credential-guid.*`` rows are
+        emitted (single-entrypoint / direct-mode submits are unaffected).
+        Override to return the single-bundle agent_json a connector's auth needs
+        (``key-type=""`` + ``secret-manager`` + ``secret-path`` + nested
+        ``extra`` ref-keys, or the dotted shape from
+        :func:`~application_sdk.testing.e2e.payload.build_agent_json`); the
+        harness then emits the routing rows so subclasses no longer override
+        ``_build_ae_payload`` just to append them.
+        """
+        return None
+
+    def _resolved_entrypoint(self) -> str:
+        """App-entrypoint for AE's manifest fetch: explicit ``entrypoint`` if set,
+        else derived from ``manifest_path`` (``.../generated/<ep>/manifest.json`` ->
+        ``<ep>``). Empty means single-entrypoint (no selector sent)."""
+        if self.entrypoint:
+            return self.entrypoint
+        mp = self.manifest_path or ""
+        marker = "/generated/"
+        if marker in mp and mp.endswith("/manifest.json"):
+            tail = mp.split(marker, 1)[1]  # "<ep>/manifest.json" or "manifest.json"
+            parts = tail.split("/")
+            if len(parts) == 2:  # a subdir <ep> is present
+                return parts[0]
+        return ""
 
     def _build_ae_payload(self, slug: str) -> dict[str, Any]:
         """Compose the AE submit payload from typed hook results.
@@ -608,6 +734,9 @@ class BaseE2ETest:
             mustache_subs=self._mustache_substitutions(),
             credential_body=self._credential_body(),
             ae_workflow_slug=slug,
+            entrypoint=self._resolved_entrypoint(),
+            agent_json=self.agent_json(),
+            credential_type=self.connector_config_name,
         )
 
     def _build_legacy_seed_dag(self, extract_queue: str) -> dict[str, Any]:
@@ -757,10 +886,58 @@ class BaseE2ETest:
         self.client.publish_version(slug, version)
         return slug
 
+    def _core_dag_ok(self, ae_result: DAGRunResult) -> bool:
+        """Skip-tolerant success gate for the DAG run.
+
+        The strict ``all_nodes_succeeded`` requires every DAG node to reach
+        ``Succeeded``. That is correct when lineage is expected, but with
+        ``expect_lineage`` False the AE legitimately Skips the qi + lineage
+        nodes — so the strict gate reports a false failure on a metadata-only
+        crawl whose ``extract -> publish`` path fully succeeded and landed
+        assets in Atlas.
+
+        Behaviour:
+          * ``expect_lineage`` True  -> unchanged strict gate
+            (``all_nodes_succeeded``), so existing lineage connectors keep
+            passing exactly as before.
+          * ``expect_lineage`` False -> every node in ``required_dag_nodes``
+            must genuinely succeed AND no node may be in a hard-failure state
+            (``Failed`` / ``Error`` / ``Cancelled``, or carrying an error
+            message). Intentionally-skipped downstream nodes (``Skipped`` /
+            ``Omitted``, or ``Pending`` from an older service that downgrades
+            Skipped) are tolerated.
+
+        The Atlas-side floors + non-empty backstop still run afterwards, so a
+        crawl that passes this gate but silently landed nothing still fails.
+        """
+        if self.expect_lineage:
+            return ae_result.all_nodes_succeeded
+        by_name = {n.name: n for n in ae_result.nodes}
+        required_ok = all(
+            name in by_name and by_name[name].status.is_success
+            for name in self.required_dag_nodes
+        )
+        no_hard_failure = not any(
+            n.status in _HARD_FAIL_NODE_STATUSES or n.error_message
+            for n in ae_result.nodes
+        )
+        return required_ok and no_hard_failure
+
     def run_full_dag(self) -> FullDAGOutcome:
         """Submit, poll AE, poll Atlas, return the combined outcome."""
         slug = self._bootstrap_workflow()
         payload = self._build_ae_payload(slug)
+
+        # Override-proof app-entrypoint injection. Per-app subclasses commonly
+        # override _build_ae_payload (to add flat credential-guid.*/agent-json.*
+        # rows) and call build_ae_payload() directly WITHOUT forwarding
+        # ``entrypoint=`` — so setting metadata.entrypoint only inside
+        # build_ae_payload silently misses them. Set it here, after the payload is
+        # built, where it always runs. Multi-entrypoint connectors (crawler/miner,
+        # extract/lineage) 404 "No manifest available" at AE submit without it.
+        resolved_entrypoint = self._resolved_entrypoint()
+        if resolved_entrypoint:
+            payload.setdefault("metadata", {})["entrypoint"] = resolved_entrypoint
 
         logger.info(
             "Submitting AE workflow: connector=%s mode=%s qn=%s",
@@ -777,13 +954,14 @@ class BaseE2ETest:
             timeout_seconds=self.ae_poll_timeout_seconds,
             stall_grace_seconds=self.ae_stall_grace_seconds,
             stall_task_queue=self._extract_task_queue(),
+            progress_stall_seconds=self.dag_progress_stall_seconds,
         )
 
         asset_counts: dict[str, int] = {}
         asset_qn_samples: dict[str, list[str]] = {}
         total_assets = 0
         lineage_present = False
-        if ae_result.all_nodes_succeeded:
+        if self._core_dag_ok(ae_result):
             connection_in_atlas = self.client.poll_atlas_for_connection(
                 self.connection_qualified_name,
                 interval_seconds=self.atlas_poll_interval_seconds,
@@ -1004,6 +1182,44 @@ class BaseE2ETest:
         return failures
 
     # ------------------------------------------------------------------
+    # Worker-up-only tier (no source provisioned)
+    # ------------------------------------------------------------------
+
+    def assert_worker_up(self) -> None:
+        """Assert only that the app worker deployed and serves its health endpoint.
+
+        The no-source tier: when a connector has no extraction source in CI
+        (``source_available`` False), the full-DAG e2e can't extract, so it
+        proves the worker came up instead — a GET of ``/server/health`` returns
+        2xx. The sdr-e2e CI action already gates on the same endpoint before
+        pytest; re-asserting it here makes the pytest run the test of record
+        (and a bare local ``pytest`` meaningful) rather than a no-op skip.
+        """
+        url = os.environ.get("E2E_WORKER_HEALTH_URL", self.worker_health_url)
+        logger.info("Worker-up-only tier: probing %s", url)
+        deadline = time.monotonic() + self.worker_health_timeout_seconds
+        last_error = ""
+        while True:
+            # conformance: ignore[L006] short, bounded readiness poll (worker_health_timeout_seconds) with a modest interval, not a hot loop; the worker is already health-gated by the sdr-e2e action so this converges on the first attempt in CI
+            try:
+                with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310 — fixed health URL, not user input
+                    status = resp.status
+                if 200 <= status < 300:
+                    logger.info("App worker healthy: %s -> HTTP %s", url, status)
+                    return
+                last_error = f"HTTP {status}"
+            except (urllib.error.URLError, OSError) as exc:
+                last_error = str(exc)
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"App worker for {self.connector_short_name} did not become "
+                    f"healthy at {url} within {self.worker_health_timeout_seconds}s "
+                    f"(last: {last_error}). No source is provisioned, so this run "
+                    "only checks that the worker deploys and serves /server/health."
+                )
+            time.sleep(self.worker_health_poll_interval_seconds)
+
+    # ------------------------------------------------------------------
     # Default test method
     # ------------------------------------------------------------------
 
@@ -1020,9 +1236,16 @@ class BaseE2ETest:
              the depth declared in ``expected_asset_qn_depth`` (opt-in).
           5. At least one Process/ColumnProcess exists (unless ``expect_lineage``
              is False).
+
+        When no extraction source is provisioned (``source_available`` False),
+        this degrades to a worker-up-only check — see :meth:`assert_worker_up`.
         """
+        if not self.source_available:
+            self.assert_worker_up()
+            return
+
         outcome = self.run_full_dag()
-        if not outcome.succeeded:
+        if not (self._core_dag_ok(outcome.ae_result) and outcome.connection_in_atlas):
             failed = outcome.ae_result.failed_nodes
             failures_msg = (
                 "\n".join(
