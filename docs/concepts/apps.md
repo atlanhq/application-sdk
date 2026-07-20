@@ -328,9 +328,13 @@ auto-stamped and each row joins to the workflow outcome by run id:
   logged as a WARNING body, but only for flagged runs.
 
 Uploads with nothing to validate emit nothing at all: when `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false`
-(the check is on by default) or when the path is not a `transformed/` subtree (e.g. a raw upload),
-no outcome event is produced. See [Monitoring](monitoring.md#asset-validation-outcome-event) for the
-attribute list as it reaches OTLP.
+or when the path is not a `transformed/` subtree (e.g. a raw upload), no outcome event is produced.
+See [Monitoring](monitoring.md#asset-validation-outcome-event) for the attribute list as it reaches
+OTLP.
+
+> **Temporarily disabled by default (CNCT-85).** The check is currently off by default while the
+> process-isolation fix ([#2769](https://github.com/atlanhq/application-sdk/pull/2769)) awaits
+> downstream changes. Set `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=true` to opt back in.
 
 ## Passthrough Modules
 
