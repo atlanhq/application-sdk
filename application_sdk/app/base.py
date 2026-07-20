@@ -14,10 +14,20 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, ClassVar, Literal, Never, TypeVar, cast, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Literal,
+    Never,
+    TypeVar,
+    cast,
+    get_type_hints,
+)
 from uuid import UUID
 
 import obstore as obs
+import orjson
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
@@ -40,7 +50,10 @@ from application_sdk.app.context import (
 from application_sdk.app.entrypoint import EntryPointMetadata
 from application_sdk.app.registry import AppMetadata, resolve_pool_queue
 from application_sdk.app.task import get_task_metadata, is_task, task
-from application_sdk.constants import LOCAL_WORKFLOW_ID
+from application_sdk.constants import (
+    ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
+    LOCAL_WORKFLOW_ID,
+)
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
     CleanupInput,
@@ -64,8 +77,14 @@ from application_sdk.errors import (
 from application_sdk.errors.base import AppError as _NewAppError
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.logger_adaptor import (
+    ASSET_VALIDATION_MATRIX_KEY,
+    get_logger,
+)
 from application_sdk.observability.observability import AtlanObservability
+
+if TYPE_CHECKING:
+    from application_sdk.validation import AssetValidationReport
 
 _task_logger = get_logger(__name__)
 
@@ -73,6 +92,72 @@ try:
     _FRAMEWORK_VERSION = importlib.metadata.version("application-sdk")
 except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] package not installed (e.g. editable dev install); "unknown" sentinel is benign
     _FRAMEWORK_VERSION = "unknown"
+
+# Fixed event name for the structured, queryable transformed-asset validation
+# outcome. Emitted on every upload from inside the upload activity, so the
+# Temporal activity context (workflow_id/run_id/app_name) is auto-stamped and the
+# row joins to the workflow outcome in ClickHouse — mirrors the preflight gate's
+# outcome event. Scalar counts land as top-level LogAttributes; the per-failure
+# drill-down rides in the ``asset_validation_matrix`` JSON attribute.
+# Peer of ``PREFLIGHT_OUTCOME_EVENT`` (execution/_temporal/preflight_gate.py):
+# same outcome-event pattern. No shared registry for these names yet — worth
+# adding only once a third such event exists.
+ASSET_VALIDATION_EVENT = "Transformed-asset validation outcome"
+
+# Cap on how many failure/orphan rows the matrix carries, aliased from the single
+# source of truth in ``constants`` so the structured matrix and the human-readable
+# ``format_report()`` listing (which defaults to the same constant) can never
+# drift. The event's scalar counts always reflect the full batch; the matrix is a
+# bounded drill-down sample so a pathological batch can't produce an unbounded
+# LogAttributes value. Passed explicitly to ``format_report(max_items=...)`` below
+# to make the shared cap obvious at the call site.
+_VALIDATION_MATRIX_MAX_ROWS = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
+
+# Per-row error message cap (chars). pyatlan_v9 ``.validate()`` messages can be
+# long; truncate so a single row can't bloat the ClickHouse attribute.
+_VALIDATION_MATRIX_ERROR_MAXLEN = 300
+
+
+def _validation_matrix_json(report: "AssetValidationReport") -> str:
+    """Compact per-failure matrix for the outcome event, as one JSON string.
+
+    Lands as a single ``LogAttributes`` value in ClickHouse so connector-pulse can
+    ``JSONExtract`` the per-failure detail against workflow outcomes with no schema
+    change (mirrors the preflight gate's ``check_matrix``). Small fixed fields
+    only, bounded to :data:`_VALIDATION_MATRIX_MAX_ROWS` rows per axis — the
+    headline counts on the event carry the full totals, and the human-readable
+    ``format_report()`` still rides in the WARNING body for flagged runs. Not
+    internally guarded (``orjson.dumps`` can raise): the sole caller,
+    :func:`_warn_on_invalid_transformed_assets`, wraps the whole emit in
+    ``try/except``, so a raise here is caught there and never blocks the upload.
+    """
+    rows: list[dict[str, Any]] = []
+    for f in report.failures[:_VALIDATION_MATRIX_MAX_ROWS]:
+        rows.append(
+            {
+                "kind": "undeserializable" if f.deserialize_error else "invalid",
+                "type_name": f.type_name,
+                "qualified_name": f.qualified_name,
+                "error": (f.errors[0] if f.errors else "")[
+                    :_VALIDATION_MATRIX_ERROR_MAXLEN
+                ],
+                "file": f.file,
+                "line": f.line,
+            }
+        )
+    for o in report.orphans[:_VALIDATION_MATRIX_MAX_ROWS]:
+        rows.append(
+            {
+                "kind": "orphan",
+                "type_name": o.missing_type_name,
+                "qualified_name": o.missing_qualified_name,
+                "relationship": o.relationship,
+                "reference_count": o.reference_count,
+                "file": o.file,
+                "line": o.line,
+            }
+        )
+    return orjson.dumps(rows).decode()
 
 
 def _resolve_transformed_target(local_path: str) -> "Path | None":
@@ -96,28 +181,35 @@ def _resolve_transformed_target(local_path: str) -> "Path | None":
     return None
 
 
-async def _warn_on_invalid_transformed_assets(local_path: str) -> None:
+async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) -> None:
     """Best-effort, warn-only validation of transformed asset NDJSON before upload.
 
     BLDX-1555 defense-in-depth at the SDR→Atlan boundary. When ``local_path``
     holds transformed asset output, every record is validated against the
-    pyatlan_v9 ``.validate()`` backbone (plus the referential/orphan pass) and a
-    warning summarises any invalid or orphaned assets. Extracts and transforms are
-    full by design by default, so the batch is complete and the orphan pass is
+    pyatlan_v9 ``.validate()`` backbone (plus the referential/orphan pass). On
+    **every** upload a structured :data:`ASSET_VALIDATION_EVENT` is emitted with
+    the per-axis counts and a compact per-failure ``asset_validation_matrix`` JSON
+    attribute, all allowlisted for OTLP so they reach ClickHouse and join to the
+    workflow outcome by Temporal run id (mirrors the preflight gate's outcome
+    event). A ``clean`` outcome is emitted too, so there is a denominator to rank
+    flag-rate against. A human-readable WARNING with the full ``format_report()``
+    is additionally logged only when the batch is flagged. Extracts and transforms
+    are full by design by default, so the batch is complete and the orphan pass is
     accurate. This **never** blocks the upload and **never** raises — a defect in
     the scaffold must not break a real handoff — and it scans every record (no
     sampling) so the summary is accurate.
 
-    The scan runs in an isolated child process via
-    :func:`application_sdk.execution.heartbeat.run_in_process`, for two reasons.
+    The scan runs via
+    :func:`application_sdk.execution.heartbeat.run_best_effort`, for two reasons.
     It keeps the event loop and the activity's auto-heartbeat free while a large
     batch is validated (ADR-0010). More importantly, it makes the never-raises
     contract hold even against *native* faults: the decode exercises third-party
     C extensions (msgspec via pyatlan_v9), and a segfault there is not a Python
     exception — in-process it would kill the whole Temporal worker (as one did,
-    CNCT-85). In the child it kills only the child; the parent logs the warning
-    and the handoff proceeds. The timeout bounds the scan for the same reason —
-    a hung validation must not stall an upload forever.
+    CNCT-85). ``run_best_effort`` isolates the scan in a child process, so a
+    crash kills only the child; it then logs the warning and the handoff
+    proceeds. The timeout bounds the scan for the same reason — a hung
+    validation must not stall an upload forever.
 
     Referential (orphan) integrity runs by default on this hook: extracts and
     transforms are full by design by default, so every referenced parent is
@@ -137,49 +229,61 @@ async def _warn_on_invalid_transformed_assets(local_path: str) -> None:
     if target is None:
         return
 
-    from concurrent.futures.process import (  # noqa: PLC0415 — deferred: co-located with the run_in_process call it guards
-        BrokenProcessPool,
-    )
-
     from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — deferred: app.base is imported by execution (circular)
-        run_in_process,
+        run_best_effort,
     )
     from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
         validate_transformed_dir,
     )
 
-    try:
-        report = await run_in_process(
-            validate_transformed_dir,
-            str(target),
-            timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
-        )
-    except BrokenProcessPool:
-        _task_logger.warning(
-            "Transformed-asset validation subprocess died or was discarded "
-            "(a native fault in a decode dependency, or a concurrent "
-            "validation's timeout); upload continues unvalidated"
-        )
-        return
-    except TimeoutError:
-        _task_logger.warning(
-            "Transformed-asset validation timed out after %ss; upload continues "
-            "unvalidated",
-            VALIDATE_ASSETS_TIMEOUT_SECONDS,
-        )
-        return
-    except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
-        _task_logger.warning(
-            "Transformed-asset validation skipped due to an unexpected error",
-            exc_info=True,
-        )
+    # Best-effort: run_best_effort isolates the scan in a child process and, on
+    # any native crash / timeout / error, logs a warning and returns None — the
+    # upload is never blocked, failed, or crashed by the validation scaffold.
+    report = await run_best_effort(
+        validate_transformed_dir,
+        str(target),
+        label="Transformed-asset validation",
+        logger=_task_logger,
+        timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
+    )
+
+    if report is None:
+        # run_best_effort swallowed a native crash / timeout / error (it already
+        # logged a warning). The "nothing to validate" cases (flag off, not a
+        # transformed/ subtree) already returned above, so reaching here with
+        # None means the scan itself failed — no counts to emit.
         return
 
-    if report is not None and not report.ok:
+    # Emit the structured outcome on every validated upload (clean + flagged) so
+    # the row is queryable and gives a denominator. Wrapped: a defect in the
+    # emit path (e.g. matrix encoding) must never break a real handoff.
+    try:
+        flagged = not report.ok
+        _task_logger.info(
+            ASSET_VALIDATION_EVENT,
+            outcome="flagged" if flagged else "clean",
+            app_name=app_name,
+            assets_total=report.total,
+            assets_passed=report.passed,
+            # ``failed`` counts undeserializable records too; report "invalid"
+            # (per-asset .validate() failures) disjointly, matching the headline
+            # in format_report().
+            assets_invalid=report.failed - report.undeserializable,
+            assets_orphaned=len(report.orphans),
+            assets_undeserializable=report.undeserializable,
+            **{ASSET_VALIDATION_MATRIX_KEY: _validation_matrix_json(report)},
+        )
+        if flagged:
+            _task_logger.warning(
+                "Transformed-asset validation flagged issues before upload "
+                "(handoff continues): %s",
+                report.format_report(max_items=_VALIDATION_MATRIX_MAX_ROWS),
+            )
+    except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
         _task_logger.warning(
-            "Transformed-asset validation flagged issues before upload "
-            "(handoff continues): %s",
-            report.format_report(),
+            "Transformed-asset validation outcome emission failed "
+            "(handoff continues)",
+            exc_info=True,
         )
 
 
@@ -1031,7 +1135,7 @@ class App(ABC):
         # BLDX-1555 defense-in-depth: validate transformed assets against the
         # pyatlan_v9 backbone before the handoff. Warn-only, best-effort, and
         # offloaded to a worker thread so it never blocks the event loop.
-        await _warn_on_invalid_transformed_assets(input.local_path)
+        await _warn_on_invalid_transformed_assets(input.local_path, self._app_name)
 
         deployment = self.context.storage
         upstream = self.context.upstream_storage

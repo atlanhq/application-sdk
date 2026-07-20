@@ -193,6 +193,18 @@ inputs:
       callers that don't wire this stay on the previous behaviour.
     required: false
     default: ""
+  expected-python-version:
+    description: |
+      The Python major.minor the built worker image is expected to ship — the
+      connector Dockerfile's golden base tag. The action pins the host pytest
+      harness to this version AND asserts the built image's interpreter matches
+      it, so the connector is exercised on exactly the Python it runs in the
+      container. This closes the CNCT-85 gap: a concurrent-decode segfault that
+      reproduces only on the container's Python (3.13) would be missed by a
+      harness left on the setup-deps default (3.11). Override only if a
+      connector's runtime base is not on the SDK default.
+    required: false
+    default: "3.13"
 outputs:
   test-outcome:
     description: pytest exit outcome (success/failure)
@@ -338,10 +350,38 @@ runs:
           .
         echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
+    # The built worker image is what actually runs the connector; its Python is
+    # fixed by the Dockerfile's golden base, not by anything this runner
+    # installs. Assert it matches `expected-python-version` so we never validate
+    # on one interpreter and ship on another — the CNCT-85 failure mode, where a
+    # concurrent-decode segfault surfaced only on the container's Python.
+    # `--entrypoint python` bypasses the app entrypoint; the base interpreter's
+    # major.minor is the golden tag we assert (venv shares it). Runs before
+    # setup-deps wipes the workspace, so the SoT script under the action
+    # checkout is still reachable. The comparison logic lives in the tested
+    # script per docs/standards/ci.md (no branching in inline shell).
+    - name: Assert worker image Python matches expected
+      shell: bash
+      env:
+        IMAGE: ${{ steps.build.outputs.image }}
+        EXPECTED: ${{ inputs.expected-python-version }}
+      run: |
+        ACTUAL=$(docker run --rm --entrypoint python "${IMAGE}" --version)
+        echo "Worker image reports: ${ACTUAL} (expected ${EXPECTED}.x)"
+        python3 "${{ github.action_path }}/../../scripts/container_python_version.py" \
+          check-interpreter --expected "${EXPECTED}" --actual "${ACTUAL}"
+
     # Must run before atlan-configurator generates ci-deploy/ — setup-deps
     # uses actions/checkout internally which would wipe generated files.
+    #
+    # Pin the host pytest harness to the same Python the worker image ships
+    # (expected-python-version) so the boundary the SDR test drives — agent
+    # contracts, BaseSDRIntegrationTest — is import-compatible with the code
+    # under test, and the whole E2E job runs one interpreter end to end.
     - name: Setup Python and dependencies
-      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.22.1
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.23.0
+      with:
+        python-version: ${{ inputs.expected-python-version }}
 
     # setup-deps' actions/checkout wipes the pre-build re-pin above. Do
     # it again so the host pytest runtime resolves the dispatched SDK
