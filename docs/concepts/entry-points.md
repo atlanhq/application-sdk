@@ -249,7 +249,7 @@ Behaviour (with `?entrypoint=<entry-point-name>`):
 - Returns 404 if that entry point's subfolder or `manifest.json` is missing.
 - The `?entrypoint=` token is the same kebab-case identifier used on `POST /workflows/v1/start` — one naming convention, two endpoints.
 
-Without a query param, `GET /workflows/v1/manifest` serves the app's **default** entry point's manifest. If no default is marked, it falls back to the explicit (non-implicit) entry points in alphabetical order — so a `run()` + `@entrypoint(s)` app (whose implicit `run` has no manifest dir) resolves to its first explicit entry point (e.g. `crawler`) with a **200** rather than 404. It 404s only when no candidate has a servable `manifest.json`. For single-entry-point apps this is just that app's manifest, as before.
+Without a query param, `GET /workflows/v1/manifest` serves the first candidate with a manifest on disk: the default entry point (if any), then the explicit (non-implicit) entry points in alphabetical order. So a `run()` + `@entrypoint(s)` app — whose implicit `run` default has no manifest dir — resolves to its first explicit entry point (e.g. `crawler`) with a **200** rather than 404. It 404s only when no candidate has a servable `manifest.json`. For single-entry-point apps this is just that app's manifest, as before.
 
 > **Configmap discovery** also benefits from the subfolder layout: the handler uses `rglob("*.json")` so configmap files can live inside per-entry subfolders alongside the manifests.
 
