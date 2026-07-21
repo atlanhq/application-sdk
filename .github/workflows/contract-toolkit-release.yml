@@ -68,6 +68,8 @@ jobs:
           python-version: "3.14"
 
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.30"
 
       - name: Compute version, bump PklProject, update CHANGELOG
         id: versions
