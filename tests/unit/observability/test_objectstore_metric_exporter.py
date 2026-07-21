@@ -421,19 +421,26 @@ class TestSdrUpstreamExport:
         assert log.warning.call_count == 1
         assert log.debug.call_count == 0
 
-    def test_binding_broken_is_transient_and_retried_quietly(self, tmp_path) -> None:
+    def test_binding_broken_is_transient_warned_once_then_healed(
+        self, tmp_path
+    ) -> None:
         """A present-but-unresolved binding is a transient boot state (BLDX-1567).
 
         ``StorageBindingBrokenError`` (placeholders / secret env not yet
-        substituted) heals once Dapr finishes boot, so it must be retried
-        quietly (debug, never warning) and not latched into ``_skip_stores``.
+        substituted) heals once Dapr finishes boot, so it must be retried and
+        never latched into ``_skip_stores``. The deferral is warned exactly once
+        (so a persistent gap stays visible where DEBUG is filtered out), stays
+        quiet at DEBUG on subsequent flushes, and the heal is announced at INFO.
+        The first-deferral warning must carry no stacktrace — the condition is
+        expected and self-describing.
         """
         from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME
         from application_sdk.storage.errors import StorageBindingBrokenError
 
         store = MagicMock(name="deployment")
-        # Broken on the first attempt (secret env not substituted yet), then healed.
+        # Broken on the first two attempts (secret env not substituted yet), then healed.
         attempts = [
+            StorageBindingBrokenError("unresolved", binding_name="x"),
             StorageBindingBrokenError("unresolved", binding_name="x"),
             store,
         ]
@@ -454,11 +461,17 @@ class TestSdrUpstreamExport:
             ),
         ):
             e = ObjectStoreMetricExporter(data_dir=str(tmp_path))
-            e._ensure_stores()
+            e._ensure_stores()  # first deferral → warn once
             assert e._deployment_store is None  # broken → deferred, not skipped
             assert DEPLOYMENT_OBJECT_STORE_NAME not in e._skip_stores
-            e._ensure_stores()
-            assert e._deployment_store is store  # healed on retry
+            assert DEPLOYMENT_OBJECT_STORE_NAME in e._deferred
+            e._ensure_stores()  # still broken → quiet at debug
+            assert e._deployment_store is None
+            e._ensure_stores()  # healed on retry
+            assert e._deployment_store is store
 
-        assert log.warning.call_count == 0  # transient must never warn
-        assert log.debug.call_count == 1  # logged once, at debug
+        assert log.warning.call_count == 1  # deferral warned exactly once
+        assert "exc_info" not in log.warning.call_args.kwargs  # no stacktrace
+        assert log.debug.call_count == 1  # subsequent retry stayed quiet
+        assert log.info.call_count == 1  # heal announced
+        assert DEPLOYMENT_OBJECT_STORE_NAME not in e._deferred  # cleared on heal

@@ -231,6 +231,11 @@ class ObjectStoreMetricExporter(MetricExporter):
         # retry below would re-log a full traceback every flush (~60s) for the
         # life of the process (BLDX-1567 regression guard).
         self._skip_stores: set[str] = set()
+        # Store names for which a *transient* deferral has already been warned
+        # about. The transient boot race is retried every flush, so we warn once
+        # (a persistent gap stays visible in prod) then stay quiet at DEBUG —
+        # same log-once-by-name discipline as ``_skip_stores`` above.
+        self._deferred: set[str] = set()
         self._writer_seq = 0
 
     def _ensure_stores(self) -> None:
@@ -270,18 +275,32 @@ class ObjectStoreMetricExporter(MetricExporter):
         )
 
         try:
-            return create_store_from_binding(name)
+            store = create_store_from_binding(name)
         except (StorageBindingNotFoundError, StorageBindingBrokenError):
             # Transient boot states: the component is not written yet, or it is
             # present but its placeholders / ``secretKeyRef`` env vars are not
             # substituted yet. Both heal once Dapr finishes writing and the
-            # secret env materialises, so retry quietly on the next export. Both
+            # secret env materialises, so retry on the next export. Both
             # subclass StorageConfigError, so this clause must precede it.
-            logger.debug(
-                "Object store '%s' binding not resolvable yet; metric upload deferred (will retry)",
-                name,
-                exc_info=True,
-            )
+            #
+            # Warn once (so a *persistent* gap stays visible in prod, where
+            # DEBUG is filtered out) then drop to DEBUG on subsequent flushes so
+            # the ~60s retry does not spam. No stacktrace: the condition is
+            # expected and self-describing, and a traceback for "not ready yet"
+            # reads as a failure. The heal is logged at INFO in the ``else``
+            # branch, so an unmatched warning is the signal it is truly stuck.
+            if name in self._deferred:
+                logger.debug(
+                    "Object store '%s' binding still not resolvable; metric upload still deferred",
+                    name,
+                )
+            else:
+                self._deferred.add(name)
+                logger.warning(
+                    "Object store '%s' binding not resolvable yet; metric upload deferred, "
+                    "retrying each flush until it appears",
+                    name,
+                )
             return None
         except StorageConfigError:
             # Non-transient misconfiguration (e.g. unsupported binding type). It
@@ -304,6 +323,17 @@ class ObjectStoreMetricExporter(MetricExporter):
                 exc_info=True,
             )
             return None
+        else:
+            # Resolved. If we had previously deferred this store, announce the
+            # heal at INFO so the earlier warning is closed out and a boot-time
+            # gap is observably self-healing.
+            if name in self._deferred:
+                self._deferred.discard(name)
+                logger.info(
+                    "Object store '%s' binding now resolved; metric upload active",
+                    name,
+                )
+            return store
 
     def export(
         self,
