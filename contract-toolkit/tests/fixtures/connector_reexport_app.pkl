@@ -1,0 +1,24 @@
+/// Fixture: an app that amends App.pkl and references `Connectors.API`
+/// WITHOUT a supplemental `import "Connectors.pkl"`.
+///
+/// Proves the Connectors re-export: amending App.pkl alone gives access to the
+/// connector constants (just like the widget types), so apps no longer need a
+/// second import line. If the re-export regresses, evaluating this fixture fails
+/// with an "unresolved reference: Connectors" error.
+amends "../../src/App.pkl"
+
+name = "reexport-probe"
+displayName = "Re-export Probe"
+icon = "https://example.com/icon.svg"
+connector = Connectors.API
+hasCredentialConfig = false
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["connection"] = new ConnectionCreator { placeholderText = "Connection" }
+      }
+    }
+  }
+}

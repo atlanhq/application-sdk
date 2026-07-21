@@ -603,6 +603,13 @@ class Widget {
   /// Whether to show connection options.
   connectionOptions: Boolean?
 
+  /// Connector type for the connection widget (ConnectionCreator). The frontend
+  /// reads this to build a newly-created connection's qualifiedName as
+  /// `default/{connector}/{epoch}`. Distinct from `connectorName` (the
+  /// connectionSelector's filter). Injected by the toolkit from the app-level
+  /// `connector`.
+  connector: String?
+
   /// Connection category filter for connectionSelector widget (e.g., "['warehouse', 'database', 'lake']").
   connectionCategories: String?
 
@@ -822,11 +829,23 @@ class ConnectionCreator extends UIElement {
   /// (Optional) Whether to show connection options.
   hidden showConnectionOptions: Boolean?
 
+  /// (Injected by the toolkit from the app-level `connector`.) The Atlan
+  /// connector type stamped on connections created via this widget, emitted as
+  /// `ui.connector` — the key the frontend's connection widget reads to build a
+  /// new connection's qualifiedName (`default/{connector}/{epoch}`). Without it
+  /// the frontend has no connector type on the CREATE path and falls back to the
+  /// workflow's `orchestration.atlan.com/source` label (the app id), which is
+  /// wrong whenever the app name differs from the connector type (e.g. app
+  /// "openapi", connector "api" → connections wrongly created as
+  /// `default/openapi/{epoch}`). Left null when no connector is injected.
+  hidden connectorType: String?
+
   /// (Generated) Internal configuration for the UI's rendering.
   fixed ui {
     widget = "connection"
     placeholder = placeholderText
     connectionOptions = showConnectionOptions
+    connector = connectorType
   }
 }
 

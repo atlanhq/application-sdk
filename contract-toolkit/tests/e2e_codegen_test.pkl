@@ -396,8 +396,14 @@ facts {
     postgresBase.contains("connection_type = \"postgres\"")
   }
 
-  ["connection_type omitted when connector.value == name"] {
-    !selfNamedBase.contains("connection_type =")
+  // connection_type is now ALWAYS emitted when a connector is declared, even
+  // when it equals the app name. Gating on `value != name` left the e2e base
+  // relying on its `connection_type or connector_short_name` fallback, which is
+  // wrong whenever the two differ (e.g. app "openapi", connector "api").
+  // Emitting unconditionally keeps this artifact aligned with the frontend
+  // config; when value == name the line simply restates the fallback value.
+  ["connection_type emitted even when connector.value == name"] {
+    selfNamedBase.contains("connection_type = \"snowflake\"")
   }
 
   ["connection_category emitted when category is not warehouse"] {
