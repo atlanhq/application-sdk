@@ -475,9 +475,31 @@ class TestWorkerUpTier:
             harness, "run_full_dag", lambda: calls.__setitem__("full_dag", 1)
         )
 
-        harness.test_full_dag_runs_end_to_end()
+        # The no-source tier asserts worker health, then raises pytest.skip so
+        # a healthy worker reports SKIPPED (not a green full-DAG pass) — the
+        # full DAG must never run in this tier.
+        with pytest.raises(pytest.skip.Exception, match="worker-up smoke check"):
+            harness.test_full_dag_runs_end_to_end()
 
         assert calls == {"worker_up": 1, "full_dag": 0}
+
+    def test_test_method_fails_red_when_worker_unhealthy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The no-source tier is a skip only when the worker is healthy. An
+        # unhealthy worker must still fail RED (AssertionError), not be masked
+        # by the pytest.skip — otherwise a worker that never deploys would show
+        # SKIPPED instead of failing.
+        harness = self._harness()
+
+        def _refused(url: str, timeout: int = 10) -> _FakeHealthResponse:
+            raise urllib.error.URLError("connection refused")
+
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e.base.urllib.request.urlopen", _refused
+        )
+        with pytest.raises(AssertionError, match="did not become healthy"):
+            harness.test_full_dag_runs_end_to_end()
 
     def test_assert_worker_up_passes_on_2xx(
         self, monkeypatch: pytest.MonkeyPatch

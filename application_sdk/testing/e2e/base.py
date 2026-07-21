@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import orjson
+import pytest
 
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.observability.logger_adaptor import get_logger
@@ -1191,9 +1192,13 @@ class BaseE2ETest:
         The no-source tier: when a connector has no extraction source in CI
         (``source_available`` False), the full-DAG e2e can't extract, so it
         proves the worker came up instead — a GET of ``/server/health`` returns
-        2xx. The sdr-e2e CI action already gates on the same endpoint before
-        pytest; re-asserting it here makes the pytest run the test of record
-        (and a bare local ``pytest`` meaningful) rather than a no-op skip.
+        2xx. This is a hard assertion (raises ``AssertionError`` when the worker
+        never becomes healthy), so an unhealthy worker fails RED. The *caller*
+        (``test_full_dag_runs_end_to_end``) then raises ``pytest.skip`` so a
+        healthy worker reports SKIPPED, not a green pass — because the full DAG
+        was never exercised. The sdr-e2e CI action already gates on the same
+        endpoint before pytest; re-asserting it here keeps a bare local
+        ``pytest`` meaningful as a worker-deploy smoke check.
         """
         url = os.environ.get("E2E_WORKER_HEALTH_URL", self.worker_health_url)
         logger.info("Worker-up-only tier: probing %s", url)
@@ -1239,10 +1244,28 @@ class BaseE2ETest:
 
         When no extraction source is provisioned (``source_available`` False),
         this degrades to a worker-up-only check — see :meth:`assert_worker_up`.
+        The full DAG is NOT exercised, so this run must not report a green
+        *pass* that reads as "full-DAG e2e passed": after asserting the worker
+        is healthy (an unhealthy worker still fails RED), it raises
+        ``pytest.skip`` so the check surface shows SKIPPED, not passed. That
+        distinction matters — a connector could regress its entire
+        extract->publish path and, without the skip, CI would stay green
+        purely because a source wasn't provisioned.
         """
         if not self.source_available:
+            # Worker health is still a hard precondition (raises AssertionError
+            # => RED) so a broken worker is never masked. But a healthy worker
+            # only proves the app deployed, not that extraction works — so mark
+            # the run SKIPPED rather than passed.
             self.assert_worker_up()
-            return
+            pytest.skip(
+                f"No extraction source provisioned for {self.connector_short_name} "
+                "(source_available=False): the app worker was verified healthy, but "
+                "the full extract->publish->Atlas DAG was NOT exercised. This is a "
+                "worker-up smoke check, not a full-DAG e2e pass. Provision a source "
+                "(a CI container, or app-owner-supplied credentials) to run the full "
+                "DAG."
+            )
 
         outcome = self.run_full_dag()
         if not (self._core_dag_ok(outcome.ae_result) and outcome.connection_in_atlas):
