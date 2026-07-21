@@ -311,10 +311,22 @@ class TestSdrUpstreamExport:
         assert deployment_store.put.call_count == 1
         assert upstream_store.put.call_count == 1
 
-    def test_upstream_store_built_only_when_atlan_upload_enabled(
-        self, tmp_path
-    ) -> None:
-        """``__init__`` resolves the upstream store only in SDR mode."""
+    def test_stores_resolved_lazily_not_at_init(self, tmp_path) -> None:
+        """Construction must not touch bindings (BLDX-1567 boot race).
+
+        Resolving eagerly in ``__init__`` meant a metrics-flush daemon thread
+        that constructed the exporter before the Dapr ``objectstore`` component
+        existed permanently disabled uploads. Stores must stay ``None`` until
+        the first ``_ensure_stores`` / ``export``.
+        """
+        with patch.object(ObjectStoreMetricExporter, "_resolve_store") as resolve_spy:
+            e = ObjectStoreMetricExporter(data_dir=str(tmp_path))
+        resolve_spy.assert_not_called()
+        assert e._deployment_store is None
+        assert e._upstream_store is None
+
+    def test_ensure_stores_resolves_upstream_only_in_sdr_mode(self, tmp_path) -> None:
+        """``_ensure_stores`` resolves the upstream store only in SDR mode."""
         from application_sdk.constants import (
             DEPLOYMENT_OBJECT_STORE_NAME,
             UPSTREAM_OBJECT_STORE_NAME,
@@ -328,13 +340,14 @@ class TestSdrUpstreamExport:
         def _fake_resolve(_self, name):
             return resolved[name]
 
-        # SDR mode: both stores resolved.
+        # SDR mode: both stores resolved on first ensure.
         with (
             patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True),
             patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", True),
             patch.object(ObjectStoreMetricExporter, "_resolve_store", _fake_resolve),
         ):
             e = ObjectStoreMetricExporter(data_dir=str(tmp_path))
+            e._ensure_stores()
         assert e._deployment_store is resolved[DEPLOYMENT_OBJECT_STORE_NAME]
         assert e._upstream_store is resolved[UPSTREAM_OBJECT_STORE_NAME]
 
@@ -345,5 +358,32 @@ class TestSdrUpstreamExport:
             patch.object(ObjectStoreMetricExporter, "_resolve_store", _fake_resolve),
         ):
             e2 = ObjectStoreMetricExporter(data_dir=str(tmp_path))
+            e2._ensure_stores()
         assert e2._deployment_store is resolved[DEPLOYMENT_OBJECT_STORE_NAME]
         assert e2._upstream_store is None
+
+    def test_ensure_stores_retries_until_binding_appears(self, tmp_path) -> None:
+        """A transient missing binding must not latch uploads off (BLDX-1567).
+
+        First resolution returns ``None`` (component not written yet); a later
+        one succeeds. The store must then be cached and not re-resolved.
+        """
+        store = MagicMock(name="deployment")
+        # None on the first attempt (boot race), then the real store.
+        attempts = iter([None, store, store])
+
+        def _fake_resolve(_self, _name):
+            return next(attempts)
+
+        with (
+            patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True),
+            patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", False),
+            patch.object(ObjectStoreMetricExporter, "_resolve_store", _fake_resolve),
+        ):
+            e = ObjectStoreMetricExporter(data_dir=str(tmp_path))
+            e._ensure_stores()
+            assert e._deployment_store is None  # still absent → retried later
+            e._ensure_stores()
+            assert e._deployment_store is store  # healed on retry
+            e._ensure_stores()
+            assert e._deployment_store is store  # cached, not re-resolved

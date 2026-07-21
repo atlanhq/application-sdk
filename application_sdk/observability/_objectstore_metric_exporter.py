@@ -215,31 +215,57 @@ class ObjectStoreMetricExporter(MetricExporter):
             },
         )
         self._data_dir = data_dir or get_observability_dir()
-        self._deployment_store: ObjectStore | None = (
-            self._resolve_store(DEPLOYMENT_OBJECT_STORE_NAME)
-            if ENABLE_OBSERVABILITY_STORE_SINK
-            else None
-        )
-        self._upstream_store: ObjectStore | None = (
-            self._resolve_store(UPSTREAM_OBJECT_STORE_NAME)
-            if ENABLE_OBSERVABILITY_STORE_SINK and ENABLE_ATLAN_UPLOAD
-            else None
-        )
+        # Stores are resolved lazily on the first export, not here (BLDX-1567).
+        # The metrics flush runs on a daemon thread that can construct this
+        # exporter during app-server boot — before the Dapr ``objectstore``
+        # component YAML has been written to ``./components``. Resolving eagerly
+        # turned that transient boot race into *permanent* metric-upload
+        # disablement for the whole process (and logged a full traceback at
+        # boot). Lazy resolution retries on each export until the binding
+        # appears, so a slow-to-materialise component self-heals.
+        self._deployment_store: ObjectStore | None = None
+        self._upstream_store: ObjectStore | None = None
         self._writer_seq = 0
+
+    def _ensure_stores(self) -> None:
+        """Resolve the deployment/upstream stores, retrying until they appear.
+
+        Idempotent and cheap once resolved (each store is resolved at most
+        once successfully, then cached). While a binding is still absent the
+        resolution is retried on the next export rather than being latched off,
+        which is what makes a boot-time binding gap self-healing.
+        """
+        if not ENABLE_OBSERVABILITY_STORE_SINK:
+            return
+        if self._deployment_store is None:
+            self._deployment_store = self._resolve_store(DEPLOYMENT_OBJECT_STORE_NAME)
+        if self._upstream_store is None and ENABLE_ATLAN_UPLOAD:
+            self._upstream_store = self._resolve_store(UPSTREAM_OBJECT_STORE_NAME)
 
     def _resolve_store(self, name: str) -> ObjectStore | None:
         from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
             create_store_from_binding,
         )
         from application_sdk.storage.errors import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+            StorageBindingNotFoundError,
             StorageConfigError,
         )
 
         try:
             return create_store_from_binding(name)
+        except StorageBindingNotFoundError:
+            # Binding not present yet. Expected transiently during boot before
+            # Dapr writes its components; resolution is retried on the next
+            # export, so this is benign rather than a hard misconfiguration.
+            logger.debug(
+                "Object store '%s' binding not present yet; metric upload deferred (will retry)",
+                name,
+                exc_info=True,
+            )
+            return None
         except StorageConfigError:
             logger.warning(
-                "Object store '%s' not configured; metric upload disabled",
+                "Object store '%s' misconfigured; metric upload disabled",
                 name,
                 exc_info=True,
             )
@@ -265,6 +291,10 @@ class ObjectStoreMetricExporter(MetricExporter):
             records = _serialize_metrics_data(metrics_data)
             if not records:
                 return MetricExportResult.SUCCESS
+
+            # Resolve stores on first use (and retry until a boot-time binding
+            # gap heals). Only attempted when there is data to write.
+            self._ensure_stores()
 
             now = datetime.now()
             ts_ns = int(now.timestamp() * 1e9)
