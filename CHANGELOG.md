@@ -1,5 +1,21 @@
 # Changelog
 
+## v3.24.0 (July 21, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.23.1...v3.24.0
+
+### Features
+
+- SDR full-DAG e2e harness enablement (source tiering, agent-mode payload, skip-tolerant gate, watchdog, split-ref) (#2639) (by @adityachoudhury-cloud in [c8dd097](https://github.com/atlanhq/application-sdk/commit/c8dd097))
+
+### Bug Fixes
+
+- de-flake rolling-writer time-rollover test (clock seam) (#2806) (by @cmgrote in [1b8d89a](https://github.com/atlanhq/application-sdk/commit/1b8d89a))
+- make AtlanLoggerAdapter.__del__ teardown-safe (#2810) (by @cmgrote in [7f68ccf](https://github.com/atlanhq/application-sdk/commit/7f68ccf))
+- resolve metric object stores lazily so a boot-time binding gap self-heals (BLDX-1567) (#2807) (by @cmgrote in [f049090](https://github.com/atlanhq/application-sdk/commit/f049090))
+- run upload asset validation in an isolated child process (CNCT-85) (#2769) (by @fyzanshaik-atlan in [143e2d3](https://github.com/atlanhq/application-sdk/commit/143e2d3))
+
+
 ## v3.23.1 (July 20, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.23.0...v3.23.1
