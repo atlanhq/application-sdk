@@ -310,13 +310,31 @@ runs:
         cp -R "${{ github.action_path }}" /tmp/sdr-e2e
         chmod +x /tmp/sdr-e2e/repin-application-sdk.sh || true
 
+    # Resolve the effective SDK ref for each side ONCE, so the
+    # (runtime||shared) / (harness||shared) fallback isn't repeated as a GHA
+    # `(a && a || b)` ternary at every call site. Plain `${VAR:-$SHARED}`
+    # parameter expansion (straight-line, no branching — ci.md-compliant); an
+    # empty output means "no repin" and the dependent step is skipped via `if:`.
+    - name: Resolve effective application-sdk refs
+      id: sdk_refs
+      shell: bash
+      env:
+        RUNTIME_SDK_REF: ${{ inputs.runtime-sdk-ref }}
+        HARNESS_SDK_REF: ${{ inputs.harness-sdk-ref }}
+        SHARED_SDK_REF: ${{ inputs.application-sdk-ref }}
+      run: |
+        {
+          echo "runtime_ref=${RUNTIME_SDK_REF:-$SHARED_SDK_REF}"
+          echo "harness_ref=${HARNESS_SDK_REF:-$SHARED_SDK_REF}"
+        } >> "$GITHUB_OUTPUT"
+
     - name: Pin application-sdk to dispatched ref (pre-build)
       # Runtime side: runtime-sdk-ref wins, else the shared application-sdk-ref,
       # else empty = build the image from the connector's OWN pinned SDK.
-      if: (inputs.runtime-sdk-ref != '' && inputs.runtime-sdk-ref || inputs.application-sdk-ref) != ''
+      if: steps.sdk_refs.outputs.runtime_ref != ''
       shell: bash
       env:
-        SDK_REF: ${{ inputs.runtime-sdk-ref != '' && inputs.runtime-sdk-ref || inputs.application-sdk-ref }}
+        SDK_REF: ${{ steps.sdk_refs.outputs.runtime_ref }}
       run: |
         ${{ github.action_path }}/repin-application-sdk.sh
         if ! command -v uv >/dev/null 2>&1; then
@@ -339,7 +357,7 @@ runs:
       uses: atlanhq/application-sdk/.github/actions/regenerate-contract@main
       with:
         # Runtime side (baked into the image) — mirror the pre-build repin.
-        application-sdk-ref: ${{ inputs.runtime-sdk-ref != '' && inputs.runtime-sdk-ref || inputs.application-sdk-ref }}
+        application-sdk-ref: ${{ steps.sdk_refs.outputs.runtime_ref }}
         check-drift: "false"
 
     # Buildx is required for the GHA cache backend below. Set up once
@@ -444,10 +462,10 @@ runs:
       # = harness comes from the connector's OWN pinned SDK. Set harness-sdk-ref
       # (with runtime-sdk-ref left empty) to run the latest test harness against
       # the connector's own runtime without bumping its SDK.
-      if: (inputs.harness-sdk-ref != '' && inputs.harness-sdk-ref || inputs.application-sdk-ref) != ''
+      if: steps.sdk_refs.outputs.harness_ref != ''
       shell: bash
       env:
-        SDK_REF: ${{ inputs.harness-sdk-ref != '' && inputs.harness-sdk-ref || inputs.application-sdk-ref }}
+        SDK_REF: ${{ steps.sdk_refs.outputs.harness_ref }}
         SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
       run: |
         "$SDR_E2E_ROOT/repin-application-sdk.sh"
