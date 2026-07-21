@@ -178,11 +178,14 @@ class TestRollingFileWriterRollover:
     async def test_time_rollover_after_interval_elapsed(self, base: str) -> None:
         """append after interval elapses must flush the in-flight chunk."""
         flush_fn, calls = _make_flush_fn()
-        # Drive the monotonic clock deterministically.
+        # Drive the monotonic clock deterministically. Patch the writer's own
+        # ``_monotonic`` seam — NOT the global ``time.monotonic`` — so only the
+        # writer's reads consume the fake clock. Patching the global clock also
+        # intercepts asyncio's event-loop scheduler, whose read count is
+        # nondeterministic; that exhausted this iterator mid-test and raised
+        # "generator raised StopIteration" on Python 3.13.
         clock = iter([100.0, 100.5, 161.0, 161.5])
-        with patch(
-            "application_sdk.storage.rolling.time.monotonic", lambda: next(clock)
-        ):
+        with patch("application_sdk.storage.rolling._monotonic", lambda: next(clock)):
             async with RollingFileWriter(
                 base,
                 ".json",
