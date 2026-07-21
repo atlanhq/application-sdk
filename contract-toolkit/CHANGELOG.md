@@ -6,6 +6,17 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.19.0] - 2026-07-21
+
+### Features
+
+- add ValidationRule.trigger; re-export ValidationRule from Credential.pkl (#2749) ([c424342](https://github.com/atlanhq/application-sdk/commit/c424342))
+- source Credential.pkl widgets from Widgets.pkl (#2744) ([fddb6a4](https://github.com/atlanhq/application-sdk/commit/fddb6a4))
+
+### Bug fixes
+
+- emit connector type on the ConnectionCreator widget (#2802) ([4853e49](https://github.com/atlanhq/application-sdk/commit/4853e49))
+
 ## [0.18.2] - 2026-07-15
 
 ### Bug fixes

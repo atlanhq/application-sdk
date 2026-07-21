@@ -2737,6 +2737,32 @@ local function generateExtractNode(): Mapping<String, Any> =
   }
 
 /// Render workflow config directly as JSON.
+// uiConfig with the app-level `connector` injected onto every ConnectionCreator
+// ("connection") widget, so the CREATE path emits `ui.connector` — the key the
+// frontend reads to mint a new connection's qualifiedName. Without this the
+// frontend has no connector type on the create widget and falls back to the
+// workflow's `orchestration.atlan.com/source` label (the app id) when building
+// `default/{connector}/{epoch}` — wrong whenever the app name and the connector
+// type differ. Only the hidden `connectorType` field is amended; `fixed ui`
+// recomputes from it, so other widgets are untouched. Mirrors App.pkl.
+local connectorInjectedUiConfig: Config.UIConfig =
+  (uiConfig) {
+    tasks {
+      for (stepKey, step in uiConfig.tasks) {
+        [stepKey] = (step) {
+          inputs {
+            for (inKey, inEl in step.inputs) {
+              [inKey] =
+                if (inEl is Config.ConnectionCreator)
+                  (inEl as Config.ConnectionCreator) { connectorType = connector.value }
+                else inEl
+            }
+          }
+        }
+      }
+    }
+  }
+
 local workflowConfigOutput: FileOutput = new FileOutput {
   value = new Mapping {
     when (workflowConfigIncludeTopLevelMetadata) {
@@ -2744,7 +2770,7 @@ local workflowConfigOutput: FileOutput = new FileOutput {
       ["name"] = displayName
       ["logo"] = logo
     }
-    ["config"] = uiConfig
+    ["config"] = connectorInjectedUiConfig
   }
   renderer = new JsonRenderer {}
 }

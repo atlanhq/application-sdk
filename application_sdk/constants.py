@@ -446,10 +446,26 @@ if DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED:
 #: BLDX-1555 defense-in-depth: when True, ``App.upload()`` validates transformed
 #: asset NDJSON against the pyatlan_v9 ``.validate()`` backbone before handing it
 #: across the SDR→Atlan boundary. Warn-only — invalid/orphaned assets are logged,
-#: never block the upload. Set to "false" to disable the check entirely.
+#: never block the upload.
+#:
+#: TEMPORARILY DEFAULTED OFF (CNCT-85): the warn-only scan runs the pyatlan/msgspec
+#: decode inside the worker, where a native fault (msgspec 0.20.0 concurrent-decode
+#: segfault on py3.13) bypasses the try/except and kills the worker. The full fix
+#: (process isolation, PR #2769) depends on downstream pyatlan changes; until it
+#: lands the path is disabled by default. Set to "true" to re-enable. Revert this
+#: default (and drop this note) once #2769 merges.
 VALIDATE_ASSETS_ON_UPLOAD: bool = (
-    os.getenv("ATLAN_VALIDATE_ASSETS_ON_UPLOAD", "true").lower() == "true"
+    os.getenv("ATLAN_VALIDATE_ASSETS_ON_UPLOAD", "false").lower() == "true"
 )
+#: The single "rows per axis" cap for transformed-asset validation output —
+#: shared by both surfaces so they can never drift: the human-readable
+#: ``AssetValidationReport.format_report(max_items=...)`` listing and the
+#: structured ``asset_validation_matrix`` telemetry the upload activity emits.
+#: The event's scalar counts always reflect the full batch; only these
+#: drill-down samples are bounded (so a pathological batch cannot produce an
+#: unbounded WARNING body or ``LogAttributes`` value).
+ASSET_VALIDATION_MAX_ITEMS_PER_AXIS: int = 25
+
 # Dapr Client Configuration
 #: Maximum gRPC message length in bytes for Dapr client.
 #:

@@ -54,7 +54,6 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "stale.yml",
     "docstring-coverage.yaml",
     "auto-fix.yml",
-    "renovate-pkl-sync.yaml",
     "generated-freshness.yaml",
 )
 

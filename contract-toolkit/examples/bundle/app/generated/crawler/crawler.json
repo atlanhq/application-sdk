@@ -26,7 +26,8 @@
           "hidden": false,
           "help": "",
           "placeholder": "Connection Name",
-          "grid": 8
+          "grid": 8,
+          "connector": "snowflake"
         }
       },
       "include-filter": {

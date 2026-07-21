@@ -934,18 +934,14 @@ hand-building it duplicates the grammar across the fleet, and a grammar change (
 scoping, escaping) then breaks every connector independently with no single source of
 truth.
 
+Not flagged — object-store keys: a qn reference preceded by a `/`-bearing literal
+segment (e.g. `f"persistent-artifacts/.../{connection_qualified_name}/publish-state"`)
+is a storage path that embeds a qn, not an asset qualifiedName rooted at its parent qn,
+so it is not flagged.
+
 Fix: construct assets through the pyatlan asset `.creator()` factories, which compute
 qualifiedName from typed parent references.  WARN tier — suppress with `# conformance:
 ignore[P028] <reason>` where a raw qualifiedName string is genuinely required.
-
-**Not flagged — object-store keys.** An asset qualifiedName is always *rooted* at its
-parent qn (the interpolated qn is the leading segment: `f"{connection_qn}/collections/{id}"`).
-An object-store **key** merely embeds a qn *after* a literal namespace prefix
-(`f"persistent-artifacts/apps/…/{connection_qn}/publish-state"`,
-`f"argo-artifacts/{connection_qn}/current-state"`) — that is a storage path, not an asset
-identity, and `.creator()` has nothing to say about it. When the qn reference is preceded
-by a `/`-bearing literal segment the f-string is treated as an object-store key and is not
-flagged.
 
 ---
 

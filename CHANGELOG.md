@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.23.1 (July 20, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.23.0...v3.23.1
+
+### Bug Fixes
+
+- serve flat single-entrypoint manifest for ?entrypoint= requests (#2764) (by @cmgrote in [ec4955b](https://github.com/atlanhq/application-sdk/commit/ec4955b))
+- per-app gate enforcement (soft default, hard opt-in) + check-matrix emission (#2751) (by @fyzanshaik-atlan in [d3b75af](https://github.com/atlanhq/application-sdk/commit/d3b75af))
+- reconcile partial local dirs against source store in App.upload (#2762) (by @vaibhavatlan in [3998948](https://github.com/atlanhq/application-sdk/commit/3998948))
+- encode credentials with quote() so passwords with spaces authenticate (#2778) (by @vaibhavatlan in [0310c42](https://github.com/atlanhq/application-sdk/commit/0310c42))
+- emit structured asset-validation outcome to OTLP/ClickHouse (#2766) (by @cmgrote in [92e8aa0](https://github.com/atlanhq/application-sdk/commit/92e8aa0))
+- default asset-validation-on-upload off pending isolation fix (CNCT-85) (#2783) (by @cmgrote in [84769c1](https://github.com/atlanhq/application-sdk/commit/84769c1))
+- default-entrypoint /manifest fallback for multi-entrypoint apps (#2776) (by @adityachoudhury-cloud in [e27319e](https://github.com/atlanhq/application-sdk/commit/e27319e))
+
+
 ## v3.23.0 (July 17, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.22.1...v3.23.0
