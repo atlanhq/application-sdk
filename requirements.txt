@@ -92,7 +92,7 @@ fastar==0.11.0
     # via
     #   fastapi
     #   fastapi-cloud-cli
-filelock==3.31.1
+filelock==3.31.2
     # via
     #   python-discovery
     #   virtualenv
@@ -126,7 +126,7 @@ httpx-retries==0.4.6
     # via
     #   atlan-application-sdk
     #   pyatlan
-hypothesis==6.157.2
+hypothesis==6.158.0
 identify==2.6.19
     # via pre-commit
 idna==3.18
