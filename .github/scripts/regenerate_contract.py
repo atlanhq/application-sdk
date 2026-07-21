@@ -99,14 +99,25 @@ def resolve(contract_dir: str) -> None:
 def evaluate(contract_dir: str) -> bool:
     """Regenerate artifacts in place via ``pkl eval``. Returns True on success.
 
+    Evals every top-level contract module (``contract/*.pkl``), not just
+    ``app.pkl``: a contract dir may also hold credential contracts (e.g.
+    ``csa-connectors-objectstore.pkl``) that emit their own generated config.
+    Regenerating only ``app.pkl`` left those unregenerated and unchecked, so a
+    toolkit change that breaks a credential contract (e.g. 0.19.0 retyping
+    Credential inputs to ``Widgets.*``) slipped through. Mirrors the app
+    Makefile's ``pkl eval -m . contract/*.pkl``; ``PklProject`` has no ``.pkl``
+    extension so the glob excludes it. Sorted for deterministic eval order.
+
     ``--project-dir``: the contract is a Pkl project declaring
     app-contract-toolkit as a dependency, so eval must load that project to
     resolve the ``@app-contract-toolkit`` import. ``-m .`` writes each output
     key (app/generated/**, atlan.yaml, app.yaml) at its natural path relative
     to the repo root — exactly where the Docker build COPYs from and the tests
     read."""
-    app_pkl = str(Path(contract_dir) / "app.pkl")
-    proc = run(["pkl", "eval", "--project-dir", contract_dir, "-m", ".", app_pkl])
+    contract_modules = sorted(str(p) for p in Path(contract_dir).glob("*.pkl"))
+    proc = run(
+        ["pkl", "eval", "--project-dir", contract_dir, "-m", ".", *contract_modules]
+    )
     return proc.returncode == 0
 
 

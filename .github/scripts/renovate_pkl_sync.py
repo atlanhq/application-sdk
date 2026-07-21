@@ -119,11 +119,22 @@ def regenerate(contract_dir: str) -> bool:
 
     tmp = Path(tempfile.mkdtemp())
     try:
+        # Eval every top-level contract module, not just app.pkl: a contract
+        # dir may also hold credential contracts (e.g.
+        # csa-connectors-objectstore.pkl) that emit their own generated config.
+        # Regenerating only app.pkl left those invisible to both this sync and
+        # the freshness gate, so a toolkit change that breaks a credential
+        # contract (e.g. 0.19.0 retyping Credential inputs to Widgets.*) slipped
+        # through undetected. Mirrors the app Makefile's
+        # `pkl eval -m . contract/*.pkl`; PklProject has no `.pkl` extension so
+        # the glob excludes it. Sorted for deterministic eval order.
+        #
         # --project-dir: the contract is a Pkl project declaring
         # app-contract-toolkit as a *remote package*, so eval must load that
         # project to resolve the `@app-contract-toolkit` import. The bare
-        # `pkl eval contract/app.pkl` from the repo root finds no project and
+        # `pkl eval contract/*.pkl` from the repo root finds no project and
         # fails. -m writes each output key relative to the output base.
+        contract_modules = sorted(str(p) for p in Path(contract_dir).glob("*.pkl"))
         eval_cmd = [
             "pkl",
             "eval",
@@ -131,7 +142,7 @@ def regenerate(contract_dir: str) -> bool:
             contract_dir,
             "-m",
             str(tmp),
-            str(app_pkl),
+            *contract_modules,
         ]
         result = run(eval_cmd)
         attempt = 1

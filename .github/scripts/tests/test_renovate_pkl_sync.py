@@ -181,6 +181,45 @@ def test_default_regenerates(repo, monkeypatch):
     )
 
 
+def test_evals_all_contract_modules_including_credentials(repo, monkeypatch):
+    """regenerate() passes every contract/*.pkl to `pkl eval`, not just app.pkl,
+    so credential contracts (e.g. csa-connectors-objectstore.pkl) are
+    regenerated and freshness-checked too — otherwise a toolkit change that
+    breaks a credential contract (0.19.0 Credential.pkl retyping) slips through.
+    PklProject (no .pkl extension) must not be passed."""
+    (repo / "contract" / "csa-connectors-objectstore.pkl").write_text(
+        'amends "@app-contract-toolkit/Credential.pkl"\n'
+    )
+    eval_cmds: list = []
+    real_run = subprocess.run
+
+    def fake_run(cmd, *, check=False):
+        if cmd[0] == "pkl" and cmd[1] == "eval":
+            eval_cmds.append(cmd)
+            out_dir = Path(cmd[cmd.index("-m") + 1])
+            gen = out_dir / "app" / "generated"
+            gen.mkdir(parents=True, exist_ok=True)
+            (gen / "manifest.json").write_text(FRESH_MANIFEST)
+            return types.SimpleNamespace(returncode=0)
+        if cmd[0] == "pkl" and cmd[1:3] == ["project", "resolve"]:
+            return types.SimpleNamespace(returncode=0)
+        if cmd[0] == "uvx":
+            return types.SimpleNamespace(returncode=0)
+        return real_run(cmd, check=check, text=True, capture_output=True)
+
+    monkeypatch.setattr(mod, "run", fake_run)
+
+    assert mod.main([]) == 0
+
+    assert eval_cmds, "pkl eval was not invoked"
+    modules = [a for c in eval_cmds for a in c if a.endswith(".pkl")]
+    assert any(m.endswith("app.pkl") for m in modules), modules
+    assert any(
+        m.endswith("csa-connectors-objectstore.pkl") for m in modules
+    ), f"credential contract was not eval'd; modules passed: {modules}"
+    assert not any(m.endswith("PklProject") for c in eval_cmds for m in c)
+
+
 def test_regenerate_eval_failure_falls_back_to_lock_only(repo, monkeypatch):
     monkeypatch.setattr(mod, "run", _make_fake_run(repo, eval_rc=1))
     before = _commit_count(repo)

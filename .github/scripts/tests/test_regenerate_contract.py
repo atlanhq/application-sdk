@@ -129,6 +129,30 @@ def test_app_level_regenerates_in_place_without_resolve(repo, monkeypatch):
     assert any(c[1] == "eval" for c in calls)
 
 
+def test_evals_all_contract_modules_including_credentials(repo, monkeypatch):
+    """Every contract/*.pkl is passed to `pkl eval`, not just app.pkl — a
+    credential contract (e.g. csa-connectors-objectstore.pkl) must be
+    regenerated too, or a toolkit change that breaks it slips past both this
+    regen and the freshness gate (the 0.19.0 Credential.pkl retyping regression).
+    PklProject (no .pkl extension) must NOT be passed."""
+    (repo / "contract" / "csa-connectors-objectstore.pkl").write_text(
+        'amends "@app-contract-toolkit/Credential.pkl"\n'
+    )
+    calls: list = []
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo, calls=calls))
+
+    assert mod.main([]) == 0
+
+    eval_cmds = [c for c in calls if c[1] == "eval"]
+    assert eval_cmds, "pkl eval was not invoked"
+    modules = [a for c in eval_cmds for a in c if a.endswith(".pkl")]
+    assert any(m.endswith("app.pkl") for m in modules), modules
+    assert any(
+        m.endswith("csa-connectors-objectstore.pkl") for m in modules
+    ), f"credential contract was not eval'd; modules passed: {modules}"
+    assert not any(m.endswith("PklProject") for c in eval_cmds for m in c)
+
+
 def test_app_level_eval_failure_warns_not_fatal(repo, monkeypatch, capsys):
     monkeypatch.setattr(mod, "run", _make_fake_run(repo, eval_rc=1))
 
