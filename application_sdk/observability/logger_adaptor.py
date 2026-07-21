@@ -1320,9 +1320,23 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             logging.error("Error processing log record", exc_info=True)
 
     def __del__(self):
-        """Cleanup when the logger is destroyed."""
-        if AtlanLoggerAdapter._flush_task and not AtlanLoggerAdapter._flush_task.done():
-            AtlanLoggerAdapter._flush_task.cancel()
+        """Cancel the periodic flush task when the logger is destroyed.
+
+        Guarded against interpreter teardown: during shutdown Python rebinds
+        module globals — including the ``AtlanLoggerAdapter`` class name this
+        references — to ``None``, so the attribute access raises
+        ``AttributeError`` ("'NoneType' object has no attribute '_flush_task'").
+        The event loop may likewise already be closed, making ``cancel()``
+        raise. Both are benign during GC/shutdown (there is nothing left to
+        flush) and cannot be logged (the logging stack may be gone), so they
+        are swallowed.
+        """
+        try:
+            task = AtlanLoggerAdapter._flush_task
+            if task is not None and not task.done():
+                task.cancel()
+        except Exception:  # noqa: S110, BLE001 — teardown-only; see docstring
+            pass
 
 
 # Create a singleton instance of the logger
