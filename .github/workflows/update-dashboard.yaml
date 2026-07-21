@@ -660,12 +660,13 @@ jobs:
         if: steps.discover.outputs.run_id != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.discover.outputs.run_id }}
         run: |
           set -euo pipefail
           mkdir -p scorecard-dl
           # Best-effort: a missing/expired artifact leaves the dir empty and the
           # downstream steps (gated on hashFiles) simply no-op — never fail.
-          gh run download "${{ steps.discover.outputs.run_id }}" \
+          gh run download "$RUN_ID" \
             --repo "${{ github.repository }}" \
             --name integration-test-results \
             --dir scorecard-dl || echo "::warning::no integration-test-results artifact (expired?)"
@@ -713,6 +714,11 @@ jobs:
           HISTORY_FILE="history/${SLUG}.jsonl"
           aws s3 cp "s3://kryptonite-store/${PREFIX}/${HISTORY_FILE}" \
             /tmp/tr_existing_history.jsonl 2>/dev/null || true
+          # First run for this repo has no history object yet, so the cp above
+          # no-ops without creating the file. Ensure it exists (empty) so the
+          # cat below does not exit 1 under `set -euo pipefail` and abort the
+          # step before the merged history is uploaded.
+          touch /tmp/tr_existing_history.jsonl
           cat /tmp/tr_existing_history.jsonl /tmp/tr_history_entry.jsonl 2>/dev/null \
             | sort -u > /tmp/tr_merged_history.jsonl
           aws s3 cp /tmp/tr_merged_history.jsonl \
