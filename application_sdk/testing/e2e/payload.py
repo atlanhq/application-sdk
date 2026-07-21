@@ -407,8 +407,9 @@ def build_ae_payload(
             consumers: (a) the flat ``credential-guid.credential-type`` routing
             row, emitted only in agent mode (when ``agent_json`` is given); and
             (b) the credential body's ``connectorConfigName``, backfilled
-            UNCONDITIONALLY when that field is absent (missing it => a heracles
-            nil-panic 500) — i.e. used even without ``agent_json``.
+            when that field is absent so the submit matches what the real UI
+            always sends (see the inline comment at the backfill site) — i.e.
+            used even without ``agent_json``.
 
     Returns:
         Dict ready to ``orjson.dumps`` and POST to
@@ -570,10 +571,15 @@ def build_ae_payload(
     # (e.g. public-source connectors like openapi Petstore).
     if credential_body is not None:
         body = credential_body.model_dump(by_alias=True, mode="json")
-        # heracles nil-panics with a 500 when the credential body has no
-        # connectorConfigName. Backfill the conventional name when the
-        # codegen'd body didn't set one, so agent-mode connectors whose body is
-        # a minimal placeholder (salesforce/anaplan/saperp/glue) don't have to.
+        # The real UI always sends ``connectorConfigName`` on the credential
+        # body (sourced from the package manifest's ``ui.credentialType``, shape
+        # ``atlan-connectors-<connector>``). Backfill the conventional name when
+        # the codegen'd body didn't set one, so agent-mode connectors whose body
+        # is a minimal placeholder (salesforce/anaplan/saperp/glue) still submit
+        # what production submits. (Heracles itself tolerates a missing value —
+        # every read site is nil-safe; it falls back to the connector name and
+        # only 400s if BOTH are absent — so this mirrors the UI, it does not
+        # dodge a crash.)
         body.setdefault(
             "connectorConfigName",
             credential_type or f"atlan-connectors-{connector_short_name}",
