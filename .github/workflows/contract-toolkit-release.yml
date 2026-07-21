@@ -90,7 +90,8 @@ jobs:
           git config --global user.email 'it@atlan.com'
 
           git checkout -b "${BUMP_BRANCH}"
-          git add contract-toolkit/src/PklProject contract-toolkit/CHANGELOG.md
+          git add contract-toolkit/src/PklProject contract-toolkit/CHANGELOG.md \
+            packages/conformance/conformance/data/toolkit_baseline.json
           git commit -m "chore(contract-toolkit): release v${new_version}"
           git push origin "${BUMP_BRANCH}" --force-with-lease
 
