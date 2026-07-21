@@ -7,6 +7,8 @@ in renovate-pkl-sync.yaml:
   * --regenerate true, eval OK   -> artifacts regenerated + committed
   * --regenerate true, eval fails -> degrade to lock-only, artifacts untouched
   * no contract/app.pkl -> skip regeneration (re-resolve only)
+  * no contract/PklProject -> whole run is a safe no-op (no pkl, no commit)
+  * --no-commit         -> regenerate in-tree but leave staging/commit to caller
   * nothing changed     -> no commit
 
 `pkl` and `uvx` are stubbed; `git` runs for real against a throwaway repo in
@@ -50,6 +52,14 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A throwaway repo with a contract, a committed (stale) lock, and stale
     generated artifacts — the state of a Renovate branch before sync."""
     (tmp_path / "contract").mkdir()
+    (tmp_path / "contract" / "PklProject").write_text(
+        'amends "pkl:Project"\n'
+        "dependencies {\n"
+        '  ["app-contract-toolkit"] {\n'
+        '    uri = "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@0.14.1"\n'
+        "  }\n"
+        "}\n"
+    )
     (tmp_path / "contract" / "app.pkl").write_text(
         'amends "@app-contract-toolkit/App.pkl"\n'
     )
@@ -290,6 +300,41 @@ def test_no_changes_makes_no_commit(repo, monkeypatch):
     assert _commit_count(repo) == before  # no new commit
 
 
+def test_no_commit_regenerates_but_does_not_commit(repo, monkeypatch):
+    """--no-commit: artifacts are re-resolved/regenerated in the working tree
+    but the driver makes NO git commit — Renovate's postUpgradeTasks stages the
+    fileFilters matches into the branch itself."""
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo, eval_rc=0))
+    before = _commit_count(repo)
+
+    assert mod.main(["--regenerate", "true", "--no-commit"]) == 0
+
+    # Working tree WAS updated ...
+    assert (repo / "app" / "generated" / "manifest.json").read_text() == FRESH_MANIFEST
+    assert (repo / "atlan.yaml").exists()
+    assert "0.14.2" in (repo / "contract" / "PklProject.deps.json").read_text()
+    # ... but nothing was committed (the changes sit unstaged for the caller).
+    assert _commit_count(repo) == before
+
+
+def test_missing_pkl_project_is_noop(repo, monkeypatch):
+    """A repo/branch with no contract/PklProject is a safe no-op: the driver
+    returns 0 without invoking `pkl project resolve` (which would be fatal) and
+    without committing."""
+    (repo / "contract" / "PklProject").unlink()
+    before = _commit_count(repo)
+
+    def fail_if_called(cmd, *, check=False):
+        if cmd[0] == "pkl":
+            pytest.fail(f"pkl must not run when PklProject is absent: {cmd}")
+        return subprocess.run(cmd, check=check, text=True, capture_output=True)
+
+    monkeypatch.setattr(mod, "run", fail_if_called)
+
+    assert mod.main(["--regenerate", "true"]) == 0
+    assert _commit_count(repo) == before
+
+
 def test_format_generated_covers_all_py_not_just_input(tmp_path, monkeypatch):
     """`_format_generated` must ruff-format every generated *.py, not only
     _input.py. The contract emits _e2e_*.py too; if those are left unformatted
@@ -311,7 +356,7 @@ def test_format_generated_covers_all_py_not_just_input(tmp_path, monkeypatch):
 
     def spy_run(cmd, *, check=False):
         if cmd[:2] == ["uvx", "ruff"] and cmd[2] == "format":
-            formatted.extend(cmd[3:])
+            formatted.extend(a for a in cmd[3:] if not a.startswith("-"))
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(mod, "run", spy_run)
@@ -380,6 +425,34 @@ def test_format_generated_lints_real_path_not_temp_dir(tmp_path, monkeypatch):
     linted_path = check_calls[0][-1]
     assert not Path(linted_path).is_absolute()
     assert linted_path == str(Path("app/generated/_input.py"))
+
+
+def test_format_generated_passes_force_exclude(tmp_path, monkeypatch):
+    """Both ruff invocations must pass `--force-exclude` so a consumer's
+    `extend-exclude = ["app/generated"]` is honored even though paths are named
+    explicitly (ruff ignores excludes for explicit paths otherwise). Without it,
+    this pass reformats an app that deliberately keeps generated output raw,
+    which the freshness gate then flags as drift (CNCT-70)."""
+    monkeypatch.chdir(tmp_path)
+    gen = tmp_path / "app" / "generated"
+    gen.mkdir(parents=True)
+    (gen / "_input.py").write_text("import os\n")
+
+    calls: list[list[str]] = []
+
+    def spy_run(cmd, *, check=False):
+        if cmd[:2] == ["uvx", "ruff"]:
+            calls.append(cmd)
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(mod, "run", spy_run)
+    mod._format_generated()
+
+    subcommands = {cmd[2] for cmd in calls}
+    assert subcommands == {"check", "format"}
+    for cmd in calls:
+        assert "--force-exclude" in cmd, cmd
+        assert cmd[-1] == str(Path("app/generated/_input.py"))
 
 
 def test_resolve_failure_is_fatal(repo, monkeypatch):

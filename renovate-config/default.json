@@ -48,7 +48,7 @@
       "enabled": false
     },
     {
-      "description": "app-contract-toolkit (Pkl): minor+patch in one PR; auto-merge on green. Matched by the regex customManager below.",
+      "description": "app-contract-toolkit (Pkl): minor+patch in one PR; auto-merge on green. Matched by the regex customManager below. postUpgradeTasks re-resolves contract/PklProject.deps.json and regenerates app/generated/** (+ atlan.yaml/app.yaml) in-branch via the shared renovate-pkl-sync driver, so the bump lands as a self-contained PR with no follow-up glue workflow. Runs ONLY under self-hosted Renovate: postUpgradeTasks commands are gated by the allowedCommands admin allowlist (set in application-sdk's central renovate workflow), so this block is an inert no-op under the Mend-hosted app. The driver is installed as a bare PATH command by that workflow (Renovate does NOT shell-expand the command, so it must not contain ${VARS}); --no-commit leaves the fileFilters commit to Renovate.",
       "matchManagers": [
         "custom.regex"
       ],
@@ -62,7 +62,19 @@
       "platformAutomerge": true,
       "addLabels": [
         "contract-toolkit-update"
-      ]
+      ],
+      "postUpgradeTasks": {
+        "commands": [
+          "renovate-pkl-sync --contract-dir contract --regenerate true --no-commit"
+        ],
+        "fileFilters": [
+          "contract/PklProject.deps.json",
+          "app/generated/**",
+          "atlan.yaml",
+          "app.yaml"
+        ],
+        "executionMode": "branch"
+      }
     },
     {
       "description": "app-contract-toolkit: disable major bumps.",

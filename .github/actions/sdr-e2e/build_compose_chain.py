@@ -5,9 +5,13 @@ Layering order (later files win on conflicting keys):
 
   1. atlan-configurator-generated base compose (``ci-deploy/docker-compose.yaml``)
   2. SDK CI overrides (``docker-compose.ci.yml``)
-  3. optional app-level overlay (explicit ``compose-overlay`` input, else the
+  3. full-DAG queue-alignment overlay (``docker-compose.full-dag.yml``), only when
+     full-DAG mode is enabled — SDK-owned, replaces the byte-identical per-app
+     ``ATLAN_DEPLOYMENT_NAME`` overlay. Below the app overlay so an app can still
+     override it.
+  4. optional app-level overlay (explicit ``compose-overlay`` input, else the
      ``<sdr-config-dir>/docker-compose.ci.yml`` convention)
-  4. two-store overlay (``docker-compose.two-store.yml``), only when two-store
+  5. two-store overlay (``docker-compose.two-store.yml``), only when two-store
      mode is enabled — applied LAST so ``ENABLE_ATLAN_UPLOAD`` /
      ``ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE`` always win over anything an app
      overlay might set.
@@ -33,6 +37,8 @@ def build_compose_files(
     *,
     two_store: bool,
     two_store_compose: Path | None = None,
+    full_dag: bool = False,
+    full_dag_compose: Path | None = None,
 ) -> list[str]:
     """Return the ordered list of docker compose file paths to layer.
 
@@ -41,10 +47,16 @@ def build_compose_files(
     not "a file named ''".
 
     Raises ``ValueError`` if *two_store* is true but *two_store_compose*
-    wasn't supplied — that overlay is SDK-owned and always expected to
-    exist, so a missing path here is a caller bug, not a per-app condition.
+    wasn't supplied, or if *full_dag* is true but *full_dag_compose* wasn't
+    supplied — both overlays are SDK-owned and always expected to exist, so a
+    missing path here is a caller bug, not a per-app condition.
     """
     files = [str(base_compose), str(sdk_compose)]
+
+    if full_dag:
+        if full_dag_compose is None:
+            raise ValueError("full_dag_compose is required when full_dag=True")
+        files.append(str(full_dag_compose))
 
     overlay = app_compose or (
         str(Path(sdr_config_dir) / "docker-compose.ci.yml") if sdr_config_dir else ""
@@ -85,12 +97,25 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=None,
         help="Path to docker-compose.two-store.yml; required when --two-store=true.",
     )
+    parser.add_argument(
+        "--full-dag",
+        choices=("true", "false"),
+        default="false",
+        help="Enable the full-DAG queue-alignment overlay (default: false).",
+    )
+    parser.add_argument(
+        "--full-dag-compose",
+        type=Path,
+        default=None,
+        help="Path to docker-compose.full-dag.yml; required when --full-dag=true.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     two_store = args.two_store == "true"
+    full_dag = args.full_dag == "true"
 
     try:
         files = build_compose_files(
@@ -100,12 +125,16 @@ def main(argv: list[str] | None = None) -> int:
             args.sdr_config_dir,
             two_store=two_store,
             two_store_compose=args.two_store_compose,
+            full_dag=full_dag,
+            full_dag_compose=args.full_dag_compose,
         )
     except ValueError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1
 
     print(f"Effective compose chain: {' '.join(files)}", file=sys.stderr)
+    if full_dag:
+        print("full-DAG mode: inserted docker-compose.full-dag.yml", file=sys.stderr)
     if two_store:
         print("two-store mode: appended docker-compose.two-store.yml", file=sys.stderr)
     print(f"files={_compose_flags(files)}")

@@ -67,7 +67,7 @@ async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
     return manifest
 ```
 
-When the app defines it, `GET /workflows/v1/manifest?entrypoint=<name>&fe_inputs=<url-encoded-json>` hands the static manifest plus the decoded `fe_inputs` to the hook and serves its return value; apps without the hook get the static manifest unchanged. The hook must be **`async def`** and return a `dict` — a sync `def` is not discovered and the route serves the static manifest unchanged. If the hook does CPU/IO-bound work (SQL generation, full DAG rewrite) it owns offloading that off the event loop (e.g. `await asyncio.to_thread(...)`). Exceptions are logged internally and surface as a generic `500` (no internals leaked). See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the module-naming convention.
+When the app defines it, `GET /workflows/v1/manifest?entrypoint=<name>&fe_inputs=<url-encoded-json>` hands the static manifest plus the decoded `fe_inputs` to the hook and serves its return value; apps without the hook get the static manifest unchanged. The hook must be **`async def`** and return a `dict` — a sync `def` is not discovered and the route serves the static manifest unchanged. If the hook does CPU/IO-bound work (SQL generation, full DAG rewrite) it owns offloading that off the event loop via the SDK's `run_in_thread()` (never the shared default executor — see conformance rule P031). Exceptions are logged internally and surface as a generic `500` (no internals leaked). See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the module-naming convention.
 
 > **`fe_inputs` size limit.** Because `fe_inputs` rides in the GET query string, it is bounded by the request-line cap of whatever proxy fronts the app (nginx defaults to 8 KB; ALB ~16 KB). The SDK rejects a decoded `fe_inputs` larger than **8 KB** with `413 Payload Too Large` so oversize surfaces as a clear error rather than an opaque upstream truncation. A fully-populated form for the largest connector we ship is ~1.6 KB (≈5 KB for a heavy multi-select), so this is comfortable headroom; forms that genuinely need more should move to a POST body rather than grow the query string.
 
@@ -278,6 +278,64 @@ from application_sdk.storage import verify_object_store_access, ObjectStorePrefl
 
 Both symbols are exported from `application_sdk.storage`. The function is normally called by
 the SDK boot path — connectors do not need to call it manually.
+
+### Preflight Gate Posture
+
+Distinct from the SDR object-store preflight above, a connector can run a `preflight_check`
+handler as the first activity of every extraction workflow. Enforcement is a **gate** property,
+not a handler property: the handler always returns the honest verdict, and the gate decides what
+to do with a `NOT_READY` verdict. The posture is set per app via the `preflight_gate_mode`
+`ClassVar`:
+
+- **soft** (default): never blocks — a `NOT_READY` verdict lets the run proceed and is emitted as
+  `outcome="would_block"` (with `gate_mode="soft"` and the per-check `check_matrix`) on the gate
+  outcome event. The verdict is always reported, so connector-pulse can rank apps by how often they
+  *would* have blocked real runs — that list is the "checks are ready to enforce" queue.
+- **hard**: blocks the run when the verdict is `NOT_READY` (raises `PreflightFailed`). This is the
+  opt-in for apps whose checks are trusted to gate real runs.
+
+```python
+class MyConnector(App):
+    preflight_gate_mode = "hard"   # checks are trusted to block runs
+```
+
+Ops can override the posture without an app release via `ATLAN_PREFLIGHT_GATE_MODE=hard` on the
+worker deployment. The env var wins over the attribute; any set value other than the literal `hard`
+resolves to soft, so malformed config never blocks a run by accident. An empty or unset value is
+not an override — resolution falls through to the declared `preflight_gate_mode` attribute. The
+worker logs an INFO line
+per hard app at boot. Start soft, then flip to `hard` once connector-pulse `would_block` rows show
+the checks track real workflow failures. See the `adopt-preflight-gate` skill for the full adoption
+flow.
+
+### Asset-Validation Outcome
+
+`App.upload()` runs a **warn-only** validation of transformed asset NDJSON against the pyatlan_v9
+`.validate()` backbone (plus a referential/orphan pass) before the SDR→Atlan handoff. It never blocks
+and never fails the upload — invalid or orphaned assets are reported, not rejected.
+
+The results are surfaced as a structured outcome event (the sibling of the preflight gate's outcome
+event above) so they are queryable in ClickHouse, not just greppable in log bodies. Because the event
+is emitted from inside the `upload` activity, the Temporal context (`workflow_run_id`, `app_name`) is
+auto-stamped and each row joins to the workflow outcome by run id:
+
+- It fires on **every validated upload** — `outcome="clean"` as well as `outcome="flagged"` — so
+  there is a denominator to rank flag-rate against (mirrors the gate's `would_block` reporting).
+- Five scalar counts land as their own `LogAttributes`: `assets_total`, `assets_passed`,
+  `assets_invalid`, `assets_orphaned`, `assets_undeserializable`.
+- Per-failure detail rides in one compact JSON attribute, `asset_validation_matrix` (bounded to a
+  fixed number of rows per axis so it can't grow unbounded); the full human-readable report is also
+  logged as a WARNING body, but only for flagged runs.
+
+Uploads with nothing to validate emit nothing at all: when `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false`
+or when the path is not a `transformed/` subtree (e.g. a raw upload), no outcome event is produced.
+See [Monitoring](monitoring.md#asset-validation-outcome-event) for the attribute list as it reaches
+OTLP.
+
+> **On by default (CNCT-85).** The scan runs in an isolated child process
+> (process-isolation fix [#2769](https://github.com/atlanhq/application-sdk/pull/2769)), so a native
+> fault in the decode path is contained and downgraded to a best-effort skip rather than killing the
+> worker. Set `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false` to disable per-deployment.
 
 ## Passthrough Modules
 

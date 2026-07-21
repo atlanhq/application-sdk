@@ -66,7 +66,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - name: Checkout repo (for local globalprotect-connect action)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Resolve PR number + requester
         id: parse
@@ -114,34 +114,57 @@ jobs:
               body,
             });
 
+      # timeout-minutes: 5 is a runner-enforced hard cap on each step. The
+      # inner nick-fields/retry timeout_minutes is best-effort — it SIGTERMs
+      # the bash subshell, but sudo/openconnect children survive parent
+      # signals, so a wedged attempt can hang indefinitely. The outer
+      # timeout-minutes is enforced by the runner itself and is the only
+      # guarantee the step terminates and the next attempt fires. Each
+      # workflow-level attempt runs the action with max-attempts: '1' so the
+      # three retries are separately-capped steps, not uncapped inner loops.
       - name: Connect to VPN (attempt 1/3)
         id: vpn1
         uses: ./.github/actions/globalprotect-connect
         continue-on-error: true
+        timeout-minutes: 5
         with:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          # Probe the actual dispatch target so the VPN step verifies the tunnel
+          # reaches mothership, not an unrelated host.
+          mothership-url: ${{ vars.MOTHERSHIP_URL }}
+          max-attempts: '1'
 
       - name: Connect to VPN (attempt 2/3)
         if: steps.vpn1.outcome == 'failure'
         id: vpn2
         uses: ./.github/actions/globalprotect-connect
         continue-on-error: true
+        timeout-minutes: 5
         with:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          # Probe the actual dispatch target so the VPN step verifies the tunnel
+          # reaches mothership, not an unrelated host.
+          mothership-url: ${{ vars.MOTHERSHIP_URL }}
+          max-attempts: '1'
 
       - name: Connect to VPN (attempt 3/3)
         id: vpn3
         if: steps.vpn2.outcome == 'failure'
         uses: ./.github/actions/globalprotect-connect
         continue-on-error: true
+        timeout-minutes: 5
         with:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          # Probe the actual dispatch target so the VPN step verifies the tunnel
+          # reaches mothership, not an unrelated host.
+          mothership-url: ${{ vars.MOTHERSHIP_URL }}
+          max-attempts: '1'
 
       # If all three VPN attempts failed, tell the PR author it died for an infra
       # reason (not a resolver failure) so they can retry — mirrors sdk-review.yml.
@@ -184,6 +207,10 @@ jobs:
         env:
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
           HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
+          # Lets the dispatch script poll the PR for the resolver's out-of-band
+          # Phase-4 hand-off comment when our SSE stream is cut before it lands
+          # (transport false-negative backstop). Read-only use of the PR comments.
+          GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
           MAX_ROUNDS: ${{ inputs.max_rounds || '8' }}
           # Human reviewers to request + tag when the PR reaches merge-ready

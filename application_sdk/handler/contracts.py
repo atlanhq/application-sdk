@@ -307,8 +307,11 @@ class AuthOutput(BaseModel):
 class PreflightStatus(SerializableEnum):
     """Overall preflight verdict — decides the gate.
 
-    ``NOT_READY`` blocks the run; ``READY`` and ``PARTIAL`` proceed. ``PARTIAL``
-    is display-only (some advisory check failed but the run may continue). Also
+    ``NOT_READY`` blocks the run only when the app has opted into hard mode
+    (``preflight_gate_mode = "hard"``); the default posture is soft, where a
+    ``NOT_READY`` verdict is reported (``outcome="would_block"``) but the run
+    proceeds. ``READY`` and ``PARTIAL`` always proceed. ``PARTIAL`` is
+    display-only (some advisory check failed but the run may continue). Also
     surfaced to the Sage UI, the connector-pulse dashboard, and the Automation
     Engine event.
     """
@@ -374,6 +377,16 @@ class PreflightInput(BaseModel):
     credentials: list[HandlerCredential] = []
     """Credentials to use during preflight."""
 
+    credentials_by_name: dict[str, list[HandlerCredential]] = Field(
+        default_factory=dict
+    )
+    """Resolved credentials grouped by ref name for multi-credential apps.
+
+    Keyed by the app's declared ``ExtractionInput.preflight_credential_refs`` name;
+    each group has the same flat ``[{key, value}]`` shape as :attr:`credentials`.
+    Populated only on the gate path for multi-credential apps; empty on the
+    single-credential and HTTP/SDR paths, which use :attr:`credentials`."""
+
     entrypoint: str = ""
     """Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
     when present. The orchestrator resolves it from the Global Marketplace app
@@ -419,15 +432,22 @@ class PreflightInput(BaseModel):
     """Specific checks to run (empty = run all)."""
 
     timeout_seconds: int = 60
-    """Maximum seconds to wait for all checks."""
+    """Maximum seconds the handler has to run all checks.
+
+    On the injected gate path this carries the *enforced* per-attempt budget
+    (the gate activity's ``start_to_close``), so a handler that sizes its checks
+    to this value stays inside the real deadline — design them to finish within
+    it, with headroom. Advisory on the HTTP ``/check`` and SDR paths, which are
+    not bounded by the gate activity timeout."""
 
 
 class PreflightOutput(BaseModel):
     """Output from the preflight_check handler operation."""
 
     status: PreflightStatus
-    """Overall verdict — decides the gate. ``NOT_READY`` blocks the run;
-    ``READY``/``PARTIAL`` proceed. The handler computes this itself."""
+    """Overall verdict — decides the gate. ``NOT_READY`` blocks the run only in
+    hard mode (per-app opt-in); the default soft posture reports it and
+    proceeds. ``READY``/``PARTIAL`` proceed. The handler computes this itself."""
 
     checks: list[PreflightCheck] = []
     """Individual check results (display + failure attribution)."""

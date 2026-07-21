@@ -67,7 +67,7 @@ mode creates a Temporal Runtime that binds `127.0.0.1:9464`:
 | Value | Effect |
 |---|---|
 | `true` (default) | Rust core binds 9464 in worker/combined mode; combined FastAPI proxy + worker `TemporalCoreCollector` can read it |
-| `false` | Rust core uses `Runtime.default()` (no Prometheus listener); FastAPI `/metrics` still serves SDK + HTTP + python defaults but lacks the `temporal_*` Rust-core families |
+| `false` | Rust core builds an explicit `Runtime` with log forwarding but no Prometheus listener; FastAPI `/metrics` still serves SDK + HTTP + python defaults but lacks the `temporal_*` Rust-core families |
 
 `run_dev_combined()` proactively sets it to `false` in local dev so a
 hot-reload-restarted process doesn't fail to bind 9464 (which the
@@ -199,6 +199,38 @@ class MyConnector(App):
 ```
 
 Use **%-style** message bodies (`"fetching page=%d", page_num`) rather than keyword arguments. See [Logging Standards](../standards/logging.md) and [ADR-0011](../adr/0011-logging-level-guidelines.md).
+
+### Structured attributes and the OTLP allowlist
+
+Structured kwargs on a log call (e.g. `logger.info("event", outcome="clean", assets_total=42)`) are
+not forwarded to OTLP wholesale. Only keys on an SDK-side **allowlist**
+(`_KNOWN_EXTRA_KEYS` in `application_sdk/observability/logger_adaptor.py`) become `LogAttributes` on
+the exported record; unlisted keys are dropped. This keeps the exported attribute set intentional —
+adding a new queryable field is a deliberate one-line change next to the emitter. Certain dotted
+prefixes (`atlan.`, `temporal.`, `failure.`, `exception.`, `otel.`, `tenant.`, `workflow_run.`) pass
+through without being individually listed.
+
+### Asset-validation outcome event
+
+`App.upload()`'s warn-only asset validation (see [Apps → Asset-Validation Outcome](apps.md#asset-validation-outcome))
+emits a structured event named `"Transformed-asset validation outcome"` on **every validated
+upload**, from inside the `upload` activity — so the Temporal context (`workflow_run_id`, `app_name`)
+is auto-stamped and each row joins to the workflow outcome by run id in ClickHouse. The following
+attributes are allowlisted and reach OTLP:
+
+| Attribute | Meaning |
+|-----------|---------|
+| `outcome` | `"clean"` or `"flagged"` |
+| `assets_total` | records seen in the batch |
+| `assets_passed` | records that passed per-asset `.validate()` |
+| `assets_invalid` | per-asset validation failures |
+| `assets_orphaned` | referential-integrity (orphan) failures |
+| `assets_undeserializable` | records that could not be decoded |
+| `asset_validation_matrix` | compact JSON array of per-failure detail (bounded rows per axis), `JSONExtract`-able |
+
+Emitting `outcome="clean"` too gives a denominator, so a dashboard can rank connectors by
+flag-rate rather than only seeing failures. Uploads with nothing to validate (validation disabled, or
+a non-`transformed/` path) emit no event.
 
 ### Replay suppression
 

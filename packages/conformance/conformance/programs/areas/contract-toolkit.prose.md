@@ -17,8 +17,8 @@ description: >
   sourced from a non-canonical base URI), K009 (unresolved scaffold placeholder
   in a generated artifact), and K010 (missing generated E2E scaffolding) are
   toolkit-hygiene findings fixed by re-pointing/bumping the PklProject dependency
-  and regenerating — all verified by the pkl-eval gate.  K009 is BLOCK-tier (fails
-  the gate in default mode); the rest of the K-series is WARN.
+  and regenerating — all verified by the pkl-eval gate.  K009, K011, and K012 are
+  BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
 
 ### Maintains
@@ -31,14 +31,15 @@ findings in the working tree, classified by disposition and remediability.
 The fingerprint-set of all unsuppressed FAILING/WARNING K-series results in the
 current working tree, as reported by `suite.runner --series K`.
 
-All K-series rules are WARN-tier **except K009 (BLOCK)**.  So in **default** mode
-this facet is empty *unless* a K009 (unresolved scaffold placeholder) finding is
-present — K009 is a FAILING result that fails the gate and must be remediated in
-default mode.  In **strict** mode the fingerprint-set also includes the
+All K-series rules are WARN-tier **except K009, K011, and K012 (BLOCK)**.  So in
+**default** mode this facet is empty *unless* a K009 (unresolved scaffold
+placeholder), K011 (missing `app_id`), or K012 (missing `generate` poe task)
+finding is present — those are FAILING results that fail the gate and must be
+remediated in default mode.  In **strict** mode the fingerprint-set also includes the
 unsuppressed WARNING results (K003/K004/K005/K007/K008/K010), which is where the
 rest of K-series remediation runs.
 
-The active scope decides which rules can appear: K001–K010 are all `scope=APP`,
+The active scope decides which rules can appear: K001–K012 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
 the SDK repo sees 0 findings.
 
@@ -80,27 +81,29 @@ call detect-fix-recheck
 
 _Read by `remediate-finding` when `finding.area == "contract-toolkit"`._
 
-All K-series rules are **WARN-tier except K009 (BLOCK)** — the WARN rules surface
-only under `--strict` mode, while K009 (unresolved scaffold placeholder) is a
-FAILING result that must be remediated even in default mode.
+All K-series rules are **WARN-tier except K009, K011, and K012 (BLOCK)** — the
+WARN rules surface only under `--strict` mode, while K009 (unresolved scaffold
+placeholder), K011 (missing `app_id`), and K012 (missing `generate` poe task) are
+FAILING results that must be remediated even in default mode.
 Before proposing any edit, read the actual lines around `finding.line` in
 `finding.file`.  **Never hand-edit `atlan.yaml`, `app/generated/`, or any other
 generated artifact directly** — those are outputs of `pkl eval`, and K004/K005
 catch the staleness that hand-editing causes.  The *only* sanctioned way to
 change a generated artifact is to regenerate it from the contract.  After every
 edit to `contract/**/*.pkl`, `contract/PklProject`, or the Pkl lock (K001–K005,
-K007–K010), the `pkl-eval` gate runs `pkl eval` to verify the contract compiled
-and regenerated cleanly.  **K006 is the one exception**: its fix is a plain
-Python edit (see below) with no `.pkl` or generated-artifact involvement, so it
-is verified by the standard test-suite gate instead of `pkl-eval`.
+K007–K011), the `pkl-eval` gate runs `pkl eval` to verify the contract compiled
+and regenerated cleanly.  **K006 and K012 are the exceptions**: K006's fix is a
+plain Python edit and K012's is a `pyproject.toml` edit (both see below), neither
+involving `.pkl` or generated artifacts, so both are verified by the standard
+test-suite gate instead of `pkl-eval`.
 
 The freshness rules (K003/K004/K005) are remediated by running a pkl command
 (`pkl project resolve` and/or `pkl eval -m . contract/app.pkl`), so they are
 **remediable only when the `pkl` toolchain is available** in the environment.
 When `pkl` is not installed, the fix cannot be applied or gate-verified — route
 the finding to **residue** with a note to regenerate locally (or let the
-`renovate-pkl-sync` / CI freshness gate handle it), rather than hand-editing the
-artifact.
+self-hosted Renovate runner's `postUpgradeTasks` / CI freshness gate handle it),
+rather than hand-editing the artifact.
 
 ---
 
@@ -194,8 +197,8 @@ deterministic re-resolve), but it **requires `pkl`**.
    just `finding.file`, if the `pkl-eval` gate rejects this fix.
 
 If `pkl` is unavailable, do not hand-edit the lock JSON — route to residue with a
-note to re-resolve locally (the `renovate-pkl-sync` workflow does this
-automatically on renovate bumps).
+note to re-resolve locally (the self-hosted Renovate runner does this
+automatically on renovate bumps, via `postUpgradeTasks`).
 
 ---
 
@@ -306,7 +309,8 @@ published one.  `classification = "mechanical"`; **requires `pkl`**.
    <reason>` on the `uri` line and route to residue.
 
 If `pkl` is unavailable, route to residue with a bump-and-resolve-locally note
-(the `renovate-pkl-sync` workflow does this automatically on renovate bumps).
+(the self-hosted Renovate runner does this automatically on renovate bumps, via
+`postUpgradeTasks`).
 
 ---
 
@@ -377,6 +381,70 @@ absent.  `classification = "mechanical"`; **requires `pkl`**.
    `amends` line of `contract/app.pkl` and route to residue.
 
 If `pkl` is unavailable, route to residue with a regenerate-locally note.
+
+---
+
+**K011 AppIdMissingFromContract** — the generated `atlan.yaml` has no top-level
+`app_id`.  **This is a BLOCK-tier finding** — it fails the gate in default mode,
+because without `app_id` the marketplace publish POSTs an empty identity and the
+Global Marketplace returns 404, so the release is cut but never appears.
+`classification = "judgment"` — the fix needs the app's correct GM UUID, which
+is not derivable from the repo alone.  **requires `pkl`** (the value belongs in
+the pkl source, and the artifact is regenerated, never hand-edited).
+
+*Procedure:*
+
+1. Recover the app's UUID.  It is stable per app: read it from the Global
+   Marketplace admin UI (the app URL is `/admin/#/apps/<app_id>/versions`), from
+   the `app_id` line of a prior successful publish log, or from git history of
+   `atlan.yaml` before it was dropped (`git log -S 'app_id' -- atlan.yaml`).
+2. Add it to the `metadata` block in `contract/app.pkl` — its entries are
+   emitted as top-level `atlan.yaml` keys, exactly as `release_model` already is:
+
+   ```
+   metadata {
+     ["release_model"] = "semver"
+     ["app_id"] = "<your-app-uuid>"
+   }
+   ```
+3. Regenerate with `pkl eval -m . contract/app.pkl` (or `uv run poe generate`)
+   and stage the result; set `touched_files` the K003-step-4 way so a gate
+   rejection reverts every regenerated artifact.  Confirm `atlan.yaml` now
+   carries `app_id:`.  **Never hand-edit `atlan.yaml`** — it is a `pkl eval`
+   output (K005 guards its provenance banner).
+4. Suppression is almost never correct — a semver app with no `app_id` cannot
+   publish.  Only for a non-published app that still ships an `atlan.yaml`:
+   `# conformance: ignore[K011] <reason>` on the first line and route to residue.
+
+If the UUID cannot be recovered or `pkl` is unavailable, route to residue with a
+note naming what to look up.
+
+---
+
+**K012 GeneratePoeTaskMissing** — `pyproject.toml` defines no
+`[tool.poe.tasks.generate]` task, so the SDK Certify step's `uv run poe generate`
+aborts the publish (`Unrecognized task 'generate'`).  **This is a BLOCK-tier
+finding**.  `classification = "mechanical"`; **does not require `pkl`** (it is a
+`pyproject.toml` edit).
+
+*Procedure:*
+
+1. Read the repo's `Makefile` `generate` target (or the `pkl eval` invocation the
+   app already uses to regenerate) and mirror it as a poe task:
+
+   ```
+   [tool.poe.tasks]
+   generate = "pkl eval --project-dir contract -m . contract/app.pkl"
+   ```
+
+   Include every `.pkl` the `Makefile` evaluates (e.g. a credential contract such
+   as `contract/csa-connectors-objectstore.pkl`) so `poe generate` and
+   `make generate` stay equivalent.
+2. Verify with `uv run poe generate`: it must succeed and leave the generated
+   tree unchanged.  Stage `pyproject.toml` (and any regenerated artifacts).
+3. Suppress only for an app never published through the marketplace pipeline:
+   `# conformance: ignore[K012] <reason>` on the `[tool.poe.tasks]` header line
+   and route to residue.
 
 ---
 

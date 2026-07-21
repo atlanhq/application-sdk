@@ -10,7 +10,7 @@ A connector test:
         BaseFullDAGE2ETest, RunMode,
     )
     from application_sdk.testing.full_dag.payload import (
-        ConnectionSpec, DatabaseSpec, AgentSpec,
+        ConnectionSpec, DatabaseSpec,
     )
 
     @pytest.mark.full_dag_e2e
@@ -31,8 +31,10 @@ A connector test:
                 password=os.environ["MYSQL_PASSWORD"],
             )
 
-        def agent_spec(self) -> AgentSpec | None:
-            return AgentSpec(agent_name=f"ci-{self.run_id}")
+    # agent_spec() is derived from ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME
+    # by default (matching the worker's atlan-{app}-{deployment} queue, including
+    # any per-leg suffix the CI action sets). Override it only to pin an explicit
+    # queue — a run_id-keyed override would silently drop per-leg isolation.
 
 The base class handles submit + native-status poll + Atlas-side
 Connection assertion + per-node duration reporting. Subclasses just
@@ -336,11 +338,36 @@ class BaseFullDAGE2ETest:
         )
 
     def agent_spec(self) -> AgentSpec | None:
-        """Agent identity (tier 4 only). Return None for direct mode."""
+        """Agent identity (tier 4 only). Return None for direct mode.
+
+        Default (AGENT mode): derive the agent identity from the worker's own
+        deployment env so the extract node lands on exactly the queue the
+        deployed worker polls (``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}``),
+        including any per-leg ``ATLAN_DEPLOYMENT_NAME`` the CI action sets to
+        isolate parallel matrix legs. Subclasses may still override.
+
+        Only the two-var shape is derivable here: a worker with
+        ATLAN_APPLICATION_NAME set but ATLAN_DEPLOYMENT_NAME absent polls the
+        bare ``{app}`` queue, which the harness can't reconstruct from env — such
+        deployments must override agent_spec() explicitly.
+
+        NOTE: keep this env-derivation in sync with
+        :meth:`application_sdk.testing.e2e.base.BaseE2ETest.agent_spec` — this
+        module is the deprecated alias (removed in v4.0) and shares no
+        inheritance with it, so the block is intentionally duplicated.
+        """
         if self.mode is RunMode.DIRECT:
             return None
+        app_name = os.environ.get("ATLAN_APPLICATION_NAME", "")
+        deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", "")
+        if app_name and deployment_name:
+            return AgentSpec(agent_name=f"{app_name}-{deployment_name}")
         raise HarnessMethodNotImplementedError(
-            message="subclass must override agent_spec() for AGENT mode",
+            message=(
+                "AGENT mode needs an agent_spec() override, or both "
+                "ATLAN_APPLICATION_NAME and ATLAN_DEPLOYMENT_NAME set in the "
+                "environment to derive the worker's task queue"
+            ),
             operation="agent_spec",
         )
 
@@ -468,6 +495,24 @@ class BaseFullDAGE2ETest:
         )
         return dag
 
+    def agent_json(self) -> dict | None:
+        """Override to supply a custom agent_json shape (keypair/token/iam).
+
+        Returns ``None`` by default → the harness builds the basic
+        username/password shape from ``agent_spec()`` + ``database_spec()``.
+        Mirrors :meth:`application_sdk.testing.e2e.base.BaseE2ETest.agent_json`
+        so a connector on this deprecated ``full_dag`` path can customize
+        agent-mode routing without overriding ``_mustache_substitutions``.
+        When set, the same override feeds *both* the ``{{agent-json}}`` seed-DAG
+        blob (via ``_mustache_substitutions``) and the AE submit's ``agent-json``
+        routing row (via ``build_ae_payload(agent_json=...)``), so the two stay
+        consistent — a keypair/token/iam override no longer leaves the submit
+        emitting the basic shape. Only consulted in AGENT mode. (``full_dag`` is
+        deprecated — prefer ``application_sdk.testing.e2e``, whose agent-json
+        routing is richer.)
+        """
+        return None
+
     def _mustache_substitutions(self) -> dict:
         """Build the ``{{...}}`` → runtime-value map for seed-DAG fills.
 
@@ -509,6 +554,14 @@ class BaseFullDAGE2ETest:
                 "basic.username": (f"SDR_{self.connector_short_name.upper()}_USERNAME"),
                 "basic.password": (f"SDR_{self.connector_short_name.upper()}_PASSWORD"),
             }
+            # Transition hook (mirrors testing.e2e.BaseE2ETest.agent_json): a
+            # connector needing a non-basic shape (keypair/token/iam) overrides
+            # agent_json() instead of this whole method. Default None keeps the
+            # inline basic shape above — so agent-mode routing on this deprecated
+            # path is no longer silently basic-only.
+            override = self.agent_json()
+            if override is not None:
+                agent_json = override
         else:
             agent_json = None
 
@@ -521,7 +574,11 @@ class BaseFullDAGE2ETest:
             "{{include-filter}}": self.include_filter,
             "{{exclude-filter}}": self.exclude_filter,
             "{{exclude-table-regex}}": "",
-            "{{preflight-check}}": True,
+            # Some generated contracts type preflight_check as `str` (not bool);
+            # submit the string form so the worker's payload-decode/validate
+            # step accepts it. A bool here trips
+            # "Failed decoding arguments" on those contracts.
+            "{{preflight-check}}": "true",
         }
 
     def _apply_mustache_subs(self, obj, subs: dict):
@@ -649,6 +706,7 @@ class BaseFullDAGE2ETest:
             include_filter=self.include_filter,
             exclude_filter=self.exclude_filter,
             agent=self.agent_spec(),
+            agent_json=self.agent_json(),
             ae_workflow_slug=slug,
         )
 

@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**31 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025) (all AST-based / cross-artifact)
+**36 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -54,6 +54,11 @@ reassigned.
 | [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
 | [P030](#p030) | `SdrUploadNotCalled` | `warn` | `app` | `sdr-readiness` | — | 0.9.0 |
 | [P031](#p031) | `SharedDefaultExecutorOffload` | `warn` | `both` | `async-correctness` | — | 0.13.0 |
+| [P032](#p032) | `ReservedPreflightActivityName` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
+| [P033](#p033) | `DuplicateInWorkflowPreflight` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
+| [P034](#p034) | `UntypedPreflightCheckFailure` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
+| [P035](#p035) | `PreflightMetadataContractParity` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
+| [P036](#p036) | `HandRolledProcessIsolation` | `warn` | `both` | `async-correctness` | — | 0.15.0 |
 
 ---
 
@@ -930,6 +935,11 @@ hand-building it duplicates the grammar across the fleet, and a grammar change (
 scoping, escaping) then breaks every connector independently with no single source of
 truth.
 
+Not flagged — object-store keys: a qn reference preceded by a `/`-bearing literal
+segment (e.g. `f"persistent-artifacts/.../{connection_qualified_name}/publish-state"`)
+is a storage path that embeds a qn, not an asset qualifiedName rooted at its parent qn,
+so it is not flagged.
+
 Fix: construct assets through the pyatlan asset `.creator()` factories, which compute
 qualifiedName from typed parent references.  WARN tier — suppress with `# conformance:
 ignore[P028] <reason>` where a raw qualifiedName string is genuinely required.
@@ -1050,5 +1060,140 @@ rule targets. `application_sdk/execution/heartbeat.py` is exempt: that is where
 Remediation is a restructure (swap in `run_in_thread()`), so findings route to residue.
 Land as `WARN`; suppress a reviewed exception with `# conformance: ignore[P031]
 <reason>`.
+
+---
+
+## P032 — `ReservedPreflightActivityName` {#p032}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+
+> An app @task registers the 'preflight' activity name reserved by the SDK gate
+
+**Rationale:** The SDK injects a mandatory pre-extraction gate as the activity '{app_name}:preflight'.
+An app @task that also registers the 'preflight' activity name collides with it: the
+worker raises WorkerActivityNameCollisionError at boot and never starts. Catching the
+collision statically surfaces it in the PR instead of on the first deploy.
+
+The SDK reserves the activity name `{app_name}:preflight` for the injected preflight
+gate and registers it unconditionally on the worker. An app `@task` whose effective
+activity name is `preflight` (an explicit `@task(name="preflight")` or a bare `@task` on
+a method named `preflight`) collides with the reserved name; worker boot fails with
+`WorkerActivityNameCollisionError`.
+
+Remediation: rename the task, or fold its logic into the app's `Handler.preflight_check`
+(which the gate already calls). A non-literal `@task(name=<expr>)` is not statically
+resolvable and is not flagged.
+
+---
+
+## P033 — `DuplicateInWorkflowPreflight` {#p033}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+
+> App defines Handler.preflight_check and a separate preflight-named @task that will drift
+
+**Rationale:** An app that defines Handler.preflight_check AND its own preflight-named @task has two
+preflight implementations that inevitably drift. The gate runs preflight_check, so the
+app-owned activity is redundant — the exact anti-pattern the SDK-native gate eliminates.
+
+When an app declares a `Handler.preflight_check` and also registers its own
+preflight-named `@task` (any `@task` whose effective name contains `preflight` as a
+token but is not the reserved gate name — that exact case is P032), the two preflight
+paths diverge over time. The SDK gate invokes `Handler.preflight_check`; the app-owned
+activity is dead weight that silently rots.
+
+Remediation: delete the app-owned preflight activity and keep the single
+`Handler.preflight_check` implementation the gate calls.
+
+---
+
+## P034 — `UntypedPreflightCheckFailure` {#p034}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+
+> PreflightCheck(passed=False) constructed without a typed error= — untyped failure
+
+**Rationale:** A failed PreflightCheck constructed without a typed error= falls back to the generic
+PREFLIGHT_CHECK_FAILED code, so the Automation Engine and the UI lose the
+category/code/audience/suggested_action the typed form carries on the wire. This points
+at the exact lines to migrate to typed failures.
+
+A `PreflightCheck` with an explicit `passed=False` and no typed `error=` (absent, or the
+literal `None`) is an untyped failure: the gate falls back to the generic
+`PREFLIGHT_CHECK_FAILED` code and only the deprecated free-text `message` reaches the
+caller. The typed form `error=AuthError(message=..., suggested_action=...,
+cause=exc).to_failure_details()` carries category / code / audience / retryable /
+suggested_action to the Automation Engine and the UI.
+
+Only an explicit `passed=False` literal is flagged; a failure expressed purely by the
+default `passed` and a non-literal `passed` are left alone to keep false positives near
+zero. A locally-defined, non-SDK class named `PreflightCheck` is not flagged.
+
+---
+
+## P035 — `PreflightMetadataContractParity` {#p035}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+
+> A preflight_check metadata key is not declared on any entrypoint Input contract
+
+**Rationale:** On the gate path metadata is rebuilt from the extraction input's model_dump, so a
+metadata key that is not a field on any entrypoint Input contract is silently absent — a
+defensive input.metadata.get(key, default) read then passes vacuously with the wrong
+config. No runtime signal can catch this class of silent drift; the static check is the
+only guard.
+
+The preflight gate does not forward the live UI form: it rebuilds
+`PreflightInput.metadata` from the extraction input's `model_dump()`
+(`_config_from_snapshot`), so only fields declared on an entrypoint `Input` contract
+survive. A key read inside `preflight_check` via `input.metadata.get("key", ...)` or
+`input.metadata["key"]` that is absent from the union of every entrypoint Input
+contract's fields is silently missing on the gate path, so a defensive `.get(key,
+default)` read passes vacuously with the wrong configuration (e.g. database scoping
+silently dropped).
+
+Remediation: declare the key as a field on the extraction input contract (matching the
+UI form), or stop reading it in `preflight_check`. Keys are compared to contract field
+names with underscore/hyphen normalization; field aliases are not treated as allowed
+because `model_dump` emits field names, not aliases. The rule does not fire when no
+entrypoint Input contract is resolvable or when a contract (or an in-repo ancestor) opts
+into extra keys via either `model_config` form: `ConfigDict(extra="allow")` or
+`{"extra": "allow"}`.
+
+---
+
+## P036 — `HandRolledProcessIsolation` {#p036}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.15.0
+
+> Bare ProcessPoolExecutor / multiprocessing child instead of the run_fault_isolated() / run_best_effort() seam
+
+**Rationale:** A native fault — a SIGSEGV in a C extension — is not a Python exception: it bypasses
+every try/except and, in a worker thread, kills the whole Temporal worker mid-poll. The
+SDK exposes a sanctioned child-process seam for this: run_fault_isolated() runs the work
+in an isolated process so the fault is contained as a catchable BrokenProcessPool, and
+run_best_effort() layers warn-and-continue on top for non-essential work. Hand-rolling a
+ProcessPoolExecutor or multiprocessing child re-implements that seam without its crash
+containment, timeout, spawn-not-fork safety, and width management, and fragments the
+worker's process model — the class of bug behind the CNCT-85 worker crash.
+
+Code constructs a process-based execution primitive directly —
+`ProcessPoolExecutor(...)` or `multiprocessing.Process(...)` / `Pool(...)` — instead of
+routing crash-prone or best-effort native work through the SDK's sanctioned
+child-process seam. Use `run_fault_isolated()` (raises a catchable `BrokenProcessPool`
+on a native crash) or `run_best_effort()` (logs and continues) from
+`application_sdk.execution.heartbeat`.
+
+Matching is construction-anchored and import-resolved (so an aliased `from
+concurrent.futures import ProcessPoolExecutor as PPE; PPE(...)` is caught).
+`multiprocessing.get_context(...).Process()` on a runtime receiver is not statically
+resolvable and is not flagged; `ThreadPoolExecutor` is a thread pool, out of scope here
+(thread offload onto the shared default executor is governed by P031).
+`application_sdk/execution/heartbeat.py` is exempt — that is where the seam's own pool
+lives.
+
+Remediation is a restructure (route through the seam), so findings route to residue.
+Land as `WARN`; suppress a reviewed exception (e.g. a deliberate CPU-bound pool that
+never touches the worker) with `# conformance: ignore[P036] <reason>`.
 
 ---

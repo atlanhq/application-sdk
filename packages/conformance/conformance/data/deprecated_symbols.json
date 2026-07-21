@@ -210,6 +210,15 @@
     {
       "kind": "class",
       "marker_via": "warn",
+      "message": "application_sdk.testing.sdr.BaseSDRIntegrationTest is deprecated; use application_sdk.testing.e2e.BaseE2ETest with RunMode.AGENT \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.testing.sdr.base",
+      "removal_version": "4.0",
+      "symbol": "BaseSDRIntegrationTest"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
       "message": "TransformerInterface is deprecated; use the connector-side asset-mapper pattern (typed records \u2192 map_<entity>() \u2192 pyatlan_v9 Asset) instead \u2014 will be removed in v4.0. See docs/upgrade-guide-v3.md.",
       "migration_target": true,
       "module": "application_sdk.transformers",

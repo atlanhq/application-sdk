@@ -18,6 +18,7 @@ import ast
 import importlib
 import inspect
 import json
+import linecache
 import re
 import subprocess
 import sys
@@ -162,6 +163,22 @@ def _render_annotation(ann: Any) -> str:
     if ann is None:
         return ""
     return str(ann)
+
+
+def _is_classvar_attribute(obj: Any) -> bool:
+    """True if a griffe attribute is annotated ``ClassVar[...]`` in source.
+
+    griffe strips the ``ClassVar`` wrapper from ``.annotation``, so a config-only
+    ClassVar reads like a settable field. Recover the marker from the declaration
+    line — checking the source (not a griffe label, which also matches properties
+    and plain class constants) keeps this precise to genuine ClassVars.
+    """
+    filepath = getattr(obj, "filepath", None)
+    lineno = getattr(obj, "lineno", None)
+    if not filepath or not lineno:
+        return False
+    source_line = linecache.getline(str(filepath), lineno)
+    return bool(re.search(r":\s*ClassVar\b", source_line))
 
 
 def _render_signature(obj: Any) -> str:
@@ -622,6 +639,13 @@ def cmd_dump() -> None:
                     # Skip attributes with no annotation (class-level assignments without type hints)
                     if not ann:
                         continue
+                    # griffe strips ``ClassVar[...]`` from the rendered annotation, so
+                    # a config-only ClassVar (e.g. ``preflight_credential_refs``) would
+                    # otherwise read as a settable payload field an author could wrongly
+                    # declare as a pydantic field. Re-wrap it — confirmed from the source
+                    # declaration so properties and plain constants are not mislabeled.
+                    if _is_classvar_attribute(f_obj):
+                        ann = f"ClassVar[{ann}]"
                     default = (
                         str(f_obj.value)
                         if hasattr(f_obj, "value") and f_obj.value is not None

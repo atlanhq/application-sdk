@@ -21,6 +21,16 @@ permissions:
   contents: write
   pull-requests: write
 
+# Serialize release runs. When two conformance PRs merge close together, each
+# merge fires this workflow; without serialization they race to force-push the
+# shared bump branch and the run with the *older* main snapshot can win, dropping
+# the other PR's changelog entry (see PR #2596). cancel-in-progress: false lets
+# the in-flight run finish, then the newest queued run regenerates against a main
+# that includes every merged PR.
+concurrency:
+  group: conformance-release
+  cancel-in-progress: false
+
 env:
   RELEASE_LABEL: "release:conformance"
   BUMP_BRANCH: "bump-version-conformance"
@@ -36,24 +46,37 @@ jobs:
         !startsWith(github.event.pull_request.head.ref, 'bump-version-conformance')
       )
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Mint fleet App token
+        # A real (non-github-actions[bot]) identity is required so the push
+        # below re-fires the bump PR's required checks. No workflow auto-merges
+        # this PR (GitHub blocks self-approval regardless of author identity),
+        # so there's no bypass-actor dependency to preserve here.
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.28"
+          version: "0.11.30"
 
       - name: Compute version, bump pyproject + __init__, update CHANGELOG
         id: versions
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: python .github/scripts/conformance_release.py
 
@@ -64,7 +87,7 @@ jobs:
       - name: Push bump branch and open or update PR
         if: steps.versions.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           new_version="${{ steps.versions.outputs.new }}"

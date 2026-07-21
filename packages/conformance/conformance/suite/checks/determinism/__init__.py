@@ -19,6 +19,9 @@ bugs are caught at CI time rather than under production orchestration.
 * ``P031`` SharedDefaultExecutorOffload — ``asyncio.to_thread(...)`` or
   ``run_in_executor(None, ...)``, which land on asyncio's shared default executor
   instead of the SDK's dedicated ``run_in_thread()`` pool.
+* ``P036`` HandRolledProcessIsolation — a bare ``ProcessPoolExecutor`` /
+  ``multiprocessing.Process`` / ``Pool`` construction instead of the SDK's
+  sanctioned ``run_fault_isolated()`` / ``run_best_effort()`` child-process seam.
 
 Discovery
 ---------
@@ -29,7 +32,7 @@ mistakes in throwaway test fixtures are not production replay risks, and toy
 
 Scope
 -----
-All five rules are ``both``-scoped: workflow-context code and async SDK usage exist
+All six rules are ``both``-scoped: workflow-context code and async SDK usage exist
 in the SDK itself and in every consumer app, so the contract applies to any repo.
 
 Inline suppression
@@ -57,6 +60,7 @@ from ._p022_unawaited import check_p022
 from ._p023_blocking_async import check_p023
 from ._p024_sync_atlan_client import check_p024
 from ._p031_executor_offload import check_p031
+from ._p036_process_isolation import check_p036
 
 SERIES = "P"
 
@@ -64,7 +68,7 @@ __all__ = ["SERIES", "discover", "main", "scan_path", "scan_text"]
 
 
 def scan_text(text: str, file: str) -> list[Finding]:
-    """Scan a single Python source *text* for all determinism findings (P020–P024, P031)."""
+    """Scan a single Python source *text* for all determinism findings (P020–P024, P031, P036)."""
     try:
         tree = ast.parse(text, filename=file)
     except SyntaxError:
@@ -77,11 +81,12 @@ def scan_text(text: str, file: str) -> list[Finding]:
         *check_p023(tree, file, directives),
         *check_p024(tree, file, directives),
         *check_p031(tree, file, directives),
+        *check_p036(tree, file, directives),
     ]
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file for P020–P024, P031 findings."""
+    """Scan a single Python file for P020–P024, P031, P036 findings."""
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -95,7 +100,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
 
 main = make_cli_main(
     scan_all=lambda paths, root: [f for p in paths for f in scan_path(p, root)],
-    description="Determinism / async-correctness P-series checks (P020-P024, P031).",
+    description="Determinism / async-correctness P-series checks (P020-P024, P031, P036).",
 )
 
 

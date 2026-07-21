@@ -28,8 +28,11 @@ import argparse
 import asyncio
 import faulthandler
 import os
+import random
 import signal
 import sys
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -847,6 +850,128 @@ def _install_graceful_signal_handlers(
             )
 
 
+# --- Worker restart supervisor ----------------------------------------------
+# A transient poll auth failure — e.g. a JWKS signing-key cache skew on the
+# Temporal frontend that rejects an otherwise-valid token for a few seconds —
+# makes temporalio treat the poll as fatal and the worker process exits. Without
+# a supervisor the whole runtime goes inactive until a manual restart. These
+# bounds drive an automatic rebuild-and-restart of the worker, while still
+# failing loud when the failure is persistent (e.g. genuinely bad credentials).
+_WORKER_MAX_CONSECUTIVE_RESTARTS = _env_int("ATLAN_WORKER_MAX_CONSECUTIVE_RESTARTS", 10)
+_WORKER_RESTART_BACKOFF_CAP_SECONDS = _env_int(
+    "ATLAN_WORKER_RESTART_BACKOFF_CAP_SECONDS", 30
+)
+_WORKER_HEALTHY_RUN_SECONDS = _env_int("ATLAN_WORKER_HEALTHY_RUN_SECONDS", 300)
+
+
+async def _run_worker_with_restart(
+    *,
+    build_worker: Callable[[], Any],
+    shutdown_event: asyncio.Event,
+    auth_manager: Any = None,
+    client: Any = None,
+) -> None:
+    """Run a Temporal worker under a bounded restart supervisor.
+
+    temporalio treats a poll ``PermissionDenied`` (and other non-retryable gRPC
+    errors) as fatal: the worker shuts down and re-raises out of the
+    ``async with worker`` block. A ``Worker`` is single-use, so each restart
+    rebuilds one via ``build_worker``.
+
+    Restart-on-fatal with a cap: any worker-fatal error triggers a rebuild after
+    a full-jitter backoff, unless a shutdown was requested. The consecutive
+    counter resets once a worker runs healthily for ``_WORKER_HEALTHY_RUN_SECONDS``;
+    if the worker keeps failing without ever staying up, the supervisor gives up
+    after ``_WORKER_MAX_CONSECUTIVE_RESTARTS`` and re-raises so a persistent
+    misconfiguration still fails loud rather than hot-looping forever.
+
+    Args:
+        build_worker: Builds a fresh worker (an ``AppWorker``) to run.
+        shutdown_event: Set on SIGINT/SIGTERM; a clean shutdown stops the loop.
+        auth_manager: Optional; when present its token is force-refreshed before
+            each restart to recover from stale/expired tokens.
+        client: The Temporal client passed to ``auth_manager.force_refresh``.
+    """
+    consecutive_failures = 0
+
+    while not shutdown_event.is_set():
+        worker = build_worker()
+        started_at = time.monotonic()
+        try:
+            async with worker:
+                await shutdown_event.wait()
+            # Body returned normally — a shutdown signal, not a failure. Stop.
+            return
+        except Exception:
+            # temporalio surfaces a worker-fatal error by cancelling this task
+            # and re-raising the error from Worker.__aexit__. Clear the residual
+            # cancellation so the backoff below (asyncio.wait_for) isn't torn
+            # down by the leftover cancel count on Python 3.11+.
+            current = asyncio.current_task()
+            if current is not None and hasattr(current, "uncancel"):
+                current.uncancel()
+
+            if shutdown_event.is_set():
+                # Failure raced with an in-flight shutdown — treat as clean.
+                logger.info("Worker exited during shutdown; not restarting")
+                return
+
+            ran_seconds = time.monotonic() - started_at
+            if ran_seconds >= _WORKER_HEALTHY_RUN_SECONDS:
+                # Ran healthily for a while before failing — a fresh incident,
+                # not a restart storm, so reset the streak.
+                consecutive_failures = 0
+            consecutive_failures += 1
+
+            if consecutive_failures > _WORKER_MAX_CONSECUTIVE_RESTARTS:
+                logger.error(
+                    "Worker failed %d times without staying healthy for %ds; "
+                    "giving up and exiting",
+                    consecutive_failures,
+                    _WORKER_HEALTHY_RUN_SECONDS,
+                    exc_info=True,
+                )
+                raise
+
+            # Force a fresh token before restarting — recovers stale/expired
+            # token cases; harmless for a transient frontend key-cache skew
+            # (the backoff itself gives the frontend time to refresh its JWKS).
+            if auth_manager is not None:
+                try:
+                    await auth_manager.force_refresh(client)
+                except Exception:
+                    logger.warning(
+                        "Token refresh before worker restart failed; "
+                        "restarting anyway",
+                        exc_info=True,
+                    )
+
+            # Full-jitter exponential backoff (matches create_temporal_client),
+            # raced against shutdown so SIGTERM stays responsive during backoff.
+            cap_at_attempt = min(
+                2 ** (consecutive_failures - 1),
+                _WORKER_RESTART_BACKOFF_CAP_SECONDS,
+            )
+            delay = random.uniform(0, cap_at_attempt)
+            logger.warning(
+                "Worker exited with a fatal error (attempt %d/%d, ran %.0fs); "
+                "restarting in %.1fs",
+                consecutive_failures,
+                _WORKER_MAX_CONSECUTIVE_RESTARTS,
+                ran_seconds,
+                delay,
+                exc_info=True,
+            )
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
+                # Shutdown requested during backoff — stop.
+                return
+            except TimeoutError:
+                # Backoff elapsed without a shutdown request — the expected
+                # path; fall through to rebuild and restart the worker.
+                logger.debug("Restart backoff elapsed; rebuilding worker")
+
+
 async def run_worker_mode(config: AppConfig) -> None:
     """Run in worker mode (Temporal workflow execution).
 
@@ -956,16 +1081,28 @@ async def run_worker_mode(config: AppConfig) -> None:
             type(handler_for_sdr).__name__,
         )
 
+    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health server only in worker mode
+        build_worker_health_server,
+    )
+
+    health_server = build_worker_health_server(port=config.health_port, client=client)
+
     # Worker-only mode pushes metrics to a Pushgateway since the process has
     # no /metrics endpoint to scrape. Combined mode (run_combined_mode below)
     # leaves enable_pushgateway=False so the FastAPI /metrics endpoint
     # exposes everything via in-process proxy.
-    worker = create_worker(
-        client,
-        task_queue=config.task_queue,
-        handler=handler_for_sdr,
-        enable_pushgateway=True,
-    )
+    def _build_worker() -> Any:
+        # Rebuilt on each supervisor restart — Worker instances are single-use.
+        # on_activity feeds the health server's liveness window (BLDX-1552): the
+        # /live probe can then observe a silently stalled poll loop that the
+        # restart supervisor cannot (it only fires when run() returns/raises).
+        return create_worker(
+            client,
+            task_queue=config.task_queue,
+            handler=handler_for_sdr,
+            enable_pushgateway=True,
+            on_activity=health_server.record_activity,
+        )
 
     # Log registrations
     for registered_app in AppRegistry.get_instance().list_apps():
@@ -990,17 +1127,17 @@ async def run_worker_mode(config: AppConfig) -> None:
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
 
-    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
-        WorkerHealthServer,
-    )
-
-    health_server = WorkerHealthServer(port=config.health_port)
-    health_server.set_temporal_client(client)
-
     logger.info("Worker started: app=%s queue=%s", app_name, config.task_queue)
     _log_process_memory_baseline()
-    async with health_server, worker:
-        await shutdown_event.wait()
+    # health_server stays up across worker restarts so the runtime keeps
+    # answering health checks while the supervisor rebuilds a crashed worker.
+    async with health_server:
+        await _run_worker_with_restart(
+            build_worker=_build_worker,
+            shutdown_event=shutdown_event,
+            auth_manager=auth_manager,
+            client=client,
+        )
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
@@ -1230,7 +1367,21 @@ async def run_combined_mode(config: AppConfig) -> None:
 
     handler = handler_class()
 
-    worker = create_worker(client, task_queue=config.task_queue, handler=handler)
+    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health server only in combined mode
+        build_worker_health_server,
+    )
+
+    health_server = build_worker_health_server(port=config.health_port, client=client)
+
+    def _build_worker() -> Any:
+        # Rebuilt on each supervisor restart — Worker instances are single-use.
+        # on_activity feeds the /live liveness window (BLDX-1552).
+        return create_worker(
+            client,
+            task_queue=config.task_queue,
+            handler=handler,
+            on_activity=health_server.record_activity,
+        )
 
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
@@ -1295,13 +1446,6 @@ async def run_combined_mode(config: AppConfig) -> None:
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
 
-    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
-        WorkerHealthServer,
-    )
-
-    health_server = WorkerHealthServer(port=config.health_port)
-    health_server.set_temporal_client(client)
-
     logger.info(
         "Combined mode started: app=%s queue=%s port=%d",
         app_name,
@@ -1309,10 +1453,17 @@ async def run_combined_mode(config: AppConfig) -> None:
         config.handler_port,
     )
     _log_process_memory_baseline()
-    async with health_server, worker:
+    # uvicorn keeps serving while the worker is supervised and restarted
+    # independently; a shutdown signal (which also sets should_exit) stops both.
+    async with health_server:
         await asyncio.gather(
             uvicorn_server.serve(),
-            shutdown_event.wait(),
+            _run_worker_with_restart(
+                build_worker=_build_worker,
+                shutdown_event=shutdown_event,
+                auth_manager=auth_manager,
+                client=client,
+            ),
         )
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
@@ -1655,6 +1806,11 @@ Environment Variables:
   ATLAN_HANDLER_PORT       Handler bind port (default: 8000)
                            Falls back to ATLAN_APP_HTTP_PORT (v2)
   ATLAN_HEALTH_PORT        Worker health check port (default: 8081)
+  ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS
+                           Optional /live idle window in seconds (default: 0 = disabled).
+                           When >0, /live fails if no worker activity within the window.
+                           Enable only for continuously-busy queues; a positive value
+                           false-positives on legitimately idle queues.
   ATLAN_LOG_LEVEL          Log level (default: INFO)
                            Falls back to LOG_LEVEL (v2)
 

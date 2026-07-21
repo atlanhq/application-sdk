@@ -16,15 +16,28 @@ jobs:
     name: Sync requirements.txt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Mint fleet App token
+        # A real (non-github-actions[bot]) identity is required here: the
+        # push below must re-trigger the PR's required checks, which a push
+        # made with the default GITHUB_TOKEN would not. Confirmed empirically
+        # that App-token pushes do re-trigger (see the PR that added this).
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
           ref: ${{ github.ref }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.28"
+          version: "0.11.30"
 
       - name: Regenerate requirements.txt
         run: uv export --no-hashes --frozen > requirements.txt

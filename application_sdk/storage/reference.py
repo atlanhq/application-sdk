@@ -113,10 +113,10 @@ async def _sha256_hex_file_async(path: Path) -> str:
     calling it directly on the event loop blocks the loop for the full
     read+hash. A blocked loop cannot run the SDK's auto-heartbeat coroutine, so
     activities that verify many/large files heartbeat-time-out even while making
-    progress. Uses ``run_in_thread`` (dedicated pool) rather than
-    ``asyncio.to_thread`` (asyncio's default executor) so this doesn't
-    contend with Temporal's own use of the default executor — same reason
-    directory listing is offloaded this way in ``persist``.
+    progress. Uses ``run_in_thread`` (the SDK's dedicated blocking pool) rather
+    than the shared default executor, so this doesn't contend with Temporal's own
+    use of that executor — same reason directory listing is offloaded this way in
+    ``persist``. See conformance rule P031.
     """
     return await run_in_thread(_sha256_hex_file, path)
 
@@ -397,7 +397,7 @@ async def materialize_file_reference(
         FILE_REF_CHUNKED_THRESHOLD_BYTES,
     )
     from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        list_keys_with_meta,
+        list_data_keys_with_meta,
     )
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         StorageError,
@@ -416,8 +416,7 @@ async def materialize_file_reference(
     # Determine single-file vs directory by listing sub-keys under the path.
     # Sizes come back with the listing so the directory branch can chunk large
     # files without a per-file HEAD (BLDX-1513).
-    all_items = await list_keys_with_meta(ref.storage_path, store)
-    data_items = [(k, s, e) for k, s, e in all_items if not k.endswith(".sha256")]
+    data_items = await list_data_keys_with_meta(ref.storage_path, store)
     data_keys = [k for k, _, _ in data_items]
 
     # Structured kwargs in the logger calls below are intentional: every key used

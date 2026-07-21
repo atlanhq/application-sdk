@@ -5,7 +5,7 @@
 
 # Test-Quality Rules (T-series)
 
-**15 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), and `suite.checks.coverage_config` (T014-T015) (AST/TOML-based)
+**17 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), `suite.checks.coverage_config` (T014-T015), `suite.checks.e2e_deployment_name` (T016), and `suite.checks.e2e_agent_spec` (T017) (AST/TOML/YAML-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -17,7 +17,7 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [T001](#t001) | `UnmarkedIntegrationTest` | `warn` | `both` | `test-marking` | — | 0.4.0 |
 | [T002](#t002) | `MissingSdrTestClass` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
-| [T003](#t003) | `SdrTestLegacyAgentSpec` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
+| [T003](#t003) | `DeprecatedSdrHarness` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
 | [T004](#t004) | `DevEntrypointRequiresAppModule` | `warn` | `app` | `dev-entrypoint` | — | 0.10.0 |
 | [T005](#t005) | `AssertionFreeTest` | `warn` | `both` | `test-assertion-quality` | — | 0.12.0 |
 | [T006](#t006) | `EmptyTestBody` | `warn` | `both` | `test-assertion-quality` | — | 0.12.0 |
@@ -30,6 +30,8 @@ Suppress a finding on the violating line or the line directly above it:
 | [T013](#t013) | `TestFileOutsideTierDir` | `warn` | `both` | `test-tier-coverage` | — | 0.12.0 |
 | [T014](#t014) | `CoverageGateDisabled` | `warn` | `app` | `coverage-config` | — | 0.12.0 |
 | [T015](#t015) | `CoverageOmitsProductCode` | `warn` | `app` | `coverage-config` | — | 0.12.0 |
+| [T016](#t016) | `E2EDeploymentNameNotInherited` | `warn` | `app` | `e2e-ci` | — | 0.13.0 |
+| [T017](#t017) | `E2EAgentSpecPinsQueue` | `warn` | `app` | `e2e-ci` | — | 0.13.0 |
 
 ---
 
@@ -67,88 +69,91 @@ hidden behaviour.
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-test-coverage` · **Autofixable:** — · **Since:** 0.9.0
 
-> SDR app declares self_deployed_runtime but has no BaseSDRIntegrationTest subclass
+> SDR app declares self_deployed_runtime but no test drives the SDR (agent-mode) path
 
-**Rationale:** An SDR app that declares self_deployed_runtime: true in atlan.yaml but has no
-BaseSDRIntegrationTest subclass has no automated test that validates SDR-specific
-behaviour: manifest inputs (agent_json, etc.), credential routing via the agent-mode
-dispatch path, and the ENABLE_ATLAN_UPLOAD upload gate. The MSSQL regression (DISTR-752)
-slipped through status-only CI exactly because no SDR test class validated
-manifest-derived inputs — the manifest was broken but all status checks passed.
+**Rationale:** An SDR app that declares self_deployed_runtime: true in atlan.yaml but has no test
+exercising the SDR (agent-mode) path has no automated coverage of the code paths that
+differ between standard and SDR deployments: agent-mode credential routing and upload
+behaviour. The MSSQL regression (DISTR-752) slipped through status-only CI exactly
+because no test drove the SDR path. Either harness satisfies this: an agent-mode e2e
+test (BaseE2ETest subclass with mode = RunMode.AGENT) or a legacy BaseSDRIntegrationTest
+subclass.
 
-For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one
-`BaseSDRIntegrationTest` subclass must be present somewhere under `tests/`.
+For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one test must
+drive the SDR (agent-mode) execution path. Two harnesses satisfy this rule:
 
-`BaseSDRIntegrationTest` (from `application_sdk.testing.sdr.base`) is the SDK's
-integration test harness for SDR apps.  It boots a Temporal dev server, injects
-credentials from the test environment, and validates that the end-to-end SDR workflow
-completes correctly — including manifest-derived inputs, credential routing, and the
-`ENABLE_ATLAN_UPLOAD` gate.  An SDR app without this harness has no automated coverage
-of the code paths that differ between standard and SDR deployments.
+**1. Agent-mode e2e test (recommended).**  A `BaseE2ETest` subclass (from
+`application_sdk.testing.e2e`, usually via a generated `*GeneratedE2EBase`) with a
+class-level `mode = RunMode.AGENT`. It submits a real workflow that runs through the
+agent-mode dispatch path end to end.  Note this test is environment- and label-gated, so
+it validates the live SDR path rather than running on every PR.
 
-**Remediation:** create a test class that:
+**2. Legacy `BaseSDRIntegrationTest` subclass.**  From
+`application_sdk.testing.sdr.base` — boots a local Temporal dev server and validates
+manifest-derived inputs in CI.  If you use this harness, set `manifest_path` (not the
+legacy `agent_spec_template`) so the test reads inputs from the committed manifest — see
+T003.
+
+An SDR app with neither has no automated coverage of the SDR-specific code paths.
+
+**Remediation** — either of:
 
 ```python
+# Preferred: agent-mode e2e
+@pytest.mark.e2e
+class TestMyAppE2E(MyAppGeneratedE2EBase):
+    mode = RunMode.AGENT
+
+# Or: legacy SDR integration harness
 class TestMyAppSDR(BaseSDRIntegrationTest):
     manifest_path = 'app/generated/manifest.json'
     workflow_type = 'extraction'
 ```
 
-Set `manifest_path` (not the legacy `agent_spec_template`) so the test reads inputs from
-the committed manifest and validates the `agent_json` slot — see T003 for the
-complementary rule.
-
 ---
 
-## T003 — `SdrTestLegacyAgentSpec` {#t003}
+## T003 — `DeprecatedSdrHarness` {#t003}
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-test-coverage` · **Autofixable:** — · **Since:** 0.9.0
 
-> BaseSDRIntegrationTest subclass uses legacy agent_spec_template instead of manifest_path
+> Subclasses the deprecated BaseSDRIntegrationTest harness instead of agent-mode BaseE2ETest
 
-**Rationale:** A BaseSDRIntegrationTest subclass that sets agent_spec_template (and not manifest_path)
-supplies credentials to the test workflow via a hand-crafted JSON blob rather than
-reading inputs from the committed manifest.json. This means the test can pass even when
-the manifest is missing the agent_json slot — the hand-crafted spec fills the gap the
-manifest was supposed to fill. This is the exact mechanism that allowed the MSSQL
-regression (atlan-mssql-app#177, DISTR-752) to slip through: the test passed because
-agent_spec_template bypassed the broken manifest, but production runs failed because the
-manifest had no agent_json slot. Switching to manifest_path forces the test to read
-inputs from the committed manifest, catching missing-agent_json and other manifest
-defects at CI time.
+**Rationale:** BaseSDRIntegrationTest is deprecated. The self-deployed-runtime path is now validated by
+the agnostic e2e harness — a BaseE2ETest subclass (from application_sdk.testing.e2e,
+usually via a generated *GeneratedE2EBase) run in agent mode (mode = RunMode.AGENT),
+which drives the real agent-mode DAG end to end. The legacy BaseSDRIntegrationTest
+harness will be removed in v4.0; a subclass will break at that bump. Surfacing usage now
+— while the deprecation notice still carries the migration target — nudges the fleet off
+it before removal. WARN because the migration restructures the test (base class, run
+mode, credential wiring) and needs human judgement.
 
-A `BaseSDRIntegrationTest` subclass must use `manifest_path` (not `agent_spec_template`)
-so the test reads workflow inputs from the committed `manifest.json` file.
+`BaseSDRIntegrationTest` (`application_sdk.testing.sdr.base`) is **deprecated** and will
+be removed in v4.0. Any subclass under `tests/` is flagged.
 
-`agent_spec_template` is the legacy class var: it supplies a hand-crafted JSON blob
-directly to the test workflow, bypassing the manifest entirely.  This means the test can
-pass even when `manifest.json` is missing the `agent_json` slot or has other defects —
-the template fills in what the manifest was supposed to provide.  P029 closes the static
-manifest gap; T003 closes the test gap: a subclass using `manifest_path` will fail at
-test time whenever `manifest.json` is broken, not silently pass.
+The self-deployed-runtime (agent-mode) path is now validated by the agnostic e2e
+harness: a `BaseE2ETest` subclass (from `application_sdk.testing.e2e`, normally via the
+generated `*GeneratedE2EBase`) with a class-level `mode = RunMode.AGENT`. It submits a
+real workflow that runs through the agent-mode dispatch path end to end, superseding the
+local-container SDR harness.
 
-**Remediation:** in the subclass body, replace:
+**Remediation** — migrate the SDR test to the agent-mode e2e harness:
 
 ```python
-agent_spec_template = '{...}'    # legacy
+from application_sdk.testing.e2e import RunMode
+from app.generated._e2e_base import MyAppGeneratedE2EBase
+
+@pytest.mark.e2e
+class TestMyAppE2E(MyAppGeneratedE2EBase):
+    mode = RunMode.AGENT
 ```
 
-with:
+Add the agent-mode e2e test **first** and confirm T002 is satisfied, then delete the
+`BaseSDRIntegrationTest` subclass — an app that removes the SDR test before adding the
+e2e replacement would fail T002.
 
-```python
-manifest_path = 'app/generated/manifest.json'
-```
-
-The `manifest_path` class var tells `BaseSDRIntegrationTest` to call
-`_manifest_extract_inputs()` which reads `dag.extract.inputs` from the manifest —
-including the `agent_json` slot — and passes them as the workflow start parameters.  If
-`agent_json` is missing from the manifest the test will raise a `KeyError` at startup,
-surface the defect, and fail the CI run rather than letting the broken manifest reach
-production.
-
-Suppress with `# conformance: ignore[T003] <reason>` on the class definition line when
-`agent_spec_template` is intentionally used for a non-manifest test scenario (e.g. a
-negative-path test that supplies deliberately invalid credentials).
+Suppress with `# conformance: ignore[T003] <reason>` on the class definition line for a
+legitimate exception (e.g. a shim that intentionally keeps the legacy harness during
+migration).
 
 ---
 
@@ -630,5 +635,116 @@ omit = ["app/generated/*"]
 Suppress with `# conformance: ignore[T015] <reason>` on the `omit`/ `source` line naming
 the specific module and why it's legitimately excluded (e.g. a vendored third-party shim
 with no branch logic worth covering).
+
+---
+
+## T016 — `E2EDeploymentNameNotInherited` {#t016}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.13.0
+
+> e2e CI compose overlay hard-codes ATLAN_DEPLOYMENT_NAME instead of inheriting the sdr-e2e per-leg value
+
+**Rationale:** The full-DAG e2e worker derives its Temporal task queue as
+atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}, and the harness
+(BaseE2ETest.agent_spec) derives the extract-node queue it dispatches to from the same
+two env vars. To keep worker and harness on one queue when the e2e suite fans out across
+parallel matrix legs, the SDK's sdr-e2e composite action derives a per-leg
+ATLAN_DEPLOYMENT_NAME (base + sanitised matrix-leg suffix) and exports it to
+$GITHUB_ENV; both sides then read that one value. A connector's e2e compose overlay that
+hard-codes ATLAN_DEPLOYMENT_NAME in a service's environment overrides that inherited
+value: the worker container drops the leg suffix and polls
+atlan-<app>-e2e-full-ci-<run_id> while the harness still dispatches to
+atlan-<app>-e2e-full-ci-<run_id>-<leg>. Two different queues means no worker polls the
+harness's queue, so the top-level AE run flips to Running (its parent lives on the
+always-on automation-engine queue) and then hangs until timeout — observed on
+atlan-mysql-app, ~20 min of dead CI per run, before this rule existed.
+
+An e2e CI docker-compose overlay under `.github/` (discovered as a `*.yml`/`*.yaml` with
+a top-level `services:` key that mentions `ATLAN_DEPLOYMENT_NAME`) assigns
+`ATLAN_DEPLOYMENT_NAME` in a service's `environment` to a literal that does not
+reference the inherited `${ATLAN_DEPLOYMENT_NAME...}` env var.
+
+The SDK's `sdr-e2e` composite action derives a per-leg `ATLAN_DEPLOYMENT_NAME`
+(`e2e-full-ci-<run_id>[-<leg>]`, see `derive_deployment_name.py`) and exports it to
+`$GITHUB_ENV` so the worker container and the pytest harness land on the same Temporal
+queue. A hard-coded overlay value overrides that inherited env, desynchronising the two
+— the worker polls one queue, the harness dispatches to another, and the run hangs with
+`No Workers Running`.
+
+**Remediation:** inherit the derived value, with a bare-shape fallback for local `docker
+compose` runs where the CI action hasn't exported it:
+
+```python
+services:
+  atlan-app:
+    environment:
+      - ATLAN_DEPLOYMENT_NAME=${ATLAN_DEPLOYMENT_NAME:-e2e-full-ci-${GITHUB_RUN_ID}}
+```
+
+A bare pass-through list entry (`- ATLAN_DEPLOYMENT_NAME` with no `=`) is also accepted
+— it inherits the runner env directly.
+
+Suppress with `# conformance: ignore[T016] <reason>` on the assignment line only when
+the overlay is intentionally single-queue (never fans out across matrix legs) and the
+hard-coded name is deliberate.
+
+---
+
+## T017 — `E2EAgentSpecPinsQueue` {#t017}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.13.0
+
+> e2e agent_spec() override hard-codes the queue instead of inheriting the per-leg ATLAN_DEPLOYMENT_NAME
+
+**Rationale:** The companion to T016. T016 polices the worker side (the compose overlay must inherit
+the sdr-e2e per-leg ATLAN_DEPLOYMENT_NAME); T017 polices the harness side. The worker
+derives its Temporal queue as atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME},
+and the harness derives the extract-node queue it dispatches to from the same two env
+vars via BaseE2ETest.agent_spec. An e2e test that overrides agent_spec with a hard-coded
+agent_name (e.g. AgentSpec(agent_name=f'metabase-e2e-full-ci-{self.run_id}')) that
+neither reads ATLAN_DEPLOYMENT_NAME nor calls super().agent_spec() pins the harness to
+the un-suffixed queue. Once the worker inherits the leg-suffixed value (T016), the two
+queues diverge, no worker polls the harness's queue, the extract node stays Running, and
+the run hangs — the exact atlan-metabase-app regression where the overlay was fixed but
+agent_spec was left hard-coded. Fixing the overlay (T016) and the agent_spec (T017) is a
+matched pair: applying one without the other breaks a previously-passing e2e.
+
+An `agent_spec` override under `tests/` returns a hard-coded `AgentSpec(agent_name=...)`
+(a plain string or an f-string such as `f"myconn-e2e-full-ci-{self.run_id}"`) without
+referencing `ATLAN_DEPLOYMENT_NAME` or calling `super().agent_spec()`.
+
+The harness builds its extract-node Temporal queue as `atlan-{agent_spec().agent_name}`.
+When the worker inherits the sdr-e2e per-leg `ATLAN_DEPLOYMENT_NAME`
+(`e2e-full-ci-<run_id>[-<leg>]`) but the harness pins a hard-coded
+`...-e2e-full-ci-<run_id>` name, the two land on different queues — no worker polls the
+harness's queue and the run hangs with `No Workers Running`.
+
+**Remediation (preferred): delete the override.** `BaseE2ETest.agent_spec` derives
+`atlan-{app}-{deployment}` from the worker's own env in CI and falls back to
+`{connector_short_name}-{connection_name_prefix}-{run_id}` locally, so no override is
+needed on either path — the harness picks up the per-leg suffix automatically and always
+matches the worker queue.
+
+If the override must stay (e.g. to pin a genuinely different agent identity), make it
+read the deployment env — defer to `super().agent_spec()` when `ATLAN_APPLICATION_NAME`
++ `ATLAN_DEPLOYMENT_NAME` are set, keeping the run-id name only as a local fallback
+(mirroring `SQLAppE2ETest.agent_spec`):
+
+```python
+def agent_spec(self) -> AgentSpec:
+    if os.environ.get('ATLAN_APPLICATION_NAME') and os.environ.get(
+        'ATLAN_DEPLOYMENT_NAME'
+    ):
+        return super().agent_spec()
+    return AgentSpec(agent_name=f'myconn-e2e-full-ci-{self.run_id}')
+```
+
+A connector that does not override `agent_spec` at all (inheriting the SDK's env-derived
+default) is never flagged. This rule and T016 are a matched pair — remediate both the
+overlay and the agent_spec together, never one alone.
+
+Suppress with `# conformance: ignore[T017] <reason>` on the `def agent_spec` line only
+when the hard-coded queue is deliberate (e.g. a single-leg suite that never fans out and
+whose overlay also hard-codes the same un-suffixed value).
 
 ---

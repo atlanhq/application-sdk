@@ -45,6 +45,12 @@ on:
       ORG_PAT_GITHUB:
         required: true
         description: "Org PAT for git push and gh pr create"
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
 
 permissions:
   contents: write
@@ -56,14 +62,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Mint fleet App token
+        # No workflow auto-merges the bump PR this opens (GitHub blocks
+        # self-approval regardless of author identity), so only the re-fire
+        # property matters here, not a specific bypass-actor identity.
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
+
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Checkout SDK helper scripts
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: ${{ inputs.sdk_scripts_ref }}
@@ -72,9 +91,9 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.28"
+          version: "0.11.30"
 
       - name: Get current version
         id: versions
@@ -94,13 +113,13 @@ jobs:
 
       - name: Generate changelog
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: python3 .sdk-scripts/.github/scripts/update_changelog.py "${{ steps.versions.outputs.current }}" "${{ steps.bump.outputs.new }}"
 
       - name: Commit and open PR
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         run: |
           set -euo pipefail
           git config --global user.name 'atlan-ci'
@@ -124,6 +143,9 @@ jobs:
           if [ -n "$EXISTING" ]; then
             echo "PR #${EXISTING} already exists for ${BRANCH}, skipping creation."
           else
+            gh label create "${{ inputs.release_label }}" \
+              --color 0e8a16 \
+              --description "Release version-bump PR" 2>/dev/null || true
             gh pr create \
               --base "${{ inputs.target_branch }}" \
               --title "Bump version to ${{ steps.bump.outputs.new }}" \

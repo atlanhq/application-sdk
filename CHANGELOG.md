@@ -1,5 +1,73 @@
 # Changelog
 
+## v3.23.1 (July 20, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.23.0...v3.23.1
+
+### Bug Fixes
+
+- serve flat single-entrypoint manifest for ?entrypoint= requests (#2764) (by @cmgrote in [ec4955b](https://github.com/atlanhq/application-sdk/commit/ec4955b))
+- per-app gate enforcement (soft default, hard opt-in) + check-matrix emission (#2751) (by @fyzanshaik-atlan in [d3b75af](https://github.com/atlanhq/application-sdk/commit/d3b75af))
+- reconcile partial local dirs against source store in App.upload (#2762) (by @vaibhavatlan in [3998948](https://github.com/atlanhq/application-sdk/commit/3998948))
+- encode credentials with quote() so passwords with spaces authenticate (#2778) (by @vaibhavatlan in [0310c42](https://github.com/atlanhq/application-sdk/commit/0310c42))
+- emit structured asset-validation outcome to OTLP/ClickHouse (#2766) (by @cmgrote in [92e8aa0](https://github.com/atlanhq/application-sdk/commit/92e8aa0))
+- default asset-validation-on-upload off pending isolation fix (CNCT-85) (#2783) (by @cmgrote in [84769c1](https://github.com/atlanhq/application-sdk/commit/84769c1))
+- default-entrypoint /manifest fallback for multi-entrypoint apps (#2776) (by @adityachoudhury-cloud in [e27319e](https://github.com/atlanhq/application-sdk/commit/e27319e))
+
+
+## v3.23.0 (July 17, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.22.1...v3.23.0
+
+### Features
+
+- pyatlan_v9-backed asset-write validation scaffold (BLDX-1555) (#2753) (by @cmgrote in [4d45073](https://github.com/atlanhq/application-sdk/commit/4d45073))
+
+### Bug Fixes
+
+- restart on fatal poll error instead of exiting (#2712) (by @mothership-ai[bot] in [df19f35](https://github.com/atlanhq/application-sdk/commit/df19f35))
+- detect and recover from zombie worker (dead poll loop) (#2746) (by @cmgrote in [5c49815](https://github.com/atlanhq/application-sdk/commit/5c49815))
+- resolve flat single-entrypoint configmap for app-id requests (fleet-wide blank setup wizard) (#2759) (by @cmgrote in [06a1e02](https://github.com/atlanhq/application-sdk/commit/06a1e02))
+
+
+## v3.22.1 (July 15, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.22.0...v3.22.1
+
+### Bug Fixes
+
+- fail fast when no worker polls the extract task queue (#2660) (by @cmgrote in [798f9a6](https://github.com/atlanhq/application-sdk/commit/798f9a6))
+- fail fast on invalid workflow input instead of retrying forever (#2690) (by @cmgrote in [aba1bd4](https://github.com/atlanhq/application-sdk/commit/aba1bd4))
+- per-leg task-queue isolation for the matrix e2e suites (#2691) (by @cmgrote in [4c55e40](https://github.com/atlanhq/application-sdk/commit/4c55e40))
+- embedded_dapr accepts a caller-supplied components_dir (#2689) (by @vaibhavatlan in [f6b3cb7](https://github.com/atlanhq/application-sdk/commit/f6b3cb7))
+- BaseE2ETest.agent_spec falls back to run-id name instead of raising (#2700) (by @cmgrote in [a501e09](https://github.com/atlanhq/application-sdk/commit/a501e09))
+- recognize AE 'Skipped' as a terminal DAG status (#2707) (by @cmgrote in [0bc35d5](https://github.com/atlanhq/application-sdk/commit/0bc35d5))
+- make AE submit idempotent — never re-POST or track a skipped duplicate (#2708) (by @cmgrote in [322e316](https://github.com/atlanhq/application-sdk/commit/322e316))
+- named credential refs for multi-credential apps + honest gate timeout (#2699) (by @fyzanshaik-atlan in [5601c68](https://github.com/atlanhq/application-sdk/commit/5601c68))
+- execute pre-rendered queries without SQLAlchemy bind-param parsing (colon-safe) (#2722) (by @omkargade04 in [f8ce303](https://github.com/atlanhq/application-sdk/commit/f8ce303))
+- forward Rust-core logs so Cloudflare 504 filter actually fires (BLDX-1277) (#2715) (by @praveenkmr in [6f947d3](https://github.com/atlanhq/application-sdk/commit/6f947d3))
+
+
+## v3.22.0 (July 13, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.21.2...v3.22.0
+
+### Features
+
+- SDK-native pre-extraction gate (HYP-1883) (#2361) (by @fyzanshaik-atlan in [a6335e6](https://github.com/atlanhq/application-sdk/commit/a6335e6))
+- SDR-QA gap coverage — obs upload + per-type asset counts (#2609) (by @adityachoudhury-cloud in [929cf18](https://github.com/atlanhq/application-sdk/commit/929cf18))
+- enrich gate outcome event for connector-pulse dashboard (#2626) (by @fyzanshaik-atlan in [15acae0](https://github.com/atlanhq/application-sdk/commit/15acae0))
+- app-agnostic filter matching (regex vs exact) (DISTR-855) (#2608) (by @adityachoudhury-cloud in [326b889](https://github.com/atlanhq/application-sdk/commit/326b889))
+
+### Bug Fixes
+
+- plumb custom CA and NO_PROXY into obstore (#2627) (by @louisnow in [7fa79cf](https://github.com/atlanhq/application-sdk/commit/7fa79cf))
+- preserve full key path for empty-prefix CloudStore downloads (#2637) (by @chaitanyaatlan in [1c8db3f](https://github.com/atlanhq/application-sdk/commit/1c8db3f))
+- don't scope the S3 cross-account STS session to the bucket region (#2636) (by @chaitanyaatlan in [6c9db25](https://github.com/atlanhq/application-sdk/commit/6c9db25))
+- return from startup sidecar wait once daprd HTTP API is reachable (#2641) (by @fyzanshaik-atlan in [ede5f24](https://github.com/atlanhq/application-sdk/commit/ede5f24))
+- SqlApp docstring teaches pyatlan_v9 .creator(), not a hand-built qualifiedName (#2651) (by @vaibhavatlan in [24a9735](https://github.com/atlanhq/application-sdk/commit/24a9735))
+
+
 ## v3.21.2 (July 09, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.21.1...v3.21.2

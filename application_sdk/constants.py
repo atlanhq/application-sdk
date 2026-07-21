@@ -51,6 +51,7 @@ Example:
     >>> print(f"Running application {APPLICATION_NAME}")
 """
 
+import math
 import os
 import warnings
 from enum import Enum
@@ -102,6 +103,13 @@ WORKFLOW_OUTPUT_PATH_TEMPLATE = (
 
 # Temporary Path (used to store intermediate files)
 TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
+
+# Preflight gate posture override (deploy-time ops lever). Read at worker build;
+# only the literal "hard" enforces, any other set value falls back to soft. An
+# empty or unset value is not an override — resolution falls through to the
+# declared App.preflight_gate_mode attribute. See
+# application_sdk.execution._temporal.worker._resolve_gate_enforcement.
+PREFLIGHT_GATE_MODE_ENV = "ATLAN_PREFLIGHT_GATE_MODE"
 
 # Directory where contract-toolkit generated files (configmaps, manifest, Python types) live.
 # Convention: app/generated/ inside the repo (importable as app.generated).
@@ -328,6 +336,44 @@ def _load_worker_eviction_max_retries() -> int:
 
 WORKER_EVICTION_MAX_RETRIES = _load_worker_eviction_max_retries()
 
+
+#: Optional liveness window (seconds) for the worker ``/live`` probe. When set
+#: to a positive value, ``check_live()`` reports unhealthy if no worker activity
+#: (activity execution or heartbeat) has been recorded within this window, so a
+#: k8s livenessProbe recycles a pod whose poll loop has silently stalled.
+#:
+#: Default ``0`` (disabled): the probe then fails only when the worker run loop
+#: has terminated unexpectedly — a signal that never false-positives. Enable the
+#: window ONLY for continuously-busy queues: on a legitimately idle queue no
+#: activity is recorded and a positive window would kill a healthy worker.
+#: Malformed or non-finite values (e.g. ``"abc"``, ``"inf"``, ``"nan"``) fall
+#: back to 0.
+def _load_worker_liveness_max_idle_seconds() -> float:
+    raw = os.getenv("ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS", "0")
+    try:
+        value = float(raw)
+    except ValueError:
+        warnings.warn(
+            f"ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS={raw!r} is not a valid number; "
+            "falling back to 0 (disabled)",
+            stacklevel=2,
+        )
+        return 0.0
+    # Reject inf/nan: an ``inf`` window is set but can never trip (``idle > inf``
+    # is always False), and ``nan`` comparisons are always False too — both are
+    # silently useless. Fall back to 0 (disabled) with a warning instead.
+    if not math.isfinite(value):
+        warnings.warn(
+            f"ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS={raw!r} is not finite; "
+            "falling back to 0 (disabled)",
+            stacklevel=2,
+        )
+        return 0.0
+    return max(0.0, value)
+
+
+WORKER_LIVENESS_MAX_IDLE_SECONDS = _load_worker_liveness_max_idle_seconds()
+
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations
 USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
@@ -397,6 +443,38 @@ if DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED:
         "App.upload writes to both deployment and upstream stores per run.",
         _DEPLOYMENT_ARTIFACT_DUAL_WRITE,
     )
+#: BLDX-1555 defense-in-depth: when True, ``App.upload()`` validates transformed
+#: asset NDJSON against the pyatlan_v9 ``.validate()`` backbone before handing it
+#: across the SDR→Atlan boundary. Warn-only — invalid/orphaned assets are logged,
+#: never block the upload.
+#:
+#: Defaulted ON (CNCT-85). The scan runs the pyatlan/msgspec decode in an isolated
+#: child process (``run_best_effort`` over ``run_fault_isolated``), so a native
+#: fault — e.g. the msgspec 0.20.0 concurrent-decode segfault on py3.13 — is
+#: contained to the child and surfaces as a swallowed best-effort skip, never
+#: killing the worker. This branch (PR #2769) is intended to merge only once the
+#: msgspec 0.21.1 bump is in place, at which point concurrent decode is itself
+#: safe and on-by-default validation is the right posture. Set to "false" to
+#: disable per-deployment.
+VALIDATE_ASSETS_ON_UPLOAD: bool = (
+    os.getenv("ATLAN_VALIDATE_ASSETS_ON_UPLOAD", "true").lower() == "true"
+)
+#: Upper bound in seconds for one upload's asset-validation scan. The scan runs
+#: in an isolated child process; past this bound the child is killed and the
+#: upload proceeds with a warning — warn-only validation must not be able to
+#: stall a handoff any more than it may crash one.
+VALIDATE_ASSETS_TIMEOUT_SECONDS: float = float(
+    os.getenv("ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS", "600")
+)
+#: The single "rows per axis" cap for transformed-asset validation output —
+#: shared by both surfaces so they can never drift: the human-readable
+#: ``AssetValidationReport.format_report(max_items=...)`` listing and the
+#: structured ``asset_validation_matrix`` telemetry the upload activity emits.
+#: The event's scalar counts always reflect the full batch; only these
+#: drill-down samples are bounded (so a pathological batch cannot produce an
+#: unbounded WARNING body or ``LogAttributes`` value).
+ASSET_VALIDATION_MAX_ITEMS_PER_AXIS: int = 25
+
 # Dapr Client Configuration
 #: Maximum gRPC message length in bytes for Dapr client.
 #:

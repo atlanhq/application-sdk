@@ -1,0 +1,154 @@
+name: Renovate (self-hosted fleet runner)
+
+# Central OSS Renovate runner for the atlan-*-app fleet — the replacement for
+# the free Mend-hosted app. Discovers consumers, then runs the OSS Renovate CLI
+# once per repo (matrix) authenticated as the atlan-app-fleet App.
+#
+# Why runner-native (npm i -g renovate) rather than the containerised
+# renovatebot/github-action: postUpgradeTasks and Renovate's NATIVE uv.lock
+# updates both execute in Renovate's own environment. Running on the runner lets
+# us provide the toolchain (uv, pkl, python, ruff) with the same steps the old
+# renovate-pkl-sync.yaml glue used, instead of baking a custom Renovate image.
+#
+# LIVE: dry_run defaults to 'null', so scheduled runs and the release fan-out
+# open/update real PRs across the discovered fleet. Mend has been uninstalled
+# fleet-wide, so there is no second engine to collide with. For a manual dry
+# run, dispatch with dry_run='full' (and optionally scope with the repos input).
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Renovate dry-run mode. 'null' = live (default, open/update PRs); 'full' = no changes (manual dry run)."
+        type: choice
+        options: ["full", "lookup", "null"]
+        default: "null"
+      repos:
+        description: 'Optional JSON array of "owner/repo" to scope the run (pilot). Empty = full discovered fleet.'
+        type: string
+        default: ""
+  schedule:
+    # Baseline cadence. Best-effort (GitHub may delay scheduled runs under load);
+    # on-demand immediacy comes from the release fan-out that dispatches this
+    # workflow from tag-and-publish.yaml / contract-toolkit-publish.yml.
+    - cron: "0 */4 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renovate-fleet
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    name: Discover consumer repos
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      repos: ${{ steps.discover.outputs.repos }}
+    steps:
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Discover atlan-application-sdk consumers
+        id: discover
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          python3 .github/scripts/discover_org_consumers.py \
+            --owner atlanhq \
+            --exclude atlanhq/application-sdk
+
+  renovate:
+    name: Renovate ${{ matrix.repo }}
+    needs: [discover]
+    # Run when there is at least one repo — either the pilot `repos` input or the
+    # discovered fleet. Ternary lives in a GitHub expression; no shell branching.
+    if: ${{ (inputs.repos != '' && inputs.repos != '[]') || needs.discover.outputs.repos != '[]' }}
+    runs-on: ubuntu-latest
+    # Cap a hung renovate/gh call so a stuck matrix job frees the runner well
+    # before GitHub's 6h default rather than occupying it for hours.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      # Cap concurrency to keep the shared fleet-App GitHub API budget under the
+      # 15k/hr ceiling during a full-fleet sweep (see Model A scaling notes).
+      max-parallel: 10
+      matrix:
+        # Pilot scope (`repos` input) when provided, else the discovered fleet.
+        # `&&`/`||` short-circuit, so fromJson is never called on an empty string.
+        repo: ${{ (inputs.repos != '' && fromJson(inputs.repos)) || fromJson(needs.discover.outputs.repos) }}
+    env:
+      # Live by default. workflow_dispatch supplies the input ('null' default);
+      # scheduled runs have no inputs context, so the `|| 'null'` fallback applies.
+      # A manual dry run = dispatch with dry_run='full'.
+      RENOVATE_DRY_RUN: ${{ inputs.dry_run || 'null' }}
+    steps:
+      - name: Mint fleet App token
+        id: app-token
+        # Owner-scoped (not per-repo): each matrix job mints its own token, so
+        # API budgets stay isolated.
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
+      # application-sdk itself — provides the pkl-sync driver and the self-hosted
+      # admin config. Renovate clones each target repo into its own base dir (a
+      # temp dir), so this checkout is never disturbed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Install the pkl-sync driver as a bare PATH command. postUpgradeTasks
+      # commands are NOT shell-expanded by Renovate, so the preset invokes
+      # `renovate-pkl-sync` directly (no ${VAR} path to expand). The script's
+      # `#!/usr/bin/env python3` shebang makes it directly executable.
+      - name: Install pkl-sync driver on PATH
+        run: sudo install -m 0755 .github/scripts/renovate_pkl_sync.py /usr/local/bin/renovate-pkl-sync
+
+      # Provides `uv`/`uvx` — used by Renovate's native uv manager to refresh
+      # uv.lock AND by the driver's `uvx ruff` formatting of generated Python.
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.30"
+
+      - name: Install pkl
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/pkl \
+            "https://github.com/apple/pkl/releases/download/0.27.2/pkl-linux-amd64"
+          chmod +x /tmp/pkl
+          sudo mv /tmp/pkl /usr/local/bin/pkl
+
+      # Renovate 43 requires Node >=24.11 — newer than the ubuntu-latest default,
+      # so pin the runtime explicitly rather than relying on the preinstalled one.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Install Renovate CLI
+        # Exact pin for reproducibility; bump deliberately (Renovate releases
+        # multiple times a week). Keep in step with the setup-node version above.
+        run: npm install -g renovate@43.265.3
+
+      - name: Run Renovate
+        env:
+          RENOVATE_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Admin config: platform, autodiscover=false, allowedCommands allowlist,
+          # and the github-actions manager disable.
+          RENOVATE_CONFIG_FILE: ${{ github.workspace }}/renovate-config/self-hosted.js
+          LOG_LEVEL: debug
+          # Pass the matrix repo through the environment rather than interpolating
+          # it into the shell string, so the value can never be parsed as shell.
+          TARGET_REPO: ${{ matrix.repo }}
+        # Positional arg = the single repository this job handles. The consumer's
+        # own renovate.json (extending renovate-config/default.json) is read as usual.
+        run: renovate "$TARGET_REPO"

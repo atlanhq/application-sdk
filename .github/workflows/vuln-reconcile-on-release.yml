@@ -30,6 +30,24 @@
 # and auto-merges via vuln-auto-merge.yml. workflow_dispatch is provided for
 # manual backfill / re-runs.
 #
+# Two passes per release (matrix `delay-minutes: [0, 60]`): the base-image
+# rebuild that clears a Case-4 CVE is a HUMAN step (platform republishes
+# app-runtime-base) and often lands SHORTLY AFTER the SDK release, not before
+# it. A release-time reconcile that only ran at t+0 would scan the still-old
+# base image, see the CVE, and conservatively leave the ticket + allowlist entry
+# in place — then nothing would retire them until the *next* release happened to
+# coincide with an already-rebuilt base (observed: a HIGH sat open for a full
+# release cycle this way). The t+60m pass re-scans an hour later and retires
+# anything the rebuild cleared in the interim.
+#
+# Why a delayed pass and not a plain cron: reconciliation must stay gated behind
+# a release event (see the allowlist-removal rationale above — connectors read
+# the allowlist from `main` while running the last *released* SDK). Both passes
+# fire only off a release, so removal stays release-gated; the delay just widens
+# the window to absorb an out-of-band base rebuild. The pass runs are
+# independent (`fail-fast: false`) and the reconcile script is idempotent — the
+# t+0 pass closing a ticket makes the t+60m pass a no-op for it, and vice versa.
+#
 # Trigger dependency (load-bearing): this fires only because tag-and-publish.yaml
 # creates the GitHub Release with a PAT (secrets.ORG_PAT_GITHUB). A release
 # created with the default GITHUB_TOKEN would NOT trigger this workflow (GitHub's
@@ -54,16 +72,41 @@ permissions:
 
 jobs:
   reconcile:
-    name: Reconcile allowlist + tickets
+    name: Reconcile allowlist + tickets (t+${{ matrix.delay-minutes }}m)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # t+60m pass idles for an hour before scanning, so the timeout must clear
+    # 60m delay + a full fresh scan (~a few min). Keep headroom above 60.
+    timeout-minutes: 90
+    strategy:
+      # t+0: retire CVEs already fixed in this release. t+60m: catch a base-image
+      # rebuild that lands just after the release (see header). Independent so a
+      # failure in one pass never cancels the other.
+      fail-fast: false
+      matrix:
+        delay-minutes: [0, 60]
     steps:
+      # Straight-line delay before checkout (per docs/standards/ci.md — no
+      # branching shell). Done before checkout so the delayed pass checks out
+      # main AS OF t+60m and scans the current base image. Best-effort, it also
+      # picks up the t+0 pass's removal PR *if that PR has merged by then*; if
+      # auto-merge is still pending (slow required checks / merge queue), the
+      # delayed pass opens a second removal PR on its own RECONCILE_PASS branch.
+      # Harmless: both passes are idempotent on the merged allowlist — whichever
+      # removal PR merges first wins, and a human closes the stale one.
+      - name: Wait ${{ matrix.delay-minutes }}m (widen the out-of-band rebuild window)
+        shell: bash
+        env:
+          # Via env (not inlined in run:) so the expression can't be treated as
+          # a shell-injection surface. matrix values are trusted, but this is the
+          # idiom actionlint/CI standards expect.
+          DELAY_MINUTES: ${{ matrix.delay-minutes }}
+        run: sleep $(( DELAY_MINUTES * 60 ))
       # ref: main (not the release tag) so the fresh scan reflects main and the
       # allowlist-removal PR bases cleanly on main. Releases are cut from main,
       # so main HEAD ≈ the released state. Checked out as atlan-ci so the removal
       # PR auto-merges.
       - name: Checkout main (as atlan-ci so the removal PR auto-merges)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           token: ${{ secrets.ORG_PAT_GITHUB }}
@@ -83,6 +126,9 @@ jobs:
           SCAN_WORKFLOW: daily-security-scan.yml
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           LINEAR_TEAM_ID: ${{ vars.LINEAR_SECURITY_SCAN_TEAM_ID }}
+          # Both matrix passes share one GITHUB_RUN_ID; this keeps their
+          # allowlist-removal branches distinct (see removal_branch()).
+          RECONCILE_PASS: ${{ matrix.delay-minutes }}
         run: |
           export RUN_DATE=$(date -u +%Y-%m-%d)
           git config user.name "atlan-ci"

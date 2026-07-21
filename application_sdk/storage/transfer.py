@@ -46,6 +46,20 @@ from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
+# Sidecar suffix / predicate and the batch key listers are owned by
+# ``storage.batch`` — the single source of truth for what counts as a sidecar
+# vs. a data key (see ``batch.SIDECAR_SUFFIX`` / ``list_data_keys``). Imported at
+# top level, unlike the other storage-sibling imports in this module which are
+# lazy: ``batch`` depends only on ``storage.ops`` (``batch → ops``) and never on
+# ``transfer``, so ``transfer → batch`` is unconditionally acyclic — the import
+# is safe regardless of module load order.
+from application_sdk.storage.batch import SIDECAR_SUFFIX as _SHA256_SUFFIX
+from application_sdk.storage.batch import (
+    list_data_keys,
+    list_data_keys_with_meta,
+    list_keys,
+)
+
 _logger = get_logger(__name__)
 
 if TYPE_CHECKING:
@@ -56,14 +70,8 @@ if TYPE_CHECKING:
     from application_sdk.contracts.storage import DownloadOutput, UploadOutput
 
 
-_SHA256_SUFFIX = ".sha256"
-
-
-def _is_sidecar(key: str) -> bool:
-    return key.endswith(_SHA256_SUFFIX)
-
-
 def _sidecar_key(key: str) -> str:
+    """Object-store key of the SHA-256 sidecar written alongside *key*."""
     return key + _SHA256_SUFFIX
 
 
@@ -391,6 +399,40 @@ _FALLBACK_PREFIX_REQUIRED = (
 )
 
 
+async def _list_source_data_keys(
+    source_storage_path: str, source_store: ObjectStore
+) -> tuple[str, list[str]]:
+    """List non-sidecar data keys under an SDR source-store directory.
+
+    Shared by the partial-local reconcile branch and the local-absent
+    deployment-store fallback in :func:`upload`, so the ``..`` path-traversal
+    guard and the source-listing sequence stay identical between them (a future
+    change to path validation can't drift between the two).
+
+    Returns the normalised ``source_dir_prefix`` (trailing slash) and the data
+    keys beneath it, sidecar (``.sha256``) keys excluded.
+
+    Raises:
+        UnsafeUploadPathError: If the normalised source path contains ``..``.
+    """
+    from pathlib import PurePosixPath  # noqa: PLC0415 — stdlib; lazy use only
+
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        normalize_key,
+    )
+
+    source_norm = normalize_key(source_storage_path)
+    if source_norm and ".." in PurePosixPath(source_norm).parts:
+        from application_sdk.storage.errors import (  # noqa: PLC0415
+            UnsafeUploadPathError,
+        )
+
+        raise UnsafeUploadPathError(unsafe_path=source_storage_path)
+    source_dir_prefix = source_norm.rstrip("/") + "/"
+    keys = await list_data_keys(source_dir_prefix, source_store, normalize=False)
+    return source_dir_prefix, keys
+
+
 async def upload(
     local_path: str,
     storage_path: str | None = None,
@@ -424,6 +466,14 @@ async def upload(
        stream from *_source_store* to the target.  ``_upload_from_store`` performs
        a cross-store SHA-256 sidecar check before transferring bytes so a second
        call for the same file short-circuits (idempotent replay support).
+    3. **Partial-local reconcile** — if *local_path* is a directory that exists
+       but holds only a subset of the tree (e.g. transform activities scheduled
+       across pods), upload the local files AND stream any file present in
+       *_source_store* but missing locally, so the target copy is complete
+       regardless of pod placement.  This fires one ``list_keys`` LIST against
+       the source store per SDR directory upload — including when the local
+       copy is already complete — since partial-ness cannot be detected without
+       listing.  The LIST is bounded and off the per-file transfer path.
 
     ``App.upload()`` automatically derives *_source_ref* from *local_path* and
     always passes ``_source_store=self.context.storage``, so all existing call
@@ -526,6 +576,23 @@ async def upload(
 
     elif local_path and src.is_dir():
         # ── Directory (local exists) ──────────────────────────────────────
+        # A locally-present directory may be *incomplete* (BLDX-1554): when the
+        # parallel transform activities that populated this tree were scheduled
+        # across multiple worker pods, only the subset produced on *this* pod is
+        # on local disk. Uploading just the local files would silently drop whole
+        # entity types from the target — the failure mode that produced orphaned
+        # child entities downstream.
+        #
+        # To keep the target copy complete regardless of pod placement, reconcile
+        # against the source (deployment) store: upload every local file AND
+        # stream any file that exists in the source store but is missing locally.
+        # This extends the local-absent fallback (below) — which the docstring
+        # already promises for "cross-pod KEDA-scaled SDR workers" — to the
+        # partially-present case. Reconciliation runs only when a *distinct*
+        # source store is supplied (i.e. an SDR hand-off where upstream !=
+        # deployment); in non-SDR uploads ``_source_store`` is ``None`` / the
+        # same store, so local disk stays authoritative and behaviour is
+        # unchanged.
         prefix = _derive_target_key(
             storage_path,
             _app_prefix,
@@ -537,7 +604,28 @@ async def upload(
         # run_in_thread keeps the blocking fsync + scandir off the event loop,
         # using the dedicated pool rather than asyncio's default executor.
         files = await run_in_thread(safe_list_directory, src)
-        if raise_on_empty and not files:
+        local_rels = {str(fp.relative_to(src)).replace(os.sep, "/") for fp in files}
+
+        # (source_key, target_key) pairs for files present in the source store
+        # but absent from this pod's local copy.
+        reconcile_pairs: list[tuple[str, str]] = []
+        if (
+            source_resolved is not None
+            and source_resolved is not resolved
+            and _source_ref is not None
+            and _source_ref.storage_path
+        ):
+            source_dir_prefix, source_keys = await _list_source_data_keys(
+                _source_ref.storage_path, source_resolved
+            )
+            for source_key in source_keys:
+                rel = source_key.removeprefix(source_dir_prefix)
+                if rel in local_rels:
+                    continue  # present locally — uploaded from the fast path below
+                target_key = f"{prefix}/{rel}" if prefix else rel
+                reconcile_pairs.append((source_key, target_key))
+
+        if raise_on_empty and not files and not reconcile_pairs:
             from application_sdk.storage.errors import (  # noqa: PLC0415
                 StorageEmptyUploadError,
             )
@@ -569,9 +657,25 @@ async def upload(
                 )
                 return ok
 
+        async def _bounded_reconcile(source_key: str, target_key: str) -> bool:
+            # source_resolved is non-None whenever reconcile_pairs is populated
+            # (guarded where reconcile_pairs is built). Explicit check rather than
+            # ``assert`` so it is not stripped under ``python -O`` and narrows the
+            # type for the ``_upload_from_store`` call below.
+            if source_resolved is None:  # pragma: no cover — structurally unreachable
+                raise RuntimeError(
+                    "reconcile requires a resolved source store but none was set"
+                )
+            async with sem:
+                ok, _ = await _upload_from_store(
+                    source_resolved, source_key, resolved, target_key
+                )
+                return ok
+
         # conformance: ignore[E010] results checked immediately below: errs filters BaseException, first is re-raised and rest are logged
         results = await asyncio.gather(
             *[_bounded_upload(fp, k) for fp, k in zip(files, keys)],
+            *[_bounded_reconcile(sk, tk) for sk, tk in reconcile_pairs],
             return_exceptions=True,
         )
         errs = [r for r in results if isinstance(r, BaseException)]
@@ -580,9 +684,18 @@ async def upload(
                 _logger.error("concurrent upload failure (suppressed)", exc_info=extra)
             raise errs[0]
         n = sum(1 for ok in results if ok)
+        total_files = len(files) + len(reconcile_pairs)
         reason = "uploaded" if n > 0 else "skipped:hash_match"
+        if reconcile_pairs:
+            _logger.info(
+                "upload dir reconciled against source store: %d local + %d "
+                "streamed from source (prefix=%s)",
+                len(files),
+                len(reconcile_pairs),
+                prefix,
+            )
         return _make_upload_output(
-            str(src), prefix, len(files), _tier, n, reason, is_dir=True
+            str(src), prefix, total_files, _tier, n, reason, is_dir=True
         )
 
     elif (
@@ -591,26 +704,12 @@ async def upload(
         and source_resolved is not None
     ):
         # ── Deployment-store fallback (local path absent) ──────────────────
-        from pathlib import PurePosixPath  # noqa: PLC0415 — stdlib; lazy use only
-
-        from application_sdk.storage.batch import list_keys  # noqa: PLC0415
-
-        source_norm = normalize_key(_source_ref.storage_path)
-        if source_norm and ".." in PurePosixPath(source_norm).parts:
-            from application_sdk.storage.errors import (  # noqa: PLC0415
-                UnsafeUploadPathError,
-            )
-
-            raise UnsafeUploadPathError(unsafe_path=_source_ref.storage_path)
-
-        source_dir_prefix = source_norm.rstrip("/") + "/"
-        data_dir_keys = [
-            k
-            for k in await list_keys(
-                source_dir_prefix, source_resolved, normalize=False
-            )
-            if not _is_sidecar(k)
-        ]
+        source_dir_prefix, data_dir_keys = await _list_source_data_keys(
+            _source_ref.storage_path, source_resolved
+        )
+        # Normalised source key for the single-file fallback below;
+        # _list_source_data_keys returns the directory prefix (trailing slash).
+        source_norm = source_dir_prefix.rstrip("/")
 
         if data_dir_keys:
             # ── Directory fallback ─────────────────────────────────────────
@@ -709,10 +808,6 @@ async def download(
     from application_sdk.contracts.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
         DownloadOutput,
     )
-    from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        list_keys,
-        list_keys_with_meta,
-    )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _resolve_store,
         _safe_join_under,
@@ -784,10 +879,8 @@ async def download(
         # ── Directory / prefix ─────────────────────────────────────────────
         prefix = norm_path.rstrip("/") + "/"
         # Listing carries per-object sizes, so large files chunk without a
-        # per-file HEAD (BLDX-1513).
-        all_items = await list_keys_with_meta(prefix, resolved, normalize=False)
-        # Exclude SHA-256 sidecars from the listing.
-        data_items = [(k, s, e) for k, s, e in all_items if not _is_sidecar(k)]
+        # per-file HEAD (BLDX-1513). SHA-256 sidecars are excluded by the helper.
+        data_items = await list_data_keys_with_meta(prefix, resolved, normalize=False)
 
         if local_path is not None:
             dest_dir = Path(local_path)

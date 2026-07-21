@@ -85,6 +85,26 @@ human audit):
   - `class X(BaseMetadataExtractor)` → migrate to `application_sdk.templates.SqlApp`
     per the notice; this is a structural change — draft it and let the test gate
     decide.
+  - **SDR test → agent-mode e2e**: a finding naming `BaseSDRIntegrationTest`
+    (import / subclass from `application_sdk.testing.sdr`) means the app's
+    `tests/sdr/test_*_sdr.py` (or `tests/integration/test_sdr.py`) still uses the
+    legacy SDR harness. Migrate to the agnostic e2e harness — a `BaseE2ETest`
+    subclass, normally via the generated `*GeneratedE2EBase`, with a class-level
+    `mode = RunMode.AGENT` (agent mode *is* the self-deployed-runtime path). Shape
+    it after `atlan-openapi-app` / `atlan-metabase-app` `tests/e2e/`:
+    ```python
+    from application_sdk.testing.e2e import RunMode
+    from app.generated._e2e_base import MyAppGeneratedE2EBase
+
+    @pytest.mark.e2e
+    class TestMyAppE2E(MyAppGeneratedE2EBase):
+        mode = RunMode.AGENT
+    ```
+    Guard the import so the file is a clean skip on older SDKs
+    (`try: ...; except ImportError: pytest.skip(allow_module_level=True)`), carry
+    over any `manifest_path`-derived assertions the SDR suite validated, then delete
+    the `test_sdr.py`. Structural change (always `"judgment"`) — draft it and let the
+    test gate decide.
   - **Legacy transformer → asset-mapper** (BLDX-1399): a finding naming
     `TransformerInterface`, `AtlasTransformer`, or `QueryBasedTransformer`
     (import / subclass / call of `transform_metadata` / `transform_row`) means the

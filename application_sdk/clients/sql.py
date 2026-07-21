@@ -11,7 +11,7 @@ import hashlib
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Union, cast
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 
 from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
@@ -38,6 +38,21 @@ from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+def _escape_colons_for_text(query: str) -> str:
+    """Backslash-escape *every* literal colon so SQLAlchemy ``text()`` does not treat them as bind params.
+
+    Callers pass fully-rendered SQL (all values inlined; no bind params to supply). ``text()``
+    reads any ``:name`` as a required bind parameter and raises at compile time on colon-bearing
+    SQL — a regex ``(?:...)``, a ``::text`` cast, a ``'12:30:00'`` literal. SQLAlchemy strips the
+    backslash before the driver, so the DB receives the original literal colon.
+
+    Note: this escapes *all* colons. Any future call site that genuinely needs ``:name`` bind
+    parameters must not route through this helper.
+    """
+    return query.replace(":", "\\:")
+
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -272,8 +287,17 @@ class BaseSQLClient(ClientInterface):
             case _:
                 raise SqlCredentialsParseError(field="authType", value_summary=authType)
 
-        # Handle None values and ensure token is a string before encoding
-        encoded_token = quote_plus(str(token or ""))
+        # Handle None values and ensure token is a string before encoding.
+        # This token is interpolated into the userinfo of a SQLAlchemy URL,
+        # which SQLAlchemy decodes with ``urllib.parse.unquote`` (percent-only).
+        # ``quote_plus`` encodes space as ``+``, and ``unquote`` never turns
+        # ``+`` back into a space, so a password containing a space would reach
+        # the driver corrupted (CONNECT-361). ``quote`` encodes space as ``%20``,
+        # which round-trips correctly. ``safe=""`` is required so that ``/`` in
+        # the credential is also encoded (an unencoded ``/`` in userinfo would
+        # otherwise break URL parsing). Query-string params below still use
+        # ``quote_plus`` — SQLAlchemy decodes query values with ``+`` -> space.
+        encoded_token = quote(str(token or ""), safe="")
         return encoded_token
 
     def add_connection_params(
@@ -392,7 +416,7 @@ class BaseSQLClient(ClientInterface):
                 from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
                 cursor = await loop.run_in_executor(
-                    pool, connection.execute, text(query)
+                    pool, connection.execute, text(_escape_colons_for_text(query))
                 )
                 if not cursor or not cursor.cursor:
                     raise UnsupportedSqlCursorError()
@@ -437,7 +461,9 @@ class BaseSQLClient(ClientInterface):
         from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
         if import_optional_dependency("sqlalchemy", errors="ignore"):
-            return pd.read_sql_query(text(query), conn, chunksize=chunksize)
+            return pd.read_sql_query(
+                text(_escape_colons_for_text(query)), conn, chunksize=chunksize
+            )
         else:
             dbapi_conn = getattr(conn, "connection", None)
             return pd.read_sql_query(query, dbapi_conn, chunksize=chunksize)
@@ -674,10 +700,11 @@ class AsyncBaseSQLClient(BaseSQLClient):
                         yield_per=batch_size
                     )
 
+                escaped_query = _escape_colons_for_text(query)
                 result = (
-                    await connection.stream(text(query))
+                    await connection.stream(text(escaped_query))
                     if use_server_side_cursor
-                    else await connection.execute(text(query))
+                    else await connection.execute(text(escaped_query))
                 )
 
                 column_names = list(result.keys())

@@ -644,16 +644,16 @@ class TestS3AssumeRole:
     @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
     @patch("boto3.Session")
     @patch("obstore.store.S3Store")
-    def test_assume_role_region_falls_back_to_env(
+    def test_assume_role_region_not_scoped_to_sts_session(
         self,
         mock_s3_cls: MagicMock,
         mock_session_cls: MagicMock,
         mock_sts_cls: MagicMock,
         tmp_path: Path,
     ) -> None:
-        # resolved_region (binding.py L340) must flow into boto3.Session so
-        # the STS call targets the correct regional endpoint when metadata.region
-        # is absent but AWS_REGION is set (IRSA / EKS injection).
+        # resolved_region (env fallback here) still lands on the S3 store's own
+        # config, but must never reach the STS session — that breaks AssumeRole
+        # for opt-in AWS regions (e.g. me-central-1).
         mock_s3_cls.return_value = MagicMock()
         mock_sts_cls.return_value = MagicMock()
         mock_session_cls.return_value = MagicMock()
@@ -666,8 +666,9 @@ class TestS3AssumeRole:
         )
         create_store_from_binding("objectstore", components_dir=components_dir)
 
+        assert mock_s3_cls.call_args.kwargs["config"]["aws_region"] == "ap-south-1"
         session_kwargs = mock_session_cls.call_args.kwargs
-        assert session_kwargs.get("region_name") == "ap-south-1"
+        assert "region_name" not in session_kwargs
 
 
 class TestS3SecretKeyRef:

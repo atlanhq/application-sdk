@@ -15,6 +15,7 @@ import pytest
 
 from application_sdk.testing.full_dag import BaseFullDAGE2ETest, RunMode
 from application_sdk.testing.full_dag._errors import (
+    HarnessMethodNotImplementedError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
 )
@@ -112,6 +113,47 @@ def _bootstrap_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
     monkeypatch.setenv("ATLAN_API_KEY", "test-token")
     monkeypatch.setenv("GITHUB_RUN_ID", "9999999")
+
+
+class TestBaseAgentSpecDerivation:
+    """The (deprecated) full_dag base derives its agent identity from env —
+    kept in sync with the e2e module so SQL apps on the alias still get per-leg
+    isolation. Mirrors TestAgentSpecDerivation in the e2e test module.
+    """
+
+    @staticmethod
+    def _agent_mode_cls():
+        class _T(BaseFullDAGE2ETest):
+            connector_short_name = "mysql"
+            argo_package_name = "@atlan/mysql"
+            argo_template_name = "atlan-mysql"
+            mode = RunMode.AGENT
+            app_service_url = "http://mysql.svc"
+
+        return _T
+
+    def test_derives_agent_name_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "mysql")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42-connection-reuse")
+        spec = self._agent_mode_cls()().agent_spec()
+        assert spec is not None
+        assert spec.agent_name == "mysql-e2e-full-ci-42-connection-reuse"
+
+    def test_without_deployment_env_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "mysql")
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+        with pytest.raises(HarnessMethodNotImplementedError):
+            self._agent_mode_cls()().agent_spec()
+
+    def test_without_application_env_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42-connection-reuse")
+        with pytest.raises(HarnessMethodNotImplementedError):
+            self._agent_mode_cls()().agent_spec()
 
 
 @pytest.fixture

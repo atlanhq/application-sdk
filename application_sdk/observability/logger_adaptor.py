@@ -51,6 +51,20 @@ from application_sdk.observability.utils import (
 )
 from application_sdk.version import __version__ as _SDK_VERSION
 
+# Preflight gate outcome-event keys, shared with the emitter
+# (``application_sdk.execution._temporal.preflight_gate``) so a rename is a
+# single edit that keeps the emit call-site and the allowlist below in sync.
+CHECK_MATRIX_KEY = "check_matrix"
+GATE_MODE_KEY = "gate_mode"
+
+# Transformed-asset validation outcome-event key, shared with the emitter
+# (``application_sdk.app.base._warn_on_invalid_transformed_assets``) so a rename
+# is a single edit that keeps the emit call-site and the allowlist below in sync.
+# The compact per-failure matrix lands as one JSON string LogAttributes value in
+# ClickHouse (JSONExtract-able); the scalar counts sit alongside it as their own
+# attributes.
+ASSET_VALIDATION_MATRIX_KEY = "asset_validation_matrix"
+
 # SDK-side allowlist that gates which kwargs reach OTLP.  When a logger is called
 # with structured kwargs (e.g. ``_log().info("Downloaded", storage_path=key)``),
 # loguru places the kwargs on ``record["extra"]`` rather than in the message
@@ -98,6 +112,19 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "error_class",
         "error_message",
         "stack_trace",
+        # ── Gate outcome event + generic activity fields ─────────────────
+        "reason",
+        "entrypoint",
+        "checks",
+        CHECK_MATRIX_KEY,
+        GATE_MODE_KEY,
+        # ── Transformed-asset validation outcome event ───────────────────
+        ASSET_VALIDATION_MATRIX_KEY,
+        "assets_total",
+        "assets_passed",
+        "assets_invalid",
+        "assets_orphaned",
+        "assets_undeserializable",
         # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",
         "app_name",
@@ -404,8 +431,12 @@ class _CloudflareTimeoutFilter(logging.Filter):
 
     Cloudflare closes idle long-poll connections with an HTTP 504 whose HTML body
     the Rust Temporal SDK misreads as an invalid gRPC compression flag (ASCII
-    '<' = 60).  The SDK logs this at ERROR and immediately retries — the worker
-    is unaffected.  See TFKB ERROR-NET-001.
+    '<' = 60).  The SDK logs this at WARN (retries 1–15) then ERROR (16+) and
+    immediately retries — the worker is unaffected.  See TFKB ERROR-NET-001.
+
+    Only fires once the Rust core forwards logs into Python logging via
+    ``LogForwardingConfig`` (see ``execution/_temporal/backend.py``); without
+    that forwarding these records go straight to stderr and never reach here.
 
     An INFO summary is emitted on the first occurrence and at most once per
     minute thereafter, so the pattern stays visible without flooding logs.
@@ -418,9 +449,13 @@ class _CloudflareTimeoutFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
-            if record.levelno != logging.ERROR or not record.name.startswith(
-                "temporalio"
-            ):
+            # Rust core emits this pattern at WARN for retries 1–15 and at ERROR
+            # for 16+ — same call site. Both must be caught, else the WARN half
+            # slips through unthrottled.
+            if record.levelno not in (
+                logging.WARNING,
+                logging.ERROR,
+            ) or not record.name.startswith("temporalio"):
                 return True
             msg = record.getMessage()
             if (
@@ -463,8 +498,24 @@ DEPENDENCY_LOGGERS = ["daft_io.stats", "tracing.span", "httpx"]
 
 # Configure external dependency loggers to reduce noise
 # Set httpx to WARNING to reduce verbose HTTP request logs (200 OK messages)
+# NOTE: the ``temporalio`` logger is pinned to WARNING separately below — it is
+# kept out of this list on purpose because its rationale differs (a prerequisite
+# for the 504 filter, not noise reduction).
 for logger_name in DEPENDENCY_LOGGERS:
     logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+# Pin the forwarded-core logger to WARNING so ``_CloudflareTimeoutFilter`` sees the
+# WARN half of the 504 pattern (retries 1–15) regardless of ``LOG_LEVEL``. Without
+# this, an operator setting ``LOG_LEVEL=ERROR`` would drop those WARN records at the
+# root level gate before the filter runs, so the filter's WARN branch would again
+# become dead code — the exact failure this fix removes. The suppression is the
+# filter's job, not a side effect of the root level.
+#
+# Side effect: because propagated records skip ancestor-logger level checks, every
+# non-504 ``temporalio`` WARN now reaches the handler regardless of ``LOG_LEVEL``
+# (e.g. ``LOG_LEVEL=ERROR`` still surfaces ``temporalio`` WARN). Intentional — the
+# filter, not the level gate, owns 504 suppression; only the 504 pattern is throttled.
+logging.getLogger("temporalio").setLevel(logging.WARNING)
 
 
 # Add these constants
@@ -1269,9 +1320,23 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             logging.error("Error processing log record", exc_info=True)
 
     def __del__(self):
-        """Cleanup when the logger is destroyed."""
-        if AtlanLoggerAdapter._flush_task and not AtlanLoggerAdapter._flush_task.done():
-            AtlanLoggerAdapter._flush_task.cancel()
+        """Cancel the periodic flush task when the logger is destroyed.
+
+        Guarded against interpreter teardown: during shutdown Python rebinds
+        module globals — including the ``AtlanLoggerAdapter`` class name this
+        references — to ``None``, so the attribute access raises
+        ``AttributeError`` ("'NoneType' object has no attribute '_flush_task'").
+        The event loop may likewise already be closed, making ``cancel()``
+        raise. Both are benign during GC/shutdown (there is nothing left to
+        flush) and cannot be logged (the logging stack may be gone), so they
+        are swallowed.
+        """
+        try:
+            task = AtlanLoggerAdapter._flush_task
+            if task is not None and not task.done():
+                task.cancel()
+        except Exception:  # noqa: S110, BLE001 — teardown-only; see docstring
+            pass
 
 
 # Create a singleton instance of the logger

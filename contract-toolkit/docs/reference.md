@@ -2902,18 +2902,88 @@ deploy = new DeployConfig {
 
 ## Credential.pkl — Legacy Module
 
-For Argo-era apps only. Uses `Config.pkl` widget classes instead of `FieldSpec`. Do not use for new native apps.
+For Argo-era apps only. Do not use for new native apps (use `FieldSpec` instead). Still used
+by CSA connector credential configs.
+
+Widget classes come from the modern `Widgets.pkl` module (not the older `Config.pkl`), and
+Credential.pkl re-exports them as unqualified typealiases — mirroring App.pkl — so a credential
+contract writes `new TextInput { }`, `new PasswordInput { }`, `new NestedInput { }`, etc.
+directly, with no supplemental `import`:
 
 ```pkl
-class NestedCredentialInput extends Config.NestedInput {
+amends "@app-contract-toolkit/Credential.pkl"
+
+name = "my-connector"
+source = "My Source"
+options {
+  ["basic"] = new NestedCredentialInput {
+    optionLabel = "Basic"
+    inputs {
+      ["username"] = new TextInput { title = "User" }
+      ["password"] = new PasswordInput { title = "Password" }
+    }
+  }
+}
+```
+
+Internally:
+
+```pkl
+class NestedCredentialInput extends Widgets.NestedInput {
   hidden optionLabel: String       // Auth radio label
   title = ""
   hide = true
-  hidden inputs: Mapping<CredentialAttribute, Config.UIElement>
+  hidden inputs: Mapping<CredentialAttribute, Widgets.UIElement>
 }
 
 typealias CredentialAttribute = "host"|"port"|"connection"|"username"|"password"|"extra"|"name"|"connector"|"connectorType"
 ```
+
+### Migration (breaking): `Config.*` widgets → bare widget names
+
+Credential.pkl previously sourced its widget classes from the legacy `Config.pkl`, so
+credential contracts imported `Config.pkl` and wrote qualified `new Config.TextInput { }`.
+Widget classes now come from `Widgets.pkl`, and `Config.UIElement` / `Widgets.UIElement` are
+nominally distinct classes. A credential contract that still assigns `Config.*` widgets fails
+`pkl eval` on the next toolkit-version bump:
+
+```
+Expected value of type Widgets#UIElement, but got Config#TextInput
+```
+
+This is a **source-level breaking change** for credential contracts (generated JSON output is
+unchanged). To migrate a contract, drop the `Config.pkl` import and unqualify the widget names:
+
+```diff
+ amends "@app-contract-toolkit/Credential.pkl"
+-import "@app-contract-toolkit/Config.pkl"
+ ...
+-  ["username"] = new Config.TextInput { title = "User" }
+-  ["password"] = new Config.PasswordInput { title = "Password" }
++  ["username"] = new TextInput { title = "User" }
++  ["password"] = new PasswordInput { title = "Password" }
+```
+
+The same rename applies to every `Config.*` widget a contract uses (`Config.NestedInput` →
+`NestedInput`, `Config.Radio` → `Radio`, `Config.UIRule` → `UIRule`, and so on). The toolkit
+bump and the consumer migrations must land together — bumping the toolkit before a consumer is
+migrated breaks that consumer's `pkl eval`.
+
+**Validation rules.** Under `Config.pkl`, `validationRules` was `Listing<Dynamic>`, so contracts
+wrote `new Dynamic { pattern = …; message = …; trigger = "blur" }`. `Widgets.pkl` types it as
+`Listing<ValidationRule>` (a real class, re-exported from `Credential.pkl`), so replace the
+untyped `new Dynamic` with `new ValidationRule` — the fields (`required`, `message`, `pattern`,
+`trigger`, …) are unchanged, so the generated JSON is identical:
+
+```diff
+ validationRules {
+-  new Dynamic { pattern = "^arn:aws:.+"; message = "Enter a valid ARN"; trigger = "blur" }
++  new ValidationRule { pattern = "^arn:aws:.+"; message = "Enter a valid ARN"; trigger = "blur" }
+ }
+```
+
+`ValidationRule` carries an optional `trigger` field precisely so this migration preserves the
+`"trigger"` key the legacy `Dynamic` emitted.
 
 ---
 

@@ -89,6 +89,70 @@ class AdminRoleNotResolvedError(PreconditionError):
 
 
 @dataclass(kw_only=True)
+class NoWorkerOnTaskQueueError(PreconditionError):
+    """No worker started any DAG node within the stall-grace window.
+
+    The AE run's parent workflow runs on the always-on automation-engine
+    queue, so the top-level run flips to ``Running`` even when the connector's
+    own ``extract`` node is stuck ``Pending`` because no worker is polling its
+    task queue. Rather than let the harness hang for the full
+    ``ae_poll_timeout_seconds`` (often 30 min), we fail fast here. The usual
+    cause is an agent-name / task-queue mismatch: the test's
+    ``agent_spec().agent_name`` must resolve to the same queue the deployed
+    worker polls (``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}``).
+    """
+
+    code: ClassVar[str] = "PRECONDITION_NO_WORKER_ON_TASK_QUEUE"
+    expected_state: str | None = "a worker polling the extract task queue"
+
+
+@dataclass(kw_only=True)
+class DAGProgressStalledError(PreconditionError):
+    """A DAG node ran without any state transition for the progress window.
+
+    Distinct from :class:`NoWorkerOnTaskQueueError`, which guards the *start*
+    (no node ever leaves ``Pending``). This guards *forward progress*: a node
+    that has begun but sits ``Running`` — with no node in the DAG changing state
+    — for ``dag_progress_stall_seconds`` almost always means it is wedged (e.g.
+    an extract stuck on a slow/failing upload). Rather than let the harness poll
+    the full ``ae_poll_timeout_seconds`` (often 90 min) and require a manual
+    cancel, we fail fast with the last-seen node states so the wedge is visible.
+    The window is set comfortably above legitimately slow single nodes (lineage
+    on deep queues can sit Running for many minutes), so a healthy run never
+    trips it.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_DAG_PROGRESS_STALLED"
+    expected_state: str | None = (
+        "at least one DAG node state transition within the progress window"
+    )
+
+
+@dataclass(kw_only=True)
+class AtlanAEWorkflowAlreadyActiveError(PreconditionError):
+    """A run for the AE workflow is already active, so a new submit was rejected.
+
+    AE returns ``AE-WF-409-03`` ("a run for workflow '<slug>' is already
+    active") when a submit collides with an in-flight run — but Heracles (the
+    tenant-facing proxy in front of Automation Engine) masks it as an HTTP 500
+    with the original 409 text embedded.
+
+    This is a *terminal* state-conflict, not a recoverable dependency blip: the
+    same submit cannot succeed until the active run ends. It is therefore a
+    non-retryable ``PreconditionError`` (like the sibling
+    ``NoWorkerOnTaskQueueError``) rather than a retryable
+    ``DependencyUnavailableError``. Retrying a non-idempotent submit spawns a
+    duplicate run that AE marks ``Skipped``, which the test then mistracks
+    (surfacing as a spurious ``NoWorkerOnTaskQueueError``). Its run_id is
+    unrecoverable via native-status (keyed by run_id), so we fail fast with the
+    true cause.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_AE_WORKFLOW_ALREADY_ACTIVE"
+    expected_state: str | None = "no active run for this workflow"
+
+
+@dataclass(kw_only=True)
 class AgentSpecRequiredError(InvalidInputError):
     """Agent mode requires an ``AgentSpec`` but none was provided."""
 

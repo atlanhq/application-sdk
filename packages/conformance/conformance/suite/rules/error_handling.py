@@ -103,7 +103,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "Catches everything but the specific type is unknown.  HIGH severity when\n"
             "not logged; MEDIUM when logged but missing ``exc_info=True``.  Acceptable\n"
             "only at top-level handlers (worker loops, HTTP handlers) when properly\n"
-            "logged with ``exc_info=True``.\n"
+            "logged with ``exc_info=True``.  A handler that unconditionally re-raises\n"
+            "while preserving the trace is exempt — bare ``raise``, ``raise X(...)``,\n"
+            "or ``raise X(...) from e`` — because nothing is swallowed; ``raise X(...)\n"
+            "from None`` (which discards the trace) and a conditional re-raise that can\n"
+            "fall through still fire.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e004",
     ),

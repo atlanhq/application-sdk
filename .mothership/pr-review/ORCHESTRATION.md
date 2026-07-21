@@ -211,7 +211,20 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
     TEST_FILES=$(grep -cE '^(tests/|contract-toolkit/tests/)' /tmp/PR_FILES.txt || true)
     DOC_FILES=$(grep -cE '^(docs/|contract-toolkit/docs/|.*README\.md$)' /tmp/PR_FILES.txt || true)
     CONFIG_FILES=$(grep -cE '^(pyproject\.toml|uv\.lock|\.pre-commit|\.github/|helm/)' /tmp/PR_FILES.txt || true)
-    SOURCE_FILES=$((TOTAL_FILES - CONF_FILES - TEST_FILES - DOC_FILES - CONFIG_FILES))
+    # Agent-prompt / operational-meta files with NO Temporal/Dapr code surface:
+    # the mothership review+resolve playbooks, Claude Code config, and
+    # AGENTS/CLAUDE instruction files. Excluded from SOURCE_FILES below so a
+    # prompt-only PR is never routed into the full 3-agent SDK panel (the SDK
+    # correctness/quality/structure agents have no rules for reviewing prompts).
+    META_FILES=$(grep -cE '^(\.mothership/|\.claude/)|(^|/)(AGENTS|CLAUDE)\.md$' /tmp/PR_FILES.txt || true)
+    # SOURCE_FILES = files in NONE of the non-source buckets (conformance, tests,
+    # docs, config, meta). Computed by exclusion (grep -vc) rather than
+    # TOTAL - sum(buckets): a file matching two buckets (e.g. docs/CLAUDE.md is
+    # both DOC and META) would be subtracted twice by the arithmetic and could
+    # zero out a real source count, silently skipping code review. Mirrors the
+    # bucket patterns above (contract-toolkit is intentionally NOT excluded — CT
+    # PRs are routed by the first two rules before SOURCE_FILES is consulted).
+    SOURCE_FILES=$(grep -vcE '^(packages/conformance/|remediation/|tests/|contract-toolkit/tests/|docs/|contract-toolkit/docs/|pyproject\.toml|uv\.lock|\.pre-commit|\.github/|helm/|\.mothership/|\.claude/)|.*README\.md$|(^|/)(AGENTS|CLAUDE)\.md$' /tmp/PR_FILES.txt || true)
     CHANGED_LINES=$(grep -cE '^[+-]' /tmp/DIFF.patch 2>/dev/null || echo 0)
     # Security-sensitive paths NEVER take the fast path (a 3-line auth/secret
     # change is exactly where a subtle blocker hides).
@@ -223,6 +236,15 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
      (toolkit-review.md only; mandatory private consumer validation based on affected surface)
    - If `CT_FILES > 0 && (SDK_FILES > 0 || CONFIG_FILES > 0)` → `review_scope=mixed-sdk-toolkit`
      (standard SDK review agents + toolkit-review.md)
+   - If `META_FILES > 0 && SOURCE_FILES == 0 && CONFIG_FILES == 0 && CONF_FILES == 0
+     && CT_FILES == 0 && TEST_FILES == 0 && DOC_FILES == 0` → `review_scope=docs-only`
+     (agent-prompt / operational-meta files only — `.mothership/**`, `.claude/**`,
+     `AGENTS.md`, `CLAUDE.md` — carry no Temporal/Dapr code surface, so the SDK
+     domain agents have nothing to review. Take the docs-only skip path: submit
+     APPROVE, no Phase 2. Because META is excluded from `SOURCE_FILES`, a PR that
+     ALSO touches code routes on the real code — `config-only`, `full`, etc. — so
+     the meta files never drag prompt/markdown into the SDK correctness agents,
+     and code is never skipped just because prompts changed alongside it.)
    - If `SOURCE_FILES == 0 && CONF_FILES > 0 && CT_FILES == 0` → `review_scope=conformance-only`
      (`conformance.md` agent only — the conformance-suite specialist for
      `packages/conformance/**` + `remediation/**`: SARIF detector correctness,
@@ -233,7 +255,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    - If `SOURCE_FILES == 0 && TEST_FILES > 0` → `review_scope=tests-only`
      (QUALITY agent only — focused on test patterns, coverage, assertions)
    - If `SOURCE_FILES == 0 && DOC_FILES > 0 && TEST_FILES == 0` → `review_scope=docs-only`
-     (Skip Phase 2 — submit APPROVE with "Docs-only PR, no code review needed")
+     (Skip Phase 2 — submit APPROVE with "Docs/meta-only PR, no code review needed")
    - If `SOURCE_FILES == 0 && CONFIG_FILES > 0` → `review_scope=config-only`
      (`ci-config.md` agent only — the CI/workflow/deps/infra specialist, NOT
      the SDK CORRECTNESS agent. Reviews GHA injection/permissions/pinning,
@@ -778,6 +800,50 @@ Include the delta status in the review summary (and inline body
 where applicable) so the author sees at a glance what was fixed vs
 what remains.
 
+### 2e′. Nit convergence — keep the write-side resolver's loop terminating
+
+`@sdk-resolve` (the write counterpart, `.mothership/pr-resolve/`) drives a PR by
+looping review→fix→push until `### Findings` is **empty** (nits included). That
+loop only terminates if the *nit* stream is **bounded, diff-local, and
+actionable**. A reviewer that surfaces a fresh batch of pre-existing optional
+nits every pass — or lists observations it recommends no action on — makes that
+loop non-terminating: it spins round after round until the sandbox dies with no
+hand-off. The three rules below keep nits convergent.
+
+**They apply to `Nit`-tier findings ONLY.** Critical / High / Important
+findings — and any regression a pushed fix introduces — are ALWAYS raised, on
+any line, including code the resolver just pushed. Never diff-scope, defer, or
+suppress a real bug for convergence; the whole-file/reachability review of the
+higher tiers is unchanged.
+
+1. **Diff-scope nits.** A `Nit` is valid only on a line the PR's diff **adds or
+   modifies**. A nit on pre-existing, untouched code — even in a file the PR
+   changed, and even when you were handed the whole file for reachability
+   context — is out of scope for THIS PR; withdraw it silently (no inline
+   comment, no finding). A PR is not the place to polish code it didn't write.
+
+2. **Re-review monotonicity.** On a re-review (`/tmp/PRIOR_REVIEW.md` non-empty),
+   a **new** `Nit` may be raised only on a hunk that **changed since the prior
+   review's HEAD**. A line that was reviewable last round and drew no nit must
+   not draw a new nit this round — you already saw it and passed it. This
+   forbids mining a fresh set of optional nits each pass ("polish the earlier
+   pass didn't call out"). Still-present prior nits are carried per §2e;
+   Critical/Important/regressions remain exempt.
+
+3. **Actionability gate.** A `Nit` is a finding only if it names a concrete fix
+   the author can apply. An observation whose only path forward is *"no action
+   needed"*, *"accept the tool/manifest quirk"*, *"keep as-is — defensible
+   either way"*, or a pure either/or style preference is **not a finding** — do
+   NOT list it under `### Findings`. Put it in `### Strengths`/prose if it's
+   worth a mention, never as a finding. A finding the resolver cannot act on can
+   never be cleared, so listing it would wedge the loop forever.
+
+Net effect: once the author's real fixes land, a re-review of the same
+substantive change returns an **empty** `### Findings` with `READY_TO_MERGE`, and
+the resolver converges — typically in 2–3 rounds — handing over a clean PR.
+`MAX_ROUNDS` stays the backstop for the rare case where a fix legitimately keeps
+spawning new work.
+
 ### 2f. Guardrails G1-G8
 
 Check consolidated findings. Any G1/G2/G3/G5 → BLOCKED.
@@ -806,7 +872,10 @@ MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 `READY_TO_MERGE` is strict: a single Important finding forces
 `NEEDS_FIXES`. Nits do not block. If you believe an Important should
 be downgraded, downgrade it explicitly in §2e with a one-line reason
-— do not silently approve over the top of it.
+— do not silently approve over the top of it. Before listing any
+`Nit`, apply the §2e′ convergence rules (diff-scope, re-review
+monotonicity, actionability) — they keep the write-side resolver's
+`### Findings`-empty loop terminating.
 
 Print: `[Phase 2 complete] <N> findings across <C> classes, verdict=<verdict>`
 

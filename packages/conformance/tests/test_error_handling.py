@@ -345,6 +345,199 @@ except (KeyError, ValueError):
     )
 
 
+def test_p004_no_finding_when_reraised_chained() -> None:
+    # Broad catch that translates-and-chains into a typed error preserves the
+    # trace via `from e` — nothing is swallowed, so E004 must not fire.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception as e:
+    raise MetadataFetchError("failed") from e
+"""
+    )
+
+
+def test_p004_no_finding_when_bare_reraise() -> None:
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception:
+    cleanup()
+    raise
+"""
+    )
+
+
+def test_p004_no_finding_when_all_branches_reraise() -> None:
+    # if/else where both branches raise → the handler always re-raises.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception as e:
+    if isinstance(e, AppError):
+        raise
+    raise MetadataFetchError("failed") from e
+"""
+    )
+
+
+def test_p004_no_finding_when_reraise_no_from() -> None:
+    # `raise X(...)` with no `from` still preserves the trace (its ``.cause`` is
+    # Python ``None``, not ``raise ... from None``), so E004 must not fire. The
+    # missing explicit chaining is E016 (MissingExceptionChaining)'s concern.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception:
+    raise MetadataFetchError("failed")
+"""
+    )
+
+
+def test_p004_still_flags_reraise_from_none() -> None:
+    # `raise ... from None` deliberately discards the original context/trace —
+    # this is the trace-losing case E004 should still catch.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception as e:
+    raise MetadataFetchError("failed") from None
+"""
+    )
+
+
+def test_p004_still_flags_conditional_reraise_that_can_fall_through() -> None:
+    # A raise guarded by `if` with no else can be skipped — the fall-through path
+    # swallows, so E004 must still fire.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception as e:
+    if should_propagate(e):
+        raise
+    x = 1
+"""
+    )
+
+
+def test_p004_still_flags_swallow_in_branch_before_reraise() -> None:
+    # A branch that returns (swallows) before the trailing re-raise means not
+    # every path re-raises — E004 must still fire.
+    assert "E004" in _findings(
+        """\
+def f():
+    try:
+        run()
+    except Exception as e:
+        if quiet(e):
+            return None
+        raise AppError("f") from e
+"""
+    )
+
+
+def test_p004_still_flags_from_none_in_branch_before_reraise() -> None:
+    # A `raise ... from None` on a branch before the trailing re-raise discards
+    # the trace on that path — E004 must still fire.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception as e:
+    if isinstance(e, TimeoutError):
+        raise AppTimeout("t") from None
+    raise AppError("f") from e
+"""
+    )
+
+
+def test_p004_no_finding_when_benign_branch_then_reraise() -> None:
+    # A branch that does work but does NOT early-exit still reaches the trailing
+    # re-raise on every path — stays exempt (guards against over-firing).
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception as e:
+    if noisy(e):
+        logger.info("context")
+    raise AppError("f") from e
+"""
+    )
+
+
+def test_p004_no_finding_when_break_controls_nested_loop() -> None:
+    # `break` controls a loop nested inside the handler — it is loop control, not
+    # a handler exit; the trailing re-raise still runs, so stay exempt.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception as e:
+    for x in xs:
+        if done(x):
+            break
+    raise AppError("f") from e
+"""
+    )
+
+
+def test_p004_still_flags_return_inside_nested_loop() -> None:
+    # `return` swallows the exception on some path regardless of loop nesting.
+    assert "E004" in _findings(
+        """\
+def f():
+    try:
+        run()
+    except Exception as e:
+        for x in xs:
+            if bad(x):
+                return None
+        raise AppError("f") from e
+"""
+    )
+
+
+def test_p004_still_flags_continue_escaping_to_outer_loop() -> None:
+    # `continue` at the handler's top level targets the loop OUTSIDE the handler,
+    # skipping the trailing re-raise — a genuine swallow, must still fire.
+    assert "E004" in _findings(
+        """\
+for item in items:
+    try:
+        run()
+    except Exception as e:
+        if skip(item):
+            continue
+        raise AppError("f") from e
+"""
+    )
+
+
+def test_p004_still_flags_swallow_in_except_star_handler() -> None:
+    # A `return` inside an `except*` handler (PEP 654, ast.TryStar — not an
+    # ast.Try subclass) swallows before the trailing re-raise; must still fire.
+    assert "E004" in _findings(
+        """\
+def f():
+    try:
+        run()
+    except Exception as e:
+        try:
+            work()
+        except* ValueError:
+            return None
+        raise AppError("f") from e
+"""
+    )
+
+
 # ── P005 — ExceptBlockMissingExcInfo ─────────────────────────────────────────
 
 

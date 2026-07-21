@@ -1,0 +1,138 @@
+// Tests for the connector type injected onto the ConnectionCreator ("connection")
+// widget in the generated workflow config JSON.
+//
+// When a user creates a NEW connection, the frontend mints its qualifiedName as
+// `default/{connectorType}/{epoch}`. The connector type must come from the app's
+// declared `connector` (e.g. Connectors.API → "api"), NOT from the app `name`.
+// The toolkit injects it as `ui.connector` on the ConnectionCreator — NOT
+// `ui.connectorName`, which is the distinct key the ConnectionSelector reads.
+//
+// Regression guard: an app named "openapi" with `connector = Connectors.API` must
+// emit `connector = "api"` — never "openapi" — otherwise connections are
+// created under `default/openapi/{epoch}` and every child asset QN is poisoned.
+
+amends "pkl:test"
+
+import "../src/App.pkl" as App
+import "../src/Config.pkl"
+import "../src/Connectors.pkl"
+import "../src/NativeApp.pkl"
+// Amends App.pkl and uses `Connectors.API` with NO Connectors import — proves
+// the re-export. Merely importing/evaluating it exercises the resolution.
+import "fixtures/connector_reexport_app.pkl" as reexportApp
+
+// App whose name ("openapi") differs from its connector type ("api") — the
+// exact scenario the bug was reported for.
+local openapiApp = (App) {
+  name = "openapi"
+  displayName = "OpenAPI Spec Loader"
+  icon = "https://example.com/icon.svg"
+  connector = Connectors.API
+  hasCredentialConfig = false
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["connection"] = new App.ConnectionCreator { placeholderText = "Connection" }
+        }
+      }
+    }
+  }
+}
+
+// App whose name == connector value — connector should still be emitted.
+local selfNamedApp = (App) {
+  name = "snowflake"
+  displayName = "Snowflake"
+  icon = "https://example.com/icon.svg"
+  connector = Connectors.SNOWFLAKE
+  hasCredentialConfig = false
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["connection"] = new App.ConnectionCreator { placeholderText = "Connection" }
+        }
+      }
+    }
+  }
+}
+
+// App with NO connector declared — connector must be omitted (unchanged
+// behaviour, no accidental key).
+local noConnectorApp = (App) {
+  name = "no-connector"
+  displayName = "No Connector"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["connection"] = new App.ConnectionCreator { placeholderText = "Connection" }
+        }
+      }
+    }
+  }
+}
+
+// NativeApp (legacy module) — same injection must apply on this path too.
+local nativeApp = (NativeApp) {
+  name = "native-openapi"
+  displayName = "Native OpenAPI"
+  connector = Connectors.API
+  icon = "https://example.com/icon.svg"
+  workflowType = "NativeOpenApiWorkflow"
+  hasCredentialConfig = false
+  uiConfig = new Config.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["connection"] = new Config.ConnectionCreator {
+            title = "Connection"
+            placeholderText = "Connection"
+          }
+        }
+      }
+    }
+  }
+}
+
+local openapiConfig: String = openapiApp.output.files["app/generated/openapi.json"].text
+local selfNamedConfig: String = selfNamedApp.output.files["app/generated/snowflake.json"].text
+local noConnectorConfig: String = noConnectorApp.output.files["app/generated/no-connector.json"].text
+local nativeConfig: String = nativeApp.output.files["native-openapi.json"].text
+
+facts {
+  // ── App path ──────────────────────────────────────────────────────────────
+  // The frontend's connection (create) widget reads `ui.connector` — NOT
+  // `ui.connectorName` (that is the connectionSelector's filter) — to build the
+  // new connection's qualifiedName `default/{connector}/{epoch}`.
+  ["ConnectionCreator emits ui.connector from connector.value, not app name"] {
+    openapiConfig.contains("\"connector\": \"api\"")
+    !openapiConfig.contains("\"connector\": \"openapi\"")
+  }
+
+  ["ConnectionCreator emits ui.connector even when name == connector.value"] {
+    selfNamedConfig.contains("\"connector\": \"snowflake\"")
+  }
+
+  ["ConnectionCreator omits ui.connector when the app has no connector"] {
+    !noConnectorConfig.contains("\"connector\":")
+  }
+
+  // ── NativeApp path ──────────────────────────────────────────────────────────
+  ["NativeApp ConnectionCreator emits ui.connector from connector.value"] {
+    nativeConfig.contains("\"connector\": \"api\"")
+    !nativeConfig.contains("\"connector\": \"native-openapi\"")
+  }
+
+  // ── Connectors re-export ──────────────────────────────────────────────────
+  // The fixture amends App.pkl and sets `connector = Connectors.API` without
+  // importing Connectors.pkl; resolving it proves the re-export works.
+  ["App re-exports Connectors so apps need no separate import"] {
+    reexportApp.connector.value == "api"
+    reexportApp.output.files["app/generated/reexport-probe.json"].text
+      .contains("\"connector\": \"api\"")
+  }
+}

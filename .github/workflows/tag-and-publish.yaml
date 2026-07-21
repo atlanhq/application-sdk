@@ -14,23 +14,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0  # Need full history for release notes
 
       - name: Setup Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.14'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.28"
+          version: "0.11.30"
 
       - name: Install dependencies
         shell: bash
@@ -58,21 +57,34 @@ jobs:
           git tag -a "v${{ env.VERSION }}" -m "Release v${{ env.VERSION }}"
           git push origin "v${{ env.VERSION }}"
 
+      - name: Mint fleet App token
+        # A real (non-github-actions[bot]) identity is required so the
+        # Release created below re-fires harbor-release.yaml's
+        # `on: release: [published]` trigger.
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - name: Delete existing GitHub Release (if any)
         run: gh release delete "v${{ env.VERSION }}" --yes 2>/dev/null || true
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Create GitHub Release
         id: create_release
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           tag_name: "v${{ env.VERSION }}"
           name: "v${{ env.VERSION }}"
           body_path: .github/release_notes.md
           draft: false
           prerelease: ${{ contains(env.VERSION, 'rc') }}
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       # TODO: Uncomment in case we need to publish to TestPyPI
       # Available at: https://test.pypi.org/project/atlan-application-sdk/
@@ -92,3 +104,34 @@ jobs:
         run: |
           uv build
           uv publish
+
+  fan-out:
+    # After an SDK release, trigger the self-hosted Renovate runner so consumers
+    # pick up the new atlan-application-sdk version within minutes rather than
+    # waiting for the next scheduled run. Skipped automatically when `release` is
+    # skipped (non-release PR) or fails.
+    name: Fan out Renovate to consumers
+    needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+      - name: Trigger the self-hosted Renovate runner
+        # No dry_run/repos overrides: inherits renovate.yaml's defaults (full
+        # discovery; dry_run=full until PR2 Stage 3 flips it live). So this is an
+        # inert rehearsal today and becomes the real post-release fan-out at
+        # go-live. Soft-fail so a fan-out hiccup never fails the release.
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+        run: |
+          gh workflow run renovate.yaml --repo atlanhq/application-sdk \
+          || echo "::warning::Could not trigger renovate.yaml — consumers will update on the next scheduled run."

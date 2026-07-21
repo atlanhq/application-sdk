@@ -1972,6 +1972,108 @@ class TestConfigMapEndpoints:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_configmap_default_fallback_serves_flat_single_entrypoint_form(
+        self, tmp_path: Path
+    ) -> None:
+        """App-id request resolves a FLAT single-entrypoint form configmap.
+
+        Single-entrypoint apps emit their form flat in CONTRACT_GENERATED_DIR
+        (e.g. ``openapi.json`` beside ``manifest.json``), not nested under an
+        ``<ep.name>/`` dir like multi-entrypoint bundles. The marketplace UI
+        requests the configmap by app-id (``atlan-openapi``), which never
+        matches the flat form stem (``openapi``), so the handler must fall
+        through the default-entrypoint search into the FLAT dir.
+
+        Regression: previously only the nested ``<ep.name>/`` dir was searched,
+        so a flat single-entrypoint app returned 404 and its setup wizard
+        rendered blank even though the form was present (observed in prod:
+        ``ConfigMap not found: requested=atlan-openapi
+        available=['manifest', 'openapi']``).
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Flat layout: form + manifest + a credential template at the ROOT, with
+        # NO per-entrypoint subdir. The credential file sorts before the form
+        # (c < o) and must be skipped — exercising the csa-connectors- exclusion.
+        (tmp_path / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (tmp_path / "csa-connectors-objectstore.json").write_text(
+            json.dumps({"config": {"key": "credential-schema"}})
+        )
+        (tmp_path / "openapi.json").write_text(
+            json.dumps({"config": {"key": "flat-form"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="openapi", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-openapi")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["metadata"]["name"] == "atlan-openapi"
+            parsed_config = json.loads(data["data"]["config"])
+            assert parsed_config["key"] == "flat-form"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_default_fallback_prefers_nested_over_flat_form(
+        self, tmp_path: Path
+    ) -> None:
+        """Nested ``<ep.name>/`` form wins over a flat sibling for the same app.
+
+        Pins the documented search order in :func:`get_configmap`: the
+        default-entrypoint fallback searches the nested per-entrypoint dir
+        BEFORE the flat ``CONTRACT_GENERATED_DIR``. Without both layouts present
+        in one test, swapping the two ``search_dir`` candidates (flat before
+        nested) would pass the whole suite, since the flat and nested regression
+        tests each supply only one layout.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Both layouts present for the same app-id request: a nested
+        # per-entrypoint form (ep.name == "crawler") and a flat form at the
+        # root. The nested one must win.
+        nested_dir = tmp_path / "crawler"
+        nested_dir.mkdir()
+        (nested_dir / "openapi.json").write_text(
+            json.dumps({"config": {"key": "nested-form"}})
+        )
+        (tmp_path / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (tmp_path / "openapi.json").write_text(
+            json.dumps({"config": {"key": "flat-form"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="openapi", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-openapi")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "nested-form"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_configmap_default_fallback_returns_404_when_only_excluded_files(
         self, tmp_path: Path
     ) -> None:
@@ -2524,6 +2626,46 @@ class TestManifestEndpoint:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_manifest_entrypoint_param_falls_back_to_flat_single_entrypoint(
+        self, tmp_path: Path
+    ) -> None:
+        """``?entrypoint=<name>`` on a FLAT single-entrypoint app serves the root manifest.
+
+        Single-entrypoint apps emit a flat manifest at
+        ``CONTRACT_GENERATED_DIR/manifest.json`` (no ``<ep>/`` subdir). Heracles/AE
+        always sends ``?entrypoint=<name>`` on package-workflow submit, which routes
+        straight to ``_serve_entrypoint_manifest`` — a nested-only lookup. Without
+        the flat fallback the app 404s ("No manifest found for entrypoint 'openapi'")
+        and the platform surfaces a 500, blocking every run (observed on the openapi
+        connector's first submit). Regression guard for that path.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Flat layout: manifest at the ROOT, no per-entrypoint subdir.
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"execution_mode": "linear", "source": "flat-root"})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="openapi", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest?entrypoint=openapi")
+            assert response.status_code == 200
+            assert response.json()["source"] == "flat-root"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_manifest_root_file_wins_over_default_entrypoint_fallback(
         self, tmp_path: Path
     ) -> None:
@@ -2633,6 +2775,182 @@ class TestManifestEndpoint:
             response = client.get("/workflows/v1/manifest")
             assert response.status_code == 404
             assert response.json()["detail"] == "No manifest available"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_falls_back_to_explicit_ep_when_implicit_run_is_default(
+        self, tmp_path: Path
+    ) -> None:
+        """Mixed run()+@entrypoint app: implicit run() default has no manifest.
+
+        A SQL-template connector (e.g. ``PostgresApp(SqlMetadataExtractor)``)
+        both implements ``run()`` AND declares explicit ``@entrypoint``s
+        (crawler, miner). The framework forces the implicit ``run()`` as the
+        default entrypoint and prohibits ``@entrypoint(default=True)`` elsewhere
+        (see ``_ep_registration._build_entry_points``) — but ``run()`` has no
+        generated manifest dir, so the no-``?entrypoint=`` route AE/Heracles use
+        for pre-flight validation would 404. The handler must instead fall back
+        to the explicit entrypoints alphabetically and serve ``crawler``
+        (c < m), the connector's primary path, rather than 404-ing.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _MixedRunApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def miner(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+        # Only the explicit entrypoints have generated manifests; the implicit
+        # run() has no dir — exactly the postgres/bundle on-disk layout.
+        for ep_name in ("crawler", "miner"):
+            ep_dir = tmp_path / ep_name
+            ep_dir.mkdir()
+            (ep_dir / "manifest.json").write_text(
+                json.dumps({"execution_mode": "automation-engine", "ep": ep_name})
+            )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _MixedRunApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_MixedRunApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            # Default (implicit run) has no manifest → alphabetically-first
+            # explicit entrypoint, i.e. crawler, NOT miner.
+            assert response.json()["ep"] == "crawler"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_404_when_mixed_run_app_has_no_servable_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """Mixed run()+@entrypoint app with no manifest dirs at all → 404.
+
+        Negative mirror of
+        ``test_manifest_falls_back_to_explicit_ep_when_implicit_run_is_default``
+        (and of the sibling ``test_manifest_returns_404_when_fallback_ep_dir_missing``)
+        for the mixed ``run()`` shape: the implicit ``run()`` default has no
+        manifest dir AND neither explicit entrypoint dir exists, so every
+        candidate misses on disk and the route terminates in the canonical
+        ``"No manifest available"`` 404 rather than serving stale data or 500-ing.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _MixedRunNoManifestApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def miner(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+        # tmp_path has no crawler/ or miner/ subdir and no root manifest.json —
+        # every candidate (implicit run default + both explicit eps) misses.
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_MixedRunNoManifestApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 404
+            assert response.json()["detail"] == "No manifest available"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_recovery_block_serves_explicit_ep_when_no_default_marked(
+        self, tmp_path: Path
+    ) -> None:
+        """No-default multi-ep app: the ``except`` recovery branch still serves.
+
+        The builder auto-marks a default for every multi-``@entrypoint`` app
+        (``_ep_registration._build_entry_points``), so ``_resolve_app_entrypoint``
+        never raises the 400 "entrypoint required" for a builder-produced app —
+        the handler's ``except HTTPException`` recovery block (re-fetch
+        ``app_meta`` from the registry, then fall back to the explicit
+        entrypoints) is defensive future-proofing against that invariant
+        changing. This test locks that branch: it clears the auto-marked default
+        on the registry entry so default resolution raises 400, then asserts the
+        recovery path re-fetches the app and serves the alphabetically-first
+        explicit entrypoint (``crawler``) rather than 404-ing.
+        """
+        from dataclasses import replace
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.app.registry import AppRegistry
+        from application_sdk.handler import service as svc_module
+
+        class _NoDefaultMultiEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def miner(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+        # Re-register the app with every default flag cleared, so
+        # _resolve_default_entrypoint returns None (multi-ep, no marked default)
+        # and _resolve_app_entrypoint raises 400 — the only way to drive the
+        # handler's except-block recovery for a registered app.
+        registry = AppRegistry.get_instance()
+        meta = registry.get(_NoDefaultMultiEpApp._app_name)
+        no_default_eps = {
+            name: replace(ep, default=False) for name, ep in meta.entry_points.items()
+        }
+        registry.register(
+            name=meta.name,
+            version=meta.version,
+            app_cls=meta.app_cls,
+            input_type=meta.input_type,
+            output_type=meta.output_type,
+            entry_points=no_default_eps,
+            allow_override=True,
+        )
+
+        # Both explicit entrypoints have manifests on disk; the recovery block
+        # must pick crawler (c < m) after default resolution fails.
+        for ep_name in ("crawler", "miner"):
+            ep_dir = tmp_path / ep_name
+            ep_dir.mkdir()
+            (ep_dir / "manifest.json").write_text(
+                json.dumps({"execution_mode": "automation-engine", "ep": ep_name})
+            )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_NoDefaultMultiEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            # No default resolvable → recovery block re-fetches app_meta and
+            # falls back to the alphabetically-first explicit ep, crawler.
+            assert response.json()["ep"] == "crawler"
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 

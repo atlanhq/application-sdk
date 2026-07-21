@@ -47,9 +47,9 @@ description: |
 
   ```yaml
   steps:
-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - uses: ./.github/actions/mssql-native-deps   # connector-local action
-    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.21.2
+    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.23.1
       with:
         app-name: mssql
   ```
@@ -207,6 +207,19 @@ runs:
         chmod +x "${{ github.action_path }}/repin-application-sdk.sh"
         "${{ github.action_path }}/repin-application-sdk.sh"
         uv sync --all-extras --all-groups
+
+    # Regenerate app/generated/** (incl. manifest.json — the AE DAG) from
+    # contract/app.pkl before the app server boots, so the host harness exercises
+    # the CURRENT contract + toolkit rather than a possibly-stale committed
+    # manifest (BLDX-1493). Runs after the SDK-ref repin so a toolkit change in
+    # the SDK PR is baked in. App-level = warn-only drift (this always-on job owns
+    # the gate); SDK-level (application-sdk-ref set) overrides the toolkit and a
+    # pkl-eval failure is fatal. Self-skips when there is no contract/app.pkl.
+    - name: Regenerate contract artifacts (manifest.json) before app server
+      uses: atlanhq/application-sdk/.github/actions/regenerate-contract@main
+      with:
+        application-sdk-ref: ${{ inputs.application-sdk-ref }}
+        check-drift: "true"
 
     # SDK 3.13+ boots an embedded daprd + Temporal directly from
     # `python main.py` (application_sdk/dev/_dapr.py + _embedded.py), each

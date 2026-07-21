@@ -405,6 +405,23 @@ _storage: ObjectStore | None = None
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 
+# Non-form JSON siblings that live in CONTRACT_GENERATED_DIR next to the
+# generated setup-form configmaps. Credential templates are emitted per
+# object-store family (`atlan-connectors-*.json`, `csa-connectors-*.json`).
+# Centralised so the form-discovery exclusion vocabulary is named in one place
+# instead of re-spelled inline; `_is_form_configmap` applies it in the
+# get_configmap default-entrypoint fallback, so adding the next connector-family
+# prefix here updates that site without re-spelling the list. `list_configmaps`
+# still uses its own `manifest`-only exclusion (a separate, deliberate decision).
+_CREDENTIAL_TEMPLATE_PREFIXES = ("atlan-connectors-", "csa-connectors-")
+
+
+def _is_form_configmap(stem: str) -> bool:
+    """True when a generated JSON stem is a setup-form configmap, i.e. neither
+    the DAG ``manifest`` nor a credential template."""
+    return stem != "manifest" and not stem.startswith(_CREDENTIAL_TEMPLATE_PREFIXES)
+
+
 # Allowlist regex for entrypoint names: letter-start, then letters/digits/hyphens/underscores.
 # Identical to the @entrypoint decorator constraint. Used as a path-traversal guard
 # in get_manifest() before any filesystem path is constructed.
@@ -1742,19 +1759,36 @@ def _register_workflow_routes(
                 )
                 ep = None
             if ep is not None:
-                # Form configmaps for an entrypoint live under
-                # CONTRACT_GENERATED_DIR/<ep.name>/ (see EntryPointMetadata
-                # docstring: kebab name on the wire and on disk). Pick the
-                # form file by excluding the two well-known non-form siblings:
-                # `manifest.json` (DAG manifest) and `atlan-connectors-*.json`
-                # (credential template). Sorted for determinism.
-                entrypoint_dir = CONTRACT_GENERATED_DIR / ep.name
-                if entrypoint_dir.is_dir():
-                    for json_file in sorted(entrypoint_dir.glob("*.json")):
-                        stem = json_file.stem
-                        if stem == "manifest" or stem.startswith("atlan-connectors-"):
+                # Locate the entrypoint's form configmap across BOTH generated
+                # layouts:
+                #   * multi-entrypoint (bundle) apps nest each entrypoint's form
+                #     under CONTRACT_GENERATED_DIR/<ep.name>/ (see
+                #     EntryPointMetadata: kebab name on the wire and on disk);
+                #   * single-entrypoint apps emit it FLAT in CONTRACT_GENERATED_DIR
+                #     itself (e.g. `openapi.json` alongside `manifest.json`).
+                # Search the nested dir first, then fall back to the flat dir, so
+                # an app-id request (e.g. "atlan-openapi", which the marketplace
+                # UI builds instead of the form stem) resolves for either shape.
+                # Previously only the nested layout was searched, so a flat
+                # single-entrypoint app 404'd on an app-id request even though its
+                # form file was present — a blank setup wizard in the UI.
+                #
+                # Pick the form file by excluding the well-known non-form
+                # siblings (`manifest.json` and the `{atlan,csa}-connectors-*`
+                # credential templates) via `_is_form_configmap`. Sorted for
+                # determinism.
+                for search_dir in (
+                    CONTRACT_GENERATED_DIR / ep.name,
+                    CONTRACT_GENERATED_DIR,
+                ):
+                    if not search_dir.is_dir():
+                        continue
+                    for json_file in sorted(search_dir.glob("*.json")):
+                        if not _is_form_configmap(json_file.stem):
                             continue
                         target = json_file
+                        break
+                    if target is not None:
                         break
 
         if target is not None:
@@ -1835,10 +1869,23 @@ def _register_workflow_routes(
         }
         ep_manifest = registry.get(entrypoint_name)
         if ep_manifest is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No manifest found for entrypoint {entrypoint_name!r}",
-            )
+            # Multi-entrypoint (bundle) apps nest each entrypoint's manifest
+            # under <ep.name>/manifest.json (matched above). Single-entrypoint
+            # apps emit it FLAT at CONTRACT_GENERATED_DIR/manifest.json, with no
+            # per-entrypoint subdir. Heracles/AE always sends ?entrypoint=<name>
+            # on package-workflow submit, so without this fallback a flat
+            # single-entrypoint app 404s ("No manifest found for entrypoint")
+            # and the platform surfaces it as a 500 on submit — blocking every
+            # run. Mirrors the flat-layout fallback in get_configmap and the
+            # no-?entrypoint branch of get_manifest.
+            flat_manifest = CONTRACT_GENERATED_DIR / "manifest.json"
+            if flat_manifest.is_file():
+                ep_manifest = flat_manifest
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No manifest found for entrypoint {entrypoint_name!r}",
+                )
         raw = ep_manifest.read_bytes()
         # app_name is baked into the generated manifest by the contract toolkit
         # (from the contract `name`); only the per-deployment token is substituted here.
@@ -1924,29 +1971,63 @@ def _register_workflow_routes(
         # caller (e.g. Heracles/AE pre-validation) omits ?entrypoint=, fall
         # back to the app's default entrypoint instead of 404-ing.
         try:
-            _, ep = _resolve_app_entrypoint(
+            app_meta, default_ep = _resolve_app_entrypoint(
                 _workflow_config.app_name, None, unknown_ep_status=404
             )
         except HTTPException:
-            # No default entrypoint resolvable (the only HTTPException
-            # _resolve_app_entrypoint raises), so the handler falls through
-            # to a 404. Warning, not debug: this is exc_info-worthy
-            # telemetry an operator should see in production, not just
-            # local control flow.
+            # No *default* entrypoint resolvable. Don't give up on the fallback:
+            # resolve the app's metadata INDEPENDENTLY of default resolution so
+            # the explicit-entrypoint alphabetical fallback below still applies.
+            # A servable multi-entrypoint app must not 404 just because the
+            # builder didn't mark a default — that invariant is off-screen and
+            # load-bearing, and this keeps the fallback robust to it changing.
+            # Warning, not debug: exc_info-worthy telemetry for operators.
             logger.warning(
-                "No default entrypoint for app %s; serving manifest 404",
+                "No default entrypoint for app %s; trying explicit-entrypoint "
+                "fallback before serving 404",
                 _workflow_config.app_name,
                 exc_info=True,
             )
-            ep = None
-        if ep is not None:
+            default_ep = None
             try:
-                return await _serve_entrypoint_manifest(ep.name, fe_inputs, deployment)
+                from application_sdk.app.registry import (  # noqa: PLC0415
+                    AppNotFoundError,
+                    AppRegistry,
+                )
+
+                app_meta = AppRegistry.get_instance().get(_workflow_config.app_name)
+            except AppNotFoundError:
+                # App genuinely not registered — no fallback possible, 404.
+                app_meta = None
+
+        # Candidate order: the resolved default first, then every *explicit*
+        # (non-implicit) entrypoint alphabetically. The second group matters
+        # for a connector that both implements run() (via the
+        # SqlMetadataExtractor template) AND declares explicit @entrypoints:
+        # the framework forces the implicit run() as the default (see
+        # app/entrypoint.py — "run() + @entrypoint(s) → run() always"), but
+        # run() has no generated manifest dir, so serving it 404s. Rather than
+        # 404 the whole route, fall back to the explicit entrypoints, ordered
+        # alphabetically — the same tie-break the framework uses when multiple
+        # @entrypoints carry no marked default. For a SQL bundle app this
+        # resolves to `crawler` (c < m < …), the connector's primary path.
+        candidates: list[str] = []
+        if default_ep is not None:
+            candidates.append(default_ep.name)
+        if app_meta is not None:
+            candidates.extend(
+                ep.name
+                for ep in sorted(app_meta.entry_points.values(), key=lambda e: e.name)
+                if not ep.implicit and ep.name not in candidates
+            )
+
+        for cand in candidates:
+            try:
+                return await _serve_entrypoint_manifest(cand, fe_inputs, deployment)
             except HTTPException as exc:
                 if exc.status_code != 404:
                     raise
-                # Default entrypoint exists but has no manifest file on disk —
-                # fall through to the canonical 404 below.
+                # This candidate has no manifest file on disk — try the next.
 
         raise HTTPException(status_code=404, detail="No manifest available")
 

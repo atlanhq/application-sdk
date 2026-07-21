@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from temporalio.client import Client
 from temporalio.worker import Interceptor as TemporalInterceptor
@@ -26,6 +26,7 @@ from application_sdk.app.registry import (
 from application_sdk.constants import (
     APP_BUILD_ID,
     APP_DEPLOYMENT_NAME,
+    PREFLIGHT_GATE_MODE_ENV,
     SHUTDOWN_DRAIN_DELAY_SECONDS,
 )
 from application_sdk.execution._temporal.activities import get_all_task_activities
@@ -43,6 +44,24 @@ if TYPE_CHECKING:
     from application_sdk.observability.pushgateway import PushGatewayClient
 
 logger = get_logger(__name__)
+
+
+def _resolve_gate_enforcement(app_cls: type | None) -> bool:
+    """Resolve the preflight gate's posture for one app.
+
+    ``True`` = hard (block on ``NOT_READY``); ``False`` = soft (emit
+    ``would_block``, proceed). Precedence: ``ATLAN_PREFLIGHT_GATE_MODE`` env
+    (deploy-time ops lever, no app release needed) > the app's declared
+    ``App.preflight_gate_mode`` (git-blamed opt-in) > soft default. Only the
+    literal ``"hard"`` enforces; an unknown or malformed value falls back to
+    soft — a run is never blocked by accident, blocking is always a deliberate
+    opt-in.
+    """
+    val = os.environ.get(PREFLIGHT_GATE_MODE_ENV)
+    if val:
+        return val.strip().lower() == "hard"
+    declared = getattr(app_cls, "preflight_gate_mode", "soft")
+    return str(declared).strip().lower() == "hard"
 
 
 class AppWorker:
@@ -290,6 +309,7 @@ def create_worker(
     graceful_shutdown_timeout_seconds: int | None = None,
     interceptors: list[TemporalInterceptor] | None = None,
     enable_pushgateway: bool = False,
+    on_activity: Callable[[], None] | None = None,
 ) -> AppWorker:
     """Create a Temporal worker for registered Apps.
 
@@ -334,6 +354,10 @@ def create_worker(
             performs a final push on exit. Combined deployments (server +
             worker in one process) should leave this False so /metrics
             doesn't double-count.
+        on_activity: Optional callback fired on every activity execution and
+            heartbeat. The main entry point wires this to
+            ``WorkerHealthServer.record_activity`` so the ``/live`` probe can
+            reflect real worker progress.
 
     Returns:
         AppWorker wrapping a configured Temporal Worker (not yet started).
@@ -402,10 +426,21 @@ def create_worker(
             field="task_name",
         )
 
-    task_activities = [
-        *task_activities,
-        *(build_preflight_gate_activity(gate_handler, name) for name in gate_app_names),
-    ]
+    name_to_app_cls = {m.name: m.app_cls for m in sdr_registered_apps}
+    gate_activities = []
+    for name in gate_app_names:
+        enforce = _resolve_gate_enforcement(name_to_app_cls.get(name))
+        if enforce:
+            logger.info(
+                "Preflight gate is HARD for app %r — a NOT_READY verdict WILL "
+                "abort the run before extraction. This is the per-app opt-in; "
+                "the default posture is soft (report only, never block).",
+                name,
+            )
+        gate_activities.append(
+            build_preflight_gate_activity(gate_handler, name, enforce=enforce)
+        )
+    task_activities = [*task_activities, *gate_activities]
 
     # SDR (the control-plane test_auth/preflight_check/fetch_metadata workflows)
     # requires a REAL handler — never the bare DefaultHandler sentinel. Both the
@@ -469,6 +504,19 @@ def create_worker(
         MetricsInterceptor(),
         TraceInterceptor(),
     ]
+
+    # Liveness recording is appended after the SDK's own Log/Metrics/Trace
+    # interceptors but before the user-supplied interceptors and the
+    # OutputInterceptor, so a stall in any of those downstream interceptors
+    # still counts as "activity observed" — the goal is to detect a dead poll
+    # loop, not to gate on downstream success.
+    if on_activity is not None:
+        from application_sdk.execution._temporal.interceptors.liveness import (  # noqa: PLC0415 — cold path: only when a liveness callback is wired
+            LivenessInterceptor,
+        )
+
+        all_interceptors.append(LivenessInterceptor(on_activity))
+
     all_interceptors.extend(interceptors or [])
 
     if interceptor_settings.enable_output_interceptor:

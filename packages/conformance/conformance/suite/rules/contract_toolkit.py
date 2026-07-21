@@ -51,6 +51,31 @@ committed ``app/generated/**/manifest.json`` against the entrypoint's Python
 supplied by an SDK mixin such as ``PublishInputMixin`` counts as declared).
 WARN and APP-scoped; no-op on any repo without ``app/generated/``.
 
+Release-readiness guards (CONNECT release-pipeline)
+---------------------------------------------------
+K011/K012 guard the two pieces of contract-toolkit setup the marketplace
+publish pipeline depends on but that no other check enforced — each has
+silently broken a real semver release:
+
+* K011 — the generated ``atlan.yaml`` must carry a top-level ``app_id``. It
+  maps the app to its Global Marketplace record; the release publish step
+  (``build-and-publish-app.yaml`` → ``.github/scripts/parse_atlan_yaml.py``)
+  POSTs it to the GM, and an empty value makes the GM return 404, so the
+  release is cut but never appears in the marketplace. This regressed when an
+  app's ``atlan.yaml`` became fully pkl-generated and the ``app_id`` — which
+  had been hand-carried in the file — was dropped because the pkl ``metadata``
+  block never declared it.
+* K012 — ``pyproject.toml`` must define a ``generate`` poe task. The SDK
+  Certify step runs ``uv run poe generate`` and hard-fails when the task is
+  absent, aborting the publish before it starts (``Unrecognized task
+  'generate'``). Apps that defined generation only in a ``Makefile`` had no
+  such task.
+
+Both are BLOCK-tier: unlike the WARN hygiene rules above, a violation here does
+not degrade quality — it silently prevents the app from ever reaching the
+marketplace, so it must fail the PR that introduces it rather than surface at
+release time.
+
 Scope
 -----
 ``APP`` only: consumer apps have a ``contract/`` directory; the SDK itself does
@@ -207,6 +232,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "``Connectors.Type`` but does not re-export the constants), so the "
             "import is required, not legacy.\n"
             "\n"
+            "Note: a contract that **amends** ``Credential.pkl`` (a "
+            "credential-config sub-contract, not an App.pkl entrypoint) is "
+            '**not** flagged for its ``import "…Config.pkl"`` line.  '
+            "Credential.pkl uses ``Config.*`` internally but, unlike App.pkl, "
+            "does not re-export the widget types as unqualified typealiases, so "
+            "such a contract genuinely needs the import for ``pkl eval`` to "
+            "resolve ``Config.TextInput`` etc. — flagging it would be a false "
+            "positive.  The exemption covers ``Config.pkl`` only: a credential "
+            'contract carrying ``import "…Renderers.pkl"`` or '
+            '``import "…Credential.pkl"`` is still legacy and still fires.\n'
+            "\n"
             "**Note:** if the contract also has a K001 finding (still amending a "
             "legacy module), address K001 first — many K002 knobs disappear "
             "automatically when the module changes, because App.pkl simply "
@@ -250,8 +286,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "When someone bumps the pin in PklProject but does not re-resolve, the "
             "lock stays behind: pkl eval regenerates from the OLD toolkit, so the "
             "committed generated artifacts silently reflect a version the contract no "
-            "longer claims.  Renovate's renovate-pkl-sync workflow keeps these two in "
-            "sync on bot bumps, but a manual pin edit bypasses it entirely.  Comparing "
+            "longer claims.  The self-hosted Renovate runner keeps these two in sync "
+            "on bot bumps (regenerating the lock and artifacts in the same PR via "
+            "postUpgradeTasks), but a manual pin edit bypasses it entirely.  Comparing "
             "the two files is a pure, deterministic text check that needs no pkl "
             "toolchain, so it catches the drift the moment it lands (BLDX-1414)."
         ),
@@ -277,9 +314,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "    pkl project resolve   # rewrites contract/PklProject.deps.json\n"
             "    pkl eval -m . contract/app.pkl   # regenerates the artifacts\n"
             "\n"
-            "On a ``renovate/**`` branch this happens automatically via the "
-            "``renovate-pkl-sync`` workflow; on a manual bump run the commands "
-            "above (or ``uv run poe generate`` where the app defines it).\n"
+            "On a ``renovate/**`` branch the self-hosted Renovate runner does this "
+            "automatically in the same PR (via postUpgradeTasks); on a manual bump "
+            "run the commands above (or ``uv run poe generate`` where the app "
+            "defines it).\n"
             "\n"
             "The version match is prefix-aware: a broad pin such as ``@0`` is "
             "satisfied by any resolved ``0.y.z`` and is never flagged — only a "
@@ -515,7 +553,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "**Fix:** bump the ``@<version>`` in ``contract/PklProject`` to the "
             "latest, run ``pkl project resolve`` to refresh the lock, then "
             "regenerate with ``pkl eval -m . contract/app.pkl``. On a "
-            "``renovate/**`` branch this happens automatically via renovate-pkl-sync.\n"
+            "``renovate/**`` branch the self-hosted Renovate runner does this "
+            "automatically via postUpgradeTasks.\n"
             "\n"
             "**Suppress** with ``// conformance: ignore[K007] <reason>`` on the "
             "``uri`` line (or the comment-only line directly above it) when a "
@@ -676,6 +715,129 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k010"
+        ),
+    ),
+    RuleDefinition(
+        id="K011",
+        scope=RuleScope.APP,
+        name="AppIdMissingFromContract",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.14.0",
+        orthogonal_gate="pkl-eval",
+        rationale=(
+            "app_id is the stable identity that maps the app to its Global "
+            "Marketplace record. The release publish step "
+            "(build-and-publish-app.yaml -> .github/scripts/parse_atlan_yaml.py) "
+            "reads the top-level app_id out of the generated atlan.yaml and POSTs "
+            "it to the GM; an empty value makes the GM return 404 creating the "
+            "version, so the GitHub Release is cut and the image is pushed to "
+            "GHCR but the version never appears in the marketplace. This is a "
+            "silent, release-time-only failure: nothing in the app's own PR CI "
+            "notices, and it stays broken across every subsequent release until "
+            "someone reads the failed publish log. It regressed on a live "
+            "connector when atlan.yaml became fully pkl-generated and the app_id, "
+            "previously hand-carried in the file, was dropped because the pkl "
+            "metadata block never declared it. BLOCK-tier because the only "
+            "outcome of shipping without it is a broken release."
+        ),
+        short_description=(
+            "atlan.yaml is present but declares no top-level app_id — the "
+            "marketplace publish will 404"
+        ),
+        full_description=(
+            "The committed ``atlan.yaml`` has no top-level ``app_id:`` key. "
+            "``app_id`` is the app's Global Marketplace identity; the release "
+            "publish step POSTs it to the GM, and an empty value returns a 404 so "
+            "the release never reaches the marketplace even though the tag, the "
+            "GitHub Release, and the GHCR image all succeed.\n"
+            "\n"
+            "``atlan.yaml`` is generated from ``contract/app.pkl`` and must not be "
+            "hand-edited (K005 guards its provenance banner). Restore ``app_id`` "
+            "at its source, in the pkl ``metadata`` block — its entries are "
+            "emitted as top-level ``atlan.yaml`` keys, exactly as "
+            "``release_model`` already is:\n"
+            "\n"
+            "    metadata {\n"
+            '      ["release_model"] = "semver"\n'
+            '      ["app_id"] = "<your-app-uuid>"\n'
+            "    }\n"
+            "\n"
+            "Find ``<your-app-uuid>`` in the Global Marketplace admin UI (the app "
+            "URL — ``/admin/#/apps/<app_id>/versions``) or in the ``app_id`` of a "
+            "prior successful publish log. Then regenerate with ``pkl eval -m . "
+            "contract/app.pkl`` (or ``uv run poe generate``) and commit the "
+            "updated ``atlan.yaml``.\n"
+            "\n"
+            "**Suppress** with ``# conformance: ignore[K011] <reason>`` on the "
+            "first line of ``atlan.yaml`` (or the line above) — but a suppression "
+            "is almost never correct here: a semver app with no ``app_id`` cannot "
+            "publish. It exists only for the rare non-published app that still "
+            "ships an ``atlan.yaml``.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k011"
+        ),
+    ),
+    RuleDefinition(
+        id="K012",
+        scope=RuleScope.APP,
+        name="GeneratePoeTaskMissing",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.14.0",
+        orthogonal_gate="tests",
+        rationale=(
+            "The SDK build-and-publish Certify step runs ``uv run poe generate`` "
+            "to prove the committed generated artifacts match what regenerating "
+            "the contract today would produce, and it hard-fails (exit 1) when "
+            "the task does not exist -- ``Error: Unrecognized task 'generate'``. "
+            "That aborts Certify before the publish job runs, so a missing task "
+            "blocks every marketplace release. Apps whose contract generation "
+            "lived only in a Makefile target (``make generate``) had no poe task "
+            "of that name, so the check passed locally yet the release died in "
+            "CI. A one-line poe alias mirroring the Makefile target closes the "
+            "gap. BLOCK-tier because, like K011, the only outcome of the missing "
+            "piece is a broken release rather than degraded quality."
+        ),
+        short_description=(
+            "pyproject.toml defines no [tool.poe.tasks.generate] task — the SDK "
+            "Certify step will abort the publish"
+        ),
+        full_description=(
+            "``pyproject.toml`` has a contract (a ``contract/`` directory exists) "
+            "but ``[tool.poe.tasks]`` defines no ``generate`` task. The SDK "
+            "Certify step (``build-and-publish-app.yaml``) runs ``uv run poe "
+            "generate`` and fails the whole publish run with ``Unrecognized task "
+            "'generate'`` when the task is absent.\n"
+            "\n"
+            "Add a ``generate`` poe task that regenerates the contract artifacts, "
+            "mirroring the repo's ``Makefile`` target — for the common "
+            "single-contract layout:\n"
+            "\n"
+            "    [tool.poe.tasks]\n"
+            '    generate = "pkl eval --project-dir contract -m . '
+            'contract/app.pkl"\n'
+            "\n"
+            "Include every ``.pkl`` the ``Makefile`` evaluates (e.g. a credential "
+            "contract such as ``contract/csa-connectors-objectstore.pkl``) so "
+            "``poe generate`` and ``make generate`` stay equivalent. Verify with "
+            "``uv run poe generate`` — it must succeed and leave the generated "
+            "tree unchanged.\n"
+            "\n"
+            "**Suppress** with ``# conformance: ignore[K012] <reason>`` on the "
+            "``[tool.poe.tasks]`` header line (or the line above). Only justified "
+            "for an app that is genuinely never published through the "
+            "marketplace pipeline.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k012"
         ),
     ),
 )

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.21.2
-source-sha:    dd4358b79c70bc2efd4414974d23bc984c8b9008
-source-date:   2026-07-10T05:58:10+05:30
+sdk-version:   3.23.0
+source-sha:    fc856c0cd89c08315c80b0131d706e08fed2ec17
+source-date:   2026-07-17T11:37:53+00:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 26 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 11 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 56 |
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 29 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 33 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -326,6 +326,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Enumeration of dataframe types.
 - **Defined in:** `application_sdk/common/types.py`
 
+#### `FilterPattern`
+
+- **Import:** `from application_sdk.common import FilterPattern`
+- **Signature:** `class FilterPattern(include: list[re.Pattern[str]], exclude: list[re.Pattern[str]])`
+- **Summary:** A compiled include/exclude filter with uniform regex-or-exact semantics.
+- **Defined in:** `application_sdk/common/filter_matching.py`
+
 #### `TaskResult`
 
 - **Import:** `from application_sdk.common import TaskResult`
@@ -341,6 +348,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Defined in:** `application_sdk/common/models.py`
 
 ### Functions
+
+#### `filter_matches`
+
+- **Import:** `from application_sdk.common import filter_matches`
+- **Signature:** `filter_matches(candidate: str, ...)`
+- **Summary:** Convenience one-shot: compile ``include``/``exclude`` and test ``candidate``.
+- **Defined in:** `application_sdk/common/filter_matching.py`
 
 #### `get_actual_cpu_count`
 
@@ -2158,6 +2172,27 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Return ``(size_bytes, e_tag)`` for *key*, or ``None`` if not found.
 - **Defined in:** `application_sdk/storage/ops.py`
 
+#### `is_sidecar_key`
+
+- **Import:** `from application_sdk.storage import is_sidecar_key`
+- **Signature:** `is_sidecar_key(key: str)`
+- **Summary:** Return ``True`` if *key* is a SHA-256 sidecar rather than a data object.
+- **Defined in:** `application_sdk/storage/batch.py`
+
+#### `list_data_keys`
+
+- **Import:** `from application_sdk.storage import list_data_keys`
+- **Signature:** `list_data_keys(prefix: str = '', store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
+- **Summary:** List data object keys under *prefix*, excluding SHA-256 sidecars.
+- **Defined in:** `application_sdk/storage/batch.py`
+
+#### `list_data_keys_with_meta`
+
+- **Import:** `from application_sdk.storage import list_data_keys_with_meta`
+- **Signature:** `list_data_keys_with_meta(prefix: str = '', store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
+- **Summary:** Like :func:`list_data_keys`, but return ``(key, size_bytes, e_tag)`` tuples.
+- **Defined in:** `application_sdk/storage/batch.py`
+
 #### `list_keys`
 
 - **Import:** `from application_sdk.storage import list_keys`
@@ -2213,6 +2248,15 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Signature:** `verify_object_store_access(infra: InfrastructureContext)`
 - **Summary:** In SDR mode, verify read+write access to every configured object store.
 - **Defined in:** `application_sdk/storage/preflight.py`
+
+### Constants and Enums
+
+#### `SIDECAR_SUFFIX`
+
+- **Import:** `from application_sdk.storage import SIDECAR_SUFFIX`
+- **Signature:** `SIDECAR_SUFFIX`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/batch.py`
 
 ## `application_sdk.templates`
 
@@ -2402,8 +2446,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import ContractValidationError`
 - **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
 - **Fields:**
-  - `DEFAULT_ERROR_CODE: ErrorCode` `= CONTRACT_VALIDATION`
-  - `code: str` `= 'INVALID_INPUT_CONTRACT_VALIDATION'`
+  - `DEFAULT_ERROR_CODE: ClassVar[ErrorCode]` `= CONTRACT_VALIDATION`
+  - `code: ClassVar[str]` `= 'INVALID_INPUT_CONTRACT_VALIDATION'`
   - `error_code: ErrorCode`
 - **Defined in:** `application_sdk/contracts/base.py`
 
@@ -2484,9 +2528,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import PublishInputMixin`
 - **Summary:** Mixin for apps whose workflow output feeds the Publish App.
 - **Fields:**
-  - `PUBLISH_STATE_PREFIX_TEMPLATE: str` `= 'persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}/publish-state'`
-  - `STAGING_DATA_PREFIX_TEMPLATE: str` `= 'persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}'`
-  - `CURRENT_STATE_PREFIX_TEMPLATE: str` `= 'argo-artifacts/{connection_qn}/current-state'`
+  - `PUBLISH_STATE_PREFIX_TEMPLATE: ClassVar[str]` `= 'persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}/publish-state'`
+  - `STAGING_DATA_PREFIX_TEMPLATE: ClassVar[str]` `= 'persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}'`
+  - `CURRENT_STATE_PREFIX_TEMPLATE: ClassVar[str]` `= 'argo-artifacts/{connection_qn}/current-state'`
   - `output_path: str` `= ''` — SDK output path. Used to derive ``transformed_data_prefix``.
   - `output_prefix: str` `= ''` — Prefix to strip from ``output_path`` before deriving transformed prefix.
   - `transformed_data_prefix: str` `= ''` — Object-store-relative path to transformed data files.
@@ -2699,12 +2743,13 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for the preflight_check handler operation.
 - **Fields:**
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
+  - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by ref name for multi-credential apps.
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
   - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
   - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).
-  - `timeout_seconds: int` `= 60` — Maximum seconds to wait for all checks.
+  - `timeout_seconds: int` `= 60` — Maximum seconds the handler has to run all checks.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `PreflightOutput`
@@ -2712,7 +2757,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import PreflightOutput`
 - **Summary:** Output from the preflight_check handler operation.
 - **Fields:**
-  - `status: PreflightStatus` — Overall verdict — decides the gate. ``NOT_READY`` blocks the run;
+  - `status: PreflightStatus` — Overall verdict — decides the gate. ``NOT_READY`` blocks the run only in
   - `checks: list[PreflightCheck]` `= []` — Individual check results (display + failure attribution).
   - `message: str` `= ''` — Human-readable summary. Seeds the gate's abort reason when set.
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.
@@ -2778,6 +2823,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import ExtractionInput`
 - **Summary:** Top-level input for a SQL metadata extraction run.
 - **Fields:**
+  - `preflight_credential_refs: ClassVar[dict[str, str]]` `= {}` — Opt-in map of ``{ref_name: guid_field}`` for multi-credential apps.
   - `workflow_id: str` `= ''` — Temporal workflow ID for this run.
   - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)` — Typed connection reference (qualified name, name, admin users, etc.).
   - `credential_guid: str` `= ''` — GUID of credentials stored in the secret store.

@@ -8,7 +8,10 @@
 # fleet dashboard data to Kryptonite (k.atlan.dev/renovate-dashboard/).
 #
 # Mirrors the conformance dashboard job in update-dashboard.yaml for the S3
-# deployment pattern, and reusable-renovate-dispatch.yaml for fleet discovery.
+# deployment pattern. This dashboard runs its own inline `gh search code`
+# discovery (see the discovery step below); the self-hosted renovate.yaml runner
+# instead uses the deterministic discover_org_consumers.py. Both target the same
+# signal — repos whose renovate.json extends the shared preset.
 #
 # Two modes:
 #   Full-fleet (schedule / workflow_dispatch without repo input):
@@ -47,12 +50,20 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout application-sdk
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
 
       - name: Discover atlan-application-sdk consumers
         id: discover
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SINGLE_REPO: ${{ inputs.repo }}
         run: |
           set -euo pipefail
@@ -79,7 +90,7 @@ jobs:
               || echo "[]")
 
             if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
-              echo "::warning::No consumer repos discovered. Check ORG_PAT_GITHUB permissions."
+              echo "::warning::No consumer repos discovered. Check the atlan-app-fleet App installation/permissions."
             else
               echo "Discovered $(echo "$repos" | jq '. | length') consumer repos"
             fi
@@ -88,7 +99,7 @@ jobs:
 
       - name: Gather Renovate PR data
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPOS: ${{ steps.discover.outputs.repos }}
           SINGLE_REPO: ${{ inputs.repo }}
         run: |
@@ -117,7 +128,9 @@ jobs:
           echo "Merged PR files: $(ls /tmp/renovate-input/merged | wc -l)"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.30"
 
       - name: Run Renovate scanner
         run: |

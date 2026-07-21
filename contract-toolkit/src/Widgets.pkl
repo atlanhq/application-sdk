@@ -145,6 +145,16 @@ class ValidationRule {
 
   /// Treat strings containing only whitespace as a validation failure.
   whitespace: Boolean?
+
+  /// The intended form-UI trigger for the rule (e.g. `"blur"`, `"change"`),
+  /// carried verbatim into the widget's `ui.rules` for parity with the legacy
+  /// `Dynamic` shape. The setup-form UI does not currently honor a per-rule
+  /// `trigger` — validation timing is set by the widget, not the rule — so this
+  /// is a passthrough / migration-parity field and does not change when
+  /// validation fires today. Left as `String?` rather than a closed enum so
+  /// connectors aren't broken by a trigger value not yet enumerated here;
+  /// tighten to a union once the accepted set is confirmed.
+  trigger: String?
 }
 
 /// Opt-in JSON or regex validation for input widgets, emitted as the widget's
@@ -427,6 +437,13 @@ class Widget {
   /// Whether to show connection options.
   connectionOptions: Boolean?
 
+  /// Connector type for the connection widget (ConnectionCreator). The frontend
+  /// reads this to build a newly-created connection's qualifiedName as
+  /// `default/{connector}/{epoch}`. Distinct from `connectorName` (the
+  /// connectionSelector's filter). Injected by the toolkit from the app-level
+  /// `connector`.
+  connector: String?
+
   /// Connection category filter for connectionSelector widget.
   connectionCategories: String?
 
@@ -583,10 +600,23 @@ class ConnectionCreator extends UIElement {
 
   hidden showConnectionOptions: Boolean?
 
+  /// (Injected by the toolkit from the app-level `connector`.) The Atlan
+  /// connector type stamped on connections created via this widget, emitted as
+  /// `ui.connector` — the key the frontend's connection widget reads to build a
+  /// new connection's qualifiedName (`default/{connector}/{epoch}`). Without it
+  /// the frontend has no connector type on the CREATE path and falls back to the
+  /// workflow's `orchestration.atlan.com/source` label (the app id), which is
+  /// wrong whenever the app name differs from the connector type (e.g. app
+  /// "openapi", connector "api" → connections wrongly created as
+  /// `default/openapi/{epoch}`). Left null when the app declares no `connector`,
+  /// in which case the key is omitted and behaviour is unchanged.
+  hidden connectorType: String?
+
   fixed ui {
     widget = "connection"
     placeholder = placeholderText
     connectionOptions = showConnectionOptions
+    connector = connectorType
   }
 }
 

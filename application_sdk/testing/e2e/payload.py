@@ -135,7 +135,7 @@ def build_agent_json(
     connector_short_name: str,
 ) -> dict[str, Any]:
     """Build the agent_json routing block for AGENT-mode extract args."""
-    return {
+    block: dict[str, Any] = {
         "host": database.host,
         "port": database.port,
         "auth-type": database.auth_type,
@@ -147,6 +147,18 @@ def build_agent_json(
         "basic.username": f"SDR_{connector_short_name.upper()}_USERNAME",
         "basic.password": f"SDR_{connector_short_name.upper()}_PASSWORD",
     }
+    # Connector-specific connection fields ride as dotted ``extra.<k>`` keys.
+    # The prime case is ``database``: postgres (and any SQL client whose
+    # DB_CONFIG.required lists it) can't build a connection string without it,
+    # while mysql omits it entirely. ``transform_agent_credentials`` nests
+    # ``extra.<k>`` → ``credentials["extra"][k]``, which is exactly where the
+    # SQL client reads it — so a connector supplies its database (and any other
+    # extra) once via ``DatabaseSpec.extra`` and the harness wires it through,
+    # rather than each connector hand-patching its AE payload. Validated by a
+    # postgres full-DAG e2e run.
+    for key, value in database.extra.items():
+        block[f"extra.{key}"] = value
+    return block
 
 
 def build_seed_dag(
@@ -318,6 +330,25 @@ def build_seed_dag(
     }
 
 
+# Top-level agent_json keys emitted as flat ``agent-json.<key>`` Argo routing
+# rows by build_ae_payload. These are the routing / secret-store-pointer fields
+# the shared cluster WorkflowTemplate reads directly (the connector's actual
+# credential ref-keys ride inside the JSON blob, not as flat rows). Only keys
+# present in the supplied agent_json are emitted.
+_AGENT_JSON_ROUTING_KEYS = (
+    "host",
+    "port",
+    "auth-type",
+    "agent-name",
+    "agent-type",
+    "key-type",
+    "aws-auth-method",
+    "azure-auth-method",
+    "secret-manager",
+    "secret-path",
+)
+
+
 def build_ae_payload(
     *,
     run_id: int,
@@ -330,6 +361,9 @@ def build_ae_payload(
     mustache_subs: MustacheSubstitutions,
     credential_body: CredentialBody | None,
     ae_workflow_slug: str = "",
+    entrypoint: str = "",
+    agent_json: dict[str, Any] | None = None,
+    credential_type: str = "",
 ) -> dict[str, Any]:
     """Assemble the AE submit body.
 
@@ -356,6 +390,26 @@ def build_ae_payload(
             credential-creation block entirely.
         ae_workflow_slug: If non-empty, used verbatim; otherwise
             auto-derived from connector name + run_id.
+        agent_json: Optional agent-mode routing block (single-bundle shape:
+            ``key-type=""`` + ``secret-manager`` + ``secret-path`` + nested
+            ``extra`` ref-keys, or the dotted ``basic.*`` / ``keypair.*`` shape
+            from :func:`build_agent_json`). When supplied, the ``agent-json``
+            JSON-blob parameter is (re)written from it and the flat
+            ``agent-json.<key>`` routing rows (:data:`_AGENT_JSON_ROUTING_KEYS`)
+            plus the ``credential-guid.*`` rows the shared cluster template reads
+            are emitted — so agent-mode connectors no longer hand-roll a
+            ``_build_ae_payload`` override to append them. Absent (default None)
+            => no flat rows and no blob rewrite (backward-compatible: the blob,
+            if any, comes from ``mustache_subs``'s ``{{agent-json}}`` field).
+        credential_type: The connector's credential-config name (e.g.
+            ``atlan-connectors-mysql``); defaults to
+            ``f"atlan-connectors-{connector_short_name}"`` when empty. Two
+            consumers: (a) the flat ``credential-guid.credential-type`` routing
+            row, emitted only in agent mode (when ``agent_json`` is given); and
+            (b) the credential body's ``connectorConfigName``, backfilled
+            when that field is absent so the submit matches what the real UI
+            always sends (see the inline comment at the backfill site) — i.e.
+            used even without ``agent_json``.
 
     Returns:
         Dict ready to ``orjson.dumps`` and POST to
@@ -394,6 +448,36 @@ def build_ae_payload(
             )
         elif value is not None:
             parameters.append({"name": param_name, "value": value})
+
+    # Agent-mode routing rows. When an ``agent_json`` dict is supplied, it is
+    # the source of truth for the ``agent-json`` blob (overriding any emitted
+    # from mustache_subs) and we emit the flat ``agent-json.<key>`` +
+    # ``credential-guid.*`` rows the shared cluster template routes on. No-op
+    # when agent_json is None, so single-entrypoint / direct-mode submits are
+    # unaffected.
+    if agent_json is not None:
+        parameters = [p for p in parameters if p.get("name") != "agent-json"]
+        parameters.append(
+            {"name": "agent-json", "value": orjson.dumps(agent_json).decode()}
+        )
+        resolved_credential_type = (
+            credential_type or f"atlan-connectors-{connector_short_name}"
+        )
+        parameters.append(
+            {
+                "name": "credential-guid.credential-type",
+                "value": resolved_credential_type,
+            }
+        )
+        if "auth-type" in agent_json:
+            parameters.append(
+                {"name": "credential-guid.auth-type", "value": agent_json["auth-type"]}
+            )
+        for key in _AGENT_JSON_ROUTING_KEYS:
+            if key in agent_json:
+                parameters.append(
+                    {"name": f"agent-json.{key}", "value": agent_json[key]}
+                )
 
     # Flat connection.* parameter rows (UI sends both the nested JSON
     # and these for the orchestrator's convenience).
@@ -472,16 +556,39 @@ def build_ae_payload(
         "execution_mode": "native",
     }
 
+    # App-entrypoint selector for AE's server-side manifest fetch. Multi-entrypoint
+    # connectors (crawler/miner, extract/lineage, per-flavor) serve a distinct
+    # manifest per entrypoint; without this AE fetches the bare manifest and 404s
+    # ("No manifest available"). Set ONLY when non-empty so single-entrypoint apps
+    # keep the default fetch. Distinct from ``spec.entrypoint`` above ("main"), which
+    # is the Argo template name, not the connector entrypoint.
+    if entrypoint:
+        result["metadata"]["entrypoint"] = entrypoint
+
     # ``payload[]`` tells the orchestrator to create a credential and
     # substitute ``{{credentialGuid}}`` in the parameters with the
     # resulting GUID. Omit when the connector has no credential needs
     # (e.g. public-source connectors like openapi Petstore).
     if credential_body is not None:
+        body = credential_body.model_dump(by_alias=True, mode="json")
+        # The real UI always sends ``connectorConfigName`` on the credential
+        # body (sourced from the package manifest's ``ui.credentialType``, shape
+        # ``atlan-connectors-<connector>``). Backfill the conventional name when
+        # the codegen'd body didn't set one, so agent-mode connectors whose body
+        # is a minimal placeholder (salesforce/anaplan/saperp/glue) still submit
+        # what production submits. (Heracles itself tolerates a missing value —
+        # every read site is nil-safe; it falls back to the connector name and
+        # only 400s if BOTH are absent — so this mirrors the UI, it does not
+        # dodge a crash.)
+        body.setdefault(
+            "connectorConfigName",
+            credential_type or f"atlan-connectors-{connector_short_name}",
+        )
         result["payload"] = [
             {
                 "parameter": "credentialGuid",
                 "type": "credential",
-                "body": credential_body.model_dump(by_alias=True, mode="json"),
+                "body": body,
             }
         ]
 

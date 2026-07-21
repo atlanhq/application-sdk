@@ -130,7 +130,7 @@ workerResources:
 vpa:
   enabled: true
   maxAllowed:
-    cpu: 7
+    cpu: "7"
     memory: 27Gi
 """)
 
@@ -237,7 +237,7 @@ resources:
     def test_request_at_ceiling_passes(self):
         validate_config("""
 resources:
-  requests: {cpu: 7,    memory: 27Gi}
+  requests: {cpu: "7",  memory: 27Gi}
   limits:   {cpu: 7,    memory: 27Gi}
 """)
 
@@ -286,7 +286,7 @@ vpa:
   enabled: true
   updateMode: "Off"
 resources:
-  requests: {cpu: 3,    memory: 500Mi}
+  requests: {cpu: "3",  memory: 500Mi}
   limits:   {cpu: 3,    memory: 1Gi}
 """)
 
@@ -298,7 +298,7 @@ vpa:
   enabled: true
   updateMode: off
 resources:
-  requests: {cpu: 3,    memory: 500Mi}
+  requests: {cpu: "3",  memory: 500Mi}
   limits:   {cpu: 3,    memory: 1Gi}
 """)
 
@@ -365,9 +365,9 @@ resources:
         validate_config("""
 vpa:
   enabled: true
-  maxAllowed: {cpu: 5, memory: 20Gi}
+  maxAllowed: {cpu: "5", memory: 20Gi}
 resources:
-  requests: {cpu: 4,    memory: 16Gi}
+  requests: {cpu: "4",  memory: 16Gi}
   limits:   {cpu: 4,    memory: 20Gi}
 """)
 
@@ -392,7 +392,7 @@ resources:
 vpa:
   enabled: false
 resources:
-  requests: {cpu: 3,    memory: 500Mi}
+  requests: {cpu: "3",  memory: 500Mi}
   limits:   {cpu: 3,    memory: 1Gi}
 """)
 
@@ -701,3 +701,102 @@ class TestTwcSdkFloor:
             v for v in exc.value.violations if v.rule == "twc_requires_sdk_2_7_4"
         )
         assert "2.7.4" in floor.fix
+
+
+# ---------------------------------------------------------------------------
+# Rule: invalid_type on strictly-typed scalars (mirrors chart values.schema.json)
+# ---------------------------------------------------------------------------
+
+
+class TestInvalidScalarType:
+    def test_int_vpa_max_cpu_fails(self):
+        # The exact class that froze snowflake-worker-twd: a bare int here
+        # passes magnitude rules but the chart schema wants a string.
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config("vpa:\n  maxAllowed:\n    cpu: 4\n")
+        assert ("invalid_type", "vpa.maxAllowed.cpu") in {
+            (v.rule, v.field) for v in exc.value.violations
+        }
+
+    def test_quoted_vpa_max_cpu_passes(self):
+        validate_config('vpa:\n  maxAllowed:\n    cpu: "4"\n')
+
+    def test_int_vpa_min_memory_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config("vpa:\n  minAllowed:\n    memory: 2\n")
+        assert any(
+            v.rule == "invalid_type" and v.field == "vpa.minAllowed.memory"
+            for v in exc.value.violations
+        )
+
+    def test_int_requests_cpu_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config("resources:\n  requests:\n    cpu: 2\n")
+        assert any(
+            v.rule == "invalid_type" and v.field == "resources.requests.cpu"
+            for v in exc.value.violations
+        )
+
+    def test_int_requests_memory_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config("resources:\n  requests:\n    memory: 500\n")
+        assert any(
+            v.rule == "invalid_type" and v.field == "resources.requests.memory"
+            for v in exc.value.violations
+        )
+
+    def test_limits_cpu_int_allowed(self):
+        # Chart schema types resources.limits.cpu as integer|string, so an int
+        # here must NOT be flagged — mirroring the chart avoids false positives.
+        validate_config(
+            "resources:\n"
+            '  requests: {cpu: "1", memory: 1Gi}\n'
+            "  limits:   {cpu: 2,   memory: 2Gi}\n"
+        )
+
+    def test_string_target_queue_size_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config('keda:\n  temporal:\n    targetQueueSize: "25"\n')
+        assert any(
+            v.rule == "invalid_type" and v.field == "keda.temporal.targetQueueSize"
+            for v in exc.value.violations
+        )
+
+    def test_int_target_queue_size_passes(self):
+        validate_config("keda:\n  temporal:\n    targetQueueSize: 25\n")
+
+    def test_bool_target_queue_size_fails(self):
+        # bool is an int subclass; the chart schema still rejects it.
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config("keda:\n  temporal:\n    targetQueueSize: true\n")
+        assert any(
+            v.rule == "invalid_type" and v.field == "keda.temporal.targetQueueSize"
+            for v in exc.value.violations
+        )
+
+    def test_int_application_version_fails(self):
+        # An all-digit build id loads as int → chart (string) rejects it.
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config("applicationVersion: 12345\n")
+        assert any(
+            v.rule == "invalid_type" and v.field == "applicationVersion"
+            for v in exc.value.violations
+        )
+
+    def test_string_application_version_passes(self):
+        validate_config("applicationVersion: d776a49\n")
+
+    def test_snowflake_incident_repro(self):
+        # Shape that froze snowflake: keda enabled + vpa.maxAllowed.cpu as a
+        # bare int. Everything else valid; only the int cpu must be flagged.
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config("""
+keda: {enabled: true, minReplicaCount: 0, temporal: {targetQueueSize: 25}}
+vpa:
+  enabled: true
+  updateMode: "Off"
+  maxAllowed: {cpu: 4, memory: 27Gi}
+  minAllowed: {cpu: "50m", memory: 2Gi}
+""")
+        types = {(v.rule, v.field) for v in exc.value.violations}
+        assert ("invalid_type", "vpa.maxAllowed.cpu") in types

@@ -40,6 +40,13 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
+        description: "Org PAT for GHCR auth, the git_token BuildKit secret, and Install Trivy's release lookup -- the build/trivy-scan jobs already need it for GHCR (App tokens only have repo-level Packages permission; these packages are org-level), so everything else in those jobs uses it uniformly too rather than minting a redundant App token."
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret), used only by security-gate's cross-repo SDK checkout (that job never touches GHCR). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
 
 permissions:
   contents: read
@@ -60,7 +67,7 @@ jobs:
       scan_image: ${{ steps.meta.outputs.scan_image }}
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
           lfs: ${{ inputs.lfs }}
@@ -105,7 +112,9 @@ jobs:
           # private git dependency via `--mount=type=secret,id=git_token` (e.g. apps
           # pulling atlan-query-redaction) can authenticate during the scan build.
           # Ignored by Dockerfiles that don't mount it, so it's a no-op for every other
-          # app. Mirrors the token the deploy/publish workflow already provides.
+          # app. Mirrors the token the deploy/publish workflow already provides. This
+          # job already logs into GHCR with the PAT above, so there's no benefit to
+          # minting a separate App token just for this -- the PAT is already in play.
           secrets: |
             git_token=${{ secrets.ORG_PAT_GITHUB }}
 
@@ -144,16 +153,32 @@ jobs:
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Install Trivy
-        env:
-          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
-        run: |
-          TRIVY_VERSION=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            https://api.github.com/repos/aquasecurity/trivy/releases/latest \
-            | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
-          curl -sL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
-            -o /tmp/trivy.tar.gz
-          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
-          sudo mv /tmp/trivy /usr/local/bin/trivy
+        # Install via the official setup-trivy action with a PINNED version —
+        # the same recipe already used by scheduled-trivy-scan.yml and the
+        # sdk-trivy-scan composite (same action SHA, same v0.70.0 pin). This
+        # replaces a hand-rolled install that resolved the version from
+        # api.github.com/.../trivy/releases/latest at scan time: when that call
+        # returned anything but the expected JSON (a transient GitHub API 5xx,
+        # a rate limit, an outage), the version came back empty, the download
+        # URL degraded to .../download/v/trivy__Linux-64bit.tar.gz, curl saved
+        # the error page, and `tar` failed with "gzip: stdin: not in gzip
+        # format". Because the security gate `needs` this job and publish
+        # `needs` the gate, a momentary GitHub blip silently failed the
+        # marketplace publish for every app on the fleet — no vulnerability
+        # involved (this job also runs with fail_on_findings=false).
+        #
+        # Note this is the install-only setup-trivy action, NOT the all-in-one
+        # aquasecurity/trivy-action (#1130): the latter's pinned release bundles
+        # an older Trivy that under-reports on Chainguard/Wolfi base images.
+        #
+        # The version is pinned deliberately (scan results drift with Trivy's
+        # vuln-DB schema) and kept in lockstep with the fleet's other scans;
+        # the aquasecurity/trivy packageRule in renovate-config/default.json
+        # disables auto-bumps so a change here is always a conscious decision.
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.70.0
+          cache: true
 
       - name: Run Trivy scan
         env:
@@ -184,8 +209,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - name: Checkout base allowlist from SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: main
@@ -193,7 +228,7 @@ jobs:
             .security
             .github/scripts
           path: _sdk
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Download Trivy results
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

@@ -148,6 +148,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
     # P029/P030: SDR-readiness — only apps declare self_deployed_runtime; the SDK
     # itself never does, so these are APP-scoped (DISTR-752).
+    # P032–P035: preflight-gate authoring — only apps register @task activities,
+    # define Handler.preflight_check, construct PreflightCheck results, and declare
+    # the entrypoint Input contracts the gate rebuilds metadata from; the SDK
+    # publishes the gate, it is not a subject of these rules (BLDX-1545).
     # T002/T003: SDR test-quality — apps that declare SDR must have an SDR test
     # class; the SDK itself is not an SDR app (DISTR-752).
     # T004: dev-entrypoint delegation — only consumer apps have a root main.py
@@ -172,6 +176,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # it has no such dependency to grade (BLDX-1479). K009: unresolved scaffold
     # placeholder in a generated artifact; K010: missing generated E2E scaffolding
     # — both are app-repo generated-output concerns (BLDX-1479).
+    # K011/K012: release-readiness — the generated atlan.yaml's app_id and the
+    # pyproject generate poe task only exist on a consumer app that publishes to
+    # the marketplace; the SDK has no contract/ dir, no atlan.yaml, and no
+    # marketplace publish, so neither rule applies to it (CONNECT release-pipeline).
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -187,6 +195,13 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # hiding app/ product code) — only connector apps have an app/ product-code
     # tree with a ratcheting coverage floor; the SDK's own coverage config is a
     # different, already-enforced policy (BLDX-1400).
+    # T016: e2e CI compose overlay must inherit ATLAN_DEPLOYMENT_NAME — only
+    # connector apps ship a .github/e2e/ docker-compose overlay for the full-DAG
+    # worker; the SDK has no such overlay to grade (the sdr-e2e action that
+    # derives the per-leg value lives here, but it is not a compose overlay).
+    # T017: e2e agent_spec() override must inherit the per-leg deployment queue —
+    # only connector apps subclass the e2e harness and (may) override agent_spec;
+    # the SDK ships the env-derived default, it doesn't hard-code a connector queue.
     assert app_scoped == {
         "B001",
         "C002",
@@ -209,6 +224,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K008",
         "K009",
         "K010",
+        "K011",
+        "K012",
         "P004",
         "P005",
         "P008",
@@ -228,6 +245,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P028",
         "P029",
         "P030",
+        "P032",
+        "P033",
+        "P034",
+        "P035",
         "T002",
         "T003",
         "T004",
@@ -236,6 +257,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "T012",
         "T014",
         "T015",
+        "T016",
+        "T017",
         "O002",
         "O003",
         "O004",
@@ -377,6 +400,12 @@ def test_catalog_p_series_present() -> None:
     P031 is SharedDefaultExecutorOffload — asyncio.to_thread(...) /
     run_in_executor(None, ...) bypass the SDK's dedicated run_in_thread() pool
     and land on asyncio's shared default executor instead (BLDX-1525).
+    P032–P035 are the preflight-gate rules — reserved gate-name collision,
+    duplicate in-workflow preflight, untyped check failures, and metadata /
+    input-contract parity (BLDX-1545).
+    P036 is HandRolledProcessIsolation — a bare ProcessPoolExecutor /
+    multiprocessing child instead of the run_fault_isolated() / run_best_effort()
+    seam (CNCT-85).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -414,6 +443,11 @@ def test_catalog_p_series_present() -> None:
         "P029",
         "P030",
         "P031",
+        "P032",
+        "P033",
+        "P034",
+        "P035",
+        "P036",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -431,12 +465,17 @@ def test_catalog_o_series_present() -> None:
 
 
 def test_catalog_t_series_present() -> None:
-    """The T-series test-quality rules are all present."""
+    """The T-series test-quality rules are all present: T001 (integration
+    marking), T002/T003 (SDR test-quality), T004 (dev-entrypoint), T005-T009
+    (assertion/collection quality), T010-T013 (tier structure), T014/T015
+    (coverage-config), and T016/T017 (e2e-CI queue isolation)."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {f"T{n:03d}" for n in range(1, 16)}
+    expected = {f"T{n:03d}" for n in range(1, 18)}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
+    extra = t_ids - expected
+    assert not extra, f"Unexpected T-series rules: {extra}"
 
 
 def test_catalog_b_series_present() -> None:
@@ -453,9 +492,10 @@ def test_catalog_b_series_present() -> None:
 def test_catalog_k_series_present() -> None:
     """The K-series contract-toolkit rules are K001/K002 (source), the
     generated-artifact freshness rules K003/K004/K005 (BLDX-1414), the
-    manifest-vs-contract field validation rule K006 (BLDX-1527), and the toolkit
+    manifest-vs-contract field validation rule K006 (BLDX-1527), the toolkit
     hygiene rules K007–K010 (version floor, source provenance, unresolved
-    placeholder, missing E2E scaffolding) (BLDX-1479)."""
+    placeholder, missing E2E scaffolding) (BLDX-1479), and the release-readiness
+    guards K011/K012 (atlan.yaml app_id, generate poe task)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
     expected = {
@@ -469,6 +509,8 @@ def test_catalog_k_series_present() -> None:
         "K008",
         "K009",
         "K010",
+        "K011",
+        "K012",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"

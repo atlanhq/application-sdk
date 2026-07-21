@@ -22,7 +22,7 @@ jobs:
       lowercase_branch: ${{ steps.get_lowercase_branch.outputs.lowercase_branch }}
       sha: ${{ steps.get_sha.outputs.sha }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -47,7 +47,7 @@ jobs:
       cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -83,6 +83,9 @@ jobs:
           build-args: |
             ACCESS_TOKEN_USR=$GITHUB_ACTOR
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+          # This job already logs into GHCR with ORG_PAT_GITHUB above, so
+          # there's no benefit to minting a separate App token just for this
+          # generic GHA-cache-API auth -- the PAT is already in play either way.
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600
