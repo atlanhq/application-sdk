@@ -160,8 +160,10 @@ def build_scorecard(
             )
         )
         # A failing gate lowers the grade only when its cap is strictly worse
-        # than the score-earned band.
-        if not passed and GRADE_ORDER[gate_cfg.cap] < GRADE_ORDER[band_grade]:
+        # than the grade so far — comparing against the running ``effective_grade``
+        # (not the score-earned band) means ``capped_by`` only ever names gates
+        # that actually bit, even after a stronger cap from an earlier gate.
+        if not passed and GRADE_ORDER[gate_cfg.cap] < GRADE_ORDER[effective_grade]:
             capped_by.append(gate_cfg.id)
             effective_grade = _worst(effective_grade, gate_cfg.cap)
 

@@ -88,7 +88,11 @@ class RawTests(BaseModel):
 
     unit: TierTestCounts = Field(default_factory=TierTestCounts)
     integration: TierTestCounts = Field(default_factory=TierTestCounts)
-    e2e: TierTestCounts = Field(default_factory=TierTestCounts)
+    # ``to_camel("e2e")`` yields ``"e2E"`` — an uppercase key inconsistent with
+    # the lowercase ``e2e`` used everywhere else (TierName, the ``e2e-present``
+    # gate id, the directory, the rubric tier). Pin the wire key to ``e2e`` so
+    # the external connector-pulse consumer sees one spelling throughout.
+    e2e: TierTestCounts = Field(default_factory=TierTestCounts, alias="e2e")
 
     model_config = _COMMON
 

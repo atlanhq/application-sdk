@@ -84,6 +84,23 @@ def test_no_unit_tests_caps_at_f() -> None:
     assert sc.aggregate.maturity == "none"
 
 
+def test_unit_present_cap_bites_below_band() -> None:
+    """The `unit-present` cap must actively lower the grade, not merely agree
+    with the band. Unit absent + integration & e2e all green scores 70 (band C);
+    the cap pulls it to F and must name itself in `capped_by`."""
+    sc = _build(
+        RawTests(
+            integration=TierTestCounts(total=18, passed=18),
+            e2e=TierTestCounts(total=3, passed=3),
+        ),
+        coverage=None,
+    )
+    assert sc.aggregate.score == 70  # band C, before the cap
+    assert _gate(sc, "unit-present").status == "fail"
+    assert sc.aggregate.grade == "F"
+    assert "unit-present" in sc.aggregate.capped_by
+
+
 def test_failing_test_caps_grade_at_c_and_blocks_maturity() -> None:
     sc = _build(
         RawTests(

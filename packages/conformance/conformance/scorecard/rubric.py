@@ -45,6 +45,14 @@ class GateKind(str, Enum):
     UNIT_PRESENT = "unit_present"
     ALL_GREEN = "all_green"
     E2E_PRESENT = "e2e_present"
+    """Aspirational under v1 weights: its ``cap:B`` is currently redundant with
+    the band math. With the e2e tier at weight 0.35, an app with no e2e tests
+    tops out at score 65 (grade C), already worse than B, so this cap never
+    enters ``capped_by``. The e2e signal is still carried by the tier's
+    ``present:false``, the gate ``status:fail``, and the silver maturity cap.
+    The cap is retained so it binds automatically if a future rubric version
+    lowers the e2e tier weight (letting e2e-absent reach a B/A band); to make it
+    bind under v1, lower its cap to ``C`` or reduce the e2e tier weight."""
 
 
 class CheckConfig(BaseModel):

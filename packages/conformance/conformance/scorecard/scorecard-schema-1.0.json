@@ -184,7 +184,7 @@
         "integration": {
           "$ref": "#/$defs/TierTestCounts"
         },
-        "e2E": {
+        "e2e": {
           "$ref": "#/$defs/TierTestCounts"
         }
       },
