@@ -4,11 +4,11 @@
 // When a user creates a NEW connection, the frontend mints its qualifiedName as
 // `default/{connectorType}/{epoch}`. The connector type must come from the app's
 // declared `connector` (e.g. Connectors.API → "api"), NOT from the app `name`.
-// The toolkit injects it as `ui.connectorName` on the ConnectionCreator, the same
-// key the ConnectionSelector already uses.
+// The toolkit injects it as `ui.connector` on the ConnectionCreator — NOT
+// `ui.connectorName`, which is the distinct key the ConnectionSelector reads.
 //
 // Regression guard: an app named "openapi" with `connector = Connectors.API` must
-// emit `connectorName = "api"` — never "openapi" — otherwise connections are
+// emit `connector = "api"` — never "openapi" — otherwise connections are
 // created under `default/openapi/{epoch}` and every child asset QN is poisoned.
 
 amends "pkl:test"
@@ -40,7 +40,7 @@ local openapiApp = (App) {
   }
 }
 
-// App whose name == connector value — connectorName should still be emitted.
+// App whose name == connector value — connector should still be emitted.
 local selfNamedApp = (App) {
   name = "snowflake"
   displayName = "Snowflake"
@@ -58,7 +58,7 @@ local selfNamedApp = (App) {
   }
 }
 
-// App with NO connector declared — connectorName must be omitted (unchanged
+// App with NO connector declared — connector must be omitted (unchanged
 // behaviour, no accidental key).
 local noConnectorApp = (App) {
   name = "no-connector"
