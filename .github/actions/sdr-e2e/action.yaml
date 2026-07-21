@@ -313,7 +313,7 @@ runs:
     - name: Pin application-sdk to dispatched ref (pre-build)
       # Runtime side: runtime-sdk-ref wins, else the shared application-sdk-ref,
       # else empty = build the image from the connector's OWN pinned SDK.
-      if: ${{ (inputs.runtime-sdk-ref != '' && inputs.runtime-sdk-ref || inputs.application-sdk-ref) != '' }}
+      if: (inputs.runtime-sdk-ref != '' && inputs.runtime-sdk-ref || inputs.application-sdk-ref) != ''
       shell: bash
       env:
         SDK_REF: ${{ inputs.runtime-sdk-ref != '' && inputs.runtime-sdk-ref || inputs.application-sdk-ref }}
@@ -444,7 +444,7 @@ runs:
       # = harness comes from the connector's OWN pinned SDK. Set harness-sdk-ref
       # (with runtime-sdk-ref left empty) to run the latest test harness against
       # the connector's own runtime without bumping its SDK.
-      if: ${{ (inputs.harness-sdk-ref != '' && inputs.harness-sdk-ref || inputs.application-sdk-ref) != '' }}
+      if: (inputs.harness-sdk-ref != '' && inputs.harness-sdk-ref || inputs.application-sdk-ref) != ''
       shell: bash
       env:
         SDK_REF: ${{ inputs.harness-sdk-ref != '' && inputs.harness-sdk-ref || inputs.application-sdk-ref }}
@@ -470,36 +470,12 @@ runs:
     # migrate at their own pace.
     - name: Resolve SDR config paths
       shell: bash
+      env:
+        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        CONFIG_DIR_INPUT: ${{ inputs.config-dir }}
       run: |
-        CONFIG_DIR_INPUT="${{ inputs.config-dir }}"
-        if [ -n "$CONFIG_DIR_INPUT" ]; then
-          if [ ! -d "$CONFIG_DIR_INPUT" ]; then
-            echo "::error::config-dir '$CONFIG_DIR_INPUT' not found."
-            exit 1
-          fi
-          DIR="$CONFIG_DIR_INPUT"
-        elif [ -d .github/sdr-e2e ]; then
-          DIR=.github/sdr-e2e
-        elif [ -d .github/e2e ]; then
-          DIR=.github/e2e
-        else
-          echo "::error::No SDR config dir found (.github/sdr-e2e or .github/e2e)."
-          exit 1
-        fi
-        if [ -f "$DIR/app.yaml" ]; then
-          APP_YAML="$DIR/app.yaml"
-        elif [ -f app.yaml ]; then
-          APP_YAML=app.yaml
-        else
-          echo "::error::No app.yaml found at $DIR/app.yaml or repo root. See the SDR onboarding skill for the minimal three-line shape."
-          exit 1
-        fi
-        echo "Using SDR config dir: $DIR"
-        echo "Using app.yaml at:    $APP_YAML"
-        {
-          echo "SDR_CONFIG_DIR=$DIR"
-          echo "APP_YAML_PATH=$APP_YAML"
-        } >> "$GITHUB_ENV"
+        python3 "$SDR_E2E_ROOT/resolve_config_paths.py" \
+          --config-dir "${CONFIG_DIR_INPUT}" >> "$GITHUB_ENV"
 
     # Give each matrix leg its own worker + Temporal queue. The queue is
     # atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}; parallel legs

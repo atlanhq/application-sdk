@@ -503,8 +503,13 @@ class BaseFullDAGE2ETest:
         Mirrors :meth:`application_sdk.testing.e2e.base.BaseE2ETest.agent_json`
         so a connector on this deprecated ``full_dag`` path can customize
         agent-mode routing without overriding ``_mustache_substitutions``.
-        Only consulted in AGENT mode. (``full_dag`` is deprecated — prefer
-        ``application_sdk.testing.e2e``, whose agent-json routing is richer.)
+        When set, the same override feeds *both* the ``{{agent-json}}`` seed-DAG
+        blob (via ``_mustache_substitutions``) and the AE submit's ``agent-json``
+        routing row (via ``build_ae_payload(agent_json=...)``), so the two stay
+        consistent — a keypair/token/iam override no longer leaves the submit
+        emitting the basic shape. Only consulted in AGENT mode. (``full_dag`` is
+        deprecated — prefer ``application_sdk.testing.e2e``, whose agent-json
+        routing is richer.)
         """
         return None
 
@@ -701,6 +706,7 @@ class BaseFullDAGE2ETest:
             include_filter=self.include_filter,
             exclude_filter=self.exclude_filter,
             agent=self.agent_spec(),
+            agent_json=self.agent_json(),
             ae_workflow_slug=slug,
         )
 

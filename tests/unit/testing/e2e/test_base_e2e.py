@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import orjson
 import pytest
 
 from application_sdk.contracts.types import ConnectionRef
@@ -763,3 +764,92 @@ class TestConnectionQnUniqueness:
             assert qn.startswith("default/openapi/")
             # Pure-numeric trailing segment so Atlas never rejects the name.
             assert qn.rsplit("/", 1)[-1].isdigit()
+
+
+# ---------------------------------------------------------------------------
+# _resolved_entrypoint — app-entrypoint derivation (pure logic, no I/O)
+# ---------------------------------------------------------------------------
+
+
+class TestResolvedEntrypoint:
+    """A wrong parse silently degrades a multi-entrypoint connector to a bare
+    manifest fetch (AE 404), so every derivation branch is covered here."""
+
+    @pytest.mark.parametrize(
+        ("entrypoint", "manifest_path", "expected"),
+        [
+            # Explicit entrypoint always wins; manifest_path is not consulted.
+            ("crawler", "app/generated/miner/manifest.json", "crawler"),
+            ("miner", "", "miner"),
+            # Derived from a namespaced manifest subdir: <ep>/manifest.json.
+            ("", "app/generated/miner/manifest.json", "miner"),
+            ("", "some/root/app/generated/lineage/manifest.json", "lineage"),
+            # Bare manifest (single-entrypoint) → no selector sent.
+            ("", "app/generated/manifest.json", ""),
+            # Unset manifest_path → no selector.
+            ("", "", ""),
+            # /generated/ marker present but the file isn't manifest.json.
+            ("", "app/generated/miner/other.json", ""),
+            # No /generated/ marker → can't derive → no selector.
+            ("", "some/other/path/manifest.json", ""),
+            # Deeper than one subdir under /generated/ → not a clean <ep>.
+            ("", "app/generated/a/b/manifest.json", ""),
+        ],
+    )
+    def test_derivation_branches(
+        self, entrypoint: str, manifest_path: str, expected: str
+    ) -> None:
+        harness = _ConcreteE2ETest()
+        harness.entrypoint = entrypoint  # type: ignore[misc]
+        harness.manifest_path = manifest_path  # type: ignore[misc]
+
+        assert harness._resolved_entrypoint() == expected
+
+
+# ---------------------------------------------------------------------------
+# agent_json() override → _build_ae_payload wiring
+# ---------------------------------------------------------------------------
+
+
+def _payload_params(payload: dict) -> dict[str, Any]:
+    """Flatten the AE submit payload's task parameters to a name→value map."""
+    tasks = payload["spec"]["templates"][0]["dag"]["tasks"]
+    return {p["name"]: p["value"] for p in tasks[0]["arguments"]["parameters"]}
+
+
+class TestAgentJsonOverrideReachesPayload:
+    """The build_ae_payload(agent_json=...) mechanism is covered in isolation in
+    test_harness_payload.py; this asserts the thin hook-forwarding — a subclass
+    overriding agent_json() actually has that shape reach _build_ae_payload's
+    submit body (not the AgentSpec-derived default)."""
+
+    def test_custom_agent_json_shape_reaches_submit_payload(self) -> None:
+        class _KeypairOverrideTest(_AgentModeE2ETest):
+            def agent_json(self) -> dict[str, Any]:
+                return {
+                    "host": "db.example.com",
+                    "port": 5432,
+                    "auth-type": "keypair",
+                    "agent-name": "openapi-e2e-ci-1234",
+                    "agent-type": "new-app-framework",
+                    "key-type": "single-key",
+                    "secret-path": "openapi-credentials",
+                }
+
+        harness = _KeypairOverrideTest()
+        # Attrs setup_method() normally derives — set directly so the test stays
+        # hermetic (no env / no $admin-role network lookup).
+        harness.run_id = 1234  # type: ignore[misc]
+        harness.connection_display_name = "test-conn"  # type: ignore[misc]
+        harness.connection_qualified_name = "default/openapi/1234"  # type: ignore[misc]
+
+        params = _payload_params(harness._build_ae_payload("openapi-slug"))
+
+        # The agent-json blob is the override verbatim, not the basic shape.
+        blob = orjson.loads(params["agent-json"])
+        assert blob["auth-type"] == "keypair"
+        assert blob["host"] == "db.example.com"
+        assert blob["secret-path"] == "openapi-credentials"
+        # And the flat routing rows the cluster template reads follow it.
+        assert params["agent-json.auth-type"] == "keypair"
+        assert params["agent-json.host"] == "db.example.com"

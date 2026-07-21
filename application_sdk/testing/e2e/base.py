@@ -172,7 +172,11 @@ class BaseE2ETest:
     # present. Flipped per-run by the E2E_SOURCE_AVAILABLE env var (set from
     # the sdr-e2e action's `source-available` input); default True so
     # connectors that already have a source run the full DAG unchanged.
-    source_available: ClassVar[bool] = True
+    # Plain instance field (not ClassVar): setup_method writes the per-run
+    # value to self.source_available, reading this class-level value as its
+    # default. A ClassVar annotation would make that instance assignment a
+    # type error under mypy/pyright.
+    source_available: bool = True
     # Health endpoint the worker-up tier probes. The CI worker container
     # serves it on localhost:8000 (the sdr-e2e action gates on the same URL
     # before pytest). Override via E2E_WORKER_HEALTH_URL for other topologies.
