@@ -184,7 +184,7 @@ class TestRollingFileWriterRollover:
         # intercepts asyncio's event-loop scheduler, whose read count is
         # nondeterministic; that exhausted this iterator mid-test and raised
         # "generator raised StopIteration" on Python 3.13.
-        clock = iter([100.0, 100.5, 161.0, 161.5])
+        clock = iter([100.0, 100.5, 161.0])
         with patch("application_sdk.storage.rolling._monotonic", lambda: next(clock)):
             async with RollingFileWriter(
                 base,
@@ -193,13 +193,12 @@ class TestRollingFileWriterRollover:
                 chunk_interval_seconds=60.0,
                 scoped_subdir_name="run",
             ) as writer:
-                # First append at t=100 — starts chunk-0 timer.
-                # Read inside append: start=100.0, then elapsed-check at 100.5
-                # (elapsed=0.5, under 60).
+                # First append — two clock reads: start=100.0 sets chunk-0 timer,
+                # then elapsed-check at 100.5 (elapsed=0.5, under 60).
                 await writer.append({"id": 1})
-                # Second append at t=161 — start-check sees existing start,
-                # then elapsed-check at 161.5 (elapsed=61.5, over 60) → flush
-                # chunk-0 with [{1}, {2}].
+                # Second append — one clock read: chunk-0 start already set, so
+                # only the elapsed-check runs, at 161.0 (elapsed=61.0, over 60)
+                # → flush chunk-0 with [{1}, {2}].
                 await writer.append({"id": 2})
 
         # Exactly one rollover from the timer; __aexit__ found empty buffer
