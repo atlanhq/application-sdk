@@ -387,3 +387,78 @@ class TestSdrUpstreamExport:
             assert e._deployment_store is store  # healed on retry
             e._ensure_stores()
             assert e._deployment_store is store  # cached, not re-resolved
+
+    def test_non_transient_error_logs_once_and_stops_retrying(self, tmp_path) -> None:
+        """A non-transient error must be logged once, not every export (BLDX-1567).
+
+        ``StorageConfigError`` (e.g. an unsupported binding type) will never
+        heal on retry. The exporter must record the store name, stop retrying
+        it, and warn exactly once — not re-log a full traceback every flush.
+        """
+        from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME
+        from application_sdk.storage.errors import StorageConfigError
+
+        boom = StorageConfigError("Unsupported binding type: 'nope'")
+
+        with (
+            patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True),
+            patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", False),
+            patch(f"{_EXPORTER_MOD}.logger") as log,
+            patch(
+                "application_sdk.storage.binding.create_store_from_binding",
+                side_effect=boom,
+            ) as create,
+        ):
+            e = ObjectStoreMetricExporter(data_dir=str(tmp_path))
+            e._ensure_stores()
+            e._ensure_stores()
+            e._ensure_stores()
+
+        # Resolution attempted once, then skipped (name latched off).
+        assert create.call_count == 1
+        assert DEPLOYMENT_OBJECT_STORE_NAME in e._skip_stores
+        assert e._deployment_store is None
+        assert log.warning.call_count == 1
+        assert log.debug.call_count == 0
+
+    def test_binding_broken_is_transient_and_retried_quietly(self, tmp_path) -> None:
+        """A present-but-unresolved binding is a transient boot state (BLDX-1567).
+
+        ``StorageBindingBrokenError`` (placeholders / secret env not yet
+        substituted) heals once Dapr finishes boot, so it must be retried
+        quietly (debug, never warning) and not latched into ``_skip_stores``.
+        """
+        from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME
+        from application_sdk.storage.errors import StorageBindingBrokenError
+
+        store = MagicMock(name="deployment")
+        # Broken on the first attempt (secret env not substituted yet), then healed.
+        attempts = [
+            StorageBindingBrokenError("unresolved", binding_name="x"),
+            store,
+        ]
+
+        def _create(_name):
+            outcome = attempts.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        with (
+            patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True),
+            patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", False),
+            patch(f"{_EXPORTER_MOD}.logger") as log,
+            patch(
+                "application_sdk.storage.binding.create_store_from_binding",
+                side_effect=_create,
+            ),
+        ):
+            e = ObjectStoreMetricExporter(data_dir=str(tmp_path))
+            e._ensure_stores()
+            assert e._deployment_store is None  # broken → deferred, not skipped
+            assert DEPLOYMENT_OBJECT_STORE_NAME not in e._skip_stores
+            e._ensure_stores()
+            assert e._deployment_store is store  # healed on retry
+
+        assert log.warning.call_count == 0  # transient must never warn
+        assert log.debug.call_count == 1  # logged once, at debug

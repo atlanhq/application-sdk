@@ -225,21 +225,38 @@ class ObjectStoreMetricExporter(MetricExporter):
         # appears, so a slow-to-materialise component self-heals.
         self._deployment_store: ObjectStore | None = None
         self._upstream_store: ObjectStore | None = None
+        # Store names that hit a *non-transient* resolution error (e.g. an
+        # unsupported binding type). These will never heal on retry, so they are
+        # resolved once, logged once, and then skipped — otherwise the per-export
+        # retry below would re-log a full traceback every flush (~60s) for the
+        # life of the process (BLDX-1567 regression guard).
+        self._skip_stores: set[str] = set()
         self._writer_seq = 0
 
     def _ensure_stores(self) -> None:
         """Resolve the deployment/upstream stores, retrying until they appear.
 
         Idempotent and cheap once resolved (each store is resolved at most
-        once successfully, then cached). While a binding is still absent the
-        resolution is retried on the next export rather than being latched off,
-        which is what makes a boot-time binding gap self-healing.
+        once successfully, then cached). While a binding is still in a
+        *transient* boot state (component not yet written, or present but with
+        placeholders/secret env not yet substituted) resolution is retried on
+        the next export rather than being latched off — that retry is what makes
+        a boot-time binding gap self-healing. A store that hit a non-transient
+        error is recorded in ``_skip_stores`` and not retried, so a genuine
+        misconfiguration is logged once, not every flush.
         """
         if not ENABLE_OBSERVABILITY_STORE_SINK:
             return
-        if self._deployment_store is None:
+        if (
+            self._deployment_store is None
+            and DEPLOYMENT_OBJECT_STORE_NAME not in self._skip_stores
+        ):
             self._deployment_store = self._resolve_store(DEPLOYMENT_OBJECT_STORE_NAME)
-        if self._upstream_store is None and ENABLE_ATLAN_UPLOAD:
+        if (
+            self._upstream_store is None
+            and ENABLE_ATLAN_UPLOAD
+            and UPSTREAM_OBJECT_STORE_NAME not in self._skip_stores
+        ):
             self._upstream_store = self._resolve_store(UPSTREAM_OBJECT_STORE_NAME)
 
     def _resolve_store(self, name: str) -> ObjectStore | None:
@@ -247,23 +264,30 @@ class ObjectStoreMetricExporter(MetricExporter):
             create_store_from_binding,
         )
         from application_sdk.storage.errors import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+            StorageBindingBrokenError,
             StorageBindingNotFoundError,
             StorageConfigError,
         )
 
         try:
             return create_store_from_binding(name)
-        except StorageBindingNotFoundError:
-            # Binding not present yet. Expected transiently during boot before
-            # Dapr writes its components; resolution is retried on the next
-            # export, so this is benign rather than a hard misconfiguration.
+        except (StorageBindingNotFoundError, StorageBindingBrokenError):
+            # Transient boot states: the component is not written yet, or it is
+            # present but its placeholders / ``secretKeyRef`` env vars are not
+            # substituted yet. Both heal once Dapr finishes writing and the
+            # secret env materialises, so retry quietly on the next export. Both
+            # subclass StorageConfigError, so this clause must precede it.
             logger.debug(
-                "Object store '%s' binding not present yet; metric upload deferred (will retry)",
+                "Object store '%s' binding not resolvable yet; metric upload deferred (will retry)",
                 name,
                 exc_info=True,
             )
             return None
         except StorageConfigError:
+            # Non-transient misconfiguration (e.g. unsupported binding type). It
+            # will not heal on retry, so record the name to stop retrying and
+            # log exactly once instead of every flush.
+            self._skip_stores.add(name)
             logger.warning(
                 "Object store '%s' misconfigured; metric upload disabled",
                 name,
@@ -271,6 +295,9 @@ class ObjectStoreMetricExporter(MetricExporter):
             )
             return None
         except Exception:
+            # Unknown failure — also treated as non-transient: log once and stop
+            # retrying so an unexpected error cannot spam warnings every flush.
+            self._skip_stores.add(name)
             logger.warning(
                 "Object store '%s' setup failed; metric upload disabled",
                 name,
