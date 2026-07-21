@@ -17,7 +17,6 @@ Environment:
     GITHUB_REPOSITORY  - owner/repo (defaults to atlanhq/application-sdk)
 """
 
-import json
 import os
 import re
 import subprocess
@@ -27,11 +26,6 @@ from datetime import date
 REPO = os.environ.get("GITHUB_REPOSITORY", "atlanhq/application-sdk")
 PKLPROJECT = "contract-toolkit/src/PklProject"
 CHANGELOG = "contract-toolkit/CHANGELOG.md"
-# Committed conformance baseline that pins the toolkit's canonical package URI
-# and latest published version. K007/K008 grade the fleet against it offline, and
-# test_toolkit_baseline_drift fails CI if it drifts from PklProject. Regenerating
-# it here keeps the release PR self-consistent so it clears its own drift gate.
-TOOLKIT_BASELINE = "packages/conformance/conformance/data/toolkit_baseline.json"
 RELEASE_NOTES_FILE = "/tmp/contract-toolkit-release-notes.md"
 TAG_PREFIX = "contract-toolkit-v"
 
@@ -225,35 +219,6 @@ def update_pklproject(current, new):
         f.write(updated)
 
 
-def regenerate_toolkit_baseline():
-    """Rewrite the committed conformance baseline from the just-bumped PklProject.
-
-    Mirrors ``conformance.suite.checks._toolkit_baseline.{build_baseline,
-    serialize}`` (same regex parse, same ``json.dumps(indent=2, sort_keys=True)``
-    + trailing newline). We re-derive here rather than importing the conformance
-    package because this script runs under the release job's system Python where
-    that package is not installed; ``test_toolkit_baseline_drift`` is the
-    cross-check that keeps the two derivations in agreement.
-    """
-    text = open(PKLPROJECT).read()
-    name_m = re.search(r'\bname\s*=\s*"([^"]+)"', text)
-    version_m = re.search(r'\bversion\s*=\s*"([^"]+)"', text)
-    baseuri_m = re.search(r'\bbaseUri\s*=\s*"([^"]+)"', text)
-    if not (name_m and version_m and baseuri_m):
-        sys.exit(
-            f"ERROR: could not parse name/version/baseUri from {PKLPROJECT} — "
-            "cannot regenerate the toolkit baseline."
-        )
-    name = name_m.group(1)
-    base_uri = baseuri_m.group(1).replace("\\(name)", name)
-    canonical_base = base_uri.split("://", 1)[-1]
-    payload = {"canonical_base": canonical_base, "latest_version": version_m.group(1)}
-    content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    with open(TOOLKIT_BASELINE, "w") as f:
-        f.write(content)
-    print(f"Regenerated {TOOLKIT_BASELINE} (toolkit {version_m.group(1)}).")
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -283,7 +248,6 @@ def main():
     print(f"Version: {current} -> {new_version} ({bump} bump)")
 
     update_pklproject(current, new_version)
-    regenerate_toolkit_baseline()
 
     commits = get_commits(tag)
     cats = categorize(commits)
