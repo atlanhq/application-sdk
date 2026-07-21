@@ -296,6 +296,7 @@ class ObjectStoreMetricExporter(MetricExporter):
                 )
             else:
                 self._deferred.add(name)
+                # conformance: ignore[L004] transient boot-race deferral, not a failure — logged once without a stacktrace by design (see block comment above); a traceback for "not ready yet" reads as a failure.
                 logger.warning(
                     "Object store '%s' binding not resolvable yet; metric upload deferred, "
                     "retrying each flush until it appears",
