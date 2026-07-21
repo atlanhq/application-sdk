@@ -403,6 +403,9 @@ def test_catalog_p_series_present() -> None:
     P032–P035 are the preflight-gate rules — reserved gate-name collision,
     duplicate in-workflow preflight, untyped check failures, and metadata /
     input-contract parity (BLDX-1545).
+    P036 is HandRolledProcessIsolation — a bare ProcessPoolExecutor /
+    multiprocessing child instead of the run_fault_isolated() / run_best_effort()
+    seam (CNCT-85).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -444,6 +447,7 @@ def test_catalog_p_series_present() -> None:
         "P033",
         "P034",
         "P035",
+        "P036",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

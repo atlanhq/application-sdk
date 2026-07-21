@@ -2,21 +2,29 @@
 
 Exercises the module-level ``_warn_on_invalid_transformed_assets`` helper
 directly — it is pure with respect to the object store, so no App context or
-Temporal runtime is needed. The helper is async (it offloads the blocking scan
-to a worker thread via ``run_in_thread``), so tests await it.
+Temporal runtime is needed. The helper is async (it offloads the scan to an
+isolated child process via ``run_best_effort``, CNCT-85), so tests await it.
+
+The scan function is pickled by reference into a spawn child, so test doubles
+for it must be module-level functions in this file — mocks and closures cannot
+cross the process boundary.
 
 On every *validated* upload the helper emits a structured
 ``ASSET_VALIDATION_EVENT`` (INFO) carrying per-axis counts and a compact
 ``asset_validation_matrix`` JSON attribute — allowlisted so it reaches OTLP /
 ClickHouse. The human-readable WARNING (full ``format_report()``) is additionally
 logged only when the batch is flagged. Uploads with nothing to validate (flag
-off / not a ``transformed/`` subtree) emit neither.
+off / not a ``transformed/`` subtree) — and scans that crash/time out — emit
+neither.
 """
 
 from __future__ import annotations
 
+import asyncio
+import faulthandler
 import importlib.util
 import json
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -47,6 +55,24 @@ def _write_transformed(base: Path, entity: str, assets: list) -> None:
             handle.write(b"\n")
 
 
+# Module-level scan doubles: run_best_effort pickles the scan function by
+# reference into a spawn child, so a failing double must be an importable
+# module-level function (a MagicMock cannot cross the process boundary).
+def _raise_runtime_error(path, **kwargs):
+    raise RuntimeError("boom")
+
+
+def _segfault(path, **kwargs):
+    # Not ctypes.string_at(0): on Windows ctypes converts the access violation
+    # to OSError instead of dying. faulthandler's test hook faults for real on
+    # every platform.
+    faulthandler._sigsegv()
+
+
+def _hang(path, **kwargs):
+    time.sleep(3600)
+
+
 def _invalid_table() -> Table:
     # Per-asset invalid: qualified_name cleared, caught by pyatlan_v9 .validate().
     table = Table.creator(name="T1", schema_qualified_name=SCHEMA_QN)
@@ -68,6 +94,33 @@ def _valid_hierarchy(base: Path) -> None:
     )
 
 
+def _valid_hierarchy_wide(base: Path, tables: int = 200) -> None:
+    """A valid batch with a real, non-trivial number of assets to decode.
+
+    The single-record ``_valid_hierarchy`` returns from the child almost
+    instantly, leaving no window for concurrent submissions to overlap. Writing
+    a few hundred real pyatlan_v9 tables makes each child scan take long enough
+    that concurrently-submitted validations genuinely pile up on the pool — the
+    load shape that mattered in production (see the concurrency regression test).
+    """
+    _write_transformed(
+        base, "Database", [Database.creator(name="DB", connection_qualified_name=CONN)]
+    )
+    _write_transformed(
+        base,
+        "Schema",
+        [Schema.creator(name="SCHEMA", database_qualified_name=f"{CONN}/DB")],
+    )
+    _write_transformed(
+        base,
+        "Table",
+        [
+            Table.creator(name=f"T{i}", schema_qualified_name=SCHEMA_QN)
+            for i in range(tables)
+        ],
+    )
+
+
 def _outcome_event(logger: MagicMock) -> dict:
     """Return the kwargs of the single ASSET_VALIDATION_EVENT info emission."""
     calls = [
@@ -82,9 +135,9 @@ def _outcome_event(logger: MagicMock) -> dict:
 class TestWarnOnInvalidTransformedAssets:
     @pytest.fixture(autouse=True)
     def _enable_validation(self):
-        # The production default is OFF (CNCT-85, see constants). These tests
-        # exercise the enabled behavior, so force the flag on; the disabled-path
-        # test re-patches it False for its own body.
+        # Force the flag on so these tests are independent of the env default
+        # (this branch defaults it ON; main currently defaults it OFF). The
+        # disabled-path test re-patches it False for its own body.
         with patch("application_sdk.constants.VALIDATE_ASSETS_ON_UPLOAD", True):
             yield
 
@@ -220,14 +273,19 @@ class TestWarnOnInvalidTransformedAssets:
             assert _outcome_event(logger)["outcome"] == "flagged"
 
     async def test_unexpected_scan_error_is_swallowed(self, tmp_path: Path) -> None:
+        # A scan error must be swallowed (warn + traceback), the upload continues,
+        # and no outcome event is emitted (the scan produced no report). The scan
+        # runs in a spawn child, so the failing double is a picklable module-level
+        # function, not a MagicMock.
         _valid_hierarchy(tmp_path)
-        boom = MagicMock(side_effect=RuntimeError("boom"))
         with patch.object(base_module, "_task_logger") as logger:
-            with patch("application_sdk.validation.validate_transformed_dir", boom):
-                # Must not propagate the RuntimeError.
+            with patch(
+                "application_sdk.validation.validate_transformed_dir",
+                _raise_runtime_error,
+            ):
+                # Must not propagate the RuntimeError (raised in the child,
+                # re-raised here from the future, swallowed by run_best_effort).
                 await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
-            # Swallowed with a warning + traceback, upload continues; no event
-            # (the scan produced no report).
             logger.warning.assert_called_once()
             assert logger.warning.call_args.kwargs.get("exc_info") is True
             logger.info.assert_not_called()
@@ -249,6 +307,122 @@ class TestWarnOnInvalidTransformedAssets:
             # raise there is hit before .info() is called — no partial outcome
             # event is emitted (mirrors test_unexpected_scan_error_is_swallowed).
             logger.info.assert_not_called()
+
+    async def test_native_crash_warns_and_continues(self, tmp_path: Path) -> None:
+        # CNCT-85: a segfault in the decode path (e.g. a native msgspec bug) is
+        # not a Python exception — it must kill only the validation child, never
+        # the worker. run_best_effort logs and the handoff proceeds; the scan
+        # produced no report, so no outcome event is emitted.
+        _valid_hierarchy(tmp_path)
+        with patch.object(base_module, "_task_logger") as logger:
+            with patch(
+                "application_sdk.validation.validate_transformed_dir", _segfault
+            ):
+                await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
+            logger.warning.assert_called_once()
+            assert "subprocess died" in logger.warning.call_args.args[0]
+            logger.info.assert_not_called()
+
+    async def test_hung_validation_times_out_and_continues(
+        self, tmp_path: Path
+    ) -> None:
+        # Warn-only validation must not be able to stall a handoff: a hung scan
+        # is killed at the timeout and the upload proceeds; no report, no event.
+        _valid_hierarchy(tmp_path)
+        with patch.object(base_module, "_task_logger") as logger:
+            with (
+                patch("application_sdk.validation.validate_transformed_dir", _hang),
+                patch("application_sdk.constants.VALIDATE_ASSETS_TIMEOUT_SECONDS", 1.0),
+            ):
+                await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
+            logger.warning.assert_called_once()
+            assert "timed out" in logger.warning.call_args.args[0]
+            logger.info.assert_not_called()
+
+    async def test_concurrent_uploads_both_survive_timeouts(
+        self, tmp_path: Path
+    ) -> None:
+        # Reviewer finding on the first cut of CNCT-85: when one caller's timeout
+        # discarded the shared pool, a concurrent caller's future could surface
+        # as CancelledError (a BaseException) and escape the warn-only guards
+        # into upload(). The pool is now multi-worker, so both run concurrently.
+        # Run two validations that both hang past the timeout: each is either
+        # killed by its own timeout or by the other's pool-discard — either way
+        # it must warn-and-continue (return None), never raise.
+        dir_a = tmp_path / "a"
+        dir_b = tmp_path / "b"
+        for base in (dir_a, dir_b):
+            _valid_hierarchy(base)
+        with patch.object(base_module, "_task_logger") as logger:
+            with (
+                patch("application_sdk.validation.validate_transformed_dir", _hang),
+                patch("application_sdk.constants.VALIDATE_ASSETS_TIMEOUT_SECONDS", 1.0),
+            ):
+                results = await asyncio.gather(
+                    _warn_on_invalid_transformed_assets(str(dir_a), APP),
+                    _warn_on_invalid_transformed_assets(str(dir_b), APP),
+                )
+            # Both callers warn-and-continue (return None), neither raises.
+            # gather() without return_exceptions would already propagate any
+            # raise, but naming the contract makes the "survives" property
+            # explicit — in particular that no CancelledError leaked out.
+            assert results == [None, None]
+            messages = [call.args[0] for call in logger.warning.call_args_list]
+            # Both hung, so both were killed and warned exactly once; at least
+            # the first to fire reports its own timeout.
+            assert any("timed out" in message for message in messages)
+            assert len(messages) == 2
+
+    async def test_concurrent_real_decodes_all_succeed_and_worker_survives(
+        self, tmp_path: Path
+    ) -> None:
+        # THE regression for the CNCT-85 root cause, and the gap the pre-3.23.0
+        # suite never covered. That suite decoded real assets only one call at a
+        # time, and its *concurrency* coverage patched the decoder away
+        # (_hang / _segfault). So real msgspec was never exercised under
+        # concurrent submission — the exact condition that killed the worker in
+        # production: msgspec 0.20.0's concurrent-decode segfault on py3.13, when
+        # multiple upload validations decoded assets in the same worker process
+        # at once.
+        #
+        # This test closes that gap with NO decoder patch: it fans out many
+        # validations of real pyatlan_v9 batches concurrently. The isolation
+        # here is purely fault containment — the pool is multi-worker, so these
+        # decodes genuinely run in PARALLEL across child processes (no artificial
+        # serialisation). That is safe because separate processes don't share the
+        # in-process decoder state the 0.20.0 bug needs, and once msgspec 0.21.1
+        # lands even same-process concurrent decode is safe. Every scan completes
+        # and the parent (the "worker") is still alive afterwards.
+        #
+        # NOTE: on other interpreters/versions this always passes; as a
+        # regression it is most meaningful when CI runs it on the SAME Python as
+        # the container image (3.13). That is why the e2e job pins the
+        # interpreter to the image's version, not the runner default.
+        concurrency = 8
+        dirs = []
+        for i in range(concurrency):
+            batch_dir = tmp_path / f"upload_{i}"
+            _valid_hierarchy_wide(batch_dir)
+            dirs.append(batch_dir)
+
+        with patch.object(base_module, "_task_logger") as logger:
+            results = await asyncio.gather(
+                *(_warn_on_invalid_transformed_assets(str(d), APP) for d in dirs)
+            )
+            # Every real, valid batch validated cleanly: warn-and-continue
+            # returns None, and valid assets produce no warning at all (a clean
+            # outcome event is emitted, but no WARNING). A native crash in any
+            # child would have surfaced here as a "subprocess died" warning
+            # (or, pre-fix, taken the process down).
+            assert results == [None] * concurrency
+            logger.warning.assert_not_called()
+
+        # The parent process survived the concurrent burst: a fresh real
+        # validation still works. (Pre-fix, a segfault in a worker thread would
+        # have killed the whole worker, and there would be no "after".)
+        with patch.object(base_module, "_task_logger") as logger_after:
+            await _warn_on_invalid_transformed_assets(str(dirs[0]), APP)
+            logger_after.warning.assert_not_called()
 
 
 def _failure(i: int, *, deserialize_error: bool = False, error: str | None = None):
