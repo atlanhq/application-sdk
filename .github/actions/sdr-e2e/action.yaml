@@ -101,14 +101,42 @@ inputs:
     default: "true"
   application-sdk-ref:
     description: |
-      Optional application-sdk commit SHA / ref. When supplied, the
-      action re-pins atlan-application-sdk in the caller's pyproject.toml
-      to this ref before building the Docker image and again after
-      setup-deps (which re-checks-out the workspace). Used by cross-repo
-      dispatches from apps-sdk PRs so SDK changes are exercised end-to-end
-      — Docker image, host pytest runtime, and (because the caller
-      already invokes the action via a local-path checkout of this same
-      ref) action.yaml itself.
+      Optional application-sdk commit SHA / ref applied to BOTH sides
+      (container runtime AND host pytest harness) unless a side-specific
+      ref below overrides it. When supplied, the action re-pins
+      atlan-application-sdk in the caller's pyproject.toml to this ref
+      before building the Docker image and again after setup-deps (which
+      re-checks-out the workspace). Used by cross-repo dispatches from
+      apps-sdk PRs so an SDK change is exercised end-to-end on both sides.
+      Prefer `runtime-sdk-ref` / `harness-sdk-ref` when you need the two
+      sides pinned independently; this stays as the shared fallback for
+      back-compat.
+    required: false
+    default: ""
+  runtime-sdk-ref:
+    description: |
+      Optional application-sdk ref for the CONNECTOR RUNTIME under test —
+      i.e. the pre-build repin that the Docker image (and its manifest
+      regeneration) is built from. Empty (default) falls back to
+      `application-sdk-ref`, and if that is also empty the image is built
+      from the connector's OWN pinned/locked SDK. Set this to pin the
+      runtime independently of the harness (usually you leave it empty so
+      the app is tested AS SHIPPED, on its own SDK).
+    required: false
+    default: ""
+  harness-sdk-ref:
+    description: |
+      Optional application-sdk ref for the TEST HARNESS — i.e. the
+      post-setup repin of the host pytest runtime that provides
+      `application_sdk.testing.e2e` (the SDR e2e scaffolding). Empty
+      (default) falls back to `application-sdk-ref`, and if that is also
+      empty the harness comes from the connector's own pinned SDK. Set
+      this (e.g. to the consolidated e2e harness branch/tag) to run the
+      LATEST test logic against the connector's own runtime WITHOUT
+      bumping the connector's SDK — the harness drives the app over the
+      wire (AE submit / Temporal poll / manifest fetch / Atlas), so it
+      only needs the manifest/AE-payload/DAG wire contracts to be
+      compatible, not an in-process SDK match.
     required: false
     default: ""
   base-image-ref:
@@ -119,6 +147,17 @@ inputs:
       in the SDK PR are exercised through a real connector build + run.
       Empty (the default) leaves the connector Dockerfile's own default
       FROM untouched — the merge-queue / non-e2e path is unchanged.
+    required: false
+    default: ""
+  config-dir:
+    description: |
+      Explicit SDR config dir (holds app.yaml + secrets/ + optional
+      test-config.yaml.tmpl). Overrides the default auto-resolution, which
+      prefers `.github/sdr-e2e` over `.github/e2e`. A repo that has BOTH an
+      SDR (testcontainer) setup under `.github/sdr-e2e/` AND a full-DAG setup
+      under `.github/e2e/` MUST set this from the full-DAG caller (to
+      `.github/e2e`), else the full-DAG run mis-resolves to the SDR dir and
+      the full-DAG secrets/app.yaml don't match. Empty = auto-resolve.
     required: false
     default: ""
   components-dir:
@@ -175,6 +214,30 @@ inputs:
       are set on the worker via docker-compose.two-store.yml. Set by
       e2e-full-reusable.yaml's `two-store` input; the pure-SDR pipeline
       never sets this.
+    required: false
+    default: "false"
+  source-available:
+    description: |
+      Whether an extraction source is provisioned for this connector in CI.
+      Sourcing is the app owner's responsibility. When "true" (default) the
+      full-DAG e2e runs unchanged (extract -> publish -> assert assets in
+      Atlas). When "false" the run degrades to a worker-up-only check — the
+      harness asserts only that the app worker deploys and serves
+      /server/health, and skips extraction/publish/Atlas assertions (read by
+      BaseE2ETest.setup_method via the E2E_SOURCE_AVAILABLE env var). Apps
+      with no free container / no wired credentials set this false until they
+      provision a source.
+    required: false
+    default: "true"
+  full-dag:
+    description: |
+      Opt-in full-DAG queue-alignment overlay. When "true" the SDK-owned
+      docker-compose.full-dag.yml is layered (below any app overlay, above the
+      SDK CI defaults), pinning ATLAN_DEPLOYMENT_NAME=e2e-full-ci-${GITHUB_RUN_ID}
+      so the CI worker registers on the same per-run Temporal queue the full-DAG
+      harness's extract node dispatches to (+ a longer Dapr sidecar wait). Set by
+      full-DAG e2e callers; replaces the byte-identical per-app compose overlay.
+      Leave "false" (default) for the pure-SDR / worker-up pipelines.
     required: false
     default: "false"
   ghcr-token:
@@ -247,11 +310,31 @@ runs:
         cp -R "${{ github.action_path }}" /tmp/sdr-e2e
         chmod +x /tmp/sdr-e2e/repin-application-sdk.sh || true
 
-    - name: Pin application-sdk to dispatched ref (pre-build)
-      if: inputs.application-sdk-ref != ''
+    # Resolve the effective SDK ref for each side ONCE, so the
+    # (runtime||shared) / (harness||shared) fallback isn't repeated as a GHA
+    # `(a && a || b)` ternary at every call site. Plain `${VAR:-$SHARED}`
+    # parameter expansion (straight-line, no branching — ci.md-compliant); an
+    # empty output means "no repin" and the dependent step is skipped via `if:`.
+    - name: Resolve effective application-sdk refs
+      id: sdk_refs
       shell: bash
       env:
-        SDK_REF: ${{ inputs.application-sdk-ref }}
+        RUNTIME_SDK_REF: ${{ inputs.runtime-sdk-ref }}
+        HARNESS_SDK_REF: ${{ inputs.harness-sdk-ref }}
+        SHARED_SDK_REF: ${{ inputs.application-sdk-ref }}
+      run: |
+        {
+          echo "runtime_ref=${RUNTIME_SDK_REF:-$SHARED_SDK_REF}"
+          echo "harness_ref=${HARNESS_SDK_REF:-$SHARED_SDK_REF}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Pin application-sdk to dispatched ref (pre-build)
+      # Runtime side: runtime-sdk-ref wins, else the shared application-sdk-ref,
+      # else empty = build the image from the connector's OWN pinned SDK.
+      if: steps.sdk_refs.outputs.runtime_ref != ''
+      shell: bash
+      env:
+        SDK_REF: ${{ steps.sdk_refs.outputs.runtime_ref }}
       run: |
         ${{ github.action_path }}/repin-application-sdk.sh
         if ! command -v uv >/dev/null 2>&1; then
@@ -273,7 +356,8 @@ runs:
     - name: Regenerate contract artifacts (manifest.json) before image build
       uses: atlanhq/application-sdk/.github/actions/regenerate-contract@main
       with:
-        application-sdk-ref: ${{ inputs.application-sdk-ref }}
+        # Runtime side (baked into the image) — mirror the pre-build repin.
+        application-sdk-ref: ${{ steps.sdk_refs.outputs.runtime_ref }}
         check-drift: "false"
 
     # Buildx is required for the GHA cache backend below. Set up once
@@ -373,10 +457,15 @@ runs:
         echo "path=$ROOT" >> "$GITHUB_OUTPUT"
 
     - name: Pin application-sdk to dispatched ref (post-setup)
-      if: inputs.application-sdk-ref != ''
+      # Harness side (host pytest runtime that provides testing.e2e):
+      # harness-sdk-ref wins, else the shared application-sdk-ref, else empty
+      # = harness comes from the connector's OWN pinned SDK. Set harness-sdk-ref
+      # (with runtime-sdk-ref left empty) to run the latest test harness against
+      # the connector's own runtime without bumping its SDK.
+      if: steps.sdk_refs.outputs.harness_ref != ''
       shell: bash
       env:
-        SDK_REF: ${{ inputs.application-sdk-ref }}
+        SDK_REF: ${{ steps.sdk_refs.outputs.harness_ref }}
         SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
       run: |
         "$SDR_E2E_ROOT/repin-application-sdk.sh"
@@ -399,29 +488,12 @@ runs:
     # migrate at their own pace.
     - name: Resolve SDR config paths
       shell: bash
+      env:
+        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        CONFIG_DIR_INPUT: ${{ inputs.config-dir }}
       run: |
-        if [ -d .github/sdr-e2e ]; then
-          DIR=.github/sdr-e2e
-        elif [ -d .github/e2e ]; then
-          DIR=.github/e2e
-        else
-          echo "::error::No SDR config dir found (.github/sdr-e2e or .github/e2e)."
-          exit 1
-        fi
-        if [ -f "$DIR/app.yaml" ]; then
-          APP_YAML="$DIR/app.yaml"
-        elif [ -f app.yaml ]; then
-          APP_YAML=app.yaml
-        else
-          echo "::error::No app.yaml found at $DIR/app.yaml or repo root. See the SDR onboarding skill for the minimal three-line shape."
-          exit 1
-        fi
-        echo "Using SDR config dir: $DIR"
-        echo "Using app.yaml at:    $APP_YAML"
-        {
-          echo "SDR_CONFIG_DIR=$DIR"
-          echo "APP_YAML_PATH=$APP_YAML"
-        } >> "$GITHUB_ENV"
+        python3 "$SDR_E2E_ROOT/resolve_config_paths.py" \
+          --config-dir "${CONFIG_DIR_INPUT}" >> "$GITHUB_ENV"
 
     # Give each matrix leg its own worker + Temporal queue. The queue is
     # atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}; parallel legs
@@ -523,6 +595,7 @@ runs:
         SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
         APP_COMPOSE: ${{ inputs.compose-overlay }}
         TWO_STORE: ${{ inputs.enable-two-store }}
+        FULL_DAG: ${{ inputs.full-dag }}
       run: |
         OUT=$(python3 "$SDR_E2E_ROOT/build_compose_chain.py" \
           --base-compose ci-deploy/docker-compose.yaml \
@@ -530,7 +603,9 @@ runs:
           --app-compose "${APP_COMPOSE}" \
           --sdr-config-dir "$SDR_CONFIG_DIR" \
           --two-store "${TWO_STORE}" \
-          --two-store-compose "$SDR_E2E_ROOT/docker-compose.two-store.yml")
+          --two-store-compose "$SDR_E2E_ROOT/docker-compose.two-store.yml" \
+          --full-dag "${FULL_DAG}" \
+          --full-dag-compose "$SDR_E2E_ROOT/docker-compose.full-dag.yml")
         echo "$OUT" >> "$GITHUB_OUTPUT"
 
     # GH-runner docker bridges have no global IPv6 routing, but
@@ -600,6 +675,9 @@ runs:
         # Read by BaseE2ETest.setup_method() to warn if two-store is on
         # but the test class runs in RunMode.DIRECT, where it has no effect.
         TWO_STORE: ${{ inputs.enable-two-store }}
+        # Read by BaseE2ETest.setup_method(): "false" degrades the full-DAG
+        # e2e to a worker-up-only check when no source is provisioned.
+        E2E_SOURCE_AVAILABLE: ${{ inputs.source-available }}
       run: |
         mkdir -p results
         set +e

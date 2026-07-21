@@ -17,6 +17,7 @@ from application_sdk.testing.e2e._errors import (
     AtlanAEWorkflowAlreadyActiveError,
     AtlanApiHttpError,
     AtlanApiTimeoutError,
+    DAGProgressStalledError,
     NoWorkerOnTaskQueueError,
 )
 from application_sdk.testing.e2e.client import (
@@ -27,6 +28,8 @@ from application_sdk.testing.e2e.client import (
     DAGRunResult,
     DAGRunStatus,
     _is_already_active_run,
+    _is_credential_name_conflict,
+    _rotate_submit_credential_name,
     _safe_node_status,
     _safe_run_status,
 )
@@ -209,6 +212,69 @@ class TestPollNativeStatusStallGuard:
                     stall_grace_seconds=-1,
                 )
         assert result.status == DAGRunStatus.RUNNING
+
+
+class TestPollNativeStatusProgressWatchdog:
+    """poll_native_status must fail fast when a node started but the DAG makes
+    no forward progress for the watchdog window (a node wedged Running that the
+    one-time start-stall latch cannot catch)."""
+
+    def test_raises_when_node_stuck_running_no_progress(self):
+        """Extract reaches Running (start-stall latch is off) then never changes
+        state → DAGProgressStalledError once progress_stall_seconds elapses,
+        instead of polling the full timeout."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                with pytest.raises(DAGProgressStalledError) as exc:
+                    client.poll_native_status(
+                        _RUN_ID,
+                        interval_seconds=10,
+                        timeout_seconds=600,
+                        stall_grace_seconds=None,  # isolate the progress watchdog
+                        progress_stall_seconds=30,
+                    )
+        # Message surfaces the wedged node's state for the operator.
+        assert "extract=" in str(exc.value)
+
+    def test_disabled_when_progress_stall_none(self):
+        """progress_stall_seconds=None disables the watchdog: a wedged-Running
+        run polls to the timeout and returns the last observation, no raise."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=30,
+                    stall_grace_seconds=None,
+                    progress_stall_seconds=None,
+                )
+        assert result.status == DAGRunStatus.RUNNING
+
+    def test_no_raise_when_run_progresses_to_terminal(self):
+        """A run that keeps moving (Running → Succeeded) within the window is not
+        killed — the terminal return wins and the watchdog never trips."""
+        client = _make_client()
+        running = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+        done = _succeeded_result()
+
+        with patch.object(
+            client, "get_native_status", side_effect=[running, running, done]
+        ):
+            with patch("time.sleep"):
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=600,
+                    stall_grace_seconds=None,
+                    progress_stall_seconds=30,
+                )
+        assert result.status == DAGRunStatus.SUCCEEDED
 
 
 class TestSkippedStatus:
@@ -422,8 +488,10 @@ class TestPostWithRetry:
                 "/some/path",
                 total_attempts=3,
                 sleep_seconds=1,
-                retryable=lambda s, b: s >= 300
-                or not (isinstance(b, dict) and b.get("status") == "success"),
+                retryable=lambda s, b: (
+                    s >= 300
+                    or not (isinstance(b, dict) and b.get("status") == "success")
+                ),
                 op_name="test_op",
             )
         assert status == 200
@@ -504,6 +572,111 @@ class TestRequestNetworkRetry:
         assert body == {"err": "boom"}
         assert mock_open.call_count == 1
         mock_sleep.assert_not_called()
+
+
+class TestCredentialConflictHelpers:
+    """The credential-name conflict detector + name rotator (submit idempotency)."""
+
+    def test_conflict_detected_in_dict_and_str_body(self):
+        dup = {
+            "code": 1002,
+            "message": "ERROR #23505 duplicate key value violates unique "
+            'constraint "credentials_name_key"',
+        }
+        assert _is_credential_name_conflict(400, dup) is True
+        assert _is_credential_name_conflict(409, "…credentials_name_key…") is True
+
+    def test_not_a_conflict(self):
+        assert _is_credential_name_conflict(500, {"err": "overloaded"}) is False
+        assert _is_credential_name_conflict(200, {"ok": True}) is False  # <400
+        assert _is_credential_name_conflict(400, {"message": "other"}) is False
+
+    def test_rotate_appends_and_increments_retry_suffix(self):
+        payload = {
+            "payload": [{"type": "credential", "body": {"name": "default-pg-42-1"}}]
+        }
+        _rotate_submit_credential_name(payload)
+        assert payload["payload"][0]["body"]["name"] == "default-pg-42-1-retry1"
+        _rotate_submit_credential_name(payload)
+        assert payload["payload"][0]["body"]["name"] == "default-pg-42-1-retry2"
+
+    def test_rotate_is_noop_without_credential(self):
+        # public-source submit — no `payload` credential block
+        p = {"metadata": {"name": "x"}, "spec": {}}
+        _rotate_submit_credential_name(p)
+        assert p == {"metadata": {"name": "x"}, "spec": {}}
+        _rotate_submit_credential_name(None)  # must not raise
+
+
+class TestSubmitWorkflowCredentialRetry:
+    """submit_workflow recovers from AE's non-idempotent credential create."""
+
+    @staticmethod
+    def _payload_with_cred() -> dict:
+        return {
+            "metadata": {"name": "atlan-postgres-1234"},
+            "spec": {
+                "templates": [{"dag": {"tasks": [{"arguments": {"parameters": []}}]}}]
+            },
+            "payload": [
+                {
+                    "parameter": "credentialGuid",
+                    "type": "credential",
+                    "body": {"name": "default-postgres-1234-1", "authType": "basic"},
+                }
+            ],
+        }
+
+    def test_credentials_name_key_400_is_retried_with_rotated_name(self):
+        """400 credentials_name_key on attempt 1 → rotate name → succeed on retry."""
+        client = _make_client()
+        dup = (
+            400,
+            {
+                "code": 1002,
+                "message": "duplicate key value violates "
+                'unique constraint "credentials_name_key"',
+            },
+        )
+        ok = (200, {"data": {"run_id": "run-xyz"}})
+        payload = self._payload_with_cred()
+        with (
+            patch.object(client, "_request", side_effect=[dup, ok]),
+            patch("time.sleep"),
+        ):
+            run_id = client.submit_workflow(payload, retries=4, retry_sleep_seconds=0)
+        assert run_id == "run-xyz"
+        # the credential name was rotated before the successful retry
+        assert payload["payload"][0]["body"]["name"] == "default-postgres-1234-1-retry1"
+
+    def test_5xx_then_success_also_rotates_credential(self):
+        """A transient 5xx (which AE may have committed) rotates before retry."""
+        client = _make_client()
+        payload = self._payload_with_cred()
+        with (
+            patch.object(
+                client,
+                "_request",
+                side_effect=[(503, {"err": "overloaded"}), (200, {"run_id": "r2"})],
+            ),
+            patch("time.sleep"),
+        ):
+            run_id = client.submit_workflow(payload, retries=4, retry_sleep_seconds=0)
+        assert run_id == "r2"
+        assert payload["payload"][0]["body"]["name"] == "default-postgres-1234-1-retry1"
+
+    def test_persistent_conflict_eventually_raises(self):
+        """All attempts conflict → still fails loudly (no silent pass)."""
+        client = _make_client()
+        dup = (400, {"message": 'unique constraint "credentials_name_key"'})
+        with (
+            patch.object(client, "_request", side_effect=[dup, dup]),
+            patch("time.sleep"),
+        ):
+            with pytest.raises(AtlanApiHttpError):
+                client.submit_workflow(
+                    self._payload_with_cred(), retries=1, retry_sleep_seconds=0
+                )
 
 
 # The exact body observed in prod: AE's 409 "already active" masked as a 500 by

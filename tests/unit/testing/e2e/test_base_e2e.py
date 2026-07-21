@@ -8,16 +8,19 @@ Covers the two methods the review flagged as uncovered (TEST-001/G4):
 from __future__ import annotations
 
 import json
+import urllib.error
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import orjson
 import pytest
 
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e._errors import (
     ManifestDagMissingError,
     ManifestFileNotFoundError,
+    MissingHarnessEnvError,
 )
 from application_sdk.testing.e2e.base import BaseE2ETest
 from application_sdk.testing.e2e.payload import AgentSpec, RunMode
@@ -355,6 +358,175 @@ class TestTwoStoreDirectModeWarning:
         mock_logger.warning.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# Source-availability tier — E2E_SOURCE_AVAILABLE gate
+# ---------------------------------------------------------------------------
+
+
+class _FakeHealthResponse:
+    """Minimal urlopen() stand-in usable as a context manager."""
+
+    def __init__(self, status: int) -> None:
+        self.status = status
+
+    def __enter__(self) -> _FakeHealthResponse:
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        return False
+
+
+class _NoSourceTest(_ConcreteE2ETest):
+    # Pre-set admin roles so the source-available path never makes the pyatlan
+    # $admin network lookup (irrelevant here and slow).
+    connection_admin_roles = ("test-admin-role-guid",)
+
+
+class TestSourceAvailabilityGate:
+    """E2E_SOURCE_AVAILABLE flips the harness between full-DAG and worker-up."""
+
+    def test_false_skips_tenant_wiring_and_needs_no_tenant_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The worker-up tier must NOT require ATLAN_BASE_URL/API_KEY — the whole
+        # point is that no tenant/source is wired.
+        monkeypatch.setenv("E2E_SOURCE_AVAILABLE", "false")
+        monkeypatch.delenv("ATLAN_BASE_URL", raising=False)
+        monkeypatch.delenv("ATLAN_API_KEY", raising=False)
+
+        harness = _NoSourceTest()
+        harness.setup_method()
+
+        assert harness.source_available is False
+        # AE client + connection identity are never built on this path.
+        assert not hasattr(harness, "client")
+        assert not hasattr(harness, "connection_qualified_name")
+
+    def test_true_builds_tenant_wiring(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("E2E_SOURCE_AVAILABLE", "true")
+        monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
+        monkeypatch.setenv("ATLAN_API_KEY", "test-token")
+        monkeypatch.setenv("GITHUB_RUN_ID", "9999999")
+
+        harness = _NoSourceTest()
+        harness.setup_method()
+
+        assert harness.source_available is True
+        assert hasattr(harness, "client")
+        assert harness.connection_qualified_name.startswith("default/openapi/")
+
+    def test_default_is_source_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("E2E_SOURCE_AVAILABLE", raising=False)
+        monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
+        monkeypatch.setenv("ATLAN_API_KEY", "test-token")
+        monkeypatch.setenv("GITHUB_RUN_ID", "9999999")
+
+        harness = _NoSourceTest()
+        harness.setup_method()
+
+        assert harness.source_available is True
+
+    def test_empty_env_falls_back_to_class_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A blank (empty / whitespace) E2E_SOURCE_AVAILABLE is UNSET, not False:
+        # it must not silently degrade a source-having connector to worker-up.
+        monkeypatch.setenv("E2E_SOURCE_AVAILABLE", "  ")
+        monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
+        monkeypatch.setenv("ATLAN_API_KEY", "test-token")
+        monkeypatch.setenv("GITHUB_RUN_ID", "9999999")
+
+        harness = _NoSourceTest()
+        harness.setup_method()
+
+        assert harness.source_available is True
+
+    def test_tenant_env_still_enforced_when_source_available(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Regression guard: the source-available path must keep requiring the
+        # tenant env (the early-return must not weaken it for full-DAG runs).
+        monkeypatch.delenv("E2E_SOURCE_AVAILABLE", raising=False)
+        monkeypatch.delenv("ATLAN_BASE_URL", raising=False)
+        monkeypatch.delenv("ATLAN_API_KEY", raising=False)
+
+        with pytest.raises(MissingHarnessEnvError):
+            _NoSourceTest().setup_method()
+
+
+class TestWorkerUpTier:
+    """Worker-up-only assertions when no source is provisioned."""
+
+    def _harness(self) -> _NoSourceTest:
+        harness = _NoSourceTest()
+        harness.source_available = False
+        harness.worker_health_poll_interval_seconds = 0
+        harness.worker_health_timeout_seconds = 1
+        return harness
+
+    def test_test_method_runs_worker_up_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = self._harness()
+        calls = {"worker_up": 0, "full_dag": 0}
+        monkeypatch.setattr(
+            harness, "assert_worker_up", lambda: calls.__setitem__("worker_up", 1)
+        )
+        monkeypatch.setattr(
+            harness, "run_full_dag", lambda: calls.__setitem__("full_dag", 1)
+        )
+
+        # The no-source tier asserts worker health, then raises pytest.skip so
+        # a healthy worker reports SKIPPED (not a green full-DAG pass) — the
+        # full DAG must never run in this tier.
+        with pytest.raises(pytest.skip.Exception, match="worker-up smoke check"):
+            harness.test_full_dag_runs_end_to_end()
+
+        assert calls == {"worker_up": 1, "full_dag": 0}
+
+    def test_test_method_fails_red_when_worker_unhealthy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The no-source tier is a skip only when the worker is healthy. An
+        # unhealthy worker must still fail RED (AssertionError), not be masked
+        # by the pytest.skip — otherwise a worker that never deploys would show
+        # SKIPPED instead of failing.
+        harness = self._harness()
+
+        def _refused(url: str, timeout: int = 10) -> _FakeHealthResponse:
+            raise urllib.error.URLError("connection refused")
+
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e.base.urllib.request.urlopen", _refused
+        )
+        with pytest.raises(AssertionError, match="did not become healthy"):
+            harness.test_full_dag_runs_end_to_end()
+
+    def test_assert_worker_up_passes_on_2xx(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = self._harness()
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e.base.urllib.request.urlopen",
+            lambda url, timeout=10: _FakeHealthResponse(200),
+        )
+        harness.assert_worker_up()  # must not raise
+
+    def test_assert_worker_up_raises_when_never_healthy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = self._harness()
+
+        def _refused(url: str, timeout: int = 10) -> _FakeHealthResponse:
+            raise urllib.error.URLError("connection refused")
+
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e.base.urllib.request.urlopen", _refused
+        )
+        with pytest.raises(AssertionError, match="did not become healthy"):
+            harness.assert_worker_up()
+
+
 class TestStallGuardDirectModeWarning:
     """setup_method nudges toward the =0 opt-out when the stall guard is armed
     under RunMode.DIRECT, where a KEDA-idle pod can cold-start past the grace.
@@ -592,3 +764,92 @@ class TestConnectionQnUniqueness:
             assert qn.startswith("default/openapi/")
             # Pure-numeric trailing segment so Atlas never rejects the name.
             assert qn.rsplit("/", 1)[-1].isdigit()
+
+
+# ---------------------------------------------------------------------------
+# _resolved_entrypoint — app-entrypoint derivation (pure logic, no I/O)
+# ---------------------------------------------------------------------------
+
+
+class TestResolvedEntrypoint:
+    """A wrong parse silently degrades a multi-entrypoint connector to a bare
+    manifest fetch (AE 404), so every derivation branch is covered here."""
+
+    @pytest.mark.parametrize(
+        ("entrypoint", "manifest_path", "expected"),
+        [
+            # Explicit entrypoint always wins; manifest_path is not consulted.
+            ("crawler", "app/generated/miner/manifest.json", "crawler"),
+            ("miner", "", "miner"),
+            # Derived from a namespaced manifest subdir: <ep>/manifest.json.
+            ("", "app/generated/miner/manifest.json", "miner"),
+            ("", "some/root/app/generated/lineage/manifest.json", "lineage"),
+            # Bare manifest (single-entrypoint) → no selector sent.
+            ("", "app/generated/manifest.json", ""),
+            # Unset manifest_path → no selector.
+            ("", "", ""),
+            # /generated/ marker present but the file isn't manifest.json.
+            ("", "app/generated/miner/other.json", ""),
+            # No /generated/ marker → can't derive → no selector.
+            ("", "some/other/path/manifest.json", ""),
+            # Deeper than one subdir under /generated/ → not a clean <ep>.
+            ("", "app/generated/a/b/manifest.json", ""),
+        ],
+    )
+    def test_derivation_branches(
+        self, entrypoint: str, manifest_path: str, expected: str
+    ) -> None:
+        harness = _ConcreteE2ETest()
+        harness.entrypoint = entrypoint  # type: ignore[misc]
+        harness.manifest_path = manifest_path  # type: ignore[misc]
+
+        assert harness._resolved_entrypoint() == expected
+
+
+# ---------------------------------------------------------------------------
+# agent_json() override → _build_ae_payload wiring
+# ---------------------------------------------------------------------------
+
+
+def _payload_params(payload: dict) -> dict[str, Any]:
+    """Flatten the AE submit payload's task parameters to a name→value map."""
+    tasks = payload["spec"]["templates"][0]["dag"]["tasks"]
+    return {p["name"]: p["value"] for p in tasks[0]["arguments"]["parameters"]}
+
+
+class TestAgentJsonOverrideReachesPayload:
+    """The build_ae_payload(agent_json=...) mechanism is covered in isolation in
+    test_harness_payload.py; this asserts the thin hook-forwarding — a subclass
+    overriding agent_json() actually has that shape reach _build_ae_payload's
+    submit body (not the AgentSpec-derived default)."""
+
+    def test_custom_agent_json_shape_reaches_submit_payload(self) -> None:
+        class _KeypairOverrideTest(_AgentModeE2ETest):
+            def agent_json(self) -> dict[str, Any]:
+                return {
+                    "host": "db.example.com",
+                    "port": 5432,
+                    "auth-type": "keypair",
+                    "agent-name": "openapi-e2e-ci-1234",
+                    "agent-type": "new-app-framework",
+                    "key-type": "single-key",
+                    "secret-path": "openapi-credentials",
+                }
+
+        harness = _KeypairOverrideTest()
+        # Attrs setup_method() normally derives — set directly so the test stays
+        # hermetic (no env / no $admin-role network lookup).
+        harness.run_id = 1234  # type: ignore[misc]
+        harness.connection_display_name = "test-conn"  # type: ignore[misc]
+        harness.connection_qualified_name = "default/openapi/1234"  # type: ignore[misc]
+
+        params = _payload_params(harness._build_ae_payload("openapi-slug"))
+
+        # The agent-json blob is the override verbatim, not the basic shape.
+        blob = orjson.loads(params["agent-json"])
+        assert blob["auth-type"] == "keypair"
+        assert blob["host"] == "db.example.com"
+        assert blob["secret-path"] == "openapi-credentials"
+        # And the flat routing rows the cluster template reads follow it.
+        assert params["agent-json.auth-type"] == "keypair"
+        assert params["agent-json.host"] == "db.example.com"
