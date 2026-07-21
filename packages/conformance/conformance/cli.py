@@ -103,6 +103,12 @@ def _cmd_renovate_scan(argv: list[str]) -> int:
     return main(argv)
 
 
+def _cmd_scorecard(argv: list[str]) -> int:
+    from conformance.scorecard.cli import main
+
+    return main(argv)
+
+
 _COMMANDS = {
     "detect": _cmd_detect,
     "programs-dir": _cmd_programs_dir,
@@ -114,6 +120,7 @@ _COMMANDS = {
     "remediate": _cmd_remediate,
     "bootstrap": _cmd_bootstrap,
     "renovate-scan": _cmd_renovate_scan,
+    "scorecard": _cmd_scorecard,
 }
 
 _USAGE = """\
@@ -145,6 +152,12 @@ commands:
                  contract_schema.lock.json are write-if-absent by default.
                  Run `bootstrap --help` for the full option list.
   renovate-scan  Build Renovate fleet dashboard JSON from gh pr list output files
+  scorecard      Emit a test-readiness scorecard JSON from junit + coverage evidence
+                 --junit PATH     pytest junit XML (e.g. results/test-results.xml)
+                 --coverage PATH  coverage.py JSON (coverage.json); optional
+                 --repo NAME      GitHub full name, e.g. atlanhq/atlan-mysql-app
+                 --commit SHA     commit SHA (optional)
+                 --out PATH       output path (default: results/test-readiness.json)
 """
 
 

@@ -66,9 +66,12 @@ on:
         type: string
         default: >-
           -n auto --dist=loadfile --tb=short
-          --cov=app --cov-report=xml --cov-report=html --cov-report=term
+          --cov=app --cov-report=xml --cov-report=json --cov-report=html --cov-report=term
           --cov-fail-under=0
-        description: Extra arguments passed to pytest after test-paths.
+        description: |
+          Extra arguments passed to pytest after test-paths.  ``--cov-report=json``
+          emits ``coverage.json`` for the test-readiness scorecard (the machine-
+          readable form; xml/html/term are for humans and other consumers).
       services-script:
         required: false
         type: string
