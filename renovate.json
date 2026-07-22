@@ -12,6 +12,20 @@
       "/^\\.github/workflow-templates/.+\\.ya?ml$/"
     ]
   },
+  "packageRules": [
+    {
+      "description": "Action bumps inside the shipped conformance bootstrap templates are conformance-package source changes: the PR-title gate requires a fix(conformance) scope for anything under packages/conformance/ (except tests/ and lock files), and these bumps change the package's scaffolded output so they should version it. Give them their own group + semantic type/scope so the PR title is deterministic and never collides with plain .github/workflows or .github/workflow-templates action bumps (which stay chore(deps)). Repo-local packageRules are appended after the fleet preset, so this overrides both the preset's force-chore rule and its github-actions groupName — but only for deps whose file lives under the templates dir (matchFileNames).",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchFileNames": [
+        "packages/conformance/conformance/bootstrap/templates/**"
+      ],
+      "groupName": "conformance action templates",
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "conformance"
+    }
+  ],
   "ignorePaths": [
     "contract-toolkit/examples/**",
     "requirements.txt"
