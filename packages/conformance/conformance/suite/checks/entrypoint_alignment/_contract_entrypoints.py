@@ -64,15 +64,25 @@ class ContractEntrypointScan:
 def _routes_from_manifest(manifest_path: Path) -> frozenset[str]:
     """Collect entry-point wire names declared as DAG routes in a manifest.
 
-    Walks the manifest JSON and returns the wire name of every
-    ``workflow_type`` of the form ``"<app>:<wire-name>"`` (the part after the
-    colon).  Platform/other-app nodes without the ``<app>:`` convention (e.g.
-    ``"PublishWorkflow"``) carry no colon and are ignored, so this yields only
-    this app's own DAG-routed entry points.
+    Walks the manifest's ``dag`` section only and returns the wire name of
+    every ``workflow_type`` of the form ``"<app>:<wire-name>"`` (the part after
+    the colon).  Platform/other-app nodes without the ``<app>:`` convention
+    (e.g. ``"PublishWorkflow"``) carry no colon and are ignored.
+
+    The walk is scoped to the ``dag`` subtree, so a ``workflow_type`` appearing
+    elsewhere in the manifest is not collected.  It does **not** pin the
+    ``<app>`` prefix to this app's own name — the (rare) cross-app
+    ``"<other>:<wire>"`` node inside the DAG would also contribute its wire
+    name.  In a generated single-mode manifest every routed node is this app's
+    own, so in practice this returns this app's DAG-routed entry points.
     """
     try:
         data: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return frozenset()
+
+    dag = data.get("dag") if isinstance(data, dict) else None
+    if dag is None:
         return frozenset()
 
     wire_names: set[str] = set()
@@ -88,7 +98,7 @@ def _routes_from_manifest(manifest_path: Path) -> frozenset[str]:
             for item in node:
                 _walk(item)
 
-    _walk(data)
+    _walk(dag)
     return frozenset(wire_names)
 
 
