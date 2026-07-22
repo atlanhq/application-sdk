@@ -29,10 +29,23 @@ name: tests-reusable
 #     it was previously delegated to e2e-full-reusable.yaml, now folded in so
 #     the whole suite is one reusable + one Tests Gate)
 #
+# Test tiering (see the `tests` job's test-paths):
+#   pull_request          → tests/unit/ only. Fast per-commit signal (seconds
+#                           of tests + uv sync); no testcontainers / source
+#                           infra spun up, so the PR loop stays cheap.
+#   merge_group / push    → full suite (unit + integration, auto-discovered).
+#                           Integration (testcontainers / services-script,
+#                           exercising the real extraction workflow) runs on
+#                           the exact batched state that will land — the one
+#                           point a regression could actually ship — and is
+#                           re-run in place if the base moves under the queue.
+#   e2e (label/dispatch)  → full-DAG against a real tenant (the `e2e` job).
+#   A caller-supplied `test-paths` overrides this tiering entirely.
+#
 # GitHub check name hierarchy (caller → tests-reusable):
-#   Tests / tests / Unit and integration  (pull_request)
-#   Tests / tests / End-to-end            (pull_request)
-#   Tests / tests / Tests Gate            (pull_request)
+#   Tests / tests / Unit and integration  (unit only on pull_request; + integration on merge_group)
+#   Tests / tests / End-to-end            (label / dispatch)
+#   Tests / tests / Tests Gate            (aggregator — the required check)
 #
 # Nested reusable depth: caller → tests-reusable = 2 (GitHub max is 4).
 # secrets: inherit chains from the caller; the inlined e2e job reads secrets.*.
@@ -58,9 +71,12 @@ on:
         type: string
         default: ""
         description: |
-          Space-separated pytest target paths.  Empty = auto-discover (honours
-          testpaths in pyproject.toml).  Override to scope to a subset
-          (e.g. "tests/unit/ tests/integration/").
+          Space-separated pytest target paths.  Empty = event-tiered default
+          (see the `tests` job): tests/unit/ on pull_request, full auto-
+          discovered suite (honouring testpaths in pyproject.toml) on
+          merge_group / push.  Set a non-empty value to override the tiering
+          and force an exact path set on every event (e.g. "tests/unit/
+          tests/integration/").
       pytest-args:
         required: false
         type: string
@@ -178,12 +194,20 @@ jobs:
         if: inputs.distinct-id != ''
         run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
 
-      - name: Run unit + integration tests
+      # Tiered by event so the expensive integration tier runs only where a
+      # regression could actually ship (see the "Test tiering" note in the
+      # header):
+      #   pull_request          → tests/unit/ only        (fast per-commit signal)
+      #   merge_group/push/etc. → '' = auto-discover full suite (unit + integration)
+      # A caller-supplied test-paths always wins (explicit override). The
+      # ternary is a workflow expression in a `with:` value — not inlined
+      # conditional shell — so it stays within the CI authoring rule.
+      - name: Run tests (unit on PRs; unit + integration in the merge queue)
         id: tests
         uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@main
         with:
           app-name: ${{ inputs.app-name }}
-          test-paths: ${{ inputs.test-paths }}
+          test-paths: ${{ inputs.test-paths != '' && inputs.test-paths || (github.event_name == 'pull_request' && 'tests/unit/' || '') }}
           pytest-args: ${{ inputs.pytest-args }}
           services-script: ${{ inputs.services-script }}
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
