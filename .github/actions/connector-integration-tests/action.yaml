@@ -189,6 +189,18 @@ inputs:
       inside a reusable/composite workflow: they resolve against the
       reusable's repo, not the caller's.
     default: ""
+  emit-scorecard:
+    required: false
+    description: |
+      Whether to generate the test-readiness scorecard from this run's junit +
+      coverage evidence. Default "true" for direct callers that run the whole
+      suite in one job (the scorecard's per-tier junit slicing then sees every
+      tier). tests-reusable.yaml sets this to "false" for its split Integration
+      job: with unit and integration on separate runners this job's junit is
+      integration-only, so an inline scorecard would misreport the unit tier as
+      absent. Per-tier scorecard aggregation across both jobs lands in a
+      follow-up (per-tier coverage in the conformance package).
+    default: "true"
 
 runs:
   using: "composite"
@@ -395,7 +407,7 @@ runs:
     # rather than failing the job — the scorecard is observational, never a gate.
     # All scoring logic lives in the tested Python CLI; this stays straight-line.
     - name: Generate test-readiness scorecard
-      if: always()
+      if: always() && inputs.emit-scorecard == 'true'
       shell: bash
       env:
         REPO: ${{ github.repository }}

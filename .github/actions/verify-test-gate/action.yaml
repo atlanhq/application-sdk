@@ -8,8 +8,20 @@ description: |
   Co-located driver, checked out with the action in consumer repos.
 
 inputs:
-  tests-result:
-    description: needs.tests.result (unit + integration job).
+  unit-result:
+    description: needs.unit.result (unit-tests job; runs on every event).
+    required: true
+  integration-result:
+    description: |
+      needs.integration.result (integration-tests job). "skipped" is a valid
+      pass: the job is skipped on pull_request and when the connector has no
+      integration suite.
+    required: true
+  detect-integration-result:
+    description: |
+      needs.detect-integration.result (the suite-detection job gating the
+      integration tier). "skipped" (pull_request) and "success" are passes; a
+      "failure" must fail the gate rather than silently skip integration.
     required: true
   discover-e2e-result:
     description: needs.discover-e2e.result (skipped = e2e not requested).
@@ -22,9 +34,12 @@ outputs:
   passed:
     description: '"true" when every required job passed, else "false".'
     value: ${{ steps.gate.outputs.passed }}
-  tests-status:
-    description: Human-readable status for the tests row.
-    value: ${{ steps.gate.outputs.tests-status }}
+  unit-status:
+    description: Human-readable status for the unit row.
+    value: ${{ steps.gate.outputs.unit-status }}
+  integration-status:
+    description: Human-readable status for the integration row.
+    value: ${{ steps.gate.outputs.integration-status }}
   e2e-status:
     description: Human-readable status for the e2e row.
     value: ${{ steps.gate.outputs.e2e-status }}
@@ -40,12 +55,16 @@ runs:
       shell: bash
       # Route job results through env (quoted below), not inline ${{ }}.
       env:
-        TESTS_RESULT: ${{ inputs.tests-result }}
+        UNIT_RESULT: ${{ inputs.unit-result }}
+        INTEGRATION_RESULT: ${{ inputs.integration-result }}
+        DETECT_INTEGRATION_RESULT: ${{ inputs.detect-integration-result }}
         DISCOVER_E2E_RESULT: ${{ inputs.discover-e2e-result }}
         E2E_RESULT: ${{ inputs.e2e-result }}
       run: |
         set -euo pipefail
         python3 "${{ github.action_path }}/verify_test_gate.py" \
-          --tests "$TESTS_RESULT" \
+          --unit "$UNIT_RESULT" \
+          --integration "$INTEGRATION_RESULT" \
+          --detect-integration "$DETECT_INTEGRATION_RESULT" \
           --discover-e2e "$DISCOVER_E2E_RESULT" \
           --e2e "$E2E_RESULT" >> "$GITHUB_OUTPUT"
