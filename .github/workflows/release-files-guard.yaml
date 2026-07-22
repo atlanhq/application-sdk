@@ -1,0 +1,101 @@
+name: Release Files Guard
+
+# Fails a PR that hand-edits a release-owned file (a package version line or a
+# package CHANGELOG) off that package's `bump-version-*` branch. Those files are
+# generated and committed only by the release automation; editing them on a
+# feature branch desyncs the package from its published tags and wedges the
+# release pipeline (the motivating incident: a feature PR hand-bumped the
+# conformance version to a never-tagged value, and conformance_release.py
+# hard-errors when the declared version has no matching conformance-v* tag, so
+# every later conformance merge failed).
+#
+# Covers conformance and contract-toolkit (both use a release script that
+# requires the declared version to have a matching tag). The SDK is intentionally
+# excluded: release.py derives the previous version from `git describe`, so a
+# stray manual edit degrades gracefully instead of wedging the pipeline.
+#
+# The decision logic lives in .github/scripts/guard_release_files.py
+# (unit-tested in .github/scripts/tests/test_guard_release_files.py), per
+# docs/standards/ci.md: a workflow `run:` block must not contain branching shell.
+#
+# Runs on every PR (no path filter) and no-ops when no guarded file changed, so
+# it can be a required check without sitting pending forever on unrelated PRs.
+# `merge_group` runs are a passing no-op — the same pattern pr-title-convention
+# uses so this can be REQUIRED without blocking the merge queue.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: release-files-guard-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Guard release-owned files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout scripts
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Evaluate PR diff against the guard
+        id: detect
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "PR #${PR_NUMBER} (${HEAD_REF})"
+          gh pr diff "${PR_NUMBER}" --repo "${REPO}" > pr.diff
+          python3 .github/scripts/guard_release_files.py \
+            --diff pr.diff \
+            --head-ref "${HEAD_REF}" \
+            --comment-out release-files-comment.md
+
+      - name: Post sticky comment on violation
+        if: >-
+          github.event_name == 'pull_request'
+          && steps.detect.outputs.violation == 'true'
+          && github.event.pull_request.head.repo.fork == false
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
+        with:
+          header: release-files-guard
+          path: release-files-comment.md
+
+      - name: Clear sticky comment when resolved
+        if: >-
+          github.event_name == 'pull_request'
+          && steps.detect.outputs.violation == 'false'
+          && github.event.pull_request.head.repo.fork == false
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
+        with:
+          header: release-files-guard
+          delete: true
+
+      - name: Fail on violation
+        if: steps.detect.outputs.violation == 'true'
+        env:
+          ERROR_MESSAGE: ${{ steps.detect.outputs.error_message }}
+        run: |
+          echo "::error title=Release-owned file edited off the release branch::${ERROR_MESSAGE}"
+          exit 1
+
+      - name: Merge queue no-op
+        if: github.event_name == 'merge_group'
+        run: |
+          echo "merge_group event — release-owned files already validated at PR time; passing."
