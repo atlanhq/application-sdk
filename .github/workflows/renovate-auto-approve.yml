@@ -52,4 +52,10 @@ jobs:
       event_name: ${{ github.event_name }}
       head_sha: ${{ github.event.workflow_run.head_sha }}
       pr_number: ${{ inputs.pr_number }}
+      # application-sdk tracks the SHA-pinned actions in its shipped conformance
+      # bootstrap templates (Renovate config in renovate.json). Those live under
+      # packages/conformance/ source, outside the built-in allowlist, so declare
+      # them here as auto-approvable dependency files. Kept in this repo's caller
+      # rather than the shared reusable workflow — the path is SDK-specific.
+      extra_dep_file_pattern: 'packages/conformance/conformance/bootstrap/templates/.+\.ya?ml'
     secrets: inherit
