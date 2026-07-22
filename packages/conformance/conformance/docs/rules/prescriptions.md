@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**36 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025) (all AST-based / cross-artifact)
+**39 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -59,6 +59,9 @@ reassigned.
 | [P034](#p034) | `UntypedPreflightCheckFailure` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P035](#p035) | `PreflightMetadataContractParity` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P036](#p036) | `HandRolledProcessIsolation` | `warn` | `both` | `async-correctness` | — | 0.15.0 |
+| [P037](#p037) | `SdrAgentJsonNotConsumed` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
+| [P038](#p038) | `SdrArtifactMisrooted` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
+| [P039](#p039) | `SdrAgentJsonDroppedByInputContract` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
 
 ---
 
@@ -1195,5 +1198,146 @@ lives.
 Remediation is a restructure (route through the seam), so findings route to residue.
 Land as `WARN`; suppress a reviewed exception (e.g. a deliberate CPU-bound pool that
 never touches the worker) with `# conformance: ignore[P036] <reason>`.
+
+---
+
+## P037 — `SdrAgentJsonNotConsumed` {#p037}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+
+> SDR app resolves credentials by credential_guid only and never routes through an agent-aware resolver — agent_json is ignored
+
+**Rationale:** In SDR (agent) mode the platform forwards agent_json on the workflow input; the SDK's
+agent-aware resolvers (CredentialRef.resolve / CredentialRef.from_workflow_args) consume
+it to route the credential fetch through the customer-side agent. An app that instead
+resolves credentials with a custom, GUID-only path — a hand-rolled vault read plus
+resolve_credential_raw, or a bare CredentialRef(credential_guid=...) — ignores
+agent_json entirely. Its manifest can be P029-clean, but in agent mode the credential
+never resolves and the workflow writes zero assets while reporting 'success' (observed
+for a table-format connector in fleet testing).
+
+For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, credential resolution
+must be able to consume `agent_json` — the agent-mode routing spec the platform forwards
+on the workflow input.
+
+This rule fires when an app performs *custom* credential resolution — a bare
+`CredentialRef(credential_guid=...)` construction or a `resolve_credential_raw(...)`
+call — but NEVER routes through an agent-aware resolver entry point anywhere in its
+source:
+
+* `CredentialRef.resolve(input)` — reads `input.agent_json` and   picks the agent vs.
+direct-GUID route. * `CredentialRef.from_workflow_args(workflow_args)` — the same,
+reading `agent_json` off the args payload.
+
+An app that resolves strictly by `credential_guid` (a custom local vault read that only
+ever builds `CredentialRef(name=guid, credential_guid=guid)`) ignores `agent_json`, so
+in agent mode the credential never resolves and zero assets are written — a silent
+failure invisible to status-only pipelines.
+
+Apps that lean on the SDK's transparent resolution (they build no `CredentialRef` and
+call no `resolve_credential_raw`) are not gated in and never flagged.
+
+This is a WARN (not BLOCK): the static heuristic recognises the two sanctioned resolver
+entry points and a direct `agent_spec`-carrying ref, but an app could resolve
+`agent_json` through a bespoke helper the heuristic does not know about.  Review before
+suppressing.
+
+**Remediation:** route credential resolution through `CredentialRef.resolve(input)` or
+`CredentialRef.from_workflow_args(workflow_args)` (both consume `agent_json` and pick
+the correct route), keeping the direct `credential_guid` path only as a fallback after
+the agent-aware call.
+
+---
+
+## P038 — `SdrArtifactMisrooted` {#p038}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+
+> SDR object-store prefix rooted from the empty-defaulting input application_name field instead of APPLICATION_NAME
+
+**Rationale:** The object-store output prefix must be rooted from the SDK app identity
+(APPLICATION_NAME / self._app_name), which the SDK's own WORKFLOW_OUTPUT_PATH_TEMPLATE
+does correctly. An app that instead roots 'artifacts/apps/<identity>/...' from the
+workflow-input application_name field mis-roots: that field's contract default is '' and
+AE forwards only manifest-declared args, so it stays empty and artifacts land under
+'artifacts/apps//workflows/...' (empty app segment). self.upload() then succeeds but 0
+assets publish — P030 passes the app (upload IS called), so this distinct rule catches
+the wrong-root case (observed for a document-store connector in fleet testing).
+
+For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, the object-store
+output path/prefix (`artifacts/apps/<identity>/workflows/...`) must be rooted from the
+SDK app identity — the `APPLICATION_NAME` constant, `self._app_name`, or the SDK's
+`WORKFLOW_OUTPUT_PATH_TEMPLATE` (which fills `application_name` from the app identity).
+
+This rule fires when the app instead builds that path from a *workflow-input*
+`application_name` field — read as `input_data.get("application_name", ...)`,
+`input_data["application_name"]`, or `input.application_name` — and interpolates it
+(directly or via a local variable) into an f-string whose literal contains
+`artifacts/apps`.  The contract default of that field is `""` and AE forwards only
+manifest-declared args, so the value stays empty; the artifacts then land under
+`artifacts/apps//workflows/...` (note the empty app segment). `self.upload()` reports
+success but the publish app finds 0 assets at the expected prefix.
+
+This is complementary to P030: P030 checks that `self.upload()` is *called*; P038 checks
+that what it uploads is rooted correctly.  An app can pass P030 and still fail P038.
+
+This is a WARN (not BLOCK): the failure is a silent zero-asset publish, not a hard
+crash, and the heuristic is deliberately narrow (it keys on the `application_name` input
+field feeding an `artifacts/apps` literal).  It does NOT catch every mis-rooting — an
+app that forwards an empty `output_prefix` input field without an `artifacts/apps`
+literal is indistinguishable from a correct app statically and is left to runtime/e2e
+detection.
+
+**Remediation:** root the object-store prefix from `APPLICATION_NAME` / `self._app_name`
+(or use `WORKFLOW_OUTPUT_PATH_TEMPLATE.format( application_name=APPLICATION_NAME,
+...)`), or default the contract field to the app name; never derive it from an
+empty-defaulting workflow arg.
+
+---
+
+## P039 — `SdrAgentJsonDroppedByInputContract` {#p039}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+
+> SDR generated extract-input contract drops the forwarded agent_json (bare Input subclass, no agent_json field, extra fields rejected)
+
+**Rationale:** In SDR (agent) mode the platform forwards agent_json on the extract input. A generated
+extract-input contract that subclasses the bare Input base, declares no agent_json
+field, and rejects extra fields makes Pydantic silently drop that forwarded agent_json —
+the extract input's credential_ref is then None and extraction fails with
+PipelineContractError and 0 assets, even though the manifest is P029-clean (declares
+{{agent-json}}). This is distinct from P029 (manifest side) and P037 (code resolves by
+guid only): here the manifest and code are fine but the typed contract eats the field
+(observed for a BI connector in fleet testing).
+
+For apps declaring `self_deployed_runtime: true` in `atlan.yaml` whose generated
+manifest declares agent routing (the `{{agent-json}}` placeholder at the extract-args
+top level — i.e. P029 passes), the generated extract-input contract model must be able
+to *receive* the forwarded `agent_json`.
+
+This rule fires when the generated extract-input contract (`AppInputContract` in a
+generated `_input.py`):
+
+* subclasses the bare `Input` base (NOT the SDK `*ExtractionInput`   family, which
+declares `agent_json`), AND * declares no `agent_json` field of its own, AND * rejects
+extra fields (no `allow_unbounded_fields=True` class keyword,   no `extra="allow"` in
+the model config).
+
+In that shape Pydantic silently drops the forwarded `agent_json` at model construction.
+The extract input's `credential_ref` is then `None` and extraction fails with
+`PipelineContractError` ("No credential_ref or inline_credentials on input") — 0 assets
+— while the manifest and the connector code both look correct.
+
+This is orthogonal to P029 (which checks the *manifest*) and P037 (which checks that the
+*code* consumes `agent_json`): all three must be clean.
+
+This is a WARN (not BLOCK): the heuristic reads the generated contract's declared bases,
+fields, and model config; an app that receives `agent_json` through a base the heuristic
+does not recognise could be flagged.  Review before suppressing.
+
+**Remediation:** declare `agent_json` on the extract-input contract in
+`contract/app.pkl` and regenerate, subclass the SDK `ExtractionInput` family (which
+declares it), or set `allow_unbounded_fields=True` on the contract — as the passing
+counterexample connectors in fleet testing do.
 
 ---

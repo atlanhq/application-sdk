@@ -388,9 +388,9 @@ drafting.
   — route to residue with the proposed shape; do not mechanically rename the
   class.  Leave `AsyncAtlanClient` usage untouched.
 
-**SDR-readiness rules (P029–P030, DISTR-752)** — all suggest-only, scope=app;
-`classification` is always `"judgment"`.  Both gate on `self_deployed_runtime: true`
-in `atlan.yaml`.
+**SDR-readiness rules (P029/P030, P037/P038/P039)** — all suggest-only,
+scope=app; `classification` is always `"judgment"`.  All gate on
+`self_deployed_runtime: true` in `atlan.yaml`.
 
 - **P029 SdrManifestMissingAgentJson** (BLOCK) — a `manifest.json` under
   `app/generated/` is missing the `agent_json` key in `dag.extract.inputs.args`.
@@ -414,3 +414,54 @@ in `atlan.yaml`.
   structure first — some apps delegate upload to a base class or a helper method
   that the scanner cannot see; if that is the case, note it in residue rather
   than adding a redundant call.  Route to residue for human confirmation.
+
+- **P037 SdrAgentJsonNotConsumed** (WARN) — the app performs custom credential
+  resolution (a bare `CredentialRef(credential_guid=...)` construction or a
+  `resolve_credential_raw(...)` call) but never routes through an agent-aware
+  resolver entry point (`CredentialRef.resolve(input)` /
+  `CredentialRef.from_workflow_args(workflow_args)`, or a `CredentialRef` built
+  with an `agent_spec`/`agent_json` kwarg).  Resolving strictly by
+  `credential_guid` ignores the forwarded `agent_json`, so in agent (SDR) mode
+  the credential never resolves and the workflow writes zero assets while
+  reporting "success".  The finding is app-level, anchored at
+  the first custom-resolution call site.  Apps that lean on the SDK's transparent
+  resolution (no `CredentialRef` / `resolve_credential_raw`) are not gated in.
+  Draft a proposal that
+  routes resolution through `CredentialRef.resolve(input)` /
+  `CredentialRef.from_workflow_args(workflow_args)`, keeping the direct
+  `credential_guid` path only as a fallback; route to residue for confirmation.
+
+- **P038 SdrArtifactMisrooted** (WARN) — the object-store output path/prefix
+  (`artifacts/apps/<identity>/...`) is rooted from the *workflow-input*
+  `application_name` field (read as `input_data.get("application_name", ...)`,
+  `input_data["application_name"]`, or `input.application_name`) instead of the
+  SDK app identity (`APPLICATION_NAME` / `self._app_name`).  That field's contract
+  default is `""` and AE forwards only manifest-declared args, so it stays empty
+  and artifacts land under `artifacts/apps//workflows/...` (empty app segment);
+  `self.upload()` succeeds but the publish app finds 0 assets (complementary to
+  P030 — the upload IS called, but mis-rooted).  The
+  finding is anchored at the offending f-string.  The heuristic is deliberately
+  narrow (it keys on the `application_name` input field feeding an
+  `artifacts/apps` literal); it does not catch every mis-rooting — an app that
+  forwards an empty `output_prefix` input field without an `artifacts/apps`
+  literal is statically indistinguishable from a correct app and is left to
+  runtime/e2e detection.  Draft a proposal that roots the prefix from
+  `APPLICATION_NAME` / `self._app_name` (or `WORKFLOW_OUTPUT_PATH_TEMPLATE`);
+  route to residue for confirmation.
+
+- **P039 SdrAgentJsonDroppedByInputContract** (WARN) — the generated manifest
+  declares `{{agent-json}}` at the extract-args top level (P029 passes), but the
+  generated extract-input contract model (`AppInputContract` in a generated
+  `_input.py`) subclasses the bare `Input` base, declares no `agent_json` field,
+  and rejects extra fields — so Pydantic silently drops the forwarded
+  `agent_json` at model construction.  The extract input's `credential_ref` is
+  then `None` and extraction fails with `PipelineContractError` / 0 assets even
+  though the manifest and connector code look correct.  This is
+  orthogonal to P029 (manifest side) and P037 (code resolves by guid only) — all
+  three must be clean.  The finding is anchored at the `AppInputContract` class.
+  Contracts that subclass the SDK `*ExtractionInput` family (which declares
+  `agent_json`) or set `allow_unbounded_fields=True` / `extra="allow"` are exempt.
+  The remedy is a
+  Pkl-layer change: declare `agent_json` on the extract-input contract in
+  `contract/app.pkl` (or set `allow_unbounded_fields=True`) and regenerate; do
+  not hand-edit the generated `_input.py`.  Route to residue for confirmation.

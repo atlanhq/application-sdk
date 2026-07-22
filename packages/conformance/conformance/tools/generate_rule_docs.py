@@ -134,7 +134,8 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.entrypoint` (P017–P018, scans test files too), "
             "`suite.checks.client_seam` (P019), "
             "`suite.checks.determinism` (P020–P024, P031), "
-            "`suite.checks.app_name_alignment` (P025) "
+            "`suite.checks.app_name_alignment` (P025), "
+            "`suite.checks.sdr` (P029/P030, P037/P038/P039) "
             "(all AST-based / cross-artifact)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
