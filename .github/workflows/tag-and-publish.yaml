@@ -126,10 +126,9 @@ jobs:
           owner: atlanhq
           repositories: application-sdk
       - name: Trigger the self-hosted Renovate runner
-        # No dry_run/repos overrides: inherits renovate.yaml's defaults (full
-        # discovery; dry_run=full until PR2 Stage 3 flips it live). So this is an
-        # inert rehearsal today and becomes the real post-release fan-out at
-        # go-live. Soft-fail so a fan-out hiccup never fails the release.
+        # No dry_run/repos overrides: inherits renovate.yaml's live defaults (full
+        # discovery, dry_run=null). Soft-fail so a fan-out hiccup never fails the
+        # release — the 4-hourly schedule is the backstop.
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         run: |
