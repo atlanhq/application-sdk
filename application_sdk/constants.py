@@ -446,10 +446,35 @@ if DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED:
 #: BLDX-1555 defense-in-depth: when True, ``App.upload()`` validates transformed
 #: asset NDJSON against the pyatlan_v9 ``.validate()`` backbone before handing it
 #: across the SDR→Atlan boundary. Warn-only — invalid/orphaned assets are logged,
-#: never block the upload. Set to "false" to disable the check entirely.
+#: never block the upload.
+#:
+#: Defaulted ON (CNCT-85). The scan runs the pyatlan/msgspec decode in an isolated
+#: child process (``run_best_effort`` over ``run_fault_isolated``), so a native
+#: fault — e.g. the msgspec 0.20.0 concurrent-decode segfault on py3.13 — is
+#: contained to the child and surfaces as a swallowed best-effort skip, never
+#: killing the worker. This branch (PR #2769) is intended to merge only once the
+#: msgspec 0.21.1 bump is in place, at which point concurrent decode is itself
+#: safe and on-by-default validation is the right posture. Set to "false" to
+#: disable per-deployment.
 VALIDATE_ASSETS_ON_UPLOAD: bool = (
     os.getenv("ATLAN_VALIDATE_ASSETS_ON_UPLOAD", "true").lower() == "true"
 )
+#: Upper bound in seconds for one upload's asset-validation scan. The scan runs
+#: in an isolated child process; past this bound the child is killed and the
+#: upload proceeds with a warning — warn-only validation must not be able to
+#: stall a handoff any more than it may crash one.
+VALIDATE_ASSETS_TIMEOUT_SECONDS: float = float(
+    os.getenv("ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS", "600")
+)
+#: The single "rows per axis" cap for transformed-asset validation output —
+#: shared by both surfaces so they can never drift: the human-readable
+#: ``AssetValidationReport.format_report(max_items=...)`` listing and the
+#: structured ``asset_validation_matrix`` telemetry the upload activity emits.
+#: The event's scalar counts always reflect the full batch; only these
+#: drill-down samples are bounded (so a pathological batch cannot produce an
+#: unbounded WARNING body or ``LogAttributes`` value).
+ASSET_VALIDATION_MAX_ITEMS_PER_AXIS: int = 25
+
 # Dapr Client Configuration
 #: Maximum gRPC message length in bytes for Dapr client.
 #:

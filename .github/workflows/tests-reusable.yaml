@@ -66,9 +66,12 @@ on:
         type: string
         default: >-
           -n auto --dist=loadfile --tb=short
-          --cov=app --cov-report=xml --cov-report=html --cov-report=term
+          --cov=app --cov-report=xml --cov-report=json --cov-report=html --cov-report=term
           --cov-fail-under=0
-        description: Extra arguments passed to pytest after test-paths.
+        description: |
+          Extra arguments passed to pytest after test-paths.  ``--cov-report=json``
+          emits ``coverage.json`` for the test-readiness scorecard (the machine-
+          readable form; xml/html/term are for humans and other consumers).
       services-script:
         required: false
         type: string
@@ -99,7 +102,17 @@ on:
         required: false
         type: string
         default: ""
-        description: Branch/SHA to pin atlanhq/application-sdk to for cross-repo dispatch. Empty = lockfile version.
+        description: Branch/SHA to pin atlanhq/application-sdk to for cross-repo dispatch, applied to BOTH runtime and harness unless overridden below. Empty = lockfile version.
+      runtime-sdk-ref:
+        required: false
+        type: string
+        default: ""
+        description: application-sdk ref for the connector RUNTIME (built image). Empty falls back to application-sdk-ref, then the lockfile pin.
+      harness-sdk-ref:
+        required: false
+        type: string
+        default: ""
+        description: application-sdk ref for the TEST HARNESS (host pytest / testing.e2e). Empty falls back to application-sdk-ref, then the lockfile pin. Set to run the latest harness against the connector's own runtime without bumping its SDK.
       base-image-ref:
         required: false
         type: string
@@ -131,6 +144,19 @@ on:
           tenant blobstorage, so a connector that forgets to bridge an artifact
           shows up as zero downstream assets instead of being masked by a shared
           bucket. Default false: existing callers are unaffected.
+      source-available:
+        required: false
+        type: boolean
+        default: true
+        description: |
+          Whether an extraction source is provisioned for this connector in
+          CI — forwarded to the sdr-e2e action's `source-available` input.
+          Sourcing is the app owner's responsibility. Default true: the
+          full-DAG e2e runs unchanged. Set false for apps with no free
+          container / no wired credentials — the e2e then degrades to a
+          worker-up-only check (assert the worker deploys + serves
+          /server/health) and skips extraction/publish/Atlas assertions,
+          until the owner provisions a source.
 
 jobs:
 
@@ -197,7 +223,7 @@ jobs:
         shell: bash
         run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -263,7 +289,7 @@ jobs:
         shell: bash
         run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -272,9 +298,9 @@ jobs:
       # (SDK-PR dispatch); the plain-label path (empty ref) otherwise has no uv
       # and fails with `uv: command not found`. Install it unconditionally here.
       - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.29"
+          version: "0.11.31"
           enable-cache: true
 
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
@@ -290,6 +316,10 @@ jobs:
           secrets-script: .github/e2e/make-secrets-e2e-full.py
           components-dir: .github/e2e/e2e-full-components
           compose-overlay: .github/e2e/e2e-full-docker-compose.yaml
+          # Force the full-DAG config dir even when the repo also has a
+          # .github/sdr-e2e/ (testcontainer) setup, which the action would
+          # otherwise prefer — see the action's `config-dir` input.
+          config-dir: .github/e2e
           # Bump the container-health wait because the worker has to establish
           # the Temporal connection with TLS + auth before /server/health greens.
           container-health-timeout-seconds: "120"
@@ -303,8 +333,11 @@ jobs:
           # connector-PR comment so N legs don't post N comments.
           post-pr-comment: "false"
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
+          runtime-sdk-ref: ${{ inputs.runtime-sdk-ref }}
+          harness-sdk-ref: ${{ inputs.harness-sdk-ref }}
           base-image-ref: ${{ inputs.base-image-ref }}
           enable-two-store: ${{ inputs.two-store }}
+          source-available: ${{ inputs.source-available }}
           # Push the test image with the org PAT (same identity build-and-publish
           # uses) so it can write PAT-published connector packages — a plain
           # GITHUB_TOKEN 403s on those (e.g. atlan-redshift-app). Available here
@@ -350,7 +383,7 @@ jobs:
       # scripts don't exist on `main` until such a PR lands — the fallback
       # below is skipped whenever the pinned ref already carries them).
       - name: Checkout application-sdk callback script
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: ${{ inputs.application-sdk-ref }}
@@ -386,7 +419,7 @@ jobs:
       - name: Fall back to main callback scripts if pinned SHA predates them
         id: scripts-fallback
         if: hashFiles('application-sdk-scripts/.github/scripts/build_callback_summary.py') == ''
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: main

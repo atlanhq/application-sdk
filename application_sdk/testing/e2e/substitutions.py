@@ -65,4 +65,8 @@ class SQLMustacheSubstitutions(MustacheSubstitutions):
     include_filter: str = Field(default="", alias="{{include-filter}}")
     exclude_filter: str = Field(default="", alias="{{exclude-filter}}")
     exclude_table_regex: str = Field(default="", alias="{{exclude-table-regex}}")
-    preflight_check: bool = Field(default=True, alias="{{preflight-check}}")
+    # Rendered as a STRING to match the generated ExtractionInput contract, which
+    # the contract-toolkit types ``preflight_check: str`` (a bool here fails
+    # pydantic validation on str-typed connectors: glue/dremio/iceberg/clickhouse).
+    # The value is inert on the extract path (preflight runs via a separate handler).
+    preflight_check: str = Field(default="true", alias="{{preflight-check}}")

@@ -11,7 +11,7 @@ import hashlib
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Union, cast
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 
 from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
@@ -287,8 +287,17 @@ class BaseSQLClient(ClientInterface):
             case _:
                 raise SqlCredentialsParseError(field="authType", value_summary=authType)
 
-        # Handle None values and ensure token is a string before encoding
-        encoded_token = quote_plus(str(token or ""))
+        # Handle None values and ensure token is a string before encoding.
+        # This token is interpolated into the userinfo of a SQLAlchemy URL,
+        # which SQLAlchemy decodes with ``urllib.parse.unquote`` (percent-only).
+        # ``quote_plus`` encodes space as ``+``, and ``unquote`` never turns
+        # ``+`` back into a space, so a password containing a space would reach
+        # the driver corrupted (CONNECT-361). ``quote`` encodes space as ``%20``,
+        # which round-trips correctly. ``safe=""`` is required so that ``/`` in
+        # the credential is also encoded (an unencoded ``/`` in userinfo would
+        # otherwise break URL parsing). Query-string params below still use
+        # ``quote_plus`` — SQLAlchemy decodes query values with ``+`` -> space.
+        encoded_token = quote(str(token or ""), safe="")
         return encoded_token
 
     def add_connection_params(

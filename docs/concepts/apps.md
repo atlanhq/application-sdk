@@ -308,6 +308,35 @@ per hard app at boot. Start soft, then flip to `hard` once connector-pulse `woul
 the checks track real workflow failures. See the `adopt-preflight-gate` skill for the full adoption
 flow.
 
+### Asset-Validation Outcome
+
+`App.upload()` runs a **warn-only** validation of transformed asset NDJSON against the pyatlan_v9
+`.validate()` backbone (plus a referential/orphan pass) before the SDR→Atlan handoff. It never blocks
+and never fails the upload — invalid or orphaned assets are reported, not rejected.
+
+The results are surfaced as a structured outcome event (the sibling of the preflight gate's outcome
+event above) so they are queryable in ClickHouse, not just greppable in log bodies. Because the event
+is emitted from inside the `upload` activity, the Temporal context (`workflow_run_id`, `app_name`) is
+auto-stamped and each row joins to the workflow outcome by run id:
+
+- It fires on **every validated upload** — `outcome="clean"` as well as `outcome="flagged"` — so
+  there is a denominator to rank flag-rate against (mirrors the gate's `would_block` reporting).
+- Five scalar counts land as their own `LogAttributes`: `assets_total`, `assets_passed`,
+  `assets_invalid`, `assets_orphaned`, `assets_undeserializable`.
+- Per-failure detail rides in one compact JSON attribute, `asset_validation_matrix` (bounded to a
+  fixed number of rows per axis so it can't grow unbounded); the full human-readable report is also
+  logged as a WARNING body, but only for flagged runs.
+
+Uploads with nothing to validate emit nothing at all: when `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false`
+or when the path is not a `transformed/` subtree (e.g. a raw upload), no outcome event is produced.
+See [Monitoring](monitoring.md#asset-validation-outcome-event) for the attribute list as it reaches
+OTLP.
+
+> **On by default (CNCT-85).** The scan runs in an isolated child process
+> (process-isolation fix [#2769](https://github.com/atlanhq/application-sdk/pull/2769)), so a native
+> fault in the decode path is contained and downgraded to a best-effort skip rather than killing the
+> worker. Set `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false` to disable per-deployment.
+
 ## Passthrough Modules
 
 If your app imports third-party libraries that must be available inside the Temporal sandbox, declare them as a class-level attribute:

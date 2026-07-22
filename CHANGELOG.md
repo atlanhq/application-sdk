@@ -1,5 +1,36 @@
 # Changelog
 
+## v3.24.0 (July 21, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.23.1...v3.24.0
+
+### Features
+
+- SDR full-DAG e2e harness enablement (source tiering, agent-mode payload, skip-tolerant gate, watchdog, split-ref) (#2639) (by @adityachoudhury-cloud in [c8dd097](https://github.com/atlanhq/application-sdk/commit/c8dd097))
+
+### Bug Fixes
+
+- de-flake rolling-writer time-rollover test (clock seam) (#2806) (by @cmgrote in [1b8d89a](https://github.com/atlanhq/application-sdk/commit/1b8d89a))
+- make AtlanLoggerAdapter.__del__ teardown-safe (#2810) (by @cmgrote in [7f68ccf](https://github.com/atlanhq/application-sdk/commit/7f68ccf))
+- resolve metric object stores lazily so a boot-time binding gap self-heals (BLDX-1567) (#2807) (by @cmgrote in [f049090](https://github.com/atlanhq/application-sdk/commit/f049090))
+- run upload asset validation in an isolated child process (CNCT-85) (#2769) (by @fyzanshaik-atlan in [143e2d3](https://github.com/atlanhq/application-sdk/commit/143e2d3))
+
+
+## v3.23.1 (July 20, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.23.0...v3.23.1
+
+### Bug Fixes
+
+- serve flat single-entrypoint manifest for ?entrypoint= requests (#2764) (by @cmgrote in [ec4955b](https://github.com/atlanhq/application-sdk/commit/ec4955b))
+- per-app gate enforcement (soft default, hard opt-in) + check-matrix emission (#2751) (by @fyzanshaik-atlan in [d3b75af](https://github.com/atlanhq/application-sdk/commit/d3b75af))
+- reconcile partial local dirs against source store in App.upload (#2762) (by @vaibhavatlan in [3998948](https://github.com/atlanhq/application-sdk/commit/3998948))
+- encode credentials with quote() so passwords with spaces authenticate (#2778) (by @vaibhavatlan in [0310c42](https://github.com/atlanhq/application-sdk/commit/0310c42))
+- emit structured asset-validation outcome to OTLP/ClickHouse (#2766) (by @cmgrote in [92e8aa0](https://github.com/atlanhq/application-sdk/commit/92e8aa0))
+- default asset-validation-on-upload off pending isolation fix (CNCT-85) (#2783) (by @cmgrote in [84769c1](https://github.com/atlanhq/application-sdk/commit/84769c1))
+- default-entrypoint /manifest fallback for multi-entrypoint apps (#2776) (by @adityachoudhury-cloud in [e27319e](https://github.com/atlanhq/application-sdk/commit/e27319e))
+
+
 ## v3.23.0 (July 17, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.22.1...v3.23.0

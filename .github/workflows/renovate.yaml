@@ -10,20 +10,19 @@ name: Renovate (self-hosted fleet runner)
 # us provide the toolchain (uv, pkl, python, ruff) with the same steps the old
 # renovate-pkl-sync.yaml glue used, instead of baking a custom Renovate image.
 #
-# SAFE BY DEFAULT: dry_run defaults to 'full', so scheduled runs and an
-# un-parameterised dispatch make NO changes (no PRs, no commits). Going live:
-#   * pilot   — dispatch with dry_run='null' and repos scoped to a repo or two;
-#   * fleet   — flip the schedule default to 'null' (a one-line change) once the
-#               Mend app is uninstalled. See the Model A rollout plan, steps 4-9.
+# LIVE: dry_run defaults to 'null', so scheduled runs and the release fan-out
+# open/update real PRs across the discovered fleet. Mend has been uninstalled
+# fleet-wide, so there is no second engine to collide with. For a manual dry
+# run, dispatch with dry_run='full' (and optionally scope with the repos input).
 
 on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Renovate dry-run mode. 'full' = no changes (default, safe); 'null' = live (open/update PRs)."
+        description: "Renovate dry-run mode. 'null' = live (default, open/update PRs); 'full' = no changes (manual dry run)."
         type: choice
         options: ["full", "lookup", "null"]
-        default: "full"
+        default: "null"
       repos:
         description: 'Optional JSON array of "owner/repo" to scope the run (pilot). Empty = full discovered fleet.'
         type: string
@@ -49,16 +48,6 @@ jobs:
     outputs:
       repos: ${{ steps.discover.outputs.repos }}
     steps:
-      # Fail-fast on an accidental unscoped live dispatch: a live run
-      # (dry_run != 'full') with no `repos` scope would fan out real PRs across
-      # the entire discovered fleet. Scheduled runs are unaffected — they carry
-      # the safe 'full' default. Remove this guard when the fleet goes live.
-      - name: Guard against unscoped live dispatch
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run != 'full' && inputs.repos == '' }}
-        run: |
-          echo "::error::Refusing an unscoped live run (dry_run='${{ inputs.dry_run }}', empty 'repos'): this would open live PRs across the entire discovered fleet. Scope the 'repos' input to a pilot set, or use dry_run='full'."
-          exit 1
-
       - name: Mint fleet App token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
@@ -67,7 +56,7 @@ jobs:
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Discover atlan-application-sdk consumers
         id: discover
@@ -76,7 +65,6 @@ jobs:
         run: |
           python3 .github/scripts/discover_org_consumers.py \
             --owner atlanhq \
-            --query "atlan-application-sdk filename:pyproject.toml" \
             --exclude atlanhq/application-sdk
 
   renovate:
@@ -99,14 +87,15 @@ jobs:
         # `&&`/`||` short-circuit, so fromJson is never called on an empty string.
         repo: ${{ (inputs.repos != '' && fromJson(inputs.repos)) || fromJson(needs.discover.outputs.repos) }}
     env:
-      # 'full' (default) makes no changes. Overridden per-dispatch via the input;
-      # scheduled runs inherit the safe default until the fleet goes live.
-      RENOVATE_DRY_RUN: ${{ inputs.dry_run || 'full' }}
+      # Live by default. workflow_dispatch supplies the input ('null' default);
+      # scheduled runs have no inputs context, so the `|| 'null'` fallback applies.
+      # A manual dry run = dispatch with dry_run='full'.
+      RENOVATE_DRY_RUN: ${{ inputs.dry_run || 'null' }}
     steps:
       - name: Mint fleet App token
         id: app-token
-        # Owner-scoped (not per-repo): mirrors reusable-renovate-dispatch.yaml.
-        # Each matrix job mints its own token, so API budgets stay isolated.
+        # Owner-scoped (not per-repo): each matrix job mints its own token, so
+        # API budgets stay isolated.
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -116,7 +105,7 @@ jobs:
       # application-sdk itself — provides the pkl-sync driver and the self-hosted
       # admin config. Renovate clones each target repo into its own base dir (a
       # temp dir), so this checkout is never disturbed.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Install the pkl-sync driver as a bare PATH command. postUpgradeTasks
       # commands are NOT shell-expanded by Renovate, so the preset invokes
@@ -127,7 +116,9 @@ jobs:
 
       # Provides `uv`/`uvx` — used by Renovate's native uv manager to refresh
       # uv.lock AND by the driver's `uvx ruff` formatting of generated Python.
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.31"
 
       - name: Install pkl
         run: |

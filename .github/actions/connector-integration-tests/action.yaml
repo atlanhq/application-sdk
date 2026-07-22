@@ -47,9 +47,9 @@ description: |
 
   ```yaml
   steps:
-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - uses: ./.github/actions/mssql-native-deps   # connector-local action
-    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.22.1
+    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.24.0
       with:
         app-name: mssql
   ```
@@ -387,6 +387,31 @@ runs:
         echo "summary=${SUMMARY:-no summary parsed}" >> "$GITHUB_OUTPUT"
         echo "exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
         exit "$TEST_EXIT_CODE"
+
+    # Emit the test-readiness scorecard from the standard evidence (junit +
+    # coverage.json). Runs on `always()` so a failing test run still produces a
+    # scorecard — a red suite is exactly when the (capped) grade matters most.
+    # Best-effort: a missing junit (e.g. the app server never started) skips
+    # rather than failing the job — the scorecard is observational, never a gate.
+    # All scoring logic lives in the tested Python CLI; this stays straight-line.
+    - name: Generate test-readiness scorecard
+      if: always()
+      shell: bash
+      env:
+        REPO: ${{ github.repository }}
+        SHA: ${{ github.sha }}
+      run: |
+        [ -f results/test-results.xml ] || { echo "no junit; skipping scorecard"; exit 0; }
+        # Trailing `|| echo` keeps this non-blocking: the scorecard is
+        # observational, and older published conformance versions predate the
+        # `scorecard` subcommand — a failure here must never redden a Tests run.
+        uvx atlan-application-sdk-conformance scorecard \
+          --junit results/test-results.xml \
+          --coverage coverage.json \
+          --repo "$REPO" \
+          --commit "$SHA" \
+          --out results/test-readiness.json \
+          || echo "::warning::test-readiness scorecard generation failed (skipped)"
 
     - name: Upload test results
       if: always()

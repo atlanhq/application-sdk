@@ -17,6 +17,9 @@ Public API:
     delete_prefix(prefix, store=None) → int  (returns count deleted)
     list_keys(prefix, suffix=...)     → list[str]
     list_keys_with_meta(prefix, ...)  → list[(key, size, e_tag)]
+    list_data_keys(prefix, ...)       → list[str]  (sidecars excluded)
+    list_data_keys_with_meta(prefix)  → list[(key, size, e_tag)]  (sidecars excluded)
+    is_sidecar_key(key)               → bool  (single source of truth; SIDECAR_SUFFIX)
 
 For directory upload/download, use App.upload / App.download (framework tasks)
 or call application_sdk.storage.transfer.upload / .download directly.
@@ -32,8 +35,12 @@ All I/O functions normalise keys by default (see normalize_key).  Pass
 from __future__ import annotations
 
 from application_sdk.storage.batch import (
+    SIDECAR_SUFFIX,
     delete_prefix,
     download_prefix,
+    is_sidecar_key,
+    list_data_keys,
+    list_data_keys_with_meta,
     list_keys,
     list_keys_with_meta,
     upload_file_from_bytes,
@@ -91,6 +98,10 @@ __all__ = [
     "get_file_meta",
     "list_keys",
     "list_keys_with_meta",
+    "list_data_keys",
+    "list_data_keys_with_meta",
+    "is_sidecar_key",
+    "SIDECAR_SUFFIX",
     "normalize_key",
     "put_json",
     # Errors

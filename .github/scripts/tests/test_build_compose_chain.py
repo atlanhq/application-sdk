@@ -165,3 +165,84 @@ def test_main_two_store_without_compose_path_errors(tmp_path: Path, capsys) -> N
 
     assert rc == 1
     assert "::error::" in capsys.readouterr().err
+
+
+def test_full_dag_inserted_after_sdk_before_app_overlay(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    sdk = tmp_path / "sdk-ci.yaml"
+    overlay = tmp_path / "app-overlay.yaml"
+    overlay.write_text("services: {}")
+    full_dag = tmp_path / "docker-compose.full-dag.yml"
+
+    files = build_compose_files(
+        base,
+        sdk,
+        str(overlay),
+        "",
+        two_store=False,
+        full_dag=True,
+        full_dag_compose=full_dag,
+    )
+
+    # full-dag overlay sits below the app overlay so an app can still override.
+    assert files == [str(base), str(sdk), str(full_dag), str(overlay)]
+
+
+def test_full_dag_off_by_default(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    sdk = tmp_path / "sdk-ci.yaml"
+
+    files = build_compose_files(base, sdk, "", "", two_store=False)
+
+    assert files == [str(base), str(sdk)]
+
+
+def test_full_dag_and_two_store_ordering(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    sdk = tmp_path / "sdk-ci.yaml"
+    full_dag = tmp_path / "docker-compose.full-dag.yml"
+    two_store_compose = tmp_path / "docker-compose.two-store.yml"
+
+    files = build_compose_files(
+        base,
+        sdk,
+        "",
+        "",
+        two_store=True,
+        two_store_compose=two_store_compose,
+        full_dag=True,
+        full_dag_compose=full_dag,
+    )
+
+    # full-dag right after SDK; two-store always last.
+    assert files == [str(base), str(sdk), str(full_dag), str(two_store_compose)]
+
+
+def test_full_dag_requires_compose_path() -> None:
+    with pytest.raises(ValueError):
+        build_compose_files(
+            Path("a"), Path("b"), "", "", two_store=False, full_dag=True
+        )
+
+
+def test_main_full_dag_flag(tmp_path: Path, capsys) -> None:
+    base = tmp_path / "base.yaml"
+    sdk = tmp_path / "sdk-ci.yaml"
+    full_dag = tmp_path / "full-dag.yml"
+
+    rc = main(
+        [
+            "--base-compose",
+            str(base),
+            "--sdk-compose",
+            str(sdk),
+            "--full-dag",
+            "true",
+            "--full-dag-compose",
+            str(full_dag),
+        ]
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out.strip() == f"files=-f {base} -f {sdk} -f {full_dag}"

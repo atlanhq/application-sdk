@@ -212,6 +212,7 @@ def test_normalize_open_pr_full_shape():
         "labels": {"nodes": [{"name": "update:minor"}]},
         "mergeable": "MERGEABLE",
         "reviewDecision": "APPROVED",
+        "autoMergeRequest": {"enabledAt": "2026-06-01T01:00:00Z"},
         "files": {"nodes": [{"path": "uv.lock"}]},
         "createdAt": "2026-06-01T00:00:00Z",
         "updatedAt": "2026-06-02T00:00:00Z",
@@ -228,6 +229,7 @@ def test_normalize_open_pr_full_shape():
         "labels": [{"name": "update:minor"}],
         "mergeable": "MERGEABLE",
         "reviewDecision": "APPROVED",
+        "autoMergeEnabled": True,
         "statusCheckRollup": [],
         "files": [{"path": "uv.lock"}],
         "createdAt": "2026-06-01T00:00:00Z",
@@ -253,6 +255,8 @@ def test_normalize_open_pr_defaults_for_missing_optional_fields():
     assert out["statusCheckRollup"] == []
     assert out["isDraft"] is False
     assert out["body"] == ""
+    # No autoMergeRequest in the node → auto-merge is not armed.
+    assert out["autoMergeEnabled"] is False
     # Never emit a bare None for fields conformance.renovate.scan reads with two-arg
     # dict.get(key, default) — an explicit null would bypass that default.
     for key in (
@@ -263,6 +267,7 @@ def test_normalize_open_pr_defaults_for_missing_optional_fields():
         "isDraft",
         "body",
         "statusCheckRollup",
+        "autoMergeEnabled",
     ):
         assert out[key] is not None
 

@@ -1,4 +1,4 @@
-"""Meta-tests for the P-series SDR-readiness checks (P029–P030, DISTR-752).
+"""Meta-tests for the P-series SDR-readiness checks (P029/P030, P037/P038/P039).
 
 P029 catches the MSSQL regression pattern: an SDR app whose manifest.json is
 missing agent_json in dag.extract.inputs.args.  The SDR worker starts, the
@@ -8,7 +8,24 @@ P030 catches apps that never call self.upload(): the ENABLE_ATLAN_UPLOAD gate
 is structurally unreachable, so assets never land in the Atlan tenant bucket
 even when the flag is true.
 
-Both rules gate on self_deployed_runtime: true in atlan.yaml — non-SDR apps
+P037 catches the custom-GUID-resolution pattern: an app that resolves credentials
+by credential_guid only (custom vault read + resolve_credential_raw, or a bare
+CredentialRef(credential_guid=...)) and never routes through an agent-aware
+resolver (CredentialRef.resolve / CredentialRef.from_workflow_args), so
+agent_json is ignored and agent-mode credentials never resolve.
+
+P038 catches the mis-rooted-prefix pattern: an app that roots its object-store
+output prefix ('artifacts/apps/{...}') from a workflow-input application_name
+field (contract default '') instead of APPLICATION_NAME, so artifacts land under
+a mis-rooted path (empty app segment) and 0 assets publish.
+
+P039 catches the dropped-agent_json pattern: a manifest that declares
+{{agent-json}} (P029 passes) but a generated extract-input contract
+(AppInputContract) that subclasses the bare Input base with no agent_json field
+and no extra-allow, so Pydantic silently drops the forwarded agent_json and
+credentials never resolve.
+
+All rules gate on self_deployed_runtime: true in atlan.yaml — non-SDR apps
 are always skipped.  Tests cover the fire path, the silent path, and the
 non-SDR skip path for each rule.
 """
@@ -552,6 +569,420 @@ def test_p030_multi_ep_silent_when_no_manifest_has_publish(tmp_path: Path) -> No
     )
     findings = _run(tmp_path)
     assert not any(f.rule_id == "P030" for f in findings)
+
+
+# ── P037: agent_json ignored by a custom GUID-only credential path ──────────
+
+# GUID-only resolution: custom ref + resolve_credential_raw, no agent-aware entry.
+_CREDS_GUID_ONLY = (
+    "from application_sdk.credentials.ref import CredentialRef\n"
+    "\n"
+    "async def _resolve(context, guid):\n"
+    "    ref = CredentialRef(name=guid, credential_guid=guid)\n"
+    "    return await context.resolve_credential_raw(ref)\n"
+)
+
+# Agent-aware via CredentialRef.resolve(input) (postgres/alloydb/bigquery shape).
+_CREDS_RESOLVE = (
+    "from application_sdk.credentials.ref import CredentialRef\n"
+    "\n"
+    "def _resolve(input_obj):\n"
+    "    return CredentialRef.resolve(input_obj)\n"
+)
+
+# Agent-aware via from_workflow_args, even with a GUID fallback (mongodb shape).
+_CREDS_FROM_WORKFLOW_ARGS = (
+    "from application_sdk.credentials import CredentialRef\n"
+    "\n"
+    "async def _resolve(context, workflow_args):\n"
+    "    ref = CredentialRef.from_workflow_args(workflow_args)\n"
+    "    return await context.resolve_credential_raw(ref)\n"
+)
+
+# Direct construction WITH an agent_spec kwarg is agent-aware.
+_CREDS_AGENT_SPEC = (
+    "from application_sdk.credentials.ref import CredentialRef\n"
+    "\n"
+    "def _make(agent):\n"
+    "    return CredentialRef(agent_spec=agent)\n"
+)
+
+# No custom credential resolution at all (mysql/mssql — rely on SDK base).
+_NO_CREDS = "class Connector:\n    async def run(self):\n        return None\n"
+
+# A docstring mentioning CredentialRef(...) must NOT register as a real call.
+_CREDS_ONLY_IN_DOCSTRING = (
+    "def helper():\n"
+    '    """The SDK wraps a guid as CredentialRef(credential_guid=guid)."""\n'
+    "    return None\n"
+)
+
+
+def test_p037_rule_metadata() -> None:
+    rule = get_rule("P037")
+    assert rule.name == "SdrAgentJsonNotConsumed"
+    assert rule.tier == EnforcementTier.WARN
+    assert rule.scope == RuleScope.APP
+    assert rule.autofixable is False
+    assert rule.rationale.strip()
+    assert rule.since == "0.16.0"
+    assert rule.category == "sdr-readiness"
+
+
+def test_p037_fires_on_guid_only_resolution(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": _CREDS_GUID_ONLY},
+    )
+    p037 = [f for f in _run(tmp_path) if f.rule_id == "P037"]
+    assert len(p037) == 1
+    assert "credential_guid" in p037[0].message
+    assert p037[0].column == 1
+
+
+def test_p037_silent_when_credential_ref_resolve_used(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": _CREDS_RESOLVE},
+    )
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+def test_p037_silent_when_from_workflow_args_used(tmp_path: Path) -> None:
+    # mongodb shape: agent-aware factory present alongside a GUID fallback → exempt.
+    _write(
+        tmp_path,
+        {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": _CREDS_FROM_WORKFLOW_ARGS},
+    )
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+def test_p037_silent_when_agent_spec_construction(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": _CREDS_AGENT_SPEC},
+    )
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+def test_p037_silent_when_no_custom_resolution(tmp_path: Path) -> None:
+    # No CredentialRef / resolve_credential_raw at all → not gated in.
+    _write(
+        tmp_path,
+        {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": _NO_CREDS},
+    )
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+def test_p037_ignores_docstring_only_mention(tmp_path: Path) -> None:
+    # A CredentialRef(...) mention inside a docstring is not a real call.
+    _write(
+        tmp_path,
+        {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": _CREDS_ONLY_IN_DOCSTRING},
+    )
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+def test_p037_agent_aware_in_any_file_exempts(tmp_path: Path) -> None:
+    # GUID-only in one file, agent-aware resolve in another → app-level exempt.
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/guid.py": _CREDS_GUID_ONLY,
+            "app/resolve.py": _CREDS_RESOLVE,
+        },
+    )
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+def test_p037_silent_on_non_sdr_app(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {"atlan.yaml": _NON_SDR_ATLAN_YAML, "app/connector.py": _CREDS_GUID_ONLY},
+    )
+    assert not _run(tmp_path)
+
+
+# ── P038: object-store prefix mis-rooted from an empty-defaulting input ──────
+
+# app_name pulled from the input, then interpolated into an artifacts/apps path.
+_PATH_MISROOTED_VIA_VAR = (
+    "from application_sdk.constants import APPLICATION_NAME\n"
+    "\n"
+    "def _paths(input_data):\n"
+    '    app_name = input_data.get("application_name", APPLICATION_NAME)\n'
+    '    workflow_id = input_data.get("workflow_id", "local")\n'
+    '    return f"artifacts/apps/{app_name}/workflows/{workflow_id}"\n'
+)
+
+# input.application_name interpolated directly into the path f-string.
+_PATH_MISROOTED_DIRECT = (
+    "def _paths(input):\n"
+    '    return f"artifacts/apps/{input.application_name}/workflows/x"\n'
+)
+
+# Correct: rooted from the APPLICATION_NAME constant.
+_PATH_CORRECT_CONST = (
+    "from application_sdk.constants import APPLICATION_NAME\n"
+    "\n"
+    "def _paths():\n"
+    '    return f"artifacts/apps/{APPLICATION_NAME}/workflows/x"\n'
+)
+
+# Correct (iceberg-style): persistent-artifacts/apps/{APPLICATION_NAME} — the
+# literal contains the "artifacts/apps" substring but interpolates the constant,
+# not an input field, so it must NOT fire.
+_PATH_CORRECT_PERSISTENT = (
+    "from application_sdk.constants import APPLICATION_NAME\n"
+    "\n"
+    "def _vault(guid):\n"
+    '    return f"persistent-artifacts/apps/{APPLICATION_NAME}/credentials/{guid}"\n'
+)
+
+# Correct: application_name read from input but used as a DB/connection param,
+# not in an artifacts/apps path → no finding.
+_PATH_APP_NAME_NOT_IN_PATH = (
+    "def _client_params(input_data):\n"
+    '    return {"application_name": input_data.get("application_name", "Atlan")}\n'
+)
+
+
+def test_p038_rule_metadata() -> None:
+    rule = get_rule("P038")
+    assert rule.name == "SdrArtifactMisrooted"
+    assert rule.tier == EnforcementTier.WARN
+    assert rule.scope == RuleScope.APP
+    assert rule.autofixable is False
+    assert rule.rationale.strip()
+    assert rule.since == "0.16.0"
+    assert rule.category == "sdr-readiness"
+
+
+def test_p038_fires_when_prefix_rooted_from_input_var(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": _PATH_MISROOTED_VIA_VAR},
+    )
+    p038 = [f for f in _run(tmp_path) if f.rule_id == "P038"]
+    assert len(p038) == 1
+    assert "application_name" in p038[0].message
+    assert p038[0].column == 1
+
+
+def test_p038_fires_when_prefix_rooted_from_input_directly(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": _PATH_MISROOTED_DIRECT},
+    )
+    assert any(f.rule_id == "P038" for f in _run(tmp_path))
+
+
+def test_p038_silent_when_rooted_from_constant(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": _PATH_CORRECT_CONST},
+    )
+    assert not any(f.rule_id == "P038" for f in _run(tmp_path))
+
+
+def test_p038_silent_on_persistent_artifacts_with_constant(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": _PATH_CORRECT_PERSISTENT},
+    )
+    assert not any(f.rule_id == "P038" for f in _run(tmp_path))
+
+
+def test_p038_silent_when_app_name_not_in_object_store_path(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": _PATH_APP_NAME_NOT_IN_PATH},
+    )
+    assert not any(f.rule_id == "P038" for f in _run(tmp_path))
+
+
+def test_p038_silent_on_non_sdr_app(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _NON_SDR_ATLAN_YAML,
+            "app/connector.py": _PATH_MISROOTED_VIA_VAR,
+        },
+    )
+    assert not _run(tmp_path)
+
+
+# ── P039: agent_json dropped by a closed generated input contract ───────────
+
+# Generated extract-input contract on the bare Input base, no agent_json field,
+# no extra-allow → drops the forwarded agent_json (the sigma failing shape).
+_INPUT_BARE_CLOSED = (
+    "from application_sdk.contracts.base import Input\n"
+    "\n"
+    "class AppInputContract(Input):\n"
+    "    extraction_method: str = 'direct'\n"
+    "    credential_guid: str = ''\n"
+)
+
+# Bare Input but opts out of payload safety → agent_json passes through.
+_INPUT_BARE_UNBOUNDED = (
+    "from application_sdk.contracts.base import Input\n"
+    "\n"
+    "class AppInputContract(Input, allow_unbounded_fields=True):\n"
+    "    extraction_method: str = 'direct'\n"
+)
+
+# Bare Input but declares agent_json explicitly → safe.
+_INPUT_BARE_WITH_AGENT_JSON = (
+    "from typing import Any\n"
+    "from application_sdk.contracts.base import Input\n"
+    "\n"
+    "class AppInputContract(Input):\n"
+    "    extraction_method: str = 'direct'\n"
+    "    agent_json: dict[str, Any] | None = None\n"
+)
+
+# Subclasses the SDK ExtractionInput family (which declares agent_json) → safe.
+_INPUT_EXTRACTION_FAMILY = (
+    "from application_sdk.templates.contracts import ExtractionInput\n"
+    "\n"
+    "class AppInputContract(ExtractionInput):\n"
+    "    preflight_check: str = ''\n"
+)
+
+# Bare Input, closed, but with model_config extra='allow' → safe.
+_INPUT_MODEL_CONFIG_ALLOW = (
+    "from pydantic import ConfigDict\n"
+    "from application_sdk.contracts.base import Input\n"
+    "\n"
+    "class AppInputContract(Input):\n"
+    "    model_config = ConfigDict(extra='allow')\n"
+    "    extraction_method: str = 'direct'\n"
+)
+
+_MANIFEST_AGENT_TOPLEVEL = _MANIFEST_WITH_AGENT_JSON  # carries {{agent-json}}
+
+
+def test_p039_rule_metadata() -> None:
+    rule = get_rule("P039")
+    assert rule.name == "SdrAgentJsonDroppedByInputContract"
+    assert rule.tier == EnforcementTier.WARN
+    assert rule.scope == RuleScope.APP
+    assert rule.autofixable is False
+    assert rule.rationale.strip()
+    assert rule.since == "0.16.0"
+    assert rule.category == "sdr-readiness"
+
+
+def test_p039_fires_on_closed_bare_input_contract(tmp_path: Path) -> None:
+    # The dropped-agent_json failing shape: manifest declares {{agent-json}}, but
+    # the generated contract is a closed bare-Input subclass with no agent_json.
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/manifest.json": _MANIFEST_AGENT_TOPLEVEL,
+            "app/generated/_input.py": _INPUT_BARE_CLOSED,
+            "app/connector.py": "class C:\n    async def run(self):\n        await self.upload('o')\n",
+        },
+    )
+    p039 = [f for f in _run(tmp_path) if f.rule_id == "P039"]
+    assert len(p039) == 1
+    assert "agent_json" in p039[0].message
+    assert p039[0].file == "app/generated/_input.py"
+
+
+def test_p039_silent_when_contract_allows_unbounded(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/manifest.json": _MANIFEST_AGENT_TOPLEVEL,
+            "app/generated/_input.py": _INPUT_BARE_UNBOUNDED,
+        },
+    )
+    assert not any(f.rule_id == "P039" for f in _run(tmp_path))
+
+
+def test_p039_silent_when_contract_declares_agent_json(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/manifest.json": _MANIFEST_AGENT_TOPLEVEL,
+            "app/generated/_input.py": _INPUT_BARE_WITH_AGENT_JSON,
+        },
+    )
+    assert not any(f.rule_id == "P039" for f in _run(tmp_path))
+
+
+def test_p039_silent_when_contract_extends_extraction_family(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/manifest.json": _MANIFEST_AGENT_TOPLEVEL,
+            "app/generated/_input.py": _INPUT_EXTRACTION_FAMILY,
+        },
+    )
+    assert not any(f.rule_id == "P039" for f in _run(tmp_path))
+
+
+def test_p039_silent_when_model_config_allows_extra(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/manifest.json": _MANIFEST_AGENT_TOPLEVEL,
+            "app/generated/_input.py": _INPUT_MODEL_CONFIG_ALLOW,
+        },
+    )
+    assert not any(f.rule_id == "P039" for f in _run(tmp_path))
+
+
+def test_p039_silent_when_manifest_has_no_agent_routing(tmp_path: Path) -> None:
+    # No {{agent-json}} in the manifest → precondition false (P029's domain,
+    # not this rule) even though the contract is a closed bare-Input subclass.
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/manifest.json": _MANIFEST_NON_AGENT,
+            "app/generated/_input.py": _INPUT_BARE_CLOSED,
+        },
+    )
+    assert not any(f.rule_id == "P039" for f in _run(tmp_path))
+
+
+def test_p039_fires_per_agent_entrypoint_sibling_input(tmp_path: Path) -> None:
+    # Multi-entrypoint: the agent crawler's sibling _input.py is closed → fires;
+    # a non-agent miner entrypoint alongside it is not considered.
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/crawler/manifest.json": _MANIFEST_AGENT_TOPLEVEL,
+            "app/generated/crawler/_input.py": _INPUT_BARE_CLOSED,
+            "app/generated/miner/manifest.json": _MANIFEST_NON_AGENT,
+            "app/generated/miner/_input.py": _INPUT_BARE_CLOSED,
+        },
+    )
+    p039 = [f for f in _run(tmp_path) if f.rule_id == "P039"]
+    assert len(p039) == 1
+    assert "crawler" in p039[0].file
+
+
+def test_p039_silent_on_non_sdr_app(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _NON_SDR_ATLAN_YAML,
+            "app/generated/manifest.json": _MANIFEST_AGENT_TOPLEVEL,
+            "app/generated/_input.py": _INPUT_BARE_CLOSED,
+        },
+    )
+    assert not _run(tmp_path)
 
 
 # ── scan_path no-op ──────────────────────────────────────────────────────────

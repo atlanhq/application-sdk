@@ -394,7 +394,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout app
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
           path: app
@@ -423,7 +423,7 @@ jobs:
         # of a consumer app repo whose GITHUB_TOKEN is scoped to that repo and
         # cannot read other org repos (even public ones via cross-repo reusable
         # workflow invocations). The fleet App token grants the necessary read access.
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: main
@@ -431,9 +431,9 @@ jobs:
           token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.29"
+          version: "0.11.31"
 
       # ── 1. v3 shape ─────────────────────────────────────────────────────────
       - name: Install SDK (migration tooling)
@@ -662,7 +662,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout app
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
           path: app
@@ -683,7 +683,7 @@ jobs:
         # gate is self-contained at publish time (no private cross-repo fetch of
         # the connector-pulse nightly skill). A token is required for the
         # cross-repo read a consumer app's scoped GITHUB_TOKEN cannot do.
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: main
@@ -917,7 +917,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
 
@@ -926,7 +926,7 @@ jobs:
         # github.workflow_ref and github.workflow_sha both resolve to the *caller's*
         # ref in a reusable workflow context (GitHub bug) — ref is pinned to main
         # so it always picks up the latest released version of the scripts.
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: main
@@ -1111,7 +1111,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
           lfs: ${{ inputs.lfs }}
@@ -1224,7 +1224,7 @@ jobs:
         # this job has no checkout of its own (unlike prepare/certify/leak-scan),
         # so the script must be pulled in explicitly before it's invoked below.
         if: needs.prepare.outputs.enable_sdr == 'true'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: main

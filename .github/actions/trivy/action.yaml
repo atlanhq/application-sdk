@@ -14,7 +14,7 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
 
     - name: Trivy Vulnerability Scan (SARIF)
@@ -70,20 +70,20 @@ runs:
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
     - name: Upload Vulnerability Scan Results
-      uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4
+      uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
       with:
         sarif_file: 'trivy-vuln-results.sarif'
         category: 'trivy-vulnerability'
 
     - name: Upload Secret Scan Results
-      uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4
+      uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
       with:
         sarif_file: 'trivy-secret-results.sarif'
         category: 'trivy-secret'
 
     - name: Set up Python
       if: inputs.add-report-comment-to-pr == 'true'
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
         python-version: '3.14'
 

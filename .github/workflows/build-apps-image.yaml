@@ -68,7 +68,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
 
@@ -183,7 +183,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
 
@@ -307,7 +307,7 @@ jobs:
         # This job also logs into GHCR with the PAT below unconditionally, so
         # there's no benefit to minting a separate App token just for this
         # cross-repo checkout -- the PAT is already in play either way.
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: main
@@ -367,7 +367,7 @@ jobs:
       - name: Upload Trivy SARIF to GitHub Security
         if: always() && hashFiles('trivy-results.sarif') != ''
         continue-on-error: true  # codeql telemetry endpoint is not accessible in reusable workflow context
-        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
         with:
           sarif_file: trivy-results.sarif
           category: trivy-container

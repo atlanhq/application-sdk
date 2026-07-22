@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+  <testsuite name="pytest" errors="1" failures="1" skipped="1" tests="8" time="16.00">
+    <testcase classname="tests.unit.test_a" name="test_ok1" file="tests/unit/test_a.py" time="0.10"/>
+    <testcase classname="tests.unit.test_a" name="test_ok2" file="tests/unit/test_a.py" time="0.20"/>
+    <testcase classname="tests.unit.test_a" name="test_ok3" file="tests/unit/test_a.py" time="0.05"/>
+    <testcase classname="tests.unit.test_a" name="test_bad" file="tests/unit/test_a.py" time="0.30">
+      <failure message="assert 1 == 2">AssertionError</failure>
+    </testcase>
+    <testcase classname="tests.integration.test_b" name="test_i1" file="tests/integration/test_b.py" time="1.00"/>
+    <testcase classname="tests.integration.test_b" name="test_i2" file="tests/integration/test_b.py" time="2.00"/>
+    <testcase classname="tests.e2e.test_c" name="test_e1" file="tests/e2e/test_c.py" time="0.00">
+      <skipped message="ATLAN_API_KEY unset" type="pytest.skip"/>
+    </testcase>
+    <testcase classname="tests.e2e.test_c" name="test_e2" file="tests/e2e/test_c.py" time="0.00">
+      <error message="fixture boom">RuntimeError</error>
+    </testcase>
+  </testsuite>
+</testsuites>

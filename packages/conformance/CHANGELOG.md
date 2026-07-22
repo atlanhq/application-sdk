@@ -2,6 +2,59 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.16.0] - 2026-07-22
+
+### Features
+
+- detect silent auto-merge-not-armed PRs in fleet scanner (#2832) ([a22bd6b](https://github.com/atlanhq/application-sdk/commit/a22bd6b))
+- add P037/P038/P039 SDR-readiness rules (#2824) ([19474a0](https://github.com/atlanhq/application-sdk/commit/19474a0))
+- test-readiness scorecard generator + CI publish (#2819) ([b82292f](https://github.com/atlanhq/application-sdk/commit/b82292f))
+
+### Bug fixes
+
+- revert unpublished 0.16.0 bump and hand-edited changelog (#2842) ([cbe4f08](https://github.com/atlanhq/application-sdk/commit/cbe4f08))
+- update actions/checkout action to v7 (#2836) ([72eda8e](https://github.com/atlanhq/application-sdk/commit/72eda8e))
+- update conformance action templates (#2835) ([c3efc38](https://github.com/atlanhq/application-sdk/commit/c3efc38))
+- P016 recognizes DAG-routed secondary entrypoints (route/card split) (#2825) ([c2d78ed](https://github.com/atlanhq/application-sdk/commit/c2d78ed))
+- run upload asset validation in an isolated child process (CNCT-85) (#2769) ([143e2d3](https://github.com/atlanhq/application-sdk/commit/143e2d3))
+- regenerate contract-toolkit conformance baseline on release (#2808) ([1775f65](https://github.com/atlanhq/application-sdk/commit/1775f65))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2840) ([ea352e0](https://github.com/atlanhq/application-sdk/commit/ea352e0))
+- chore(deps): lock file maintenance (#2834) ([d7f8ba7](https://github.com/atlanhq/application-sdk/commit/d7f8ba7))
+- chore(deps): lock file maintenance (#2827) ([c36f434](https://github.com/atlanhq/application-sdk/commit/c36f434))
+- chore(deps): lock file maintenance (#2821) ([03e9aca](https://github.com/atlanhq/application-sdk/commit/03e9aca))
+- chore(deps): lock file maintenance (#2816) ([41785f7](https://github.com/atlanhq/application-sdk/commit/41785f7))
+- chore(deps): lock file maintenance (#2814) ([d5b3bd2](https://github.com/atlanhq/application-sdk/commit/d5b3bd2))
+- chore(deps): lock file maintenance (#2797) ([ce5f1d7](https://github.com/atlanhq/application-sdk/commit/ce5f1d7))
+- chore(deps): lock file maintenance (#2794) ([665a29f](https://github.com/atlanhq/application-sdk/commit/665a29f))
+
+## [0.15.0] - 2026-07-20
+
+### Features
+
+- add K011/K012 release-readiness guards (#2756) ([98b66b0](https://github.com/atlanhq/application-sdk/commit/98b66b0))
+
+### Bug fixes
+
+- contract-toolkit conformance prose/rules → self-hosted runner (#2792) ([a8d86c2](https://github.com/atlanhq/application-sdk/commit/a8d86c2))
+- stop shipping the renovate-pkl-sync glue to new repos (PR2 Stage 4b) (#2790) ([cac4e79](https://github.com/atlanhq/application-sdk/commit/cac4e79))
+- K002 skips legacy-import check for Credential.pkl contracts (#2742) ([cf2ec85](https://github.com/atlanhq/application-sdk/commit/cf2ec85))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2786) ([7c58823](https://github.com/atlanhq/application-sdk/commit/7c58823))
+- chore(deps): lock file maintenance (#2775) ([ddba13e](https://github.com/atlanhq/application-sdk/commit/ddba13e))
+- chore(deps): lock file maintenance (#2772) ([7a17675](https://github.com/atlanhq/application-sdk/commit/7a17675))
+- chore(deps): lock file maintenance (#2771) ([e38d6a1](https://github.com/atlanhq/application-sdk/commit/e38d6a1))
+- chore(deps): lock file maintenance (#2755) ([b22cade](https://github.com/atlanhq/application-sdk/commit/b22cade))
+- chore(deps): lock file maintenance (#2752) ([d88272f](https://github.com/atlanhq/application-sdk/commit/d88272f))
+- chore(deps): lock file maintenance (#2750) ([cb70168](https://github.com/atlanhq/application-sdk/commit/cb70168))
+- chore(deps): lock file maintenance (#2748) ([2ef8474](https://github.com/atlanhq/application-sdk/commit/2ef8474))
+- chore(deps): lock file maintenance (#2740) ([afcd63d](https://github.com/atlanhq/application-sdk/commit/afcd63d))
+- chore(deps): lock file maintenance (#2730) ([25f8c08](https://github.com/atlanhq/application-sdk/commit/25f8c08))
+
 ## [0.14.0] - 2026-07-15
 
 ### Features
