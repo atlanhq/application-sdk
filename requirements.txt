@@ -127,7 +127,7 @@ httpx-retries==0.6.0
     # via
     #   atlan-application-sdk
     #   pyatlan
-hypothesis==6.158.1
+hypothesis==6.159.0
 identify==2.6.19
     # via pre-commit
 idna==3.18
