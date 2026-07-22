@@ -358,7 +358,7 @@ requires-dist = [
     { name = "duckdb", marker = "extra == 'sql'", specifier = ">=1.1.3,<1.6.0" },
     { name = "duckdb-engine", marker = "extra == 'incremental'", specifier = ">=0.17.0,<0.18.0" },
     { name = "duckdb-engine", marker = "extra == 'sql'", specifier = ">=0.17.0,<0.18.0" },
-    { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=40.32.0,<40.33.0" },
+    { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=40.33.0,<40.34.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.1,<0.140.0" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.2.0,<4.0.0" },
     { name = "google-auth", specifier = ">=2.0.0,<3.0.0" },
@@ -1193,14 +1193,14 @@ wheels = [
 
 [[package]]
 name = "faker"
-version = "40.32.0"
+version = "40.33.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/42/cd/bfa4f0a397c4d34f5b6c8e7ac02832f9be5679a1f0c9a7642f2338e85a4e/faker-40.32.0.tar.gz", hash = "sha256:78271bfa3a0e982f1b90e1345b2b8f4a04a132864e0372262074e60c2cddd4ef", size = 2024472, upload-time = "2026-07-20T21:40:12.278Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/03/b1/c57019eede9f33f043cf321256d51fccd9e51ddc020e5a3eac22a9149220/faker-40.33.0.tar.gz", hash = "sha256:085fb008f83306bf7ac65a492418e0a2e70ff1782deb5d7cde3051687f8b2024", size = 2025174, upload-time = "2026-07-22T16:00:46.132Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8a/d1/2df16a41d5e3521442ac8713d0488235d54bb81a09d4fd1159e6dd7f3a41/faker-40.32.0-py3-none-any.whl", hash = "sha256:2fd913ad02dabbea84d729937db68f9ca9773dce93cec45f1fd6fe0fd1b41840", size = 2062161, upload-time = "2026-07-20T21:40:10.436Z" },
+    { url = "https://files.pythonhosted.org/packages/73/bc/ba527af371dd04362e55abdaaac304c8143e4b14d68dca3fe32bf53c5454/faker-40.33.0-py3-none-any.whl", hash = "sha256:abd66f68099d6a2d0dc6b3dc55e1b7ef06790b9e90842bd634da3b2196c61a40", size = 2062627, upload-time = "2026-07-22T16:00:44.208Z" },
 ]
 
 [[package]]
