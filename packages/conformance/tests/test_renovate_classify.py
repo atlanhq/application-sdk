@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from conformance.renovate.classify import classify
+from conformance.renovate.classify import STALE_AFTER_DAYS, classify
 from conformance.renovate.models import (
     BlockingReason,
     Category,
@@ -284,6 +284,36 @@ def test_blocking_automerge_stale_armed_but_wedged() -> None:
         )
     )
     assert pr.blocking_reason is BlockingReason.AUTOMERGE_STALE
+
+
+def test_blocking_automerge_stale_at_exact_threshold() -> None:
+    # Boundary: age == STALE_AFTER_DAYS must trip the backstop (the `>=` in
+    # classify.py). Anchored to STALE_AFTER_DAYS so a future `>=` → `>` regression
+    # fails here. Unapproved so the not-armed branch is skipped and the stale
+    # backstop is isolated.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="",
+            created_at=_NOW - timedelta(days=STALE_AFTER_DAYS),
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AUTOMERGE_STALE
+
+
+def test_blocking_automerge_not_stale_just_under_threshold() -> None:
+    # Boundary: just under a full day (age 0 after `.days` truncation) is NOT
+    # stale yet — the freshly-eligible PR is still expected to merge imminently.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="",
+            created_at=_NOW - timedelta(hours=23),
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AWAITING_APPROVAL
 
 
 def test_blocking_unknown_checks_not_flagged_as_automerge() -> None:
