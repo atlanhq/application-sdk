@@ -52,6 +52,14 @@ _DEP_FILE_RE = re.compile(
 )
 
 
+# Age backstop for the "genuinely wedged" signal. An auto-merge-eligible, green
+# PR still open this many days after creation is treated as stuck regardless of
+# the specific mechanism — the auto-approve → auto-merge → queue pipeline runs on
+# a cadence of hours, so a full day open means something is broken. Deliberately
+# conservative to avoid flagging PRs the pipeline is still legitimately carrying.
+STALE_AFTER_DAYS = 1
+
+
 def _non_dep_files(files: list[str]) -> list[str]:
     return [f for f in files if not _DEP_FILE_RE.match(f)]
 
@@ -145,11 +153,17 @@ def blocking_reason(
     pr: RenovatePR,
     category: Category,
     update_type: UpdateType,
+    age_days: int = 0,
 ) -> BlockingReason:
     """
     Why has this open PR not merged?
 
-    Mirrors the conditions in renovate-auto-approve-reusable.yml.
+    Mirrors the conditions in renovate-auto-approve-reusable.yml, then adds two
+    signals for the silent-stuck case a green/approved/mergeable PR can fall into
+    when GitHub-native auto-merge is never armed (see PR #2828 postmortem).
+
+    ``age_days`` is threaded in explicitly rather than read off ``pr`` because
+    classify() computes it after the model is first constructed.
     """
     if not auto_merge_expected(category, update_type):
         return BlockingReason.AWAITING_HUMAN_REVIEW
@@ -166,7 +180,26 @@ def blocking_reason(
     if pr.checks_state == ChecksState.PENDING:
         return BlockingReason.CHECKS_PENDING
 
-    # All conditions satisfied — atlan-ci approval just hasn't been posted yet.
+    # Eligible, non-conflicting, dep-only, checks green. Is anything actually
+    # driving it to merge?
+    approved = pr.review_decision == "APPROVED"
+
+    # Precise signal: approval is in and every gate is green, yet auto-merge was
+    # never armed. With a required merge queue nothing will ever merge it — the
+    # dangerous "looks healthy, parked forever" case. Detected immediately (no
+    # age threshold) because there is nothing left to wait for.
+    if approved and not pr.auto_merge_enabled:
+        return BlockingReason.AUTOMERGE_NOT_ARMED
+
+    # Age backstop: green + eligible but still open past the staleness threshold.
+    # Not gated on approval or armed-state so it also catches a down approval
+    # workflow and wedged merge queues — any stuck mode, including ones not
+    # modelled above.
+    if age_days >= STALE_AFTER_DAYS:
+        return BlockingReason.AUTOMERGE_STALE
+
+    # Recently eligible; expected to merge imminently (approval pending or freshly
+    # armed and awaiting the queue).
     return BlockingReason.AWAITING_APPROVAL
 
 
@@ -180,7 +213,6 @@ def classify(pr: RenovatePR) -> RenovatePR:
     cat = categorize(pr)
     ut = derive_update_type(pr)
     ame = auto_merge_expected(cat, ut)
-    br = blocking_reason(pr, cat, ut)
 
     now = datetime.now(timezone.utc)
     # pr.created_at may be tz-aware or naive; normalise.
@@ -190,6 +222,9 @@ def classify(pr: RenovatePR) -> RenovatePR:
 
         created = created.replace(tzinfo=_tz.utc)
     age = max(0, (now - created).days)
+
+    # age feeds the staleness backstop, so it must be computed before classifying.
+    br = blocking_reason(pr, cat, ut, age)
 
     # dataclass is frozen=True; use replace pattern.
     import dataclasses

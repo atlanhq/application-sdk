@@ -37,6 +37,7 @@ def make_pr(
     updated_at: datetime = _NOW,
     is_draft: bool = False,
     body: str = "",
+    auto_merge_enabled: bool = False,
 ) -> RenovatePR:
     """Construct an unclassified RenovatePR with sane defaults for one scenario."""
     return RenovatePR(
@@ -53,6 +54,7 @@ def make_pr(
         updated_at=updated_at,
         is_draft=is_draft,
         body=body,
+        auto_merge_enabled=auto_merge_enabled,
     )
 
 
@@ -195,16 +197,93 @@ def test_blocking_non_dep_files() -> None:
 
 
 def test_blocking_awaiting_approval() -> None:
-    # github-actions, all green, no conflict, only dep files changed.
+    # github-actions, all green, no conflict, dep-only, freshly opened and not yet
+    # approved → transient wait for the atlan-ci approval, not stuck.
     pr = classify(
         make_pr(
             labels=["update:github-actions"],
             files=[".github/workflows/test.yaml"],
             mergeable="MERGEABLE",
             checks_state=ChecksState.GREEN,
+            review_decision="",
+            created_at=_NOW,
         )
     )
     assert pr.blocking_reason is BlockingReason.AWAITING_APPROVAL
+
+
+def test_blocking_awaiting_approval_armed_and_young() -> None:
+    # Approved + auto-merge armed + freshly opened → in-flight, expected to merge
+    # via the queue imminently. Not stuck.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="APPROVED",
+            auto_merge_enabled=True,
+            created_at=_NOW,
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AWAITING_APPROVAL
+
+
+def test_blocking_automerge_not_armed() -> None:
+    # The #2828 silent-stuck case: eligible, green, dep-only, code-owner approved,
+    # but GitHub-native auto-merge was never enabled → nothing will merge it.
+    # Flagged immediately (age 0), no staleness wait.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="APPROVED",
+            auto_merge_enabled=False,
+            created_at=_NOW,
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AUTOMERGE_NOT_ARMED
+
+
+def test_blocking_automerge_not_armed_wins_over_stale() -> None:
+    # Precise not-armed signal takes priority over the age backstop when both hold.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="APPROVED",
+            auto_merge_enabled=False,
+            created_at=_OLD,
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AUTOMERGE_NOT_ARMED
+
+
+def test_blocking_automerge_stale_unapproved_old() -> None:
+    # Age backstop: eligible + green but still open past the threshold and never
+    # approved → the auto-approval pipeline is likely down. Caught without needing
+    # to model the specific failure. (Backstop is not gated on approval.)
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="",
+            created_at=_OLD,
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AUTOMERGE_STALE
+
+
+def test_blocking_automerge_stale_armed_but_wedged() -> None:
+    # Armed and approved but still open past the threshold → merge queue wedged.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="APPROVED",
+            auto_merge_enabled=True,
+            created_at=_OLD,
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AUTOMERGE_STALE
 
 
 # ── Non-dep file detection ───────────────────────────────────────────────────
