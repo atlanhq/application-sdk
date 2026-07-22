@@ -187,6 +187,32 @@ uv run pytest tests/integration/ -v
 
 In CI: the `tests` job in your `.github/workflows/tests.yaml` uses [`connector-integration-tests@main`](../standards/connector-ci-e2e.md) which runs exactly this command, with the env vars wired from repo secrets.
 
+## Markers and CI tiering — the directory *is* the boundary
+
+The reusable Tests workflow runs the two tiers as **separate, directory-scoped jobs**: the unit job runs `pytest tests/unit`, and the integration job runs `pytest tests/integration/`. Neither re-selects by marker. Two rules follow from that:
+
+- **Mark integration tests with the single standard `integration` marker** (conformance **T001**). It documents intent and lets a developer skip the heavy tier locally with `-m "not integration"`. Use one marker, not a family of bespoke ones (`s3_integration`, `azure_integration`, …).
+- **Do _not_ `addopts`-deselect that marker** (conformance **T018**). Because the integration job selects by path, an `addopts = "-m 'not integration'"` in `pyproject.toml` is applied to `pytest tests/integration/` too and removes those tests from the only job meant to run them. If it deselects *every* test in the directory, the job collects nothing and fails with **pytest exit code 5** (`no tests ran`); if it deselects some, they silently run in no tier at all.
+
+```toml
+# pyproject.toml — the standard shape (see atlan-mysql-app, atlan-metabase-app)
+[tool.pytest.ini_options]
+markers = ["integration: requires external services; deselect locally with -m 'not integration'"]
+# NO addopts '-m not ...' deselection — the directory is the tier boundary.
+```
+
+**Tests that need an external service** (an emulator, a live source) should **self-skip at runtime** when it is unavailable — a module-scoped autouse fixture that probes the endpoint and calls `pytest.skip(...)`:
+
+```python
+@pytest.fixture(scope="module", autouse=True)
+def require_minio() -> None:
+    """Skip this module's tests when MinIO isn't reachable (bare local run)."""
+    if not _reachable(os.environ.get("AWS_ENDPOINT_URL", "http://localhost:9000")):
+        pytest.skip("MinIO not reachable; CI provisions it via services-script")
+```
+
+This keeps a bare local `pytest tests/integration/` green without the service while CI (which provisions it) runs the tests — without hiding anything from the CI tier, which an `addopts` deselect would. See [`atlan-openapi-app`](https://github.com/atlanhq/atlan-openapi-app/blob/main/tests/integration/test_s3_download.py) for the `require_minio` / `require_azurite` pattern.
+
 ## What to test
 
 | Scenario | What to assert |

@@ -5,7 +5,7 @@
 
 # Test-Quality Rules (T-series)
 
-**17 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), `suite.checks.coverage_config` (T014-T015), `suite.checks.e2e_deployment_name` (T016), and `suite.checks.e2e_agent_spec` (T017) (AST/TOML/YAML-based)
+**18 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), `suite.checks.coverage_config` (T014-T015), `suite.checks.e2e_deployment_name` (T016), `suite.checks.e2e_agent_spec` (T017), and `suite.checks.integration_deselect` (T018) (AST/TOML/YAML-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -32,6 +32,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [T015](#t015) | `CoverageOmitsProductCode` | `warn` | `app` | `coverage-config` | — | 0.12.0 |
 | [T016](#t016) | `E2EDeploymentNameNotInherited` | `warn` | `app` | `e2e-ci` | — | 0.13.0 |
 | [T017](#t017) | `E2EAgentSpecPinsQueue` | `warn` | `app` | `e2e-ci` | — | 0.13.0 |
+| [T018](#t018) | `IntegrationTierDeselectedByAddopts` | `warn` | `app` | `test-collection` | — | 0.16.0 |
 
 ---
 
@@ -746,5 +747,79 @@ overlay and the agent_spec together, never one alone.
 Suppress with `# conformance: ignore[T017] <reason>` on the `def agent_spec` line only
 when the hard-coded queue is deliberate (e.g. a single-leg suite that never fans out and
 whose overlay also hard-codes the same un-suffixed value).
+
+---
+
+## T018 — `IntegrationTierDeselectedByAddopts` {#t018}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `test-collection` · **Autofixable:** — · **Since:** 0.16.0
+
+> pyproject addopts '-m not <marker>' deselects tests under tests/integration/, emptying or thinning the directory-scoped integration CI job
+
+**Rationale:** The reusable Tests workflow (application-sdk#2852) runs the integration tier by
+directory — the CI job invokes 'pytest tests/integration/' with no '-m' selection,
+because the unit tier is a separate directory-scoped job ('pytest tests/unit'), not a
+full-suite run that deselects integration via markers. A
+[tool.pytest.ini_options].addopts '-m not <marker>' expression is still applied to every
+pytest invocation, including that integration job — so if it deselects a marker carried
+by tests under tests/integration/, those tests are removed from the one job meant to run
+them. When the deselection matches every collectable test in the directory, the job
+collects zero tests and pytest exits 5 (a hard CI failure); when it matches only some,
+those are silently dropped from all tiers (the unit job never sees tests/integration/,
+and the integration job just deselected them). This surfaced on a canonical connector
+whose integration tests had in fact never executed in CI: pre-split, the single job
+collected tests/unit + tests/integration together, the unit tests made the run
+non-empty, and the addopts-deselected integration tests were silently skipped on every
+run. This is the inverse of T001: keep the marker present (T001), but do not
+addopts-deselect it — the directory is the tier boundary.
+
+`[tool.pytest.ini_options].addopts` in `pyproject.toml` contains a `-m 'not <marker>'`
+selection expression, and one or more collectable tests under `tests/integration/` carry
+a deselected marker.
+
+The reusable Tests workflow runs the integration tier **by directory** (`pytest
+tests/integration/`) with no `-m` re-selection — the unit tier is a separate `pytest
+tests/unit` job, so integration tests no longer need a marker to be kept *out* of the
+unit job. But `addopts` applies to every pytest run, so a `-m 'not <marker>'`
+deselection is still applied to the integration job and removes any `tests/integration/`
+test carrying that marker from the only job meant to run it:
+
+* **All deselected** — the integration job collects nothing and fails   with `pytest`
+exit code 5 (`no tests ran`). * **Some deselected** — those tests run in no tier at all
+(the unit job   never collects `tests/integration/`; the integration job deselects
+them), so they silently stop contributing any signal.
+
+This is the inverse of **T001**, which wants integration tests to *carry* the
+`integration` marker. Both hold at once: keep the marker, but do **not**
+`addopts`-deselect it.
+
+**Remediation:** remove the `-m 'not …'` deselection from `addopts` and mark integration
+tests with the standard `integration` marker (T001) — the directory is the tier
+boundary, exactly as `atlan-mysql-app` / `atlan-metabase-app` do (marker present, no
+`addopts` deselect). Before:
+
+```toml
+[tool.pytest.ini_options]
+markers = ["s3_integration: ...", "azure_integration: ..."]
+addopts = "-m 'not s3_integration and not azure_integration'"
+```
+
+After:
+
+```toml
+[tool.pytest.ini_options]
+markers = ["integration: requires external services; deselect locally with -m 'not integration'"]
+# no addopts -m deselection
+```
+
+For tests that need an external service (an emulator, a live source), self-skip at
+runtime when it is unavailable — a module-scoped autouse fixture that probes the
+endpoint and calls `pytest.skip(...)` — so a bare local `pytest tests/integration/`
+stays green without the service while CI (which provisions it) runs the tests. Do not
+fall back to an `addopts` deselect for this: it hides the tests from the CI tier too.
+
+Suppress with `# conformance: ignore[T018] <reason>` on the `addopts` line only when the
+deselection is deliberate and the deselected tests are run by some other
+explicitly-configured CI job (rare — prefer the directory + runtime-skip pattern above).
 
 ---
