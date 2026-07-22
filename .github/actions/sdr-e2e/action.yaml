@@ -463,7 +463,7 @@ runs:
     # contracts, BaseSDRIntegrationTest — is import-compatible with the code
     # under test, and the whole E2E job runs one interpreter end to end.
     - name: Setup Python and dependencies
-      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.23.1
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.24.0
       with:
         python-version: ${{ inputs.expected-python-version }}
 
