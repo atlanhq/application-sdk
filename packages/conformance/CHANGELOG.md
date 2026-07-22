@@ -2,13 +2,6 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
-## [Unreleased]
-
-### Features
-
-- add P037 `SdrAgentJsonNotConsumed` (warn) and P038 `SdrArtifactMisrooted` (warn) SDR-readiness rules — P037 flags an app that resolves credentials by `credential_guid` only and never routes through an agent-aware resolver (`agent_json` ignored → zero assets in agent mode); P038 flags an object-store output prefix rooted from the empty-defaulting workflow-input `application_name` field instead of `APPLICATION_NAME` (mis-rooted artifacts → zero assets published)
-- add P039 `SdrAgentJsonDroppedByInputContract` (warn) SDR-readiness rule — flags an app whose generated manifest declares `{{agent-json}}` (P029-clean) but whose generated extract-input contract (`AppInputContract`) subclasses the bare `Input` base, declares no `agent_json` field, and rejects extra fields, so Pydantic silently drops the forwarded `agent_json` and credentials never resolve (`PipelineContractError` / zero assets); contracts that subclass the SDK `*ExtractionInput` family or set `allow_unbounded_fields=True`/`extra="allow"` are exempt
-
 ## [0.15.0] - 2026-07-20
 
 ### Features
