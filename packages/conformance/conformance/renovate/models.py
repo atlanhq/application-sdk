@@ -39,8 +39,24 @@ class BlockingReason(str, Enum):
     CHECKS_PENDING = "checks_pending"  # required CI checks still running
     MERGE_CONFLICT = "merge_conflict"  # mergeable=CONFLICTING
     NON_DEP_FILES = "non_dep_files"  # changed files outside auto-approve allowlist
+    AUTOMERGE_NOT_ARMED = (
+        # Eligible, every gate green, and code-owner approval is in — but
+        # GitHub-native auto-merge was never enabled on the PR. With a required
+        # merge queue nothing else will merge it, so it sits green-and-approved
+        # forever with no visible fault. Precise signal: autoMergeRequest is null.
+        "automerge_not_armed"
+    )
+    AUTOMERGE_STALE = (
+        # Age backstop: an auto-merge-eligible, green PR still open well past when
+        # the auto-approve → auto-merge → queue pipeline should have carried it.
+        # Catches wedged merge queues, a down approval workflow, and failure modes
+        # not modelled explicitly — without flagging freshly-opened PRs.
+        "automerge_stale"
+    )
     AWAITING_APPROVAL = (
-        "awaiting_approval"  # eligible; atlan-ci approval not yet posted
+        # Transient: recently became eligible and is expected to merge imminently
+        # (atlan-ci approval pending, or freshly armed and awaiting the queue).
+        "awaiting_approval"
     )
     UNKNOWN = "unknown"
 
@@ -69,6 +85,10 @@ class RenovatePR:
     updated_at: datetime
     is_draft: bool
     body: str
+    # Raw: GitHub-native auto-merge armed (GraphQL autoMergeRequest non-null).
+    # Defaulted so pre-existing RenovatePR constructions stay valid; scan._parse_pr
+    # populates it from the fetched field.
+    auto_merge_enabled: bool = False
     # populated by classify()
     category: Category = Category.UNKNOWN
     update_type: UpdateType = UpdateType.UNKNOWN

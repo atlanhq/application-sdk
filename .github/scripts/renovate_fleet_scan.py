@@ -50,6 +50,7 @@ isDraft
 body
 mergeable
 reviewDecision
+autoMergeRequest { enabledAt }
 repository { nameWithOwner }
 labels(first: 20) { nodes { name } }
 files(first: 100) { nodes { path } }
@@ -219,6 +220,8 @@ def normalize_open_pr(pr: dict) -> dict:
         ],
         "mergeable": pr.get("mergeable") or "UNKNOWN",
         "reviewDecision": pr.get("reviewDecision"),
+        # autoMergeRequest is non-null iff GitHub-native auto-merge is armed.
+        "autoMergeEnabled": pr.get("autoMergeRequest") is not None,
         "statusCheckRollup": _status_rollup_to_list(pr),
         "files": [
             {"path": f["path"]} for f in (pr.get("files") or {}).get("nodes") or []
