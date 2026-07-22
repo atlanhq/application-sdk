@@ -5,7 +5,7 @@
 
 # Test-Quality Rules (T-series)
 
-**1 rule** · Checker: `suite.checks.integration_marking` (AST-based)
+**17 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), `suite.checks.coverage_config` (T014-T015), `suite.checks.e2e_deployment_name` (T016), and `suite.checks.e2e_agent_spec` (T017) (AST/TOML/YAML-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -16,6 +16,22 @@ Suppress a finding on the violating line or the line directly above it:
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
 | [T001](#t001) | `UnmarkedIntegrationTest` | `warn` | `both` | `test-marking` | — | 0.4.0 |
+| [T002](#t002) | `MissingSdrTestClass` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
+| [T003](#t003) | `DeprecatedSdrHarness` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
+| [T004](#t004) | `DevEntrypointRequiresAppModule` | `warn` | `app` | `dev-entrypoint` | — | 0.10.0 |
+| [T005](#t005) | `AssertionFreeTest` | `warn` | `both` | `test-assertion-quality` | — | 0.12.0 |
+| [T006](#t006) | `EmptyTestBody` | `warn` | `both` | `test-assertion-quality` | — | 0.12.0 |
+| [T007](#t007) | `VacuousAssertion` | `warn` | `both` | `test-assertion-quality` | — | 0.12.0 |
+| [T008](#t008) | `UncollectableTestFile` | `warn` | `both` | `test-collection` | — | 0.12.0 |
+| [T009](#t009) | `UnconditionalModuleSkip` | `warn` | `both` | `test-collection` | — | 0.12.0 |
+| [T010](#t010) | `MissingUnitTestSuite` | `warn` | `app` | `test-tier-coverage` | — | 0.12.0 |
+| [T011](#t011) | `MissingIntegrationTestSuite` | `warn` | `app` | `test-tier-coverage` | — | 0.12.0 |
+| [T012](#t012) | `MissingE2ETestSuite` | `warn` | `app` | `test-tier-coverage` | — | 0.12.0 |
+| [T013](#t013) | `TestFileOutsideTierDir` | `warn` | `both` | `test-tier-coverage` | — | 0.12.0 |
+| [T014](#t014) | `CoverageGateDisabled` | `warn` | `app` | `coverage-config` | — | 0.12.0 |
+| [T015](#t015) | `CoverageOmitsProductCode` | `warn` | `app` | `coverage-config` | — | 0.12.0 |
+| [T016](#t016) | `E2EDeploymentNameNotInherited` | `warn` | `app` | `e2e-ci` | — | 0.13.0 |
+| [T017](#t017) | `E2EAgentSpecPinsQueue` | `warn` | `app` | `e2e-ci` | — | 0.13.0 |
 
 ---
 
@@ -46,5 +62,689 @@ leak into the unit matrix — where the embedded Temporal/Dapr/emulator boot can
 the unit job timeout — and are skipped by the dedicated integration job.  Tracked in
 BLDX-1455; chosen over an auto-marking `conftest.py` hook precisely to avoid non-obvious
 hidden behaviour.
+
+---
+
+## T002 — `MissingSdrTestClass` {#t002}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-test-coverage` · **Autofixable:** — · **Since:** 0.9.0
+
+> SDR app declares self_deployed_runtime but no test drives the SDR (agent-mode) path
+
+**Rationale:** An SDR app that declares self_deployed_runtime: true in atlan.yaml but has no test
+exercising the SDR (agent-mode) path has no automated coverage of the code paths that
+differ between standard and SDR deployments: agent-mode credential routing and upload
+behaviour. The MSSQL regression (DISTR-752) slipped through status-only CI exactly
+because no test drove the SDR path. Either harness satisfies this: an agent-mode e2e
+test (BaseE2ETest subclass with mode = RunMode.AGENT) or a legacy BaseSDRIntegrationTest
+subclass.
+
+For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one test must
+drive the SDR (agent-mode) execution path. Two harnesses satisfy this rule:
+
+**1. Agent-mode e2e test (recommended).**  A `BaseE2ETest` subclass (from
+`application_sdk.testing.e2e`, usually via a generated `*GeneratedE2EBase`) with a
+class-level `mode = RunMode.AGENT`. It submits a real workflow that runs through the
+agent-mode dispatch path end to end.  Note this test is environment- and label-gated, so
+it validates the live SDR path rather than running on every PR.
+
+**2. Legacy `BaseSDRIntegrationTest` subclass.**  From
+`application_sdk.testing.sdr.base` — boots a local Temporal dev server and validates
+manifest-derived inputs in CI.  If you use this harness, set `manifest_path` (not the
+legacy `agent_spec_template`) so the test reads inputs from the committed manifest — see
+T003.
+
+An SDR app with neither has no automated coverage of the SDR-specific code paths.
+
+**Remediation** — either of:
+
+```python
+# Preferred: agent-mode e2e
+@pytest.mark.e2e
+class TestMyAppE2E(MyAppGeneratedE2EBase):
+    mode = RunMode.AGENT
+
+# Or: legacy SDR integration harness
+class TestMyAppSDR(BaseSDRIntegrationTest):
+    manifest_path = 'app/generated/manifest.json'
+    workflow_type = 'extraction'
+```
+
+---
+
+## T003 — `DeprecatedSdrHarness` {#t003}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-test-coverage` · **Autofixable:** — · **Since:** 0.9.0
+
+> Subclasses the deprecated BaseSDRIntegrationTest harness instead of agent-mode BaseE2ETest
+
+**Rationale:** BaseSDRIntegrationTest is deprecated. The self-deployed-runtime path is now validated by
+the agnostic e2e harness — a BaseE2ETest subclass (from application_sdk.testing.e2e,
+usually via a generated *GeneratedE2EBase) run in agent mode (mode = RunMode.AGENT),
+which drives the real agent-mode DAG end to end. The legacy BaseSDRIntegrationTest
+harness will be removed in v4.0; a subclass will break at that bump. Surfacing usage now
+— while the deprecation notice still carries the migration target — nudges the fleet off
+it before removal. WARN because the migration restructures the test (base class, run
+mode, credential wiring) and needs human judgement.
+
+`BaseSDRIntegrationTest` (`application_sdk.testing.sdr.base`) is **deprecated** and will
+be removed in v4.0. Any subclass under `tests/` is flagged.
+
+The self-deployed-runtime (agent-mode) path is now validated by the agnostic e2e
+harness: a `BaseE2ETest` subclass (from `application_sdk.testing.e2e`, normally via the
+generated `*GeneratedE2EBase`) with a class-level `mode = RunMode.AGENT`. It submits a
+real workflow that runs through the agent-mode dispatch path end to end, superseding the
+local-container SDR harness.
+
+**Remediation** — migrate the SDR test to the agent-mode e2e harness:
+
+```python
+from application_sdk.testing.e2e import RunMode
+from app.generated._e2e_base import MyAppGeneratedE2EBase
+
+@pytest.mark.e2e
+class TestMyAppE2E(MyAppGeneratedE2EBase):
+    mode = RunMode.AGENT
+```
+
+Add the agent-mode e2e test **first** and confirm T002 is satisfied, then delete the
+`BaseSDRIntegrationTest` subclass — an app that removes the SDR test before adding the
+e2e replacement would fail T002.
+
+Suppress with `# conformance: ignore[T003] <reason>` on the class definition line for a
+legitimate exception (e.g. a shim that intentionally keeps the legacy harness during
+migration).
+
+---
+
+## T004 — `DevEntrypointRequiresAppModule` {#t004}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `dev-entrypoint` · **Autofixable:** — · **Since:** 0.10.0
+
+> Root main.py calls application_sdk.main.main() directly, which requires ATLAN_APP_MODULE and breaks CI's dev-mode boot
+
+**Rationale:** application_sdk.main.main() is the production, ATLAN_APP_MODULE-driven launcher: it
+always calls AppConfig.from_args_and_env(args), which raises MissingAppModuleError
+unless ATLAN_APP_MODULE (or --app) is set. That is correct in production, where the base
+image's own CMD sets the env var and never even executes the repo's main.py. But main.py
+is also what CI's connector-integration-tests composite action runs directly ('python
+main.py') to boot the app for local/dev-mode testing, and the bootstrapped
+tests-reusable.yaml path exposes no input to inject ATLAN_APP_MODULE into that job. A
+main.py that delegates straight to application_sdk.main.main() therefore fails every PR
+with MissingAppModuleError / 'App server failed to start within 60s' (BLDX-1520).
+
+Root `main.py` must not call `application_sdk.main.main()` directly (whether via `from
+application_sdk.main import main`, an aliased module import, or a bare dotted call).
+
+`main()` always resolves its `App` class from `ATLAN_APP_MODULE`/`--app` — there is no
+way to supply it any other way.  That is the right contract for the production
+container, which never runs `main.py` at all (the base image's own CMD sets
+`ATLAN_APP_MODULE` and boots directly).  But `main.py` *is* what CI's
+`connector-integration-tests` composite action runs directly (`python main.py`) to boot
+the app for local/dev-mode testing, and the bootstrapped `tests-reusable.yaml` path has
+no input that lets a caller inject `ATLAN_APP_MODULE` into that job.  A `main.py` wired
+this way fails every PR with `MissingAppModuleError`.
+
+**Remediation:** delegate to a local dev entrypoint — conventionally `app/run_dev.py` —
+that constructs your `App` subclass directly and calls `run_dev_combined(MyApp, ...)`:
+no env var required.  See `atlan-metabase-app`, `atlan-openapi-app`, or
+`atlan-mysql-app` for the reference pattern:
+
+```python
+# main.py
+import asyncio
+from app.run_dev import main
+
+if __name__ == '__main__':
+    asyncio.run(main())
+```
+
+Suppress with `# conformance: ignore[T004] <reason>` on the call's line when the app
+genuinely has no local dev-mode boot path and relies on `ATLAN_APP_MODULE` being set
+out-of-band even for CI (e.g. some utility/CSA apps).
+
+---
+
+## T005 — `AssertionFreeTest` {#t005}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `test-assertion-quality` · **Autofixable:** — · **Since:** 0.12.0
+
+> Test has a non-empty body but no recognised assertion — it runs but verifies nothing
+
+**Rationale:** Code coverage measures whether a line executed, not whether anything was verified about
+its behaviour. A test function that calls the code under test but never asserts on the
+outcome inflates the coverage percentage while providing zero protection against a
+regression — it passes whether the code is correct, subtly wrong, or completely broken,
+as long as it doesn't raise. This is the single most common way 'meaningful test
+coverage' targets are gamed unintentionally: a developer writes a test that exercises a
+code path to satisfy a coverage gate, intending to add assertions later, and the
+assertions never arrive. Flagging this deterministically closes the gap between 'the
+coverage tool is green' and 'the tests actually verify something.'
+
+A collected test function (`test*`, including methods of a `Test*` class) has a
+non-empty body but contains none of the recognised assertion forms:
+
+```python
+a bare `assert` statement
+`with pytest.raises(...)` / `pytest.warns(...)` / `pytest.deprecated_call(...)`
+a call named `assert_*` (`self.assertEqual`, `mock.assert_called_once`,
+    `pandas.testing.assert_frame_equal`, a project-local `_assert_*` helper)
+`pytest.fail(...)` / `self.fail(...)`
+an SDK integration-test scenario-helper call: `.equals` / `.contains` /
+    `.exists` / `.is_dict` / `.is_string` / `.is_true` / `.is_list`
+```
+
+This vocabulary is intentionally broad — the check is biased toward zero false positives
+at WARN tier rather than toward catching every possible assertion idiom, mirroring
+T001's documented-limits approach.
+
+**Remediation:** add an assertion on the outcome you actually care about. Before:
+
+```python
+def test_extracts_users():
+    result = extract_users(client)
+```
+
+After:
+
+```python
+def test_extracts_users():
+    result = extract_users(client)
+    assert result.record_count == 3
+```
+
+Suppress with `# conformance: ignore[T005] <reason>` only for a test whose sole purpose
+is confirming the call doesn't raise (rare — usually better expressed as
+`pytest.raises`'s absence isn't a thing worth a dedicated test on its own; prefer
+folding the no-raise expectation into a test that also asserts on the return value).
+
+---
+
+## T006 — `EmptyTestBody` {#t006}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `test-assertion-quality` · **Autofixable:** — · **Since:** 0.12.0
+
+> Test body is a stub — only 'pass', '...', or a docstring
+
+**Rationale:** A test whose body is only 'pass', '...', or a docstring is a placeholder that was
+scaffolded and never filled in. It is worse than an assertion-free test (T005): it
+doesn't even exercise the code under test, so it contributes to the visible test count
+without contributing any coverage at all. Left in place, it reads as 'this behaviour is
+tested' to anyone scanning the test file, which is actively misleading.
+
+A collected test function's body consists solely of `pass`, an `Ellipsis` (`...`), a
+docstring, or some combination of those — no other statement is present.
+
+**Remediation:** either implement the test, or remove it. A stub that documents intent
+without a target date tends to stay a stub forever; prefer tracking the gap in an issue
+over leaving a placeholder that reads as tested coverage. If the test is genuinely not
+yet actionable, use `@pytest.mark.skip(reason='<ticket> — not yet implemented')` so
+pytest's own reporting surfaces it as skipped rather than passing silently.
+
+Suppress with `# conformance: ignore[T006] <reason>` on the `def` line only for an
+intentionally-empty test used purely to assert collection/import succeeds (rare).
+
+---
+
+## T007 — `VacuousAssertion` {#t007}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `test-assertion-quality` · **Autofixable:** — · **Since:** 0.12.0
+
+> Every assertion in this test is a constant-true expression that can never fail
+
+**Rationale:** 'assert True' and equivalents (assert 1, assert "x") satisfy T005's assertion-presence
+check but can never fail — they provide the visual appearance of verification with none
+of the substance. This is the quieter sibling of T005: a reviewer scanning for 'does
+this test have an assert' sees one and moves on, without noticing it is unconditionally
+true. Both are 'coverage without verification'; this one specifically targets a test
+whose entire assertion surface is a truism.
+
+A collected test's only assertion(s) evaluate a literal truthy constant (`assert True`,
+`assert 1`, `assert "non-empty string"`) rather than an expression whose value depends
+on the code under test. Such an assertion can never fail regardless of what the test
+exercised.
+
+**Remediation:** assert on something that actually depends on the call under test.
+Before:
+
+```python
+def test_creates_asset():
+    asset = build_asset(record)
+    assert True  # created without error
+```
+
+After:
+
+```python
+def test_creates_asset():
+    asset = build_asset(record)
+    assert asset.qualified_name == 'default/mysql/db/table'
+```
+
+Suppress with `# conformance: ignore[T007] <reason>` on the assert line only when the
+constant assertion is a deliberate reachability marker in a larger test body that also
+contains real assertions elsewhere (in which case T007 shouldn't fire in the first place
+— file a correction if it does).
+
+---
+
+## T008 — `UncollectableTestFile` {#t008}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `test-collection` · **Autofixable:** — · **Since:** 0.12.0
+
+> File defines test*/Test* collectables but its filename doesn't match pytest's collection glob — never collected
+
+**Rationale:** pytest only collects files matching its python_files convention (test_*.py / *_test.py
+by default). A file under a test-tier directory that defines def test_* functions or
+Test* classes but is named something else (helpers.py, connector_tests.py) is never
+collected — it contributes zero coverage and zero CI signal while looking, to anyone
+reading the directory listing, exactly like a real test file. This is a particularly
+dangerous failure mode because it is invisible in the pytest run output: there is no
+error, no skip, nothing — the tests simply never exist as far as CI is concerned.
+
+A `.py` file under a test-tier directory (`tests/unit`, `tests/integration`,
+`tests/e2e`, `tests/ui`) defines at least one `def test*` function or `class Test*`, but
+its own filename does not match pytest's default collection glob (`test_*.py` /
+`*_test.py`). pytest's default configuration never collects such a file, so every test
+it defines silently never runs.
+
+**Remediation:** rename the file to match the convention. Before:
+
+```python
+tests/unit/connector_tests.py
+```
+
+After:
+
+```python
+tests/unit/test_connector.py
+```
+
+Suppress with `# conformance: ignore[T008] <reason>` on the first line of the file only
+when the repo has a non-default `python_files` override in `pyproject.toml` that
+legitimately collects this name (the check does not read that override — see the module
+docstring).
+
+---
+
+## T009 — `UnconditionalModuleSkip` {#t009}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `test-collection` · **Autofixable:** — · **Since:** 0.12.0
+
+> Module-level pytest.skip(allow_module_level=True) is unconditional — the whole file is permanently disabled
+
+**Rationale:** A module-level pytest.skip(..., allow_module_level=True) that is not nested inside an
+if/try guard unconditionally disables every test in the file on every run, in every
+environment, forever. This differs from the legitimate e2e pattern — 'if not
+os.environ.get(...): pytest.skip(...)' — which disables the file only when a real
+precondition (credentials, a live tenant) is absent, and re-enables it automatically
+once the precondition is met. An unconditional skip usually starts as a temporary
+'disable this flaky suite' workaround and is forgotten, silently zeroing out that file's
+contribution to coverage from that point on.
+
+A module-level call to `pytest.skip(..., allow_module_level=True)` appears directly in
+the module body (not nested inside an `if` or `try` statement), so it executes — and
+disables every test in the file — on every collection, unconditionally.
+
+The legitimate form guards the skip behind a real precondition, so the file re-enables
+itself once the precondition is satisfied:
+
+```python
+if not os.environ.get('ATLAN_API_KEY'):
+    pytest.skip('e2e harness needs ATLAN_API_KEY', allow_module_level=True)
+```
+
+That guarded form is **not** flagged by T009 — only a bare, unguarded call at module
+scope is.
+
+**Remediation:** either delete the file's tests (if they are genuinely obsolete) or
+replace the unconditional skip with a real precondition guard, or with
+`@pytest.mark.skip(reason='<ticket>')` on the individual tests that are temporarily
+disabled — which at least reports as a visible per-test skip in CI output rather than
+silently vanishing at collection time.
+
+Suppress with `# conformance: ignore[T009] <reason>` on the `skip(...)` call's line when
+the file is intentionally, permanently disabled pending removal in a tracked follow-up.
+
+---
+
+## T010 — `MissingUnitTestSuite` {#t010}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
+
+> No collectable unit tests under tests/unit/
+
+**Rationale:** Unit tests — method-by-method coverage of helper functions and activities — are the
+universal floor of the agreed testing-tier architecture: every canonical app, including
+the minimal hello-world scaffold, has one. An app with no tests/unit/ directory (or one
+with no collectable tests in it) has no fast, hermetic verification of its own logic at
+all — every other tier (integration, e2e) is slower, network-bound, and exercises the
+app only end-to-end, so a defect in a helper function has no tier positioned to catch it
+cheaply. Unlike T011/T012, this rule has no scaffold exemption: even the smallest app
+has some logic worth a fast unit test.
+
+No collectable pytest tests (`def test*` / `class Test*` in a `test_*.py` / `*_test.py`
+file) exist under `tests/unit/`. This is the universal floor of the tiering architecture
+— unlike `tests/integration/` and `tests/e2e/` (T011/T012), this tier has no
+`exempt_test_tiers` opt-out: every canonical app, including the minimal `hello-world`
+scaffold, ships a real unit suite.
+
+**Remediation:** add `tests/unit/test_<module>.py` files exercising the app's helper
+functions and `@task`-decorated activities directly (call them as coroutines — the
+decorator only attaches metadata outside the workflow runtime). See
+`atlan-hello-world-app/tests/unit/` for the minimal reference shape: typed
+`Input`/`Output` contracts, a `pytest.fixture` for the app instance, and real outcome
+assertions (record counts, on-disk side effects, error paths via `pytest.raises`).
+
+---
+
+## T011 — `MissingIntegrationTestSuite` {#t011}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
+
+> No collectable integration tests under tests/integration/
+
+**Rationale:** Integration tests — connecting to the real source and running the app's extract only, no
+system apps — are where most scenario variations (auth modes, schema shapes,
+include/exclude filters) belong per the agreed tiering architecture; the SDK provides
+hermetic paths for this tier (embedded Temporal, testcontainers, mocked infra) so there
+is no cost excuse for skipping it. An app with no tests/integration/ suite has no
+verification that its extraction logic works against anything resembling the real
+source. Scaffold/minimal apps that genuinely have no external source to integrate
+against (e.g. a template with no connector logic yet) can opt out via
+[tool.conformance].exempt_test_tiers in pyproject.toml — atlan.yaml is generated from
+the Pkl contract and must not be hand-edited, so the exemption can't live there.
+
+No collectable pytest tests exist under `tests/integration/`. Per the agreed tiering
+architecture, integration tests connect to the real source and run the app's extract
+path (no system apps) — this is where most scenario-variation coverage belongs, and the
+SDK ships hermetic paths for it (embedded Temporal dev server, testcontainers, or mocked
+infra — see `atlan-mysql-app`/`atlan-metabase-app`/ `atlan-openapi-app` for the
+reference shapes).
+
+**Remediation:** add an integration suite under `tests/integration/` using one of the
+SDK's hermetic test paths, marked so the unit job deselects it (see T001).
+
+**Exemption:** for a scaffold/minimal app with no external source to integrate against
+yet, add to the app's `pyproject.toml`:
+
+```toml
+[tool.conformance]
+exempt_test_tiers = ["integration"]
+```
+
+State the reason in a comment above the table. Suppress a single instance instead with
+`# conformance: ignore[T011] <reason>` on the first line of `pyproject.toml`.
+
+---
+
+## T012 — `MissingE2ETestSuite` {#t012}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
+
+> No collectable end-to-end tests under tests/e2e/
+
+**Rationale:** End-to-end tests — the full pipeline including system apps, operating in SDR mode
+against a real tenant — are the tier that catches integration failures between the app
+and the platform itself (AE dispatch, agent routing, upload gating) that a
+tests/integration/ suite cannot see because it deliberately excludes system apps. Per
+the agreed architecture, e2e needs only one representative run, not scenario-level
+coverage, so this rule is the weakest of the three tier rules — it only asks that the
+tier exist at all. Exemptable the same way as T011 for scaffold/minimal apps via
+[tool.conformance].exempt_test_tiers.
+
+No collectable pytest tests exist under `tests/e2e/`. Per the agreed tiering
+architecture this tier needs only one representative run — the full pipeline including
+system apps, in SDR mode against a real tenant — not scenario-level coverage (that
+belongs to `tests/integration/`, T011). See `atlan-mysql-app`/`atlan-metabase-app`/
+`atlan-openapi-app` for the reference shape: a thin test class inheriting from the
+SDK-generated `*GeneratedE2EBase`, double env-guarded (skips without
+`ATLAN_BASE_URL`/`ATLAN_API_KEY` and without the harness import), marked
+`@pytest.mark.e2e`.
+
+**Remediation:** add a representative e2e test under `tests/e2e/` following that
+pattern.
+
+**Exemption:** for a scaffold/minimal app with no system-app integration to exercise
+yet, add to the app's `pyproject.toml`:
+
+```toml
+[tool.conformance]
+exempt_test_tiers = ["e2e"]
+```
+
+State the reason in a comment above the table. Suppress a single instance instead with
+`# conformance: ignore[T012] <reason>` on the first line of `pyproject.toml`.
+
+---
+
+## T013 — `TestFileOutsideTierDir` {#t013}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
+
+> Collectable test file lives outside the four canonical tier directories (tests/unit, tests/integration, tests/e2e, tests/ui)
+
+**Rationale:** CI's composite actions locate each tier by directory convention — connector-unit-tests
+runs tests/unit, the integration action defaults to auto-discovery but is commonly
+scoped to tests/integration, and the sdr-e2e/e2e-full-reusable actions default to
+tests/sdr or tests/e2e or tests/full_dag. A collectable test file placed loose under
+tests/ (or in an ad hoc subdirectory outside the four canonical tier dirs) may still get
+picked up by a broad auto-discovery run, or may not — depending on exactly how the
+calling workflow scoped test-paths — making its actual execution status ambiguous from
+the file layout alone. Enforcing the placement convention removes that ambiguity.
+
+A file matching pytest's collection glob (`test_*.py` / `*_test.py`) and defining at
+least one collectable test lives under `tests/` but outside all four canonical tier
+directories (`tests/unit`, `tests/integration`, `tests/e2e`, `tests/ui`) — for example
+directly in `tests/` itself, or under an ad hoc subdirectory like `tests/scratch/`.
+
+**Remediation:** move the file into the tier directory matching what it actually tests —
+a file with no external I/O belongs in `tests/unit/`; a file connecting to a real source
+belongs in `tests/integration/`.
+
+Suppress with `# conformance: ignore[T013] <reason>` on the file's first line for
+intentional non-tier test infrastructure that happens to match the collection glob (rare
+— prefer a filename that doesn't match the glob for pure helpers, which also avoids
+T008-adjacent confusion).
+
+---
+
+## T014 — `CoverageGateDisabled` {#t014}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `coverage-config` · **Autofixable:** — · **Since:** 0.12.0
+
+> Coverage is configured but fail_under is absent or 0 — the number is measured but never enforced
+
+**Rationale:** A coverage percentage that cannot fail a build is decorative: it is reported in every PR
+comment and dashboard, creating the appearance of an enforced quality bar, while
+[tool.coverage.report].fail_under absent or 0 means no percentage — however low —
+actually blocks anything. This is the config-level counterpart to T005-T007: those catch
+tests that run without asserting; this catches a coverage number that exists without
+enforcing. The unified test-framework onboarding path deliberately starts new adopters
+at --cov-fail-under=0 and ramps up over time (Athena at 20%, mssql at 60%), so WARN (not
+BLOCK) matches the agreed rollout reality — this rule's value is making the '0 is
+temporary, not the final state' expectation visible and trackable, not blocking the
+initial adoption PR.
+
+`[tool.coverage.report]` exists in `pyproject.toml` — the repo has opted into coverage
+measurement — but `fail_under` is either absent (defaults to 0) or explicitly set to
+`0`, *and* no CI workflow declares an overriding floor. Coverage is measured and
+reported (e.g. as a PR comment via the `connector-unit-tests` composite action) but can
+never cause a run to fail, regardless of how low it drops.
+
+coverage.py's CLI flag always overrides `pyproject.toml`, so this rule also checks the
+repo's own `.github/workflows/*.yml` for a `connector-unit-tests` `fail-under:` input or
+a `--cov-fail-under=N` flag embedded in a `tests-reusable.yaml` `pytest-args` override.
+Either one, if non-zero, is treated as the effective floor — the finding only fires when
+neither source enforces anything.
+
+**Remediation:** set a real, ratcheting floor:
+
+```toml
+[tool.coverage.report]
+fail_under = 60
+```
+
+Per the unified test-framework's own onboarding guidance, start at the repo's *current*
+measured percentage (never below what's already true) and raise it in follow-up PRs as
+coverage improves — the agreed target for unit tests is 90-100%, but a repo mid-adoption
+is not expected to jump there in one step.
+
+Suppress with `# conformance: ignore[T014] <reason>` on the `[tool.coverage.report]`
+line only during the initial adoption PR itself, explicitly naming the follow-up
+tracking issue that will set a real floor.
+
+---
+
+## T015 — `CoverageOmitsProductCode` {#t015}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `coverage-config` · **Autofixable:** — · **Since:** 0.12.0
+
+> coverage omit/source excludes real product code under app/, inflating the reported percentage
+
+**Rationale:** [tool.coverage.run].omit (or a narrowed source) controls the denominator of the coverage
+percentage: excluding real product code under app/ makes the percentage look higher
+without a single additional test being written, which is a more direct form of gaming
+than T014's disabled gate — the number moves in the intended direction while measuring
+less of what actually ships. Legitimate omissions exist (test helpers, generated code
+under app/generated/, vendored code) but those are not product logic; a pattern that
+reaches into ordinary app/ submodules is the signal this rule targets.
+
+`[tool.coverage.run].omit` contains a pattern matching source under `app/` that is not
+one of the recognised legitimate exclusions (`app/generated/**` — generated contract
+artifacts; `**/test_*.py`/`**/conftest.py` — test infra that happens to live under
+`app/` in some layouts), or `[tool.coverage.run].source` is narrowed to a subset of
+`app/` that excludes real handler/mapper/ client modules.
+
+**Remediation:** narrow the omission to only what shouldn't count — generated code and
+test infra — and let real product modules contribute to (and be held to) the coverage
+floor. Before:
+
+```toml
+[tool.coverage.run]
+omit = ["app/handlers/*", "app/clients/*"]
+```
+
+After:
+
+```toml
+[tool.coverage.run]
+omit = ["app/generated/*"]
+```
+
+Suppress with `# conformance: ignore[T015] <reason>` on the `omit`/ `source` line naming
+the specific module and why it's legitimately excluded (e.g. a vendored third-party shim
+with no branch logic worth covering).
+
+---
+
+## T016 — `E2EDeploymentNameNotInherited` {#t016}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.13.0
+
+> e2e CI compose overlay hard-codes ATLAN_DEPLOYMENT_NAME instead of inheriting the sdr-e2e per-leg value
+
+**Rationale:** The full-DAG e2e worker derives its Temporal task queue as
+atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}, and the harness
+(BaseE2ETest.agent_spec) derives the extract-node queue it dispatches to from the same
+two env vars. To keep worker and harness on one queue when the e2e suite fans out across
+parallel matrix legs, the SDK's sdr-e2e composite action derives a per-leg
+ATLAN_DEPLOYMENT_NAME (base + sanitised matrix-leg suffix) and exports it to
+$GITHUB_ENV; both sides then read that one value. A connector's e2e compose overlay that
+hard-codes ATLAN_DEPLOYMENT_NAME in a service's environment overrides that inherited
+value: the worker container drops the leg suffix and polls
+atlan-<app>-e2e-full-ci-<run_id> while the harness still dispatches to
+atlan-<app>-e2e-full-ci-<run_id>-<leg>. Two different queues means no worker polls the
+harness's queue, so the top-level AE run flips to Running (its parent lives on the
+always-on automation-engine queue) and then hangs until timeout — observed on
+atlan-mysql-app, ~20 min of dead CI per run, before this rule existed.
+
+An e2e CI docker-compose overlay under `.github/` (discovered as a `*.yml`/`*.yaml` with
+a top-level `services:` key that mentions `ATLAN_DEPLOYMENT_NAME`) assigns
+`ATLAN_DEPLOYMENT_NAME` in a service's `environment` to a literal that does not
+reference the inherited `${ATLAN_DEPLOYMENT_NAME...}` env var.
+
+The SDK's `sdr-e2e` composite action derives a per-leg `ATLAN_DEPLOYMENT_NAME`
+(`e2e-full-ci-<run_id>[-<leg>]`, see `derive_deployment_name.py`) and exports it to
+`$GITHUB_ENV` so the worker container and the pytest harness land on the same Temporal
+queue. A hard-coded overlay value overrides that inherited env, desynchronising the two
+— the worker polls one queue, the harness dispatches to another, and the run hangs with
+`No Workers Running`.
+
+**Remediation:** inherit the derived value, with a bare-shape fallback for local `docker
+compose` runs where the CI action hasn't exported it:
+
+```python
+services:
+  atlan-app:
+    environment:
+      - ATLAN_DEPLOYMENT_NAME=${ATLAN_DEPLOYMENT_NAME:-e2e-full-ci-${GITHUB_RUN_ID}}
+```
+
+A bare pass-through list entry (`- ATLAN_DEPLOYMENT_NAME` with no `=`) is also accepted
+— it inherits the runner env directly.
+
+Suppress with `# conformance: ignore[T016] <reason>` on the assignment line only when
+the overlay is intentionally single-queue (never fans out across matrix legs) and the
+hard-coded name is deliberate.
+
+---
+
+## T017 — `E2EAgentSpecPinsQueue` {#t017}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.13.0
+
+> e2e agent_spec() override hard-codes the queue instead of inheriting the per-leg ATLAN_DEPLOYMENT_NAME
+
+**Rationale:** The companion to T016. T016 polices the worker side (the compose overlay must inherit
+the sdr-e2e per-leg ATLAN_DEPLOYMENT_NAME); T017 polices the harness side. The worker
+derives its Temporal queue as atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME},
+and the harness derives the extract-node queue it dispatches to from the same two env
+vars via BaseE2ETest.agent_spec. An e2e test that overrides agent_spec with a hard-coded
+agent_name (e.g. AgentSpec(agent_name=f'metabase-e2e-full-ci-{self.run_id}')) that
+neither reads ATLAN_DEPLOYMENT_NAME nor calls super().agent_spec() pins the harness to
+the un-suffixed queue. Once the worker inherits the leg-suffixed value (T016), the two
+queues diverge, no worker polls the harness's queue, the extract node stays Running, and
+the run hangs — the exact atlan-metabase-app regression where the overlay was fixed but
+agent_spec was left hard-coded. Fixing the overlay (T016) and the agent_spec (T017) is a
+matched pair: applying one without the other breaks a previously-passing e2e.
+
+An `agent_spec` override under `tests/` returns a hard-coded `AgentSpec(agent_name=...)`
+(a plain string or an f-string such as `f"myconn-e2e-full-ci-{self.run_id}"`) without
+referencing `ATLAN_DEPLOYMENT_NAME` or calling `super().agent_spec()`.
+
+The harness builds its extract-node Temporal queue as `atlan-{agent_spec().agent_name}`.
+When the worker inherits the sdr-e2e per-leg `ATLAN_DEPLOYMENT_NAME`
+(`e2e-full-ci-<run_id>[-<leg>]`) but the harness pins a hard-coded
+`...-e2e-full-ci-<run_id>` name, the two land on different queues — no worker polls the
+harness's queue and the run hangs with `No Workers Running`.
+
+**Remediation (preferred): delete the override.** `BaseE2ETest.agent_spec` derives
+`atlan-{app}-{deployment}` from the worker's own env in CI and falls back to
+`{connector_short_name}-{connection_name_prefix}-{run_id}` locally, so no override is
+needed on either path — the harness picks up the per-leg suffix automatically and always
+matches the worker queue.
+
+If the override must stay (e.g. to pin a genuinely different agent identity), make it
+read the deployment env — defer to `super().agent_spec()` when `ATLAN_APPLICATION_NAME`
++ `ATLAN_DEPLOYMENT_NAME` are set, keeping the run-id name only as a local fallback
+(mirroring `SQLAppE2ETest.agent_spec`):
+
+```python
+def agent_spec(self) -> AgentSpec:
+    if os.environ.get('ATLAN_APPLICATION_NAME') and os.environ.get(
+        'ATLAN_DEPLOYMENT_NAME'
+    ):
+        return super().agent_spec()
+    return AgentSpec(agent_name=f'myconn-e2e-full-ci-{self.run_id}')
+```
+
+A connector that does not override `agent_spec` at all (inheriting the SDK's env-derived
+default) is never flagged. This rule and T016 are a matched pair — remediate both the
+overlay and the agent_spec together, never one alone.
+
+Suppress with `# conformance: ignore[T017] <reason>` on the `def agent_spec` line only
+when the hard-coded queue is deliberate (e.g. a single-leg suite that never fans out and
+whose overlay also hard-codes the same un-suffixed value).
 
 ---

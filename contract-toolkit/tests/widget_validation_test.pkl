@@ -57,6 +57,20 @@ facts {
     !plainUi.containsKey("validation")
   }
 
+  // ValidationRule.trigger — added so credential contracts migrating off the
+  // legacy Config.pkl `new Dynamic { ... trigger = "blur" }` keep emitting the
+  // trigger verbatim in ui.rules (see Credential.pkl migration to Widgets.pkl).
+  ["validationRules carries an optional trigger through to ui.rules"] {
+    local w = new App.TextInput {
+      title = "x"
+      validationRules {
+        new { pattern = "^x$"; message = "must be x"; trigger = "blur" }
+      }
+    }
+    w.validationRules[0].trigger == "blur"
+    w.ui.rules[0].trigger == "blur"
+  }
+
   // -----------------------------------------------------------------------
   // Class-level shape: only set fields are emitted; nulls are stripped.
   // -----------------------------------------------------------------------

@@ -104,7 +104,26 @@ on:
       application-sdk-ref:
         description: |
           Branch / tag / SHA of application-sdk to pin during the
-          composite-action invocation. Empty = repo's pyproject pin.
+          composite-action invocation, applied to BOTH the container
+          runtime and the host pytest harness unless overridden by the
+          side-specific refs below. Empty = repo's pyproject pin.
+        required: false
+        type: string
+        default: ""
+      runtime-sdk-ref:
+        description: |
+          application-sdk ref for the CONNECTOR RUNTIME (the built image).
+          Empty falls back to application-sdk-ref, then the connector's own
+          pin. Usually left empty so the app is tested as shipped.
+        required: false
+        type: string
+        default: ""
+      harness-sdk-ref:
+        description: |
+          application-sdk ref for the TEST HARNESS (host pytest / testing.e2e).
+          Empty falls back to application-sdk-ref, then the connector's own
+          pin. Set this to run the latest e2e harness against the connector's
+          own runtime without bumping its SDK.
         required: false
         type: string
         default: ""
@@ -128,6 +147,41 @@ on:
         required: false
         type: string
         default: ""
+      two-store:
+        description: |
+          Opt-in ADR-0014 two-store SDR posture (docs/adr/0014-two-store-
+          storage-architecture.md). When true, the connector's deployment
+          `objectstore` is forced to the SDK-default CI-local binding
+          (never the tenant-blobstorage override some connectors ship),
+          `atlan-objectstore` stays the configurator-emitted tenant
+          binding, and ENABLE_ATLAN_UPLOAD=true is set on the worker.
+          This makes the two stores physically distinct so a connector
+          that forgets to bridge an artifact via `App.upload()` shows up
+          as zero downstream assets/lineage in Atlas instead of being
+          silently masked by a single shared bucket.
+
+          Only meaningful when the test class runs in RunMode.AGENT —
+          in RunMode.DIRECT the connector's extract activity runs on the
+          tenant's own pod, whose storage config this harness does not
+          control, so the gap is not observable there.
+
+          Default false: existing full-DAG adopters are unaffected until
+          they opt in per docs/standards/connector-ci-e2e.md.
+        required: false
+        type: boolean
+        default: false
+      source-available:
+        description: |
+          Whether an extraction source is provisioned for this connector in
+          CI — forwarded to the sdr-e2e action's `source-available` input.
+          Sourcing is the app owner's responsibility. Default true: the
+          full-DAG e2e runs unchanged. Set false for apps with no free
+          container / no wired credentials — the e2e then degrades to a
+          worker-up-only check (assert the worker deploys + serves
+          /server/health) and skips extraction/publish/Atlas assertions.
+        required: false
+        type: boolean
+        default: true
     secrets:
       SDR_TEST_TENANT:
         description: Tenant FQDN (e.g. devex.atlan.com — no https:// prefix). ATLAN_BASE_URL is derived from this.
@@ -174,7 +228,7 @@ jobs:
         shell: bash
         run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -196,6 +250,10 @@ jobs:
           secrets-script: ${{ inputs.secrets-script }}
           components-dir: ${{ inputs.components-dir }}
           compose-overlay: ${{ inputs.compose-overlay }}
+          # Force the full-DAG config dir even when the repo also has a
+          # .github/sdr-e2e/ (testcontainer) setup, which the action would
+          # otherwise prefer — see the action's `config-dir` input.
+          config-dir: .github/e2e
           # Bump the container-health wait because the worker has to
           # establish the Temporal connection with TLS + auth before
           # /server/health turns green.
@@ -205,4 +263,8 @@ jobs:
           # instead of waiting for a final dump.
           pytest-extra-args: "-s"
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
+          runtime-sdk-ref: ${{ inputs.runtime-sdk-ref }}
+          harness-sdk-ref: ${{ inputs.harness-sdk-ref }}
           base-image-ref: ${{ inputs.base-image-ref }}
+          enable-two-store: ${{ inputs.two-store }}
+          source-available: ${{ inputs.source-available }}

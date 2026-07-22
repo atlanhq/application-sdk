@@ -47,9 +47,9 @@ description: |
 
   ```yaml
   steps:
-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - uses: ./.github/actions/mssql-native-deps   # connector-local action
-    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.20.0
+    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.24.0
       with:
         app-name: mssql
   ```
@@ -208,6 +208,19 @@ runs:
         "${{ github.action_path }}/repin-application-sdk.sh"
         uv sync --all-extras --all-groups
 
+    # Regenerate app/generated/** (incl. manifest.json — the AE DAG) from
+    # contract/app.pkl before the app server boots, so the host harness exercises
+    # the CURRENT contract + toolkit rather than a possibly-stale committed
+    # manifest (BLDX-1493). Runs after the SDK-ref repin so a toolkit change in
+    # the SDK PR is baked in. App-level = warn-only drift (this always-on job owns
+    # the gate); SDK-level (application-sdk-ref set) overrides the toolkit and a
+    # pkl-eval failure is fatal. Self-skips when there is no contract/app.pkl.
+    - name: Regenerate contract artifacts (manifest.json) before app server
+      uses: atlanhq/application-sdk/.github/actions/regenerate-contract@main
+      with:
+        application-sdk-ref: ${{ inputs.application-sdk-ref }}
+        check-drift: "true"
+
     # SDK 3.13+ boots an embedded daprd + Temporal directly from
     # `python main.py` (application_sdk/dev/_dapr.py + _embedded.py), each
     # downloading its own runtime. On those versions the external daprd +
@@ -269,6 +282,21 @@ runs:
       shell: bash
       # daprd is already on PATH (/usr/local/bin); only the Temporal CLI needs adding.
       run: echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
+
+    - name: Provision default Dapr components (external runtime)
+      if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
+      shell: bash
+      run: |
+        # The external daprd below runs with `--resources-path components`, and
+        # the SDK reads the same YAML off disk to resolve its bindings at boot
+        # (objectstore, statestore, secretstore …). Almost no connector ships a
+        # components/ dir, so daprd would come up with no `objectstore` binding
+        # and app startup would crash with StorageBindingNotFoundError
+        # [AAF-STR-003]. Provision the default local-backed set here. The script
+        # is write-if-absent, so a real components/*.yaml a connector already
+        # ships (e.g. the real-cloud S3/Azure/GCS suite) is left untouched. It
+        # is pure-stdlib — no extra deps needed to emit the YAML.
+        python3 "${{ github.action_path }}/../../scripts/write_dapr_components.py" components
 
     - name: Start daprd + Temporal
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
@@ -359,6 +387,31 @@ runs:
         echo "summary=${SUMMARY:-no summary parsed}" >> "$GITHUB_OUTPUT"
         echo "exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
         exit "$TEST_EXIT_CODE"
+
+    # Emit the test-readiness scorecard from the standard evidence (junit +
+    # coverage.json). Runs on `always()` so a failing test run still produces a
+    # scorecard — a red suite is exactly when the (capped) grade matters most.
+    # Best-effort: a missing junit (e.g. the app server never started) skips
+    # rather than failing the job — the scorecard is observational, never a gate.
+    # All scoring logic lives in the tested Python CLI; this stays straight-line.
+    - name: Generate test-readiness scorecard
+      if: always()
+      shell: bash
+      env:
+        REPO: ${{ github.repository }}
+        SHA: ${{ github.sha }}
+      run: |
+        [ -f results/test-results.xml ] || { echo "no junit; skipping scorecard"; exit 0; }
+        # Trailing `|| echo` keeps this non-blocking: the scorecard is
+        # observational, and older published conformance versions predate the
+        # `scorecard` subcommand — a failure here must never redden a Tests run.
+        uvx atlan-application-sdk-conformance scorecard \
+          --junit results/test-results.xml \
+          --coverage coverage.json \
+          --repo "$REPO" \
+          --commit "$SHA" \
+          --out results/test-readiness.json \
+          || echo "::warning::test-readiness scorecard generation failed (skipped)"
 
     - name: Upload test results
       if: always()

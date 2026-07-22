@@ -28,7 +28,6 @@ Usage::
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import inspect
 import json
@@ -59,6 +58,7 @@ from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERA
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.errors import AppError
 from application_sdk.errors.categories import FailureCategory
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
@@ -67,8 +67,13 @@ from application_sdk.handler.contracts import (
     FileUploadResponse,
     HandlerCredential,
     MetadataInput,
+    PreflightCheck,
     PreflightInput,
+    PreflightOutput,
     SubscriptionConfig,
+)
+from application_sdk.handler.contracts import (
+    flatten_credentials_to_pairs as _flatten_to_pairs,
 )
 from application_sdk.handler.manifest import AppManifest
 from application_sdk.handler.service_errors import (
@@ -131,12 +136,6 @@ def _record_proxy_failure(
     logger.warning(log_message, *log_args, exc_info=exc_info)
 
 
-def _serialize_credential_value(v: Any) -> str:
-    if isinstance(v, str):
-        return v
-    return json.dumps(v)
-
-
 _CREDENTIAL_KEYS = frozenset(
     {
         "host",
@@ -149,22 +148,6 @@ _CREDENTIAL_KEYS = frozenset(
         "extra",
     }
 )
-
-
-def _flatten_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
-    """Convert a flat credential dict to v3 [{key, value}] pairs."""
-    pairs: list[dict[str, str]] = []
-    extra = creds_dict.pop("extra", None)
-    for k, v in creds_dict.items():
-        if v is not None:
-            pairs.append({"key": k, "value": _serialize_credential_value(v)})
-    if isinstance(extra, dict):
-        for k, v in extra.items():
-            if v is not None:
-                pairs.append(
-                    {"key": f"extra.{k}", "value": _serialize_credential_value(v)}
-                )
-    return pairs
 
 
 # v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
@@ -208,6 +191,45 @@ def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
         return {**body, "credentials": _flatten_to_pairs(flat_creds)}
 
     return body
+
+
+def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
+    """Normalize preflight-specific compatibility fields before validation."""
+    normalized = _normalize_credentials(body)
+    has_metadata = "metadata" in normalized and normalized["metadata"] is not None
+    has_connection_config = (
+        "connection_config" in normalized
+        and normalized["connection_config"] is not None
+    )
+
+    if has_metadata and not has_connection_config:
+        return {**normalized, "connection_config": normalized["metadata"]}
+    if has_connection_config and not has_metadata:
+        return {**normalized, "metadata": normalized["connection_config"]}
+    return normalized
+
+
+def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
+    dumped = check.model_dump(mode="json", exclude_none=True)
+    dumped["message"] = check.resolved_message
+    if check.resolved_suggested_action:
+        dumped["suggested_action"] = check.resolved_suggested_action
+    return dumped
+
+
+def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
+    """Runtime metadata kept outside the SageV2 ``data`` map.
+
+    ``status`` is the gate verdict (``ready`` / ``not_ready`` / ``partial``);
+    ``not_ready`` means blocked. Per-check ``message``/``suggested_action`` follow
+    the precedence rule (typed ``error`` wins). Consumed for display/diagnostics.
+    """
+    return {
+        "status": result.status.value,
+        "message": result.message,
+        "total_duration_ms": result.total_duration_ms,
+        "checks": [_summarize_check(check) for check in result.checks],
+    }
 
 
 if TYPE_CHECKING:
@@ -382,6 +404,23 @@ _storage: ObjectStore | None = None
 
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
+
+# Non-form JSON siblings that live in CONTRACT_GENERATED_DIR next to the
+# generated setup-form configmaps. Credential templates are emitted per
+# object-store family (`atlan-connectors-*.json`, `csa-connectors-*.json`).
+# Centralised so the form-discovery exclusion vocabulary is named in one place
+# instead of re-spelled inline; `_is_form_configmap` applies it in the
+# get_configmap default-entrypoint fallback, so adding the next connector-family
+# prefix here updates that site without re-spelling the list. `list_configmaps`
+# still uses its own `manifest`-only exclusion (a separate, deliberate decision).
+_CREDENTIAL_TEMPLATE_PREFIXES = ("atlan-connectors-", "csa-connectors-")
+
+
+def _is_form_configmap(stem: str) -> bool:
+    """True when a generated JSON stem is a setup-form configmap, i.e. neither
+    the DAG ``manifest`` nor a credential template."""
+    return stem != "manifest" and not stem.startswith(_CREDENTIAL_TEMPLATE_PREFIXES)
+
 
 # Allowlist regex for entrypoint names: letter-start, then letters/digits/hyphens/underscores.
 # Identical to the @entrypoint decorator constraint. Used as a path-traversal guard
@@ -591,7 +630,9 @@ def _decode_fe_inputs(raw: str | None) -> dict[str, Any]:
             detail=f"fe_inputs exceeds the {_MAX_FE_INPUTS_BYTES}-byte limit",
         )
     try:
-        parsed = json.loads(raw)
+        # orjson.JSONDecodeError subclasses json.JSONDecodeError, so the
+        # existing except clause still catches malformed input.
+        parsed = orjson.loads(raw)
     except json.JSONDecodeError as exc:
         raise HTTPException(
             status_code=400, detail=f"fe_inputs is not valid JSON: {exc}"
@@ -739,6 +780,7 @@ def _resolve_app_entrypoint(
 
     if selected_entrypoint:
         if selected_entrypoint not in entry_points:
+            # conformance: ignore[L009] logs caller-invisible context (the available entrypoints) that the generic HTTPException detail does not carry.
             logger.warning(
                 "Unknown entrypoint '%s' for app %s; available: %s",
                 selected_entrypoint,
@@ -756,6 +798,7 @@ def _resolve_app_entrypoint(
     ep = _resolve_default_entrypoint(entry_points)
     if ep is None:
         if entry_points:
+            # conformance: ignore[L009] logs caller-invisible context (the available entrypoints) that the generic HTTPException detail does not carry.
             logger.warning(
                 "entrypoint required but not provided for multi-entry-point "
                 "app %s with no default; available: %s",
@@ -985,7 +1028,8 @@ def _register_workflow_routes(
         if legacy_workflow_type is not None and entrypoint_param is None:
             warnings.warn(
                 f"App {app_name}: 'workflow_type' body field is deprecated. "
-                "Use ?entrypoint=<name> query param instead.",
+                "Use ?entrypoint=<name> query param instead. "
+                "Will be removed in v4.0.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -1103,11 +1147,13 @@ def _register_workflow_routes(
         except HTTPException:
             raise
         except TypeError as e:
+            # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Invalid workflow input for app %s: %s", app_name, e, exc_info=True
             )
             raise HTTPException(status_code=400, detail="Invalid input") from None
         except Exception as e:
+            # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Failed to start workflow %s for app %s: %s",
                 workflow_id,
@@ -1141,6 +1187,7 @@ def _register_workflow_routes(
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
+            # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Failed to stop workflow %s run %s: %s",
                 workflow_id,
@@ -1327,6 +1374,7 @@ def _register_workflow_routes(
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
+            # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Failed to get workflow result for %s: %s",
                 workflow_id,
@@ -1379,6 +1427,7 @@ def _register_workflow_routes(
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
+            # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Failed to get workflow status for %s run %s: %s",
                 workflow_id,
@@ -1430,7 +1479,8 @@ def _register_workflow_routes(
         if type == "workflows":
             warnings.warn(
                 "Saving config with type='workflows' is deprecated; "
-                "use a specific config type instead.",
+                "use a specific config type instead. "
+                "Will be removed in v4.0.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -1496,7 +1546,7 @@ def _register_workflow_routes(
                     shutil.copyfileobj(file.file, dst)
                 return os.path.getsize(safe_tmp_path)
 
-            file_size = await asyncio.to_thread(_drain_to_tmp)
+            file_size = await run_in_thread(_drain_to_tmp)
             await _upload_file(key, safe_tmp_path, _storage)
         finally:
             try:
@@ -1603,6 +1653,7 @@ def _register_workflow_routes(
         except Exception:
             # Log details server-side; the HTTPException intentionally hides the
             # parse internals from the client (avoid leaking file/line/offset).
+            # conformance: ignore[L009] the log is the only server-side record; the raised HTTPException deliberately withholds the parse internals.
             logger.warning("Failed to parse JSON request body", exc_info=True)
             raise HTTPException(status_code=400, detail="Invalid JSON body") from None
 
@@ -1696,27 +1747,56 @@ def _register_workflow_routes(
                     _workflow_config.app_name, None, unknown_ep_status=404
                 )
             except HTTPException:
+                # No default entrypoint resolvable (the only HTTPException
+                # _resolve_app_entrypoint raises), so the handler falls through
+                # to a 404. Warning, not debug: this is exc_info-worthy
+                # telemetry an operator should see in production, not just
+                # local control flow.
+                logger.warning(
+                    "No default entrypoint for app %s; serving configmap 404",
+                    _workflow_config.app_name,
+                    exc_info=True,
+                )
                 ep = None
             if ep is not None:
-                # Form configmaps for an entrypoint live under
-                # CONTRACT_GENERATED_DIR/<ep.name>/ (see EntryPointMetadata
-                # docstring: kebab name on the wire and on disk). Pick the
-                # form file by excluding the two well-known non-form siblings:
-                # `manifest.json` (DAG manifest) and `atlan-connectors-*.json`
-                # (credential template). Sorted for determinism.
-                entrypoint_dir = CONTRACT_GENERATED_DIR / ep.name
-                if entrypoint_dir.is_dir():
-                    for json_file in sorted(entrypoint_dir.glob("*.json")):
-                        stem = json_file.stem
-                        if stem == "manifest" or stem.startswith("atlan-connectors-"):
+                # Locate the entrypoint's form configmap across BOTH generated
+                # layouts:
+                #   * multi-entrypoint (bundle) apps nest each entrypoint's form
+                #     under CONTRACT_GENERATED_DIR/<ep.name>/ (see
+                #     EntryPointMetadata: kebab name on the wire and on disk);
+                #   * single-entrypoint apps emit it FLAT in CONTRACT_GENERATED_DIR
+                #     itself (e.g. `openapi.json` alongside `manifest.json`).
+                # Search the nested dir first, then fall back to the flat dir, so
+                # an app-id request (e.g. "atlan-openapi", which the marketplace
+                # UI builds instead of the form stem) resolves for either shape.
+                # Previously only the nested layout was searched, so a flat
+                # single-entrypoint app 404'd on an app-id request even though its
+                # form file was present — a blank setup wizard in the UI.
+                #
+                # Pick the form file by excluding the well-known non-form
+                # siblings (`manifest.json` and the `{atlan,csa}-connectors-*`
+                # credential templates) via `_is_form_configmap`. Sorted for
+                # determinism.
+                for search_dir in (
+                    CONTRACT_GENERATED_DIR / ep.name,
+                    CONTRACT_GENERATED_DIR,
+                ):
+                    if not search_dir.is_dir():
+                        continue
+                    for json_file in sorted(search_dir.glob("*.json")):
+                        if not _is_form_configmap(json_file.stem):
                             continue
                         target = json_file
+                        break
+                    if target is not None:
                         break
 
         if target is not None:
             with open(target) as f:
                 raw = json.load(f)
-            data: dict[str, Any] = {"config": json.dumps(raw.get("config", raw))}
+            data: dict[str, Any] = {
+                "config": orjson.dumps(raw.get("config", raw)).decode()
+            }
             # Some configmaps (e.g., connector apps) carry a top-level
             # `defaultConnectorType`; surface it alongside `config` when present.
             default_connector_type = raw.get("defaultConnectorType")
@@ -1735,6 +1815,7 @@ def _register_workflow_routes(
                 )
             )
 
+        # conformance: ignore[L009] logs caller-invisible context (the available configmaps) that the generic 404 HTTPException detail does not carry.
         logger.warning(
             "ConfigMap not found: requested=%s available=%s",
             config_map_id,
@@ -1788,10 +1869,23 @@ def _register_workflow_routes(
         }
         ep_manifest = registry.get(entrypoint_name)
         if ep_manifest is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No manifest found for entrypoint {entrypoint_name!r}",
-            )
+            # Multi-entrypoint (bundle) apps nest each entrypoint's manifest
+            # under <ep.name>/manifest.json (matched above). Single-entrypoint
+            # apps emit it FLAT at CONTRACT_GENERATED_DIR/manifest.json, with no
+            # per-entrypoint subdir. Heracles/AE always sends ?entrypoint=<name>
+            # on package-workflow submit, so without this fallback a flat
+            # single-entrypoint app 404s ("No manifest found for entrypoint")
+            # and the platform surfaces it as a 500 on submit — blocking every
+            # run. Mirrors the flat-layout fallback in get_configmap and the
+            # no-?entrypoint branch of get_manifest.
+            flat_manifest = CONTRACT_GENERATED_DIR / "manifest.json"
+            if flat_manifest.is_file():
+                ep_manifest = flat_manifest
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No manifest found for entrypoint {entrypoint_name!r}",
+                )
         raw = ep_manifest.read_bytes()
         # app_name is baked into the generated manifest by the contract toolkit
         # (from the contract `name`); only the per-deployment token is substituted here.
@@ -1805,12 +1899,13 @@ def _register_workflow_routes(
         compute = _discover_compute_manifest(entrypoint_name)
         if compute is not None:
             fe_inputs_decoded = _decode_fe_inputs(fe_inputs)
-            manifest_dict = json.loads(raw)
+            manifest_dict = orjson.loads(raw)
             try:
                 # The hook is async-only (discovery rejects sync defs), so
                 # await it directly. Authors doing CPU/IO-bound work inside
                 # (SQL generation, full DAG rewrite) own offloading it — e.g.
-                # `await asyncio.to_thread(...)` — rather than the SDK
+                # `from application_sdk.execution.heartbeat import run_in_thread`
+                # then `await run_in_thread(...)` — rather than the SDK
                 # guessing on their behalf.
                 computed = await compute(manifest_dict, fe_inputs_decoded)
             except HTTPException:
@@ -1818,6 +1913,7 @@ def _register_workflow_routes(
             except Exception:
                 # Don't leak the hook's internals (stack/SQL/paths) to the
                 # caller — mirror the other handler routes' generic 500.
+                # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
                 logger.error(
                     "compute_manifest hook failed for entrypoint %r",
                     entrypoint_name,
@@ -1827,13 +1923,14 @@ def _register_workflow_routes(
                     status_code=500, detail="Internal server error"
                 ) from None
             if not isinstance(computed, dict):
+                # conformance: ignore[L009] logs caller-invisible context (the actual returned type) that the generic 500 HTTPException detail omits.
                 logger.error(
                     "compute_manifest for entrypoint %r returned %s, expected dict",
                     entrypoint_name,
                     type(computed).__name__,
                 )
                 raise HTTPException(status_code=500, detail="Internal server error")
-            raw = json.dumps(computed).encode()
+            raw = orjson.dumps(computed)
 
         return Response(content=raw, media_type="application/json")
 
@@ -1874,19 +1971,63 @@ def _register_workflow_routes(
         # caller (e.g. Heracles/AE pre-validation) omits ?entrypoint=, fall
         # back to the app's default entrypoint instead of 404-ing.
         try:
-            _, ep = _resolve_app_entrypoint(
+            app_meta, default_ep = _resolve_app_entrypoint(
                 _workflow_config.app_name, None, unknown_ep_status=404
             )
         except HTTPException:
-            ep = None
-        if ep is not None:
+            # No *default* entrypoint resolvable. Don't give up on the fallback:
+            # resolve the app's metadata INDEPENDENTLY of default resolution so
+            # the explicit-entrypoint alphabetical fallback below still applies.
+            # A servable multi-entrypoint app must not 404 just because the
+            # builder didn't mark a default — that invariant is off-screen and
+            # load-bearing, and this keeps the fallback robust to it changing.
+            # Warning, not debug: exc_info-worthy telemetry for operators.
+            logger.warning(
+                "No default entrypoint for app %s; trying explicit-entrypoint "
+                "fallback before serving 404",
+                _workflow_config.app_name,
+                exc_info=True,
+            )
+            default_ep = None
             try:
-                return await _serve_entrypoint_manifest(ep.name, fe_inputs, deployment)
+                from application_sdk.app.registry import (  # noqa: PLC0415
+                    AppNotFoundError,
+                    AppRegistry,
+                )
+
+                app_meta = AppRegistry.get_instance().get(_workflow_config.app_name)
+            except AppNotFoundError:
+                # App genuinely not registered — no fallback possible, 404.
+                app_meta = None
+
+        # Candidate order: the resolved default first, then every *explicit*
+        # (non-implicit) entrypoint alphabetically. The second group matters
+        # for a connector that both implements run() (via the
+        # SqlMetadataExtractor template) AND declares explicit @entrypoints:
+        # the framework forces the implicit run() as the default (see
+        # app/entrypoint.py — "run() + @entrypoint(s) → run() always"), but
+        # run() has no generated manifest dir, so serving it 404s. Rather than
+        # 404 the whole route, fall back to the explicit entrypoints, ordered
+        # alphabetically — the same tie-break the framework uses when multiple
+        # @entrypoints carry no marked default. For a SQL bundle app this
+        # resolves to `crawler` (c < m < …), the connector's primary path.
+        candidates: list[str] = []
+        if default_ep is not None:
+            candidates.append(default_ep.name)
+        if app_meta is not None:
+            candidates.extend(
+                ep.name
+                for ep in sorted(app_meta.entry_points.values(), key=lambda e: e.name)
+                if not ep.implicit and ep.name not in candidates
+            )
+
+        for cand in candidates:
+            try:
+                return await _serve_entrypoint_manifest(cand, fe_inputs, deployment)
             except HTTPException as exc:
                 if exc.status_code != 404:
                     raise
-                # Default entrypoint exists but has no manifest file on disk —
-                # fall through to the canonical 404 below.
+                # This candidate has no manifest file on disk — try the next.
 
         raise HTTPException(status_code=404, detail="No manifest available")
 
@@ -1951,7 +2092,7 @@ def _register_workflow_routes(
             )
 
         return Response(
-            content=json.dumps(input_type.model_json_schema()),
+            content=orjson.dumps(input_type.model_json_schema()),
             media_type="application/json",
         )
 
@@ -2047,7 +2188,8 @@ def create_app_handler_service(
     if state_store is not None:
         warnings.warn(
             "state_store parameter is deprecated and ignored. "
-            "Credential resolution now uses DaprCredentialVault exclusively. "
+            "Use DaprCredentialVault, now the exclusive credential-resolution "
+            "path; stop passing state_store. "
             "Will be removed in v3.2.0.",
             DeprecationWarning,
             stacklevel=2,
@@ -2195,6 +2337,7 @@ def create_app_handler_service(
                 # Remove once all connector subclasses raise typed AppError leaves.
                 # Tracked alongside the Handler abstract-method contract migration.
                 # See typed-error-prescription.md §5 (HandlerError row).
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Auth test failed for app %s (request %s): %s",
                     app_name,
@@ -2206,6 +2349,7 @@ def create_app_handler_service(
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
                 # non-HandlerError typed errors (already migrated).
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Auth test failed for app %s (request %s): %s",
                     app_name,
@@ -2222,6 +2366,7 @@ def create_app_handler_service(
                 # through rather than masking them as a generic 500.
                 raise
             except Exception as e:
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Auth test failed unexpectedly for app %s (request %s): %s",
                     app_name,
@@ -2239,7 +2384,7 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/check")
     async def preflight_check(request: Request) -> JSONResponse:
-        body = _normalize_credentials(await request.json())
+        body = _normalize_preflight_request(await request.json())
         preflight_input = PreflightInput.model_validate(body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
@@ -2291,7 +2436,7 @@ def create_app_handler_service(
                 for check in result.checks:
                     # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
                     key = check.name[0].lower() + check.name[1:]
-                    msg = check.message or ""
+                    msg = check.resolved_message or ""
                     v2_data[key] = {
                         "success": check.passed,
                         "message": msg,
@@ -2307,23 +2452,23 @@ def create_app_handler_service(
                 # behaviour) made every PARTIAL/NOT_READY response surface
                 # as "Check failed" with a blank "Hide details" panel
                 # (DBBI-665). Tying envelope success to "any check ran"
-                # keeps it false when the handler produced no checks (a
-                # genuine preflight-system failure) and lets the widget
-                # render per-check rows otherwise.
-                return JSONResponse(
-                    content=_wrap_response(
-                        v2_data,
-                        message=result.message
-                        or f"Preflight check {result.status.value}",
-                        success=len(result.checks) > 0,
-                    )
+                # keeps it false when a handler produced no checks and lets
+                # the widget render per-check rows otherwise. The canonical
+                # status is exposed separately under ``preflight``.
+                response = _wrap_response(
+                    v2_data,
+                    message=result.message or f"Preflight check {result.status.value}",
+                    success=len(result.checks) > 0,
                 )
+                response["preflight"] = _preflight_runtime_summary(result)
+                return JSONResponse(content=response)
             except HandlerError as e:
                 # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
                 # AppError subclass caught here first so http_status is preserved.
                 # Remove once all connector subclasses raise typed AppError leaves.
                 # Tracked alongside the Handler abstract-method contract migration.
                 # See typed-error-prescription.md §5 (HandlerError row).
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Preflight check failed for app %s (request %s): %s",
                     app_name,
@@ -2335,6 +2480,7 @@ def create_app_handler_service(
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
                 # non-HandlerError typed errors (already migrated).
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Preflight check failed for app %s (request %s): %s",
                     app_name,
@@ -2351,6 +2497,7 @@ def create_app_handler_service(
                 # through rather than masking them as a generic 500.
                 raise
             except Exception as e:
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Preflight check failed unexpectedly for app %s (request %s): %s",
                     app_name,
@@ -2425,6 +2572,7 @@ def create_app_handler_service(
                 # Remove once all connector subclasses raise typed AppError leaves.
                 # Tracked alongside the Handler abstract-method contract migration.
                 # See typed-error-prescription.md §5 (HandlerError row).
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Metadata fetch failed for app %s (request %s): %s",
                     app_name,
@@ -2436,6 +2584,7 @@ def create_app_handler_service(
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
                 # non-HandlerError typed errors (already migrated).
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Metadata fetch failed for app %s (request %s): %s",
                     app_name,
@@ -2452,6 +2601,7 @@ def create_app_handler_service(
                 # through rather than masking them as a generic 500.
                 raise
             except Exception as e:
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Metadata fetch failed unexpectedly for app %s (request %s): %s",
                     app_name,

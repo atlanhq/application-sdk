@@ -83,14 +83,20 @@ on:
         type: string
         default: "app"
       private_git_auth:
-        description: "Set true if the app has a private-org (atlanhq) git dependency that `uv sync` must clone in the certify gate. When true, certify authenticates atlanhq GitHub remotes with ORG_PAT_GITHUB before installing deps, so the install succeeds and unit tests actually run. Default false — apps with only PyPI deps are unaffected."
+        description: "Set true if the app has a private-org (atlanhq) git dependency that `uv sync` must clone in the certify gate. When true, certify authenticates atlanhq GitHub remotes with a minted fleet App token before installing deps, so the install succeeds and unit tests actually run. Default false — apps with only PyPI deps are unaffected."
         required: false
         type: boolean
         default: false
     secrets:
       ORG_PAT_GITHUB:
         required: true
-        description: "Org-level PAT for GHCR login and gh CLI auth"
+        description: "Org-level PAT for GHCR login (the fleet App only has repo-level Packages permission; these packages are org-level) and, in the build job specifically, everything else that job needs too (the private-dependency git_token BuildKit secret) since it's already using the PAT for GHCR anyway. Also a fallback if the App token can't be minted elsewhere. Cross-repo checkout/dispatch steps in jobs that never touch GHCR (certify, leak-scan, app-deployment-dispatcher) use a minted atlan-app-fleet token instead — see the 'Mint fleet App token' steps."
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit', which every caller already uses. Declared here so the contract is self-documenting; a caller using explicit named secrets instead of inherit would need to list this too."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same inherit-only availability as FLEET_APP_ID above."
       DOCKER_HUB_PAT_RW:
         required: false
         description: "DockerHub PAT (read/write) — only needed when atlan.yaml self_deployed_runtime=true"
@@ -388,30 +394,46 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout app
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
           path: app
           fetch-depth: 1
 
+      - name: Mint fleet App token
+        # Not scoped to a single repo: also used below to authenticate git
+        # config for the consumer app's own (arbitrary) private atlanhq deps.
+        # continue-on-error + the `|| secrets.ORG_PAT_GITHUB` fallback below:
+        # FLEET_APP_ID/FLEET_APP_PRIVATE_KEY are declared optional (every real
+        # caller uses secrets: inherit, so they're always available in
+        # practice) -- this is defense-in-depth so a caller that somehow
+        # doesn't provide them degrades to the old PAT instead of hard-failing.
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
       - name: Checkout application-sdk (migration tooling)
         # tools.migrate_v3 ships in the SDK repo, not the published package —
         # pinned to main so the check tracks the latest released rules.
-        # ORG_PAT_GITHUB is required because this workflow runs in the context
+        # A token is required because this workflow runs in the context
         # of a consumer app repo whose GITHUB_TOKEN is scoped to that repo and
         # cannot read other org repos (even public ones via cross-repo reusable
-        # workflow invocations). An org PAT grants the necessary read access.
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        # workflow invocations). The fleet App token grants the necessary read access.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: main
           path: sdk
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.24"
+          version: "0.11.31"
 
       # ── 1. v3 shape ─────────────────────────────────────────────────────────
       - name: Install SDK (migration tooling)
@@ -438,7 +460,7 @@ jobs:
       - name: Configure git auth for private dependencies
         if: ${{ inputs.private_git_auth }}
         env:
-          GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GIT_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         run: |
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
@@ -640,25 +662,35 @@ jobs:
       contents: read
     steps:
       - name: Checkout app
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
           path: app
           fetch-depth: 1
 
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - name: Checkout SDK gate assets
         # Pull only the vendored scanner + ruleset from the SDK at main, so the
         # gate is self-contained at publish time (no private cross-repo fetch of
-        # the connector-pulse nightly skill). ORG_PAT_GITHUB grants the
-        # cross-repo read a consumer app's scoped GITHUB_TOKEN cannot.
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        # the connector-pulse nightly skill). A token is required for the
+        # cross-repo read a consumer app's scoped GITHUB_TOKEN cannot do.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: main
           path: sdk
           sparse-checkout: .github/scripts/credential-leak-gate
           sparse-checkout-cone-mode: false
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       # ── Layer 1: deterministic hardcoded-secret scan (gitleaks) ───────────────
       - name: Install gitleaks
@@ -843,7 +875,11 @@ jobs:
 
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
-    needs: [validate-channel, unit-tests-gate, certify, leak-scan]
+    # Build runs CONCURRENTLY with certify (not after it): certify no longer
+    # gates prepare/build, it gates the terminal side-effecting jobs instead:
+    # publish AND app-deployment-dispatcher (see their needs/if). leak-scan +
+    # validate-channel stay as pre-build gates.
+    needs: [validate-channel, unit-tests-gate, leak-scan]
     # `needs: [...]` only enforces ordering when those jobs run. When
     # publish=false, all of them are skipped via their `if:` — which by default
     # would propagate "skipped" to dependents. The condition below explicitly
@@ -881,7 +917,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
 
@@ -890,7 +926,7 @@ jobs:
         # github.workflow_ref and github.workflow_sha both resolve to the *caller's*
         # ref in a reusable workflow context (GitHub bug) — ref is pinned to main
         # so it always picks up the latest released version of the scripts.
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: main
@@ -1075,23 +1111,23 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
           lfs: ${{ inputs.lfs }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Build and push arch image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           file: ${{ needs.prepare.outputs.dockerfile }}
@@ -1107,6 +1143,10 @@ jobs:
           build-args: |
             ACCESS_TOKEN_USR=${{ github.actor }}
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+          # This job already logs into GHCR with the PAT above, so there's no
+          # benefit to minting a separate App token just for this BuildKit
+          # secret (Dockerfiles cloning a private git dependency, e.g.
+          # atlan-query-redaction) -- the PAT is already in play either way.
           secrets: |
             git_token=${{ secrets.ORG_PAT_GITHUB }}
 
@@ -1127,14 +1167,14 @@ jobs:
 
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Install Cosign
         if: needs.prepare.outputs.enable_sdr == 'true'
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Log in to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1142,7 +1182,7 @@ jobs:
 
       - name: Log in to Docker Hub
         if: needs.prepare.outputs.enable_sdr == 'true'
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
         with:
           registry: docker.io
           username: atlanhq
@@ -1179,9 +1219,22 @@ jobs:
             while IFS= read -r tag; do [ -n "$tag" ] && echo "    ${tag}"; done <<< "${RELEASE_TAGS}"
           fi
 
+      - name: Checkout SDK helper scripts
+        # mirror_tags_dockerhub.py lives in the SDK repo, not the caller repo —
+        # this job has no checkout of its own (unlike prepare/certify/leak-scan),
+        # so the script must be pulled in explicitly before it's invoked below.
+        if: needs.prepare.outputs.enable_sdr == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: .sdk-entrypoint
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
       - name: Install crane
         if: needs.prepare.outputs.enable_sdr == 'true'
-        uses: imjasonh/setup-crane@59c71e96a00b28651f10369ba3359a6d730740a0 # v0.6
+        uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
 
       # setup-crane's final step runs `crane auth login ghcr.io` with the
       # calling repo's GITHUB_TOKEN, overwriting the ghcr.io credential the
@@ -1201,6 +1254,7 @@ jobs:
         env:
           GHCR_IMAGE:      ${{ needs.prepare.outputs.ghcr_image }}
           DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub_image }}
+          RELEASE_TAGS:    ${{ needs.prepare.outputs.release_tags }}
         run: |
           set -euo pipefail
           # Use `crane copy`, not `docker buildx imagetools create`, for the
@@ -1213,6 +1267,13 @@ jobs:
           # login steps above.
           crane copy "${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}"
           echo "Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
+
+          # Mirror the release version-tag ladder (e.g. :2.0.1, :2.0, :2, :latest)
+          # onto Docker Hub. Branching logic lives in a tested script per
+          # docs/standards/ci.md.
+          python3 .sdk-entrypoint/.github/scripts/mirror_tags_dockerhub.py \
+            --dockerhub-image "${DOCKERHUB_IMAGE}" \
+            --release-tags "${RELEASE_TAGS}"
 
           # Resolve the pushed manifest digest so we can sign by digest (immutable)
           # rather than by tag (mutable). `${DOCKERHUB_IMAGE%%:*}` strips the tag.
@@ -1260,17 +1321,32 @@ jobs:
   # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
   app-deployment-dispatcher:
     name: Dispatch App Deployment
-    needs: [prepare, merge, security-scan]
-    if: ${{ !failure() && !cancelled() && needs.merge.result == 'success' && needs.security-scan.result == 'success' && github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true' }}
+    needs: [prepare, merge, security-scan, certify]
+    # certify may be SKIPPED here: it runs only on publish=true, but the
+    # dispatcher fires on any main push for SDR apps (some, e.g. mysql, publish
+    # only on release). Block on a real certify FAILURE, not on skipped — else
+    # deploy-on-merge SDR apps would stop deploying. (publish uses == 'success'
+    # safely because it also requires inputs.publish, so certify always ran.)
+    if: ${{ !failure() && !cancelled() && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result != 'failure' && github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
         repo: ['atlanhq/atlan-apps-deployment']
     steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: atlan-apps-deployment
+
       - name: Repository Dispatch
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           repository: ${{ matrix.repo }}
           event-type: dispatch_app_builder_workflow
           client-payload: |-
@@ -1282,8 +1358,8 @@ jobs:
   # ── Job 7: Publish to Global Marketplace ────────────────────────────────────
   publish:
     name: Publish to Marketplace
-    needs: [prepare, merge, security-scan]
-    if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' && needs.merge.result == 'success' && needs.security-scan.result == 'success' && inputs.publish }}
+    needs: [prepare, merge, security-scan, certify]
+    if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result == 'success' && inputs.publish }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

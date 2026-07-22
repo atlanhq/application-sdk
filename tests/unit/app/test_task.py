@@ -413,3 +413,233 @@ class TestTaskEnvVarDefaults:
         monkeypatch.setenv("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", "not-a-number")
         result = env_int("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60)
         assert result == 60
+
+
+# =============================================================================
+# @task pool field
+# =============================================================================
+
+
+class TestTaskPool:
+    """Tests for @task(pool=...) — logical worker-pool routing."""
+
+    def test_task_without_pool_has_none(self) -> None:
+        """Tasks without pool default to None."""
+
+        class MyApp:
+            @task
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.pool is None
+
+    def test_task_with_pool_stores_it(self) -> None:
+        """@task(pool='main') stores the pool string."""
+
+        class MyApp:
+            @task(pool="main")
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.pool == "main"
+
+    def test_task_pool_empty_parens_is_none(self) -> None:
+        """@task() without pool= still defaults to None."""
+
+        class MyApp:
+            @task()
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.pool is None
+
+    def test_pool_queue_threaded_to_execute_activity(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Wrapper passes task_queue='qi-app-queue-heavy' for pool='heavy'.
+
+        This is the definitive end-to-end check: it calls through
+        _create_task_activity_wrapper (not a re-implementation) so it catches
+        regressions in resolution order, closure capture, .upper() casing, and
+        kwarg-threading shape in one shot.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import _create_task_activity_wrapper
+
+        monkeypatch.delenv("ATLAN_POOL_HEAVY_QUEUE", raising=False)
+        monkeypatch.setenv("ATLAN_TASK_QUEUE", "qi-app-queue")
+
+        with patch(
+            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            new_callable=AsyncMock,
+        ) as mock_exec:
+            mock_exec.return_value = MagicMock()
+            wrapper = _create_task_activity_wrapper(
+                app_name="qi-app",
+                task_name="analyse-heavy",
+                timeout_seconds=600,
+                retry_max_attempts=3,
+                retry_max_interval_seconds=30,
+                output_type=SimpleOutput,
+                context_data={"run_id": "r1", "correlation_id": "c1"},
+                pool="heavy",
+            )
+            import asyncio
+
+            asyncio.run(wrapper(MagicMock()))
+
+        assert mock_exec.call_args.kwargs["task_queue"] == "qi-app-queue-heavy"
+
+    def test_pool_explicit_env_var_overrides_derived_queue(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit ATLAN_POOL_<POOL>_QUEUE takes precedence over derived queue."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import _create_task_activity_wrapper
+
+        monkeypatch.setenv("ATLAN_POOL_HEAVY_QUEUE", "custom-heavy-queue")
+        monkeypatch.setenv("ATLAN_TASK_QUEUE", "qi-app-queue")
+
+        with patch(
+            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            new_callable=AsyncMock,
+        ) as mock_exec:
+            mock_exec.return_value = MagicMock()
+            wrapper = _create_task_activity_wrapper(
+                app_name="qi-app",
+                task_name="analyse-heavy",
+                timeout_seconds=600,
+                retry_max_attempts=3,
+                retry_max_interval_seconds=30,
+                output_type=SimpleOutput,
+                context_data={"run_id": "r1", "correlation_id": "c1"},
+                pool="heavy",
+            )
+            import asyncio
+
+            asyncio.run(wrapper(MagicMock()))
+
+        assert mock_exec.call_args.kwargs["task_queue"] == "custom-heavy-queue"
+
+    def test_no_pool_no_task_queue_kwarg(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Wrapper without pool passes no task_queue kwarg (backward-compatible)."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import _create_task_activity_wrapper
+
+        with patch(
+            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            new_callable=AsyncMock,
+        ) as mock_exec:
+            mock_exec.return_value = MagicMock()
+            wrapper = _create_task_activity_wrapper(
+                app_name="qi-app",
+                task_name="analyse",
+                timeout_seconds=600,
+                retry_max_attempts=3,
+                retry_max_interval_seconds=30,
+                output_type=SimpleOutput,
+                context_data={"run_id": "r1", "correlation_id": "c1"},
+            )
+            import asyncio
+
+            asyncio.run(wrapper(MagicMock()))
+
+        assert "task_queue" not in mock_exec.call_args.kwargs
+
+    def test_pool_uppercase_raises_error(self) -> None:
+        """@task(pool='HotPool') raises TaskContractError — pool must be lowercase kebab-case."""
+        with pytest.raises(TaskContractError, match="lowercase kebab-case"):
+
+            class MyApp:
+                @task(pool="HotPool")
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+    def test_pool_empty_string_raises_error(self) -> None:
+        """@task(pool='') raises TaskContractError."""
+        with pytest.raises(TaskContractError, match="empty or whitespace"):
+
+            class MyApp:
+                @task(pool="")
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+    def test_pool_whitespace_only_raises_error(self) -> None:
+        """@task(pool='  ') raises TaskContractError."""
+        with pytest.raises(TaskContractError, match="empty or whitespace"):
+
+            class MyApp:
+                @task(pool="  ")
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+    def test_pool_trailing_dash_raises_error(self) -> None:
+        """@task(pool='pool-') raises TaskContractError — trailing dash is not kebab-case."""
+        with pytest.raises(TaskContractError, match="lowercase kebab-case"):
+
+            class MyApp:
+                @task(pool="pool-")
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+    def test_pool_consecutive_dashes_raises_error(self) -> None:
+        """@task(pool='pool--name') raises TaskContractError — consecutive dashes rejected."""
+        with pytest.raises(TaskContractError, match="lowercase kebab-case"):
+
+            class MyApp:
+                @task(pool="pool--name")
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+    def test_pool_valid_kebab_with_hyphen_accepted(self) -> None:
+        """@task(pool='cold-tier') is valid kebab-case."""
+
+        class MyApp:
+            @task(pool="cold-tier")
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.pool == "cold-tier"
+
+    def test_pool_hyphen_normalised_to_underscore_in_env_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """pool='cold-tier' resolves ATLAN_POOL_COLD_TIER_QUEUE, not ATLAN_POOL_COLD-TIER_QUEUE."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import _create_task_activity_wrapper
+
+        monkeypatch.setenv("ATLAN_POOL_COLD_TIER_QUEUE", "explicit-cold-queue")
+        monkeypatch.setenv("ATLAN_TASK_QUEUE", "base-queue")
+
+        with patch(
+            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            new_callable=AsyncMock,
+        ) as mock_exec:
+            mock_exec.return_value = MagicMock()
+            wrapper = _create_task_activity_wrapper(
+                app_name="qi-app",
+                task_name="cold-export",
+                timeout_seconds=600,
+                retry_max_attempts=3,
+                retry_max_interval_seconds=30,
+                output_type=SimpleOutput,
+                context_data={"run_id": "r1", "correlation_id": "c1"},
+                pool="cold-tier",
+            )
+            import asyncio
+
+            asyncio.run(wrapper(MagicMock()))
+
+        assert mock_exec.call_args.kwargs["task_queue"] == "explicit-cold-queue"

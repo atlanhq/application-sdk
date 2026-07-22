@@ -11,11 +11,16 @@ Covers:
 from __future__ import annotations
 
 import pathlib
+import re
 
 import pytest
-from conformance.bootstrap.render import MANAGED_WORKFLOWS, render
+from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
 from conformance.cli import _cmd_bootstrap
-from conformance.suite.checks.bootstrap_drift import discover, scan_path
+from conformance.suite.checks.bootstrap_drift import (
+    _extract_exit_zero,
+    discover,
+    scan_path,
+)
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier
 
@@ -24,14 +29,14 @@ from conformance.suite.schema.disposition import EnforcementTier
 # ---------------------------------------------------------------------------
 
 
-def _bootstrap(root: pathlib.Path) -> None:
-    """Run bootstrap in *root* (no chdir needed — uses monkeypatch elsewhere)."""
+def _bootstrap(root: pathlib.Path, *argv: str) -> None:
+    """Run bootstrap in *root* with optional flags (e.g. ``"--enforce", "false"``)."""
     import os
 
     old = os.getcwd()
     os.chdir(root)
     try:
-        _cmd_bootstrap([])
+        _cmd_bootstrap(list(argv))
     finally:
         os.chdir(old)
 
@@ -55,6 +60,10 @@ def test_c002_is_autofixable() -> None:
     assert get_rule("C002").autofixable is True
 
 
+def test_c002_orthogonal_gate_is_skip() -> None:
+    assert get_rule("C002").orthogonal_gate == "skip"
+
+
 # ---------------------------------------------------------------------------
 # discover()
 # ---------------------------------------------------------------------------
@@ -63,17 +72,21 @@ def test_c002_is_autofixable() -> None:
 def test_discover_returns_all_managed_paths(tmp_path: pathlib.Path) -> None:
     paths = discover(tmp_path)
     names = {p.name for p in paths}
+    rels = {p.relative_to(tmp_path).as_posix() for p in paths}
     # Must include all managed shims plus the write-if-absent scaffolds.
     assert set(MANAGED_WORKFLOWS).issubset(names)
     assert "tests.yaml" in names
     assert "renovate.json" in names
+    # And the vendored non-workflow files (action.yaml + arg-building script).
+    for dest_rel, _template_name in MANAGED_ACTION_FILES:
+        assert dest_rel in rels
 
 
 def test_discover_returns_paths_even_when_absent(tmp_path: pathlib.Path) -> None:
     """discover() must not filter out non-existent files."""
     paths = discover(tmp_path)
-    # managed shims + tests.yaml + renovate.json scaffolds.
-    assert len(paths) == len(MANAGED_WORKFLOWS) + 2
+    # managed shims + managed action files + tests.yaml + renovate.json scaffolds.
+    assert len(paths) == len(MANAGED_WORKFLOWS) + len(MANAGED_ACTION_FILES) + 2
     # None of them exist yet.
     assert all(not p.exists() for p in paths)
 
@@ -121,6 +134,19 @@ def test_missing_workflow_finding_mentions_bootstrap_command(
     assert "bootstrap" in findings[0].message
 
 
+@pytest.mark.parametrize("dest_rel", [d for d, _ in MANAGED_ACTION_FILES])
+def test_missing_managed_action_file_produces_finding(
+    tmp_path: pathlib.Path, dest_rel: str
+) -> None:
+    # Don't bootstrap — the vendored action/script isn't on disk at all.
+    path = tmp_path / dest_rel
+    findings = scan_path(path, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+    assert "absent" in findings[0].message
+    assert dest_rel in findings[0].message
+
+
 # ---------------------------------------------------------------------------
 # Drifted file → finding
 # ---------------------------------------------------------------------------
@@ -142,6 +168,60 @@ def test_drifted_workflow_finding_names_the_file(tmp_path: pathlib.Path) -> None
     wf.write_text("completely wrong content")
     findings = scan_path(wf, tmp_path)
     assert "commits.yaml" in findings[0].message
+
+
+@pytest.mark.parametrize("dest_rel", [d for d, _ in MANAGED_ACTION_FILES])
+def test_drifted_managed_action_file_produces_finding(
+    tmp_path: pathlib.Path, dest_rel: str
+) -> None:
+    _bootstrap(tmp_path)
+    path = tmp_path / dest_rel
+    path.write_text("completely wrong content")
+    findings = scan_path(path, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+    assert "drifted" in findings[0].message
+    assert dest_rel in findings[0].message
+
+
+# ---------------------------------------------------------------------------
+# Action pin bumps — ignored during drift comparison
+# ---------------------------------------------------------------------------
+
+_SHA_A = "a" * 40
+_SHA_B = "b" * 40
+
+
+def test_pin_only_change_not_flagged(tmp_path: pathlib.Path) -> None:
+    """Automations may bump SHA pins freely — a pin-only diff must not flag C002."""
+    _bootstrap(tmp_path)
+    wf = tmp_path / ".github" / "workflows" / "checks.yml"
+    bumped = re.sub(r"@[0-9a-f]{40}", f"@{_SHA_B}", wf.read_text())
+    wf.write_text(bumped)
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_pin_and_comment_change_not_flagged(tmp_path: pathlib.Path) -> None:
+    """Renovate typically updates both the SHA and the adjacent version comment."""
+    _bootstrap(tmp_path)
+    wf = tmp_path / ".github" / "workflows" / "checks.yml"
+    bumped = re.sub(
+        r"@[0-9a-f]{40}(?:[ \t]+#[^\n]*)?", f"@{_SHA_B} # v99", wf.read_text()
+    )
+    wf.write_text(bumped)
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_structural_change_alongside_pin_still_flagged(tmp_path: pathlib.Path) -> None:
+    """A structural edit is caught even when the SHA pin was also bumped."""
+    _bootstrap(tmp_path)
+    wf = tmp_path / ".github" / "workflows" / "checks.yml"
+    bumped = re.sub(r"@[0-9a-f]{40}", f"@{_SHA_B}", wf.read_text())
+    drifted = bumped + "\n# injected structural drift\n"
+    wf.write_text(drifted)
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
 
 
 # ---------------------------------------------------------------------------
@@ -171,68 +251,6 @@ def test_build_and_publish_custom_unit_tests_workflow_not_flagged(
     wf.write_text(render("build-and-publish.yaml", unit_tests_workflow="ci.yaml"))
     findings = scan_path(wf, tmp_path)
     assert findings == []
-
-
-def _renovate_pkl_sync_with_regen(value: str) -> str:
-    """Canonical caller with a `with: regenerate-contract: <value>` override."""
-    canonical = render("renovate-pkl-sync.yaml")
-    return canonical.replace(
-        "    secrets:",
-        f"    with:\n      regenerate-contract: {value}\n    secrets:",
-        1,
-    )
-
-
-def test_renovate_pkl_sync_optout_not_flagged(tmp_path: pathlib.Path) -> None:
-    """Opting out of regeneration (regenerate-contract: false) is a sanctioned
-    per-repo choice, not drift."""
-    wf_dir = tmp_path / ".github" / "workflows"
-    wf_dir.mkdir(parents=True)
-    wf = wf_dir / "renovate-pkl-sync.yaml"
-    wf.write_text(_renovate_pkl_sync_with_regen("false"))
-    assert scan_path(wf, tmp_path) == []
-
-
-def test_renovate_pkl_sync_explicit_true_not_flagged(tmp_path: pathlib.Path) -> None:
-    """An explicit regenerate-contract: true (the default, stated redundantly)
-    is also fine."""
-    wf_dir = tmp_path / ".github" / "workflows"
-    wf_dir.mkdir(parents=True)
-    wf = wf_dir / "renovate-pkl-sync.yaml"
-    wf.write_text(_renovate_pkl_sync_with_regen("true"))
-    assert scan_path(wf, tmp_path) == []
-
-
-def test_renovate_pkl_sync_other_drift_still_flagged(tmp_path: pathlib.Path) -> None:
-    """Stripping the regenerate-contract override must not mask real drift."""
-    wf_dir = tmp_path / ".github" / "workflows"
-    wf_dir.mkdir(parents=True)
-    wf = wf_dir / "renovate-pkl-sync.yaml"
-    drifted = _renovate_pkl_sync_with_regen("false").replace("@main", "@v1")
-    wf.write_text(drifted)
-    findings = scan_path(wf, tmp_path)
-    assert len(findings) == 1
-    assert findings[0].rule_id == "C002"
-
-
-def test_renovate_pkl_sync_extra_with_key_still_flagged(
-    tmp_path: pathlib.Path,
-) -> None:
-    """The strip is targeted: only `regenerate-contract` is sanctioned. A second
-    key under `with:` is unsanctioned drift and must still flag."""
-    wf_dir = tmp_path / ".github" / "workflows"
-    wf_dir.mkdir(parents=True)
-    wf = wf_dir / "renovate-pkl-sync.yaml"
-    canonical = render("renovate-pkl-sync.yaml")
-    drifted = canonical.replace(
-        "    secrets:",
-        "    with:\n      regenerate-contract: false\n      some-other-key: true\n    secrets:",
-        1,
-    )
-    wf.write_text(drifted)
-    findings = scan_path(wf, tmp_path)
-    assert len(findings) == 1
-    assert findings[0].rule_id == "C002"
 
 
 # ---------------------------------------------------------------------------
@@ -444,3 +462,122 @@ def test_all_scaffolds_clean_after_bootstrap(tmp_path: pathlib.Path) -> None:
     for path in discover(tmp_path):
         findings.extend(scan_path(path, tmp_path))
     assert findings == [], [f.message for f in findings]
+
+
+# ---------------------------------------------------------------------------
+# Soft-mode (--enforce false) repos: exit-zero/automerge must not be flagged
+# ---------------------------------------------------------------------------
+
+
+def test_soft_mode_conformance_yaml_not_flagged(tmp_path: pathlib.Path) -> None:
+    """A repo bootstrapped with --enforce false must not show C002 drift on
+    conformance.yaml — its exit-zero mode is a recognised param, not drift."""
+    _bootstrap(tmp_path, "--enforce", "false")
+    wf = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    findings = scan_path(wf, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_soft_mode_renovate_json_not_flagged(tmp_path: pathlib.Path) -> None:
+    """A repo bootstrapped with --enforce false must not show C002 drift on
+    renovate.json — its soft-rollout block is a recognised param, not drift."""
+    _bootstrap(tmp_path, "--enforce", "false")
+    rj = tmp_path / "renovate.json"
+    findings = scan_path(rj, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_soft_mode_survives_bare_rerun_without_drift(tmp_path: pathlib.Path) -> None:
+    """A bare re-run (no --enforce) after an explicit soft-mode bootstrap must
+    preserve soft mode (per the bootstrap auto-detection) *and* stay clean of
+    C002 findings for both conformance.yaml and renovate.json."""
+    _bootstrap(tmp_path, "--enforce", "false")
+    _bootstrap(tmp_path)  # bare re-run
+    wf = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    rj = tmp_path / "renovate.json"
+    findings = scan_path(wf, tmp_path) + scan_path(rj, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_conformance_yaml_structural_drift_still_flagged_in_soft_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Extracting exit-zero must not mask a genuine structural change."""
+    _bootstrap(tmp_path, "--enforce", "false")
+    wf = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    wf.write_text(wf.read_text() + "\n# structural drift\n")
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+
+
+def test_renovate_json_structural_drift_still_flagged_in_soft_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Extracting automerge must not mask a genuine structural change."""
+    _bootstrap(tmp_path, "--enforce", "false")
+    rj = tmp_path / "renovate.json"
+    rj.write_text(rj.read_text().replace("platformAutomerge", "platform_automerge"))
+    findings = scan_path(rj, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+
+
+# ---------------------------------------------------------------------------
+# _extract_exit_zero — unparseable exit-zero line falls back to renovate.json
+#
+# Unit-tested directly (rather than through scan_path/discover) because the
+# fallback's effect is invisible at the scan_path level: conformance.yaml's
+# exit-zero line is the *only* place `exit_zero` is substituted (verified
+# against the template), so an unparseable line is always textually
+# different from any correctly-rendered canonical line regardless of which
+# exit_zero value the extractor falls back to -- scan_path always reports
+# drift for that file either way, correctly. What the fallback actually
+# fixes is `kwargs["exit_zero"]` itself matching bootstrap's own
+# `_read_conformance_enforce` autodetection (see autodetect.py) instead of
+# silently defaulting to hard-gate, so the two callers of `extract.py` can't
+# quietly disagree about a repo's inferred enforcement mode.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_exit_zero_unparseable_falls_back_to_renovate_soft_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An unparseable exit-zero line with a soft-mode renovate.json falls back
+    to "true" (soft/observe), matching autodetect._read_conformance_enforce's
+    fallback instead of silently defaulting to hard-gate."""
+    _bootstrap(tmp_path, "--enforce", "false")  # writes a soft-mode renovate.json
+    assert _extract_exit_zero("exit-zero: not-a-recognised-expression", tmp_path) == (
+        "true"
+    )
+
+
+def test_extract_exit_zero_unparseable_falls_back_to_renovate_hard_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Same, but a hard-mode (default) renovate.json falls back to "false"."""
+    _bootstrap(tmp_path)  # writes a hard-mode (default) renovate.json
+    assert _extract_exit_zero("exit-zero: not-a-recognised-expression", tmp_path) == (
+        "false"
+    )
+
+
+def test_extract_exit_zero_unparseable_defaults_false_without_renovate_json(
+    tmp_path: pathlib.Path,
+) -> None:
+    """No renovate.json at all -- nothing to fall back to, defaults to hard-gate."""
+    assert _extract_exit_zero("exit-zero: not-a-recognised-expression", tmp_path) == (
+        "false"
+    )
+
+
+def test_extract_exit_zero_matches_takes_priority_over_renovate() -> None:
+    """A parseable line wins outright -- the renovate.json fallback is only
+    consulted when the line itself doesn't match."""
+    text = (
+        "exit-zero: ${{ github.event_name == 'schedule' || "
+        "github.event_name == 'workflow_dispatch' || true }}"
+    )
+    # No root/renovate.json is ever touched in this case; a bogus path proves
+    # the match path doesn't need it.
+    assert _extract_exit_zero(text, pathlib.Path("/nonexistent")) == "true"

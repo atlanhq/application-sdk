@@ -67,7 +67,7 @@ jobs:
       force_conformance: ${{ steps.final-force.outputs.force_conformance }}
       force_toolkit: ${{ steps.final-force.outputs.force_toolkit }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Compute force-all FIRST — it needs no diff base, only the ref/head_ref.
       - name: Compute force flags
@@ -119,7 +119,7 @@ jobs:
       # possibly hard-fail, which would skip every area and turn the always()
       # gate falsely green). For pull_request the filter diffs against the PR
       # base automatically; for merge_group against the queued merge ref.
-      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
         id: filter
         if: steps.force.outputs.force_all != 'true'
         with:
@@ -270,6 +270,8 @@ jobs:
       # conformance package (its tests embed deprecation-notice strings as fixtures)
       # and tooling so only application_sdk/ deprecations are graded.
       exclude-paths-b: "tools/,contract-toolkit/,packages/conformance/"
+      # SDK's own ledger lives inside the conformance package data dir.
+      ledger-path: "packages/conformance/conformance/data/contract_schema.lock.json"
       event_name: ${{ github.event_name }}
       # force-all the inner per-series run for conformance releases AND container
       # changes — a Dockerfile/entrypoint diff isn't .py/.github/pyproject, so

@@ -178,6 +178,32 @@ def test_skips_vendored_dirs(tmp_path: Path) -> None:
     assert result["findings"] == []
 
 
+def test_github_env_block_redirect_is_not_a_leak(tmp_path: Path) -> None:
+    # { echo "VAR=$SECRET"; } >> "$GITHUB_ENV" writes to a GitHub Actions masked
+    # file sink, not stdout. The redirect is on the closing `}` line, not the
+    # echo line — the scanner must look forward to catch this pattern.
+    _write(
+        tmp_path,
+        ".github/workflows/ci.yml",
+        "      {\n"
+        '        echo "ATLAN_CLIENT_SECRET=$CLIENT_SECRET"\n'
+        '      } >> "$GITHUB_ENV"\n',
+    )
+    result = scan.scan(str(tmp_path))
+    assert result["findings"] == []
+    assert result["decision"] == "pass"
+
+
+def test_bare_echo_not_suppressed_by_distant_github_env_block(tmp_path: Path) -> None:
+    # A bare echo of a secret must still flag even when an unrelated
+    # `} >> "$GITHUB_ENV"` appears later in the same file but beyond the
+    # 12-line look-ahead cap — cross-step suppression must not happen.
+    body = 'echo "CLIENT_SECRET=$CLIENT_SECRET"\n' + "\n" * 13 + '} >> "$GITHUB_ENV"\n'
+    _write(tmp_path, ".github/workflows/ci.yml", body)
+    result = scan.scan(str(tmp_path))
+    assert _by_file(result)[".github/workflows/ci.yml"]["pattern_id"] == "shell-echo"
+
+
 def test_clean_tree_passes(tmp_path: Path) -> None:
     _write(tmp_path, "h.py", 'logger.info("started worker")\n')
     result = scan.scan(str(tmp_path))

@@ -28,10 +28,15 @@ import argparse
 import asyncio
 import faulthandler
 import os
+import random
 import signal
 import sys
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
+
+import orjson
 
 from application_sdk.common._env import env_int as _env_int
 from application_sdk.discovery import (
@@ -80,11 +85,42 @@ def _debug_dump_handler(signum: int, frame: object) -> None:
         os.write(fd, b"\n===== END DEBUG DUMP =====\n")
     finally:
         os.close(fd)
+    # conformance: ignore[L005] signal handler must stay async-signal-safe; the logging framework takes locks and can deadlock when invoked from a signal context
     print(f"Debug dump written to {dump_path}", file=sys.stderr, flush=True)
 
 
 if hasattr(signal, "SIGUSR1"):
     signal.signal(signal.SIGUSR1, _debug_dump_handler)
+
+
+def _log_process_memory_baseline() -> None:
+    """Log current RSS vs container memory limit at process startup.
+
+    Gives a baseline so that — after an OOM kill — the log of the replacement
+    pod shows the limit, and the log of the killed pod shows memory climbing
+    toward it via the heartbeat-loop pressure warnings.  No-ops when
+    K8S_POD_MEMORY_LIMIT is unset (local dev / non-Kubernetes environments).
+    """
+    from application_sdk.observability import (  # noqa: PLC0415 — cold path: startup only
+        resource_sampler as _rs,
+    )
+    from application_sdk.observability.resource_sampler import (  # noqa: PLC0415
+        parse_pod_memory_limit,
+    )
+
+    limit_bytes = parse_pod_memory_limit(os.environ.get("K8S_POD_MEMORY_LIMIT", ""))
+    if limit_bytes <= 0:
+        return
+    sample = _rs.sample()
+    if sample is None:
+        return
+    logger.info(
+        "Process memory at start: %.2f GiB RSS / %.2f GiB limit (%.0f%% of limit)",
+        sample.rss_bytes / (1024**3),
+        limit_bytes / (1024**3),
+        100.0 * sample.rss_bytes / limit_bytes,
+    )
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -437,6 +473,7 @@ async def _log_dapr_components(
         safe_meta = yaml_details.get(name, {})
         if safe_meta:
             detail = ", ".join("%s=%s" % (k, v) for k, v in safe_meta.items())
+            # conformance: ignore[L006] one-time startup enumeration over discovered dapr components (small, bounded set), not a hot loop; an existing test pins INFO
             logger.info(
                 "Dapr component: %s (type=%s, version=%s) — %s",
                 name,
@@ -445,6 +482,7 @@ async def _log_dapr_components(
                 detail,
             )
         else:
+            # conformance: ignore[L006] one-time startup enumeration over discovered dapr components (small, bounded set), not a hot loop
             logger.info(
                 "Dapr component: %s (type=%s, version=%s)",
                 name,
@@ -471,6 +509,7 @@ async def _log_dapr_components(
         is_registered = comp_name in registered
 
         if is_registered and declared is not False:
+            # conformance: ignore[L006] one-time startup validation over the fixed 4-element `expected` tuple, not a hot loop
             logger.info(
                 "Dapr binding %s (role=%s) accepted: registered in sidecar (%s=%s)",
                 comp_name,
@@ -479,6 +518,7 @@ async def _log_dapr_components(
                 raw if raw is not None else "<unset>",
             )
         elif is_registered and declared is False:
+            # conformance: ignore[L006] one-time startup validation over the fixed 4-element `expected` tuple, not a hot loop
             logger.info(
                 "Dapr binding %s (role=%s) registered in sidecar despite %s=false — "
                 "possible drift between atlan.yaml deploy.dapr.%s and the deployed chart values",
@@ -496,6 +536,7 @@ async def _log_dapr_components(
                 enable_var,
             )
         elif not is_registered and declared is False:
+            # conformance: ignore[L006] one-time startup validation over the fixed 4-element `expected` tuple, not a hot loop
             logger.info(
                 "Dapr binding %s (role=%s) disabled by config (%s=false); not registered in sidecar (expected)",
                 comp_name,
@@ -503,6 +544,7 @@ async def _log_dapr_components(
                 enable_var,
             )
         else:  # not registered, declared is None
+            # conformance: ignore[L006] one-time startup validation over the fixed 4-element `expected` tuple, not a hot loop
             logger.info(
                 "Dapr binding %s (role=%s) not registered in sidecar and %s is unset — "
                 "the SDK cannot determine whether your app needs it; "
@@ -808,6 +850,128 @@ def _install_graceful_signal_handlers(
             )
 
 
+# --- Worker restart supervisor ----------------------------------------------
+# A transient poll auth failure — e.g. a JWKS signing-key cache skew on the
+# Temporal frontend that rejects an otherwise-valid token for a few seconds —
+# makes temporalio treat the poll as fatal and the worker process exits. Without
+# a supervisor the whole runtime goes inactive until a manual restart. These
+# bounds drive an automatic rebuild-and-restart of the worker, while still
+# failing loud when the failure is persistent (e.g. genuinely bad credentials).
+_WORKER_MAX_CONSECUTIVE_RESTARTS = _env_int("ATLAN_WORKER_MAX_CONSECUTIVE_RESTARTS", 10)
+_WORKER_RESTART_BACKOFF_CAP_SECONDS = _env_int(
+    "ATLAN_WORKER_RESTART_BACKOFF_CAP_SECONDS", 30
+)
+_WORKER_HEALTHY_RUN_SECONDS = _env_int("ATLAN_WORKER_HEALTHY_RUN_SECONDS", 300)
+
+
+async def _run_worker_with_restart(
+    *,
+    build_worker: Callable[[], Any],
+    shutdown_event: asyncio.Event,
+    auth_manager: Any = None,
+    client: Any = None,
+) -> None:
+    """Run a Temporal worker under a bounded restart supervisor.
+
+    temporalio treats a poll ``PermissionDenied`` (and other non-retryable gRPC
+    errors) as fatal: the worker shuts down and re-raises out of the
+    ``async with worker`` block. A ``Worker`` is single-use, so each restart
+    rebuilds one via ``build_worker``.
+
+    Restart-on-fatal with a cap: any worker-fatal error triggers a rebuild after
+    a full-jitter backoff, unless a shutdown was requested. The consecutive
+    counter resets once a worker runs healthily for ``_WORKER_HEALTHY_RUN_SECONDS``;
+    if the worker keeps failing without ever staying up, the supervisor gives up
+    after ``_WORKER_MAX_CONSECUTIVE_RESTARTS`` and re-raises so a persistent
+    misconfiguration still fails loud rather than hot-looping forever.
+
+    Args:
+        build_worker: Builds a fresh worker (an ``AppWorker``) to run.
+        shutdown_event: Set on SIGINT/SIGTERM; a clean shutdown stops the loop.
+        auth_manager: Optional; when present its token is force-refreshed before
+            each restart to recover from stale/expired tokens.
+        client: The Temporal client passed to ``auth_manager.force_refresh``.
+    """
+    consecutive_failures = 0
+
+    while not shutdown_event.is_set():
+        worker = build_worker()
+        started_at = time.monotonic()
+        try:
+            async with worker:
+                await shutdown_event.wait()
+            # Body returned normally — a shutdown signal, not a failure. Stop.
+            return
+        except Exception:
+            # temporalio surfaces a worker-fatal error by cancelling this task
+            # and re-raising the error from Worker.__aexit__. Clear the residual
+            # cancellation so the backoff below (asyncio.wait_for) isn't torn
+            # down by the leftover cancel count on Python 3.11+.
+            current = asyncio.current_task()
+            if current is not None and hasattr(current, "uncancel"):
+                current.uncancel()
+
+            if shutdown_event.is_set():
+                # Failure raced with an in-flight shutdown — treat as clean.
+                logger.info("Worker exited during shutdown; not restarting")
+                return
+
+            ran_seconds = time.monotonic() - started_at
+            if ran_seconds >= _WORKER_HEALTHY_RUN_SECONDS:
+                # Ran healthily for a while before failing — a fresh incident,
+                # not a restart storm, so reset the streak.
+                consecutive_failures = 0
+            consecutive_failures += 1
+
+            if consecutive_failures > _WORKER_MAX_CONSECUTIVE_RESTARTS:
+                logger.error(
+                    "Worker failed %d times without staying healthy for %ds; "
+                    "giving up and exiting",
+                    consecutive_failures,
+                    _WORKER_HEALTHY_RUN_SECONDS,
+                    exc_info=True,
+                )
+                raise
+
+            # Force a fresh token before restarting — recovers stale/expired
+            # token cases; harmless for a transient frontend key-cache skew
+            # (the backoff itself gives the frontend time to refresh its JWKS).
+            if auth_manager is not None:
+                try:
+                    await auth_manager.force_refresh(client)
+                except Exception:
+                    logger.warning(
+                        "Token refresh before worker restart failed; "
+                        "restarting anyway",
+                        exc_info=True,
+                    )
+
+            # Full-jitter exponential backoff (matches create_temporal_client),
+            # raced against shutdown so SIGTERM stays responsive during backoff.
+            cap_at_attempt = min(
+                2 ** (consecutive_failures - 1),
+                _WORKER_RESTART_BACKOFF_CAP_SECONDS,
+            )
+            delay = random.uniform(0, cap_at_attempt)
+            logger.warning(
+                "Worker exited with a fatal error (attempt %d/%d, ran %.0fs); "
+                "restarting in %.1fs",
+                consecutive_failures,
+                _WORKER_MAX_CONSECUTIVE_RESTARTS,
+                ran_seconds,
+                delay,
+                exc_info=True,
+            )
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
+                # Shutdown requested during backoff — stop.
+                return
+            except TimeoutError:
+                # Backoff elapsed without a shutdown request — the expected
+                # path; fall through to rebuild and restart the worker.
+                logger.debug("Restart backoff elapsed; rebuilding worker")
+
+
 async def run_worker_mode(config: AppConfig) -> None:
     """Run in worker mode (Temporal workflow execution).
 
@@ -901,7 +1065,9 @@ async def run_worker_mode(config: AppConfig) -> None:
         logger.info("Background token refresh started")
 
     # Discover the app's Handler so SDR workflows can be registered on the
-    # worker.  When no Handler is found, create_worker silently skips SDR.
+    # worker.  When no Handler is found, create_worker binds DefaultHandler so
+    # the SDR/gate activities are still registered (the preflight gate is
+    # mandatory; DefaultHandler's no-op keeps it non-blocking).
     handler_class_for_sdr = load_handler_class(
         config.app_module,
         handler_module_path=config.handler_module,
@@ -915,20 +1081,33 @@ async def run_worker_mode(config: AppConfig) -> None:
             type(handler_for_sdr).__name__,
         )
 
+    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health server only in worker mode
+        build_worker_health_server,
+    )
+
+    health_server = build_worker_health_server(port=config.health_port, client=client)
+
     # Worker-only mode pushes metrics to a Pushgateway since the process has
     # no /metrics endpoint to scrape. Combined mode (run_combined_mode below)
     # leaves enable_pushgateway=False so the FastAPI /metrics endpoint
     # exposes everything via in-process proxy.
-    worker = create_worker(
-        client,
-        task_queue=config.task_queue,
-        handler=handler_for_sdr,
-        enable_pushgateway=True,
-    )
+    def _build_worker() -> Any:
+        # Rebuilt on each supervisor restart — Worker instances are single-use.
+        # on_activity feeds the health server's liveness window (BLDX-1552): the
+        # /live probe can then observe a silently stalled poll loop that the
+        # restart supervisor cannot (it only fires when run() returns/raises).
+        return create_worker(
+            client,
+            task_queue=config.task_queue,
+            handler=handler_for_sdr,
+            enable_pushgateway=True,
+            on_activity=health_server.record_activity,
+        )
 
     # Log registrations
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
+        # conformance: ignore[L006] this worker registers a small, statically-configured set of apps (typically one); production logs are collected at INFO floor, so demoting this to DEBUG would delete it from observability entirely
         logger.info("Registered app %s version %s", registered_app, app_meta.version)
 
     for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
@@ -948,16 +1127,17 @@ async def run_worker_mode(config: AppConfig) -> None:
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
 
-    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
-        WorkerHealthServer,
-    )
-
-    health_server = WorkerHealthServer(port=config.health_port)
-    health_server.set_temporal_client(client)
-
     logger.info("Worker started: app=%s queue=%s", app_name, config.task_queue)
-    async with health_server, worker:
-        await shutdown_event.wait()
+    _log_process_memory_baseline()
+    # health_server stays up across worker restarts so the runtime keeps
+    # answering health checks while the supervisor rebuilds a crashed worker.
+    async with health_server:
+        await _run_worker_with_restart(
+            build_worker=_build_worker,
+            shutdown_event=shutdown_event,
+            auth_manager=auth_manager,
+            client=client,
+        )
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
@@ -1003,6 +1183,7 @@ def run_handler_mode(config: AppConfig) -> None:
         config.handler_host,
         config.handler_port,
     )
+    _log_process_memory_baseline()
 
     app_class = load_app_class(config.app_module)
     validate_app_class(app_class)
@@ -1186,10 +1367,25 @@ async def run_combined_mode(config: AppConfig) -> None:
 
     handler = handler_class()
 
-    worker = create_worker(client, task_queue=config.task_queue, handler=handler)
+    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health server only in combined mode
+        build_worker_health_server,
+    )
+
+    health_server = build_worker_health_server(port=config.health_port, client=client)
+
+    def _build_worker() -> Any:
+        # Rebuilt on each supervisor restart — Worker instances are single-use.
+        # on_activity feeds the /live liveness window (BLDX-1552).
+        return create_worker(
+            client,
+            task_queue=config.task_queue,
+            handler=handler,
+            on_activity=health_server.record_activity,
+        )
 
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
+        # conformance: ignore[L006] this worker registers a small, statically-configured set of apps (typically one); production logs are collected at INFO floor, so demoting this to DEBUG would delete it from observability entirely
         logger.info("Registered app %s version %s", registered_app, app_meta.version)
 
     for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
@@ -1250,23 +1446,24 @@ async def run_combined_mode(config: AppConfig) -> None:
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
 
-    from application_sdk.server.health import (  # noqa: PLC0415 — cold path: health/MCP server only when relevant mode
-        WorkerHealthServer,
-    )
-
-    health_server = WorkerHealthServer(port=config.health_port)
-    health_server.set_temporal_client(client)
-
     logger.info(
         "Combined mode started: app=%s queue=%s port=%d",
         app_name,
         config.task_queue,
         config.handler_port,
     )
-    async with health_server, worker:
+    _log_process_memory_baseline()
+    # uvicorn keeps serving while the worker is supervised and restarted
+    # independently; a shutdown signal (which also sets should_exit) stops both.
+    async with health_server:
         await asyncio.gather(
             uvicorn_server.serve(),
-            shutdown_event.wait(),
+            _run_worker_with_restart(
+                build_worker=_build_worker,
+                shutdown_event=shutdown_event,
+                auth_manager=auth_manager,
+                client=client,
+            ),
         )
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
@@ -1365,9 +1562,10 @@ async def run_dev_combined(
         import warnings  # noqa: PLC0415 — cold path: deprecation warning only
 
         warnings.warn(
-            "`temporal_host` is deprecated and ignored: `run_dev_combined` now "
-            "always boots an in-process workflow runtime. To target an external "
-            "Temporal cluster, use `run_combined_mode(config)` directly.",
+            "`temporal_host` is deprecated and ignored and will be removed in "
+            "v4.0: `run_dev_combined` now always boots an in-process workflow "
+            "runtime. To target an external Temporal cluster, use "
+            "`run_combined_mode(config)` directly.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -1393,6 +1591,7 @@ async def run_dev_combined(
     ):
         del _dapr  # env-side-effect is sufficient; the dataclass is just for tests
         if _rt.ui_url:
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print(f"\nTemporal UI running at {_rt.ui_url}")
         await _run_dev_combined_inner(
             app_class=app_class,
@@ -1426,8 +1625,6 @@ async def _run_dev_combined_inner(
     vars → AppConfig fields). ``temporal_host`` and ``temporal_namespace``
     always arrive populated from the embedded runtime.
     """
-    import json as _json  # noqa: PLC0415
-
     app_module = f"{app_class.__module__}:{app_class.__name__}"
 
     config = _build_dev_config(
@@ -1510,32 +1707,49 @@ async def _run_dev_combined_inner(
                     run_id,
                 )
 
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print(f"\n  Credentials provisioned: credential_guid={credential_guid}")
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print(f"  Workflow started: workflow_id={workflow_id} run_id={run_id}")
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print(f"\n  curl {base}/workflows/v1/result/{workflow_id}\n")
 
         # Schedule provisioning + start as a background task — runs after the server starts
         asyncio.create_task(_provision_and_start())
     else:
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print(
             f"\nDev server running at http://{config.handler_host}:{config.handler_port}"
         )
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print(
             "  POST /workflows/v1/dev/local-vault                            - Provision credentials"
         )
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print("  POST /workflows/v1/start                         - Start workflow")
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print("  POST /workflows/v1/stop/{workflow_id}/{run_id}   - Stop workflow")
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print("  GET  /workflows/v1/result/{workflow_id}          - Get result")
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print("  GET  /workflows/v1/status/{workflow_id}/{run_id} - Get status")
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print("  GET  /health                                      - Health check")
         if example_input is not None:
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print("\nExample:")
-            example_json = _json.dumps(example_input, indent=2)
+            example_json = orjson.dumps(
+                example_input, option=orjson.OPT_INDENT_2
+            ).decode()
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print(
                 f"  curl -X POST http://{config.handler_host}:{config.handler_port}/workflows/v1/start \\"
             )
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print('    -H "Content-Type: application/json" \\')
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print(f"    -d '{example_json}'")
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print(
             f"\n  curl http://{config.handler_host}:{config.handler_port}/workflows/v1/result/{{workflow_id}}\n"
         )
@@ -1592,6 +1806,11 @@ Environment Variables:
   ATLAN_HANDLER_PORT       Handler bind port (default: 8000)
                            Falls back to ATLAN_APP_HTTP_PORT (v2)
   ATLAN_HEALTH_PORT        Worker health check port (default: 8081)
+  ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS
+                           Optional /live idle window in seconds (default: 0 = disabled).
+                           When >0, /live fails if no worker activity within the window.
+                           Enable only for continuously-busy queues; a positive value
+                           false-positives on legitimately idle queues.
   ATLAN_LOG_LEVEL          Log level (default: INFO)
                            Falls back to LOG_LEVEL (v2)
 

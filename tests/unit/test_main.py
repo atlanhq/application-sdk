@@ -7,6 +7,7 @@ import asyncio
 import signal
 import sys
 from pathlib import Path
+from typing import Any
 from unittest import mock
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -20,9 +21,11 @@ from application_sdk.main import (
     _install_excepthook,
     _install_graceful_signal_handlers,
     _log_dapr_components,
+    _log_process_memory_baseline,
     _loop_exception_handler,
     _parse_all_component_yamls,
     _parse_workflow_max_timeout_hours,
+    _run_worker_with_restart,
     main,
     parse_args,
     run_combined_mode,
@@ -1437,6 +1440,41 @@ class TestRunWorkerMode:
         with pytest.raises(RuntimeError, match="temporal down"):
             await run_worker_mode(cfg)
 
+    async def test_activity_recorder_wired_into_worker(self, worker_patches) -> None:
+        """run_worker_mode wires the health server's record_activity into
+        create_worker (via the _build_worker factory) so the /live liveness
+        window reflects real worker progress (BLDX-1552)."""
+        health_cm = _make_async_cm()
+        worker_patches["health"].return_value = health_cm
+
+        captured: dict = {}
+
+        def _capture_create_worker(*args, **kwargs):
+            captured["on_activity"] = kwargs.get("on_activity")
+            return _make_async_cm()
+
+        cfg = AppConfig(mode="worker", app_module="pkg:FakeApp")
+        with (
+            patch(
+                "application_sdk.execution._temporal.worker.create_worker",
+                side_effect=_capture_create_worker,
+            ),
+            patch.object(asyncio.Event, "wait", new=AsyncMock(return_value=None)),
+        ):
+            await run_worker_mode(cfg)
+
+        from application_sdk.constants import WORKER_LIVENESS_MAX_IDLE_SECONDS
+
+        # Identity check only — that the exact recorder is wired through; the
+        # callback's runtime behavior is exercised by the interceptor tests.
+        assert captured["on_activity"] is health_cm.record_activity
+        # The liveness window must reach the constructor: a dropped kwarg would
+        # silently never activate /live yet leave the on_activity wiring intact.
+        assert (
+            worker_patches["health"].call_args.kwargs["max_idle_seconds"]
+            == WORKER_LIVENESS_MAX_IDLE_SECONDS
+        )
+
 
 # --------------------------------------------------------------------------- #
 # run_handler_mode                                                            #
@@ -1646,7 +1684,7 @@ class TestRunCombinedMode:
             patch(
                 "application_sdk.server.health.WorkerHealthServer",
                 return_value=_make_async_cm(),
-            ),
+            ) as mock_health,
             patch(
                 "application_sdk.main._flush_observability",
                 new_callable=AsyncMock,
@@ -1662,6 +1700,7 @@ class TestRunCombinedMode:
                 "create_svc": mock_create_svc,
                 "close_infra": mock_close_infra,
                 "uvicorn_server": uvicorn_server,
+                "health": mock_health,
             }
 
     async def test_combined_runs_to_completion(self, combined_patches) -> None:
@@ -1694,6 +1733,41 @@ class TestRunCombinedMode:
         ):
             await run_combined_mode(cfg)
         no_create.assert_not_awaited()
+
+    async def test_activity_recorder_wired_into_worker(self, combined_patches) -> None:
+        """run_combined_mode wires the health server's record_activity into
+        create_worker (via the _build_worker factory) so the /live liveness
+        window reflects real worker progress in combined mode (BLDX-1552).
+
+        Mirrors TestRunWorkerMode.test_activity_recorder_wired_into_worker so a
+        dropped kwarg can't silently disable the liveness window in combined mode."""
+        health_cm = _make_async_cm()
+        combined_patches["health"].return_value = health_cm
+
+        captured: dict = {}
+
+        def _capture_create_worker(*args, **kwargs):
+            captured["on_activity"] = kwargs.get("on_activity")
+            return _make_async_cm()
+
+        cfg = AppConfig(mode="combined", app_module="pkg:FakeApp")
+        with patch(
+            "application_sdk.execution._temporal.worker.create_worker",
+            side_effect=_capture_create_worker,
+        ):
+            await run_combined_mode(cfg)
+
+        from application_sdk.constants import WORKER_LIVENESS_MAX_IDLE_SECONDS
+
+        # Identity check only — that the exact recorder is wired through; the
+        # callback's runtime behavior is exercised by the interceptor tests.
+        assert captured["on_activity"] is health_cm.record_activity
+        # The liveness window must reach the constructor: a dropped kwarg would
+        # silently never activate /live yet leave the on_activity wiring intact.
+        assert (
+            combined_patches["health"].call_args.kwargs["max_idle_seconds"]
+            == WORKER_LIVENESS_MAX_IDLE_SECONDS
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -2184,3 +2258,273 @@ class TestRunCombinedAuth:
         auth_mgr.acquire_initial_token.assert_awaited_once()
         auth_mgr.start_background_refresh.assert_called_once()
         auth_mgr.shutdown.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# _log_process_memory_baseline
+# ---------------------------------------------------------------------------
+
+
+class TestLogProcessMemoryBaseline:
+    def test_emits_info_with_percentage(self, monkeypatch) -> None:
+        """INFO log is emitted with RSS/limit ratio when both are available."""
+        import application_sdk.main as main_mod
+        from application_sdk.observability.resource_sampler import ResourceSample
+
+        limit = 8 * 1024**3  # 8 GiB
+        rss = 2 * 1024**3  # 2 GiB → 25%
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", str(limit))
+
+        with (
+            patch(
+                "application_sdk.observability.resource_sampler.sample",
+                return_value=ResourceSample(cpu_time_s=0.5, rss_bytes=rss),
+            ),
+            patch.object(main_mod, "logger") as mock_logger,
+        ):
+            _log_process_memory_baseline()
+
+        info_calls = [
+            c
+            for c in mock_logger.info.call_args_list
+            if "memory at start" in str(c).lower()
+        ]
+        assert info_calls, "Expected INFO memory baseline log"
+        # args: (fmt, rss_gib, limit_gib, pct_float)
+        _fmt, _rss, _lim, pct = info_calls[0].args
+        assert abs(pct - 25.0) < 0.5
+
+    def test_silent_when_limit_unset(self, monkeypatch) -> None:
+        """No INFO log when K8S_POD_MEMORY_LIMIT is absent (local dev / non-K8s)."""
+        import application_sdk.main as main_mod
+
+        monkeypatch.delenv("K8S_POD_MEMORY_LIMIT", raising=False)
+
+        with patch.object(main_mod, "logger") as mock_logger:
+            _log_process_memory_baseline()
+
+        mock_logger.info.assert_not_called()
+
+    def test_silent_when_sample_returns_none(self, monkeypatch) -> None:
+        """No INFO log when resource sampling fails (e.g. on Windows)."""
+        import application_sdk.main as main_mod
+
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", str(4 * 1024**3))
+
+        with (
+            patch(
+                "application_sdk.observability.resource_sampler.sample",
+                return_value=None,
+            ),
+            patch.object(main_mod, "logger") as mock_logger,
+        ):
+            _log_process_memory_baseline()
+
+        mock_logger.info.assert_not_called()
+
+
+class _FakeWorker:
+    """Minimal async-context-manager stand-in for an AppWorker.
+
+    ``fail=True`` makes ``__aenter__`` raise the same shape of error temporalio
+    surfaces on a fatal poll. ``on_enter`` runs on enter (e.g. to set the
+    shutdown event so the supervisor's ``await shutdown_event.wait()`` returns).
+    """
+
+    def __init__(self, *, fail: bool, on_enter: Any = None) -> None:
+        self.fail = fail
+        self.on_enter = on_enter
+
+    async def __aenter__(self) -> _FakeWorker:
+        if self.on_enter is not None:
+            self.on_enter()
+        if self.fail:
+            raise RuntimeError("Activity worker failed")
+        return self
+
+    async def __aexit__(self, *args: Any) -> bool:
+        return False
+
+
+class _CancelThenFailWorker:
+    """Models temporalio's *real* fatal-poll seam.
+
+    Unlike ``_FakeWorker(fail=True)`` (which raises from ``__aenter__``),
+    temporalio surfaces a fatal poll by cancelling the ``async with`` body task
+    mid-``await`` and re-raising the fatal error from ``__aexit__`` only when
+    ``exc_type is CancelledError``. That leaves a residual cancellation on the
+    task, which the supervisor must clear with ``uncancel()`` before its backoff
+    ``wait_for`` — the exact line ``_FakeWorker`` never exercises.
+    """
+
+    def __init__(self, *, on_exit: Any = None) -> None:
+        self.on_exit = on_exit
+
+    async def __aenter__(self) -> _CancelThenFailWorker:
+        # Cancel the task running the `async with` body so the following
+        # `await shutdown_event.wait()` is torn down mid-await.
+        task = asyncio.current_task()
+        assert task is not None
+        task.cancel()
+        return self
+
+    async def __aexit__(self, exc_type: Any, *args: Any) -> bool:
+        if self.on_exit is not None:
+            self.on_exit()
+        if exc_type is asyncio.CancelledError:
+            # temporalio re-raises the fatal error from __aexit__ on the seam.
+            raise RuntimeError("Activity worker failed")
+        return False
+
+
+class TestRunWorkerWithRestart:
+    """Behavioral tests for the worker restart supervisor."""
+
+    async def test_clean_shutdown_runs_once_no_restart(self) -> None:
+        """A shutdown signal stops the loop without rebuilding the worker."""
+        shutdown = asyncio.Event()
+        built: list[_FakeWorker] = []
+
+        def build() -> _FakeWorker:
+            w = _FakeWorker(fail=False, on_enter=shutdown.set)
+            built.append(w)
+            return w
+
+        await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+
+        assert len(built) == 1
+
+    async def test_restarts_after_fatal_then_shuts_down(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fatal error rebuilds the worker; a fresh token is minted first."""
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        auth = AsyncMock()
+        calls = {"n": 0}
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _FakeWorker(fail=True)
+            return _FakeWorker(fail=False, on_enter=shutdown.set)
+
+        await _run_worker_with_restart(
+            build_worker=build,
+            shutdown_event=shutdown,
+            auth_manager=auth,
+            client=object(),
+        )
+
+        assert calls["n"] == 2
+        auth.force_refresh.assert_awaited_once()
+
+    async def test_restarts_on_cancellation_seam_without_propagating_cancel(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fatal error arriving via the temporalio cancellation seam self-heals.
+
+        The first worker cancels the body task and re-raises the fatal error
+        from ``__aexit__`` (exercising the supervisor's ``uncancel()`` guard);
+        the supervisor must clear the residual cancel, restart, and reach a
+        clean shutdown without ever letting ``CancelledError`` escape.
+        """
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+
+        def build() -> Any:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _CancelThenFailWorker()
+            return _FakeWorker(fail=False, on_enter=shutdown.set)
+
+        # Must complete normally: no CancelledError propagates out, and the
+        # supervisor rebuilt the worker after the seam failure.
+        await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+
+        assert calls["n"] == 2
+
+    async def test_gives_up_after_cap_and_reraises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A persistent failure fails loud once the restart cap is exceeded."""
+        monkeypatch.setattr("application_sdk.main._WORKER_MAX_CONSECUTIVE_RESTARTS", 2)
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            return _FakeWorker(fail=True)
+
+        with pytest.raises(RuntimeError, match="Activity worker failed"):
+            await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+
+        # attempts 1 and 2 restart; the 3rd pushes the streak past the cap.
+        assert calls["n"] == 3
+
+    async def test_shutdown_during_backoff_stops_promptly(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A shutdown set during the backoff wait ends the loop immediately."""
+        # Force a long backoff so the shutdown interrupts it deterministically.
+        monkeypatch.setattr("application_sdk.main.random.uniform", lambda *a: 10.0)
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            return _FakeWorker(fail=True)
+
+        task = asyncio.create_task(
+            _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+        )
+        await asyncio.sleep(0.05)
+        shutdown.set()
+        await asyncio.wait_for(task, timeout=2.0)
+
+        assert calls["n"] == 1
+
+    async def test_healthy_run_resets_failure_streak(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A worker that ran healthily before failing resets the streak.
+
+        With a cap of 2 but each run appearing to last past the healthy window,
+        the streak resets every time, so four failures never trip the cap and
+        the loop survives to a clean shutdown.
+        """
+        monkeypatch.setattr("application_sdk.main._WORKER_MAX_CONSECUTIVE_RESTARTS", 2)
+        monkeypatch.setattr("application_sdk.main._WORKER_HEALTHY_RUN_SECONDS", 1)
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        # Clock jumps 5s on every read → each run looks like it lasted 5s (>1s).
+        counter = {"t": 0.0}
+
+        def fake_monotonic() -> float:
+            counter["t"] += 5.0
+            return counter["t"]
+
+        monkeypatch.setattr("application_sdk.main.time.monotonic", fake_monotonic)
+
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            if calls["n"] <= 4:
+                return _FakeWorker(fail=True)
+            return _FakeWorker(fail=False, on_enter=shutdown.set)
+
+        # Must not raise despite 4 failures (cap is 2) because each resets.
+        await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+
+        assert calls["n"] == 5

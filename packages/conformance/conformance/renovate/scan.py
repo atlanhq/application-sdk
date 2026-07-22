@@ -108,6 +108,7 @@ def _parse_pr(raw: dict) -> Optional[RenovatePR]:
             updated_at=updated,
             is_draft=raw.get("isDraft", False),
             body=raw.get("body") or "",
+            auto_merge_enabled=bool(raw.get("autoMergeEnabled") or False),
         )
     except (KeyError, ValueError) as exc:
         print(f"Warning: skipping malformed PR record: {exc}", file=sys.stderr)
@@ -202,6 +203,7 @@ def _pr_to_dict(pr: RenovatePR) -> dict:
         "category": pr.category.value,
         "updateType": pr.update_type.value,
         "autoMergeExpected": pr.auto_merge_expected,
+        "autoMergeEnabled": pr.auto_merge_enabled,
         "blockingReason": pr.blocking_reason.value,
         "mergeable": pr.mergeable,
         "checksState": pr.checks_state.value,

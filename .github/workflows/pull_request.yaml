@@ -37,11 +37,11 @@ jobs:
       #          pure docs/, .github-meta, and .security-only PRs.
       scan: ${{ steps.filter.outputs.scan }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # No explicit `base`: for pull_request, paths-filter diffs against the PR
       # base automatically; for merge_group it diffs the queued merge ref against
       # the default branch (the same proven setup the conformance jobs use).
-      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
         id: filter
         with:
           # list-files: json is required so the sdk-refine step below can inspect
@@ -103,14 +103,24 @@ jobs:
     name: Conventional Commits
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
         with:
           fetch-depth: 0
+      - name: Mint fleet App token
+        id: app-token
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
       - uses: webiny/action-conventional-commits@7f91b1595ca1951cdb671ddc9f07a49081ec5b69 # v1.4.2
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
         with:
-          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
       - name: Skip on fork PR / merge_group
         if: github.event_name == 'merge_group' || github.event.pull_request.head.repo.fork == true
         run: echo "Commit-convention check not applicable here (fork PR or merge_group); PR title is enforced by Validate PR title."
@@ -121,7 +131,7 @@ jobs:
     if: needs.changes.outputs.sdk == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: "./.github/actions/docstring-coverage"
         with:
           module-name: application_sdk
@@ -140,7 +150,7 @@ jobs:
       - name: Short-circuit when nothing to scan
         if: needs.changes.outputs.scan != 'true'
         run: echo "No first-party source or dependency changes — Trivy code scan not needed."
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: needs.changes.outputs.scan == 'true'
       - uses: "./.github/actions/trivy"
         if: needs.changes.outputs.scan == 'true'
@@ -153,12 +163,21 @@ jobs:
     if: needs.changes.outputs.container == 'true' && github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
       - uses: "./.github/actions/trivy-container"
         with:
           chainguard-username: ${{ secrets.CHAINGUARD_USERNAME }}
           chainguard-password: ${{ secrets.CHAINGUARD_PASSWORD }}
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           fail-on-vulns: 'true'
 
   # NOTE: SDK unit / integration / storage-emulator tests moved to
@@ -174,25 +193,9 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Get PR Labels
-        id: get-labels
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number
-            });
-            const labelNames = labels.map(label => label.name).join(',');
-            console.log(`PR Labels: ${labelNames}`);
-            core.setOutput('labels', labelNames);
-
-      - name: Build matrix from PR labels
+      - name: Build matrix
         id: set-matrix
         run: |
           # For pull_request, github.base_ref is the branch name (e.g. 'main').
@@ -203,51 +206,8 @@ jobs:
             TARGET_BRANCH="${{ github.event.merge_group.base_ref }}"
             TARGET_BRANCH="${TARGET_BRANCH#refs/heads/}"
           fi
-          # Default matrix if no label provided
-          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-mysql-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-metabase-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
-
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            # Parse labels from GitHub Script output
-            LABELS="${{ steps.get-labels.outputs.labels }}"
-
-            FOUND_LABEL=false
-            INCLUDES=""
-
-            echo "Found labels: ${LABELS}"
-
-            IFS=',' read -ra LABEL_ARRAY <<< "$LABELS"
-            for LABEL in "${LABEL_ARRAY[@]}"; do
-              if [[ $LABEL =~ ^([^:]+):([^:]+)$ ]]; then
-                REPO="${BASH_REMATCH[1]}"
-                BRANCH="${BASH_REMATCH[2]}"
-
-                # Add comma if not the first entry
-                if [[ "$FOUND_LABEL" == "true" ]]; then
-                  INCLUDES="${INCLUDES},"
-                fi
-
-                # Add this pair as a direct include entry
-                INCLUDES="${INCLUDES}{\"repo_name\":\"${REPO}\",\"target_branch\":\"${BRANCH}\"}"
-                FOUND_LABEL=true
-                echo "Added pair: $REPO:$BRANCH"
-              fi
-            done
-
-            # Generate matrix JSON with includes
-            if [[ "$FOUND_LABEL" == "true" ]]; then
-              MATRIX="{\"include\":[${INCLUDES}]}"
-              echo "Generated matrix from labels: $MATRIX"
-            else
-              MATRIX="$DEFAULT_MATRIX"
-              echo "No repo:branch labels found, using default matrix"
-            fi
-          else
-            MATRIX="$DEFAULT_MATRIX"
-            echo "Not a PR event, using default matrix"
-          fi
-
+          MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-mysql-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-metabase-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-          echo "Matrix output: $MATRIX"
 
   # Build a PR-scoped SDK runtime base image so the connector e2e tests can
   # build the connector FROM the *rebuilt* base — exercising Dockerfile /
@@ -281,9 +241,9 @@ jobs:
     outputs:
       image: ${{ steps.ref.outputs.image }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
       - name: Compute PR base image ref
         id: ref
         env:
@@ -292,17 +252,26 @@ jobs:
         run: |
           echo "image=registry.atlan.com/public/app-runtime-base:pr-${PR_NUMBER}-sha-${HEAD_SHA::7}" >> "$GITHUB_OUTPUT"
       - name: Log in to Atlan Harbor Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: registry.atlan.com
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_PASSWORD }}
       - name: Log in to Chainguard Container Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: cgr.dev
           username: ${{ secrets.CHAINGUARD_USERNAME }}
           password: ${{ secrets.CHAINGUARD_PASSWORD }}
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
       - name: Build, scan, and push PR base image
         uses: ./.github/actions/secure-build-push-apps
         with:
@@ -314,10 +283,7 @@ jobs:
           # build (sdr-e2e) is single-platform too. Keeps the rebuild fast.
           platforms: linux/amd64
           tags: ${{ steps.ref.outputs.image }}
-          build-args: |
-            ACCESS_TOKEN_USR=$GITHUB_ACTOR
-            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600
           COMPOSE_HTTP_TIMEOUT: 600
@@ -335,7 +301,7 @@ jobs:
   #     On this path base_image_ref is the freshly-built PR base image, so
   #     the connector is rebuilt on top of the SDK PR's runtime image.
   connector-tests:
-    name: Connector Tests (${{ matrix.repo_name }})
+    name: Connector E2E dispatch (${{ matrix.repo_name }})
     needs: [changes, matrix-builder, build-sdk-base-image]
     # always() so a *skipped* build-sdk-base-image (merge_group path) does
     # not auto-skip this job. The explicit result clause still BLOCKS this
@@ -358,18 +324,60 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
+    # The check run is created + updated with the atlan-app-fleet App token
+    # (scoped to application-sdk below), NOT github.token. A check run can only
+    # be updated by the App that created it, and the connector's own callback
+    # (tests-reusable.yaml report-to-sdk) completes it with that same fleet App
+    # — so it MUST be the creator too, or the callback's PATCH is rejected and
+    # the check hangs until the watchdog. Creating it under the fleet App also
+    # attributes it to the fleet App's check suite instead of an arbitrary
+    # github-actions suite. In callback mode every check write goes through the
+    # fleet token, so github.token needs only contents:read (the checkout) — the
+    # sole github.token check/PR-writing step (Post dispatched-run status) is
+    # wait-mode != 'callback' and never runs here. A job-level permissions block
+    # replaces rather than merges with the workflow defaults, so contents:read
+    # is spelled out explicitly.
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Dispatch token: fleet App scoped to the CONNECTOR repo (return-dispatch
+      # triggers that repo's workflow).
+      - name: Mint fleet App token (connector dispatch)
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ matrix.repo_name }}
+      # Checks token: same fleet App, scoped to THIS repo (application-sdk), so
+      # the check run it creates is owned by the fleet App and the connector's
+      # callback (same App) can complete it. Kept separate from the dispatch
+      # token for least privilege — dispatch can't write SDK checks and vice
+      # versa.
+      - name: Mint fleet App token (SDK checks)
+        id: checks-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
       - uses: "./.github/actions/e2e-apps"
         with:
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token }}
+          checks-app-token: ${{ steps.checks-app-token.outputs.token }}
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
           workflow: tests.yaml
           workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}","run_e2e":"true","base_image_ref":"{1}"}}', github.event.pull_request.head.sha, needs.build-sdk-base-image.outputs.image) }}
+          wait-mode: callback
+          check-run-name: "Connector E2E run / ${{ matrix.repo_name }}"
+          check-sha: ${{ github.event_name == 'merge_group' && github.sha || github.event.pull_request.head.sha }}
 
   # SDR-on-Kubernetes e2e — dispatched cross-repo to atlan-local-marketplace-app,
   # which owns the orchestrator + charts and runs the hermetic kind e2e. LM
@@ -401,19 +409,40 @@ jobs:
       )
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: atlan-local-marketplace-app
       - uses: "./.github/actions/e2e-apps"
         with:
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token }}
           repo-name: atlan-local-marketplace-app
           target-branch: "refs/heads/main"
           workflow: sdr-k8s-e2e.yaml
           workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}"}}', github.event.pull_request.head.sha) }}
+          # sdr-k8s-e2e.yaml (atlan-local-marketplace-app) doesn't yet report
+          # back via the Checks API callback — stays on the legacy busy-poll
+          # until that's added there too. Explicit so it doesn't silently
+          # inherit a future default change.
+          wait-mode: poll
+
+  # (No dedicated two-store-e2e job: mysql's own tests.yaml hardcodes
+  # `two-store: true` unconditionally, so its EXISTING full-DAG run —
+  # already dispatched by connector-tests below via the 'e2e' label —
+  # regression-guards the ADR-0014 two-store posture with no extra SDK-
+  # side dispatch glue. A standalone per-connector job here would repeat
+  # the exact mistake sdr-matrix-builder / sdr-e2e-apps / e2e-full-mysql
+  # were removed for — see the comment near the bottom of this file.)
 
   # ── The single required check for the connector e2e area ────────────────────
   # Always runs and always concludes, so branch protection / the merge queue can
   # require exactly this one stable context instead of the matrix legs
-  # (whose names are label-driven: "Connector Tests (<repo>)"). Without this,
+  # (whose names are label-driven: "Connector E2E dispatch (<repo>)"). Without this,
   # the matrix legs are not required, so the merge queue (ALLGREEN) merges as
   # soon as the OTHER required contexts (SDK Gate, Trivy, …) conclude — even
   # while the connector legs are still running. This gate closes that window.
@@ -430,43 +459,124 @@ jobs:
     needs: [changes, matrix-builder, build-sdk-base-image, connector-tests]
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
     steps:
-      - name: Evaluate connector e2e area
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # connector-tests now only dispatches (e2e-apps wait-mode: callback) —
+      # its own success means "dispatch succeeded", not "tests passed". The
+      # actual pass/fail lands later via the Connector E2E run / <repo> check
+      # runs that each connector completes directly (tests-reusable.yaml's
+      # report-to-sdk job); this step still validates the upstream chain
+      # that had to succeed for those checks to exist at all.
+      - name: Verify upstream jobs + dispatch succeeded
+        id: upstream
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           MATRIX_RESULT: ${{ needs.matrix-builder.result }}
           BASE_IMAGE_RESULT: ${{ needs.build-sdk-base-image.result }}
           CONNECTOR_RESULT: ${{ needs.connector-tests.result }}
         run: |
+          python3 .github/scripts/verify_connector_gate_upstream.py \
+            --changes-result "$CHANGES_RESULT" \
+            --matrix-result "$MATRIX_RESULT" \
+            --base-image-result "$BASE_IMAGE_RESULT" \
+            --connector-result "$CONNECTOR_RESULT"
+
+      # Rolls up every 'Connector E2E run / <repo>' check run in ONE endpoint
+      # call per poll (not one busy-poll per matrix leg), using conditional
+      # requests so an unchanged poll doesn't count against the rate limit.
+      # Each check flips the instant its connector's own run reports back
+      # (tests-reusable.yaml's report-to-sdk job) — this only has to notice
+      # that within one poll interval, not sit through a whole poll cycle
+      # itself.
+      - name: Wait for connector check runs to complete
+        if: steps.upstream.outputs.dispatched == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MATRIX_JSON: ${{ needs.matrix-builder.outputs.matrix }}
+          SHA: ${{ github.event_name == 'merge_group' && github.sha || github.event.pull_request.head.sha }}
+        run: |
           set -euo pipefail
-          # Detection / matrix build have no path-skip — anything other than
-          # success means we cannot trust whether the connector legs ran. A
-          # connector-tests skip downstream of these would then be an
-          # upstream-failure skip, not the docs-only skip. Fail closed.
-          if [[ "$CHANGES_RESULT" != "success" ]]; then
-            echo "::error::Detect Changes did not succeed ($CHANGES_RESULT) — failing the gate closed."
-            exit 1
-          fi
-          if [[ "$MATRIX_RESULT" != "success" ]]; then
-            echo "::error::Build Test Matrix did not succeed ($MATRIX_RESULT) — failing the gate closed."
-            exit 1
-          fi
-          # build-sdk-base-image is legitimately skipped on merge_group and on
-          # non-e2e PRs; only a genuine build FAILURE must block (a base that
-          # won't build is the signal, per the connector-tests if: comment).
-          if [[ "$BASE_IMAGE_RESULT" != "success" && "$BASE_IMAGE_RESULT" != "skipped" ]]; then
-            echo "::error::Build SDK base image did not succeed ($BASE_IMAGE_RESULT) — failing the gate closed."
-            exit 1
-          fi
-          # With upstream proven healthy, a skipped connector-tests is the
-          # genuine docs-only skip (sdk==false && container==false) → pass.
-          if [[ "$CONNECTOR_RESULT" == "success" || "$CONNECTOR_RESULT" == "skipped" ]]; then
-            echo "✓ Connector Tests: $CONNECTOR_RESULT"
-            echo "Connector gate passed."
-          else
-            echo "::error::Connector Tests did not pass ($CONNECTOR_RESULT) — failing the gate."
-            exit 1
-          fi
+          NAMES_JSON=$(jq -c '[.include[] | "Connector E2E run / " + .repo_name]' <<< "$MATRIX_JSON")
+          python3 .github/scripts/poll_check_runs_gate.py \
+            --repo "${{ github.repository }}" \
+            --sha "$SHA" \
+            --names-json "$NAMES_JSON"
+
+  # Real-cloud storage integration tests (S3 / Azure / GCS) — exercise
+  # create_store_from_binding + CloudStore against real buckets/vaults using the
+  # *_integration markers (excluded from default addopts; conftest skips when a
+  # cloud's creds are absent). Label-gated ('storage-integration') so it only
+  # runs on demand; the heavy/credentialed path stays off the per-PR hot path.
+  # Fork PRs are excluded (no secrets). Nightly counterpart lives in schedule.yaml.
+  storage-integration:
+    name: Storage Integration Tests (S3 / Azure / GCS)
+    if: |
+      (
+        (github.event.action == 'labeled' && github.event.label.name == 'storage-integration') ||
+        contains(github.event.pull_request.labels.*.name, 'storage-integration')
+      ) && github.event.pull_request.head.repo.fork != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Keyless: all three clouds authenticate via GitHub OIDC (no static secrets).
+    # Resource identifiers are non-secret repo variables (vars.*_INTEG_*).
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: "./.github/actions/setup-deps"
+      - name: AWS — assume the integration role (OIDC)
+        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6
+        with:
+          role-to-assume: ${{ vars.AWS_INTEG_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_INTEG_REGION }}
+      - name: Azure — login (OIDC federated, no secret)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.AZURE_INTEG_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_INTEG_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_INTEG_SUBSCRIPTION_ID }}
+      - name: GCS — Workload Identity Federation (sets ADC)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_INTEG_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_INTEG_SA }}
+      - name: Azure — write the federated token file for obstore WI auth
+        run: |
+          set -euo pipefail
+          # Mint into a throwaway file and only publish it on success, so a failed
+          # mint/parse can't leave a zero-byte token that yields an opaque AAD
+          # error downstream instead of a clear "OIDC mint failed". --fail-with-body
+          # makes curl exit non-zero on a non-2xx (still printing the body to debug).
+          tmp="$(mktemp)"
+          curl --fail-with-body -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+            | python3 -c 'import sys,json;sys.stdout.write(json.load(sys.stdin)["value"])' \
+            > "$tmp"
+          mv "$tmp" "${RUNNER_TEMP}/azure-federated-token"
+      - name: Run storage integration tests (keyless)
+        env:
+          # AWS: ambient creds (AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN) set by the OIDC step.
+          S3_BUCKET: ${{ vars.S3_INTEG_BUCKET }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_INTEG_REGION }}
+          # Azure: federated workload identity (shared-key is disabled on the account).
+          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_INTEG_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_CONTAINER: ${{ vars.AZURE_INTEG_CONTAINER }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_INTEG_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_INTEG_TENANT_ID }}
+          AZURE_FEDERATED_TOKEN_FILE: ${{ runner.temp }}/azure-federated-token
+          # GCS: ADC (GOOGLE_APPLICATION_CREDENTIALS) set by the WIF step.
+          GCS_BUCKET: ${{ vars.GCS_INTEG_BUCKET }}
+          GCS_PROJECT_ID: ${{ vars.GCS_INTEG_PROJECT_ID }}
+        run: |
+          uv run pytest tests/integration/storage/ \
+            -m "s3_integration or azure_integration or gcs_integration" \
+            -v --timeout=60
 
   # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
   # superseded by connector-tests + the 'e2e' label on tests.yaml)

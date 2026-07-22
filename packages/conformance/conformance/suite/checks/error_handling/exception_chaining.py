@@ -1,4 +1,4 @@
-"""E015, E016 — exception-chaining and message-hygiene rules."""
+"""E015, E016, E019 — exception-chaining and message-hygiene rules."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from ._helpers import _get_name, _message_kw_has_exc_text
 
 
 class ExceptionChainingMixin:
-    """Rule methods for E015 and E016 (exception-chaining category)."""
+    """Rule methods for E015, E016 and E019 (exception-chaining category)."""
 
     # ── E015 ─────────────────────────────────────────────────────────────────
 
@@ -27,6 +27,35 @@ class ExceptionChainingMixin:
                     f"message= on {exc_type} contains interpolated exception text "
                     f"(f-string/str(exc)/repr(exc)) — leaks unsanitised text and breaks "
                     f"dashboard grouping. Put context in a typed evidence field instead.",
+                )
+                return
+
+    # ── E019 ─────────────────────────────────────────────────────────────────
+
+    def _check_e019(self, node: ast.Call) -> None:
+        # Non-raise counterpart of E015: exception text interpolated into the
+        # message= of a contract DTO constructed inside an except block — whether
+        # the DTO is returned directly (`return AuthOutput(message=str(e))`) or
+        # appended/assigned for a later return
+        # (`checks.append(PreflightCheck(message=f"...{e}"))`). E015 owns the raise
+        # case; _in_raise_call lets that path skip here so the two never overlap.
+        if self._in_raise_call:
+            return
+        if not self._except_stack:
+            return
+        exc_binding = self._except_stack[-1].name
+        if exc_binding is None:
+            return
+        for kw in node.keywords:
+            if kw.arg == "message" and _message_kw_has_exc_text(kw.value, exc_binding):
+                ctor = _get_name(node.func) or "the contract"
+                self._add(
+                    "E019",
+                    node,
+                    f"message= on {ctor} contains interpolated exception text "
+                    f"(f-string/str(exc)/repr(exc)) — leaks unsanitised text across the "
+                    f"typed boundary and breaks dashboard grouping. Keep message= a stable "
+                    f"summary and carry the detail in a typed field (e.g. cause=exc).",
                 )
                 return
 

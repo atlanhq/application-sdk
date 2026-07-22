@@ -145,6 +145,16 @@ class ValidationRule {
 
   /// Treat strings containing only whitespace as a validation failure.
   whitespace: Boolean?
+
+  /// The intended form-UI trigger for the rule (e.g. `"blur"`, `"change"`),
+  /// carried verbatim into the widget's `ui.rules` for parity with the legacy
+  /// `Dynamic` shape. The setup-form UI does not currently honor a per-rule
+  /// `trigger` — validation timing is set by the widget, not the rule — so this
+  /// is a passthrough / migration-parity field and does not change when
+  /// validation fires today. Left as `String?` rather than a closed enum so
+  /// connectors aren't broken by a trigger value not yet enumerated here;
+  /// tighten to a union once the accepted set is confirmed.
+  trigger: String?
 }
 
 /// Opt-in JSON or regex validation for input widgets, emitted as the widget's
@@ -228,6 +238,27 @@ abstract class UIElement {
 
   /// Default fallback value to use for the element if nothing is selected or entered in the UI.
   hidden fallback: Any? = null
+
+  /// Field lifecycle state.
+  ///
+  /// * `active` (default) — field is in active use.
+  /// * `deprecated` — still accepted but discouraged; consumers should migrate away.
+  ///   The generated Python field carries `Field(deprecated=True)`, which emits a
+  ///   runtime `DeprecationWarning` when the field is set.
+  /// * `sunset` — retained for backwards-compatibility but no longer consumed by
+  ///   the app; a stronger form of deprecated.  The generated Python field carries
+  ///   `Field(deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})`.
+  ///
+  /// A field's lifecycle may only advance (active → deprecated → sunset).  The field
+  /// is NEVER removed and its type NEVER changes — removal or type change is a
+  /// breaking contract change caught by the B005 conformance rule.
+  hidden lifecycle: "active"|"deprecated"|"sunset" = "active"
+
+  /// Optional deprecation message passed to Pydantic's `Field(deprecated="<msg>")`.
+  /// When set, the generated field uses `Field(deprecated="<message>")` instead of
+  /// `Field(deprecated=True)`, providing a richer runtime warning.
+  /// Ignored when `lifecycle` is `"active"`.
+  hidden lifecycleMessage: String?
 
   /// (Generated) UI configuration for the element.
   fixed ui: Widget|Mapping<String, Any> = new Widget {
@@ -406,6 +437,13 @@ class Widget {
   /// Whether to show connection options.
   connectionOptions: Boolean?
 
+  /// Connector type for the connection widget (ConnectionCreator). The frontend
+  /// reads this to build a newly-created connection's qualifiedName as
+  /// `default/{connector}/{epoch}`. Distinct from `connectorName` (the
+  /// connectionSelector's filter). Injected by the toolkit from the app-level
+  /// `connector`.
+  connector: String?
+
   /// Connection category filter for connectionSelector widget.
   connectionCategories: String?
 
@@ -562,10 +600,23 @@ class ConnectionCreator extends UIElement {
 
   hidden showConnectionOptions: Boolean?
 
+  /// (Injected by the toolkit from the app-level `connector`.) The Atlan
+  /// connector type stamped on connections created via this widget, emitted as
+  /// `ui.connector` — the key the frontend's connection widget reads to build a
+  /// new connection's qualifiedName (`default/{connector}/{epoch}`). Without it
+  /// the frontend has no connector type on the CREATE path and falls back to the
+  /// workflow's `orchestration.atlan.com/source` label (the app id), which is
+  /// wrong whenever the app name differs from the connector type (e.g. app
+  /// "openapi", connector "api" → connections wrongly created as
+  /// `default/openapi/{epoch}`). Left null when the app declares no `connector`,
+  /// in which case the key is omitted and behaviour is unchanged.
+  hidden connectorType: String?
+
   fixed ui {
     widget = "connection"
     placeholder = placeholderText
     connectionOptions = showConnectionOptions
+    connector = connectorType
   }
 }
 
@@ -1164,8 +1215,17 @@ class CloudProvider extends UIElement {
 }
 
 /// Widget that renders a secure agent configuration panel.
+///
+/// `includeInManifest` is constrained to `true` — setting it to `false`
+/// raises a constraint violation at eval time. The `agent_json` manifest
+/// slot is structurally required for SDR credential routing: Heracles
+/// substitutes the create-time agent spec into it at run start, and a
+/// missing slot silently drops the credential, causing a
+/// `CredentialRoutingError`. Allowing an app to opt out via
+/// `includeInManifest = false` would reintroduce that failure class.
 class AgentSelector extends UIElement {
   fixed type = "object"
+  hidden includeInManifest: Boolean(this) = true
   required: Boolean? = false
 
   hidden agentConfigEntries: Listing<Any>?

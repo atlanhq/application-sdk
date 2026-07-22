@@ -770,11 +770,13 @@ def validate_payload_safety(cls: type, *, skip_fields: set[str] | None = None) -
         return
 
     for field_name, field_type in hints.items():
-        # Skip internal fields, explicitly skipped fields, and Pydantic internals
+        # Skip internal fields, explicitly skipped fields, Pydantic internals, and
+        # ClassVars (class-level constants, never part of the serialized payload).
         if (
             field_name in skip
             or field_name.startswith("_")
             or field_name.startswith("model_")
+            or get_origin(field_type) is ClassVar
         ):
             continue
 
@@ -855,13 +857,15 @@ class PublishInputMixin(BaseModel):
                     workflow as _wf,
                 )
 
+                from application_sdk.app.registry import (  # noqa: PLC0415 — deferred to avoid circular import (registry imports from this module)
+                    AppRegistry,
+                )
                 from application_sdk.constants import (  # noqa: PLC0415 — co-located with temporalio import in same try block
-                    APPLICATION_NAME,
                     WORKFLOW_OUTPUT_PATH_TEMPLATE,
                 )
 
                 self.output_path = WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
-                    application_name=APPLICATION_NAME,
+                    application_name=AppRegistry.resolve_running_app_name(),
                     workflow_id=_wf.info().workflow_id,
                     run_id=_wf.info().run_id,
                 )

@@ -5,9 +5,10 @@ joins on qualifiedName, and classifies each asset as ADDED, REMOVED,
 MODIFIED, or UNCHANGED.
 """
 
-import json
 from pathlib import Path
 from typing import Any
+
+import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.parity.models import AssetDiff, CategoryResult, FieldDiff
@@ -36,8 +37,8 @@ def load_ndjson(directory: Path) -> list[dict[str, Any]]:
                 if not line:
                     continue
                 try:
-                    assets.append(json.loads(line))
-                except json.JSONDecodeError:
+                    assets.append(orjson.loads(line))
+                except orjson.JSONDecodeError:
                     logger.warning(
                         "Skipping malformed JSON at %s:%d",
                         json_file.name,

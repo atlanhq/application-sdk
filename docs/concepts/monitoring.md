@@ -67,7 +67,7 @@ mode creates a Temporal Runtime that binds `127.0.0.1:9464`:
 | Value | Effect |
 |---|---|
 | `true` (default) | Rust core binds 9464 in worker/combined mode; combined FastAPI proxy + worker `TemporalCoreCollector` can read it |
-| `false` | Rust core uses `Runtime.default()` (no Prometheus listener); FastAPI `/metrics` still serves SDK + HTTP + python defaults but lacks the `temporal_*` Rust-core families |
+| `false` | Rust core builds an explicit `Runtime` with log forwarding but no Prometheus listener; FastAPI `/metrics` still serves SDK + HTTP + python defaults but lacks the `temporal_*` Rust-core families |
 
 `run_dev_combined()` proactively sets it to `false` in local dev so a
 hot-reload-restarted process doesn't fail to bind 9464 (which the
@@ -200,6 +200,38 @@ class MyConnector(App):
 
 Use **%-style** message bodies (`"fetching page=%d", page_num`) rather than keyword arguments. See [Logging Standards](../standards/logging.md) and [ADR-0011](../adr/0011-logging-level-guidelines.md).
 
+### Structured attributes and the OTLP allowlist
+
+Structured kwargs on a log call (e.g. `logger.info("event", outcome="clean", assets_total=42)`) are
+not forwarded to OTLP wholesale. Only keys on an SDK-side **allowlist**
+(`_KNOWN_EXTRA_KEYS` in `application_sdk/observability/logger_adaptor.py`) become `LogAttributes` on
+the exported record; unlisted keys are dropped. This keeps the exported attribute set intentional —
+adding a new queryable field is a deliberate one-line change next to the emitter. Certain dotted
+prefixes (`atlan.`, `temporal.`, `failure.`, `exception.`, `otel.`, `tenant.`, `workflow_run.`) pass
+through without being individually listed.
+
+### Asset-validation outcome event
+
+`App.upload()`'s warn-only asset validation (see [Apps → Asset-Validation Outcome](apps.md#asset-validation-outcome))
+emits a structured event named `"Transformed-asset validation outcome"` on **every validated
+upload**, from inside the `upload` activity — so the Temporal context (`workflow_run_id`, `app_name`)
+is auto-stamped and each row joins to the workflow outcome by run id in ClickHouse. The following
+attributes are allowlisted and reach OTLP:
+
+| Attribute | Meaning |
+|-----------|---------|
+| `outcome` | `"clean"` or `"flagged"` |
+| `assets_total` | records seen in the batch |
+| `assets_passed` | records that passed per-asset `.validate()` |
+| `assets_invalid` | per-asset validation failures |
+| `assets_orphaned` | referential-integrity (orphan) failures |
+| `assets_undeserializable` | records that could not be decoded |
+| `asset_validation_matrix` | compact JSON array of per-failure detail (bounded rows per axis), `JSONExtract`-able |
+
+Emitting `outcome="clean"` too gives a denominator, so a dashboard can rank connectors by
+flag-rate rather than only seeing failures. Uploads with nothing to validate (validation disabled, or
+a non-`transformed/` path) emit no event.
+
 ### Replay suppression
 
 `self.logger` suppresses log output during Temporal workflow replay by default, matching the behaviour of Temporal's native `workflow.logger`. This prevents duplicate bare lines (missing `workflow_id`/`run_id`) that would otherwise appear in Grafana when a worker replays history after a sticky-cache eviction.
@@ -208,6 +240,57 @@ If you need replay logs — for example when using `temporalio.worker.Replayer` 
 
 - **Per-instance** (in-code): `self.logger.log_during_replay = True`
 - **Globally** (env flag): `ENABLE_WORKFLOW_REPLAY_LOGS=true`
+
+---
+
+## Memory pressure and OOM diagnostics
+
+OOM kills produce no application-level log — the kernel sends SIGKILL and the
+process vanishes silently. The SDK surfaces four log signals so operators have
+a clear evidence trail and a short time-to-diagnosis.
+
+### Log surfaces (grep patterns)
+
+| # | When | Level | Where | Grep |
+|---|------|-------|-------|------|
+| 1 | Worker/combined/handler startup | `INFO` | pod log (first lines) | `"Process memory at start"` |
+| 2 | Every 20 s during an active task, once RSS ≥ 80 % of limit | `WARNING` | pod log | `"Memory pressure on task"` |
+| 3 | Immediately after pod restart, if `exitCode == 137` | `CRITICAL` | pod log (first lines of new pod) | `"exit code 137 = SIGKILL"` |
+| 4 | When Temporal re-dispatches an activity after worker loss | `WARNING` | workflow log | `"re-dispatched after worker eviction"` |
+
+Signal 1 establishes a baseline (RSS at startup, limit, %) so you can see
+where memory stood when the pod was last healthy. Signal 2 fires on the rising
+edge and re-arms after the ratio drops below 75 %, giving pre-kill leading
+indicators in the killed pod's log. Signal 3 fires in the **replacement** pod's
+entrypoint immediately on restart — before any Temporal heartbeat timeout — so
+the first thing you see in `kubectl logs` is the exit code, along with the
+diagnostic commands to run. Signal 4 names OOM kill (pod exit 137) explicitly
+alongside KEDA scale-down, spot preemption, and rolling deploys.
+
+### Required Kubernetes configuration
+
+Signal 2 and signal 1's percentage require `K8S_POD_MEMORY_LIMIT` to be
+injected via the Downward API:
+
+```yaml
+env:
+  - name: K8S_POD_MEMORY_LIMIT
+    valueFrom:
+      resourceFieldRef:
+        resource: limits.memory
+        divisor: "1"          # raw bytes; parse_pod_memory_limit() also accepts Ki/Mi/Gi suffixes
+```
+
+When this env var is absent the memory-pressure warning is silently disabled
+(no false positives in local dev / non-Kubernetes environments).
+
+### Diagnostic runbook (OOM kill)
+
+1. **Check exit code in the new pod** (`kubectl logs <pod>` — look for the exit-137 CRITICAL line at the top, or the process memory at start line showing a high baseline).
+2. **Confirm OOM kill** — `kubectl describe pod <pod>` → `lastState.terminated.reason: OOMKilled`.
+3. **Check cluster events** — `kubectl get events -n <namespace> --field-selector=reason=OOMKilling`.
+4. **Review memory trajectory** — search the killed pod's log for `Memory pressure on task` lines to see how fast RSS climbed before the kill.
+5. **Check eviction retries** — search the workflow log for `re-dispatched after worker eviction` to understand how many attempts Temporal made.
 
 ---
 
@@ -234,7 +317,7 @@ cid = ctx.correlation_id if ctx else None  # str (empty when unset) or None when
 
 ## Observability Store Sink
 
-By default, logs, metrics, and traces are also written to parquet files in the object store under `artifacts/apps/{app_name}/{deployment_name}/observability/`. This enables historical querying even when the live pipelines (OTLP for logs/traces, Prometheus scrape / Pushgateway push for metrics) are unavailable.
+By default, logs, metrics, and traces are also written to gzip-compressed NDJSON files (`.json.gz`) in the object store under `artifacts/apps/{app_name}/{deployment_name}/observability/`. This enables historical querying even when the live pipelines (OTLP for logs/traces, Prometheus scrape / Pushgateway push for metrics) are unavailable.
 
 Control with:
 
@@ -251,3 +334,24 @@ ATLAN_LOG_FLUSH_INTERVAL_SECONDS=10
 ```
 
 See [Configuration](../configuration.md#logging) for all observability variables.
+
+---
+
+## Forwarding daprd Sidecar Logs
+
+The `daprd` sidecar's own logs go straight to the container's stdout/stderr and don't enter the SDK observability pipeline on their own.
+
+- **On atlan-infra** (`ENABLE_ATLAN_UPLOAD=false`) this is fine: a node-level filelog collector scrapes every container's stdout — daprd included — and ships it to the central log backend.
+- **In SDR mode** (`ENABLE_ATLAN_UPLOAD=true`, i.e. customer infra) there is **no** such node-level collector, so daprd's logs would be invisible to Atlan — only present in the customer's own pod logs.
+
+So in SDR mode the SDK **automatically** forwards daprd's logs through its own pipeline (the same path as the app's logs, so they land in the lakehouse `app_logs` table with `app_name` / `is_sdr` populated), while still echoing them to the container's own logs. No configuration is required — it is gated on `ENABLE_ATLAN_UPLOAD`. Under the hood the container entrypoint runs daprd under `application_sdk.observability.dapr_log_forwarder`, which streams each daprd log line into a `dapr.runtime` logger and forwards `SIGTERM` so graceful shutdown is unaffected.
+
+> **Note (`kubectl logs` format in SDR mode):** In SDR mode daprd's stdout/stderr is piped into the forwarder, so `kubectl logs` shows the SDK's re-emitted format (with level, `app_name`, timestamp) rather than daprd's raw `--log-as-json` lines. The content is the same; only the format differs.
+
+daprd is chatty, so control the volume at the source with its log level:
+
+```bash
+DAPR_LOG_LEVEL=warn   # forward warn + error (and above); raise to error to drop the rest
+```
+
+`DAPR_LOG_LEVEL` is a minimum-severity floor — `warn` captures both warnings **and** errors. It's the recommended knob for controlling daprd log volume reaching the lakehouse.

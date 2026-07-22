@@ -1,0 +1,25 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "extract": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Extract Pools Map Example Metadata",
+      "app_name": "pools-example",
+      "inputs": {
+        "workflow_type": "pools-example",
+        "app_name": "pools-example",
+        "app_id": "",
+        "argo_workflow_slug": "",
+        "task_queue": "atlan-pools-example-{deployment_name}",
+        "args": {
+          "credential": "{{credential}}",
+          "agent_json": "{{agent-json}}",
+          "target": "{{target}}"
+        }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
+      }
+    }
+  }
+}

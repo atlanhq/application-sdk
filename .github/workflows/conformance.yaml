@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   suite:
@@ -27,4 +28,6 @@ jobs:
       # B-series (sdk scope) grades only application_sdk/ deprecation authoring;
       # exclude the conformance package (its tests embed deprecation-notice strings).
       exclude-paths-b: "tools/,contract-toolkit/,packages/conformance/"
+      # SDK's own ledger lives inside the conformance package data dir.
+      ledger-path: "packages/conformance/conformance/data/contract_schema.lock.json"
       event_name: ${{ github.event_name }}

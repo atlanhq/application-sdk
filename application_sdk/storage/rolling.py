@@ -87,6 +87,25 @@ logger = get_logger(__name__)
 
 T = TypeVar("T")
 
+
+def _monotonic() -> float:
+    """Monotonic clock seam for the writer.
+
+    The writer reads the clock through this indirection instead of calling
+    ``time.monotonic`` directly so tests can drive rollover deterministically
+    by patching ``application_sdk.storage.rolling._monotonic`` in isolation.
+
+    Patching the global ``time.monotonic`` instead would also intercept
+    asyncio's event-loop clock (``BaseEventLoop.time`` reads ``time.monotonic``),
+    whose read count during ``await`` scheduling is nondeterministic and
+    platform-dependent. A finite fake clock then gets exhausted mid-test —
+    ``next(iter)`` raises ``StopIteration`` which PEP 479 surfaces as
+    ``RuntimeError: generator raised StopIteration``. That is exactly what
+    flaked ``test_time_rollover_after_interval_elapsed`` on Python 3.13.
+    """
+    return time.monotonic()
+
+
 FlushFn = Callable[[list[T], str], Awaitable[None] | None]
 ChunkCompleteFn = Callable[[int, str], Awaitable[None] | None]
 SizeEstimatorFn = Callable[[Any], int]
@@ -164,7 +183,7 @@ class TimePolicy(RolloverPolicy):
         self.interval_seconds = interval_seconds
 
     def should_roll(self, state: BufferState) -> bool:
-        elapsed = time.monotonic() - state.chunk_start_monotonic
+        elapsed = _monotonic() - state.chunk_start_monotonic
         return elapsed >= self.interval_seconds
 
 
@@ -411,7 +430,7 @@ class RollingFileWriter(Generic[T]):
 
         async with self._lock:
             if self._chunk_start_monotonic is None:
-                self._chunk_start_monotonic = time.monotonic()
+                self._chunk_start_monotonic = _monotonic()
             self._buffer.append(batch)
 
             try:
@@ -468,6 +487,7 @@ class RollingFileWriter(Generic[T]):
             if inspect.isawaitable(result):
                 await result
         except Exception:
+            # conformance: ignore[L009] flush failure log carries chunk_index/path and buffered batch/byte/record counts not present on the re-raised exception
             logger.error(
                 "RollingFileWriter flush failed: chunk_index=%d chunk_path=%s buffered_batches=%d buffered_bytes=%d buffered_records=%d",
                 self._chunk_index,

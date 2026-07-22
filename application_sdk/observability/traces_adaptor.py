@@ -28,7 +28,7 @@ from application_sdk.observability.utils import (
     get_observability_dir,
 )
 
-# Local traces-parquet sink tuning. Hardcoded — production does not yet
+# Local traces object-store sink tuning. Hardcoded — production does not yet
 # support traces; the local sink is dormant until the trace pipeline lands.
 _TRACES_BATCH_SIZE = 100
 _TRACES_FLUSH_INTERVAL_SECONDS = 5
@@ -47,14 +47,14 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
     """A traces adapter for Atlan that extends AtlanObservability.
 
     This adapter provides functionality for recording, processing, and exporting
-    distributed traces to various backends including OpenTelemetry and parquet files.
+    distributed traces to various backends including OpenTelemetry and gzip-compressed NDJSON files.
 
     Features:
     - Distributed tracing with spans and events
     - OpenTelemetry integration
     - Periodic trace flushing
     - Console logging
-    - Parquet file storage
+    - Gzip-compressed NDJSON file storage
     """
 
     _flush_task_started: ClassVar[bool] = False
@@ -231,7 +231,9 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         Returns:
             Dict[str, Any]: Standardized dictionary representation of the trace
 
-        This method ensures traces are properly formatted for storage in traces.parquet.
+        This method ensures traces are properly formatted for storage in gzip-compressed NDJSON
+        (the traces.parquet env-var name is a signal-type discriminator, not an on-disk format — see
+        constants.py TRACES_FILE_NAME).
         It converts the TraceRecord into a dictionary with all necessary fields.
         """
         if isinstance(record, TraceRecord):
@@ -441,6 +443,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             self.add_record(trace_record)
 
         except Exception:
+            # conformance: ignore[L009] the ERROR record here is the operator-visible failure signal (add_record failures are otherwise silent) — an existing test pins it, not merely a re-raise duplicate
             logging.error("Error recording trace", exc_info=True)
             raise
 

@@ -11,6 +11,7 @@ from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.storage.batch import delete_prefix as _delete_prefix
+from application_sdk.storage.errors import ObjectStoreNotProvidedError
 from application_sdk.storage.formats import DataframeType, Reader, Writer
 from application_sdk.storage.formats.utils import (
     PARQUET_FILE_EXTENSION,
@@ -121,8 +122,8 @@ class ParquetFileReader(Reader):
             import warnings as _warnings  # noqa: PLC0415
 
             _warnings.warn(
-                "DataframeType.daft is deprecated and will be removed in v4.0. "
-                "Routing to the pandas/pyarrow path.",
+                "DataframeType.daft is deprecated and will be removed in v4.0; "
+                "use DataframeType.pandas. Routing to the pandas/pyarrow path.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -433,8 +434,8 @@ class ParquetFileWriter(Writer):
             import warnings as _warnings  # noqa: PLC0415
 
             _warnings.warn(
-                "DataframeType.daft is deprecated and will be removed in v4.0. "
-                "Routing to the pandas/pyarrow path.",
+                "DataframeType.daft is deprecated and will be removed in v4.0; "
+                "use DataframeType.pandas. Routing to the pandas/pyarrow path.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -489,11 +490,15 @@ class ParquetFileWriter(Writer):
 
         try:
             deleted_count = await _delete_prefix(self.path)
-        except RuntimeError as exc:
-            if "No ObjectStore provided" not in str(exc):
-                raise
-            logger.debug("No object store configured, skipping prefix replacement")
+        except ObjectStoreNotProvidedError:
+            logger.warning(
+                "No object store configured, skipping prefix replacement — "
+                "existing objects under %s were not deleted",
+                normalized_prefix,
+                exc_info=True,
+            )
         else:
+            # conformance: ignore[L018] ParquetFileWriter is deprecated (removed in v4.0); existing dashboards/alerts likely query these kwarg keys directly out of the JSON blob, so we keep the anti-pattern rather than risk breaking them for a class on its way out
             logger.info(
                 "Cleared existing parquet object-store prefix",
                 prefix=normalized_prefix,
@@ -552,10 +557,8 @@ class ParquetFileWriter(Writer):
             # Phase 3: Cleanup temp folders
             await self._cleanup_temp_folders()
 
+        # conformance: ignore[E004] immediate cleanup-then-bare-reraise loses no information (the original exception and traceback propagate unchanged); a log call here would be the exact log-before-raise duplicate L009 avoids
         except Exception:
-            logger.error(
-                "Error in batched dataframe writing with consolidation", exc_info=True
-            )
             await self._cleanup_temp_folders()  # Cleanup on error
             raise
 
@@ -701,6 +704,7 @@ class ParquetFileWriter(Writer):
             )
 
         except Exception:
+            # conformance: ignore[L009] adds caller-invisible partial state (temp_folder_index being consolidated) not carried by the propagating exception
             logger.error(
                 "Error consolidating folder %s",
                 self.temp_folder_index,
@@ -759,9 +763,21 @@ class ParquetFileWriter(Writer):
             if os.path.exists(output_file_name):
                 try:
                     await self._upload_file(output_file_name)
-                except RuntimeError:
-                    # No object store configured (local dev) — file stays on disk.
-                    logger.debug("No object store configured, skipping upload")
+                except ObjectStoreNotProvidedError:
+                    # Local dev with no object store configured. Any other
+                    # exception (transient blob upload failure, auth token
+                    # rotation, network error) must propagate: the base
+                    # _flush_buffer has already incremented
+                    # total_record_count, and swallowing here would make the
+                    # writer report more rows in statistics.json than
+                    # actually reached object storage. Mirrors the safe
+                    # pattern used in _ensure_prefix_replaced above.
+                    logger.warning(
+                        "No object store configured, skipping upload — %s "
+                        "was written locally only and will not reach object storage",
+                        output_file_name,
+                        exc_info=True,
+                    )
         # Advance part so the next sub-chunk gets a unique filename.
         self.chunk_part += 1
 

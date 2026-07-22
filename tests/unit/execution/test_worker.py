@@ -13,9 +13,14 @@ from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.execution._temporal._activity_errors import (
+    WorkerActivityNameCollisionError,
     WorkerInterceptorDuplicateError,
 )
-from application_sdk.execution._temporal.worker import AppWorker, create_worker
+from application_sdk.execution._temporal.worker import (
+    AppWorker,
+    _resolve_gate_enforcement,
+    create_worker,
+)
 
 DRAIN_DELAY_PATCH = (
     "application_sdk.execution._temporal.worker.SHUTDOWN_DRAIN_DELAY_SECONDS"
@@ -212,6 +217,118 @@ class TestCreateWorker:
         assert "_filter-app-a" in user_app_names
         assert "_filter-app-b" in user_app_names
 
+    def test_gate_registration_deduped_across_versions(self) -> None:
+        """An app registered under multiple versions must register the gate
+        activity ONCE — list_all() returns one entry per version, and two
+        activities named {app}:preflight crash the worker at boot."""
+
+        class _MultiVersionApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        meta = AppRegistry.get_instance().list_all()[0]
+        AppRegistry.get_instance().register(
+            name=meta.name,
+            version="9.9.9",
+            app_cls=meta.app_cls,
+            input_type=meta.input_type,
+            output_type=meta.output_type,
+        )
+        assert len(AppRegistry.get_instance().list_all()) == 2
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured["activities"] = list(kwargs.get("activities", []))
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client)
+
+        gate_names = [
+            getattr(a, "__temporal_activity_definition").name
+            for a in captured["activities"]
+            if hasattr(a, "__temporal_activity_definition")
+            and getattr(a, "__temporal_activity_definition").name.endswith(":preflight")
+        ]
+        assert gate_names == list(dict.fromkeys(gate_names))  # no duplicate names
+        assert len(gate_names) == 1
+
+    def test_hard_app_registers_gate_and_logs_boot_line(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An app declaring ``preflight_gate_mode = "hard"`` drives the
+        ``create_worker`` glue end to end: the ``name -> app_cls`` map resolves
+        ``enforce=True``, the gate activity registers under ``{app}:preflight``,
+        and the boot INFO line fires so the hard posture is visible in logs."""
+        # _resolve_gate_enforcement reads env first, so a non-"hard" ambient
+        # value would resolve this app to soft and suppress the boot line —
+        # clear it to isolate the test from the environment (sibling pattern).
+        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
+
+        class _HardGateApp(App):
+            preflight_gate_mode = "hard"
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        app_name = AppRegistry.get_instance().list_all()[0].name
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured["activities"] = list(kwargs.get("activities", []))
+            return mock.MagicMock()
+
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.worker.Worker",
+                side_effect=capture_worker,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.worker.logger"
+            ) as mock_logger,
+        ):
+            create_worker(client)
+
+        gate_names = [
+            getattr(a, "__temporal_activity_definition").name
+            for a in captured["activities"]
+            if hasattr(a, "__temporal_activity_definition")
+            and getattr(a, "__temporal_activity_definition").name.endswith(":preflight")
+        ]
+        assert f"{app_name}:preflight" in gate_names
+
+        hard_boot_calls = [
+            call
+            for call in mock_logger.info.call_args_list
+            if call.args and "HARD" in call.args[0] and app_name in call.args
+        ]
+        assert len(hard_boot_calls) == 1
+
+    def test_task_named_preflight_collides_with_gate(self) -> None:
+        """A bare @task named `preflight` registers as {app}:preflight, colliding
+        with the injected gate. create_worker must fail with a descriptive error,
+        not the opaque temporalio duplicate-activity ValueError."""
+
+        class _CollidingApp(App):
+            @task(timeout_seconds=60)
+            async def preflight(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        with pytest.raises(WorkerActivityNameCollisionError) as excinfo:
+            create_worker(client)
+        assert "preflight" in str(excinfo.value)
+
     def test_rejects_caller_supplied_log_interceptor(self) -> None:
         """``create_worker(interceptors=[LogInterceptor()])`` must fail loudly:
         the SDK adds the observability trio automatically and a duplicate would
@@ -317,8 +434,13 @@ class TestCreateWorker:
 
         assert app_worker._start_event_params["max_concurrent_workflow_tasks"] == 3
 
-    def test_sdr_workflows_skipped_when_no_handler(self) -> None:
-        """SDR registration is silently skipped when no Handler is provided."""
+    def test_gate_registered_but_sdr_skipped_when_no_handler(
+        self,
+    ) -> None:
+        """With no app Handler: the mandatory gate ({app}:preflight) is still
+        registered (bound to DefaultHandler, no-op safe), but SDR is NOT — binding
+        DefaultHandler to sdr:test_auth would fake a green auth check for an app
+        that implements none. SDR exposes only capabilities the app actually has."""
 
         class _NoHandlerApp(App):
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
@@ -340,21 +462,68 @@ class TestCreateWorker:
 
         from application_sdk.execution._temporal.sdr import SDR_WORKFLOWS
 
-        for sdr_wf in SDR_WORKFLOWS:
-            assert sdr_wf not in captured["workflows"]
-        activity_names = [
-            getattr(a, "__temporal_activity_definition", None).name  # type: ignore[union-attr]
+        activity_names = {
+            getattr(a, "__temporal_activity_definition").name  # type: ignore[union-attr]
             for a in captured["activities"]
             if hasattr(a, "__temporal_activity_definition")
-        ]
+        }
+        # Gate is always registered.
+        assert any(n.endswith(":preflight") for n in activity_names)
+        # SDR is skipped entirely — no workflows, no sdr:* activities.
+        for sdr_wf in SDR_WORKFLOWS:
+            assert sdr_wf not in captured["workflows"]
         assert not any(n.startswith("sdr:") for n in activity_names)
 
-    def test_sdr_workflows_registered_when_handler_provided(self) -> None:
-        """When ``handler`` is provided, SDR workflows + activities are appended."""
+    def test_sdr_workflows_registered_when_real_handler_provided(self) -> None:
+        """When a REAL handler is provided (a DefaultHandler subclass counts),
+        SDR workflows + activities are appended."""
 
         from application_sdk.handler.base import DefaultHandler
 
+        class _RealHandler(DefaultHandler):
+            """A real handler — not the bare DefaultHandler sentinel."""
+
         class _WithHandlerApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured["workflows"] = list(kwargs.get("workflows", []))
+            captured["activities"] = list(kwargs.get("activities", []))
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client, handler=_RealHandler())
+
+        from application_sdk.execution._temporal.sdr import SDR_WORKFLOWS
+
+        for sdr_wf in SDR_WORKFLOWS:
+            assert sdr_wf in captured["workflows"]
+        activity_names = {
+            getattr(a, "__temporal_activity_definition").name  # type: ignore[union-attr]
+            for a in captured["activities"]
+            if hasattr(a, "__temporal_activity_definition")
+        }
+        assert {
+            "sdr:test_auth",
+            "sdr:preflight_check",
+            "sdr:fetch_metadata",
+        }.issubset(activity_names)
+
+    def test_sdr_skipped_for_bare_default_handler(self) -> None:
+        """Combined mode passes a bare DefaultHandler() (to also serve HTTP) for a
+        handler-less app. SDR must still be skipped — binding it would fake a green
+        sdr:test_auth — while the mandatory gate is registered."""
+
+        from application_sdk.handler.base import DefaultHandler
+
+        class _BareApp(App):
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
@@ -374,23 +543,23 @@ class TestCreateWorker:
 
         from application_sdk.execution._temporal.sdr import SDR_WORKFLOWS
 
-        for sdr_wf in SDR_WORKFLOWS:
-            assert sdr_wf in captured["workflows"]
         activity_names = {
             getattr(a, "__temporal_activity_definition").name  # type: ignore[union-attr]
             for a in captured["activities"]
             if hasattr(a, "__temporal_activity_definition")
         }
-        assert {
-            "sdr:test_auth",
-            "sdr:preflight_check",
-            "sdr:fetch_metadata",
-        }.issubset(activity_names)
+        assert any(n.endswith(":preflight") for n in activity_names)  # gate present
+        for sdr_wf in SDR_WORKFLOWS:
+            assert sdr_wf not in captured["workflows"]
+        assert not any(n.startswith("sdr:") for n in activity_names)
 
     def test_sdr_opt_out_via_enable_sdr_flag(self) -> None:
-        """``enable_sdr=False`` suppresses SDR even when a handler is provided."""
+        """``enable_sdr=False`` suppresses SDR even when a real handler is provided."""
 
         from application_sdk.handler.base import DefaultHandler
+
+        class _RealHandler(DefaultHandler):
+            """A real handler — so the skip is attributable to enable_sdr=False."""
 
         class _OptOutApp(App):
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
@@ -408,12 +577,21 @@ class TestCreateWorker:
             "application_sdk.execution._temporal.worker.Worker",
             side_effect=capture_worker,
         ):
-            create_worker(client, handler=DefaultHandler(), enable_sdr=False)
+            create_worker(client, handler=_RealHandler(), enable_sdr=False)
 
         from application_sdk.execution._temporal.sdr import SDR_WORKFLOWS
 
         for sdr_wf in SDR_WORKFLOWS:
             assert sdr_wf not in captured["workflows"]
+        activity_names = {
+            getattr(a, "__temporal_activity_definition").name  # type: ignore[union-attr]
+            for a in captured["activities"]
+            if hasattr(a, "__temporal_activity_definition")
+        }
+        # SDR activities suppressed, but the mandatory preflight gate is a core
+        # lifecycle activity — it must register regardless of the SDR opt-out.
+        assert not any(n.startswith("sdr:") for n in activity_names)
+        assert any(n.endswith(":preflight") for n in activity_names)
 
     def test_passthrough_modules_included_in_sandbox(self) -> None:
         class _SandboxApp(App):
@@ -557,6 +735,47 @@ class TestAppWorker:
         assert result is mock_inner
 
 
+class TestLivenessInterceptorWiring:
+    """create_worker wires the LivenessInterceptor only when on_activity given."""
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @staticmethod
+    def _interceptor_types(on_activity) -> list[str]:
+        class _LivenessApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        captured: list = []
+
+        def capture_worker(*args, **kwargs):
+            captured.extend(kwargs.get("interceptors", []))
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client, on_activity=on_activity)
+
+        return [type(i).__name__ for i in captured]
+
+    def test_liveness_interceptor_registered_when_callback_supplied(self) -> None:
+        types = self._interceptor_types(lambda: None)
+        assert "LivenessInterceptor" in types
+
+    def test_no_liveness_interceptor_without_callback(self) -> None:
+        types = self._interceptor_types(None)
+        assert "LivenessInterceptor" not in types
+
+
 class TestShutdownDrainDelay:
     """Tests for the drain delay that prevents SIGTERM from preempting
     in-flight activity completion RPCs.
@@ -669,3 +888,211 @@ class TestShutdownDrainDelay:
             await app_worker.__aexit__(None, None, None)
 
         inner.__aexit__.assert_called_once()
+
+
+class TestWorkerPoolQueueResolution:
+    """ADR-0016 §3: startup pool→queue diagnostic log emitted by create_worker."""
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _register_pooled_app(self, pool: str) -> None:
+        class _PoolApp(App):
+            @task(pool=pool)
+            async def heavy_work(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+    def _pool_map_from_info_calls(self, mock_logger: mock.MagicMock) -> dict | None:
+        """Extract the pool-queue dict from logger.info('Pool queue map: %s', ...)."""
+        for call in mock_logger.info.call_args_list:
+            if call.args and "Pool queue map" in str(call.args[0]):
+                return call.args[1]
+        return None
+
+    def test_explicit_env_var_logged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Explicit ATLAN_POOL_HEAVY_QUEUE value appears in the startup info log."""
+        monkeypatch.setenv("ATLAN_POOL_HEAVY_QUEUE", "dedicated-heavy")
+        monkeypatch.delenv("ATLAN_TASK_QUEUE", raising=False)
+        self._register_pooled_app("heavy")
+        client = _make_mock_client()
+        mock_logger = mock.MagicMock()
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.worker.Worker"
+            ) as MockWorker,
+            mock.patch(
+                "application_sdk.execution._temporal.worker.logger", mock_logger
+            ),
+        ):
+            MockWorker.return_value = mock.MagicMock()
+            create_worker(client)
+        pool_map = self._pool_map_from_info_calls(mock_logger)
+        assert pool_map is not None
+        assert pool_map.get("heavy") == "dedicated-heavy"
+
+    def test_derived_queue_logged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When no explicit override is set, derived queue appears in startup info log."""
+        monkeypatch.delenv("ATLAN_POOL_HEAVY_QUEUE", raising=False)
+        monkeypatch.setenv("ATLAN_TASK_QUEUE", "base-queue")
+        self._register_pooled_app("heavy")
+        client = _make_mock_client()
+        mock_logger = mock.MagicMock()
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.worker.Worker"
+            ) as MockWorker,
+            mock.patch(
+                "application_sdk.execution._temporal.worker.logger", mock_logger
+            ),
+        ):
+            MockWorker.return_value = mock.MagicMock()
+            create_worker(client)
+        pool_map = self._pool_map_from_info_calls(mock_logger)
+        assert pool_map is not None
+        assert pool_map.get("heavy") == "base-queue-heavy"
+
+    def test_no_queue_warns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When neither env var is set, a warning naming the pool is emitted."""
+        monkeypatch.delenv("ATLAN_POOL_HEAVY_QUEUE", raising=False)
+        monkeypatch.delenv("ATLAN_TASK_QUEUE", raising=False)
+        self._register_pooled_app("heavy")
+        client = _make_mock_client()
+        mock_logger = mock.MagicMock()
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.worker.Worker"
+            ) as MockWorker,
+            mock.patch(
+                "application_sdk.execution._temporal.worker.logger", mock_logger
+            ),
+        ):
+            MockWorker.return_value = mock.MagicMock()
+            create_worker(client)
+        pool_warn = next(
+            (
+                c
+                for c in mock_logger.warning.call_args_list
+                if c.args and "no resolvable queue" in str(c.args[0])
+            ),
+            None,
+        )
+        assert pool_warn is not None
+        assert pool_warn.args[1] == "heavy"
+
+
+class TestResolveGateEnforcement:
+    """Gate posture resolution: env > App.preflight_gate_mode > soft default.
+
+    Only the literal "hard" enforces; anything unknown falls back to soft so
+    a run is never blocked by a typo — blocking is always a deliberate opt-in.
+    """
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def test_default_soft_when_nothing_declared(self, monkeypatch) -> None:
+        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
+
+        class _Plain(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        assert _resolve_gate_enforcement(_Plain) is False
+        assert _resolve_gate_enforcement(None) is False
+
+    def test_declared_hard_enforces(self, monkeypatch) -> None:
+        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
+
+        class _Hard(App):
+            preflight_gate_mode = "hard"
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        assert _resolve_gate_enforcement(_Hard) is True
+
+    def test_declared_value_case_and_whitespace_insensitive(self, monkeypatch) -> None:
+        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
+
+        class _Loud(App):
+            preflight_gate_mode = "  HARD  "
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        assert _resolve_gate_enforcement(_Loud) is True
+
+    def test_malformed_declared_falls_back_to_soft(self, monkeypatch) -> None:
+        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
+
+        class _Typo(App):
+            preflight_gate_mode = "on"  # not "hard" -> soft
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        assert _resolve_gate_enforcement(_Typo) is False
+
+    def test_env_hard_wins_over_declared_soft(self, monkeypatch) -> None:
+        # ops can force the net up without waiting on an app release
+        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", "hard")
+
+        class _Soft(App):
+            preflight_gate_mode = "soft"
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        assert _resolve_gate_enforcement(_Soft) is True
+
+    def test_env_soft_wins_over_declared_hard(self, monkeypatch) -> None:
+        # ops can drop the net without waiting on an app release
+        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", "soft")
+
+        class _Hard(App):
+            preflight_gate_mode = "hard"
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        assert _resolve_gate_enforcement(_Hard) is False
+
+    def test_malformed_env_falls_back_to_soft(self, monkeypatch) -> None:
+        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", "enabled")
+
+        class _Hard(App):
+            preflight_gate_mode = "hard"
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        # a set-but-unknown env value decides (falls back to soft), it does not
+        # fall through to the declared attribute
+        assert _resolve_gate_enforcement(_Hard) is False
+
+    def test_empty_env_defers_to_declared(self, monkeypatch) -> None:
+        # An empty env value (a blank ConfigMap entry) is falsy under `if val:`,
+        # so it is not treated as an override — resolution falls through to the
+        # declared attribute rather than forcing soft.
+        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", "")
+
+        class _Hard(App):
+            preflight_gate_mode = "hard"
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        assert _resolve_gate_enforcement(_Hard) is True

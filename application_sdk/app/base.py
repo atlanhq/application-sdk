@@ -13,10 +13,21 @@ from abc import ABC
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import Any, ClassVar, Literal, Never, TypeVar, cast, get_type_hints
+from pathlib import Path
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Literal,
+    Never,
+    TypeVar,
+    cast,
+    get_type_hints,
+)
 from uuid import UUID
 
 import obstore as obs
+import orjson
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
@@ -37,8 +48,12 @@ from application_sdk.app.context import (
     _is_atlan_logger,
 )
 from application_sdk.app.entrypoint import EntryPointMetadata
-from application_sdk.app.registry import AppMetadata
+from application_sdk.app.registry import AppMetadata, resolve_pool_queue
 from application_sdk.app.task import get_task_metadata, is_task, task
+from application_sdk.constants import (
+    ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
+    LOCAL_WORKFLOW_ID,
+)
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
     CleanupInput,
@@ -62,8 +77,14 @@ from application_sdk.errors import (
 from application_sdk.errors.base import AppError as _NewAppError
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.logger_adaptor import (
+    ASSET_VALIDATION_MATRIX_KEY,
+    get_logger,
+)
 from application_sdk.observability.observability import AtlanObservability
+
+if TYPE_CHECKING:
+    from application_sdk.validation import AssetValidationReport
 
 _task_logger = get_logger(__name__)
 
@@ -71,6 +92,199 @@ try:
     _FRAMEWORK_VERSION = importlib.metadata.version("application-sdk")
 except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] package not installed (e.g. editable dev install); "unknown" sentinel is benign
     _FRAMEWORK_VERSION = "unknown"
+
+# Fixed event name for the structured, queryable transformed-asset validation
+# outcome. Emitted on every upload from inside the upload activity, so the
+# Temporal activity context (workflow_id/run_id/app_name) is auto-stamped and the
+# row joins to the workflow outcome in ClickHouse — mirrors the preflight gate's
+# outcome event. Scalar counts land as top-level LogAttributes; the per-failure
+# drill-down rides in the ``asset_validation_matrix`` JSON attribute.
+# Peer of ``PREFLIGHT_OUTCOME_EVENT`` (execution/_temporal/preflight_gate.py):
+# same outcome-event pattern. No shared registry for these names yet — worth
+# adding only once a third such event exists.
+ASSET_VALIDATION_EVENT = "Transformed-asset validation outcome"
+
+# Cap on how many failure/orphan rows the matrix carries, aliased from the single
+# source of truth in ``constants`` so the structured matrix and the human-readable
+# ``format_report()`` listing (which defaults to the same constant) can never
+# drift. The event's scalar counts always reflect the full batch; the matrix is a
+# bounded drill-down sample so a pathological batch can't produce an unbounded
+# LogAttributes value. Passed explicitly to ``format_report(max_items=...)`` below
+# to make the shared cap obvious at the call site.
+_VALIDATION_MATRIX_MAX_ROWS = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
+
+# Per-row error message cap (chars). pyatlan_v9 ``.validate()`` messages can be
+# long; truncate so a single row can't bloat the ClickHouse attribute.
+_VALIDATION_MATRIX_ERROR_MAXLEN = 300
+
+
+def _validation_matrix_json(report: "AssetValidationReport") -> str:
+    """Compact per-failure matrix for the outcome event, as one JSON string.
+
+    Lands as a single ``LogAttributes`` value in ClickHouse so connector-pulse can
+    ``JSONExtract`` the per-failure detail against workflow outcomes with no schema
+    change (mirrors the preflight gate's ``check_matrix``). Small fixed fields
+    only, bounded to :data:`_VALIDATION_MATRIX_MAX_ROWS` rows per axis — the
+    headline counts on the event carry the full totals, and the human-readable
+    ``format_report()`` still rides in the WARNING body for flagged runs. Not
+    internally guarded (``orjson.dumps`` can raise): the sole caller,
+    :func:`_warn_on_invalid_transformed_assets`, wraps the whole emit in
+    ``try/except``, so a raise here is caught there and never blocks the upload.
+    """
+    rows: list[dict[str, Any]] = []
+    for f in report.failures[:_VALIDATION_MATRIX_MAX_ROWS]:
+        rows.append(
+            {
+                "kind": "undeserializable" if f.deserialize_error else "invalid",
+                "type_name": f.type_name,
+                "qualified_name": f.qualified_name,
+                "error": (f.errors[0] if f.errors else "")[
+                    :_VALIDATION_MATRIX_ERROR_MAXLEN
+                ],
+                "file": f.file,
+                "line": f.line,
+            }
+        )
+    for o in report.orphans[:_VALIDATION_MATRIX_MAX_ROWS]:
+        rows.append(
+            {
+                "kind": "orphan",
+                "type_name": o.missing_type_name,
+                "qualified_name": o.missing_qualified_name,
+                "relationship": o.relationship,
+                "reference_count": o.reference_count,
+                "file": o.file,
+                "line": o.line,
+            }
+        )
+    return orjson.dumps(rows).decode()
+
+
+def _resolve_transformed_target(local_path: str) -> "Path | None":
+    """Locate the ``transformed/`` asset subtree under ``local_path``, if any.
+
+    Returns the path to validate, or ``None`` when there is nothing to validate
+    (``local_path`` is not a ``transformed/`` asset subtree — e.g. a raw upload).
+    """
+    if not local_path:
+        return None
+    root = Path(local_path)
+    if root.is_dir():
+        transformed = root / "transformed"
+        if transformed.is_dir():
+            return transformed
+        if "transformed" in root.parts:
+            return root
+        return None
+    if "transformed" in root.parts:
+        return root
+    return None
+
+
+async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) -> None:
+    """Best-effort, warn-only validation of transformed asset NDJSON before upload.
+
+    BLDX-1555 defense-in-depth at the SDR→Atlan boundary. When ``local_path``
+    holds transformed asset output, every record is validated against the
+    pyatlan_v9 ``.validate()`` backbone (plus the referential/orphan pass). On
+    **every** upload a structured :data:`ASSET_VALIDATION_EVENT` is emitted with
+    the per-axis counts and a compact per-failure ``asset_validation_matrix`` JSON
+    attribute, all allowlisted for OTLP so they reach ClickHouse and join to the
+    workflow outcome by Temporal run id (mirrors the preflight gate's outcome
+    event). A ``clean`` outcome is emitted too, so there is a denominator to rank
+    flag-rate against. A human-readable WARNING with the full ``format_report()``
+    is additionally logged only when the batch is flagged. Extracts and transforms
+    are full by design by default, so the batch is complete and the orphan pass is
+    accurate. This **never** blocks the upload and **never** raises — a defect in
+    the scaffold must not break a real handoff — and it scans every record (no
+    sampling) so the summary is accurate.
+
+    The scan runs via
+    :func:`application_sdk.execution.heartbeat.run_best_effort`, for two reasons.
+    It keeps the event loop and the activity's auto-heartbeat free while a large
+    batch is validated (ADR-0010). More importantly, it makes the never-raises
+    contract hold even against *native* faults: the decode exercises third-party
+    C extensions (msgspec via pyatlan_v9), and a segfault there is not a Python
+    exception — in-process it would kill the whole Temporal worker (as one did,
+    CNCT-85). ``run_best_effort`` isolates the scan in a child process, so a
+    crash kills only the child; it then logs the warning and the handoff
+    proceeds. The timeout bounds the scan for the same reason — a hung
+    validation must not stall an upload forever.
+
+    Referential (orphan) integrity runs by default on this hook: extracts and
+    transforms are full by design by default, so every referenced parent is
+    present in the same batch and the orphan pass is accurate. Even on an
+    atypical partial batch the worst case is a spurious warning.
+    """
+    from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
+        VALIDATE_ASSETS_ON_UPLOAD,
+        VALIDATE_ASSETS_TIMEOUT_SECONDS,
+    )
+
+    # Cheap checks stay in-parent so a disabled feature or a raw upload never
+    # pays for a child-process dispatch.
+    if not VALIDATE_ASSETS_ON_UPLOAD:
+        return
+    target = _resolve_transformed_target(local_path)
+    if target is None:
+        return
+
+    from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — deferred: app.base is imported by execution (circular)
+        run_best_effort,
+    )
+    from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
+        validate_transformed_dir,
+    )
+
+    # Best-effort: run_best_effort isolates the scan in a child process and, on
+    # any native crash / timeout / error, logs a warning and returns None — the
+    # upload is never blocked, failed, or crashed by the validation scaffold.
+    report = await run_best_effort(
+        validate_transformed_dir,
+        str(target),
+        label="Transformed-asset validation",
+        logger=_task_logger,
+        timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
+    )
+
+    if report is None:
+        # run_best_effort swallowed a native crash / timeout / error (it already
+        # logged a warning). The "nothing to validate" cases (flag off, not a
+        # transformed/ subtree) already returned above, so reaching here with
+        # None means the scan itself failed — no counts to emit.
+        return
+
+    # Emit the structured outcome on every validated upload (clean + flagged) so
+    # the row is queryable and gives a denominator. Wrapped: a defect in the
+    # emit path (e.g. matrix encoding) must never break a real handoff.
+    try:
+        flagged = not report.ok
+        _task_logger.info(
+            ASSET_VALIDATION_EVENT,
+            outcome="flagged" if flagged else "clean",
+            app_name=app_name,
+            assets_total=report.total,
+            assets_passed=report.passed,
+            # ``failed`` counts undeserializable records too; report "invalid"
+            # (per-asset .validate() failures) disjointly, matching the headline
+            # in format_report().
+            assets_invalid=report.failed - report.undeserializable,
+            assets_orphaned=len(report.orphans),
+            assets_undeserializable=report.undeserializable,
+            **{ASSET_VALIDATION_MATRIX_KEY: _validation_matrix_json(report)},
+        )
+        if flagged:
+            _task_logger.warning(
+                "Transformed-asset validation flagged issues before upload "
+                "(handoff continues): %s",
+                report.format_report(max_items=_VALIDATION_MATRIX_MAX_ROWS),
+            )
+    except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
+        _task_logger.warning(
+            "Transformed-asset validation outcome emission failed "
+            "(handoff continues)",
+            exc_info=True,
+        )
 
 
 # Type variable for require() method
@@ -477,6 +691,17 @@ class App(ABC):
     description: ClassVar[str] = ""
     tags: ClassVar[dict[str, str] | None] = None
     passthrough_modules: ClassVar[set[str] | None] = None
+
+    preflight_gate_mode: ClassVar[Literal["hard", "soft"]] = "soft"
+    """Preflight gate posture. ``"soft"`` (default) never blocks — a
+    ``NOT_READY`` verdict lets the run proceed and is emitted as
+    ``outcome="would_block"`` on the gate outcome event so it is always
+    reported. ``"hard"`` is the opt-in that blocks the run when the handler's
+    verdict is ``NOT_READY`` (the worker logs at boot). Set ``"hard"`` once the
+    app's checks are trusted to gate real runs. The ``ATLAN_PREFLIGHT_GATE_MODE``
+    env var overrides this at deploy time; any set value other than ``"hard"``
+    resolves to soft. An empty or unset value is not an override — resolution
+    falls through to this declared attribute. See the adopt-preflight-gate skill."""
 
     # Marker to track if class has been registered
     _app_registered: ClassVar[bool] = False
@@ -907,6 +1132,12 @@ class App(ABC):
             upload as _upload,
         )
 
+        # BLDX-1555 defense-in-depth: validate transformed assets against the
+        # pyatlan_v9 backbone before the handoff. Warn-only, best-effort, and
+        # run in an isolated child process (CNCT-85) so a native decode fault
+        # kills only the child and never blocks or crashes the event loop.
+        await _warn_on_invalid_transformed_assets(input.local_path, self._app_name)
+
         deployment = self.context.storage
         upstream = self.context.upstream_storage
 
@@ -930,7 +1161,7 @@ class App(ABC):
                 (single, "upstream" if single is upstream else "deployment", True)
             ]
 
-        run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
+        run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.workflow_id}/{self.context.run_id}"
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
         )
@@ -999,8 +1230,9 @@ class App(ABC):
         if result is None:
             # Unreachable under current target-construction logic (the single-target
             # branch is always fatal=True), but guards against future changes.
-            raise RuntimeError(
-                "App.upload fan-out captured no result — this is a programming error"
+            raise _InternalError(
+                message="App.upload fan-out captured no result — this is a programming error",
+                invariant="upload fan-out must produce at least one result",
             )
         return result
 
@@ -1542,6 +1774,158 @@ def _collect_interaction_relays(
     return relays
 
 
+async def _run_preflight_gate(
+    input_data: Input, app_name: str, entrypoint: str
+) -> None:
+    """Run the SDK-owned pre-extraction preflight gate (HYP-1883).
+
+    Dispatches the app's preflight handler as a mandatory first activity. The
+    activity raises ``PreflightFailed`` when the verdict is ``NOT_READY``; this
+    re-raises only that deliberate block and aborts the run. Every other activity
+    failure (timeout, secret-store/transport error, handler crash) fails open —
+    logged loudly, run proceeds — because the gate is an injected guardrail the
+    app never opted into, so its own plumbing must not kill a run.
+
+    Guards: ``workflow.patched("preflight-gate")`` keeps pre-gate runs replaying
+    deterministically; ``isinstance(input_data, CredentialResolvable)`` skips
+    source-less apps. Credential resolution happens inside the activity — the
+    deterministic workflow forwards only secret-free references. Dispatch is to
+    the one app-level handler, with ``entrypoint`` threaded through for internal
+    branching.
+
+    The ``no_verdict`` outcome event emitted here (fail-open path) omits
+    ``gate_mode``, unlike the ``blocked``/``would_block``/``proceeded`` events
+    the activity emits: the workflow layer never sees ``enforce`` (it is baked
+    into the activity closure at worker build), so the mode is not available to
+    stamp on this row.
+    """
+    if not workflow.patched("preflight-gate"):
+        return
+
+    with workflow.unsafe.imports_passed_through():
+        from application_sdk.credentials.ref import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            CredentialResolvable,
+        )
+        from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            GATE_RETRY,
+            GATE_SCHEDULE_TO_CLOSE,
+            GATE_START_TO_CLOSE,
+            PREFLIGHT_OUTCOME_EVENT,
+            PreflightGateInput,
+            is_preflight_block,
+            preflight_gate_activity_name,
+        )
+
+    if not isinstance(input_data, CredentialResolvable):
+        return
+
+    entry = entrypoint or "<implicit>"
+    try:
+        gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
+        await workflow.execute_activity(
+            preflight_gate_activity_name(app_name),
+            gate_input,
+            schedule_to_close_timeout=GATE_SCHEDULE_TO_CLOSE,
+            start_to_close_timeout=GATE_START_TO_CLOSE,
+            retry_policy=GATE_RETRY,
+        )
+    except Exception as e:
+        # The activity emits the blocked outcome event before it raises; the
+        # workflow only re-raises the deliberate block here.
+        if is_preflight_block(e):
+            raise
+        # Fail-open: only the workflow knows a no-verdict failure happened, so it
+        # owns the no_verdict row (plus the loud ERROR line).
+        _safe_log(
+            "error",
+            "Preflight gate could not produce a verdict; proceeding without source "
+            "verification (fail-open)",
+            app_name=app_name,
+            entrypoint=entry,
+            exc_info=True,
+        )
+        _safe_log(
+            "info",
+            PREFLIGHT_OUTCOME_EVENT,
+            app_name=app_name,
+            entrypoint=entry,
+            outcome="no_verdict",
+            reason=type(e).__name__,
+        )
+        return
+
+    # Success: the activity already emitted the proceeded outcome event.
+
+
+def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
+    """Validate a decoded workflow payload against the entry point's typed contract.
+
+    The generated workflow declares its argument to Temporal with a permissive
+    ``Any`` annotation (see ``generate_workflow_class``). That is deliberate: if the
+    argument were annotated as ``input_type``, Temporal's pydantic data converter
+    would validate the payload while *decoding the workflow task*, and a bad payload
+    would surface as a Workflow *Task* failure — which Temporal retries with backoff
+    **indefinitely** (there is no max-attempts for workflow tasks). A permanently
+    invalid input (e.g. a required object field sent as ``""``) would then retry
+    forever instead of failing.
+
+    Validating here, inside the workflow body, converts that into a clean,
+    non-retryable workflow *execution* failure that fails fast.
+
+    This does **not** loosen or bypass the typed contract. The payload is validated
+    against exactly ``input_type`` — the same model the entry point declares — before
+    any app code runs, and the fully typed, validated model is what every downstream
+    caller (preflight gate, ``_log_summary``, the entry point method) receives. The
+    permissive annotation is confined to this generated wire boundary; there is no
+    path by which a raw payload reaches app code, and app authors cannot opt into it.
+
+    Note that this validates in pydantic's python/lax mode (``model_validate`` on a
+    decoded dict) rather than the json mode the removed typed annotation gave Temporal's
+    data converter. The two are equivalent for every field type a permitted ``Input``
+    tree allows — ``bytes``/``bytearray``, the one genuinely mode-divergent type, is
+    forbidden by ``validate_payload_safety`` (contracts/base.py). A maintainer adding a
+    custom, mode-sensitive pydantic type to a contract should re-check that equivalence.
+
+    Args:
+        raw_input: The decoded payload — a dict from the wire, or (unit tests / the
+            in-process ``/start`` path) an already-constructed ``input_type``.
+        input_type: The entry point's typed input contract.
+
+    Returns:
+        A validated ``input_type`` instance.
+
+    Raises:
+        ApplicationError: non-retryable, if the payload does not satisfy ``input_type``.
+    """
+    if isinstance(raw_input, input_type):
+        # Already the typed model (constructed by the SDK /start path or a test);
+        # it was validated at construction, so re-validation would be redundant.
+        return raw_input
+
+    # deferred import: circular — execution/__init__.py loads _temporal which imports app.base
+    from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
+
+    try:
+        return input_type.model_validate(raw_input)
+    # conformance: ignore[E004] deterministic input-validation failure; logged via _safe_log with exc_info=True and re-raised as a non-retryable ApplicationError
+    except Exception as e:
+        _safe_log(
+            "error",
+            "Workflow input failed validation against its typed contract",
+            input_type=input_type.__name__,
+            exc_info=True,
+        )
+        # Non-retryable: a payload that fails schema validation is deterministic —
+        # retrying the same input can never succeed. Failing the execution now
+        # avoids the indefinite Workflow Task retry loop that a decode-time failure
+        # would cause.
+        raise ApplicationError(
+            f"Invalid workflow input for {input_type.__name__}: {e}",
+            type="InputValidationError",
+            non_retryable=True,
+        ) from e
+
+
 def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:
     """Generate a Temporal workflow class for one entry point.
 
@@ -1563,17 +1947,59 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         app_cls._app_name if ep.implicit else f"{app_cls._app_name}:{ep.name}"
     )
     entry_method_name = ep.method_name
+    entrypoint_name = ep.name
     input_type = ep.input_type
     output_type = ep.output_type
     app_name = app_cls._app_name
     app_version = app_cls._app_version
 
-    async def _run(self, input_data: Input) -> Output:
+    from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — boot-time (not in workflow sandbox); avoids a module-load cycle
+        input_type_supports_gate,
+    )
+
+    if not input_type_supports_gate(input_type):
+        _task_logger.warning(
+            "Preflight gate will not run for entrypoint '%s' (%s): input type %s does "
+            "not declare the credential-routing fields (extraction_method, "
+            "credential_guid, agent_json) top-level. Expected for source-less "
+            "entrypoints; if this entrypoint verifies a data source, declare those "
+            "fields (e.g. via the contract toolkit's ExtractionInput) so source "
+            "verification runs before extraction.",
+            entrypoint_name,
+            workflow_name,
+            input_type.__name__,
+        )
+
+    # input_data is annotated ``Any`` (not ``input_type``) so Temporal's data
+    # converter decodes the payload without validating it — validation happens
+    # below via _validate_workflow_input so a bad payload fails the workflow
+    # execution (fast, non-retryable) instead of failing the workflow *task*
+    # (retried by the server indefinitely). See _validate_workflow_input.
+    async def _run(self, input_data: Any) -> Output:
         # deferred imports: inside Temporal sandbox (workflow.unsafe.imports_passed_through context)
         # BLDX-878: inter-app calls deactivated pending review.
         # from application_sdk.app.client import WorkflowAppClient
+
+        # Fail fast on a malformed / wrong-typed payload, before any setup runs.
+        # Enforces the entry point's typed contract at the workflow boundary.
+        #
+        # Placement is deliberate — this MUST stay above the setup and the outer
+        # try/except below, for two reasons:
+        #   1. Downstream code (the preflight gate, _log_summary, the entry method)
+        #      requires a validated typed model; it must never see the raw dict the
+        #      Any-annotated argument decodes to.
+        #   2. It preserves pre-PR behavior: previously a bad payload failed during
+        #      Temporal's decode, so neither the _run body nor the on_complete()
+        #      finally ran. Moving this into the try/except would run on_complete()
+        #      for an input that never entered the workflow proper.
+        # (Retryability is not the reason: the raised ApplicationError is a
+        # FailureError subclass, so the outer handler's `isinstance(e, FailureError)`
+        # branch would bare re-raise it, preserving non_retryable=True either way.)
+        input_data = _validate_workflow_input(input_data, input_type)
+
         start_time = _safe_now()
         run_id = workflow.info().run_id
+        workflow_id = workflow.info().workflow_id
 
         try:
             with workflow.unsafe.imports_passed_through():
@@ -1596,6 +2022,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             app_name=app_name,
             app_version=app_version,
             run_id=run_id,
+            workflow_id=workflow_id,
             correlation_id=correlation_id,
             started_at=start_time,
         )
@@ -1613,7 +2040,11 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             self._app_instance = app_instance
         app_instance._context = context
 
-        context_data = {"run_id": run_id, "correlation_id": context.correlation_id}
+        context_data = {
+            "run_id": run_id,
+            "workflow_id": workflow_id,
+            "correlation_id": context.correlation_id,
+        }
         # BLDX-878: inter-app calls deactivated pending review.
         # app_instance._client = WorkflowAppClient(context_data)
         _wrap_instance_tasks(app_instance, context_data)
@@ -1643,21 +2074,38 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             _safe_log("warning", "Failed to log input summary", exc_info=True)
 
         try:
+            await _run_preflight_gate(input_data, app_name, entrypoint_name)
             entry_method = getattr(app_instance, entry_method_name)
             result = await entry_method(input_data)
             return cast("Output", result)
 
         # conformance: ignore[E004] top-level entrypoint handler; logged via _safe_log with exc_info=True and re-raised as typed ApplicationError
         except Exception as e:
-            _safe_log(
-                "error",
-                "App failed",
-                app_name=app_name,
-                run_id=str(run_id),
-                correlation_id=context.correlation_id,
-                error_type=type(e).__name__,
-                exc_info=True,
-            )
+            with workflow.unsafe.imports_passed_through():
+                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+                    is_preflight_block,
+                )
+            # A deliberate preflight-gate block logs terse (classification already
+            # on the error's FailureDetails); the marker may sit on a cause.
+            if is_preflight_block(e):
+                _safe_log(
+                    "warning",
+                    "App blocked by preflight gate",
+                    app_name=app_name,
+                    run_id=str(run_id),
+                    correlation_id=context.correlation_id,
+                    reason=str(e),
+                )
+            else:
+                _safe_log(
+                    "error",
+                    "App failed",
+                    app_name=app_name,
+                    run_id=str(run_id),
+                    correlation_id=context.correlation_id,
+                    error_type=type(e).__name__,
+                    exc_info=True,
+                )
             # deferred import: circular dependency
             # Raw Python exceptions (e.g. ValueError raised directly in an
             # entrypoint) must be wrapped in ApplicationError so Temporal
@@ -1731,7 +2179,13 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
     _run.__name__ = "run"
     _run.__qualname__ = f"{cls_name}.run"
     _run.__module__ = app_cls.__module__
-    _run.__annotations__ = {"input_data": input_type, "return": output_type}
+    # input_data is decoded as ``Any`` on purpose: this is the annotation Temporal's
+    # pydantic data converter reads to decode the workflow task. Decoding as ``Any``
+    # keeps validation out of the converter (where a failure = an indefinitely
+    # retried Workflow Task failure) and defers it to _validate_workflow_input inside
+    # the run body, which enforces ``input_type`` and fails fast on a bad payload.
+    # The return type stays typed so results are still validated/serialized normally.
+    _run.__annotations__ = {"input_data": Any, "return": output_type}
 
     decorated_run = workflow.run(_run)
 
@@ -1779,7 +2233,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
 
     Args:
         app_instance: The app instance.
-        context_data: Context dict with run_id and correlation_id.
+        context_data: Context dict with run_id, workflow_id, and correlation_id.
     """
     for attr_name in dir(app_instance):
         if attr_name.startswith("_"):
@@ -1803,6 +2257,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     task_meta.heartbeat_timeout_seconds,
                     task_meta.auto_heartbeat_seconds,
                     task_meta.retry_policy,
+                    pool=task_meta.pool,
                 )
                 setattr(app_instance, attr_name, wrapper)
 
@@ -1818,6 +2273,8 @@ def _create_task_activity_wrapper(
     heartbeat_timeout_seconds: int | None = 60,
     auto_heartbeat_seconds: int | None = 10,
     retry_policy: Any = None,
+    *,
+    pool: str | None = None,
 ) -> Any:
     """Create a wrapper that executes a task as a Temporal activity.
 
@@ -1828,14 +2285,26 @@ def _create_task_activity_wrapper(
         retry_max_attempts: Maximum retry attempts.
         retry_max_interval_seconds: Maximum interval between retries.
         output_type: The typed output class for deserialization.
-        context_data: Context dict with run_id and correlation_id.
+        context_data: Context dict with run_id, workflow_id, and correlation_id.
         heartbeat_timeout_seconds: Heartbeat timeout. None disables.
         auto_heartbeat_seconds: Auto-heartbeat interval. None disables.
         retry_policy: Full retry policy (overrides max_attempts/interval if set).
+        pool: Logical worker-pool name. When set, the activity is routed
+            to a dedicated task queue. Queue name resolution order:
+            1. ``ATLAN_POOL_<POOL>_QUEUE`` env var (explicit override).
+            2. ``{ATLAN_TASK_QUEUE}-{pool}`` derived from the app's base queue
+               (default — ensures different apps with the same pool name get
+               different Temporal queues automatically).
 
     Returns:
         Async function that executes the task as an activity.
     """
+    # Resolve pool → task queue at construction time. Env vars are fixed for
+    # the process lifetime, so capturing the result in the closure is safe.
+    # Resolution order: explicit ATLAN_POOL_<POOL>_QUEUE override first, then
+    # derive from ATLAN_TASK_QUEUE so two apps sharing a pool name (e.g.
+    # "heavy") never collide on the same Temporal queue.
+    pool_queue: str | None = resolve_pool_queue(pool) if pool else None
     from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
         RetryPolicy as _RP,
     )
@@ -1868,6 +2337,7 @@ def _create_task_activity_wrapper(
             app_name=app_name,
             task_name=task_name,
             run_id=context_data.get("run_id", ""),
+            workflow_id=context_data.get("workflow_id", LOCAL_WORKFLOW_ID),
             heartbeat_timeout_seconds=heartbeat_timeout_seconds,
             auto_heartbeat_seconds=auto_heartbeat_seconds,
         )
@@ -1885,6 +2355,8 @@ def _create_task_activity_wrapper(
         # Execute as activity, routed through the SDK eviction-retry loop so
         # worker pod evictions (SIGTERM mid-activity) re-dispatch as fresh
         # attempts without burning the application-error retry budget.
+        # When a pool_queue is set the activity is dispatched to the task
+        # queue for that pool; otherwise it runs on the workflow's own queue.
         result: Output = await execute_activity_with_eviction_retry(
             f"{app_name}:{task_name}",
             args=[task_context, input_data],
@@ -1893,6 +2365,7 @@ def _create_task_activity_wrapper(
             retry_policy=temporal_retry_policy,
             result_type=output_type,
             summary=summary,
+            **({"task_queue": pool_queue} if pool_queue else {}),
         )
 
         return result

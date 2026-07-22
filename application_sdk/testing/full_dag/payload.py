@@ -350,6 +350,7 @@ def build_ae_payload(
     include_filter: str = '{"^def$":[".*"]}',
     exclude_filter: str = "{}",
     agent: AgentSpec | None = None,
+    agent_json: dict[str, Any] | None = None,
     ae_workflow_slug: str = "",
 ) -> dict[str, Any]:
     """Assemble the AE submit body.
@@ -376,6 +377,12 @@ def build_ae_payload(
             handing to the connector). Defaults match the "all schemas
             in the default catalog" case.
         agent: Required when ``mode == AGENT``. Ignored in DIRECT mode.
+        agent_json: Optional agent-mode routing override. When supplied (a
+            connector's ``agent_json()`` hook returning a keypair/token/iam
+            shape), it replaces the basic username/password ``agent-json``
+            row derived from *agent* — so the submit's routing block matches
+            the ``{{agent-json}}`` seed-DAG blob. Ignored in DIRECT mode and
+            when ``None`` (the derived basic shape is used).
 
     Returns:
         Dict ready to ``orjson.dumps`` and POST to
@@ -400,24 +407,31 @@ def build_ae_payload(
 
     if mode is RunMode.AGENT:
         assert agent is not None
-        agent_json = {
-            "host": database.host,
-            "port": database.port,
-            "auth-type": database.auth_type,
-            "agent-name": agent.agent_name,
-            "agent-type": agent.agent_type,
-            "key-type": agent.key_type,
-            "aws-auth-method": agent.aws_auth_method,
-            "azure-auth-method": agent.azure_auth_method,
-            # In agent mode the username/password fields are *secret-store
-            # keys*, not literal values — the agent's local Dapr
-            # secret-store resolves them at workflow time. Callers should
-            # pre-populate the secret store with these keys.
-            "basic.username": f"SDR_{connector_short_name.upper()}_USERNAME",
-            "basic.password": f"SDR_{connector_short_name.upper()}_PASSWORD",
-        }
+        # A connector's agent_json() override (keypair/token/iam) wins over the
+        # basic shape so the submit's routing row matches the {{agent-json}}
+        # seed-DAG blob build_seed_dag fills from the same override.
+        submit_agent_json = (
+            agent_json
+            if agent_json is not None
+            else {
+                "host": database.host,
+                "port": database.port,
+                "auth-type": database.auth_type,
+                "agent-name": agent.agent_name,
+                "agent-type": agent.agent_type,
+                "key-type": agent.key_type,
+                "aws-auth-method": agent.aws_auth_method,
+                "azure-auth-method": agent.azure_auth_method,
+                # In agent mode the username/password fields are *secret-store
+                # keys*, not literal values — the agent's local Dapr
+                # secret-store resolves them at workflow time. Callers should
+                # pre-populate the secret store with these keys.
+                "basic.username": f"SDR_{connector_short_name.upper()}_USERNAME",
+                "basic.password": f"SDR_{connector_short_name.upper()}_PASSWORD",
+            }
+        )
         parameters.append(
-            {"name": "agent-json", "value": orjson.dumps(agent_json).decode()}
+            {"name": "agent-json", "value": orjson.dumps(submit_agent_json).decode()}
         )
 
     # Connection (full nested JSON string)

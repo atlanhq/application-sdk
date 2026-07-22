@@ -38,10 +38,23 @@ jobs:
         !startsWith(github.event.pull_request.head.ref, 'bump-version-contract-toolkit')
       )
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Mint fleet App token
+        # A real (non-github-actions[bot]) identity is required so the push
+        # below re-fires the bump PR's required checks. No workflow auto-merges
+        # this PR (GitHub blocks self-approval regardless of author identity),
+        # so there's no bypass-actor dependency to preserve here.
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Install PKL
         run: |
@@ -50,16 +63,34 @@ jobs:
           chmod +x /tmp/pkl
           sudo mv /tmp/pkl /usr/local/bin/pkl
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.31"
 
       - name: Compute version, bump PklProject, update CHANGELOG
         id: versions
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: python .github/scripts/contract_toolkit_release.py
+
+      - name: Regenerate conformance toolkit baseline
+        # Reuse the conformance suite's own generator — the single source of truth
+        # for the baseline's parse + serialize — so the release PR clears its own
+        # K007/K008 drift gate (test_committed_baseline_matches_fresh_read). uvx runs
+        # it straight from the in-repo package, so nothing is added to this job's
+        # dependencies. --outfile targets the repo working copy (the CLI's default
+        # writes inside the ephemeral install); the Push step below git-adds it.
+        if: steps.versions.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          uvx --from ./packages/conformance atlan-application-sdk-conformance \
+            gen-toolkit-baseline --sdk-root . \
+            --outfile packages/conformance/conformance/data/toolkit_baseline.json
 
       - name: Sanity-build package
         if: steps.versions.outputs.skip != 'true'
@@ -68,7 +99,7 @@ jobs:
       - name: Push bump branch and open or update PR
         if: steps.versions.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           new_version="${{ steps.versions.outputs.new }}"
@@ -77,7 +108,8 @@ jobs:
           git config --global user.email 'it@atlan.com'
 
           git checkout -b "${BUMP_BRANCH}"
-          git add contract-toolkit/src/PklProject contract-toolkit/CHANGELOG.md
+          git add contract-toolkit/src/PklProject contract-toolkit/CHANGELOG.md \
+            packages/conformance/conformance/data/toolkit_baseline.json
           git commit -m "chore(contract-toolkit): release v${new_version}"
           git push origin "${BUMP_BRANCH}" --force-with-lease
 

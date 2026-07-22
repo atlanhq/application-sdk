@@ -35,6 +35,7 @@ from prometheus_client import (
 from prometheus_client.exposition import default_handler
 from prometheus_client.parser import text_string_to_metric_families
 
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.pushgateway_errors import (
     PushGatewayJobRequiredError,
@@ -188,7 +189,7 @@ class PushGatewayClient:
         # this pod is also pushing fresh data.
         if self._sweep_stale_on_start:
             try:
-                await asyncio.to_thread(self._sweep_stale_predecessors_blocking)
+                await run_in_thread(self._sweep_stale_predecessors_blocking)
             except Exception:
                 logger.warning(
                     "Pushgateway startup sweep failed — proceeding with push",
@@ -205,7 +206,7 @@ class PushGatewayClient:
         )
 
     async def push_now(self) -> None:
-        await asyncio.to_thread(self._push_blocking)
+        await run_in_thread(self._push_blocking)
 
     async def stop(self) -> None:
         self._stopped.set()
@@ -248,7 +249,7 @@ class PushGatewayClient:
                     # startup sweep instead.
                     raise
             try:
-                await asyncio.to_thread(self._delete_blocking)
+                await run_in_thread(self._delete_blocking)
             except Exception:
                 logger.warning("Pushgateway delete on shutdown failed", exc_info=True)
 
@@ -375,6 +376,7 @@ class PushGatewayClient:
                     timeout=self._http_timeout_s,
                 )
                 deleted += 1
+                # conformance: ignore[L006] fires only for actually-stale groups found during a periodic sweep (rare, not per-item hot path); production logs are collected at INFO floor, so DEBUG would delete this from observability
                 logger.info(
                     "Swept stale Pushgateway group: job=%s instance=%s stale_for_seconds=%.1f",
                     self._job,

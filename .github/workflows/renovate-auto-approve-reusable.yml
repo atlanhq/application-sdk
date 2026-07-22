@@ -19,8 +19,18 @@
 #
 # Why atlan-ci:
 #   atlan-ci is a regular GitHub User account listed in CODEOWNERS (the `*` rule).
-#   Running `gh pr review --approve` with GH_TOKEN set to the org_pat secret
+#   Running `gh pr review --approve` with GH_TOKEN set to ORG_PAT_GITHUB
 #   posts the review as atlan-ci, satisfying require_code_owner_review.
+#   GitHub Apps cannot be CODEOWNERS, so this one step deliberately keeps
+#   using the atlan-ci PAT rather than the atlan-app-fleet App token.
+#
+# Caller migration (fleet rollout in progress):
+#   Callers should use `secrets: inherit` rather than the old explicit
+#   `secrets: { org_pat: ${{ secrets.ORG_PAT_GITHUB }} }` — inherit makes both
+#   ORG_PAT_GITHUB (approval step, above) and FLEET_APP_ID/FLEET_APP_PRIVATE_KEY
+#   (dashboard-dispatch step, below) available with nothing else to configure.
+#   The `org_pat` secret input stays declared (optional) only until every
+#   atlan-*-app caller has migrated — remove it once the fleet rollout is done.
 #
 # Relationship to @sdk-review:
 #   Fully decoupled. This workflow uses the approval signature
@@ -30,7 +40,8 @@
 #   freshness is guaranteed by the ruleset's dismiss_stale_reviews_on_push.
 #
 # Approval conditions (ALL must hold — see step comments in the bash below):
-#   1. PR author is renovate[bot]
+#   1. PR author is a Renovate bot: atlan-app-fleet[bot] (self-hosted fleet
+#      runner) or renovate[bot] (Mend — still used by application-sdk itself)
 #   2. PR is open and not a draft
 #   3. Current HEAD SHA matches the evaluated SHA (race guard)
 #   4. Every changed file is under .github/, uv.lock, requirements.txt,
@@ -47,7 +58,9 @@
 #   atlanhq/application-sdk/renovate-dashboard.yaml with the calling repo as
 #   input. This keeps the dashboard current within seconds of a PR state change
 #   rather than waiting up to 6h for the next cron. Non-critical — the cron
-#   provides fleet-wide coverage as a fallback if the dispatch fails.
+#   provides fleet-wide coverage as a fallback if the dispatch fails. Uses a
+#   minted atlan-app-fleet token (isolated rate-limit budget) when available,
+#   falling back to the atlan-ci PAT chain otherwise.
 
 name: "Renovate auto-approve (reusable)"
 
@@ -68,10 +81,35 @@ on:
         required: false
         default: ""
         type: string
+      extra_dep_file_pattern:
+        description: >
+          Optional extra ERE alternation of repo-specific dependency file paths
+          to treat as auto-approvable, appended to the built-in allowlist (which
+          already covers .github/ and lock/manifest/contract files). Each branch
+          is whole-line matched (grep -vxE), so anchor to full workspace-relative
+          paths, e.g. 'packages/conformance/.../templates/.+\.ya?ml'. This is how
+          a repo declares its OWN dep-managed source paths without hard-coding any
+          app-specific path into this shared workflow.
+        required: false
+        default: ""
+        type: string
     secrets:
       org_pat:
-        description: "PAT owned by atlan-ci with repo read + pull-request write access"
-        required: true
+        description: >
+          DEPRECATED — pass `secrets: inherit` instead so ORG_PAT_GITHUB and
+          FLEET_APP_ID/FLEET_APP_PRIVATE_KEY are picked up by their real names.
+          Kept optional only during the fleet rollout; remove once every
+          atlan-*-app caller has migrated off explicit named secrets.
+        required: false
+      ORG_PAT_GITHUB:
+        description: "PAT owned by atlan-ci with repo read + pull-request write access. Required for the approval step; available via secrets: inherit."
+        required: false
+      FLEET_APP_ID:
+        description: "atlan-app-fleet App ID (org secret). Used to mint a token for the (non-critical) dashboard-dispatch step; available via secrets: inherit."
+        required: false
+      FLEET_APP_PRIVATE_KEY:
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
+        required: false
 
 permissions:
   contents: read
@@ -90,11 +128,14 @@ jobs:
     steps:
       - name: Auto-approve if Renovate dep-only PR and all required checks are green
         env:
-          GH_TOKEN: ${{ secrets.org_pat }}
+          # secrets.org_pat: old explicit-passthrough callers. secrets.ORG_PAT_GITHUB:
+          # new callers using `secrets: inherit`. Same credential either way.
+          GH_TOKEN: ${{ secrets.org_pat || secrets.ORG_PAT_GITHUB }}
           REPO: ${{ github.repository }}
           EVENT_NAME: ${{ inputs.event_name }}
           RUN_SHA: ${{ inputs.head_sha }}
           DISPATCH_PR: ${{ inputs.pr_number }}
+          EXTRA_DEP_PATTERN: ${{ inputs.extra_dep_file_pattern }}
         run: |
           set -euo pipefail
 
@@ -133,9 +174,13 @@ jobs:
             DRAFT=$(printf '%s'  "$PR_META"   | jq -r .draft)
             HEAD_SHA=$(printf '%s' "$PR_META" | jq -r .head_sha)
 
-            # a. Author must be renovate[bot].
-            if [ "$AUTHOR" != "renovate[bot]" ]; then
-              echo "PR #${PR_NUM}: author is '${AUTHOR}', not renovate[bot] — skipping."
+            # a. Author must be a Renovate bot. Keep BOTH: atlan-app-fleet[bot]
+            #    is the self-hosted fleet runner; renovate[bot] is the Mend-hosted
+            #    app, which application-sdk itself still uses for its own
+            #    workflow-action updates. Do not drop renovate[bot] while
+            #    application-sdk remains on Mend.
+            if [ "$AUTHOR" != "atlan-app-fleet[bot]" ] && [ "$AUTHOR" != "renovate[bot]" ]; then
+              echo "PR #${PR_NUM}: author is '${AUTHOR}', not a Renovate bot — skipping."
               continue
             fi
 
@@ -175,9 +220,16 @@ jobs:
               continue
             fi
 
+            #    A caller may extend the allowlist with its own dep-managed
+            #    source paths via extra_dep_file_pattern (kept out of this shared
+            #    workflow so no app-specific path is hard-coded here).
+            DEP_FILE_RE='(.*/)?uv\.lock|(.*/)?package-lock\.json|(.*/)?requirements\.txt|(.*/)?pyproject\.toml|(.*/)?contract/PklProject|(.*/)?contract/PklProject\.deps\.json|app/generated/.*|atlan\.yaml|app\.yaml'
+            if [ -n "${EXTRA_DEP_PATTERN:-}" ]; then
+              DEP_FILE_RE="${DEP_FILE_RE}|${EXTRA_DEP_PATTERN}"
+            fi
             NON_DEP_FILES=$(echo "$FILENAMES" \
               | grep -v '^\.github/' \
-              | grep -vxE '(.*/)?uv\.lock|(.*/)?package-lock\.json|(.*/)?requirements\.txt|(.*/)?pyproject\.toml|(.*/)?contract/PklProject|(.*/)?contract/PklProject\.deps\.json|app/generated/.*|atlan\.yaml|app\.yaml' \
+              | grep -vxE "$DEP_FILE_RE" \
               || true)
             if [ -n "$NON_DEP_FILES" ]; then
               echo "PR #${PR_NUM}: contains non-dependency files:"
@@ -227,13 +279,24 @@ jobs:
             echo "✅ Approved PR #${PR_NUM} as atlan-ci (Renovate auto-approval)."
           done
 
+      - name: Mint fleet App token for dashboard dispatch
+        if: always()
+        id: app-token
+        continue-on-error: true # soft-fail: falls through to the PAT chain below
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - name: Trigger Renovate dashboard update
         if: always()
         env:
-          # secrets.org_pat is this reusable's declared alias for ORG_PAT_GITHUB
-          # (passed by every caller as `secrets: { org_pat: ${{ secrets.ORG_PAT_GITHUB }} }`).
-          # It is the same credential used in renovate-dashboard.yaml as secrets.ORG_PAT_GITHUB.
-          GH_TOKEN: ${{ secrets.org_pat }}
+          # Preferred: minted App token (isolated rate-limit budget, scoped to
+          # just application-sdk). Falls back to the PAT chain for callers not
+          # yet migrated to `secrets: inherit`, or if the mint step ever fails.
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.org_pat || secrets.ORG_PAT_GITHUB }}
           REPO: ${{ github.repository }}
         run: |
           # Push a fresh snapshot of this repo's Renovate PR state to the dashboard.

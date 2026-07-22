@@ -18,6 +18,9 @@
           "extraction_method": "{{extraction-method}}",
           "agent_json": "{{agent-json}}"
         }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     }
   }

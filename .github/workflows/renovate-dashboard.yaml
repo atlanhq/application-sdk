@@ -1,12 +1,17 @@
 # Update Renovate Dashboard — standalone scheduled workflow.
 #
-# Discovers every atlan-application-sdk consumer repo, gathers each repo's open
-# and recently-merged Renovate PRs via `gh pr list`, classifies them with the
-# conformance `renovate-scan` CLI, and deploys per-repo + fleet dashboard data
-# to Kryptonite (k.atlan.dev/renovate-dashboard/).
+# Discovers every atlan-application-sdk consumer repo, gathers open and
+# recently-merged Renovate PRs across the scanned scope via a handful of paginated
+# GraphQL search queries (renovate_fleet_scan.py — not a per-repo `gh pr list` loop,
+# which used to be the dominant contributor to fleet-wide rate-limit pressure),
+# classifies them with the conformance `renovate-scan` CLI, and deploys per-repo +
+# fleet dashboard data to Kryptonite (k.atlan.dev/renovate-dashboard/).
 #
 # Mirrors the conformance dashboard job in update-dashboard.yaml for the S3
-# deployment pattern, and reusable-renovate-dispatch.yaml for fleet discovery.
+# deployment pattern. This dashboard runs its own inline `gh search code`
+# discovery (see the discovery step below); the self-hosted renovate.yaml runner
+# instead uses the deterministic discover_org_consumers.py. Both target the same
+# signal — repos whose renovate.json extends the shared preset.
 #
 # Two modes:
 #   Full-fleet (schedule / workflow_dispatch without repo input):
@@ -45,12 +50,20 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout application-sdk
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
 
       - name: Discover atlan-application-sdk consumers
         id: discover
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SINGLE_REPO: ${{ inputs.repo }}
         run: |
           set -euo pipefail
@@ -77,7 +90,7 @@ jobs:
               || echo "[]")
 
             if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
-              echo "::warning::No consumer repos discovered. Check ORG_PAT_GITHUB permissions."
+              echo "::warning::No consumer repos discovered. Check the atlan-app-fleet App installation/permissions."
             else
               echo "Discovered $(echo "$repos" | jq '. | length') consumer repos"
             fi
@@ -86,42 +99,38 @@ jobs:
 
       - name: Gather Renovate PR data
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPOS: ${{ steps.discover.outputs.repos }}
+          SINGLE_REPO: ${{ inputs.repo }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/renovate-input/open /tmp/renovate-input/merged
+          printf '%s' "$REPOS" > /tmp/renovate-known-repos.json
 
           # 30-day merged window — GNU date on the runner, BSD date as fallback.
           SINCE=$(date -d '30 days ago' +%Y-%m-%d 2>/dev/null || date -v-30d +%Y-%m-%d)
 
-          # Iterate the discovered fleet. gh calls are fast, so a serial loop is
-          # simpler than a matrix and keeps all data in one workspace for the scan.
-          echo "$REPOS" | jq -r '.[]' | while read -r repo; do
-            [ -z "$repo" ] && continue
-            slug=$(echo "$repo" | tr '/' '_')
-            echo "Gathering Renovate PRs for $repo"
-
-            # Open PRs. gh returns [] for repos with no matching PRs — scan.py
-            # handles empty arrays, so a repo with no Renovate PRs is fine.
-            gh pr list --repo "$repo" --author 'app/renovate' --state open --limit 100 \
-              --json number,title,headRefName,labels,mergeable,reviewDecision,statusCheckRollup,files,createdAt,updatedAt,url,isDraft,body \
-              > "/tmp/renovate-input/open/${slug}.json" 2>/dev/null \
-              || echo "[]" > "/tmp/renovate-input/open/${slug}.json"
-
-            # Merged PRs over the trailing 30-day window.
-            gh pr list --repo "$repo" --author 'app/renovate' --state merged --limit 100 \
-              --search "merged:>=${SINCE}" \
-              --json number,title,headRefName,labels,createdAt,mergedAt,url,reviews \
-              > "/tmp/renovate-input/merged/${slug}.json" 2>/dev/null \
-              || echo "[]" > "/tmp/renovate-input/merged/${slug}.json"
-          done
+          # A handful of paginated GraphQL search calls covers the whole scope (org or
+          # single repo) at once, replacing what used to be two `gh pr list` REST calls
+          # per discovered repo — that O(repos) loop was a major contributor to hitting
+          # GitHub's rate limits at fleet scale. See renovate_fleet_scan.py.
+          # --repo is always passed (empty string in full-fleet mode); resolve_scope()
+          # in the script treats an empty value as "no repo" and falls back to --org.
+          python3 .github/scripts/renovate_fleet_scan.py \
+            --org atlanhq \
+            --repo "$SINGLE_REPO" \
+            --since "$SINCE" \
+            --open-dir /tmp/renovate-input/open \
+            --merged-dir /tmp/renovate-input/merged \
+            --known-repos-file /tmp/renovate-known-repos.json
 
           echo "Open PR files:   $(ls /tmp/renovate-input/open   | wc -l)"
           echo "Merged PR files: $(ls /tmp/renovate-input/merged | wc -l)"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.31"
 
       - name: Run Renovate scanner
         run: |
@@ -136,7 +145,7 @@ jobs:
             --out /tmp/renovate-output
 
       - name: Setup AWS Credentials
-        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6
+        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6
         with:
           aws-region: ap-south-1
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess

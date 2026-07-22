@@ -255,6 +255,33 @@ class AppRegistry:
         """List all registered App names."""
         return list(self._apps.keys())
 
+    @classmethod
+    def resolve_running_app_name(cls, prefer: str = "") -> str:
+        """Return the best-available app name for path construction.
+
+        Resolution order:
+        1. ``prefer`` — caller-supplied name (e.g. ``self._app_name`` from an
+           ``App`` instance that already owns its registered identity).
+        2. Registry — when exactly one app is registered, its name is
+           unambiguous and more reliable than an env var.
+        3. ``APPLICATION_NAME`` env var (``ATLAN_APPLICATION_NAME``) — last
+           resort; defaults to ``"default"`` when unset.
+
+        Args:
+            prefer: Optional explicit name to return immediately if non-empty.
+
+        Returns:
+            The resolved app name, never empty.
+        """
+        if prefer:
+            return prefer
+        apps = cls.get_instance().list_apps()
+        if len(apps) == 1:
+            return apps[0]
+        from application_sdk.constants import APPLICATION_NAME  # noqa: PLC0415
+
+        return APPLICATION_NAME
+
     def list_all(self) -> list[AppMetadata]:
         """List all registered Apps (all versions)."""
         result: list[AppMetadata] = []
@@ -450,4 +477,41 @@ class TaskRegistry:
         Returns:
             Activity name in format ``{app_name}:{task_name}``.
         """
-        return f"{app_name}:{task_name}"
+        return get_activity_name(app_name, task_name)
+
+
+def get_activity_name(app_name: str, task_name: str) -> str:
+    """Canonical ``{app_name}:{task_name}`` activity-name formatter.
+
+    The single home for the activity-naming rule so app tasks, the injected
+    preflight gate, and the worker's collision guard all agree byte-for-byte.
+    """
+    return f"{app_name}:{task_name}"
+
+
+def resolve_pool_queue(pool: str) -> str | None:
+    """Resolve the Temporal task queue for a named worker pool.
+
+    Resolution order (ADR-0016):
+
+    1. ``ATLAN_POOL_<POOL>_QUEUE`` explicit override — hyphens in the pool
+       name are normalised to underscores so ``"cold-tier"`` looks up
+       ``ATLAN_POOL_COLD_TIER_QUEUE``.
+    2. ``{ATLAN_TASK_QUEUE}-{pool}`` derived from the app's base queue.
+    3. ``None`` — neither env var is set; the caller must handle this.
+
+    Args:
+        pool: Validated lowercase kebab-case pool name
+            (e.g. ``"heavy"``, ``"cold-tier"``).
+
+    Returns:
+        Resolved task-queue string, or ``None`` if unresolvable.
+    """
+    import os  # noqa: PLC0415
+
+    env_key = f"ATLAN_POOL_{pool.upper().replace('-', '_')}_QUEUE"
+    explicit = os.environ.get(env_key)
+    if explicit:
+        return explicit
+    base_queue = os.environ.get("ATLAN_TASK_QUEUE", "")
+    return f"{base_queue}-{pool}" if base_queue else None

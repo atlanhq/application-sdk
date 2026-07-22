@@ -14,13 +14,16 @@ on ingress (``model_validate``), direct JSON serialization on egress
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
+from application_sdk.errors.base import AppError
+from application_sdk.errors.wire import FailureDetails
 
 
 class _DictLikeConfigBase(BaseModel):
@@ -176,6 +179,48 @@ class HandlerCredential(BaseModel):
     value: str
     """Credential value (sensitive — never log this directly)."""
 
+    @classmethod
+    def list_from_raw(cls, creds_dict: dict[str, Any]) -> list[HandlerCredential]:
+        """Build a credential list from a raw resolved credential dict.
+
+        Produces the same v3 ``[{key, value}]`` shape Heracles sends on the
+        HTTP path, so a handler's ``input.credentials`` round-trips identically
+        whether creds arrive over HTTP or are resolved inside the injected
+        preflight gate. Nested ``extra`` keys flatten to ``extra.<k>``.
+        """
+        return [
+            cls(key=pair["key"], value=pair["value"])
+            for pair in flatten_credentials_to_pairs(creds_dict)
+        ]
+
+
+def _serialize_credential_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value)
+
+
+def flatten_credentials_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
+    """Flatten a credential dict to v3 ``[{key, value}]`` pairs.
+
+    Nested ``extra`` is hoisted to ``extra.<k>`` keys. Shared by the HTTP
+    preflight path (heracles-normalized requests) and the injected gate's
+    resolved-credential conversion so both emit identical shapes.
+    """
+    pairs: list[dict[str, str]] = []
+    extra = creds_dict.get("extra")
+    for key, value in creds_dict.items():
+        if key == "extra" or value is None:
+            continue
+        pairs.append({"key": key, "value": _serialize_credential_value(value)})
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            if value is not None:
+                pairs.append(
+                    {"key": f"extra.{key}", "value": _serialize_credential_value(value)}
+                )
+    return pairs
+
 
 class AuthStatus(SerializableEnum):
     """Result of an authentication attempt."""
@@ -260,7 +305,16 @@ class AuthOutput(BaseModel):
 
 
 class PreflightStatus(SerializableEnum):
-    """Overall result of a preflight check."""
+    """Overall preflight verdict — decides the gate.
+
+    ``NOT_READY`` blocks the run only when the app has opted into hard mode
+    (``preflight_gate_mode = "hard"``); the default posture is soft, where a
+    ``NOT_READY`` verdict is reported (``outcome="would_block"``) but the run
+    proceeds. ``READY`` and ``PARTIAL`` always proceed. ``PARTIAL`` is
+    display-only (some advisory check failed but the run may continue). Also
+    surfaced to the Sage UI, the connector-pulse dashboard, and the Automation
+    Engine event.
+    """
 
     READY = "ready"
     NOT_READY = "not_ready"
@@ -277,10 +331,44 @@ class PreflightCheck(BaseModel):
     """Whether the check passed."""
 
     message: str = ""
-    """Details about the check result."""
+    """Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
+    is unset. If ``error`` is set, its ``message``/``suggested_action`` win and
+    this is ignored. Kept for handlers not yet migrated to typed errors."""
+
+    error: FailureDetails | None = None
+    """Typed failure for a failed check — set only on failed checks.
+
+    Pass a wire ``FailureDetails``, e.g.
+    ``AuthError(message=..., suggested_action=..., cause=exc).to_failure_details()``
+    — the statically-typed form. A bare ``AppError`` instance is also accepted at
+    runtime (a field validator coerces it), but type-checkers require the explicit
+    ``.to_failure_details()`` call. Carries category / code / audience / retryable
+    / suggested_action and a redacted, capped ``cause_repr``. Takes precedence over
+    :attr:`message`. Ignored on a passed check."""
 
     duration_ms: float = 0.0
     """How long the check took in milliseconds."""
+
+    @field_validator("error", mode="before")
+    @classmethod
+    def _coerce_error(cls, value: Any) -> Any:
+        if isinstance(value, AppError):
+            return value.to_failure_details()
+        return value
+
+    @property
+    def resolved_message(self) -> str:
+        """Message under the precedence rule: a failed check's ``error`` wins."""
+        if self.error is not None and not self.passed:
+            return self.error.message
+        return self.message
+
+    @property
+    def resolved_suggested_action(self) -> str:
+        """Suggested action from a failed check's ``error``; empty otherwise."""
+        if self.error is not None and not self.passed:
+            return self.error.suggested_action or ""
+        return ""
 
 
 class PreflightInput(BaseModel):
@@ -288,6 +376,16 @@ class PreflightInput(BaseModel):
 
     credentials: list[HandlerCredential] = []
     """Credentials to use during preflight."""
+
+    credentials_by_name: dict[str, list[HandlerCredential]] = Field(
+        default_factory=dict
+    )
+    """Resolved credentials grouped by ref name for multi-credential apps.
+
+    Keyed by the app's declared ``ExtractionInput.preflight_credential_refs`` name;
+    each group has the same flat ``[{key, value}]`` shape as :attr:`credentials`.
+    Populated only on the gate path for multi-credential apps; empty on the
+    single-credential and HTTP/SDR paths, which use :attr:`credentials`."""
 
     entrypoint: str = ""
     """Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
@@ -334,20 +432,28 @@ class PreflightInput(BaseModel):
     """Specific checks to run (empty = run all)."""
 
     timeout_seconds: int = 60
-    """Maximum seconds to wait for all checks."""
+    """Maximum seconds the handler has to run all checks.
+
+    On the injected gate path this carries the *enforced* per-attempt budget
+    (the gate activity's ``start_to_close``), so a handler that sizes its checks
+    to this value stays inside the real deadline — design them to finish within
+    it, with headroom. Advisory on the HTTP ``/check`` and SDR paths, which are
+    not bounded by the gate activity timeout."""
 
 
 class PreflightOutput(BaseModel):
     """Output from the preflight_check handler operation."""
 
     status: PreflightStatus
-    """Overall preflight result."""
+    """Overall verdict — decides the gate. ``NOT_READY`` blocks the run only in
+    hard mode (per-app opt-in); the default soft posture reports it and
+    proceeds. ``READY``/``PARTIAL`` proceed. The handler computes this itself."""
 
     checks: list[PreflightCheck] = []
-    """Individual check results."""
+    """Individual check results (display + failure attribution)."""
 
     message: str = ""
-    """Human-readable summary."""
+    """Human-readable summary. Seeds the gate's abort reason when set."""
 
     total_duration_ms: float = 0.0
     """Total time for all checks in milliseconds."""

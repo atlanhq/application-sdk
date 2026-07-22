@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING
 
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.contracts.types import FileReference
+from application_sdk.execution.heartbeat import run_in_thread
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -103,6 +104,21 @@ def _sha256_hex_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+async def _sha256_hex_file_async(path: Path) -> str:
+    """Run :func:`_sha256_hex_file` in a worker thread.
+
+    ``_sha256_hex_file`` reads and digests the whole file with no ``await``;
+    calling it directly on the event loop blocks the loop for the full
+    read+hash. A blocked loop cannot run the SDK's auto-heartbeat coroutine, so
+    activities that verify many/large files heartbeat-time-out even while making
+    progress. Uses ``run_in_thread`` (the SDK's dedicated blocking pool) rather
+    than the shared default executor, so this doesn't contend with Temporal's own
+    use of that executor — same reason directory listing is offloaded this way in
+    ``persist``. See conformance rule P031.
+    """
+    return await run_in_thread(_sha256_hex_file, path)
 
 
 async def _get_stored_sidecar(storage_path: str, store: ObjectStore) -> str | None:
@@ -205,9 +221,11 @@ async def persist_file_reference(
     if local.is_dir():
         # ── Directory upload ───────────────────────────────────────────────
         prefix = _make_storage_prefix(ref, output_path=output_path)
-        # to_thread keeps the blocking fsync + scandir off the event loop.
-        files = await asyncio.to_thread(safe_list_directory, local)
+        # run_in_thread keeps the blocking fsync + scandir off the event loop,
+        # using the dedicated pool rather than asyncio's default executor.
+        files = await run_in_thread(safe_list_directory, local)
         _t0 = time.monotonic()
+        # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
         logger.info(
             "file_ref.persist.start",
             local_path=ref.local_path,
@@ -242,6 +260,7 @@ async def persist_file_reference(
             sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
             await _gather_with_semaphore([_upload_one(fp) for fp in files], sem)
         except Exception as exc:
+            # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
             logger.error(
                 "file_ref.persist.failed",
                 storage_path=prefix,
@@ -251,6 +270,7 @@ async def persist_file_reference(
             )
             raise
 
+        # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
         logger.info(
             "file_ref.persist.complete",
             storage_path=prefix,
@@ -312,6 +332,7 @@ async def persist_file_reference(
                 )
             _write_local_sidecar(ref.local_path, sha256)
         except Exception as exc:
+            # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
             logger.error(
                 "file_ref.persist.failed",
                 storage_path=storage_path,
@@ -376,7 +397,7 @@ async def materialize_file_reference(
         FILE_REF_CHUNKED_THRESHOLD_BYTES,
     )
     from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        list_keys,
+        list_data_keys_with_meta,
     )
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         StorageError,
@@ -386,15 +407,17 @@ async def materialize_file_reference(
         _safe_join_under,
         download_file,
         download_file_chunked,
-        get_file_size,
+        get_file_meta,
     )
 
     if not ref.is_durable or ref.storage_path is None:
         return ref  # nothing to materialise
 
     # Determine single-file vs directory by listing sub-keys under the path.
-    all_keys = await list_keys(ref.storage_path, store)
-    data_keys = [k for k in all_keys if not k.endswith(".sha256")]
+    # Sizes come back with the listing so the directory branch can chunk large
+    # files without a per-file HEAD (BLDX-1513).
+    data_items = await list_data_keys_with_meta(ref.storage_path, store)
+    data_keys = [k for k, _, _ in data_items]
 
     # Structured kwargs in the logger calls below are intentional: every key used
     # (storage_path, local_path, file_size_bytes, bytes_downloaded,
@@ -409,12 +432,13 @@ async def materialize_file_reference(
         # Fast path: local file exists — validate before deciding to download.
         stored_hash: str | None = None
         if ref.local_path is not None and Path(ref.local_path).exists():
-            local_hash = _sha256_hex_file(Path(ref.local_path))
+            local_hash = await _sha256_hex_file_async(Path(ref.local_path))
             stored_hash = await _get_stored_sidecar(ref.storage_path, store)
 
             if stored_hash is not None and local_hash == stored_hash:
                 # File is intact — stamp local sidecar and reuse.
                 _write_local_sidecar(ref.local_path, local_hash)
+                # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                 logger.debug(
                     "file_ref.materialize.skipped",
                     storage_path=ref.storage_path,
@@ -425,7 +449,12 @@ async def materialize_file_reference(
             # Otherwise (no stored sidecar OR hash mismatch) fall through
             # to re-download — conservative since we cannot verify.
 
-        # Determine output path.
+        # Determine output path. owns_temp: a fresh mkstemp name per call
+        # means a resume checkpoint could never be reused on retry — disable
+        # resume and clean up the partial + sidecar on failure. A stable
+        # ref.local_path keeps the default (env-driven) resume behaviour so a
+        # Temporal retry on the same pod fetches only the missing ranges.
+        owns_temp = ref.local_path is None
         if ref.local_path is not None:
             out_path = ref.local_path
             Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -447,7 +476,10 @@ async def materialize_file_reference(
         # lists empty here, AND some stores (notably GCS with conditional
         # IAM) silently return an empty listing when the caller lacks
         # permission.
-        remote_size = await get_file_size(ref.storage_path, store, normalize=False)
+        remote_meta = await get_file_meta(ref.storage_path, store, normalize=False)
+        remote_size, remote_etag = (
+            remote_meta if remote_meta is not None else (None, None)
+        )
         if remote_size is None:
             raise StorageNotFoundError(
                 f"FileReference path '{ref.storage_path}' resolved to no "
@@ -489,6 +521,12 @@ async def materialize_file_reference(
                     max_concurrent_chunks=FILE_REF_CHUNK_CONCURRENCY,
                     compute_hash=True,
                     normalize=False,
+                    # remote_size/etag already fetched via get_file_meta (HEAD)
+                    # above; reuse both so the chunked path doesn't HEAD a
+                    # second time and its range GETs are version-pinned.
+                    file_size=remote_size,
+                    etag=remote_etag,
+                    resume=False if owns_temp else None,
                 )
             else:
                 sha256 = await download_file(
@@ -517,6 +555,7 @@ async def materialize_file_reference(
 
             _write_local_sidecar(out_path, sha256)
         except Exception as exc:
+            # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
             logger.error(
                 "file_ref.materialize.failed",
                 storage_path=ref.storage_path,
@@ -524,6 +563,14 @@ async def materialize_file_reference(
                 bytes_transferred_before_failure=0,
                 exc_info=True,
             )
+            if owns_temp:
+                # A fresh-named temp can never be resumed — don't strand the
+                # partial file or its checkpoint sidecar (best-effort).
+                try:
+                    Path(out_path).unlink(missing_ok=True)
+                    Path(str(out_path) + ".transfer-state").unlink(missing_ok=True)
+                except OSError:  # conformance: ignore[E002] best-effort cleanup of an unusable temp; original error re-raised below
+                    pass
             raise
 
         _log(
@@ -555,6 +602,7 @@ async def materialize_file_reference(
         Path(local_directory).mkdir(parents=True, exist_ok=True)
 
         _t0 = time.monotonic()
+        # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
         logger.info(
             "file_ref.materialize.start",
             storage_path=ref.storage_path,
@@ -565,7 +613,7 @@ async def materialize_file_reference(
 
         prefix = ref.storage_path.rstrip("/") + "/"
 
-        async def _download_one(key: str) -> bool:
+        async def _download_one(key: str, size: int, etag: str | None) -> bool:
             """Download one file from the prefix. Returns True if skipped (cache hit)."""
             rel = key.removeprefix(prefix)
             # Reject keys whose resolved path escapes local_directory.
@@ -580,8 +628,9 @@ async def materialize_file_reference(
             # OOM recoveries on the same node) free after the first pass.
             if dest_path.exists() and dest_sidecar.exists():
                 try:
-                    local_hash = _sha256_hex_file(dest_path)
+                    local_hash = await _sha256_hex_file_async(dest_path)
                     if local_hash == dest_sidecar.read_text().strip():
+                        # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                         logger.debug(
                             "file_ref.materialize.skipped",
                             storage_path=key,
@@ -591,6 +640,7 @@ async def materialize_file_reference(
                         return True
                 # conformance: ignore[E004] sidecar integrity probe; failure is benign and logged at debug before falling through to re-download
                 except Exception:
+                    # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                     logger.debug(
                         "file_ref.materialize.sidecar_check_failed",
                         storage_path=key,
@@ -599,8 +649,23 @@ async def materialize_file_reference(
                     )
                     # fall through to re-download
 
-            sha256 = await download_file(
-                key, dest, store, compute_hash=True, normalize=False
+            # Chunk large files (bounded parallel range GETs, each with its own
+            # timeout / retry budget) and stream small ones — passing the
+            # listing's size so no per-file HEAD is issued. This is the same
+            # reliability the single-file branch already has (BLDX-1513); before
+            # this, a multi-hundred-MB file inside a directory ref (e.g. a
+            # connection-cache SQLite) streamed in one GET and died on the
+            # overall-request timeout.
+            sha256 = await download_file_chunked(
+                key,
+                dest,
+                store,
+                chunk_size_bytes=FILE_REF_CHUNK_SIZE_BYTES,
+                max_concurrent_chunks=FILE_REF_CHUNK_CONCURRENCY,
+                compute_hash=True,
+                normalize=False,
+                file_size=size,
+                etag=etag,
             )
             if sha256 is not None:
                 _write_local_sidecar(dest, sha256)
@@ -616,10 +681,11 @@ async def materialize_file_reference(
 
             sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
             results = await _gather_with_semaphore(
-                [_download_one(k) for k in data_keys], sem
+                [_download_one(k, s, e) for k, s, e in data_items], sem
             )
             skipped = sum(results)
         except Exception as exc:
+            # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
             logger.error(
                 "file_ref.materialize.failed",
                 storage_path=ref.storage_path,
@@ -629,6 +695,7 @@ async def materialize_file_reference(
             )
             raise
 
+        # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
         logger.info(
             "file_ref.materialize.complete",
             storage_path=ref.storage_path,
@@ -675,7 +742,7 @@ async def fetch(
         A ``FileReference`` with ``local_path`` set to the downloaded file.
 
     Raises:
-        RuntimeError: If *store* is ``None`` and no infrastructure store is
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is
             available (i.e. called outside an activity without an explicit store).
     """
     if not ref.is_durable:

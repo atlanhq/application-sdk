@@ -82,7 +82,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "``FailureCategory`` is the closed, single-axis taxonomy the SDK owns —\n"
             "every value is the canonical answer to *what happened* and is consumed as\n"
             "an immutable reporting metric (dashboards, SLA gates, on-call routing).\n"
-            "The 14 categorical leaves in ``application_sdk.errors.leaves`` (and\n"
+            "The 15 categorical leaves in ``application_sdk.errors.leaves`` (and\n"
             "``AppError`` itself) are the sole defining sites: each leaf binds exactly\n"
             "one ``FailureCategory`` to its ``category`` ``ClassVar``.\n"
             "\n"
@@ -277,5 +277,126 @@ RULES: tuple[RuleDefinition, ...] = (
             "is not feasible.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p015",
+    ),
+    RuleDefinition(
+        id="P026",
+        scope=RuleScope.APP,
+        name="GetattrOnTypedContractField",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="typed-contract-boundary",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.9.0",
+        rationale=(
+            "P013/P014 buy a typed Input/Output boundary; reading a declared field "
+            "via getattr(param, 'field', default) spends it. A renamed or removed "
+            "contract field silently yields the default instead of raising "
+            "AttributeError, so contract drift goes undetected at the call site and "
+            "the type annotation stops being load-bearing."
+        ),
+        short_description=(
+            "getattr() with a default on a typed entrypoint/task contract param — "
+            "defeats the typed boundary"
+        ),
+        full_description=(
+            "Inside an ``@entrypoint`` or ``@task`` method, a declared field of a\n"
+            "typed ``Input``/``Output`` contract parameter is read via\n"
+            '``getattr(param, "field", default)`` instead of attribute access.\n'
+            "Only the three-argument form (a *default* present) is flagged: it\n"
+            "silently substitutes the default when the field is renamed or removed,\n"
+            "where ``param.field`` would raise ``AttributeError`` and surface the\n"
+            "drift.  This defeats the typed boundary P013/P014 establish and hides\n"
+            "the change from the contract ledger (B005/B006), which only sees schema\n"
+            "edits, not reads.\n"
+            "\n"
+            "Fix: use attribute access (``param.field``).  Suppress with\n"
+            "``# conformance: ignore[P026] <reason>`` only when a value genuinely may\n"
+            "be absent and the contract models it as ``Optional`` with a real default.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p026",
+    ),
+    RuleDefinition(
+        id="P027",
+        scope=RuleScope.APP,
+        name="AppStateAsCrossTaskChannel",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="state-seam",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.9.0",
+        rationale=(
+            "app_state is an in-memory bag scoped to a single execution id. Using it "
+            "to hand data between tasks silently no-ops across activity/worker "
+            "boundaries. A get_app_state(KEY) whose KEY is never written by any "
+            "set_app_state(KEY) is a dead side channel — the read always falls "
+            "through to its default, so the intended hand-off never happens."
+        ),
+        short_description=(
+            "get_app_state(KEY) with no matching set_app_state(KEY) writer anywhere — "
+            "dead cross-task side channel"
+        ),
+        full_description=(
+            "An ``App.get_app_state(KEY)`` read whose ``KEY`` is never written by a\n"
+            "``set_app_state(KEY, <non-None value>)`` anywhere in the app (a writer\n"
+            "that only stores ``None`` — a placeholder 'claim ownership' write whose\n"
+            "real populating write never lands — does not count).  ``app_state`` is\n"
+            "in-memory\n"
+            "and keyed by execution id, so it cannot carry data across activity or\n"
+            "worker boundaries; a read with no writer always returns the default and\n"
+            "the optimisation it was meant to enable is dead code.\n"
+            "\n"
+            "Cross-file: keys are resolved through module-level string constants, so\n"
+            "a key defined in one module and read in another is matched.  Keys that\n"
+            "do not resolve to a string literal are ignored on both sides.\n"
+            "\n"
+            "Fix: pass cross-task data through the typed entrypoint/task contract.\n"
+            "Suppress with ``# conformance: ignore[P027] <reason>`` only when the\n"
+            "writer is genuinely external to the scanned source.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p027",
+    ),
+    RuleDefinition(
+        id="P028",
+        scope=RuleScope.APP,
+        name="ManualQualifiedNameFString",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-modeling",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.9.0",
+        rationale=(
+            "qualifiedName is the identity primitive for every Atlan asset (dedup, "
+            "lineage, linking). Building it with an f-string scatters the grammar "
+            "(segments, order, separator, escaping) across every connector, so a "
+            "single grammar change breaks each one independently and silently. The "
+            "pyatlan asset .creator() factories own the grammar centrally."
+        ),
+        short_description=(
+            "Asset qualifiedName composed by hand with an f-string instead of via "
+            "pyatlan asset creators"
+        ),
+        full_description=(
+            "An f-string composes a slash-delimited ``qualifiedName`` — it both\n"
+            "interpolates a ``*qualified_name`` / ``*_qn`` value and contains a\n"
+            '``/`` separator (e.g. ``f"{connection_qualified_name}/{schema}"``).\n'
+            "qualifiedName is Atlan's asset identity; hand-building it duplicates the\n"
+            "grammar across the fleet, and a grammar change (tenant scoping, escaping)\n"
+            "then breaks every connector independently with no single source of truth.\n"
+            "\n"
+            "Not flagged — object-store keys: a qn reference preceded by a ``/``-bearing\n"
+            "literal segment (e.g.\n"
+            '``f"persistent-artifacts/.../{connection_qualified_name}/publish-state"``) is\n'
+            "a storage path that embeds a qn, not an asset qualifiedName rooted at its\n"
+            "parent qn, so it is not flagged.\n"
+            "\n"
+            "Fix: construct assets through the pyatlan asset ``.creator()`` factories,\n"
+            "which compute qualifiedName from typed parent references.  WARN tier —\n"
+            "suppress with ``# conformance: ignore[P028] <reason>`` where a raw\n"
+            "qualifiedName string is genuinely required.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p028",
     ),
 )

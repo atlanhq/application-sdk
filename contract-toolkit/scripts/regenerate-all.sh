@@ -36,16 +36,22 @@ if [ "$failed" -ne 0 ]; then
 fi
 
 # Lint + format generated Python files to match what the pre-commit hooks produce.
-# ruff check --fix removes unused imports (F401); ruff format handles whitespace.
-PY_FILES=$(find examples -name '_input.py' | sort)
+# No --select: ruff auto-discovers this repo's own pyproject.toml rule set,
+# same as pre-commit would apply — hardcoding a narrower subset (previously
+# just F401) drifts from whatever's actually configured (see
+# .github/scripts/renovate_pkl_sync.py's _format_generated for the consumer-repo
+# equivalent of this same fix).
+# Match every generated *.py (_input.py, _e2e_base.py, _e2e_credential.py,
+# _e2e_substitutions.py, …) — not just _input.py — so none lands unformatted.
+PY_FILES=$(find examples -path '*/app/generated/*.py' | sort)
 if [ -n "$PY_FILES" ]; then
   echo ""
   echo ":: Linting and formatting generated Python files..."
   if command -v uvx &> /dev/null; then
-    echo "$PY_FILES" | xargs uvx ruff check --fix --select F401 --quiet
+    echo "$PY_FILES" | xargs uvx ruff check --fix --quiet
     echo "$PY_FILES" | xargs uvx ruff format
   elif command -v ruff &> /dev/null; then
-    echo "$PY_FILES" | xargs ruff check --fix --select F401 --quiet
+    echo "$PY_FILES" | xargs ruff check --fix --quiet
     echo "$PY_FILES" | xargs ruff format
   else
     echo "WARNING: ruff not found — skipping Python lint/format."

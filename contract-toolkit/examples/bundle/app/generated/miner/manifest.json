@@ -13,10 +13,14 @@
         "task_queue": "atlan-miner-{deployment_name}",
         "args": {
           "credential": "{{credential}}",
+          "agent_json": "{{agent-json}}",
           "credential_guid": "{{credential-guid}}",
           "lookback_days": "{{lookback-days}}",
           "max_queries": "{{max-queries}}"
         }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     }
   }

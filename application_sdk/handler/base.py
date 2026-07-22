@@ -145,14 +145,20 @@ class Handler(ABC):
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         """Run preflight checks (connectivity, permissions, etc.).
 
+        One method, two surfaces: the HTTP ``/check`` endpoint (Sage UI) and the
+        injected pre-extraction gate. To abort a run, return
+        ``status=PreflightStatus.NOT_READY``; ``READY``/``PARTIAL`` proceed.
+        Express a blocking failure through the returned status, not by raising —
+        the gate fails open on any error it cannot turn into a verdict (handler
+        bug, secret store down, timeout), so a raise does not reliably block.
+
         Args:
-            input: Credentials, connection config, and checks to run.
+            input: Credentials, connection config, and checks to run. On the gate
+                path connectivity comes from ``credentials`` (there is no
+                ``connection_config``/form ``metadata`` on that path).
 
         Returns:
-            PreflightOutput with per-check results and overall status.
-
-        Raises:
-            HandlerError: On check errors that should surface as HTTP 500.
+            PreflightOutput whose ``status`` decides the gate.
         """
         ...
 
@@ -188,10 +194,9 @@ class DefaultHandler(Handler):
         )
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        """Always returns READY with no checks."""
+        """Returns READY (no checks) when no handler is registered."""
         return PreflightOutput(
-            status=PreflightStatus.READY,
-            message="All preflight checks passed",
+            status=PreflightStatus.READY, message="No preflight handler registered"
         )
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:

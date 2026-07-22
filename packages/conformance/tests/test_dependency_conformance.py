@@ -1,4 +1,4 @@
-"""Tests for the D-series (D001/D002/D003/D004/D005/D006/D007/D008) dependency_conformance check."""
+"""Tests for the D-series (D001-D009) dependency_conformance check."""
 
 from __future__ import annotations
 
@@ -7,14 +7,16 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from conformance.suite.checks._ast_common import parse_toml_suppressions
 from conformance.suite.checks.dependency_conformance import (
+    _REMOTE_COMPONENT_FETCH_RE,
     SDK_PYTHON_FLOOR,
+    _collect_dialect_drivers,
     _is_bounded_specifier,
     _iter_dep_entries,
     _iter_dependency_group_entries,
     _normalise_name,
     _parse_requirement,
-    _parse_suppressions,
     _requires_python_lower_bound,
     _sdk_extras_in,
     main,
@@ -294,7 +296,7 @@ def test_parse_suppressions_inline_directive() -> None:
         '    "pydantic>=2,<3",  # conformance: ignore[D002] override for hotfix\n'
         "]\n"
     )
-    suppressions = _parse_suppressions(text)
+    suppressions = parse_toml_suppressions(text)
     assert 4 in suppressions
     ids, just = suppressions[4]
     assert ids == frozenset({"D002"})
@@ -678,6 +680,164 @@ def test_d008_line_anchors_in_pyright_section_not_decoy() -> None:
     assert findings[0].line == expected
 
 
+# ── D009: remote Dapr component fetch ────────────────────────────────────────
+
+
+def _poe_pyproject(task_toml: str) -> str:
+    return (
+        '[project]\nname = "demo-app"\nversion = "0.1.0"\ndependencies = [\n'
+        '    "atlan-application-sdk>=3.17,<4.0.0",\n]\n\n'
+        f"{task_toml}\n"
+    )
+
+
+def test_d009_fires_on_github_contents_api_fetch() -> None:
+    task = (
+        "[tool.poe.tasks.download-components]\n"
+        'interpreter = "python"\n'
+        'env = { SDK_VERSION = "v3.14.0" }\n'
+        'shell = """\n'
+        "import requests\n"
+        'api_url = "https://api.github.com/repos/atlanhq/application-sdk/contents/components"\n'
+        'requests.get(api_url, params={"ref": "v3.14.0"})\n'
+        '"""\n'
+    )
+    findings = scan_text(
+        _poe_pyproject(task),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert [f.rule_id for f in findings] == ["D009"]
+
+
+def test_d009_fires_on_raw_githubusercontent_fetch() -> None:
+    task = (
+        "[tool.poe.tasks]\n"
+        "download-components.shell = "
+        '"curl -O https://raw.githubusercontent.com/atlanhq/application-sdk/'
+        'v3.14.0/components/statestore.yaml"\n'
+    )
+    findings = scan_text(
+        _poe_pyproject(task),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert [f.rule_id for f in findings] == ["D009"]
+
+
+def test_d009_passes_for_local_copy_from_installed_wheel() -> None:
+    task = (
+        "[tool.poe.tasks]\n"
+        'download-components.shell = "python -c \\"import application_sdk\\""\n'
+    )
+    findings = scan_text(
+        _poe_pyproject(task),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert findings == []
+
+
+def test_d009_no_poe_tasks_no_finding() -> None:
+    findings = scan_text(
+        _poe_pyproject(""),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert findings == []
+
+
+def test_d009_unrelated_poe_task_no_finding() -> None:
+    task = '[tool.poe.tasks]\nstart-dapr = "dapr run --app-id app"\n'
+    findings = scan_text(
+        _poe_pyproject(task),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert findings == []
+
+
+def test_d009_suppressed_inline_directive_above() -> None:
+    task = (
+        "[tool.poe.tasks]\n"
+        "# conformance: ignore[D009] migration tracked separately\n"
+        "download-components.shell = "
+        '"curl -O https://raw.githubusercontent.com/atlanhq/application-sdk/'
+        'v3.14.0/components/statestore.yaml"\n'
+    )
+    findings = scan_text(
+        _poe_pyproject(task),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert len(findings) == 1
+    assert findings[0].suppressed is True
+
+
+def test_d009_does_not_match_similarly_prefixed_repo_name() -> None:
+    """A repo merely starting with 'application-sdk' must not false-positive."""
+    task = (
+        "[tool.poe.tasks]\n"
+        "download-components.shell = "
+        '"curl -O https://raw.githubusercontent.com/atlanhq/application-sdk-extra/'
+        'v1.0.0/components/statestore.yaml"\n'
+    )
+    findings = scan_text(
+        _poe_pyproject(task),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert findings == []
+
+
+def test_d009_matches_bare_repo_reference_with_no_trailing_path() -> None:
+    task = (
+        "[tool.poe.tasks]\n"
+        "download-components.shell = "
+        '"echo https://api.github.com/repos/atlanhq/application-sdk"\n'
+    )
+    findings = scan_text(
+        _poe_pyproject(task),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert [f.rule_id for f in findings] == ["D009"]
+
+
+def test_d009_multiple_tasks_one_violating_reports_once_at_correct_line() -> None:
+    """A finding must anchor to the actual offending line, not misattribute
+    across tasks when only one of several poe tasks violates the rule."""
+    task = (
+        "[tool.poe.tasks]\n"
+        'start-dapr = "dapr run --app-id app"\n'
+        "download-components.shell = "
+        '"curl -O https://raw.githubusercontent.com/atlanhq/application-sdk/'
+        'v3.14.0/components/statestore.yaml"\n'
+    )
+    text = _poe_pyproject(task)
+    findings = scan_text(
+        text,
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert len(findings) == 1
+    expected_line = next(
+        ln
+        for ln, line in enumerate(text.splitlines(), start=1)
+        if _REMOTE_COMPONENT_FETCH_RE.search(line)
+    )
+    assert findings[0].line == expected_line
+
+
 def test_inline_duplicate_entries_get_distinct_columns() -> None:
     # A repeated requirement on one inline line must not alias to the first
     # match's column (the raw_line.index → offset-cursor fix).
@@ -790,6 +950,7 @@ def _d003_scan(
     *,
     imported_modules: set[str],
     dist_import_map: dict[str, set[str] | None],
+    dialect_drivers: set[str] | None = None,
     name: str = "my-connector",
 ) -> list:
     """Write a pyproject and run scan_all with injected import data (no env/AST).
@@ -806,6 +967,7 @@ def _d003_scan(
         tmp_path,
         imported_modules=imported_modules,
         dist_import_map=dist_import_map,
+        dialect_drivers=set() if dialect_drivers is None else dialect_drivers,
     )
     return [f for f in findings if f.rule_id == "D003"]
 
@@ -843,6 +1005,78 @@ def test_d003_maps_dist_name_to_import_name(tmp_path: Path) -> None:
         dist_import_map={"pyyaml": {"yaml"}},
     )
     assert findings == []
+
+
+def test_d003_not_flagged_when_referenced_as_sqlalchemy_driver(tmp_path: Path) -> None:
+    """A DBAPI driver loaded dynamically by SQLAlchemy via a ``dialect+driver``
+    string (never imported) is treated as used, not flagged."""
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n    "aiomysql>=0.2,<1",\n]\n',
+        imported_modules={"os"},
+        dist_import_map={"aiomysql": {"aiomysql"}},
+        dialect_drivers={"aiomysql"},
+    )
+    assert findings == []
+
+
+def test_d003_dialect_driver_match_is_selective(tmp_path: Path) -> None:
+    """A non-empty dialect_drivers set suppresses only the matching driver — an
+    unrelated declared-but-unimported dependency is still flagged."""
+    findings = _d003_scan(
+        tmp_path,
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        '    "aiomysql>=0.2,<1",\n'
+        '    "requests>=2,<3",\n'
+        "]\n",
+        imported_modules={"os"},
+        dist_import_map={"aiomysql": {"aiomysql"}, "requests": {"requests"}},
+        dialect_drivers={"aiomysql"},
+    )
+    messages = [f.message for f in findings]
+    assert any("requests" in m for m in messages), "requests must still be flagged"
+    assert not any(
+        "aiomysql" in m for m in messages
+    ), "aiomysql is suppressed by the driver match"
+
+
+def test_d003_collects_dialect_driver_from_source_string(tmp_path: Path) -> None:
+    """End-to-end: a ``mysql+aiomysql`` dialect string in source clears the
+    aiomysql D003 finding without an explicit import or injected drivers."""
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(
+        '[project]\nname = "my-connector"\nversion = "0.1.0"\n'
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        '    "aiomysql>=0.2,<1",\n]\n',
+        encoding="utf-8",
+    )
+    src = tmp_path / "app" / "client.py"
+    src.parent.mkdir(parents=True)
+    src.write_text(
+        'URL = "mysql+aiomysql://user:pw@host:3306/db"\n'
+        'DRIVERNAME = "mysql+aiomysql"\n',
+        encoding="utf-8",
+    )
+    findings = scan_all(
+        [pp, src],
+        tmp_path,
+        imported_modules={"os"},  # aiomysql NOT imported
+        dist_import_map={"aiomysql": {"aiomysql"}},
+        # dialect_drivers left to compute from source
+    )
+    assert [f for f in findings if f.rule_id == "D003"] == []
+
+
+def test_collect_dialect_drivers_parses_both_forms(tmp_path: Path) -> None:
+    src = tmp_path / "m.py"
+    src.write_text(
+        't1 = "mysql+aiomysql://u:p@h/d"\n'
+        't2 = "postgresql+asyncpg"\n'
+        'noise = "1 + 2 = 3"\n',
+        encoding="utf-8",
+    )
+    assert _collect_dialect_drivers([src]) == {"aiomysql", "asyncpg"}
 
 
 def test_d003_skips_unresolvable_dependency_and_reports_it(

@@ -182,6 +182,10 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 | `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Max concurrent upload/download operations |
 | `ATLAN_TEMPORARY_PATH` | `./local/tmp/` | Base path for local temporary files |
 | `ATLAN_CLEANUP_BASE_PATHS` | _(empty)_ | Extra prefixes to clean up (comma-separated) |
+| `ATLAN_OBSTORE_READ_TIMEOUT` | `90s` | Progress-based liveness bound — fail only if no bytes arrive for this long |
+| `ATLAN_OBSTORE_TIMEOUT` | `30m` | Overall per-request wall-clock backstop |
+| `ATLAN_STORAGE_RESUME_DOWNLOADS` | `true` | Resume interrupted chunked downloads from their checkpoint sidecar |
+| `ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS` | `30` | Heartbeat log interval during long transfers (`0` disables) |
 
 ---
 

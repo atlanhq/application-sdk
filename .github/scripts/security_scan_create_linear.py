@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Create a Linear ticket for daily security scan findings, with dedup.
+"""Create Linear tickets for daily security scan findings, with dedup.
+
+One ticket is filed **per severity level** (Critical / High / Medium / Low)
+so each carries its own remediation SLA and priority and is triaged
+independently by the vuln-triage rover.
 
 Compared to a naive "create one ticket per run":
 - Every finding (all severities) is identified by a stable ID (Trivy CVE).
@@ -8,14 +12,16 @@ Compared to a naive "create one ticket per run":
   hidden marker line in each description:
       <!-- vuln-ids: id1,id2,id3 -->
   IDs already covered by an open labelled issue are removed from
-  today's set.
+  today's set (dedup is global — a CVE tracked by any open ticket of any
+  severity is not refiled).
 - If every finding is already covered, no new issue is created — we
   just record that fact in the workflow summary.
-- Otherwise, a new issue is created listing only the *new* IDs, tagged
-  with the same label so the next run dedups against it. The full
-  marker (every finding seen today) is included.
+- Otherwise the remaining *new* findings are partitioned by severity and
+  one ticket per non-empty severity is created, tagged with the same label
+  so the next run dedups against it. Each ticket's marker lists only the
+  CVE IDs of its own severity (the ones it tracks).
 
-The new issue is created in the team's "Backlog" state (not Triage).
+Each new issue is created in the team's "Backlog" state (not Triage).
 The ``Backlog`` state is resolved at runtime from the team's workflow.
 
 The label name defaults to ``vulnerabilities`` and must already exist
@@ -35,7 +41,8 @@ Optional:
     LINEAR_ASSIGNEE_ID
     LINEAR_VULN_LABEL_NAME  default: "vulnerabilities"
     GITHUB_STEP_SUMMARY     Markdown is appended for visibility
-    GITHUB_OUTPUT           new_issue_identifier / new_issue_url emitted here
+    GITHUB_OUTPUT           ``new_issues`` (JSON array of {identifier, url,
+                            severity}) is emitted here for the dispatch step
 """
 
 from __future__ import annotations
@@ -66,6 +73,17 @@ ACTIONABLE_SEVERITIES_TRIVY = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
 
 # Lower rank sorts first.
 SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+
+# One ticket is filed per severity level so each carries the right SLA and
+# priority and is triaged independently. Map each severity to a Linear
+# priority (1=Urgent … 4=Low) and a human label for the title.
+SEVERITY_PRIORITY = {"CRITICAL": 1, "HIGH": 2, "MEDIUM": 3, "LOW": 4}
+SEVERITY_LABEL = {
+    "CRITICAL": "Critical",
+    "HIGH": "High",
+    "MEDIUM": "Medium",
+    "LOW": "Low",
+}
 
 
 def gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
@@ -261,25 +279,28 @@ def render_table(findings: list[dict]) -> str:
 
 def build_description(
     new_findings: list[dict],
-    all_today_ids: list[str],
+    severity: str,
     target_image: str,
     scan_date: str,
     run_url: str,
 ) -> str:
+    """Render a per-severity ticket body. The marker lists only this
+    severity's CVE IDs (the ones this ticket tracks)."""
     new_ids = [f["id"] for f in new_findings]
     visible_ids = "\n".join(f"- `{vid}`" for vid in new_ids)
     table = render_table(new_findings)
-    marker = f"{VULN_MARKER_PREFIX}{','.join(all_today_ids)}{VULN_MARKER_SUFFIX}"
+    marker = f"{VULN_MARKER_PREFIX}{','.join(new_ids)}{VULN_MARKER_SUFFIX}"
     plural = "y" if len(new_findings) == 1 else "ies"
-    return f"""## Daily Security Scan — New Findings
+    sev_label = SEVERITY_LABEL.get(severity, severity.title())
+    return f"""## Daily Security Scan — New {sev_label} Findings
 
 **Image:** `{target_image}`
 **Python deps:** `pyproject.toml` / `uv.lock` (application-sdk)
 **Scan date:** {scan_date}
 **Workflow run:** [View logs]({run_url})
 
-This issue tracks **{len(new_findings)} new** vulnerabilit{plural} \
-(all severities) not already covered by an open Linear issue in this project.
+This issue tracks **{len(new_findings)} new {sev_label}** vulnerabilit{plural} \
+not already covered by an open Linear issue in this project.
 
 ---
 
@@ -321,6 +342,76 @@ def emit_output(name: str, value: str) -> None:
     if output_path:
         with open(output_path, "a") as f:
             f.write(f"{name}={value}\n")
+
+
+def create_issue(
+    severity: str,
+    bucket: list[dict],
+    *,
+    team_id: str,
+    project_id: str,
+    label_id: str,
+    backlog_state_id: str | None,
+    target_image: str,
+    scan_date: str,
+    run_url: str,
+) -> dict | None:
+    """Create one per-severity Linear issue. Returns {identifier, url,
+    severity} on success, else None."""
+    sev_label = SEVERITY_LABEL.get(severity, severity.title())
+    description = build_description(bucket, severity, target_image, scan_date, run_url)
+    title = (
+        f"[Security][{sev_label}] {len(bucket)} new "
+        f"vulnerabilit{'y' if len(bucket) == 1 else 'ies'} ({scan_date})"
+    )
+
+    issue_input: dict[str, Any] = {
+        "title": title,
+        "description": description,
+        "teamId": team_id,
+        "projectId": project_id,
+        "priority": SEVERITY_PRIORITY.get(severity, 2),
+        "labelIds": [label_id],
+    }
+    for env_key, payload_key in [
+        ("LINEAR_MILESTONE_ID", "projectMilestoneId"),
+        ("LINEAR_ASSIGNEE_ID", "assigneeId"),
+    ]:
+        val = os.environ.get(env_key)
+        if val:
+            issue_input[payload_key] = val
+    if backlog_state_id:
+        issue_input["stateId"] = backlog_state_id
+
+    data = gql(
+        """
+        mutation CreateIssue($input: IssueCreateInput!) {
+          issueCreate(input: $input) {
+            success
+            issue { id identifier url }
+          }
+        }
+        """,
+        {"input": issue_input},
+    )
+    result = data.get("issueCreate") or {}
+    if not result.get("success"):
+        sys.stderr.write(
+            f"Linear issueCreate returned success=false for {severity}: "
+            f"{json.dumps(data)}\n"
+        )
+        return None
+
+    issue = result.get("issue") or {}
+    write_summary(
+        f"### Linear Issue ({sev_label}): "
+        f"[{issue.get('identifier')}]({issue.get('url')})"
+    )
+    return {
+        "identifier": issue.get("identifier") or "",
+        "url": issue.get("url") or "",
+        "severity": severity,
+    }
 
 
 def main() -> int:
@@ -375,64 +466,44 @@ def main() -> int:
         )
         return 0
 
-    write_summary(f"> ⚠️ {len(new_findings)} new finding(s) — creating Linear issue.")
+    # Partition new findings by severity → one ticket per non-empty bucket.
+    buckets: dict[str, list[dict]] = {}
+    for f in new_findings:
+        buckets.setdefault(f["severity"], []).append(f)
+    ordered_severities = sorted(buckets, key=lambda s: SEVERITY_RANK.get(s, 99))
+
+    write_summary(
+        f"> ⚠️ {len(new_findings)} new finding(s) across "
+        f"{len(ordered_severities)} severit{'y' if len(ordered_severities) == 1 else 'ies'} "
+        "— creating one Linear issue per severity."
+    )
 
     backlog_state_id = resolve_backlog_state_id(team_id)
     if not backlog_state_id:
-        print("warning: could not resolve Backlog state — issue will use team default")
+        print("warning: could not resolve Backlog state — issues will use team default")
 
     target_image = os.environ.get("TARGET_IMAGE", "(unknown)")
     scan_date = os.environ.get("SCAN_DATE", "")
     run_url = os.environ.get("RUN_URL", "")
 
-    description = build_description(
-        new_findings, today_ids, target_image, scan_date, run_url
-    )
-    title = (
-        f"[Security] {len(new_findings)} new "
-        f"vulnerabilit{'y' if len(new_findings) == 1 else 'ies'} ({scan_date})"
-    )
-
-    issue_input: dict[str, Any] = {
-        "title": title,
-        "description": description,
-        "teamId": team_id,
-        "projectId": project_id,
-        "priority": 2,
-        "labelIds": [label_id],
-    }
-    for env_key, payload_key in [
-        ("LINEAR_MILESTONE_ID", "projectMilestoneId"),
-        ("LINEAR_ASSIGNEE_ID", "assigneeId"),
-    ]:
-        val = os.environ.get(env_key)
-        if val:
-            issue_input[payload_key] = val
-    if backlog_state_id:
-        issue_input["stateId"] = backlog_state_id
-
-    data = gql(
-        """
-        mutation CreateIssue($input: IssueCreateInput!) {
-          issueCreate(input: $input) {
-            success
-            issue { id identifier url }
-          }
-        }
-        """,
-        {"input": issue_input},
-    )
-    result = data.get("issueCreate") or {}
-    if not result.get("success"):
-        sys.stderr.write(
-            f"Linear issueCreate returned success=false: {json.dumps(data)}\n"
+    created: list[dict] = []
+    for severity in ordered_severities:
+        issue = create_issue(
+            severity,
+            buckets[severity],
+            team_id=team_id,
+            project_id=project_id,
+            label_id=label_id,
+            backlog_state_id=backlog_state_id,
+            target_image=target_image,
+            scan_date=scan_date,
+            run_url=run_url,
         )
-        return 1
+        if issue is None:
+            return 1
+        created.append(issue)
 
-    issue = result.get("issue") or {}
-    write_summary(f"### Linear Issue: [{issue.get('identifier')}]({issue.get('url')})")
-    emit_output("new_issue_identifier", issue.get("identifier") or "")
-    emit_output("new_issue_url", issue.get("url") or "")
+    emit_output("new_issues", json.dumps(created))
     return 0
 
 

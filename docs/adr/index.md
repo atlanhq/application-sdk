@@ -19,3 +19,5 @@ ADRs capture the architectural decisions behind the Application SDK — what was
 | [ADR-0013](0013-error-hierarchy-and-failure-taxonomy.md) | Error Hierarchy and Failure Taxonomy |
 | [ADR-0014](0014-two-store-storage-architecture.md) | Two-Store Storage Architecture (task-to-task vs app-to-app) |
 | [ADR-0015](0015-directory-listing-race-fix.md) | Directory Listing Race Fix (safe_list_directory primitive) |
+| [ADR-0016](0016-multi-pool-worker-routing.md) | Multi-Pool Worker Routing (N pools per app, @task(pool=...) static affinity) |
+| [ADR-0017](0017-native-execution-isolation.md) | Native Execution Isolation (best-effort work in an isolated process; run_fault_isolated / run_best_effort, conformance rule P036) |

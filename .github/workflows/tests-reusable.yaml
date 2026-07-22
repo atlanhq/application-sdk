@@ -25,15 +25,17 @@ name: tests-reusable
 #   - connector-integration-tests composite with services-script hook (no-op
 #     by default; used when source systems need CI-level startup rather than
 #     pytest fixtures — see openapi's .github/test/setup-services.sh)
-#   - Label/dispatch-gated e2e job via e2e-full-reusable
+#   - Label/dispatch-gated full-DAG e2e job (inlined here — see the `e2e` job;
+#     it was previously delegated to e2e-full-reusable.yaml, now folded in so
+#     the whole suite is one reusable + one Tests Gate)
 #
 # GitHub check name hierarchy (caller → tests-reusable):
 #   Tests / tests / Unit and integration  (pull_request)
-#   Tests / tests / e2e / End-to-end      (pull_request)  ← 4-deep; nested reusable
+#   Tests / tests / End-to-end            (pull_request)
 #   Tests / tests / Tests Gate            (pull_request)
 #
-# Nested reusable depth: caller → tests-reusable → e2e-full-reusable = 3
-# (GitHub max is 4).  secrets: inherit chains through both levels.
+# Nested reusable depth: caller → tests-reusable = 2 (GitHub max is 4).
+# secrets: inherit chains from the caller; the inlined e2e job reads secrets.*.
 #
 # Connectors that need OS-level native build deps (ODBC, SAP JCo, etc.) before
 # uv sync cannot use this reusable — they need a bespoke tests.yaml with the
@@ -64,9 +66,12 @@ on:
         type: string
         default: >-
           -n auto --dist=loadfile --tb=short
-          --cov=app --cov-report=xml --cov-report=html --cov-report=term
+          --cov=app --cov-report=xml --cov-report=json --cov-report=html --cov-report=term
           --cov-fail-under=0
-        description: Extra arguments passed to pytest after test-paths.
+        description: |
+          Extra arguments passed to pytest after test-paths.  ``--cov-report=json``
+          emits ``coverage.json`` for the test-readiness scorecard (the machine-
+          readable form; xml/html/term are for humans and other consumers).
       services-script:
         required: false
         type: string
@@ -97,7 +102,17 @@ on:
         required: false
         type: string
         default: ""
-        description: Branch/SHA to pin atlanhq/application-sdk to for cross-repo dispatch. Empty = lockfile version.
+        description: Branch/SHA to pin atlanhq/application-sdk to for cross-repo dispatch, applied to BOTH runtime and harness unless overridden below. Empty = lockfile version.
+      runtime-sdk-ref:
+        required: false
+        type: string
+        default: ""
+        description: application-sdk ref for the connector RUNTIME (built image). Empty falls back to application-sdk-ref, then the lockfile pin.
+      harness-sdk-ref:
+        required: false
+        type: string
+        default: ""
+        description: application-sdk ref for the TEST HARNESS (host pytest / testing.e2e). Empty falls back to application-sdk-ref, then the lockfile pin. Set to run the latest harness against the connector's own runtime without bumping its SDK.
       base-image-ref:
         required: false
         type: string
@@ -118,6 +133,30 @@ on:
         type: string
         default: ""
         description: Set to 'true' to trigger the e2e job from workflow_dispatch.
+      two-store:
+        required: false
+        type: boolean
+        default: false
+        description: |
+          Opt-in ADR-0014 two-store SDR posture for the e2e job — forwarded to
+          the sdr-e2e action's `enable-two-store` input. When true, objectstore
+          is forced to the CI-local binding while atlan-objectstore stays the
+          tenant blobstorage, so a connector that forgets to bridge an artifact
+          shows up as zero downstream assets instead of being masked by a shared
+          bucket. Default false: existing callers are unaffected.
+      source-available:
+        required: false
+        type: boolean
+        default: true
+        description: |
+          Whether an extraction source is provisioned for this connector in
+          CI — forwarded to the sdr-e2e action's `source-available` input.
+          Sourcing is the app owner's responsibility. Default true: the
+          full-DAG e2e runs unchanged. Set false for apps with no free
+          container / no wired credentials — the e2e then degrades to a
+          worker-up-only check (assert the worker deploys + serves
+          /server/health) and skips extraction/publish/Atlas assertions,
+          until the owner provisions a source.
 
 jobs:
 
@@ -149,15 +188,18 @@ jobs:
           services-script: ${{ inputs.services-script }}
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
 
-  # ── Full-DAG e2e (system apps — extract→qi→publish→lineage) ─────────────
-  e2e:
-    name: End-to-end
-    concurrency:
-      group: tests-e2e-${{ github.ref }}
-      cancel-in-progress: false
-    # On workflow_dispatch with run-e2e=true (covers cross-repo dispatch), or
-    # when the 'e2e' PR label is present.  Forks and bots are excluded.
-    # Skipped entirely when enable-e2e is false (e.g. hello-world).
+  # ── Discover e2e suites → matrix ─────────────────────────────────────────
+  # Globs the connector's tests/e2e/test_*.py into a strategy.matrix so the
+  # e2e job fans out one leg per suite (parallel, live per-job logs, per-suite
+  # re-run, isolation). Connector-agnostic: the SDK never hard-codes a
+  # connector's suites — the discovery script scans the checked-out tree.
+  # Same label/dispatch gate the e2e job used to carry.
+  discover-e2e:
+    name: Discover e2e suites
+    runs-on: ubuntu-latest
+    # Just a checkout + a seconds-long glob; cap it so a wedged runner can't
+    # hold the required check pending for GitHub's 6-hour default.
+    timeout-minutes: 10
     if: |
       inputs.enable-e2e && (
         (github.event_name == 'workflow_dispatch' && inputs.run-e2e == 'true') ||
@@ -168,27 +210,296 @@ jobs:
           github.event.pull_request.user.login != 'dependabot[bot]'
         )
       )
-    uses: atlanhq/application-sdk/.github/workflows/e2e-full-reusable.yaml@main
-    with:
-      app-name: ${{ inputs.app-name }}
-      app-image-name: ${{ inputs.app-image-name }}
-      test-path: ${{ inputs.e2e-test-path }}
-      agent-name-override: ${{ inputs.agent-name-override }}
-      application-sdk-ref: ${{ inputs.application-sdk-ref }}
-      base-image-ref: ${{ inputs.base-image-ref }}
-      distinct-id: ${{ inputs.distinct-id }}
-    secrets: inherit
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+      count: ${{ steps.discover.outputs.count }}
+    steps:
+      # codex-/return-dispatch on the apps-sdk side scans step *names* for
+      # "distinct-id <value>". Emitting it here (the first job in the e2e path)
+      # lets the SDK PR's dispatched run be located quickly via the GH API,
+      # regardless of how the downstream matrix fans out.
+      - name: distinct-id ${{ inputs.distinct-id }}
+        if: inputs.distinct-id != ''
+        shell: bash
+        run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Discover suites
+        id: discover
+        uses: atlanhq/application-sdk/.github/actions/discover-e2e-suites@main
+        with:
+          test-dir: ${{ inputs.e2e-test-path }}
+
+      # This job only runs when e2e was explicitly requested (label / run-e2e),
+      # so zero discovered suites means "requested but nothing found" — a
+      # misconfiguration a plain `pytest ${{ inputs.e2e-test-path }}` would fail
+      # on (exit 5). Fail here rather than skip the e2e job and green the gate.
+      - name: Require at least one discovered suite
+        if: steps.discover.outputs.count == '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::error::e2e was requested but no suites were discovered under '${{ inputs.e2e-test-path }}' (expected test_*.py). Failing so this is not a silent pass."
+          exit 1
+
+  # ── Full-DAG e2e (system apps — extract→qi→publish→lineage) ─────────────
+  # One matrix leg per discovered suite. fail-fast:false so one suite's failure
+  # doesn't cancel the others, and "Re-run failed jobs" re-runs only the failed
+  # leg. Each leg spins its own worker container on its OWN Temporal queue: the
+  # sdr-e2e action derives a per-leg ATLAN_DEPLOYMENT_NAME (base + artifact-
+  # suffix) so legs don't co-serve one queue — under the two-store posture a
+  # shared queue lets Temporal split a workflow's activities across leg-workers
+  # with per-container localstorage, hiding artifacts cross-worker. 120-min
+  # timeout (> ae_poll + atlas_poll + build/setup overhead).
+  e2e:
+    name: End-to-end (${{ matrix.name }})
+    needs: discover-e2e
+    if: needs.discover-e2e.result == 'success' && needs.discover-e2e.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      # Fallback to an empty matrix when discovery was skipped (no label / not
+      # dispatched) so fromJson('') doesn't error at job-setup; the `if` above
+      # also skips the job in that case.
+      matrix: ${{ fromJson(needs.discover-e2e.outputs.matrix || '{"include":[]}') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    concurrency:
+      # Per-leg group so matrix legs run concurrently (a shared group would
+      # serialise them). cancel-in-progress:false keeps re-runs from cancelling.
+      group: tests-e2e-${{ github.ref }}-${{ matrix.name }}
+      cancel-in-progress: false
+    permissions:
+      pull-requests: write
+      contents: read
+      statuses: write
+      packages: write
+    env:
+      SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
+      SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
+      SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
+      ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
+      # Derived so ATLAN_BASE_URL is always the same tenant as SDR_TEST_TENANT.
+      ATLAN_BASE_URL: https://${{ secrets.SDR_TEST_TENANT }}
+    steps:
+      - name: distinct-id ${{ inputs.distinct-id }}
+        if: inputs.distinct-id != ''
+        shell: bash
+        run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # uv on the host for the sdr-e2e action's `uv run pytest` + summary steps.
+      # The action self-installs uv only when application-sdk-ref is set
+      # (SDK-PR dispatch); the plain-label path (empty ref) otherwise has no uv
+      # and fails with `uv: command not found`. Install it unconditionally here.
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.31"
+          enable-cache: true
+
+      - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
+        with:
+          app-name: ${{ inputs.app-name }}
+          app-image-name: ${{ inputs.app-image-name }}
+          # One suite per leg (the matrix file), not the whole e2e directory.
+          test-path: ${{ matrix.file }}
+          # Full-DAG defaults carried over from e2e-full-reusable.yaml. The
+          # full-DAG pipeline lives alongside the SDR (testcontainer) pipeline
+          # in connector repos, so these must be explicit — otherwise the action
+          # falls back to the SDR component/compose set (wrong stack).
+          secrets-script: .github/e2e/make-secrets-e2e-full.py
+          components-dir: .github/e2e/e2e-full-components
+          compose-overlay: .github/e2e/e2e-full-docker-compose.yaml
+          # Force the full-DAG config dir even when the repo also has a
+          # .github/sdr-e2e/ (testcontainer) setup, which the action would
+          # otherwise prefer — see the action's `config-dir` input.
+          config-dir: .github/e2e
+          # Bump the container-health wait because the worker has to establish
+          # the Temporal connection with TLS + auth before /server/health greens.
+          container-health-timeout-seconds: "120"
+          # `-s` streams the harness poll-loop output in real time — each leg is
+          # a single sequential pytest process, so this is live per-job again.
+          pytest-extra-args: "-s"
+          # Unique per-leg artifact name so parallel legs don't collide on
+          # upload-artifact (which rejects duplicate names within a run).
+          artifact-suffix: ${{ matrix.name }}
+          # One slim summary is posted by the Tests Gate; suppress the per-leg
+          # connector-PR comment so N legs don't post N comments.
+          post-pr-comment: "false"
+          application-sdk-ref: ${{ inputs.application-sdk-ref }}
+          runtime-sdk-ref: ${{ inputs.runtime-sdk-ref }}
+          harness-sdk-ref: ${{ inputs.harness-sdk-ref }}
+          base-image-ref: ${{ inputs.base-image-ref }}
+          enable-two-store: ${{ inputs.two-store }}
+          source-available: ${{ inputs.source-available }}
+          # Push the test image with the org PAT (same identity build-and-publish
+          # uses) so it can write PAT-published connector packages — a plain
+          # GITHUB_TOKEN 403s on those (e.g. atlan-redshift-app). Available here
+          # because callers invoke this reusable with `secrets: inherit`.
+          ghcr-token: ${{ secrets.ORG_PAT_GITHUB }}
+
+  # ── Callback: report the result back to the application-sdk PR/commit ────
+  # that dispatched this run. application-sdk's e2e-apps composite
+  # (wait-mode: callback) creates an in_progress check run on its own SHA
+  # before dispatching, then exits without polling; this job is the push
+  # that completes it the instant this run finishes — no polling on either
+  # side. Only fires on the cross-repo dispatch path: application-sdk-ref is
+  # empty on the connector's own same-repo pull_request/push runs.
+  report-to-sdk:
+    name: Report to application-sdk
+    needs: [tests, e2e]
+    if: |
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.application-sdk-ref != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # The Checks API's write endpoints (create/update a check run) reject
+      # PATs outright — "You must authenticate via a GitHub App" — only a
+      # real GitHub App installation token works. ORG_PAT_GITHUB can't do
+      # the "Complete the check run" step below at all; mint a scoped
+      # atlan-app-fleet token instead (same one used for the checkout, so
+      # this job touches application-sdk with a single credential).
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
+      # Pinned to the exact SHA that dispatched this run (not `main`): that
+      # SHA is what created the check run we're about to complete, so a PR
+      # that *modifies* the callback scripts self-tests its own version (the
+      # scripts don't exist on `main` until such a PR lands — the fallback
+      # below is skipped whenever the pinned ref already carries them).
+      - name: Checkout application-sdk callback script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ inputs.application-sdk-ref }}
+          token: ${{ steps.app-token.outputs.token }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+
+      # A dispatching SDK PR branch that forked *before* the callback scripts
+      # merged (and never picked up main since) checks out a ref that lacks
+      # build_callback_summary.py — the callback then hard-fails on a missing
+      # file even though the connector tests passed, leaving the check stuck
+      # in_progress until the 130-min watchdog flips it to timed_out (a red
+      # result for a green run). Fall back to main's scripts for those stale
+      # refs. Only the *script source* falls back — the check run still
+      # completes on the dispatching SHA via `--sha`, so nothing about which
+      # commit gets the result changes. `hashFiles() == ''` is a step-level
+      # expression, not inlined conditional shell, so it stays within the CI
+      # authoring rule (no branching logic in `run:` blocks).
+      # Clear the incomplete pinned-ref checkout before re-checking out from
+      # main into the same path. `actions/checkout` already defaults to
+      # `clean: true`, so this is belt-and-suspenders — it makes the "one
+      # path, two checkouts" pattern self-evidently clean for future readers.
+      # Gated on the SAME condition as the fallback: on the happy path (pinned
+      # ref carries the scripts) it is skipped, so the good checkout is never
+      # deleted and the fallback stays skipped — the PR-self-test property is
+      # preserved. Straight-line `rm`, no branching in the shell, per the CI
+      # authoring rule.
+      - name: Clear the stale sparse checkout before falling back
+        if: hashFiles('application-sdk-scripts/.github/scripts/build_callback_summary.py') == ''
+        run: rm -rf application-sdk-scripts
+
+      - name: Fall back to main callback scripts if pinned SHA predates them
+        id: scripts-fallback
+        if: hashFiles('application-sdk-scripts/.github/scripts/build_callback_summary.py') == ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+
+      # `outcome == 'success'` is true only when the fallback step actually
+      # ran (skipped when the pinned ref already had the scripts), so the
+      # warning fires exactly on the stale-ref path.
+      - name: Warn that the dispatching SDK ref was stale
+        if: steps.scripts-fallback.outcome == 'success'
+        env:
+          SDK_REF: ${{ inputs.application-sdk-ref }}
+        run: echo "::warning::Dispatching application-sdk ref ${SDK_REF} predates the callback scripts; used main's copy instead. Merge main into that SDK branch to silence this."
+
+      - name: Download connector e2e results
+        if: needs.e2e.result != 'skipped'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        continue-on-error: true
+        with:
+          name: sdr-integration-tests-${{ inputs.app-name }}-results
+          path: connector-results
+
+      - name: Determine conclusion + build summary
+        id: report
+        env:
+          TESTS_RESULT: ${{ needs.tests.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+          TESTS_SUMMARY: ${{ needs.tests.outputs.summary }}
+        run: |
+          python3 application-sdk-scripts/.github/scripts/build_callback_summary.py \
+            --tests-result "$TESTS_RESULT" \
+            --e2e-result "$E2E_RESULT" \
+            --tests-summary "$TESTS_SUMMARY"
+
+      - name: Complete the check run on application-sdk
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SHA: ${{ inputs.application-sdk-ref }}
+          REPO_SHORT: ${{ github.event.repository.name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 application-sdk-scripts/.github/scripts/complete_check_run.py \
+            --repo atlanhq/application-sdk \
+            --sha "$SHA" \
+            --name "Connector E2E run / ${REPO_SHORT}" \
+            --conclusion "${{ steps.report.outputs.conclusion }}" \
+            --summary-file "${{ steps.report.outputs.summary_file }}" \
+            --details-url "$RUN_URL"
 
   # ── Aggregator gate (single required check for branch protection) ────────
   tests-passed:
     name: Tests Gate
-    needs: [tests, e2e]
+    needs: [tests, discover-e2e, e2e]
     if: always()
     runs-on: ubuntu-latest
+    # Comment + gate-eval only; cap so a wedged runner can't hold the required
+    # check pending for GitHub's 6-hour default.
+    timeout-minutes: 10
     permissions:
       pull-requests: write
       contents: read
     steps:
+      # Single source of truth: the tested driver computes both the pass/fail
+      # decision and the human-readable status strings the summary table below
+      # renders, so displayed status can't drift from the enforced result.
+      # Discovery skipped = e2e not requested (OK); discovery failed = requested
+      # but empty (fail); the e2e matrix aggregate is success iff every leg
+      # passed.
+      - name: Evaluate Tests Gate
+        id: gate
+        if: always()
+        uses: atlanhq/application-sdk/.github/actions/verify-test-gate@main
+        with:
+          tests-result: ${{ needs.tests.result }}
+          discover-e2e-result: ${{ needs.discover-e2e.result }}
+          e2e-result: ${{ needs.e2e.result }}
+
       - name: Post unified test-summary comment on PR
         if: always() && github.event_name == 'pull_request'
         uses: mshick/add-pr-comment@ec328af66588ab8f77cdeb2c264f14aba45bbf59 # v3.12.0
@@ -199,20 +510,15 @@ jobs:
 
             | Job | Status | Result |
             |---|---|---|
-            | tests | ${{ needs.tests.result == 'success' && '✅ Passed' || (needs.tests.result == 'skipped' && '⊘ Skipped' || '❌ Failed') }} | `${{ needs.tests.outputs.summary || 'no summary' }}` |
-            | e2e | ${{ needs.e2e.result == 'success' && '✅ Passed' || (needs.e2e.result == 'skipped' && '⊘ Skipped — add `e2e` label to trigger' || '❌ Failed') }} | (see run) |
+            | tests | ${{ steps.gate.outputs.tests-status }} | `${{ needs.tests.outputs.summary || 'no summary' }}` |
+            | e2e | ${{ steps.gate.outputs.e2e-status }} | per-suite results + live logs in the run |
 
-            **Overall:** ${{ (needs.tests.result == 'success' && (needs.e2e.result == 'success' || needs.e2e.result == 'skipped')) && '✅ All passed' || '❌ Some failed' }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **Overall:** ${{ steps.gate.outputs.overall-status }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
         continue-on-error: true
 
-      - name: Verify all test jobs succeeded
-        run: |
-          if [ "${{ needs.tests.result }}" != "success" ]; then
-            echo "::error::tests job did not succeed (result=${{ needs.tests.result }})"
-            exit 1
-          fi
-          if [ "${{ needs.e2e.result }}" != "success" ] && [ "${{ needs.e2e.result }}" != "skipped" ]; then
-            echo "::error::e2e job did not succeed (result=${{ needs.e2e.result }})"
-            exit 1
-          fi
-          echo "All test jobs passed."
+      # Branch-free enforcement: the decision lives in the driver's `passed`
+      # output; this step just fails the required check when it isn't "true".
+      - name: Enforce gate
+        if: always() && steps.gate.outputs.passed != 'true'
+        shell: bash
+        run: exit 1

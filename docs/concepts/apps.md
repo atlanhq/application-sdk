@@ -67,7 +67,7 @@ async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
     return manifest
 ```
 
-When the app defines it, `GET /workflows/v1/manifest?entrypoint=<name>&fe_inputs=<url-encoded-json>` hands the static manifest plus the decoded `fe_inputs` to the hook and serves its return value; apps without the hook get the static manifest unchanged. The hook must be **`async def`** and return a `dict` — a sync `def` is not discovered and the route serves the static manifest unchanged. If the hook does CPU/IO-bound work (SQL generation, full DAG rewrite) it owns offloading that off the event loop (e.g. `await asyncio.to_thread(...)`). Exceptions are logged internally and surface as a generic `500` (no internals leaked). See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the module-naming convention.
+When the app defines it, `GET /workflows/v1/manifest?entrypoint=<name>&fe_inputs=<url-encoded-json>` hands the static manifest plus the decoded `fe_inputs` to the hook and serves its return value; apps without the hook get the static manifest unchanged. The hook must be **`async def`** and return a `dict` — a sync `def` is not discovered and the route serves the static manifest unchanged. If the hook does CPU/IO-bound work (SQL generation, full DAG rewrite) it owns offloading that off the event loop via the SDK's `run_in_thread()` (never the shared default executor — see conformance rule P031). Exceptions are logged internally and surface as a generic `500` (no internals leaked). See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the module-naming convention.
 
 > **`fe_inputs` size limit.** Because `fe_inputs` rides in the GET query string, it is bounded by the request-line cap of whatever proxy fronts the app (nginx defaults to 8 KB; ALB ~16 KB). The SDK rejects a decoded `fe_inputs` larger than **8 KB** with `413 Payload Too Large` so oversize surfaces as a clear error rather than an opaque upstream truncation. A fully-populated form for the largest connector we ship is ~1.6 KB (≈5 KB for a heavy multi-select), so this is comfortable headroom; forms that genuinely need more should move to a POST body rather than grow the query string.
 
@@ -279,6 +279,64 @@ from application_sdk.storage import verify_object_store_access, ObjectStorePrefl
 Both symbols are exported from `application_sdk.storage`. The function is normally called by
 the SDK boot path — connectors do not need to call it manually.
 
+### Preflight Gate Posture
+
+Distinct from the SDR object-store preflight above, a connector can run a `preflight_check`
+handler as the first activity of every extraction workflow. Enforcement is a **gate** property,
+not a handler property: the handler always returns the honest verdict, and the gate decides what
+to do with a `NOT_READY` verdict. The posture is set per app via the `preflight_gate_mode`
+`ClassVar`:
+
+- **soft** (default): never blocks — a `NOT_READY` verdict lets the run proceed and is emitted as
+  `outcome="would_block"` (with `gate_mode="soft"` and the per-check `check_matrix`) on the gate
+  outcome event. The verdict is always reported, so connector-pulse can rank apps by how often they
+  *would* have blocked real runs — that list is the "checks are ready to enforce" queue.
+- **hard**: blocks the run when the verdict is `NOT_READY` (raises `PreflightFailed`). This is the
+  opt-in for apps whose checks are trusted to gate real runs.
+
+```python
+class MyConnector(App):
+    preflight_gate_mode = "hard"   # checks are trusted to block runs
+```
+
+Ops can override the posture without an app release via `ATLAN_PREFLIGHT_GATE_MODE=hard` on the
+worker deployment. The env var wins over the attribute; any set value other than the literal `hard`
+resolves to soft, so malformed config never blocks a run by accident. An empty or unset value is
+not an override — resolution falls through to the declared `preflight_gate_mode` attribute. The
+worker logs an INFO line
+per hard app at boot. Start soft, then flip to `hard` once connector-pulse `would_block` rows show
+the checks track real workflow failures. See the `adopt-preflight-gate` skill for the full adoption
+flow.
+
+### Asset-Validation Outcome
+
+`App.upload()` runs a **warn-only** validation of transformed asset NDJSON against the pyatlan_v9
+`.validate()` backbone (plus a referential/orphan pass) before the SDR→Atlan handoff. It never blocks
+and never fails the upload — invalid or orphaned assets are reported, not rejected.
+
+The results are surfaced as a structured outcome event (the sibling of the preflight gate's outcome
+event above) so they are queryable in ClickHouse, not just greppable in log bodies. Because the event
+is emitted from inside the `upload` activity, the Temporal context (`workflow_run_id`, `app_name`) is
+auto-stamped and each row joins to the workflow outcome by run id:
+
+- It fires on **every validated upload** — `outcome="clean"` as well as `outcome="flagged"` — so
+  there is a denominator to rank flag-rate against (mirrors the gate's `would_block` reporting).
+- Five scalar counts land as their own `LogAttributes`: `assets_total`, `assets_passed`,
+  `assets_invalid`, `assets_orphaned`, `assets_undeserializable`.
+- Per-failure detail rides in one compact JSON attribute, `asset_validation_matrix` (bounded to a
+  fixed number of rows per axis so it can't grow unbounded); the full human-readable report is also
+  logged as a WARNING body, but only for flagged runs.
+
+Uploads with nothing to validate emit nothing at all: when `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false`
+or when the path is not a `transformed/` subtree (e.g. a raw upload), no outcome event is produced.
+See [Monitoring](monitoring.md#asset-validation-outcome-event) for the attribute list as it reaches
+OTLP.
+
+> **On by default (CNCT-85).** The scan runs in an isolated child process
+> (process-isolation fix [#2769](https://github.com/atlanhq/application-sdk/pull/2769)), so a native
+> fault in the decode path is contained and downgraded to a best-effort skip rather than killing the
+> worker. Set `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false` to disable per-deployment.
+
 ## Passthrough Modules
 
 If your app imports third-party libraries that must be available inside the Temporal sandbox, declare them as a class-level attribute:
@@ -413,6 +471,47 @@ class IncrementalExtractor(App):
 
 ---
 
+## Worker Pools
+
+By default every task runs on the app's primary Temporal task queue. Use `pool=` on `@task` to route a task to a dedicated worker pool — useful for activities that need different resource profiles (CPU-heavy crawls, memory-intensive exports, etc.).
+
+```python
+from application_sdk.app import App, task
+
+class MyConnector(App):
+
+    @task(pool="heavy")
+    async def bulk_export(self, input: ExportInput) -> ExportOutput: ...
+
+    @task  # runs on the default queue
+    async def fetch_schema(self, input: SchemaInput) -> SchemaOutput: ...
+```
+
+**Pool name rules:** pool names must be lowercase kebab-case (e.g. `"heavy"`, `"cold-tier"`). The `@task` decorator enforces this at decoration time.
+
+**Queue resolution** (evaluated at workflow-run time):
+
+1. `ATLAN_POOL_<POOL>_QUEUE` — explicit override. Hyphens in the pool name are normalised to underscores: `pool="cold-tier"` looks up `ATLAN_POOL_COLD_TIER_QUEUE`.
+2. `${ATLAN_TASK_QUEUE}-<pool>` — derived from the app's base queue when the explicit env var is absent.
+3. If neither is set, a warning is emitted at startup and the activity falls back to the default queue.
+
+**Pkl contract:** every pool used in `@task` must be declared in the app contract so the contract-toolkit can generate the correct deployment manifest:
+
+```pkl
+pools {
+  ["heavy"] = new Pool {
+    keda { minReplicaCount = 2 }
+  }
+  ["cold-tier"] = new Pool {
+    keda { minReplicaCount = 0; cooldownPeriod = 600 }
+  }
+}
+```
+
+See [ADR-0016](../adr/0016-multi-pool-worker-routing.md) for the full design including rollout-drain requirements.
+
+---
+
 ## Retry Policies
 
 Pass a `RetryPolicy` to `@task` via `retry_policy` to override the default (3 attempts, exponential backoff: initial 1s, coefficient 2.0, capped at 5 minutes):
@@ -433,6 +532,51 @@ class MyConnector(App):
 ```python
 policy = RetryPolicy().with_max_attempts(5).with_non_retryable(ValueError)
 ```
+
+---
+
+## Catching Client-Side Workflow Failures
+
+Code that calls `TemporalClient.execute_workflow(...)` or waits on a workflow handle
+(test harnesses, admin tooling, anything outside `run()`/`@task`) can catch the
+Temporal failure/cause exception family directly from `application_sdk.execution` —
+no need to import `temporalio` yourself:
+
+```python
+from application_sdk.execution import (
+    TemporalActivityError,
+    TemporalCancelledError,
+    TemporalWorkflowFailureError,
+)
+
+try:
+    await temporal_client.execute_workflow(MyConnector.run, input, id=run_id, task_queue=queue)
+except TemporalWorkflowFailureError as e:
+    match e.cause:
+        case TemporalActivityError():
+            ...  # an @task raised
+        case TemporalCancelledError():
+            ...  # the workflow was cancelled
+        case _:
+            ...  # e.g. temporalio.exceptions.ApplicationError when run()/@entrypoint
+            # itself raised directly — still log/handle it, don't ignore silently
+```
+
+`TemporalWorkflowFailureError` wraps the terminal-state cause on `.cause` — commonly
+one of `TemporalActivityError`, `TemporalCancelledError`, `TemporalChildWorkflowError`,
+`TemporalTerminatedError`, or `TemporalTimeoutError`, but not limited to those (e.g. a
+direct raise from `run()`/`@entrypoint` surfaces as the unexported
+`temporalio.exceptions.ApplicationError` — always include a catch-all case). These
+five are re-exported (not wrapped) with a `Temporal` prefix so they don't collide with
+unrelated SDK types of the same short name, e.g.
+`application_sdk.common.error_codes.ActivityError` and
+`application_sdk.errors.leaves.CancelledError`.
+
+This is distinct from error handling *inside* `run()`/`@task` code: there, raise
+and catch `application_sdk.errors.AppError` leaves (`CancelledError`,
+`AppTimeoutError`, etc.) instead — those carry the SDK's classified failure
+metadata (category, code, retryable). The `Temporal*Error` types above are raw
+client-side signals for code observing a workflow from the outside.
 
 ---
 

@@ -6,7 +6,11 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.models import DatabaseConfig
-from application_sdk.clients.sql import AsyncBaseSQLClient, BaseSQLClient
+from application_sdk.clients.sql import (
+    AsyncBaseSQLClient,
+    BaseSQLClient,
+    _escape_colons_for_text,
+)
 from application_sdk.clients.sql_errors import (
     EngineNotInitializedError,
     InvalidSqlEngineTypeError,
@@ -92,32 +96,28 @@ def test_load_respects_pool_pre_ping_override(
 
 
 @pytest.mark.asyncio
-@patch("application_sdk.clients.sql.asyncio.to_thread")
+@patch("application_sdk.clients.sql.run_in_thread", new_callable=AsyncMock)
 @patch("sqlalchemy.create_engine")
-async def test_load_uses_asyncio_to_thread_for_ping(
-    mock_create_engine: Any, mock_to_thread: AsyncMock, sql_client: BaseSQLClient
+async def test_load_uses_run_in_thread_for_ping(
+    mock_create_engine: Any, mock_run_in_thread: AsyncMock, sql_client: BaseSQLClient
 ):
-    """load() must delegate the blocking engine.connect() ping to asyncio.to_thread.
+    """load() must delegate the blocking engine.connect() ping to run_in_thread.
 
     The ping closes the event loop for the duration of the ODBC handshake; running
     it on the event loop directly starves Temporal's auto-heartbeat. Verify that
-    asyncio.to_thread is called (not a direct engine.connect() on the loop).
+    run_in_thread is called (not a direct engine.connect() on the loop, and not
+    asyncio.to_thread — which would land on asyncio's shared default executor
+    instead of the SDK's dedicated pool).
     """
-    from unittest.mock import AsyncMock as _AsyncMock
-
     mock_engine = MagicMock()
     mock_create_engine.return_value = mock_engine
-    mock_to_thread.return_value = None  # AsyncMock already returns a coroutine
-    mock_to_thread.__class__ = _AsyncMock
+    mock_run_in_thread.return_value = None
 
-    # Replace with a true AsyncMock so await works
-    actual_async_mock = _AsyncMock(return_value=None)
-    with patch("application_sdk.clients.sql.asyncio.to_thread", actual_async_mock):
-        await sql_client.load({"username": "u", "password": "p"})
+    await sql_client.load({"username": "u", "password": "p"})
 
-    actual_async_mock.assert_called_once()
-    # The callable passed to to_thread should trigger engine.connect when called
-    ping_fn = actual_async_mock.call_args[0][0]
+    mock_run_in_thread.assert_called_once()
+    # The callable passed to run_in_thread should trigger engine.connect when called
+    ping_fn = mock_run_in_thread.call_args[0][0]
     ping_fn()
     mock_engine.connect.assert_called_once()
 
@@ -445,6 +445,45 @@ def test_get_sqlalchemy_connection_string_basic_auth(sql_client_with_db_config):
     assert conn_str == expected
 
 
+@pytest.mark.parametrize(
+    "password",
+    [
+        "my pass",  # space — the CONNECT-361 regression: quote_plus made this '+'
+        "sp ace+plus",  # space AND a literal '+'
+        "p@ss:w/rd",  # userinfo-significant chars @ : /
+        "100%sure",  # percent
+        "хм пароль",  # non-ASCII with a space
+    ],
+)
+def test_connection_string_password_survives_sqlalchemy_decode(
+    sql_client_with_db_config, password
+):
+    """Passwords with special characters must reach the driver unchanged.
+
+    ``get_auth_token`` encodes the password into the userinfo of a SQLAlchemy
+    URL. SQLAlchemy decodes that userinfo with ``urllib.parse.unquote``
+    (percent-only, NOT ``unquote_plus``), so encoding a space as ``+`` (what
+    ``quote_plus`` did) reached the driver as a literal ``+`` — the root cause of
+    CONNECT-361. ``sqlalchemy.engine.url.make_url`` is exactly the parser
+    ``create_engine`` uses internally, so asserting the round-trip through it
+    proves the driver receives the original password without needing a live DB.
+    """
+    from sqlalchemy.engine.url import make_url  # noqa: PLC0415 — optional dep
+
+    sql_client_with_db_config.credentials = {
+        "username": "test_user",
+        "password": password,
+        "host": "localhost",
+        "port": 5432,
+        "database": "test_db",
+        "authType": "basic",
+    }
+
+    conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
+
+    assert make_url(conn_str).password == password
+
+
 def test_get_sqlalchemy_connection_string_iam_user(sql_client_with_db_config):
     """Test connection string generation with IAM user authentication"""
     credentials = {
@@ -671,9 +710,9 @@ async def test_load_wraps_engine_failure_as_client_error(
     mock_engine = MagicMock()
     mock_create_engine.return_value = mock_engine
 
-    # Force the connect-test inside asyncio.to_thread to fail
+    # Force the connect-test inside run_in_thread to fail
     actual_async_mock = AsyncMock(side_effect=RuntimeError("auth handshake failed"))
-    with patch("application_sdk.clients.sql.asyncio.to_thread", actual_async_mock):
+    with patch("application_sdk.clients.sql.run_in_thread", actual_async_mock):
         with pytest.raises(SqlClientAuthFailedError) as exc_info:
             await sql_client.load({"username": "u", "password": "p"})
     assert isinstance(exc_info.value.cause, RuntimeError)
@@ -912,6 +951,149 @@ def test_read_sql_query_uses_session_connection(sql_client: BaseSQLClient):
         out = sql_client._read_sql_query(fake_session, "SELECT 1", chunksize=5)
     assert out == "df"
     mock_exec.assert_called_once_with("conn-from-session", "SELECT 1", chunksize=5)
+
+
+# ---------- colon-safe query execution (CONNECT-260) ----------
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("RLIKE '^(?:cdl|das).*$'", "RLIKE '^(?\\:cdl|das).*$'"),
+        ("col::text", "col\\:\\:text"),
+        ("'12:30:00'", "'12\\:30\\:00'"),
+        ("SELECT 1", "SELECT 1"),  # no colon: unchanged
+        ("regex '\\:'", "regex '\\\\:'"),  # pre-existing backslash-colon round-trips
+        ("", ""),  # empty string: identity
+    ],
+)
+def test_escape_colons_for_text(query: str, expected: str):
+    assert _escape_colons_for_text(query) == expected
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        "^(?:(?:cdl|das|dap|aif|app).*_prod|cdl_mads_dev)$",  # the CONNECT-260 regex
+        "(?:cdl)",  # colon before '('
+        "(?i)abc",  # inline flag
+        "[[:alpha:]]+",  # POSIX class
+        "12:30:00",  # time literal (colon before a digit)
+        "x::y",  # cast-style double colon
+        "a:9b",  # colon before a digit mid-string
+        "abc:",  # trailing colon
+        "name:cdl",  # colon before an identifier (the would-be bind param)
+    ],
+)
+def test_escaped_colon_round_trips_to_driver(literal: str):
+    """The load-bearing fact: escaping colons and wrapping in text() must deliver
+    the *original literal colon* to the database — not a backslash-corrupted
+    string — for every colon shape (regex, POSIX class, cast, time literal). All
+    four execution sites share this one escape+text() path, so this real-engine
+    check exercises that shared path end to end. It runs on SQLite; the escape is
+    dialect-agnostic (SQLAlchemy strips the backslash before the driver on every
+    dialect), so a passing SQLite round-trip is representative, not exhaustive."""
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine("sqlite://")
+    with engine.connect() as conn:
+        query = f"SELECT '{literal}' AS v"
+        returned = conn.execute(text(_escape_colons_for_text(query))).fetchall()[0][0]
+    assert returned == literal
+
+
+def test_execute_pandas_query_colon_in_text_returns_rows(sql_client: BaseSQLClient):
+    """A pre-rendered query with literal colons must run and return the correct
+    rows on the SQLAlchemy read path — not merely avoid InvalidRequestError."""
+    from sqlalchemy import create_engine
+
+    engine = create_engine("sqlite://")
+    with engine.connect() as conn:
+        df = sql_client._execute_pandas_query(
+            conn, "SELECT '(?:cdl)' AS a, '12:30:00' AS b", chunksize=None
+        )
+        assert df.to_dict("records") == [{"a": "(?:cdl)", "b": "12:30:00"}]
+
+
+def test_execute_pandas_query_colon_chunked_returns_iterator(
+    sql_client: BaseSQLClient,
+):
+    """chunksize on a colon-bearing query yields the correct iterator of frames."""
+    from sqlalchemy import create_engine
+
+    engine = create_engine("sqlite://")
+    with engine.connect() as conn:
+        frames = list(
+            sql_client._execute_pandas_query(
+                conn,
+                "SELECT '(?:x)' AS a UNION ALL SELECT '(?:y)'",
+                chunksize=1,
+            )
+        )
+    assert [f.to_dict("records") for f in frames] == [
+        [{"a": "(?:x)"}],
+        [{"a": "(?:y)"}],
+    ]
+
+
+def test_execute_pandas_query_no_colon_unchanged(sql_client: BaseSQLClient):
+    """An ordinary query returns identical results (no regression)."""
+    from sqlalchemy import create_engine
+
+    engine = create_engine("sqlite://")
+    with engine.connect() as conn:
+        df = sql_client._execute_pandas_query(conn, "SELECT 1 AS x", chunksize=None)
+    assert df.to_dict("records") == [{"x": 1}]
+
+
+def test_execute_pandas_query_escapes_colons_before_text(sql_client: BaseSQLClient):
+    """The read path hands text() the colon-escaped string, never the raw one."""
+    import pandas
+    from pandas.compat import _optional
+
+    conn = MagicMock()
+    # Patch sqlalchemy.text and the two pandas call sites the method uses, rather
+    # than swapping whole modules in sys.modules (which is fragile across pandas
+    # versions). The method imports these locally, so the patched attributes are
+    # what it resolves at call time.
+    with (
+        patch("sqlalchemy.text", side_effect=lambda q: f"text({q})") as mock_text,
+        patch.object(_optional, "import_optional_dependency", return_value=object()),
+        patch.object(pandas, "read_sql_query", return_value="df"),
+    ):
+        sql_client._execute_pandas_query(conn, "RLIKE '^(?:cdl)'", chunksize=None)
+    mock_text.assert_called_once_with("RLIKE '^(?\\:cdl)'")
+
+
+@pytest.mark.asyncio
+@patch("sqlalchemy.text", side_effect=lambda q: q)  # type: ignore
+@patch(
+    "application_sdk.clients.sql.asyncio.get_running_loop",
+    new_callable=MagicMock,
+)
+async def test_run_query_escapes_colons(
+    mock_loop: MagicMock, mock_text: Any, sql_client: BaseSQLClient
+):
+    """The threadpool execute path escapes literal colons before text()."""
+    sql_client.engine = MagicMock()
+    sql_client.engine.connect.return_value = MagicMock()
+
+    cursor = MagicMock()
+    col = MagicMock()
+    col.name = "a"
+    cursor.cursor.description = [col]
+
+    # run_in_executor is called once for execute (returns the cursor) then once
+    # per fetchmany batch — an empty batch ends the loop.
+    mock_loop.return_value.run_in_executor = AsyncMock(
+        side_effect=[cursor, [("v",)], []]
+    )
+
+    async for _ in sql_client.run_query("RLIKE '^(?:cdl)'"):
+        pass
+
+    # sqlalchemy.text (identity-mocked) receives the colon-escaped string.
+    mock_text.assert_called_once_with("RLIKE '^(?\\:cdl)'")
 
 
 # ---------- _execute_async_read_operation / get_results / get_batched_results ----------

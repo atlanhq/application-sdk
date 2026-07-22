@@ -1,5 +1,5 @@
 {
-  "_note": "Only these GitHub usernames can approve changes to files in .security/. Self-protecting: changes to this file also require approval from an existing approver.",
+  "_note": "Only these GitHub usernames can approve changes to files in .security/. Self-protecting: changes to this file also require approval from an existing approver. 'atlan-ci' is the vuln-triage automation identity — its approval lets the zero-touch CVE-SLA flow auto-merge allowlist PRs (see .github/workflows/vuln-auto-merge.yml); it only ever approves rover-authored allowlist/bump PRs that pass the path-allowlist gate.",
   "allowlist_approvers": [
     "nishantmunjal7",
     "anbarasantr",
@@ -10,6 +10,7 @@
     "cmgrote",
     "mananjain99",
     "vaibhavatlan",
-    "Aryamanz29"
+    "Aryamanz29",
+    "atlan-ci"
   ]
 }

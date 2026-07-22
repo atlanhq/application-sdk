@@ -5,10 +5,12 @@
 # and pushes the result as github-actions[bot].
 #
 # Modelled on auto-fix-vulnerabilities.yaml. Key design choices:
-#   - ORG_PAT_GITHUB checkout token so the resulting push re-fires PR check workflows
-#     (same pattern as auto-fix-vulnerabilities.yaml and release-version-bump.yaml).
-#   - github-actions[bot] identity, NOT atlan-ci, so the bot commit does not
-#     auto-satisfy the wildcard CODEOWNERS rule that includes @atlan-ci.
+#   - A minted atlan-app-fleet App checkout token so the resulting push re-fires
+#     PR check workflows (same pattern as auto-fix-vulnerabilities.yaml and
+#     release-version-bump.yaml). Confirmed empirically that App-token pushes
+#     re-trigger downstream workflows the same way a real PAT identity does.
+#   - github-actions[bot] identity, NOT atlan-ci (nor the App), so the bot commit
+#     does not auto-satisfy the wildcard CODEOWNERS rule that includes @atlan-ci.
 #   - Fork PRs are rejected immediately with an explanatory comment.
 #   - fetch-depth: 0 for the same reason as the drift-check workflow (source-sha).
 
@@ -91,15 +93,27 @@ jobs:
               content: 'rocket',
             });
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Mint fleet App token
+        id: app-token
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         with:
           ref: ${{ steps.pr.outputs.branch }}
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
 
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
+        with:
+          version: "0.11.31"
 
       - name: Regenerate capability manifest
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'

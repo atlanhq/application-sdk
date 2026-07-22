@@ -30,6 +30,25 @@ Every handler service exposes health checks at two equivalent paths each:
 
 These are registered automatically. No configuration is needed.
 
+### Worker liveness window
+
+In worker and combined mode the SDK also runs a `WorkerHealthServer` that
+exposes `/health`, `/ready`, and `/live`. By default `/live` always returns
+healthy. Setting `ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS` to a positive value
+makes `/live` fail once no worker activity (an activity execution or heartbeat)
+has been recorded within that window, so a Kubernetes `livenessProbe` can
+recycle a worker whose Temporal poll loop has silently parked while `run()`
+never returns or raises (BLDX-1552) — the one failure the in-process restart
+supervisor cannot see.
+
+The window is disabled by default (`0`) because a positive value
+false-positives on legitimately idle queues, where no work arriving is normal
+rather than a stall. Enable it only for continuously-busy queues, and set it
+larger than the longest activity that runs without heartbeating so a slow but
+healthy activity is not mistaken for a parked poll loop. The probe never fails
+before the first activity is recorded, so it does not kill a worker during
+startup. See the env var in `docs/concepts/common.md`.
+
 ## Handler Method Routing
 
 The service maps your `Handler` methods to HTTP endpoints:

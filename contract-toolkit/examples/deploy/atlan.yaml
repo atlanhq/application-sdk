@@ -13,20 +13,14 @@ entrypoints:
   display_name: Deploy Config Example
   icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
   type: connector
+  package_id: '@atlan/deploy'
+  marketplace_card: true
 deploy:
   execution_mode: native
   splitDeploymentEnabled: true
-  dapr:
-    objectstore: true
-    secretstore: true
-    statestore: false
-    eventstore: false
-    subscription: false
-    configurationstore: false
-    lock: false
   keda:
     enabled: true
-    minReplicaCount: 1
+    minReplicaCount: 0
     temporal:
       targetQueueSize: 10
   resources:
@@ -42,3 +36,23 @@ deploy:
   verticalPodAutoscaler:
     enabled: true
     updateMode: Auto
+pools:
+  default:
+    keda:
+      enabled: true
+      minReplicaCount: 0
+      temporal:
+        targetQueueSize: 10
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: '2'
+        memory: 4Gi
+    env:
+      LOG_LEVEL: INFO
+      MAX_WORKERS: '4'
+    verticalPodAutoscaler:
+      enabled: true
+      updateMode: Auto

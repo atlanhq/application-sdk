@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import random
 import socket
 import threading
@@ -14,7 +15,14 @@ from urllib.parse import urlsplit
 
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
+from temporalio.runtime import (
+    LogForwardingConfig,
+    LoggingConfig,
+    PrometheusConfig,
+    Runtime,
+    TelemetryConfig,
+    TelemetryFilter,
+)
 
 from application_sdk.constants import (
     ENABLE_ATLAN_UPLOAD,
@@ -31,6 +39,26 @@ _prometheus_lock = threading.Lock()
 
 
 _default_runtime: Runtime | None = None
+
+
+def _core_logging_config() -> LoggingConfig:
+    """Logging config that forwards Temporal Rust-core logs into Python logging.
+
+    By default the Rust core's ``tracing`` subscriber writes to stderr directly
+    and never becomes a Python ``LogRecord`` — which means the
+    ``_CloudflareTimeoutFilter`` on the root handler can never see (and thus
+    never suppress) the Cloudflare 504 long-poll noise on
+    ``poll_workflow_task_queue`` (TFKB ERROR-NET-001).
+
+    Forwarding to the ``temporalio`` logger routes those records through the
+    root handler so the filter fires. Core stays at WARN (and other at ERROR)
+    so genuine retry exhaustion is still surfaced; only the known 504 pattern
+    is downgraded/throttled by the filter.
+    """
+    return LoggingConfig(
+        filter=TelemetryFilter(core_level="WARN", other_level="ERROR"),
+        forwarding=LogForwardingConfig(logger=logging.getLogger("temporalio")),
+    )
 
 
 def _get_or_create_runtime(
@@ -58,6 +86,7 @@ def _get_or_create_runtime(
                     telemetry=TelemetryConfig(
                         metrics=PrometheusConfig(bind_address=bind_addr),
                         global_tags=get_metric_enrichment_labels(),
+                        logging=_core_logging_config(),
                     )
                 )
                 logger.info("Temporal Prometheus metrics enabled on %s", bind_addr)
@@ -75,7 +104,13 @@ def _get_or_create_runtime(
     else:
         with _prometheus_lock:
             if _default_runtime is None:
-                _default_runtime = Runtime.default()
+                # Not Runtime.default(): the default runtime forwards nothing,
+                # so Rust-core 504 noise would bypass Python logging and the
+                # _CloudflareTimeoutFilter. Build an explicit runtime with
+                # log forwarding instead (no Prometheus endpoint bound).
+                _default_runtime = Runtime(
+                    telemetry=TelemetryConfig(logging=_core_logging_config())
+                )
                 logger.info("Temporal Prometheus metrics disabled")
         return _default_runtime
 
@@ -654,6 +689,7 @@ async def create_temporal_client(
     for attempt in range(1, connect_max_attempts + 1):
         try:
             client = await Client.connect(**kwargs)
+            # conformance: ignore[L006] fires exactly once on successful connect then returns; a genuine INFO lifecycle event, not per-iteration retry-loop volume
             logger.info("Connected to Temporal: host=%s namespace=%s", host, namespace)
             return client
         except Exception as exc:

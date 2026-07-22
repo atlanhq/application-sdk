@@ -25,6 +25,20 @@ uv run atlan-application-sdk-conformance programs-dir
 uv run atlan-application-sdk-conformance gen-rule-docs
 ```
 
+## Suppressing a finding
+
+Most findings are suppressed inline, next to the violating line:
+
+```python
+x = 1  # conformance: ignore[E001] reason
+```
+
+A rule that checks for something *missing* repo-wide (no line to attach an inline
+comment to) is instead exempted via a `[tool.conformance]` key in the repo's own
+`pyproject.toml` — see
+[`docs/schema-contract.md` §6.4](conformance/docs/schema-contract.md#64-config-based-tier-exemption-toolconformance)
+for the canonical convention and when to use it over inline suppression.
+
 ## In CI
 
 Consumer repos should reference this package via the reusable workflow in

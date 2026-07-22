@@ -54,7 +54,25 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "stale.yml",
     "docstring-coverage.yaml",
     "auto-fix.yml",
-    "renovate-pkl-sync.yaml",
+    "generated-freshness.yaml",
+)
+
+# Non-workflow files that must also be vendored into every consumer repo,
+# keyed by (repo-root-relative dest path, template filename in templates/).
+#
+# ``conformance-reusable.yaml`` references these via a local ``uses: ./...``
+# step and a ``$GITHUB_ACTION_PATH``-relative script path. GitHub resolves
+# both against the *caller's* checkout, not application-sdk's — so every
+# consumer app needs its own copy or the C/D-series (and any other series
+# whose changed-files filter matches) legs fail with "Can't find action.yml"
+# the first time they actually run. Static templates (no per-repo params),
+# always-overwrite like MANAGED_WORKFLOWS.
+MANAGED_ACTION_FILES: tuple[tuple[str, str], ...] = (
+    (
+        ".github/actions/run-conformance-detect/action.yaml",
+        "run-conformance-detect-action.yaml",
+    ),
+    (".github/scripts/build_conformance_args.py", "build_conformance_args.py"),
 )
 
 
@@ -62,6 +80,18 @@ def _load_template(name: str) -> str:
     """Read a template file from the embedded templates directory."""
     pkg = _ir.files("conformance.bootstrap") / "templates"
     return (pkg / name).read_text(encoding="utf-8")  # type: ignore[union-attr]
+
+
+# Templates that are byte-for-byte vendored copies of files living elsewhere
+# (action.yaml / shell scripts) and never take substitution variables. These
+# skip the jinja env entirely rather than relying on "just don't define any
+# << >> vars" — vendored scripts legitimately contain bash constructs like
+# the here-string operator (`<<<`) that collide with our custom `<< `
+# variable-start delimiter (Jinja matches it starting at the *second* `<`,
+# then fails deep in the following line looking for the closing ` >>`).
+_STATIC_TEMPLATES: frozenset[str] = frozenset(
+    template_name for _, template_name in MANAGED_ACTION_FILES
+)
 
 
 def render(
@@ -73,6 +103,8 @@ def render(
     app_image_name: str = "",
     enable_e2e: str = "true",
     services_script: str = "",
+    exit_zero: str = "false",
+    automerge: str = "true",
 ) -> str:
     """Render template *name* with the given substitution variables.
 
@@ -80,7 +112,14 @@ def render(
     Parameterised templates:
 
     - ``build-and-publish.yaml``: ``unit_tests_workflow`` (default ``"tests.yaml"``)
+    - ``conformance.yaml``: ``exit_zero`` (default ``"false"``; set to ``"true"``
+      for soft-enforcement rollouts where violations are tracked but do not block
+      merges — flip to ``"false"`` when the app is ready for hard gating).
     - ``docstring-coverage.yaml``: ``package_name`` (default ``"app"``)
+    - ``renovate.json``: ``automerge`` (default ``"true"``; set to ``"false"``
+      to disable Renovate auto-merge during initial rollouts — the preset's
+      ``automerge: true`` packageRules are overridden by a catch-all rule so
+      PRs are raised and CI-gated but humans must click merge).
     - ``tests.yaml``: ``app_name`` (default ``"app"``), ``app_image_name``
       (default derived as ``"atlan-<app_name>-app"``), ``enable_e2e``
       (default ``"true"``), ``services_script`` (default ``""`` — renders the
@@ -90,11 +129,14 @@ def render(
     All other keyword arguments are accepted but unused, so callers can pass
     the full variable set without knowing which template is parametric.
     """
+    raw = _load_template(name)
+    if name in _STATIC_TEMPLATES:
+        return raw
+
     # Derive app_image_name from app_name if not supplied.
     if not app_image_name:
         app_image_name = f"atlan-{app_name}-app"
 
-    raw = _load_template(name)
     tmpl = _ENV.from_string(raw)
     return tmpl.render(
         package_name=package_name,
@@ -103,4 +145,6 @@ def render(
         app_image_name=app_image_name,
         enable_e2e=enable_e2e,
         services_script=services_script,
+        exit_zero=exit_zero,
+        automerge=automerge,
     )

@@ -152,6 +152,16 @@ class TemporalAuthManager:
 
         logger.info("Auth manager shut down")
 
+    async def force_refresh(self, client: Client) -> None:
+        """Force an immediate token refresh outside the background loop.
+
+        The worker restart supervisor calls this before rebuilding a worker
+        that exited on a poll auth failure, so the new worker starts with a
+        freshly minted token. Safe to call alongside the background loop; the
+        underlying token service serialises token fetches.
+        """
+        await self._do_refresh(client)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

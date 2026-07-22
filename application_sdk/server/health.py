@@ -30,6 +30,7 @@ Usage::
 
 import asyncio
 import contextlib
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http import HTTPStatus
@@ -116,12 +117,26 @@ class WorkerHealthServer:
         *,
         host: str = "0.0.0.0",
         port: int = 8081,
+        max_idle_seconds: float | None = None,
     ) -> None:
         """Initialize the health server.
 
         Args:
             host: Host to bind to.
             port: Port to listen on.
+            max_idle_seconds: Optional liveness window. When a positive value is
+                supplied, ``check_live`` reports unhealthy if no worker activity
+                (activity execution or heartbeat) has been recorded within this
+                many seconds, so a k8s ``livenessProbe`` can recycle a pod whose
+                poll loop has silently stalled. Leave ``None``/``0`` (the
+                default) to disable the window — enable it only for
+                continuously-busy queues, since a positive value false-positives
+                on a legitimately idle queue (see BLDX-1552). Note the window is
+                refreshed at activity start and on every ``activity.heartbeat()``:
+                even on a busy queue, an activity that runs longer than the
+                window without heartbeating will trip ``/live`` mid-execution, so
+                set the window strictly larger than the longest non-heartbeating
+                activity.
         """
         self.host = host
         self.port = port
@@ -130,6 +145,18 @@ class WorkerHealthServer:
         self._started_at: datetime | None = None
         self._last_activity: datetime | None = None
         self._request_count: int = 0
+        # Reject non-finite windows to match the env loader
+        # (``_load_worker_liveness_max_idle_seconds``): an ``inf`` window is set
+        # but can never trip (``idle > inf`` is always False) and ``nan``
+        # comparisons are always False too — both are silently useless, so treat
+        # them as disabled.
+        self._max_idle_seconds: float | None = (
+            max_idle_seconds
+            if max_idle_seconds
+            and max_idle_seconds > 0
+            and math.isfinite(max_idle_seconds)
+            else None
+        )
 
     def set_temporal_client(self, client: TemporalClientProtocol) -> None:
         """Set the Temporal client for readiness checks.
@@ -187,22 +214,40 @@ class WorkerHealthServer:
         )
 
     async def check_live(self) -> HealthStatus:
-        """Liveness check - is the worker responsive?
+        """Liveness check - is the worker still doing work?
 
-        Returns healthy if the worker is not stuck. Kubernetes uses this
-        to determine if the pod should be restarted.
+        Kubernetes uses this to decide whether to restart the pod. Fails only
+        when a liveness window is configured (``max_idle_seconds``) and no
+        worker activity has been recorded within it — an opt-in proxy for a
+        silently stalled poll loop, disabled by default because it
+        false-positives on legitimately idle queues (see BLDX-1552). The
+        restart supervisor in ``main.py`` already recovers a worker whose
+        ``run()`` returns/raises, so this probe targets the harder case where
+        the poll loop parks without the worker ever exiting.
 
-        Currently always returns healthy if the process is running.
-        Could be extended to check for stuck workers (no activity for too long).
+        Returns healthy otherwise.
         """
+        last_activity_iso = (
+            self._last_activity.isoformat() if self._last_activity else None
+        )
+
+        if self._max_idle_seconds is not None and self._last_activity is not None:
+            idle_seconds = (_utc_now() - self._last_activity).total_seconds()
+            if idle_seconds > self._max_idle_seconds:
+                return HealthStatus(
+                    healthy=False,
+                    message="No worker activity within liveness window",
+                    details={
+                        "last_activity": last_activity_iso,
+                        "idle_seconds": idle_seconds,
+                        "max_idle_seconds": self._max_idle_seconds,
+                    },
+                )
+
         return HealthStatus(
             healthy=True,
             message="Worker is responsive",
-            details={
-                "last_activity": self._last_activity.isoformat()
-                if self._last_activity
-                else None,
-            },
+            details={"last_activity": last_activity_iso},
         )
 
     async def _handle_request(
@@ -289,9 +334,9 @@ class WorkerHealthServer:
             status: HTTP status code.
             body: JSON body to send.
         """
-        import json  # noqa: PLC0415 — stdlib json; lazy use only on health metrics
+        import orjson  # noqa: PLC0415 — orjson; lazy use only on health metrics
 
-        body_bytes = json.dumps(body).encode("utf-8")
+        body_bytes = orjson.dumps(body)
         response = (
             f"HTTP/1.1 {status.value} {status.phrase}\r\n"
             f"Content-Type: application/json\r\n"
@@ -348,11 +393,46 @@ class WorkerHealthServer:
         await self.stop()
 
 
+def build_worker_health_server(
+    *, port: int, client: TemporalClientProtocol
+) -> WorkerHealthServer:
+    """Build a ``WorkerHealthServer`` wired for the worker liveness window.
+
+    Shared by ``run_worker_mode`` and ``run_combined_mode`` (``main.py``) so the
+    liveness-window wiring (BLDX-1552) lives beside ``WorkerHealthServer`` rather
+    than growing ``main.py``. The window comes from
+    ``ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS`` (default disabled). The per-mode
+    ``on_activity`` recorder is wired separately in each ``_build_worker()``
+    closure, since it depends on the mode's worker.
+
+    Args:
+        port: Port the health server binds to.
+        client: Temporal client used for the readiness check.
+
+    Returns:
+        A configured (not yet started) ``WorkerHealthServer``.
+    """
+    # Lazy import: defers the os.getenv read behind WORKER_LIVENESS_MAX_IDLE_SECONDS
+    # (evaluated at constants-module import time) until a worker/combined boot
+    # actually builds the health server.
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker/combined boot only
+        WORKER_LIVENESS_MAX_IDLE_SECONDS,
+    )
+
+    server = WorkerHealthServer(
+        port=port,
+        max_idle_seconds=WORKER_LIVENESS_MAX_IDLE_SECONDS,
+    )
+    server.set_temporal_client(client)
+    return server
+
+
 async def run_health_server(
     *,
     host: str = "0.0.0.0",
     port: int = 8081,
     temporal_client: TemporalClientProtocol | None = None,
+    max_idle_seconds: float | None = None,
 ) -> WorkerHealthServer:
     """Create and start a health server.
 
@@ -363,6 +443,9 @@ async def run_health_server(
         host: Host to bind to.
         port: Port to listen on.
         temporal_client: Optional Temporal client for readiness checks.
+        max_idle_seconds: Optional liveness window forwarded to
+            :class:`WorkerHealthServer`. Leave ``None``/``0`` (the default) to
+            disable the window (see the constructor for the enable-time caveat).
 
     Returns:
         Running WorkerHealthServer instance.
@@ -376,7 +459,7 @@ async def run_health_server(
         # ... run worker ...
         await server.stop()
     """
-    server = WorkerHealthServer(host=host, port=port)
+    server = WorkerHealthServer(host=host, port=port, max_idle_seconds=max_idle_seconds)
 
     if temporal_client:
         server.set_temporal_client(temporal_client)

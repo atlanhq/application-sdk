@@ -2,14 +2,17 @@
 # To regenerate: pkl eval -m . contract/app.pkl
 from __future__ import annotations
 
-import json
 from typing import Annotated, Any, ClassVar
 
+import orjson
 from pydantic import Field, field_validator
 
 from application_sdk.contracts.types import MaxItems
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.contracts import ExtractionInput
+
+logger = get_logger(__name__)
 
 
 class AppInputContract(ExtractionInput):
@@ -36,6 +39,15 @@ class AppInputContract(ExtractionInput):
     """Only extract tables whose name starts with this prefix."""
     custom_attributes: str = ""
     """Extra attributes to attach to every asset, as a JSON object."""
+    legacy_timeout: int = Field(
+        default=60,
+        deprecated="Use the standard pipeline timeout configuration instead.",
+    )
+    """Deprecated: use the standard pipeline timeout instead."""
+    old_batch_mode: bool = Field(
+        default=False, deprecated=True, json_schema_extra={"x-lifecycle": "sunset"}
+    )
+    """Sunset: no longer consumed by the extractor."""
     schemas: Annotated[dict[str, str], MaxItems(1000)] = Field(default_factory=dict)
 
     @field_validator("schemas", mode="before")
@@ -48,8 +60,12 @@ class AppInputContract(ExtractionInput):
             if not stripped:
                 return {}
             try:
-                parsed = json.loads(stripped)
-            except json.JSONDecodeError:
+                parsed = orjson.loads(stripped)
+            except orjson.JSONDecodeError:
+                logger.debug(
+                    "Coercion input was not valid JSON; passing the raw "
+                    "string through for downstream validation."
+                )
                 return value
             if isinstance(parsed, dict):
                 return parsed

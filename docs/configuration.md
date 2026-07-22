@@ -44,6 +44,7 @@ Injected by the Local Marketplace into the Helm release at deploy time, and expo
 | `ATLAN_TEMPORAL_NAMESPACE` | `default` | Temporal namespace. **v2-compat fallback:** `ATLAN_WORKFLOW_NAMESPACE`. |
 | `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when both are set, or just the app name when only `ATLAN_APPLICATION_NAME` is set, or `{ClassName}-queue` (kebab-case) when neither is set. |
 | `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `127.0.0.1:9464` | Bind address for the Temporal SDK Prometheus endpoint (~40 built-in metrics). Loopback-only by default — operators should not scrape this port directly; combined-mode FastAPI `/metrics` proxies it in-process. See [Monitoring](concepts/monitoring.md). |
+| `ATLAN_PREFLIGHT_GATE_MODE` | _(unset)_ | Deploy-time preflight gate posture override, read once at worker build. Only the literal `hard` enforces (blocks a `NOT_READY` run); any other set value resolves to soft. Empty or unset defers to the app's declared `App.preflight_gate_mode`. Set on the worker deployment; no app release needed. See [Apps](concepts/apps.md#preflight-gate-posture). |
 
 ### Worker Versioning
 
@@ -53,6 +54,16 @@ Used by the Temporal Worker Deployment controller (TWD). Leave empty unless your
 |----------|---------|-------------|
 | `ATLAN_APP_BUILD_ID` | _(empty)_ | Build ID for worker versioning. Fallback: `TEMPORAL_BUILD_ID`. |
 | `ATLAN_APP_DEPLOYMENT_NAME` | _(empty)_ | Worker Deployment name (`<namespace>/<twd-name>`). Fallback: `TEMPORAL_DEPLOYMENT_NAME`. |
+
+### Worker Restart Supervisor
+
+Bounds the restart supervisor that rebuilds the worker after a fatal poll error (e.g. a transient auth failure) instead of exiting. Defaults are sensible; override only to tune restart behavior.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_WORKER_MAX_CONSECUTIVE_RESTARTS` | `10` | Consecutive worker-fatal failures tolerated before the supervisor gives up and re-raises, so a persistent misconfiguration still fails loud instead of hot-looping. The counter resets after a healthy run window. |
+| `ATLAN_WORKER_RESTART_BACKOFF_CAP_SECONDS` | `30` | Upper bound (seconds) for the full-jitter exponential backoff between worker restarts. The backoff is raced against shutdown so SIGTERM stays responsive. |
+| `ATLAN_WORKER_HEALTHY_RUN_SECONDS` | `300` | A worker that ran at least this long (seconds) before failing is treated as a fresh incident, resetting the consecutive-failure streak. |
 
 ### TLS
 
@@ -110,6 +121,13 @@ Dapr component names are read at module-import time (not at runtime) because the
 | `DEPLOYMENT_SECRET_STORE_NAME` | `deployment-secret-store` | Dapr secret store holding deployment-scoped secrets (auth credentials, etc.). |
 | `DAPR_MAX_GRPC_MESSAGE_LENGTH` | `104857600` (100 MB) | Maximum gRPC message size in bytes for Dapr client calls. Increase for apps that move large payloads through Dapr state or bindings. |
 
+### Dapr Sidecar Readiness / Cold-Start Retry
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT` | `60` | Max seconds to poll `/v1.0/healthz` at startup for daprd to start accepting connections. Startup proceeds as soon as daprd answers the probe at all (per-component readiness is covered by each call site's cold-start retry budget); only connection errors poll to this deadline. Increase for pathologically slow cold starts (image pull + daprd boot). |
+| `ATLAN_DAPR_COLD_START_MAX_WAIT_SECONDS` | `120.0` | Seconds a Dapr-backed call (secret fetch, credential-vault config fetch, ...) may retry a cold-sidecar race before giving up. Shared by every call site that opts into `retry_past_dapr_cold_start`. Env-overridable for pathologically slow runners. |
+
 ---
 
 ## Redis (Capacity Lock)
@@ -149,8 +167,17 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Maximum concurrent object-store uploads/downloads. |
+| `ATLAN_OBSTORE_READ_TIMEOUT` | `90s` | **Progress-based** liveness bound: a transfer fails only if no bytes arrive for this long (the timer resets on every successful read). The primary timeout — a slow-but-progressing transfer survives; a genuine stall fails fast. |
+| `ATLAN_OBSTORE_TIMEOUT` | `30m` | **Overall-request** wall-clock backstop per object-store request. Scales with file size, not throughput, so it is deliberately generous; `ATLAN_OBSTORE_READ_TIMEOUT` is the real liveness bound. |
+| `ATLAN_STORAGE_RESUME_DOWNLOADS` | `true` | Kill-switch for resumable chunked downloads. When enabled, an interrupted chunked download keeps its partial file plus a `{path}.transfer-state` checkpoint sidecar, and a retry fetches only the missing ranges. Set to `false` to restore delete-partial-on-failure behaviour. |
+| `ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS` | `30` | Interval (seconds) between in-progress heartbeat log lines during a long upload/download. `0` disables heartbeats. |
+| `ATLAN_FILE_REF_CHUNKED_THRESHOLD_BYTES` | `33554432` (32 MiB) | FileReference size threshold above which downloads use parallel range GETs. |
+| `ATLAN_FILE_REF_CHUNK_SIZE_BYTES` | `16777216` (16 MiB) | Size of each range-GET chunk in a chunked download. |
+| `ATLAN_FILE_REF_CHUNK_CONCURRENCY` | `4` | Maximum concurrent range-GET chunks per file. |
 | `ENABLE_ATLAN_UPLOAD` | `false` | Enable uploading processed artifacts to the Atlan platform object store. |
 | `ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE` | `best_effort` | Controls dual-write behaviour when both stores are configured (SDR only). `best_effort` (default): artifact is written to the deployment (customer) store and the upstream (Atlan) store; a deployment-write failure logs a `WARNING` and the run continues. `required`: same dual-write, but a deployment-write failure causes the run to fail after the upstream write completes (a copy is guaranteed somewhere). `disabled`: upstream-only write (pre-BLDX-1464 behaviour). |
+| `ATLAN_VALIDATE_ASSETS_ON_UPLOAD` | `true` | Validate transformed assets against the pyatlan_v9 backbone before the SDR→Atlan upload handoff. Warn-only — invalid/orphaned assets are logged, never block the upload. Set to `false` to disable the check entirely. |
+| `ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS` | `600` | Upper bound in seconds for one upload's asset-validation scan. The scan runs in an isolated child process (CNCT-85); past this bound the child is killed and the upload proceeds with a warning, so warn-only validation can neither stall nor crash a handoff. |
 | `SSL_CERT_DIR` | _(empty)_ | Directory of custom CA certificates (`.pem`, `.crt`, `.cer`, `.ca-bundle`). Used by `httpx` and `aiohttp` clients when set. |
 
 ---
@@ -160,11 +187,11 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAN_LOG_LEVEL` | `INFO` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). **Fallback:** `LOG_LEVEL`. `CRITICAL` is accepted by loguru but prohibited in app code per [ADR-0011](adr/0011-logging-level-guidelines.md). |
-| `ATLAN_LOG_BATCH_SIZE` | `100` | Records buffered before flushing to the parquet sink. |
-| `ATLAN_LOG_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between parquet sink flushes. |
-| `ATLAN_LOG_RETENTION_DAYS` | `30` | Days to retain parquet log files before cleanup. |
+| `ATLAN_LOG_BATCH_SIZE` | `100` | Records buffered before flushing to the object-store sink. |
+| `ATLAN_LOG_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between object-store sink flushes. |
+| `ATLAN_LOG_RETENTION_DAYS` | `30` | Days to retain log files in the object store before cleanup. |
 | `ATLAN_LOG_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old log files. Any non-empty string value (including `"false"`) is treated as `true` by `bool()`; unset or empty to disable. |
-| `ATLAN_LOG_FILE_NAME` | `log.parquet` | Parquet log file name. |
+| `ATLAN_LOG_FILE_NAME` | `log.parquet` | Signal-type discriminator used internally to route records to the correct observability sub-path (logs / metrics / traces). **The default is kept as `log.parquet` for back-compat; the on-disk and object-store format is gzip-compressed NDJSON (`.json.gz`), not parquet.** |
 
 ---
 
@@ -172,9 +199,9 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAN_METRICS_BATCH_SIZE` | `100` | Records buffered before flushing to the parquet sink. |
-| `ATLAN_METRICS_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between parquet sink flushes. |
-| `ATLAN_METRICS_RETENTION_DAYS` | `30` | Days to retain parquet metric files. |
+| `ATLAN_METRICS_BATCH_SIZE` | `100` | Records buffered before flushing to the object-store sink. |
+| `ATLAN_METRICS_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between object-store sink flushes. |
+| `ATLAN_METRICS_RETENTION_DAYS` | `30` | Days to retain metric files in the object store before cleanup. |
 | `ATLAN_METRICS_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old metric files. Uses `.lower() == "true"` — safe to set to `"false"` to disable. |
 | `ATLAN_ENABLE_TEMPORAL_CORE_METRICS` | `true` | Bind the Temporal Rust-core Prometheus endpoint at `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` (loopback) in worker/combined mode so its metric set (`temporal_workflow_*`, `temporal_activity_*`, etc.) is reachable for the combined-mode FastAPI `/metrics` proxy and the worker's `TemporalCoreCollector`. The FastAPI `/metrics` route is always exposed regardless of this flag — when this flag is `false`, or in handler-only mode, the response simply omits the proxied Temporal Rust-core families. `run_dev_combined()` defaults to `false` to avoid hot-reload port collisions. See [Monitoring](concepts/monitoring.md). |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` | _(empty)_ | Pushgateway URL workers push to (split deployment). Empty disables push — combined-mode pods leave it unset and rely on direct `/metrics` scrape. |

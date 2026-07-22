@@ -1,0 +1,221 @@
+# SDK Resolve — mothership Rover-based PR resolver (the WRITE counterpart to @sdk-review).
+#
+# Triggered by `@sdk-resolve` on a PR (OWNER/MEMBER/COLLABORATOR only), or
+# manually via workflow_dispatch with a PR number. Dispatches a Cloudflare
+# sandbox that drives the PR to MERGE-READY: fixes CI + every @sdk-review
+# finding (nits included, unless proven false), looping review->fix->push until
+# zero findings + green CI + READY_TO_MERGE — then STOPS. It never merges; a
+# human does.
+#
+# This runs in a SEPARATE sandbox from @sdk-review. The reviewer stays strictly
+# read-only (never pushes); this resolver is the only writer. All resolver logic
+# lives in .mothership/pr-resolve/ and is read at runtime by the sandbox.
+#
+# Dispatch + SSE parsing + GITHUB_STEP_SUMMARY rendering live in the tested
+# sdk_resolve_dispatch.py (per docs/standards/ci.md), not inlined here.
+#
+# Required configuration (shared with sdk-review.yml):
+#   secrets.HARNESS_TOKEN           Bearer token for /api/sandbox/execute.
+#   secrets.GLOBALPROTECT_USERNAME  VPN auth.
+#   secrets.GLOBALPROTECT_PASSWORD  VPN auth.
+#   vars.GLOBALPROTECT_PORTAL_URL   VPN portal URL.
+#   vars.MOTHERSHIP_URL             e.g. https://mothership.atlan.dev
+
+name: SDK Resolve (mothership)
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to drive to merge-ready'
+        required: true
+        type: string
+      max_rounds:
+        description: 'Max @sdk-review rounds before stopping'
+        required: false
+        default: '8'
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  sdk-resolve-dispatch:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (
+        github.event.issue.pull_request
+        && startsWith(github.event.comment.body, '@sdk-resolve')
+        && (
+          github.event.comment.author_association == 'OWNER'
+          || github.event.comment.author_association == 'MEMBER'
+          || github.event.comment.author_association == 'COLLABORATOR'
+          || github.event.comment.user.login == 'atlan-ci'
+        )
+      )
+    runs-on: ubuntu-latest
+    # The sandbox loops for up to 2h (max_timeout_seconds: 7200); the dispatch
+    # script's stream timeout matches.
+    timeout-minutes: 130
+    concurrency:
+      group: sdk-resolve-${{ github.event.issue.number || inputs.pr_number }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout repo (for local globalprotect-connect action)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve PR number + requester
+        id: parse
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const isDispatch = context.eventName === 'workflow_dispatch';
+            const prNumber = isDispatch
+              ? context.payload.inputs.pr_number
+              : String(context.payload.issue.number);
+            const requester = isDispatch
+              ? context.actor
+              : context.payload.comment.user.login;
+            core.setOutput('pr_number', prNumber);
+            core.setOutput('requester', requester);
+
+      # Acknowledge with an eyes reaction AND a visible comment carrying the
+      # run link, so the requester has an immediate status handle to follow
+      # (the sandbox loop runs out-of-band for many minutes).
+      - name: Acknowledge + link the run
+        if: github.event_name == 'issue_comment'
+        env:
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
+            const body = [
+              `<!-- SDK_RESOLVE_STARTED -->`,
+              `🤖 **SDK Resolve started.** Driving this PR toward merge-ready — fixing CI + every \`@sdk-review\` finding, then requesting human review.`,
+              ``,
+              `[Follow progress →](${process.env.GHA_RUN_URL})`,
+              ``,
+              `_This runs out-of-band and can take several minutes; I'll comment here when it finishes._`,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt('${{ steps.parse.outputs.pr_number }}', 10),
+              body,
+            });
+
+      # timeout-minutes: 5 is a runner-enforced hard cap on each step. The
+      # inner nick-fields/retry timeout_minutes is best-effort — it SIGTERMs
+      # the bash subshell, but sudo/openconnect children survive parent
+      # signals, so a wedged attempt can hang indefinitely. The outer
+      # timeout-minutes is enforced by the runner itself and is the only
+      # guarantee the step terminates and the next attempt fires. Each
+      # workflow-level attempt runs the action with max-attempts: '1' so the
+      # three retries are separately-capped steps, not uncapped inner loops.
+      - name: Connect to VPN (attempt 1/3)
+        id: vpn1
+        uses: ./.github/actions/globalprotect-connect
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          # Probe the actual dispatch target so the VPN step verifies the tunnel
+          # reaches mothership, not an unrelated host.
+          mothership-url: ${{ vars.MOTHERSHIP_URL }}
+          max-attempts: '1'
+
+      - name: Connect to VPN (attempt 2/3)
+        if: steps.vpn1.outcome == 'failure'
+        id: vpn2
+        uses: ./.github/actions/globalprotect-connect
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          # Probe the actual dispatch target so the VPN step verifies the tunnel
+          # reaches mothership, not an unrelated host.
+          mothership-url: ${{ vars.MOTHERSHIP_URL }}
+          max-attempts: '1'
+
+      - name: Connect to VPN (attempt 3/3)
+        id: vpn3
+        if: steps.vpn2.outcome == 'failure'
+        uses: ./.github/actions/globalprotect-connect
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          # Probe the actual dispatch target so the VPN step verifies the tunnel
+          # reaches mothership, not an unrelated host.
+          mothership-url: ${{ vars.MOTHERSHIP_URL }}
+          max-attempts: '1'
+
+      # If all three VPN attempts failed, tell the PR author it died for an infra
+      # reason (not a resolver failure) so they can retry — mirrors sdk-review.yml.
+      - name: Notify PR if VPN failed after 3 attempts
+        if: steps.vpn3.outcome == 'failure'
+        env:
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PORTAL_URL: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            const runUrl = process.env.GHA_RUN_URL;
+            const body = [
+              `⚠️ **SDK Resolve failed: could not connect to VPN.**`,
+              ``,
+              `All 3 VPN connection attempts to \`${process.env.PORTAL_URL || 'the VPN portal'}\` failed. This is usually a transient infrastructure issue.`,
+              ``,
+              `[View workflow logs](${runUrl})`,
+              ``,
+              `Please retry by commenting \`@sdk-resolve\` again. If it keeps failing, flag it in \`#bu-platform-engineering\`.`,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body,
+            });
+
+      # Explicit fail so the run flips red after the PR has been notified,
+      # instead of proceeding into a dispatch that would hang on a broken tunnel.
+      - name: Fail workflow after VPN failure notification
+        if: steps.vpn3.outcome == 'failure'
+        run: |
+          echo "::error::All 3 VPN connection attempts failed. PR has been notified — see comment posted above."
+          exit 1
+
+      - name: Dispatch SDK Resolve to mothership Rover Direct API
+        env:
+          MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
+          HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
+          # Lets the dispatch script poll the PR for the resolver's out-of-band
+          # Phase-4 hand-off comment when our SSE stream is cut before it lands
+          # (transport false-negative backstop). Read-only use of the PR comments.
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          MAX_ROUNDS: ${{ inputs.max_rounds || '8' }}
+          # Human reviewers to request + tag when the PR reaches merge-ready
+          # (Chris = cmgrote, Vaibhav = vaibhavatlan); the requester is added too.
+          REVIEWERS: cmgrote,vaibhavatlan
+          REQUESTER: ${{ steps.parse.outputs.requester }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 .github/scripts/sdk_resolve_dispatch.py

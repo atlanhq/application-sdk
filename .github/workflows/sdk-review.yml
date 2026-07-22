@@ -80,11 +80,13 @@ jobs:
       github.event_name == 'workflow_dispatch'
       || (
         github.event.issue.pull_request
-        && contains(github.event.comment.body, '@sdk-review')
+        && startsWith(github.event.comment.body, '@sdk-review')
         && (
           github.event.comment.author_association == 'OWNER'
           || github.event.comment.author_association == 'MEMBER'
           || github.event.comment.author_association == 'COLLABORATOR'
+          || github.event.comment.user.login == 'atlan-ci'
+          || github.event.comment.user.login == 'mothership-ai[bot]'
         )
       )
     runs-on: ubuntu-latest
@@ -97,7 +99,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - name: Checkout repo (for local globalprotect-connect action)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Parse comment intent
         id: parse
@@ -293,6 +295,9 @@ jobs:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          # Probe the actual dispatch target so the VPN step verifies the tunnel
+          # reaches mothership, not an unrelated host.
+          mothership-url: ${{ vars.MOTHERSHIP_URL }}
           max-attempts: '1'
 
       - name: Connect to VPN (attempt 2/3)
@@ -305,6 +310,9 @@ jobs:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          # Probe the actual dispatch target so the VPN step verifies the tunnel
+          # reaches mothership, not an unrelated host.
+          mothership-url: ${{ vars.MOTHERSHIP_URL }}
           max-attempts: '1'
 
       - name: Connect to VPN (attempt 3/3)
@@ -317,6 +325,9 @@ jobs:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          # Probe the actual dispatch target so the VPN step verifies the tunnel
+          # reaches mothership, not an unrelated host.
+          mothership-url: ${{ vars.MOTHERSHIP_URL }}
           max-attempts: '1'
 
       # If all three VPN attempts failed, post a comment on the PR so the
@@ -329,20 +340,19 @@ jobs:
         env:
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PORTAL_URL: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const prNumber = parseInt(process.env.PR_NUMBER, 10);
             const runUrl = process.env.GHA_RUN_URL;
             const body = [
-              `⚠️ **SDK Review failed: could not connect to VPN.**`,
+              `⚠️ **SDK Review couldn't start due to a transient infrastructure issue.**`,
               ``,
-              `All 3 VPN connection attempts to \`${process.env.PORTAL_URL || 'the VPN portal'}\` failed. This is usually a transient infrastructure issue.`,
+              `The review environment was temporarily unreachable. This is usually transient.`,
               ``,
               `[View workflow logs](${runUrl})`,
               ``,
-              `Please retry by commenting \`@sdk-review\` again. If it keeps failing, flag it in \`#bu-platform-engineering\`.`,
+              `Please retry by commenting \`@sdk-review\` again. If it keeps failing, reach out to the platform team.`,
             ].join('\n');
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -381,7 +391,6 @@ jobs:
           PR_URL: ${{ steps.pr.outputs.html_url }}
           REPO_FULL_NAME: ${{ github.repository }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          GHA_RUN_STARTED_AT: ${{ github.run_started_at }}
         run: |
           set -euo pipefail
 
@@ -526,6 +535,10 @@ jobs:
 
           # curl -N: no buffering (required for SSE).
           # --max-time matches mothership's max_timeout_seconds upper bound.
+          # --keepalive-time 15: send TCP keepalive probes so the VPN/nginx/NAT
+          # path doesn't reap an idle-looking connection mid-stream (the
+          # `curl: (56) Recv failure` class). Belt-and-suspenders alongside the
+          # ~15s app-level SSE heartbeats.
           # 2>&1: surface curl's own diagnostics into the same stream.
           while IFS= read -r line; do
             # Idle-watchdog: every line is an opportunity to check
@@ -628,7 +641,7 @@ jobs:
                 echo "[unknown]   ${line}"
                 ;;
             esac
-          done < <(curl -sS -N --max-time 7200 \
+          done < <(curl -sS -N --max-time 7200 --keepalive-time 15 \
             -X POST "${MOTHERSHIP_URL}/api/sandbox/execute" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${HARNESS_TOKEN}" \
@@ -646,14 +659,31 @@ jobs:
           # fail the workflow. The timestamp filter prevents a re-trigger on
           # a new commit from falsely soft-succeeding by counting a verdict
           # comment that belonged to a previous head.
+          #
+          # Lower-bound timestamp: the starter comment's created-at, captured
+          # in STARTER_STARTED_AT and set by this run's own starter step via
+          # core.setOutput('started_at', ...). We prefer it over
+          # github.run_started_at because it is deterministically populated by
+          # a step in this run. The previous code keyed this bound off
+          # github.run_started_at, which evaluated to empty here (seen in the
+          # run's env dump); the empty value made the `[ -n ... ]` guard below
+          # false, so this whole soft-success block was skipped and every
+          # delivered-then-dropped review hard-failed.
           VERDICT_POSTED=0
-          RUN_STARTED_AT="${GHA_RUN_STARTED_AT}"
+          RUN_STARTED_AT="${STARTER_STARTED_AT:-}"
           if [ -n "${PR_NUMBER}" ] && [ -n "${RUN_STARTED_AT}" ]; then
+            # --slurp collapses all pages into one array so the jq filter emits a
+            # SINGLE count. NOTE: `gh api` rejects `--slurp` together with `--jq`
+            # ("the --slurp option is not supported with --jq"), so the slurped
+            # array is piped into a standalone `jq`. The prior `--slurp --jq` form
+            # errored, was swallowed by `2>/dev/null`, and `|| echo 0` forced a
+            # false "no verdict" -> every delivered-then-dropped review hard-failed
+            # (see RCA for run 29001242204).
             SUMMARY_COUNT=$(gh api "repos/${REPO_FULL_NAME}/issues/${PR_NUMBER}/comments" \
-              --paginate \
-              --jq "[.[] | select(.body | contains(\"<!-- SDK_REVIEW -->\")) | select(.created_at >= \"${RUN_STARTED_AT}\")] | length" \
+              --paginate --slurp 2>/dev/null \
+              | jq "[.[][] | select(.body | contains(\"<!-- SDK_REVIEW -->\")) | select(.created_at >= \"${RUN_STARTED_AT}\")] | length" \
               2>/dev/null || echo "0")
-            if [ "${SUMMARY_COUNT}" -gt 0 ]; then
+            if [ "${SUMMARY_COUNT:-0}" -gt 0 ]; then
               VERDICT_POSTED=1
             fi
           fi
@@ -856,9 +886,19 @@ jobs:
           # string. A naive `.[] | select(...) | .body | tail -1` truncates
           # the multiline body to its last line, which silently breaks the
           # verdict grep below.
+          #
+          # --slurp collapses all pages into one array so `last` picks the
+          # genuinely most-recent matching comment. Without it, `--paginate`
+          # runs the jq filter once PER PAGE, so on a PR whose comments span
+          # multiple API pages this would emit one body per matching page
+          # (concatenated) and the verdict grep below would read the verdict
+          # from the EARLIEST matching page rather than the latest — acting
+          # on a stale verdict. `gh api` rejects `--slurp` with `--jq`, so the
+          # slurped array (array-of-pages) is piped into a standalone `jq`,
+          # which flattens with `.[][]` (same idiom as the two guards above).
           SUMMARY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            --paginate \
-            --jq '[.[] | select((.body | contains("<!-- SDK_REVIEW -->")) or (.body | contains("<!-- TEST_SDK_REVIEW -->")))] | last | .body // ""')
+            --paginate --slurp 2>/dev/null \
+            | jq -r '[.[][] | select((.body | contains("<!-- SDK_REVIEW -->")) or (.body | contains("<!-- TEST_SDK_REVIEW -->")))] | last | .body // ""')
 
           if [ -z "$SUMMARY" ]; then
             echo "::warning::No SDK_REVIEW summary comment found on PR #${PR_NUMBER} — skipping approval (the sandbox may have errored before posting)"
@@ -912,11 +952,17 @@ jobs:
               # READY_TO_MERGE comment as stale.
               LABEL_PRESENT=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" \
                 --jq '[.[] | select(.name == "sdk-review-approved")] | length')
-              EXISTING_APPROVAL=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" --paginate \
-                --jq '[.[] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | length')
+              # --slurp collapses all pages into one array so the jq filter emits
+              # a SINGLE count. `gh api` rejects `--slurp` with `--jq`, so the
+              # slurped array is piped into a standalone `jq` (same idiom as the
+              # verdict-posted guard above). Without slurp, `--paginate` runs the
+              # jq per page and prints one number per page — on a PR with >30
+              # reviews that multi-line output breaks `[ ... != "0" ]`.
+              EXISTING_APPROVAL=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" --paginate --slurp 2>/dev/null \
+                | jq '[.[][] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | length' 2>/dev/null || echo "0")
               if [ "$LABEL_PRESENT" = "0" ]; then
                 echo "sdk-review-approved label not present on PR #${PR_NUMBER} (downgrade or reset-on-push likely ran) — skipping approval."
-              elif [ "$EXISTING_APPROVAL" != "0" ]; then
+              elif [ "${EXISTING_APPROVAL:-0}" != "0" ]; then
                 echo "atlan-ci already approved PR #${PR_NUMBER} (likely from the fast path) — skipping."
               else
                 # NOTE: the leading line of the body is a STABLE SIGNATURE used

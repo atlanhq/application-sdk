@@ -47,6 +47,35 @@ def test_manifest_is_committed() -> None:
     assert manifest.symbols, "committed manifest has no symbols"
 
 
+def test_manifest_contains_legacy_transformers() -> None:
+    """BLDX-1399: the legacy transformer surface is recorded for B001.
+
+    Stronger than the drift test (which only proves the file matches a fresh
+    scan): this pins the *intent* — the three transformer symbols must stay
+    marked, with a well-formed asset-mapper migration target and a v4.0 removal,
+    so B001 keeps steering apps onto the asset-mapper pattern.  If a refactor
+    drops a class-level marker, the drift test would still pass after a
+    regenerate; this one fails loudly.
+    """
+    manifest = load_manifest()
+    by_name = {s.symbol: s for s in manifest.symbols}
+    expected = {
+        "TransformerInterface": "application_sdk.transformers",
+        "AtlasTransformer": "application_sdk.transformers.atlas",
+        "QueryBasedTransformer": "application_sdk.transformers.query",
+    }
+    for symbol, module in expected.items():
+        assert (
+            symbol in by_name
+        ), f"{symbol} missing from manifest — B001 is blind to it"
+        rec = by_name[symbol]
+        assert rec.module == module
+        assert rec.kind == "class"
+        assert rec.migration_target, f"{symbol} notice names no migration target (B002)"
+        assert rec.removal_version == "4.0", f"{symbol} removal version drifted"
+        assert "asset-mapper" in rec.message
+
+
 def test_committed_manifest_matches_fresh_scan() -> None:
     """The committed manifest equals a fresh scan of application_sdk/.
 

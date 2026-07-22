@@ -19,7 +19,18 @@ Environment variables
 
 Client options (passed via ``S3Store(client_options=…)``):
 
-* ``ATLAN_OBSTORE_TIMEOUT`` — per-request timeout (default ``"90s"``).
+* ``ATLAN_OBSTORE_READ_TIMEOUT`` — **progress-based** read timeout (default
+  ``"90s"``). This is the primary liveness bound for large transfers: obstore
+  resets it after every successful read, so a slow-but-*progressing* GB-class
+  download stays alive indefinitely and only fails when no bytes arrive for
+  the window. This is what keeps large downloads alive instead of relying on a
+  bigger overall cap (BLDX-1513).
+* ``ATLAN_OBSTORE_TIMEOUT`` — **overall-request** timeout (default ``"30m"``).
+  This is the total wall-clock cap from connect to last byte, so it scales with
+  file size, not throughput. It is now a generous *backstop* — ``read_timeout``
+  above does the real stall detection. A prior default of ``"90s"`` killed
+  ~250 MB connection-cache downloads on a slow-egress tenant even while bytes
+  were still flowing (~1 MiB/s); bump this env for multi-GB single objects.
 * ``ATLAN_OBSTORE_CONNECT_TIMEOUT`` — connect-phase timeout (default ``"30s"``).
 * ``ATLAN_OBSTORE_POOL_IDLE_TIMEOUT`` — pool idle timeout (default ``"90s"``).
 * ``ATLAN_OBSTORE_POOL_MAX_IDLE_PER_HOST`` — pool size per host (unset by
@@ -29,6 +40,14 @@ Client options (passed via ``S3Store(client_options=…)``):
 * ``ATLAN_OBSTORE_USER_AGENT`` — custom UA string.  Defaults to
   ``"atlan-application-sdk/{version}"`` so tenant operators can identify
   SDK traffic in S3 access logs.
+
+Proxy / TLS (obstore reads none of these itself, so we plumb them explicitly):
+
+* ``HTTPS_PROXY`` / ``HTTP_PROXY`` — obstore's ``proxy_url``.
+* ``NO_PROXY`` — obstore's ``proxy_excludes`` (only when a proxy is set).
+* ``SSL_CERT_DIR`` — custom CA certs for private-CA stores (e.g. self-hosted
+  MinIO), loaded into obstore's ``root_certificate``. Same env var httpx/aiohttp
+  and Temporal honor via ``clients/ssl_utils.py``.
 
 Retry config (passed via ``S3Store(retry_config=…)``):
 
@@ -57,7 +76,15 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
-_DEFAULT_TIMEOUT = "90s"
+# Overall-request cap: from connect to last byte, so it scales with file size,
+# not throughput. Kept generous — ``read_timeout`` below is the real liveness
+# bound. See BLDX-1513: a 90s value here killed slow-but-progressing GB-class
+# downloads even while bytes were flowing.
+_DEFAULT_TIMEOUT = "30m"
+# Progress-based read timeout: resets after every successful read, so it detects
+# a genuinely *stalled* connection (no bytes for the window) without penalising a
+# transfer that is merely slow. This is what keeps large downloads alive.
+_DEFAULT_READ_TIMEOUT = "90s"
 _DEFAULT_CONNECT_TIMEOUT = "30s"
 _DEFAULT_POOL_IDLE_TIMEOUT = "90s"
 _DEFAULT_HTTP2_KEEP_ALIVE_TIMEOUT = "30s"
@@ -85,11 +112,20 @@ def _default_user_agent() -> str:
 def _obstore_proxy_url() -> str | None:
     """Return the proxy URL from HTTPS_PROXY/HTTP_PROXY, or None.
 
-    obstore doesn't read proxy env vars itself, so we pass ``proxy_url``
-    explicitly. NO_PROXY isn't honored — the binding has no per-host excludes.
+    obstore doesn't read proxy env vars itself, so we pass it explicitly.
     """
     proxies = urllib.request.getproxies()
     return proxies.get("https") or proxies.get("http") or None
+
+
+def _obstore_proxy_excludes() -> str | None:
+    """Return NO_PROXY (obstore's ``proxy_excludes``), or None.
+
+    Unlike Temporal — which knows its single target host and resolves the bypass
+    itself via ``proxy_bypass_environment`` — obstore matches NO_PROXY per-host
+    at request time, so we just hand it the raw list.
+    """
+    return urllib.request.getproxies_environment().get("no") or None
 
 
 def obstore_client_options() -> ClientConfig:
@@ -102,6 +138,7 @@ def obstore_client_options() -> ClientConfig:
     """
     opts: ClientConfig = {
         "timeout": os.getenv("ATLAN_OBSTORE_TIMEOUT", _DEFAULT_TIMEOUT),
+        "read_timeout": os.getenv("ATLAN_OBSTORE_READ_TIMEOUT", _DEFAULT_READ_TIMEOUT),
         "connect_timeout": os.getenv(
             "ATLAN_OBSTORE_CONNECT_TIMEOUT", _DEFAULT_CONNECT_TIMEOUT
         ),
@@ -120,6 +157,17 @@ def obstore_client_options() -> ClientConfig:
     proxy_url = _obstore_proxy_url()
     if proxy_url:
         opts["proxy_url"] = proxy_url
+        proxy_excludes = _obstore_proxy_excludes()
+        if proxy_excludes:
+            opts["proxy_excludes"] = proxy_excludes
+
+    from application_sdk.clients.ssl_utils import (  # noqa: PLC0415
+        get_custom_ca_cert_bytes,
+    )
+
+    root_certificate = get_custom_ca_cert_bytes()
+    if root_certificate:
+        opts["root_certificate"] = root_certificate
     return opts
 
 
@@ -292,19 +340,28 @@ def make_gcs_store(
     *,
     label: str = "gcs",
     client_options: ClientConfig | None = None,
+    credential_provider: object = None,
 ) -> ObjectStore:
     """Create a GCSStore with SDK-default client/retry config.
 
-    See :func:`make_s3_store` for rationale.
+    See :func:`make_s3_store` for rationale. On the ADC / Workload-Identity path
+    ``binding.py`` passes a ``credential_provider`` (obstore.auth.google, backed
+    by google-auth) instead of a key in ``config``: obstore's built-in GCS
+    credential-file decoder only understands ``service_account`` /
+    ``authorized_user`` files, NOT a Workload Identity Federation
+    ``external_account`` file — google-auth handles all of them.
     """
     from obstore.store import GCSStore  # noqa: PLC0415
 
     opts = client_options if client_options is not None else obstore_client_options()
     retry = obstore_retry_config()
     log_obstore_config(label, client_options=opts, retry_config=retry)
-    return GCSStore(
+    kw: dict[str, object] = dict(
         bucket=bucket, config=config, client_options=opts, retry_config=retry
-    )  # type: ignore[arg-type]
+    )
+    if credential_provider is not None:
+        kw["credential_provider"] = credential_provider
+    return GCSStore(**kw)  # type: ignore[arg-type]
 
 
 def log_obstore_config(
@@ -331,18 +388,22 @@ def log_obstore_config(
 
 
 def _redact_proxy_userinfo(client_options: ClientConfig) -> dict:
-    """Return a copy of *client_options* with any proxy_url credentials masked.
+    """Return a log-safe copy of *client_options* (the real config is untouched).
 
-    The real config keeps the userinfo (obstore needs it); only the log copy is
-    redacted so a `user:pass@` proxy never lands in logs.
+    Masks ``proxy_url`` credentials and shrinks ``root_certificate`` to a byte
+    count, so logs never carry a proxy password or a full PEM bundle.
     """
     opts = dict(client_options)
     proxy = opts.get("proxy_url")
-    if not isinstance(proxy, str):
-        return opts
-    p = urlsplit(proxy)
-    if p.username or p.password:
-        host = p.hostname or ""
-        netloc = f"***@{host}:{p.port}" if p.port else f"***@{host}"
-        opts["proxy_url"] = urlunsplit((p.scheme, netloc, p.path, p.query, p.fragment))
+    if isinstance(proxy, str):
+        p = urlsplit(proxy)
+        if p.username or p.password:
+            host = p.hostname or ""
+            netloc = f"***@{host}:{p.port}" if p.port else f"***@{host}"
+            opts["proxy_url"] = urlunsplit(
+                (p.scheme, netloc, p.path, p.query, p.fragment)
+            )
+    root_cert = opts.get("root_certificate")
+    if isinstance(root_cert, (bytes, str)):
+        opts["root_certificate"] = f"<{len(root_cert)} bytes>"
     return opts

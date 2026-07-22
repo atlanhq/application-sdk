@@ -118,6 +118,17 @@ hasPublishStep: Boolean = true
 /// control through these generated fields.
 hasPublishInputFields: Boolean = true
 
+/// Background-job schedules (DISTR-815). When non-empty, the toolkit renders a
+/// `triggers.schedules` block into `manifest.json` (AE ScheduleTrigger shape) so a
+/// reconciler (Local Marketplace) can create the workflow's Temporal schedule(s)
+/// straight from the manifest. Only scheduled (cron) entrypoints set this; leave
+/// empty for UI/event-triggered entrypoints.
+///
+/// `name` is the reconcile identity key downstream, so names must be unique within
+/// an entrypoint — duplicates would collapse to one AE trigger. The constraint
+/// fails such a contract at eval time.
+schedules: Listing<ScheduleSpec>(this.toList().map((s) -> s.name).isDistinct) = new Listing {}
+
 /// Value for the default publish node's executor_enabled argument.
 /// Use a Boolean literal or an exact template placeholder string such as
 /// "{{load-to-atlan}}". Defaults to true for the existing always-publish path.
@@ -186,7 +197,14 @@ publishActivityDisplayName: String?
 /// as `startToCloseTimeoutSeconds` and retry policy fields. Do not set
 /// `heartbeatTimeoutSeconds`; AE only accepts heartbeat timeouts on activity
 /// nodes, and the toolkit rejects that at eval time.
-extractNodeErrorHandling: ErrorHandlingConfig?
+///
+/// Defaults to a 1-day `startToCloseTimeoutSeconds`. AE's source-code default
+/// for workflow nodes is 2h, which is too tight for non-trivial extraction on a
+/// large tenant. Override to a different value, or set to `null` to fall back
+/// to AE's own default.
+extractNodeErrorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+  startToCloseTimeoutSeconds = 86400
+}
 
 /// Error handling / retry / timeout configuration for the toolkit-managed
 /// default publish node in `manifest.json`.
@@ -847,8 +865,14 @@ open class DAGNode {
   /// exclusive with `dependsOn`.
   dependsOnCondition: DependencyCondition?
 
-  /// Error handling / retry / timeout configuration for this node.
-  errorHandling: ErrorHandlingConfig?
+  /// Error handling / retry / timeout configuration for this node. Defaults to
+  /// a 1-day `startToCloseTimeoutSeconds`; AE's source-code default for workflow
+  /// nodes is 2h, which is too tight for non-trivial work. `PublishNode` raises
+  /// this to 3 days. Override on the instance, or set to `null` to fall back to
+  /// AE's own default.
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400
+  }
 
   // Invariant: heartbeatTimeoutSeconds is activity-only. Mirrors AE's
   // _validate_error_handling_for_node_type (registry/workflows/models.py).
@@ -970,7 +994,8 @@ class PublishNode extends DAGNode {
 /// pod environment, not per-workflow args.
 ///
 /// Defaults are biased toward AE-native orchestration:
-/// - `appName = "automation-engine"` (matches working Athena usage)
+/// - `appName = "query-intelligence"` (identifies the QI app for failure
+///   attribution; `taskQueue` — not `appName` — governs dispatch)
 /// - `taskQueue = "atlan-query-intelligence-{deployment_name}"`
 /// - `dependsOn { upstream }`
 ///
@@ -1066,7 +1091,7 @@ class QueryIntelligenceNode extends DAGNode {
 
   displayName = "Parse SQL Queries"
   workflowType = "QueryIntelligenceWorkflow"
-  appName = "automation-engine"
+  appName = "query-intelligence"
   taskQueue = "atlan-query-intelligence-{deployment_name}"
   args {
     ["connection_qualified_name"] = connectionQualifiedName
@@ -1358,7 +1383,7 @@ class PopularityNode extends DAGNode {
 ///
 /// Defaults target the native JSON/view-lineage flow used by Athena:
 /// - `workflowType = "LineageWorkflow"`
-/// - `appName = "automation-engine"`
+/// - `appName = "lineage"`
 /// - `taskQueue = "atlan-lineage-{deployment_name}"`
 /// - `fileType = "json"` and `inputPath = ""`
 /// - `parsedViewsPath = "$.extract.outputs.view_lineage_output_prefix"`
@@ -1518,7 +1543,7 @@ class LineageNode extends DAGNode {
 
   displayName = "Build Lineage Entities"
   workflowType = "LineageWorkflow"
-  appName = "automation-engine"
+  appName = "lineage"
   taskQueue = "atlan-lineage-{deployment_name}"
   args {
     ["connection_qualified_name"] = connectionQualifiedName
@@ -2412,6 +2437,34 @@ local function generateCredentialConfig(): Mapping<String, Any> =
 local manifestData: Mapping<String, Any> = new Mapping {
   ["execution_mode"] = "automation-engine"
   ["dag"] = generateDAG()
+  // DISTR-815: emit triggers.schedules when the entrypoint declares schedules,
+  // so the cron lives in the manifest itself (not a separate file).
+  when (schedules.length > 0) {
+    ["triggers"] = new Mapping {
+      ["schedules"] = new Listing {
+        for (s in schedules) {
+          new Mapping {
+            ["name"] = s.name
+            ["cron_expression"] = s.cronExpression
+            ["timezone"] = s.timezone
+            ["status"] = s.status
+          }
+        }
+      }
+    }
+  }
+}
+
+/// One background-job schedule rendered into `manifest.json`'s `triggers.schedules`
+/// (AE ScheduleTrigger shape). `name` is the stable trigger id — never rename/reuse
+/// (a rename is a delete+recreate downstream); names must be unique within an
+/// entrypoint. `timezone` is an IANA zone (format-validated at eval time). `status`
+/// is a closed set — a typo would otherwise silently pause a schedule downstream.
+class ScheduleSpec {
+  name: String
+  cronExpression: String
+  timezone: String(matches(Regex("[A-Za-z_]+(/[A-Za-z0-9_+-]+)*"))) = "UTC"
+  status: "ACTIVE"|"PAUSED" = "ACTIVE"
 }
 
 local function generateDAG(): Mapping<String, Any> = new Mapping {
@@ -2624,15 +2677,28 @@ local function generateExtractNode(): Mapping<String, Any> =
   new Mapping {
     ["activity_name"] = "execute_workflow"
     ["activity_display_name"] = extractActivityDisplayName ?? "Extract \(displayName) Metadata"
-    ["app_name"] = "{app_name}"
+    // Log identity: bake the contract `name` directly. This is the value the
+    // AE DAG (and Pulse) attributes failures to, and it must match the app's
+    // ATLAN_APPLICATION_NAME so failure logs correlate (HYP-1678 / HYP-1954).
+    // The SDK no longer substitutes a `{app_name}` placeholder at serve time
+    // (#2271); bake it here as App.pkl does, or it stays literal in the DAG.
+    ["app_name"] = name
     ["inputs"] = new Mapping {
       ["workflow_type"] = workflowTypeResolved
-      ["app_name"] = "{app_name}"
+      ["app_name"] = name
       ["app_id"] = ""
       ["argo_workflow_slug"] = ""
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
       ["args"] = new Mapping {
         ["credential"] = "{{credential}}"
+        // SDR / agent-mode credential slot. Emitted whenever the app does not
+        // model `agent-json` — the gap that silently broke MSSQL's SDR rollout
+        // (atlan-mssql-app#177). When the app DOES model `agent-json`, the loops
+        // below emit it (AgentSelector constrains includeInManifest to true, so the
+        // loops always fire); this guard skips to avoid a duplicate key.
+        when (!uiConfig.properties.containsKey("agent-json")) {
+          ["agent_json"] = "{{agent-json}}"
+        }
         for (argName, formField in manifestTopLevelArgs) {
           when (uiConfig.properties.containsKey(formField) && uiConfig.properties[formField].includeInManifest) {
             [argName] = "{{" + formField + "}}"
@@ -2671,6 +2737,32 @@ local function generateExtractNode(): Mapping<String, Any> =
   }
 
 /// Render workflow config directly as JSON.
+// uiConfig with the app-level `connector` injected onto every ConnectionCreator
+// ("connection") widget, so the CREATE path emits `ui.connector` — the key the
+// frontend reads to mint a new connection's qualifiedName. Without this the
+// frontend has no connector type on the create widget and falls back to the
+// workflow's `orchestration.atlan.com/source` label (the app id) when building
+// `default/{connector}/{epoch}` — wrong whenever the app name and the connector
+// type differ. Only the hidden `connectorType` field is amended; `fixed ui`
+// recomputes from it, so other widgets are untouched. Mirrors App.pkl.
+local connectorInjectedUiConfig: Config.UIConfig =
+  (uiConfig) {
+    tasks {
+      for (stepKey, step in uiConfig.tasks) {
+        [stepKey] = (step) {
+          inputs {
+            for (inKey, inEl in step.inputs) {
+              [inKey] =
+                if (inEl is Config.ConnectionCreator)
+                  (inEl as Config.ConnectionCreator) { connectorType = connector.value }
+                else inEl
+            }
+          }
+        }
+      }
+    }
+  }
+
 local workflowConfigOutput: FileOutput = new FileOutput {
   value = new Mapping {
     when (workflowConfigIncludeTopLevelMetadata) {
@@ -2678,7 +2770,7 @@ local workflowConfigOutput: FileOutput = new FileOutput {
       ["name"] = displayName
       ["logo"] = logo
     }
-    ["config"] = uiConfig
+    ["config"] = connectorInjectedUiConfig
   }
   renderer = new JsonRenderer {}
 }
@@ -2843,8 +2935,12 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "            if not stripped:\n" +
     "                return {}\n" +
     "            try:\n" +
-    "                parsed = json.loads(stripped)\n" +
-    "            except json.JSONDecodeError:\n" +
+    "                parsed = orjson.loads(stripped)\n" +
+    "            except orjson.JSONDecodeError:\n" +
+    "                logger.debug(\n" +
+    "                    \"Coercion input was not valid JSON; passing the raw \"\n" +
+    "                    \"string through for downstream validation.\"\n" +
+    "                )\n" +
     "                return value\n" +
     "            if isinstance(parsed, dict):\n" +
     "                return parsed\n" +
@@ -2889,8 +2985,12 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     }
   }).toList()
   local stdlibImportLines: String =
-    (if (!objectStringCoercionFields.isEmpty) "import json\n" else "") +
     (if (!typingImports.isEmpty) "from typing import \(typingImports.join(", "))\n" else "")
+  // orjson is a core SDK dependency (~10x faster than stdlib json) and is the
+  // sanctioned JSON entrypoint (conformance O001). Emitted as a third-party
+  // import only when the JSON-object-string coercion validator is generated.
+  local thirdPartyImportLines: String =
+    (if (!objectStringCoercionFields.isEmpty) "import orjson\n" else "")
   local pydanticImports: List<String> = (new Listing {
     when (uiFieldLines.contains(" = Field(")) {
       "Field"
@@ -2917,17 +3017,30 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
       "from application_sdk.contracts.types import \(sdkTypeImports.join(", "))\n"
     else "") +
     (if (!credFieldLine.isEmpty) "from application_sdk.credentials.ref import CredentialRef\n" else "") +
+    (if (!objectStringCoercionFields.isEmpty)
+      "from application_sdk.observability.logger_adaptor import get_logger\n"
+    else "") +
     "from application_sdk.templates.contracts import ExtractionInput\n"
+  // Module-level logger, emitted only when the coercion validator needs it, so
+  // its benign "not valid JSON" fallback is observable (conformance E007) rather
+  // than silently swallowed. The message never logs the value itself.
+  local loggerModuleLine: String =
+    if (!objectStringCoercionFields.isEmpty) "logger = get_logger(__name__)\n\n\n" else ""
   local inputImportBlock: String =
     "from __future__ import annotations\n\n" +
     (if (!stdlibImportLines.isEmpty) stdlibImportLines + "\n" else "") +
-    (if (!pydanticImportLines.isEmpty) pydanticImportLines + "\n" else "") +
+    (if (!thirdPartyImportLines.isEmpty || !pydanticImportLines.isEmpty)
+      thirdPartyImportLines + pydanticImportLines + "\n"
+    else "") +
     firstPartyImportLines +
-    "\n\n"
+    // One blank line before the module-level logger assignment (if any),
+    // two before the class itself — matches ruff/isort canonical spacing.
+    (if (!loggerModuleLine.isEmpty) "\n" else "\n\n")
   text =
     "# AUTO-GENERATED from app.pkl — DO NOT EDIT MANUALLY.\n" +
     "# To regenerate: make generate\n" +
     inputImportBlock +
+    loggerModuleLine +
     "class AppInputContract(ExtractionInput):\n" +
     publishHashExcludeBlock +
     uiFieldLines +

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from conformance.renovate.classify import classify
+from conformance.renovate.classify import STALE_AFTER_DAYS, classify
 from conformance.renovate.models import (
     BlockingReason,
     Category,
@@ -15,9 +15,11 @@ from conformance.renovate.models import (
 from conformance.renovate.scan import _parse_checks_state
 
 # Anchor "now" once so age computations are deterministic within a run. _OLD is
-# clamped to day-of-month >= 1 so the 3-day-old PR stays in the same month.
+# exactly 3 days before _NOW via timedelta so it is correct across month
+# boundaries — the previous day-of-month clamp collapsed _OLD onto _NOW on days
+# 1–3 of a month (age_days would be 0, not 3).
 _NOW = datetime.now(timezone.utc)
-_OLD = datetime(_NOW.year, _NOW.month, max(1, _NOW.day - 3), tzinfo=timezone.utc)
+_OLD = _NOW - timedelta(days=3)
 
 
 def make_pr(
@@ -35,6 +37,7 @@ def make_pr(
     updated_at: datetime = _NOW,
     is_draft: bool = False,
     body: str = "",
+    auto_merge_enabled: bool = False,
 ) -> RenovatePR:
     """Construct an unclassified RenovatePR with sane defaults for one scenario."""
     return RenovatePR(
@@ -51,6 +54,7 @@ def make_pr(
         updated_at=updated_at,
         is_draft=is_draft,
         body=body,
+        auto_merge_enabled=auto_merge_enabled,
     )
 
 
@@ -193,13 +197,138 @@ def test_blocking_non_dep_files() -> None:
 
 
 def test_blocking_awaiting_approval() -> None:
-    # github-actions, all green, no conflict, only dep files changed.
+    # github-actions, all green, no conflict, dep-only, freshly opened and not yet
+    # approved → transient wait for the atlan-ci approval, not stuck.
     pr = classify(
         make_pr(
             labels=["update:github-actions"],
             files=[".github/workflows/test.yaml"],
             mergeable="MERGEABLE",
             checks_state=ChecksState.GREEN,
+            review_decision="",
+            created_at=_NOW,
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AWAITING_APPROVAL
+
+
+def test_blocking_awaiting_approval_armed_and_young() -> None:
+    # Approved + auto-merge armed + freshly opened → in-flight, expected to merge
+    # via the queue imminently. Not stuck.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="APPROVED",
+            auto_merge_enabled=True,
+            created_at=_NOW,
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AWAITING_APPROVAL
+
+
+def test_blocking_automerge_not_armed() -> None:
+    # The #2828 silent-stuck case: eligible, green, dep-only, code-owner approved,
+    # but GitHub-native auto-merge was never enabled → nothing will merge it.
+    # Flagged immediately (age 0), no staleness wait.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="APPROVED",
+            auto_merge_enabled=False,
+            created_at=_NOW,
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AUTOMERGE_NOT_ARMED
+
+
+def test_blocking_automerge_not_armed_wins_over_stale() -> None:
+    # Precise not-armed signal takes priority over the age backstop when both hold.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="APPROVED",
+            auto_merge_enabled=False,
+            created_at=_OLD,
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AUTOMERGE_NOT_ARMED
+
+
+def test_blocking_automerge_stale_unapproved_old() -> None:
+    # Age backstop: eligible + green but still open past the threshold and never
+    # approved → the auto-approval pipeline is likely down. Caught without needing
+    # to model the specific failure. (Backstop is not gated on approval.)
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="",
+            created_at=_OLD,
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AUTOMERGE_STALE
+
+
+def test_blocking_automerge_stale_armed_but_wedged() -> None:
+    # Armed and approved but still open past the threshold → merge queue wedged.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="APPROVED",
+            auto_merge_enabled=True,
+            created_at=_OLD,
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AUTOMERGE_STALE
+
+
+def test_blocking_automerge_stale_at_exact_threshold() -> None:
+    # Boundary: age == STALE_AFTER_DAYS must trip the backstop (the `>=` in
+    # classify.py). Anchored to STALE_AFTER_DAYS so a future `>=` → `>` regression
+    # fails here. Unapproved so the not-armed branch is skipped and the stale
+    # backstop is isolated.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="",
+            created_at=_NOW - timedelta(days=STALE_AFTER_DAYS),
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AUTOMERGE_STALE
+
+
+def test_blocking_automerge_not_stale_just_under_threshold() -> None:
+    # Boundary: just under a full day (age 0 after `.days` truncation) is NOT
+    # stale yet — the freshly-eligible PR is still expected to merge imminently.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="",
+            created_at=_NOW - timedelta(hours=23),
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AWAITING_APPROVAL
+
+
+def test_blocking_unknown_checks_not_flagged_as_automerge() -> None:
+    # UNKNOWN checks state is not green: the auto-merge-not-armed / stale signals
+    # both assert every gate is green, so an eligible + approved + old PR whose
+    # checks rollup can't be determined must NOT be reported as AUTOMERGE_* —
+    # it falls through to AWAITING_APPROVAL as it did before these signals existed.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="APPROVED",
+            auto_merge_enabled=False,
+            checks_state=ChecksState.UNKNOWN,
+            created_at=_OLD,
         )
     )
     assert pr.blocking_reason is BlockingReason.AWAITING_APPROVAL

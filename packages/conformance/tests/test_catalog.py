@@ -13,6 +13,7 @@ from conformance.suite.schema.disposition import (
     RuleMechanism,
     RuleScope,
 )
+from conformance.suite.schema.extensions import AtlanRuleProperties
 from pydantic import ValidationError
 
 
@@ -107,6 +108,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     through the SDK seam (BLDX-1417).  P006–P007 are SDK-only: the SDK must
     keep Temporal contained behind its seam.
 
+    P017–P018 (entrypoint-conformance) are app-scoped: the SDK's ``main.py``
+    legitimately calls ``create_worker`` and ``uvicorn.run`` — that is its job;
+    consumer apps must delegate those calls to the SDK launcher (BLDX-1411).
+
     B001 (deprecated-symbol usage) is app-scoped: the SDK deliberately retains
     and internally uses its own deprecated shims.  B002–B004 (deprecation
     authoring hygiene) are SDK-only — they grade how the SDK *declares* its
@@ -117,7 +122,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # C002/D001/D002: publisher-side contract. D004/D005: the same
     # redeclaration/extra contract on dependency-groups and SDK extras.
     # D006/D007/D008: the app pyproject baseline (python floor, build backend,
-    # type-checking) the SDK publishes. P004/P005: apps must reach the
+    # type-checking) the SDK publishes. D009: apps fetching Dapr components
+    # from GitHub instead of the installed wheel — the SDK's own
+    # download-components task never does this (it lists local files).
+    # P004/P005: apps must reach the
     # orchestration layer through the SDK seam, not Temporal/SDK-internals
     # (BLDX-1417). P008–P012: apps must use the SDK's storage seam, not
     # hand-roll object stores or bare path fields (BLDX-1398).
@@ -127,8 +135,73 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # P016: entry-point contract/code alignment — only apps have a Pkl contract
     # and app/generated/ dirs; the SDK itself has no @entrypoint-decorated App
     # methods and no contract to drift from (BLDX-1425).
+    # P017/P018: apps must boot through the SDK launcher, not hand-roll
+    # workers or servers (BLDX-1411).
+    # P026: getattr-with-default on a typed entrypoint/task contract param —
+    # only apps own the @entrypoint/@task methods that consume the contract
+    # (BLDX-1501). P027: app_state used as a cross-task data channel — the SDK
+    # defines get/set_app_state but apps are the ones that (mis)use it as a
+    # conduit (BLDX-1500). P028: hand-built qualifiedName f-strings — connectors
+    # mint asset qualifiedNames; the SDK is the framework, not an asset author
+    # (BLDX-1499).
+    # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
+    # the SDK has neither, so this check is meaningless there (BLDX-1491).
+    # P029/P030 + P037/P038/P039: SDR-readiness — only apps declare
+    # self_deployed_runtime; the SDK itself never does, so these are APP-scoped.
+    # P032–P035: preflight-gate authoring — only apps register @task activities,
+    # define Handler.preflight_check, construct PreflightCheck results, and declare
+    # the entrypoint Input contracts the gate rebuilds metadata from; the SDK
+    # publishes the gate, it is not a subject of these rules (BLDX-1545).
+    # T002/T003: SDR test-quality — apps that declare SDR must have an SDR test
+    # class; the SDK itself is not an SDR app (DISTR-752).
+    # T004: dev-entrypoint delegation — only consumer apps have a root main.py
+    # that CI's connector-integration-tests action runs directly; the SDK has
+    # no such file (BLDX-1520).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     # B001: consuming a deprecated SDK symbol (BLDX-1418).
+    # O002/O003/O004: asset-mapper usage — connectors build assets with pyatlan_v9,
+    # serialize with to_nested_bytes, and type their mapper returns (BLDX-1492); the
+    # SDK is the framework, not a connector.
+    # K001/K002: contract-toolkit conformance — only app repos have a contract/
+    # directory with .pkl source files; the SDK has no contract/ dir to scan
+    # (BLDX-1479).
+    # K003/K004/K005: generated-artifact freshness — a stale Pkl lock, a missing
+    # generated output, or a stripped provenance banner are all app-repo concerns
+    # (the SDK has no contract/ + generated app artifacts) (BLDX-1414).
+    # K006: manifest-vs-contract field validation — only app repos have a
+    # generated app/generated/**/manifest.json DAG to cross-reference against a
+    # Python Output contract; the SDK has no such generated artifact (BLDX-1527).
+    # K007/K008: toolkit version floor + source provenance — the app's PklProject
+    # declares the app-contract-toolkit dependency; the SDK *is* the publisher, so
+    # it has no such dependency to grade (BLDX-1479). K009: unresolved scaffold
+    # placeholder in a generated artifact; K010: missing generated E2E scaffolding
+    # — both are app-repo generated-output concerns (BLDX-1479).
+    # K011/K012: release-readiness — the generated atlan.yaml's app_id and the
+    # pyproject generate poe task only exist on a consumer app that publishes to
+    # the marketplace; the SDK has no contract/ dir, no atlan.yaml, and no
+    # marketplace publish, so neither rule applies to it (CONNECT release-pipeline).
+    # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
+    # complete) is a connector extract/publish concern; the SDK's matching sites are
+    # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
+    # S002: raw-env credential reads — the SDK is the *provider* of the secret-store
+    # seam (EnvironmentSecretStore legitimately reads os.environ), so the rule that
+    # steers apps onto that seam is meaningless on the SDK itself (BLDX-1419). S001
+    # (hardcoded credentials) stays 'both'.
+    # T010/T011/T012: missing unit/integration/e2e test suite — these encode the
+    # agreed per-connector testing-tier architecture (unit+integration required,
+    # e2e recommended); the SDK's own tests/ layout is graded by its own coverage
+    # gate (fail_under=85), not this per-app tiering policy (BLDX-1400).
+    # T014/T015: coverage-config integrity (disabled fail_under gate, omit/source
+    # hiding app/ product code) — only connector apps have an app/ product-code
+    # tree with a ratcheting coverage floor; the SDK's own coverage config is a
+    # different, already-enforced policy (BLDX-1400).
+    # T016: e2e CI compose overlay must inherit ATLAN_DEPLOYMENT_NAME — only
+    # connector apps ship a .github/e2e/ docker-compose overlay for the full-DAG
+    # worker; the SDK has no such overlay to grade (the sdr-e2e action that
+    # derives the per-leg value lives here, but it is not a compose overlay).
+    # T017: e2e agent_spec() override must inherit the per-leg deployment queue —
+    # only connector apps subclass the e2e harness and (may) override agent_spec;
+    # the SDK ships the env-derived default, it doesn't hard-code a connector queue.
     assert app_scoped == {
         "B001",
         "C002",
@@ -139,6 +212,20 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "D006",
         "D007",
         "D008",
+        "D009",
+        "E020",
+        "K001",
+        "K002",
+        "K003",
+        "K004",
+        "K005",
+        "K006",
+        "K007",
+        "K008",
+        "K009",
+        "K010",
+        "K011",
+        "K012",
         "P004",
         "P005",
         "P008",
@@ -150,11 +237,40 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P014",
         "P015",
         "P016",
+        "P017",
+        "P018",
+        "P025",
+        "P026",
+        "P027",
+        "P028",
+        "P029",
+        "P030",
+        "P032",
+        "P033",
+        "P034",
+        "P035",
+        "P037",
+        "P038",
+        "P039",
+        "T002",
+        "T003",
+        "T004",
+        "T010",
+        "T011",
+        "T012",
+        "T014",
+        "T015",
+        "T016",
+        "T017",
+        "O002",
+        "O003",
+        "O004",
         "I001",
         "I002",
         "I003",
         "I004",
         "I005",
+        "S002",
     }, app_scoped
     # SDK-only rules: the SDK must keep Temporal contained behind its seam
     # (P006/P007, BLDX-1417) and declare its deprecations correctly (B002–B004).
@@ -195,6 +311,8 @@ def test_catalog_e_series_present() -> None:
         "E016",
         "E017",
         "E018",
+        "E019",
+        "E020",
     }
     missing = expected - e_ids
     assert not missing, f"Missing E-series rules: {missing}"
@@ -249,20 +367,55 @@ def test_catalog_d_series_present() -> None:
     """The D-series dependency rules are all present."""
     rules = load_catalog()
     d_ids = {r.id for r in rules if r.id.startswith("D")}
-    expected = {"D001", "D002", "D003", "D004", "D005", "D006", "D007", "D008"}
+    expected = {
+        "D001",
+        "D002",
+        "D003",
+        "D004",
+        "D005",
+        "D006",
+        "D007",
+        "D008",
+        "D009",
+    }
     missing = expected - d_ids
     assert not missing, f"Missing D-series rules: {missing}"
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are exactly P001–P015 plus P016.
+    """The P-series prescription rules are exactly P001–P025, P031.
 
     Strict equality (not just not-missing): P004–P007 are the orchestration-seam
     rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398);
     P013–P015 are the typed-contract-boundary rules (BLDX-1413);
-    P016 is the entry-point contract/code alignment rule (BLDX-1425).  A stray
-    or renumbered P-id would slip past a subset check while breaking fleet-wide
-    ``# conformance: ignore[Pxxx]`` suppressions.
+    P016 is the entry-point contract/code alignment rule (BLDX-1425);
+    P017–P018 are the entrypoint-conformance rules (BLDX-1411);
+    P019 is the client-seam rule — raw HTTP to Atlan instead of pyatlan
+    (BLDX-1430).  P020–P024 are the determinism / async-correctness rules:
+    non-deterministic primitives, side-effect I/O, un-awaited coroutines,
+    blocking calls in async defs, and pyatlan sync ``AtlanClient`` use.
+    P025 is the app-name alignment rule — code name, atlan.yaml name:, and
+    .env.example ATLAN_APPLICATION_NAME must agree (BLDX-1491).
+    P026–P028 are reserved by PR #2417 (GetattrOnTypedContractField,
+    AppStateAsCrossTaskChannel, ManualQualifiedNameFString).
+    P029/P030 are the SDR-readiness rules — manifest agent_json slot and
+    upload call presence (DISTR-752).
+    P031 is SharedDefaultExecutorOffload — asyncio.to_thread(...) /
+    run_in_executor(None, ...) bypass the SDK's dedicated run_in_thread() pool
+    and land on asyncio's shared default executor instead (BLDX-1525).
+    P032–P035 are the preflight-gate rules — reserved gate-name collision,
+    duplicate in-workflow preflight, untyped check failures, and metadata /
+    input-contract parity (BLDX-1545).
+    P036 is HandRolledProcessIsolation — a bare ProcessPoolExecutor /
+    multiprocessing child instead of the run_fault_isolated() / run_best_effort()
+    seam (CNCT-85).
+    P037 is SdrAgentJsonNotConsumed (credentials resolved by GUID only, agent_json
+    ignored), P038 is SdrArtifactMisrooted (object-store prefix rooted from an
+    empty-defaulting input field), and P039 is SdrAgentJsonDroppedByInputContract
+    (the generated extract-input contract silently drops the forwarded agent_json)
+    — the follow-on SDR-readiness rules.
+    A stray or renumbered P-id would slip past a subset check while
+    breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
     rules = load_catalog()
     p_ids = {r.id for r in rules if r.id.startswith("P")}
@@ -283,6 +436,29 @@ def test_catalog_p_series_present() -> None:
         "P014",
         "P015",
         "P016",
+        "P017",
+        "P018",
+        "P019",
+        "P020",
+        "P021",
+        "P022",
+        "P023",
+        "P024",
+        "P025",
+        "P026",
+        "P027",
+        "P028",
+        "P029",
+        "P030",
+        "P031",
+        "P032",
+        "P033",
+        "P034",
+        "P035",
+        "P036",
+        "P037",
+        "P038",
+        "P039",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -294,29 +470,74 @@ def test_catalog_o_series_present() -> None:
     """The O-series optimisation rules are all present."""
     rules = load_catalog()
     o_ids = {r.id for r in rules if r.id.startswith("O")}
-    expected = {"O001"}
+    expected = {"O001", "O002", "O003", "O004"}
     missing = expected - o_ids
     assert not missing, f"Missing O-series rules: {missing}"
 
 
 def test_catalog_t_series_present() -> None:
-    """The T-series test-quality rules are all present."""
+    """The T-series test-quality rules are all present: T001 (integration
+    marking), T002/T003 (SDR test-quality), T004 (dev-entrypoint), T005-T009
+    (assertion/collection quality), T010-T013 (tier structure), T014/T015
+    (coverage-config), and T016/T017 (e2e-CI queue isolation)."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {"T001"}
+    expected = {f"T{n:03d}" for n in range(1, 18)}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
+    extra = t_ids - expected
+    assert not extra, f"Unexpected T-series rules: {extra}"
 
 
 def test_catalog_b_series_present() -> None:
     """The B-series backwards-compatibility / deprecation rules are all present."""
     rules = load_catalog()
     b_ids = {r.id for r in rules if r.id.startswith("B")}
-    expected = {"B001", "B002", "B003", "B004"}
+    expected = {"B001", "B002", "B003", "B004", "B005", "B006"}
     missing = expected - b_ids
     assert not missing, f"Missing B-series rules: {missing}"
     extra = b_ids - expected
     assert not extra, f"Unexpected B-series rules: {extra}"
+
+
+def test_catalog_k_series_present() -> None:
+    """The K-series contract-toolkit rules are K001/K002 (source), the
+    generated-artifact freshness rules K003/K004/K005 (BLDX-1414), the
+    manifest-vs-contract field validation rule K006 (BLDX-1527), the toolkit
+    hygiene rules K007–K010 (version floor, source provenance, unresolved
+    placeholder, missing E2E scaffolding) (BLDX-1479), and the release-readiness
+    guards K011/K012 (atlan.yaml app_id, generate poe task)."""
+    rules = load_catalog()
+    k_ids = {r.id for r in rules if r.id.startswith("K")}
+    expected = {
+        "K001",
+        "K002",
+        "K003",
+        "K004",
+        "K005",
+        "K006",
+        "K007",
+        "K008",
+        "K009",
+        "K010",
+        "K011",
+        "K012",
+    }
+    missing = expected - k_ids
+    assert not missing, f"Missing K-series rules: {missing}"
+    extra = k_ids - expected
+    assert not extra, f"Unexpected K-series rules: {extra}"
+
+
+def test_catalog_s_series_present() -> None:
+    """The S-series secret-hygiene rules are exactly S001 and S002."""
+    rules = load_catalog()
+    s_ids = {r.id for r in rules if r.id.startswith("S")}
+    expected = {"S001", "S002"}
+    missing = expected - s_ids
+    assert not missing, f"Missing S-series rules: {missing}"
+    extra = s_ids - expected
+    assert not extra, f"Unexpected S-series rules: {extra}"
 
 
 def test_catalog_is_mapping_keyed_by_id() -> None:
@@ -355,6 +576,52 @@ def test_to_reporting_descriptor_roundtrip() -> None:
     assert descriptor.properties["atlan/category"] == "silent-swallow"
     assert descriptor.properties["atlan/autofixable"] is False
     assert descriptor.properties["atlan/orthogonalGate"] == "tests"
+
+
+def test_to_reporting_descriptor_roundtrip_forces_external_influence() -> None:
+    """C001's forces_external_influence=True survives the SARIF round-trip,
+    and a rule that doesn't set it (E001) omits the property entirely --
+    the field is only ever emitted when True (see AtlanRuleProperties.to_properties)."""
+    c001 = get_rule("C001")
+    descriptor = c001.to_reporting_descriptor()
+    assert descriptor.properties["atlan/forcesExternalInfluence"] is True
+
+    e001 = get_rule("E001")
+    descriptor = e001.to_reporting_descriptor()
+    assert "atlan/forcesExternalInfluence" not in descriptor.properties
+
+
+def test_atlan_rule_properties_forces_external_influence_roundtrip() -> None:
+    """to_properties() -> from_properties() preserves forces_external_influence
+    in both directions, so a typo in the ``atlan/forcesExternalInfluence`` key
+    on either side would fail this test rather than silently defeating C001's
+    mandatory-human-review guarantee."""
+    props = AtlanRuleProperties(
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="ci-supply-chain",
+        forces_external_influence=True,
+    )
+    serialised = props.to_properties()
+    assert serialised["atlan/forcesExternalInfluence"] is True
+    assert (
+        AtlanRuleProperties.from_properties(serialised).forces_external_influence
+        is True
+    )
+
+    default_props = AtlanRuleProperties(
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="ci-supply-chain",
+    )
+    default_serialised = default_props.to_properties()
+    assert "atlan/forcesExternalInfluence" not in default_serialised
+    assert (
+        AtlanRuleProperties.from_properties(
+            default_serialised
+        ).forces_external_influence
+        is False
+    )
 
 
 def test_warn_tier_maps_to_warning_level() -> None:

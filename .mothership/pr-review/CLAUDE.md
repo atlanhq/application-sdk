@@ -95,7 +95,15 @@ is read-only and never commits or pushes to the PR branch.
 Rover Direct's deterministic `session_id` (derived from the PR head SHA)
 means a re-trigger on the same HEAD resumes context; a new commit produces
 a new HEAD_SHA and a fresh sandbox. If a prior `<!-- SDK_REVIEW -->` summary
-exists, the run is a re-review (deltas tracked — see ORCHESTRATION.md §2d).
+exists, the run is a re-review (deltas tracked — see ORCHESTRATION.md §2e).
+
+On a re-review, apply the **nit-convergence rules** (ORCHESTRATION.md §2e′)
+so the write-side `@sdk-resolve` loop can terminate: `Nit`-tier findings are
+diff-scoped (only on lines this PR adds/modifies), monotonic (a new nit only
+on a hunk changed since the prior review), and actionable (an observation you
+recommend no action on is not a finding). These apply to nits ONLY —
+Critical/Important/regressions are always raised, including on code the
+resolver just pushed.
 
 ## Path Forward on Every Finding
 

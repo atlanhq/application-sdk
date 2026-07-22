@@ -9,6 +9,7 @@ import yaml
 from pyatlan.model.enums import AtlanConnectorType
 
 if TYPE_CHECKING:
+    import pandas as pd
     import pyarrow as pa
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -28,9 +29,9 @@ from application_sdk.transformers.query.errors import (
 )
 
 warnings.warn(
-    "application_sdk.transformers.query is deprecated and will be removed in the next major version. "
-    "Use the connector-side typed-record → mapper-function pattern instead. "
-    "See docs/upgrade-guide-v3.md.",
+    "application_sdk.transformers.query is deprecated; use the connector-side "
+    "asset-mapper pattern (typed records → map_<entity>() → pyatlan_v9 Asset) instead "
+    "— will be removed in v4.0. See docs/upgrade-guide-v3.md.",
     DeprecationWarning,
     stacklevel=2,
 )
@@ -60,9 +61,21 @@ class QueryBasedTransformer(TransformerInterface):
         connector_name: Name of the connector
         tenant_id: ID of the tenant
         **kwargs: Additional keyword arguments
+
+    .. deprecated:: 3.20.0
+        Use the connector-side asset-mapper pattern (typed records →
+        ``map_<entity>()`` → ``pyatlan_v9`` Asset) instead — will be removed in
+        v4.0. See ``docs/upgrade-guide-v3.md``.
     """
 
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
+        warnings.warn(
+            "QueryBasedTransformer is deprecated; use the connector-side asset-mapper "
+            "pattern (typed records → map_<entity>() → pyatlan_v9 Asset) instead — "
+            "will be removed in v4.0. See docs/upgrade-guide-v3.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.connector_name = connector_name
         self.tenant_id = tenant_id
         self.entity_class_definitions: dict[str, str] = (
@@ -185,9 +198,10 @@ class QueryBasedTransformer(TransformerInterface):
         return sql_query, literal_columns or None
 
     def _build_struct(self, level: dict, prefix: str = "") -> None:  # type: ignore[return]
-        """Deprecated: struct building is now handled by get_grouped_dataframe_by_prefix.
+        """No-op shim — struct building moved to get_grouped_dataframe_by_prefix.
 
         Kept as a no-op so callers that were patching this in tests do not blow up.
+        (The enclosing class is itself deprecated; see the class notice.)
 
         Args:
             level (dict): The current level of the struct hierarchy
@@ -302,17 +316,29 @@ class QueryBasedTransformer(TransformerInterface):
     def transform_metadata(  # type: ignore
         self,
         typename: str,
-        dataframe: pa.Table | list[dict[str, Any]],
+        dataframe: pa.Table | pd.DataFrame | list[dict[str, Any]],
         workflow_id: str,
         workflow_run_id: str,
         entity_class_definitions: dict[str, type[Any]] | None = None,
         **kwargs: Any,
     ) -> list[dict[str, Any]] | None:
         """Transform records using SQL executed through DuckDB"""
+        import sys  # noqa: PLC0415
+
         import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+
+        # Readers (e.g. ParquetFileReader) return pandas; bridge it to the
+        # pyarrow Table this transformer operates on. Producing a pandas
+        # DataFrame in the first place requires pandas to already be
+        # installed and imported, so probing sys.modules here (rather than
+        # importing pandas unconditionally) never forces the optional
+        # dependency on callers passing a pa.Table or list[dict] input.
+        pd = sys.modules.get("pandas")
 
         if isinstance(dataframe, list):
             dataframe = pa.Table.from_pylist(dataframe) if dataframe else None
+        elif pd is not None and isinstance(dataframe, pd.DataFrame):
+            dataframe = pa.Table.from_pandas(dataframe, preserve_index=False)
         if dataframe is None or len(dataframe) == 0:
             return None
 

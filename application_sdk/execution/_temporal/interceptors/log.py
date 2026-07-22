@@ -41,6 +41,7 @@ from temporalio.worker import (
 
 from application_sdk.errors.base import AppError
 from application_sdk.errors.wire import FailureDetails
+from application_sdk.execution._temporal.preflight_gate import is_preflight_block
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
@@ -59,6 +60,11 @@ if TYPE_CHECKING:
     from temporalio.api.common.v1 import Payload
 
 logger = get_logger(__name__)
+
+
+# Must match _MAX_CHAIN_DEPTH in activities.py: an AppError sitting between the
+# walk cap and the sever cap would be silently invisible to OTel attributes.
+_MAX_CHAIN_WALK = 50
 
 
 def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
@@ -84,8 +90,10 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
         return {}
     seen: set[int] = set()
     current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
+    depth = 0
+    while current is not None and id(current) not in seen and depth < _MAX_CHAIN_WALK:
         seen.add(id(current))
+        depth += 1
         if isinstance(current, AppError):
             return {
                 "failure.category": current.category.value,
@@ -379,7 +387,14 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             try:
                 if status == "ERROR":
                     ended_attrs.update(_extract_failure_attrs(exc_caught))
-                    logger.error("workflow.ended", exc_info=True, **ended_attrs)
+                    # A deliberate preflight-gate block is an expected, typed
+                    # outcome, not a crash — log it terse (no stack). Its
+                    # classification is already in ended_attrs via the failure
+                    # details. Real failures keep the ERROR traceback.
+                    if is_preflight_block(exc_caught):
+                        logger.warning("workflow.ended", **ended_attrs)
+                    else:
+                        logger.error("workflow.ended", exc_info=True, **ended_attrs)
                 else:
                     logger.info("workflow.ended", **ended_attrs)
             # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block workflow completion
@@ -489,7 +504,13 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
             try:
                 if status == "ERROR":
                     ended_attrs.update(_extract_failure_attrs(exc_caught))
-                    logger.error("activity.ended", exc_info=True, **ended_attrs)
+                    # A deliberate preflight-gate block logs terse (no stack);
+                    # the activity's Temporal redness comes from the raise, not
+                    # the log. Every other failure keeps the ERROR traceback.
+                    if is_preflight_block(exc_caught):
+                        logger.warning("activity.ended", **ended_attrs)
+                    else:
+                        logger.error("activity.ended", exc_info=True, **ended_attrs)
                 else:
                     logger.info("activity.ended", **ended_attrs)
             # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block activity completion

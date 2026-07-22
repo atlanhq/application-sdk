@@ -160,6 +160,42 @@ class CredentialRef(BaseModel, frozen=True):
         raise CredentialRoutingError()
 
     @classmethod
+    def resolve_or_none(cls, source: CredentialResolvable) -> CredentialRef | None:
+        """Resolve a :class:`CredentialRef` with graceful fallback.
+
+        Prefers a ref the source already carries on its ``credential_ref``
+        attribute; otherwise routes via :meth:`resolve`. Returns ``None`` when
+        the source carries no credential routing at all (e.g. a source-less app
+        input). On a routing/type error, falls back to a legacy GUID ref when a
+        ``credential_guid`` is present, else ``None``.
+
+        Shared by the extraction task path and the injected preflight gate so
+        both degrade identically instead of erroring on a routing edge case.
+        """
+        prebuilt = getattr(source, "credential_ref", None)
+        if prebuilt is not None:
+            return prebuilt
+
+        guid = getattr(source, "credential_guid", "") or ""
+        agent = getattr(source, "agent_json", None)
+        if not (guid or agent):
+            return None
+
+        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__ loads sibling modules
+            CredentialResolvableTypeError,
+            CredentialRoutingError,
+        )
+
+        try:
+            return cls.resolve(source)
+        except (CredentialResolvableTypeError, CredentialRoutingError):
+            logger.warning(
+                "CredentialRef.resolve failed; falling back to legacy GUID ref or None",
+                exc_info=True,
+            )
+            return legacy_credential_ref(guid) if guid else None
+
+    @classmethod
     def from_workflow_args(cls, workflow_args: dict[str, Any]) -> CredentialRef:
         """Build a :class:`CredentialRef` from a Temporal workflow payload.
 
@@ -207,7 +243,7 @@ class CredentialRef(BaseModel, frozen=True):
         """
         warnings.warn(
             "CredentialRef.from_workflow_args() is deprecated and will be removed "
-            "in a future release. Use CredentialRef.resolve(input) instead.",
+            "in v4.0. Use CredentialRef.resolve(input) instead.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -324,8 +360,8 @@ def legacy_credential_ref(guid: str, credential_type: str = "unknown") -> Creden
         supports direct (GUID) mode and will be removed in a future release.
     """
     warnings.warn(
-        "legacy_credential_ref() is deprecated and will be removed in a "
-        "future release. Use CredentialRef.resolve(input) instead.",
+        "legacy_credential_ref() is deprecated and will be removed in v4.0. "
+        "Use CredentialRef.resolve(input) instead.",
         DeprecationWarning,
         stacklevel=2,
     )

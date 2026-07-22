@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import socket
 from typing import TYPE_CHECKING
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -62,12 +61,14 @@ if _raw_timeout is not None:
         )
 del _raw_timeout
 
-# Stable probe key reused across boots on the same host so that a principal
-# with put+head but no delete permission doesn't accumulate one orphaned
-# object per boot.  Must stay under ``artifacts/apps/`` (or another allowed
-# prefix) — the Kong s3proxy plugin enforces an upstream_path_prefixes
-# allowlist and rejects anything outside it with 403 code 1009.
-_PROBE_KEY = f"{_PREFLIGHT_PREFIX}/probe-{socket.gethostname()}"
+# Fixed probe key overwritten on every boot — guarantees a single object per
+# store with no accumulation.  A hostname-scoped key would create one object
+# per unique pod name in k8s and never converge.  Since we always write before
+# reading, a stale probe from a previous run cannot produce a false positive.
+# Must stay under ``artifacts/apps/`` (or another allowed prefix) — the Kong
+# s3proxy plugin enforces an upstream_path_prefixes allowlist and rejects
+# anything outside it with 403 code 1009.
+_PROBE_KEY = f"{_PREFLIGHT_PREFIX}/probe"
 
 # Pre-compiled patterns for HTTP status codes.  Word-boundary anchors prevent
 # false positives from request IDs, byte counts, or longer strings that happen
@@ -108,9 +109,9 @@ def _classify_access_error(exc: BaseException) -> tuple[str, str]:
     ):
         return (
             "permission denied",
-            "The credentials are valid but lack the required read/write/delete "
+            "The credentials are valid but lack the required read/write "
             "permissions on this bucket. Grant the IAM/ACL permissions needed "
-            "for get, put, and delete operations.",
+            "for get and put operations.",
         )
 
     if _RE_401.search(msg) or any(
@@ -137,12 +138,14 @@ def _classify_access_error(exc: BaseException) -> tuple[str, str]:
 
 
 async def _probe_store(store: object, label: str, binding_name: str) -> str | None:
-    """Run a write → read → delete round-trip against *store*.
+    """Run a write → read round-trip against *store*.
 
     Each operation is unbounded in this function; the caller wraps the whole
     coroutine in ``asyncio.wait_for`` to enforce the boot-time timeout.
 
-    Delete is best-effort: a delete failure logs a warning but does not raise.
+    The probe key is fixed and overwritten on every call — no delete is needed
+    or performed.  Environments that prohibit deletes (e.g. an S3 reverse-proxy
+    with an intentional no-delete policy) are therefore fully supported.
 
     Args:
         store: An obstore-compatible store instance.
@@ -166,6 +169,13 @@ async def _probe_store(store: object, label: str, binding_name: str) -> str | No
     try:
         await obstore.put_async(store, probe_key, _PREFLIGHT_PAYLOAD)
     except Exception as exc:
+        logger.warning(
+            "SDR preflight: write probe failed for %s store (binding: %s): %s",
+            label,
+            binding_name,
+            exc,
+            exc_info=True,
+        )
         error_class, hint = _classify_access_error(exc)
         return (
             f"  * {label} store (binding: '{binding_name}'): write failed [{error_class}]\n"
@@ -173,44 +183,39 @@ async def _probe_store(store: object, label: str, binding_name: str) -> str | No
             f"    Hint:  {hint}"
         )
 
-    # Read (HEAD) — confirms read permission and that the write was committed
-    read_failure: str | None = None
+    # Read (HEAD) — confirms read permission and that the write was committed.
+    # The probe key is fixed; we always overwrite it rather than deleting, so
+    # no cleanup is needed and delete permission is never required.
     try:
         await obstore.head_async(store, probe_key)
     except Exception as exc:
+        logger.warning(
+            "SDR preflight: read/head probe failed for %s store (binding: %s): %s",
+            label,
+            binding_name,
+            exc,
+            exc_info=True,
+        )
         error_class, hint = _classify_access_error(exc)
-        read_failure = (
+        return (
             f"  * {label} store (binding: '{binding_name}'): read/head failed [{error_class}]\n"
             f"    Cause: {exc}\n"
             f"    Hint:  {hint}"
         )
 
-    # Delete — best-effort cleanup; uses the stable per-host key so a missing
-    # delete permission doesn't accumulate one new object per boot.
-    try:
-        await obstore.delete_async(store, probe_key)
-    except Exception as exc:
-        logger.warning(
-            "SDR preflight: could not delete probe object from %s store "
-            "(binding='%s', key=%s): %s — object may be left behind",
-            label,
-            binding_name,
-            probe_key,
-            exc,
-            exc_info=True,
-        )
-
-    return read_failure
+    return None
 
 
 async def verify_object_store_access(infra: InfrastructureContext) -> None:
     """In SDR mode, verify read+write access to every configured object store.
 
-    Performs a write → read → delete round-trip on the deployment store and,
-    when configured, the upstream Atlan store.  Also hard-fails if SDR mode is
-    active but the upstream store is absent — this is a defense-in-depth check;
-    the primary guard is ``_create_store_from_binding_optional_with_put_attrs``
-    raising ``StorageBindingNotFoundError`` at construction time.
+    Performs a write → read round-trip on the deployment store and, when
+    configured, the upstream Atlan store.  The probe key is fixed and
+    overwritten on each call — no delete permission is required.  Also
+    hard-fails if SDR mode is active but the upstream store is absent — this is
+    a defense-in-depth check; the primary guard is
+    ``_create_store_from_binding_optional_with_put_attrs`` raising
+    ``StorageBindingNotFoundError`` at construction time.
 
     Each per-store probe is bounded by ``ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS``
     (default: 30 s).  A probe that times out is classified as
@@ -281,6 +286,13 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
                 timeout=_PROBE_TIMEOUT_SECS,
             )
         except TimeoutError:
+            logger.warning(
+                "SDR preflight: probe for %s store (binding: %s) timed out after %.0fs",
+                label,
+                binding_name,
+                _PROBE_TIMEOUT_SECS,
+                exc_info=True,
+            )
             failure = (
                 f"  * {label} store (binding: '{binding_name}'): probe timed out "
                 f"after {_PROBE_TIMEOUT_SECS:.0f}s [connectivity / unknown]\n"

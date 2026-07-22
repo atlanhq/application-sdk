@@ -11,7 +11,7 @@ import hashlib
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Union, cast
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 
 from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
@@ -34,9 +34,25 @@ from application_sdk.common.aws_utils import (
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 from application_sdk.credentials.utils import parse_credentials_extra
 from application_sdk.errors import AppError, sanitize_cause_repr
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+def _escape_colons_for_text(query: str) -> str:
+    """Backslash-escape *every* literal colon so SQLAlchemy ``text()`` does not treat them as bind params.
+
+    Callers pass fully-rendered SQL (all values inlined; no bind params to supply). ``text()``
+    reads any ``:name`` as a required bind parameter and raises at compile time on colon-bearing
+    SQL — a regex ``(?:...)``, a ``::text`` cast, a ``'12:30:00'`` literal. SQLAlchemy strips the
+    backslash before the driver, so the DB receives the original literal colon.
+
+    Note: this escapes *all* colons. Any future call site that genuinely needs ``:name`` bind
+    parameters must not route through this helper.
+    """
+    return query.replace(":", "\\:")
+
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -120,9 +136,11 @@ class BaseSQLClient(ClientInterface):
             install_tolerant_text_decoder_hook(self.engine)
 
             # Test connection briefly to validate credentials.
-            # Wrapped in asyncio.to_thread because SQLAlchemy's synchronous
+            # Wrapped in run_in_thread because SQLAlchemy's synchronous
             # engine.connect() blocks the event loop — critical for Temporal
-            # activities where blocking starves the auto-heartbeat.
+            # activities where blocking starves the auto-heartbeat. run_in_thread
+            # dispatches onto the SDK's dedicated pool rather than asyncio's
+            # shared default executor, which Temporal's own scheduling also uses.
             # Capture engine in a local variable so the closure doesn't need to
             # re-read self.engine (which is typed Optional) and pyright can narrow it.
             _engine = self.engine
@@ -131,7 +149,7 @@ class BaseSQLClient(ClientInterface):
                 with _engine.connect() as _:
                     pass  # Connection test successful
 
-            await asyncio.to_thread(_ping)
+            await run_in_thread(_ping)
 
             # Don't store persistent connection
             self.connection = None
@@ -141,7 +159,7 @@ class BaseSQLClient(ClientInterface):
             # No exc_info here: SQLAlchemy errors embed the full connection
             # string (including the password) in their message, and the
             # traceback would print it verbatim into logs.
-            logger.error(  # conformance: ignore[E005,L004] exc_info would expose SQLAlchemy password in traceback; cause sanitized above
+            logger.error(  # conformance: ignore[E005,L004,L009] exc_info would expose SQLAlchemy password; logs sanitized cause at failure site — raised typed error wraps only the raw unsanitized cause
                 "Error loading SQL client: %s", sanitize_cause_repr(e)
             )
             if self.engine:
@@ -269,8 +287,17 @@ class BaseSQLClient(ClientInterface):
             case _:
                 raise SqlCredentialsParseError(field="authType", value_summary=authType)
 
-        # Handle None values and ensure token is a string before encoding
-        encoded_token = quote_plus(str(token or ""))
+        # Handle None values and ensure token is a string before encoding.
+        # This token is interpolated into the userinfo of a SQLAlchemy URL,
+        # which SQLAlchemy decodes with ``urllib.parse.unquote`` (percent-only).
+        # ``quote_plus`` encodes space as ``+``, and ``unquote`` never turns
+        # ``+`` back into a space, so a password containing a space would reach
+        # the driver corrupted (CONNECT-361). ``quote`` encodes space as ``%20``,
+        # which round-trips correctly. ``safe=""`` is required so that ``/`` in
+        # the credential is also encoded (an unencoded ``/`` in userinfo would
+        # otherwise break URL parsing). Query-string params below still use
+        # ``quote_plus`` — SQLAlchemy decodes query values with ``+`` -> space.
+        encoded_token = quote(str(token or ""), safe="")
         return encoded_token
 
     def add_connection_params(
@@ -389,7 +416,7 @@ class BaseSQLClient(ClientInterface):
                 from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
                 cursor = await loop.run_in_executor(
-                    pool, connection.execute, text(query)
+                    pool, connection.execute, text(_escape_colons_for_text(query))
                 )
                 if not cursor or not cursor.cursor:
                     raise UnsupportedSqlCursorError()
@@ -434,7 +461,9 @@ class BaseSQLClient(ClientInterface):
         from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
         if import_optional_dependency("sqlalchemy", errors="ignore"):
-            return pd.read_sql_query(text(query), conn, chunksize=chunksize)
+            return pd.read_sql_query(
+                text(_escape_colons_for_text(query)), conn, chunksize=chunksize
+            )
         else:
             dbapi_conn = getattr(conn, "connection", None)
             return pd.read_sql_query(query, dbapi_conn, chunksize=chunksize)
@@ -617,7 +646,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             # No exc_info here: SQLAlchemy errors embed the full connection
             # string (including the password) in their message, and the
             # traceback would print it verbatim into logs.
-            logger.error(  # conformance: ignore[E005,L004] exc_info would expose SQLAlchemy password in traceback; cause sanitized above
+            logger.error(  # conformance: ignore[E005,L004,L009] exc_info would expose SQLAlchemy password; logs sanitized cause at failure site — raised typed error wraps only the raw unsanitized cause
                 "Error establishing database connection: %s", sanitize_cause_repr(e)
             )
             if self.engine:
@@ -671,10 +700,11 @@ class AsyncBaseSQLClient(BaseSQLClient):
                         yield_per=batch_size
                     )
 
+                escaped_query = _escape_colons_for_text(query)
                 result = (
-                    await connection.stream(text(query))
+                    await connection.stream(text(escaped_query))
                     if use_server_side_cursor
-                    else await connection.execute(text(query))
+                    else await connection.execute(text(escaped_query))
                 )
 
                 column_names = list(result.keys())

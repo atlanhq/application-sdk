@@ -5,7 +5,7 @@
 
 # Error-Handling Rules (E-series)
 
-**18 rules** · Checker: `suite.checks.error_handling` (AST-based)
+**20 rules** · Checker: `suite.checks.error_handling` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -33,6 +33,8 @@ Suppress a finding on the violating line or the line directly above it:
 | [E016](#e016) | `MissingExceptionChaining` | `warn` | `both` | `exception-chaining` | yes | 0.2.0 |
 | [E017](#e017) | `SecretNamedEvidenceKey` | `block` | `both` | `security` | — | 0.2.0 |
 | [E018](#e018) | `BareParentLeafRaise` | `warn` | `both` | `untyped-raise` | — | 0.2.0 |
+| [E019](#e019) | `ExceptionTextInContractField` | `warn` | `both` | `error-message-hygiene` | — | 0.9.0 |
+| [E020](#e020) | `HttpFailureToEmptyReturn` | `warn` | `app` | `error-to-return-value` | — | 0.9.0 |
 
 ---
 
@@ -98,7 +100,11 @@ root-cause analysis impossible.
 
 Catches everything but the specific type is unknown.  HIGH severity when not logged;
 MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level handlers
-(worker loops, HTTP handlers) when properly logged with `exc_info=True`.
+(worker loops, HTTP handlers) when properly logged with `exc_info=True`.  A handler that
+unconditionally re-raises while preserving the trace is exempt — bare `raise`, `raise
+X(...)`, or `raise X(...) from e` — because nothing is swallowed; `raise X(...) from
+None` (which discards the trace) and a conditional re-raise that can fall through still
+fire.
 
 ---
 
@@ -283,12 +289,13 @@ leaks unsanitised upstream text into a field shown to operators and indexed by
 aggregation.
 
 A typed `AppError` raise whose `message=` keyword value embeds the caught exception via
-an f-string (`f'…{exc}…'`), `str(exc)`, or `repr(exc)` — see typed-error-prescription.md
-§6.  This leaks unsanitised, potentially user-facing text from an upstream library into
-a field that is displayed to operators and indexed in dashboards.  It also breaks
-aggregation by collapsing distinct failure modes into one variable-text bucket.  Place
-the exception context in a typed evidence field (`cause=exc`, `network_error=str(exc)`)
-and keep `message=` a stable human summary.
+an f-string (`f'…{exc}…'`), `str(exc)`, `repr(exc)`, or string concatenation (`'…: ' +
+str(exc)`) — see typed-error-prescription.md §6.  This leaks unsanitised, potentially
+user-facing text from an upstream library into a field that is displayed to operators
+and indexed in dashboards.  It also breaks aggregation by collapsing distinct failure
+modes into one variable-text bucket.  Place the exception context in a typed evidence
+field (`cause=exc`, `network_error=str(exc)`) and keep `message=` a stable human
+summary.
 
 ---
 
@@ -355,5 +362,69 @@ define a domain subclass that overrides `code` with a specific constant (e.g.
 `ENGINE_NOT_INITIALIZED`). Note: this rule is WARN tier because some bare-parent raises
 may be legitimate in small apps or during active migration.  Review findings before
 suppressing.
+
+---
+
+## E019 — `ExceptionTextInContractField` {#e019}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `error-message-hygiene` · **Autofixable:** — · **Since:** 0.9.0
+
+> Caught exception text interpolated into a returned contract message= field — leaks unsanitised text
+
+**Rationale:** E015 stops exception text leaking through a raised AppError's message=, but the same
+text leaks just as readily when an except block returns a typed response contract
+(AuthOutput, PreflightCheck) with message=str(exc). The returned value crosses the typed
+boundary to operators and dashboards, and each distinct str(exc) becomes its own
+aggregation bucket instead of one countable signal.
+
+Inside an `except … as exc:` block, a call (typically a typed response/output contract
+such as `AuthOutput` or `PreflightCheck`) is constructed with a `message=` keyword that
+embeds the caught exception — whether that call is returned (`return
+AuthOutput(message=str(exc))`), appended/collected for a later return
+(`checks.append(PreflightCheck(message=f'…{exc}'))`), or simply assigned.  The
+interpolation may be an f-string (`f'…{exc}…'`), `str(exc)`, `repr(exc)`, or string
+concatenation (`'…: ' + str(exc)`). This is the non-`raise` counterpart of E015: the
+unsanitised upstream text still crosses the typed boundary into a field shown to
+operators and indexed in dashboards, and still collapses distinct failure modes into one
+variable-text bucket.  Keep `message=` a stable human summary and carry the exception
+detail in a typed field (e.g. raise a typed `AppError` with `cause=exc` upstream, or
+record it in a dedicated evidence field) rather than the user-facing contract message.
+
+Detection scope mirrors E015 exactly (they share one matcher): it covers f-string,
+`str(exc)`, `repr(exc)` and string-concatenation (`'…' + str(exc)`) interpolation of the
+except binding, but not a bare `message=exc` or attribute access such as
+`message=exc.args[0]`. Extending both rules to those shapes is a deliberate future
+follow-up kept symmetric across E015/E019.
+
+---
+
+## E020 — `HttpFailureToEmptyReturn` {#e020}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.9.0
+
+> Checked HTTP-response failure returns an empty/None sentinel instead of raising — silently publishes a failure as success
+
+**Rationale:** A guard that checks an HTTP response for failure and then returns an empty/None sentinel
+converts a remote API failure into an empty successful result — the workflow publishes a
+zero or partial crawl as if it completed, with no error surfaced. Unlike E001/E002/E007
+there is no except/raise to key on; the failure is swallowed by a plain if-guard.
+
+An `if` whose test inspects an HTTP response for failure (a negation or comparison on
+`is_success` / `ok` / `status_code`) and whose branch `return`\ s an empty/None sentinel
+(`return`, `None`, `[]`, `{}`, `()`, `""`, `list()`/`dict()`/`set()`).  The remote
+failure is coerced into an empty *successful* result, so the workflow reports a
+zero/partial crawl as complete and no error reaches the operator or the Automation
+Engine.
+
+Both polarities are covered: failure-in-the-test → empty body (`if not resp.is_success:
+return []`) and its mirror, success-in-the- test → empty `else` (`if resp.is_success: …
+else: return []`).
+
+This escapes the rest of the E-series because there is no `except`/`raise` — it is a
+plain response guard.  Fix: raise a typed `AppError` (e.g. `DependencyUnavailableError`)
+on the failure branch so it propagates.  Anchored on HTTP-response markers and a
+failure-shaped test to avoid flagging ordinary `if x is None: return None` guards;
+suppress with `# conformance: ignore[E020] <reason>` where an empty result is the
+deliberate, documented contract.
 
 ---

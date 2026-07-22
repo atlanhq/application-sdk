@@ -337,7 +337,8 @@ def _build_s3_config(
         credential_provider = make_s3_assume_role_provider(
             role_arn=meta["assumeRoleArn"],
             session_name=_nonempty(meta, "sessionName") or "atlan-application-sdk",
-            region=resolved_region or None,
+            # No region: see cloud.py's identical fix — resolved_region is for
+            # the data-plane config above, not the STS session.
             base_access_key=base_access_key,
             base_secret_key=base_secret_key,
             base_session_token=base_session_token,
@@ -545,6 +546,41 @@ def _build_gcs_config(
     return bucket, gcs_config, put_attributes
 
 
+def _adc_is_external_account() -> bool:
+    """True if ``GOOGLE_APPLICATION_CREDENTIALS`` points to a Workload Identity
+    Federation (``external_account``) credential file.
+
+    That is the one ADC subtype obstore's built-in GCS credential-file decoder
+    cannot parse; every other subtype (service-account key, authorized_user,
+    GKE metadata server) is left to obstore. Reads a local file only — never
+    networks — so it is safe on the hermetic unit/emulator-test paths (where
+    ``GOOGLE_APPLICATION_CREDENTIALS`` is unset and this returns ``False``).
+    """
+    path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+    if not path:
+        return False
+    try:
+        import json  # noqa: PLC0415
+
+        with open(path) as fh:
+            data = json.load(fh)
+        # A creds file that parses to a non-dict (``[]``, ``null``, a scalar) is
+        # malformed — treat it as "not external_account" and let obstore's own
+        # decoder surface the error, rather than crashing boot with AttributeError.
+        return isinstance(data, dict) and data.get("type") == "external_account"
+    except (OSError, ValueError) as e:
+        # Best-effort: an unreadable/unparseable creds file is left for obstore's
+        # own decoder to surface authoritatively; here we just decline to treat
+        # it as external_account.
+        _get_logger().warning(
+            "Could not read ADC credential file %r for external_account check: %s",
+            path,
+            e,
+            exc_info=True,
+        )
+        return False
+
+
 def create_store_from_binding_with_put_attrs(
     name: str,
     *,
@@ -683,11 +719,26 @@ def _create_store_core(
 
     if store_kind == "gcs":
         bucket, gcs_config, put_attrs = _build_gcs_config(meta)
+        gcs_credential_provider = None
+        # Only Workload Identity Federation (`external_account`) ADC needs the
+        # google-auth provider: obstore's built-in GCS credential-file decoder
+        # rejects `external_account` (GitHub OIDC → GCP) but handles every other
+        # ADC subtype (service-account key file, authorized_user, GKE metadata
+        # server) on its own via ``config=None``. Gating on this keeps the common
+        # ADC path zero-network (so hermetic unit/emulator tests don't resolve
+        # credentials), and only reaches for google-auth when obstore can't cope.
+        if not gcs_config and _adc_is_external_account():
+            from application_sdk.storage._credential_providers import (  # noqa: PLC0415
+                make_gcs_adc_provider,
+            )
+
+            gcs_credential_provider = make_gcs_adc_provider()
         store = make_gcs_store(
             bucket,
             # Pass ``None`` (not {}) so obstore uses Application Default Credentials.
             gcs_config if gcs_config else None,
             client_options=sdk_client_options,
+            credential_provider=gcs_credential_provider,
         )
         return store, put_attrs
 

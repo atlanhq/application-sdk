@@ -13,8 +13,12 @@
         "task_queue": "atlan-minimal-{deployment_name}",
         "args": {
           "credential": "{{credential}}",
+          "agent_json": "{{agent-json}}",
           "target": "{{target}}"
         }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     }
   }

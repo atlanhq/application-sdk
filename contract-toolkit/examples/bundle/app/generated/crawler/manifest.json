@@ -13,11 +13,15 @@
         "task_queue": "atlan-crawler-{deployment_name}",
         "args": {
           "credential": "{{credential}}",
+          "agent_json": "{{agent-json}}",
           "credential_guid": "{{credential-guid}}",
           "connection": "{{connection}}",
           "include_filter": "{{include-filter}}",
           "exclude_filter": "{{exclude-filter}}"
         }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     },
     "publish": {

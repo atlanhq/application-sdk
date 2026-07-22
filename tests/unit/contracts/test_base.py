@@ -1,6 +1,6 @@
 """Unit tests for application_sdk.contracts.base."""
 
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -157,7 +157,7 @@ class TestOutputStatus:
 
     def test_input_safe_file_reference(self) -> None:
         class SafeInput(Input):
-            file: Optional[FileReference] = None
+            file: FileReference | None = None
 
         ref = FileReference(local_path="/tmp/data.jsonl")
         obj = SafeInput(file=ref)
@@ -214,6 +214,17 @@ class TestPayloadSafetyValidation:
 
             class BadOutput(Output):
                 content: bytes
+
+    def test_classvar_is_skipped_even_with_unbounded_inner_type(self) -> None:
+        # ClassVars are class-level constants, never serialized into the payload,
+        # so the scan must skip them even when the inner type (an unbounded dict)
+        # would be forbidden on a real field. Pins the get_origin(...) is ClassVar
+        # skip; this is exactly the shape ExtractionInput.preflight_credential_refs
+        # uses, which would otherwise raise at class-definition time.
+        class OkInput(Input):
+            preflight_credential_refs: ClassVar[dict[str, str]] = {}
+
+        assert OkInput.preflight_credential_refs == {}
 
     def test_allow_unbounded_fields_bypasses_validation(self) -> None:
         # Should NOT raise even with Any/bytes/unbounded list
@@ -293,16 +304,15 @@ class TestIsBackwardsCompatible:
         assert ok is True
         assert issues == []
 
-    def test_new_field_without_default_is_incompatible(self) -> None:
+    def test_new_field_with_empty_string_default_is_compatible(self) -> None:
         class V1(Input):
             name: str
 
         class V2(Input):
             name: str
-            required_new: str = ""  # needs default to be backwards-compatible
+            required_new: str = ""  # empty string is a valid default
 
         ok, issues = is_backwards_compatible(V1, V2)
-        # required_new has a default so this IS compatible
         assert ok is True
 
     def test_added_required_field_is_incompatible(self) -> None:
@@ -690,3 +700,96 @@ class TestUnknownKeyWarning:
             MyInput.model_validate({"name": "ok", "b": 2})
 
         assert mock_logger.warning.call_count == 2
+
+
+# =============================================================================
+# AppRegistry.resolve_running_app_name / PublishInputMixin
+# =============================================================================
+
+
+class TestResolveRunningAppName:
+    """AppRegistry.resolve_running_app_name prefers explicit name > registry > APPLICATION_NAME."""
+
+    def test_prefer_returned_immediately(self) -> None:
+        from application_sdk.app.registry import AppRegistry
+
+        result = AppRegistry.resolve_running_app_name(prefer="explicit-name")
+        assert result == "explicit-name"
+
+    def test_returns_registry_name_when_single_app_registered(self) -> None:
+        from application_sdk.app.registry import AppRegistry
+
+        with patch(
+            "application_sdk.app.registry.AppRegistry.get_instance"
+        ) as mock_inst:
+            mock_inst.return_value.list_apps.return_value = ["my-connector"]
+            result = AppRegistry.resolve_running_app_name()
+
+        assert result == "my-connector"
+
+    def test_falls_back_to_application_name_when_registry_empty(self) -> None:
+        from application_sdk.app.registry import AppRegistry
+
+        with patch(
+            "application_sdk.app.registry.AppRegistry.get_instance"
+        ) as mock_inst:
+            mock_inst.return_value.list_apps.return_value = []
+            with patch("application_sdk.constants.APPLICATION_NAME", "env-app"):
+                result = AppRegistry.resolve_running_app_name()
+
+        assert result == "env-app"
+
+    def test_falls_back_when_multiple_apps_registered(self) -> None:
+        from application_sdk.app.registry import AppRegistry
+
+        with patch(
+            "application_sdk.app.registry.AppRegistry.get_instance"
+        ) as mock_inst:
+            mock_inst.return_value.list_apps.return_value = ["app-a", "app-b"]
+            with patch("application_sdk.constants.APPLICATION_NAME", "env-app"):
+                result = AppRegistry.resolve_running_app_name()
+
+        assert result == "env-app"
+
+
+class TestPublishInputMixinDerivation:
+    """PublishInputMixin auto-derives output_path using AppRegistry.resolve_running_app_name."""
+
+    def test_derive_uses_registry_name_not_env_var(self) -> None:
+        """Registry name wins over APPLICATION_NAME when auto-deriving output_path."""
+        from application_sdk.contracts.base import PublishInputMixin
+
+        mock_wf_info = patch(
+            "temporalio.workflow.info",
+            return_value=type(
+                "I", (), {"workflow_id": "wf-123", "run_id": "run-456"}
+            )(),
+        )
+        mock_registry = patch("application_sdk.app.registry.AppRegistry.get_instance")
+
+        with mock_wf_info, mock_registry as mr:
+            mr.return_value.list_apps.return_value = ["my-connector"]
+
+            class MyOutput(PublishInputMixin):
+                pass
+
+            obj = MyOutput()
+
+        assert "my-connector" in obj.output_path
+        assert "wf-123" in obj.output_path
+        assert "run-456" in obj.output_path
+        assert obj.transformed_data_prefix.endswith("/transformed")
+
+    def test_explicit_transformed_data_prefix_not_overridden(self) -> None:
+        """If transformed_data_prefix is already set, auto-derivation is skipped."""
+        from application_sdk.contracts.base import PublishInputMixin
+
+        class MyOutput(PublishInputMixin):
+            pass
+
+        obj = MyOutput(
+            output_path="artifacts/apps/x/workflows/wf/run",
+            transformed_data_prefix="artifacts/custom/path/transformed",
+        )
+
+        assert obj.transformed_data_prefix == "artifacts/custom/path/transformed"
