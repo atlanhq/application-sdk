@@ -51,8 +51,9 @@ import sys
 from dataclasses import dataclass, field
 
 # `diff --git a/<path> b/<path>` -- group 2 is the post-image path, which is
-# the file's name for edits and renames alike (deletions set it to /dev/null,
-# which never matches a guarded path).
+# the file's name for edits and renames alike. For a deletion the b-side is
+# still the real path; `/dev/null` only appears in the skipped `+++` header, so
+# deleted guarded files are correctly flagged.
 DIFF_GIT_RE = re.compile(r"^diff --git a/(.*?) b/(.*)$")
 
 # Version-line matchers, keyed by the file they apply to. `version =` in a

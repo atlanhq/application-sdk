@@ -190,6 +190,13 @@ class TestAllowed:
         violations = grf.evaluate(parsed, "bump-version-conformance")
         assert "contract-toolkit/src/PklProject" in [p for p, _ in violations]
 
+    def test_toolkit_bump_branch_does_not_exempt_conformance_files(self):
+        # The symmetric inverse: the toolkit release branch must not exempt
+        # conformance's release-owned files.
+        parsed = grf.parse_diff(CONFORMANCE_VERSION_DIFF)
+        violations = grf.evaluate(parsed, "bump-version-contract-toolkit")
+        assert "packages/conformance/pyproject.toml" in [p for p, _ in violations]
+
     def test_dependency_edit_leaves_version_line_untouched(self):
         parsed = grf.parse_diff(CONFORMANCE_DEP_ONLY_DIFF)
         assert grf.evaluate(parsed, "feature/bump-deps") == []
