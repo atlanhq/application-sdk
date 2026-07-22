@@ -1,0 +1,354 @@
+{
+  "$defs": {
+    "Aggregate": {
+      "description": "The headline rollup: score, grade (after gate caps), and maturity.",
+      "properties": {
+        "score": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Score",
+          "type": "integer"
+        },
+        "grade": {
+          "enum": [
+            "A",
+            "B",
+            "C",
+            "D",
+            "F"
+          ],
+          "title": "Grade",
+          "type": "string"
+        },
+        "maturity": {
+          "enum": [
+            "gold",
+            "silver",
+            "bronze",
+            "none"
+          ],
+          "title": "Maturity",
+          "type": "string"
+        },
+        "cappedBy": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Cappedby",
+          "type": "array"
+        }
+      },
+      "required": [
+        "score",
+        "grade",
+        "maturity"
+      ],
+      "title": "Aggregate",
+      "type": "object"
+    },
+    "Check": {
+      "description": "A single scored dimension within a tier (0.0\u20131.0).",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "score": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Score",
+          "type": "number"
+        },
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "weight": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Weight",
+          "type": "number"
+        },
+        "evidence": {
+          "title": "Evidence",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "score",
+        "value",
+        "weight",
+        "evidence"
+      ],
+      "title": "Check",
+      "type": "object"
+    },
+    "CoverageMetrics": {
+      "description": "Aggregate coverage numbers parsed from coverage.py JSON ``totals``.",
+      "properties": {
+        "linesCovered": {
+          "minimum": 0,
+          "title": "Linescovered",
+          "type": "integer"
+        },
+        "linesValid": {
+          "minimum": 0,
+          "title": "Linesvalid",
+          "type": "integer"
+        },
+        "percent": {
+          "maximum": 100.0,
+          "minimum": 0.0,
+          "title": "Percent",
+          "type": "number"
+        },
+        "branchPercent": {
+          "anyOf": [
+            {
+              "maximum": 100.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branchpercent"
+        }
+      },
+      "required": [
+        "linesCovered",
+        "linesValid",
+        "percent"
+      ],
+      "title": "CoverageMetrics",
+      "type": "object"
+    },
+    "Gate": {
+      "description": "A SonarQube-style quality gate that can cap the grade regardless of score.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "fail"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "effect": {
+          "title": "Effect",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "effect"
+      ],
+      "title": "Gate",
+      "type": "object"
+    },
+    "RawMetrics": {
+      "description": "The underlying measured numbers, for dashboard drill-down and recompute.",
+      "properties": {
+        "coverage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoverageMetrics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tests": {
+          "$ref": "#/$defs/RawTests"
+        }
+      },
+      "title": "RawMetrics",
+      "type": "object"
+    },
+    "RawTests": {
+      "description": "Per-tier counts for all three tiers (always present, zeroed if absent).",
+      "properties": {
+        "unit": {
+          "$ref": "#/$defs/TierTestCounts"
+        },
+        "integration": {
+          "$ref": "#/$defs/TierTestCounts"
+        },
+        "e2e": {
+          "$ref": "#/$defs/TierTestCounts"
+        }
+      },
+      "title": "RawTests",
+      "type": "object"
+    },
+    "Tier": {
+      "description": "A test tier (unit / integration / e2e) with its weighted sub-score.",
+      "properties": {
+        "name": {
+          "enum": [
+            "unit",
+            "integration",
+            "e2e"
+          ],
+          "title": "Name",
+          "type": "string"
+        },
+        "present": {
+          "title": "Present",
+          "type": "boolean"
+        },
+        "weight": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Weight",
+          "type": "number"
+        },
+        "score": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Score",
+          "type": "integer"
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/Check"
+          },
+          "title": "Checks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "present",
+        "weight",
+        "score"
+      ],
+      "title": "Tier",
+      "type": "object"
+    },
+    "TierTestCounts": {
+      "description": "Per-tier test outcome counts sliced from one junit XML by file path.",
+      "properties": {
+        "total": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "passed": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Passed",
+          "type": "integer"
+        },
+        "failed": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Failed",
+          "type": "integer"
+        },
+        "skipped": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Skipped",
+          "type": "integer"
+        },
+        "errors": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Errors",
+          "type": "integer"
+        },
+        "durationSec": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Durationsec",
+          "type": "number"
+        }
+      },
+      "title": "TierTestCounts",
+      "type": "object"
+    }
+  },
+  "description": "Top-level per-repo test-readiness scorecard.",
+  "properties": {
+    "schemaVersion": {
+      "default": "1.0",
+      "title": "Schemaversion",
+      "type": "string"
+    },
+    "rubricVersion": {
+      "title": "Rubricversion",
+      "type": "string"
+    },
+    "repo": {
+      "title": "Repo",
+      "type": "string"
+    },
+    "app": {
+      "title": "App",
+      "type": "string"
+    },
+    "commitSha": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Commitsha"
+    },
+    "toolVersion": {
+      "title": "Toolversion",
+      "type": "string"
+    },
+    "generatedAt": {
+      "title": "Generatedat",
+      "type": "string"
+    },
+    "aggregate": {
+      "$ref": "#/$defs/Aggregate"
+    },
+    "tiers": {
+      "items": {
+        "$ref": "#/$defs/Tier"
+      },
+      "title": "Tiers",
+      "type": "array"
+    },
+    "gates": {
+      "items": {
+        "$ref": "#/$defs/Gate"
+      },
+      "title": "Gates",
+      "type": "array"
+    },
+    "raw": {
+      "$ref": "#/$defs/RawMetrics"
+    }
+  },
+  "required": [
+    "rubricVersion",
+    "repo",
+    "app",
+    "toolVersion",
+    "generatedAt",
+    "aggregate",
+    "raw"
+  ],
+  "title": "Scorecard",
+  "type": "object"
+}
