@@ -101,7 +101,7 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-google-auth==2.56.1
+google-auth==2.56.2
     # via atlan-application-sdk
 googleapis-common-protos==1.75.0
     # via
@@ -257,7 +257,7 @@ platformdirs==4.11.0
 pluggy==1.6.0
     # via pytest
 poethepoet==0.48.0
-pre-commit==4.6.0
+pre-commit==4.6.1
 prometheus-client==0.25.0
     # via
     #   atlan-application-sdk
