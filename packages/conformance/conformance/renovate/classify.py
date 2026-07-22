@@ -180,26 +180,31 @@ def blocking_reason(
     if pr.checks_state == ChecksState.PENDING:
         return BlockingReason.CHECKS_PENDING
 
-    # Eligible, non-conflicting, dep-only, checks green. Is anything actually
-    # driving it to merge?
-    approved = pr.review_decision == "APPROVED"
+    # Eligible, non-conflicting, dep-only. Both auto-merge signals below describe
+    # a PR whose every gate is *green* yet nothing is driving it to merge, so they
+    # only fire on GREEN. FAILING/PENDING are already handled above; UNKNOWN
+    # (checks rollup couldn't be determined) must not masquerade as green-but-
+    # parked — it falls through to AWAITING_APPROVAL as it did before these
+    # signals existed. Is anything actually driving a green PR to merge?
+    if pr.checks_state == ChecksState.GREEN:
+        approved = pr.review_decision == "APPROVED"
 
-    # Precise signal: approval is in and every gate is green, yet auto-merge was
-    # never armed. With a required merge queue nothing will ever merge it — the
-    # dangerous "looks healthy, parked forever" case. Detected immediately (no
-    # age threshold) because there is nothing left to wait for.
-    if approved and not pr.auto_merge_enabled:
-        return BlockingReason.AUTOMERGE_NOT_ARMED
+        # Precise signal: approval is in and every gate is green, yet auto-merge
+        # was never armed. With a required merge queue nothing will ever merge it
+        # — the dangerous "looks healthy, parked forever" case. Detected
+        # immediately (no age threshold) because there is nothing left to wait for.
+        if approved and not pr.auto_merge_enabled:
+            return BlockingReason.AUTOMERGE_NOT_ARMED
 
-    # Age backstop: green + eligible but still open past the staleness threshold.
-    # Not gated on approval or armed-state so it also catches a down approval
-    # workflow and wedged merge queues — any stuck mode, including ones not
-    # modelled above.
-    if age_days >= STALE_AFTER_DAYS:
-        return BlockingReason.AUTOMERGE_STALE
+        # Age backstop: green + eligible but still open past the staleness
+        # threshold. Not gated on approval or armed-state so it also catches a
+        # down approval workflow and wedged merge queues — any stuck mode,
+        # including ones not modelled above.
+        if age_days >= STALE_AFTER_DAYS:
+            return BlockingReason.AUTOMERGE_STALE
 
-    # Recently eligible; expected to merge imminently (approval pending or freshly
-    # armed and awaiting the queue).
+    # Recently eligible (or checks state not yet determinable); expected to merge
+    # imminently (approval pending or freshly armed and awaiting the queue).
     return BlockingReason.AWAITING_APPROVAL
 
 

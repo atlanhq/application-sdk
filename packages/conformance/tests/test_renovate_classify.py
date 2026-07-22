@@ -286,6 +286,24 @@ def test_blocking_automerge_stale_armed_but_wedged() -> None:
     assert pr.blocking_reason is BlockingReason.AUTOMERGE_STALE
 
 
+def test_blocking_unknown_checks_not_flagged_as_automerge() -> None:
+    # UNKNOWN checks state is not green: the auto-merge-not-armed / stale signals
+    # both assert every gate is green, so an eligible + approved + old PR whose
+    # checks rollup can't be determined must NOT be reported as AUTOMERGE_* —
+    # it falls through to AWAITING_APPROVAL as it did before these signals existed.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="APPROVED",
+            auto_merge_enabled=False,
+            checks_state=ChecksState.UNKNOWN,
+            created_at=_OLD,
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AWAITING_APPROVAL
+
+
 # ── Non-dep file detection ───────────────────────────────────────────────────
 
 
