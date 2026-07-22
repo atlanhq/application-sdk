@@ -81,6 +81,18 @@ on:
         required: false
         default: ""
         type: string
+      extra_dep_file_pattern:
+        description: >
+          Optional extra ERE alternation of repo-specific dependency file paths
+          to treat as auto-approvable, appended to the built-in allowlist (which
+          already covers .github/ and lock/manifest/contract files). Each branch
+          is whole-line matched (grep -vxE), so anchor to full workspace-relative
+          paths, e.g. 'packages/conformance/.../templates/.+\.ya?ml'. This is how
+          a repo declares its OWN dep-managed source paths without hard-coding any
+          app-specific path into this shared workflow.
+        required: false
+        default: ""
+        type: string
     secrets:
       org_pat:
         description: >
@@ -123,6 +135,7 @@ jobs:
           EVENT_NAME: ${{ inputs.event_name }}
           RUN_SHA: ${{ inputs.head_sha }}
           DISPATCH_PR: ${{ inputs.pr_number }}
+          EXTRA_DEP_PATTERN: ${{ inputs.extra_dep_file_pattern }}
         run: |
           set -euo pipefail
 
@@ -207,9 +220,16 @@ jobs:
               continue
             fi
 
+            #    A caller may extend the allowlist with its own dep-managed
+            #    source paths via extra_dep_file_pattern (kept out of this shared
+            #    workflow so no app-specific path is hard-coded here).
+            DEP_FILE_RE='(.*/)?uv\.lock|(.*/)?package-lock\.json|(.*/)?requirements\.txt|(.*/)?pyproject\.toml|(.*/)?contract/PklProject|(.*/)?contract/PklProject\.deps\.json|app/generated/.*|atlan\.yaml|app\.yaml'
+            if [ -n "${EXTRA_DEP_PATTERN:-}" ]; then
+              DEP_FILE_RE="${DEP_FILE_RE}|${EXTRA_DEP_PATTERN}"
+            fi
             NON_DEP_FILES=$(echo "$FILENAMES" \
               | grep -v '^\.github/' \
-              | grep -vxE '(.*/)?uv\.lock|(.*/)?package-lock\.json|(.*/)?requirements\.txt|(.*/)?pyproject\.toml|(.*/)?contract/PklProject|(.*/)?contract/PklProject\.deps\.json|app/generated/.*|atlan\.yaml|app\.yaml' \
+              | grep -vxE "$DEP_FILE_RE" \
               || true)
             if [ -n "$NON_DEP_FILES" ]; then
               echo "PR #${PR_NUM}: contains non-dependency files:"
