@@ -14,8 +14,9 @@
       "name": "integration",
       "weight": 0.35,
       "checks": [
-        { "id": "integration.present", "weight": 0.4, "kind": "present", "evidence": "results/test-results.xml" },
-        { "id": "integration.pass-rate", "weight": 0.6, "kind": "pass_rate", "evidence": "results/test-results.xml" }
+        { "id": "integration.coverage", "weight": 0.3, "kind": "coverage", "evidence": "coverage.json" },
+        { "id": "integration.present", "weight": 0.3, "kind": "present", "evidence": "results/test-results.xml" },
+        { "id": "integration.pass-rate", "weight": 0.4, "kind": "pass_rate", "evidence": "results/test-results.xml" }
       ]
     },
     {

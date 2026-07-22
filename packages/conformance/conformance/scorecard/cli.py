@@ -1,20 +1,26 @@
 """``scorecard`` subcommand — emit a test-readiness scorecard JSON.
 
 Reads the standard test-evidence artifacts a CI run already produces (pytest
-junit XML + coverage.py JSON), scores them against the bundled rubric, and
-writes ``results/test-readiness.json``.
+junit XML + coverage.py JSON) and scores them against the bundled rubric.
 
-This is the one impure edge of the scorecard pipeline: it touches the
-filesystem and stamps ``generatedAt``.  All scoring logic lives in the pure
-``readers`` + ``compute`` modules.
+Post tier-split, unit and integration run as separate CI jobs, so evidence
+arrives per-tier: a dedicated aggregation job downloads both jobs' artifacts and
+invokes this with per-tier flags.  unit + integration are always scored (a
+missing junit → an empty, zero-scored tier, so a missing integration suite
+still counts against the grade); e2e is scored only when ``--e2e-junit`` is
+supplied — otherwise the e2e tier is marked not-applicable.
+
+This is the one impure edge: it touches the filesystem and stamps
+``generatedAt``.  All scoring logic lives in the pure ``readers`` + ``compute``.
 
 Usage::
 
     atlan-application-sdk-conformance scorecard \\
-        --junit results/test-results.xml \\
-        --coverage coverage.json \\
-        --repo "$GITHUB_REPOSITORY" \\
-        --commit "$GITHUB_SHA" \\
+        --unit-junit unit/results/test-results.xml \\
+        --unit-coverage unit/coverage.json \\
+        --integration-junit integration/results/test-results.xml \\
+        --integration-coverage integration/coverage.json \\
+        --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \\
         --out results/test-readiness.json
 """
 
@@ -26,9 +32,14 @@ import json
 from pathlib import Path
 
 from conformance.scorecard.compute import build_scorecard
-from conformance.scorecard.readers import parse_coverage_json, parse_junit
+from conformance.scorecard.readers import parse_coverage_json, parse_junit_tier
 from conformance.scorecard.rubric import load_rubric
-from conformance.scorecard.schema import RawTests
+from conformance.scorecard.schema import (
+    CoverageMetrics,
+    RawTests,
+    TierName,
+    TierTestCounts,
+)
 
 
 def _now_iso() -> str:
@@ -43,20 +54,48 @@ def _app_from_repo(repo: str) -> str:
     return name
 
 
+def _counts(path: str | None) -> TierTestCounts:
+    """Parse a tier's junit into counts; empty (zeroed) when absent."""
+    if path and Path(path).exists():
+        return parse_junit_tier(path)
+    if path:
+        print(f"warning: junit not found, tier scored empty: {path}")
+    return TierTestCounts()
+
+
+def _coverage(path: str | None) -> CoverageMetrics | None:
+    if path and Path(path).exists():
+        return parse_coverage_json(path)
+    if path:
+        print(f"warning: coverage file not found, scoring tier without it: {path}")
+    return None
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="atlan-application-sdk-conformance scorecard",
-        description="Emit a test-readiness scorecard from junit + coverage evidence.",
+        description="Emit a test-readiness scorecard from per-tier junit + coverage.",
+    )
+    parser.add_argument("--unit-junit", default=None, help="Unit tier junit XML.")
+    parser.add_argument(
+        "--integration-junit", default=None, help="Integration tier junit XML."
     )
     parser.add_argument(
-        "--junit",
-        required=True,
-        help="Path to the pytest junit XML (e.g. results/test-results.xml).",
-    )
-    parser.add_argument(
-        "--coverage",
+        "--e2e-junit",
         default=None,
-        help="Path to coverage.py JSON (coverage.json). Omit if unavailable.",
+        help="E2E tier junit XML. Omit when e2e did not run — the e2e tier is "
+        "then marked not-applicable (no grade cap, excluded from the aggregate).",
+    )
+    parser.add_argument("--unit-coverage", default=None, help="Unit coverage.json.")
+    parser.add_argument(
+        "--integration-coverage", default=None, help="Integration coverage.json."
+    )
+    # Deprecated single-file aliases (pre-tier-split); map to the unit tier.
+    parser.add_argument(
+        "--junit", default=None, help="Deprecated alias for --unit-junit."
+    )
+    parser.add_argument(
+        "--coverage", default=None, help="Deprecated alias for --unit-coverage."
     )
     parser.add_argument(
         "--repo",
@@ -82,23 +121,32 @@ def main(argv: list[str]) -> int:
 
     from conformance import __version__
 
-    junit_path = Path(args.junit)
-    if not junit_path.exists():
-        parser.error(f"junit file not found: {junit_path}")
+    unit_junit = args.unit_junit or args.junit
+    unit_coverage = args.unit_coverage or args.coverage
+    if not unit_junit:
+        parser.error("at least --unit-junit (or the deprecated --junit) is required")
 
-    tests: RawTests = parse_junit(junit_path)
+    tests = RawTests(
+        unit=_counts(unit_junit),
+        integration=_counts(args.integration_junit),
+        e2e=_counts(args.e2e_junit),
+    )
 
-    coverage = None
-    if args.coverage:
-        cov_path = Path(args.coverage)
-        if cov_path.exists():
-            coverage = parse_coverage_json(cov_path)
-        else:
-            print(f"warning: coverage file not found, scoring without it: {cov_path}")
+    # unit + integration are always measured; e2e only when its junit is given.
+    measured_tiers: set[TierName] = {"unit", "integration"}
+    if args.e2e_junit:
+        measured_tiers.add("e2e")
+
+    coverage: dict[TierName, CoverageMetrics] = {}
+    if (unit_cov := _coverage(unit_coverage)) is not None:
+        coverage["unit"] = unit_cov
+    if (int_cov := _coverage(args.integration_coverage)) is not None:
+        coverage["integration"] = int_cov
 
     scorecard = build_scorecard(
         tests=tests,
         coverage=coverage,
+        measured_tiers=measured_tiers,
         rubric=load_rubric(args.rubric),
         repo=args.repo,
         app=args.app or _app_from_repo(args.repo),
