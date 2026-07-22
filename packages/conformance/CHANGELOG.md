@@ -2,6 +2,22 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.15.1] - 2026-07-22
+
+### Bug fixes
+
+- run upload asset validation in an isolated child process (CNCT-85) (#2769) ([143e2d3](https://github.com/atlanhq/application-sdk/commit/143e2d3))
+- regenerate contract-toolkit conformance baseline on release (#2808) ([1775f65](https://github.com/atlanhq/application-sdk/commit/1775f65))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2827) ([c36f434](https://github.com/atlanhq/application-sdk/commit/c36f434))
+- chore(deps): lock file maintenance (#2821) ([03e9aca](https://github.com/atlanhq/application-sdk/commit/03e9aca))
+- chore(deps): lock file maintenance (#2816) ([41785f7](https://github.com/atlanhq/application-sdk/commit/41785f7))
+- chore(deps): lock file maintenance (#2814) ([d5b3bd2](https://github.com/atlanhq/application-sdk/commit/d5b3bd2))
+- chore(deps): lock file maintenance (#2797) ([ce5f1d7](https://github.com/atlanhq/application-sdk/commit/ce5f1d7))
+- chore(deps): lock file maintenance (#2794) ([665a29f](https://github.com/atlanhq/application-sdk/commit/665a29f))
+
 ## [0.15.0] - 2026-07-20
 
 ### Features
