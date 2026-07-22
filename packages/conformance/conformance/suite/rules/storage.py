@@ -227,9 +227,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "interceptor persists the underlying file to the object store and\n"
             "materialises it on the consuming worker.  See BLDX-1398.\n"
             "\n"
+            "If the value is a deterministic, worker-portable **workflow-relative**\n"
+            "path (derived from the workflow/run id, normalised by the SDK\n"
+            "ObjectStore) rather than a worker-local absolute path, annotate the field\n"
+            "with ``application_sdk.contracts.types.WorkflowPath`` (a ``str`` alias) —\n"
+            "it serialises exactly as ``str`` and is **exempt** from this rule, so it\n"
+            "documents worker-portability without a suppression or a FileReference.\n"
+            "\n"
             "This rule is a heuristic — it matches on field name and documentation\n"
             "text — so a string field that is genuinely not a transferable path will\n"
-            "occasionally be flagged.  Suppress a genuine exception with an inline\n"
+            "occasionally be flagged.  Prefer ``WorkflowPath`` for workflow paths;\n"
+            "otherwise suppress a genuine exception with an inline\n"
             "``# conformance: ignore[P012] <reason>``, which stays visible in SARIF.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p012",

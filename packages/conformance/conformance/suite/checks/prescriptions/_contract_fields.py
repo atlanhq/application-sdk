@@ -28,6 +28,7 @@ from ._contract_common import (
     field_doc_text,
     is_bytes_annotation,
     is_str_annotation,
+    is_workflow_path_annotation,
     iter_contract_classes,
     unmodeled_container_name,
 )
@@ -103,6 +104,10 @@ def check_p012(
     foreign = collect_foreign_contract_names(tree)
     for classdef in iter_contract_classes(tree, foreign):
         for name, ann_node in _iter_field_annassigns(classdef):
+            # WorkflowPath is the sanctioned str type for deterministic,
+            # worker-portable workflow-relative paths — exempt from P012.
+            if is_workflow_path_annotation(ann_node.annotation):
+                continue
             if not is_str_annotation(ann_node.annotation):
                 continue
             doc = field_doc_text(classdef, ann_node)

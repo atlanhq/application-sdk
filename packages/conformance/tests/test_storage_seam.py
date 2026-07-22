@@ -557,6 +557,18 @@ def test_p012_silent_on_non_str_path_annotation() -> None:
     assert _rule(src, "P012") == []
 
 
+def test_p012_silent_on_workflow_path_field() -> None:
+    # WorkflowPath is the sanctioned str type for worker-portable workflow-relative
+    # paths — exempt from P012 (no suppression needed).
+    src = "class MyInput(Input):\n    output_path: WorkflowPath\n"
+    assert _rule(src, "P012") == []
+
+
+def test_p012_silent_on_optional_workflow_path_field() -> None:
+    src = "class MyOutput(Output):\n    output_path: WorkflowPath | None = None\n"
+    assert _rule(src, "P012") == []
+
+
 def test_p012_silent_on_non_contract_class() -> None:
     # path-named str field outside Input/Output is not flagged
     src = "class Config:\n    output_path: str\n"

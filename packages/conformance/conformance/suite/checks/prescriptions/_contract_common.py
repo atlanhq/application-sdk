@@ -152,6 +152,17 @@ def is_str_annotation(node: ast.expr) -> bool:
     return _is_annotation(node, "str")
 
 
+def is_workflow_path_annotation(node: ast.expr) -> bool:
+    """True for ``WorkflowPath``, ``WorkflowPath | None``, ``Optional[WorkflowPath]``.
+
+    ``WorkflowPath`` (``application_sdk.contracts.types``) is a ``str`` alias for a
+    deterministic, worker-portable workflow-relative path.  It is the sanctioned,
+    self-documenting alternative to a bare ``str`` path field and is exempt from
+    P012.
+    """
+    return _is_annotation(node, "WorkflowPath")
+
+
 # ── P015 unmodeled-container helpers ──────────────────────────────────────────
 
 # Container type names that, when used as a field annotation on a contract

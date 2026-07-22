@@ -16,7 +16,7 @@ import dataclasses
 import uuid
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any, TypeVar
+from typing import Annotated, Any, TypeAlias, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
@@ -200,6 +200,27 @@ BoundedList = Annotated[list[T], MaxItems]
 
 BoundedDict = Annotated[dict[K, V], MaxItems]
 """Bounded dict type. Use: Annotated[dict[K, V], MaxItems(N)]"""
+
+
+WorkflowPath: TypeAlias = Annotated[str, "atlan:workflow-path"]
+"""A workflow-relative filesystem path — a plain ``str`` on the wire.
+
+Use this (instead of a bare ``str``) for staging/output *path* fields on
+``Input``/``Output`` contracts whose value is a deterministic, workflow-relative
+path (e.g. derived from the workflow/run id) that the SDK ObjectStore normalises
+per its documented path semantics — i.e. it is reconstructible and valid on any
+worker, not a worker-specific absolute path.
+
+It serialises exactly as ``str`` (the ``Annotated`` marker is metadata only), so
+there is no behaviour change and no impact on platform JSONPath substitution.
+Conformance ``P012 FilePathStringInContract`` exempts ``WorkflowPath`` fields:
+the type is the sanctioned, self-documenting signal that the path is
+worker-portable, replacing a per-field ``# conformance: ignore[P012]``.
+
+Use ``FileReference`` instead when the data must actually be uploaded to and
+materialised from the object store across a task boundary; use ``WorkflowPath``
+when the path itself is the deterministic, app-owned staging location.
+"""
 
 
 class FileReference(BaseModel, frozen=True):

@@ -382,10 +382,16 @@ Carry the path as a durable `FileReference` instead, so the activity interceptor
 persists the underlying file to the object store and materialises it on the consuming
 worker.  See BLDX-1398.
 
+If the value is a deterministic, worker-portable **workflow-relative** path (derived
+from the workflow/run id, normalised by the SDK ObjectStore) rather than a worker-local
+absolute path, annotate the field with `application_sdk.contracts.types.WorkflowPath` (a
+`str` alias) — it serialises exactly as `str` and is **exempt** from this rule, so it
+documents worker-portability without a suppression or a FileReference.
+
 This rule is a heuristic — it matches on field name and documentation text — so a string
-field that is genuinely not a transferable path will occasionally be flagged.  Suppress
-a genuine exception with an inline `# conformance: ignore[P012] <reason>`, which stays
-visible in SARIF.
+field that is genuinely not a transferable path will occasionally be flagged.  Prefer
+`WorkflowPath` for workflow paths; otherwise suppress a genuine exception with an inline
+`# conformance: ignore[P012] <reason>`, which stays visible in SARIF.
 
 ---
 
