@@ -39,6 +39,14 @@ inputs:
       step. CLI flag overrides `[tool.coverage.report].fail_under` in the
       consumer's pyproject.toml.
     default: "60"
+  application-sdk-ref:
+    required: false
+    description: |
+      Branch/SHA of atlanhq/application-sdk to pin before running tests.
+      Empty = use the lockfile version. Used by cross-repo dispatch from
+      application-sdk PRs so the unit tier exercises the SDK branch under
+      review too — parity with connector-integration-tests.
+    default: ""
 
 runs:
   using: "composite"
@@ -47,6 +55,23 @@ runs:
       uses: atlanhq/application-sdk/.github/actions/setup-deps@main
       with:
         python-version: ${{ inputs.python-version }}
+
+    - name: Pin application-sdk to dispatched ref
+      if: inputs.application-sdk-ref != ''
+      shell: bash
+      env:
+        SDK_REF: ${{ inputs.application-sdk-ref }}
+      # Reuse the integration action's repin script (a generic pyproject
+      # [tool.uv.sources] rewriter, not integration-specific) rather than
+      # keeping a third copy. Both actions are checked out together from the
+      # application-sdk tree, so the sibling path resolves — the same
+      # cross-action-file pattern connector-integration-tests already relies on
+      # for ../../scripts/ and ../../../application_sdk/version.py.
+      run: |
+        REPIN="${{ github.action_path }}/../connector-integration-tests/repin-application-sdk.sh"
+        chmod +x "$REPIN"
+        "$REPIN"
+        uv sync --all-extras --all-groups
 
     - name: Run unit tests with coverage
       id: tests

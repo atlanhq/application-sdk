@@ -7,7 +7,10 @@ the enforced result can never drift.
 
 Gate passes iff:
 
-  * ``tests`` (unit + integration) succeeded, AND
+  * ``unit`` tests succeeded (the per-commit tier; runs on every event), AND
+  * ``integration`` tests succeeded OR were skipped (skipped is legitimate: the
+    job is skipped on pull_request — the unit tier is the PR signal — and when
+    the connector ships no integration suite), AND
   * e2e discovery succeeded OR was skipped (skipped = e2e not requested; a
     *failed* discovery means e2e was requested but no suites were found), AND
   * the e2e matrix succeeded OR was skipped (matrix aggregate is success only
@@ -31,11 +34,16 @@ import sys
 _OK_OPTIONAL = ("success", "skipped")
 
 
-def evaluate(tests: str, discover_e2e: str, e2e: str) -> list[str]:
+def evaluate(unit: str, integration: str, discover_e2e: str, e2e: str) -> list[str]:
     """Return human-readable failure reasons (empty ⇒ the gate passes)."""
     errors: list[str] = []
-    if tests != "success":
-        errors.append(f"tests job did not succeed (result={tests})")
+    if unit != "success":
+        errors.append(f"unit tests did not succeed (result={unit})")
+    # Integration is optional-by-skip: the job is intentionally skipped on
+    # pull_request and when the connector has no integration suite. Any result
+    # other than success/skipped (failure, cancelled, timed_out) fails the gate.
+    if integration not in _OK_OPTIONAL:
+        errors.append(f"integration tests did not succeed (result={integration})")
     if discover_e2e not in _OK_OPTIONAL:
         errors.append(f"e2e discovery did not succeed (result={discover_e2e})")
     if e2e not in _OK_OPTIONAL:
@@ -51,11 +59,19 @@ def evaluate(tests: str, discover_e2e: str, e2e: str) -> list[str]:
     return errors
 
 
-def _tests_status(tests: str) -> str:
-    if tests == "success":
+def _unit_status(unit: str) -> str:
+    if unit == "success":
         return "✅ Passed"
-    if tests == "skipped":
+    if unit == "skipped":
         return "⊘ Skipped"
+    return "❌ Failed"
+
+
+def _integration_status(integration: str) -> str:
+    if integration == "success":
+        return "✅ Passed"
+    if integration == "skipped":
+        return "⊘ Skipped — PRs, or no integration suite (runs in merge queue)"
     return "❌ Failed"
 
 
@@ -73,12 +89,13 @@ def _e2e_status(discover_e2e: str, e2e: str) -> str:
     return "❌ Failed"
 
 
-def render(tests: str, discover_e2e: str, e2e: str) -> dict[str, str]:
+def render(unit: str, integration: str, discover_e2e: str, e2e: str) -> dict[str, str]:
     """Compute the gate's outputs: pass/fail + the display status strings."""
-    errors = evaluate(tests, discover_e2e, e2e)
+    errors = evaluate(unit, integration, discover_e2e, e2e)
     return {
         "passed": "true" if not errors else "false",
-        "tests-status": _tests_status(tests),
+        "unit-status": _unit_status(unit),
+        "integration-status": _integration_status(integration),
         "e2e-status": _e2e_status(discover_e2e, e2e),
         "overall-status": "✅ All passed" if not errors else "❌ Some failed",
     }
@@ -86,7 +103,8 @@ def render(tests: str, discover_e2e: str, e2e: str) -> dict[str, str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Evaluate + render the Tests Gate.")
-    parser.add_argument("--tests", required=True, help="needs.tests.result")
+    parser.add_argument("--unit", required=True, help="needs.unit.result")
+    parser.add_argument("--integration", required=True, help="needs.integration.result")
     parser.add_argument(
         "--discover-e2e", required=True, help="needs.discover-e2e.result"
     )
@@ -95,10 +113,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # Annotate each failure reason (shows on the gate step regardless of the
     # zero exit; the job's enforce step turns `passed=false` into a red check).
-    for reason in evaluate(args.tests, args.discover_e2e, args.e2e):
+    for reason in evaluate(args.unit, args.integration, args.discover_e2e, args.e2e):
         print(f"::error::{reason}", file=sys.stderr)
 
-    for key, value in render(args.tests, args.discover_e2e, args.e2e).items():
+    for key, value in render(
+        args.unit, args.integration, args.discover_e2e, args.e2e
+    ).items():
         print(f"{key}={value}")
     return 0
 

@@ -1,7 +1,9 @@
 name: tests-reusable
 
 # Reusable workflow for the standard connector tests + e2e scaffold.
-# Each connector's per-app tests.yaml collapses to a thin caller:
+# Each connector's per-app tests.yaml collapses to a thin caller — a single
+# job invoking this reusable; the tiered unit/integration jobs, the e2e
+# scaffold and the aggregator Tests Gate all live in here:
 #
 #     name: Tests
 #     jobs:
@@ -11,11 +13,6 @@ name: tests-reusable
 #           app-name: mysql
 #           ...
 #         secrets: inherit
-#       tests-gate:
-#         name: Tests Gate
-#         needs: [tests]
-#         if: always()
-#         ...  # gate logic using needs.tests.outputs.*
 #
 # Standard boilerplate baked in this reusable so apps don't copy-paste it:
 #   - 60-min job timeout (override via timeout-minutes input)
@@ -29,23 +26,28 @@ name: tests-reusable
 #     it was previously delegated to e2e-full-reusable.yaml, now folded in so
 #     the whole suite is one reusable + one Tests Gate)
 #
-# Test tiering (see the `tests` job's test-paths):
-#   pull_request          → tests/unit/ only. Fast per-commit signal (seconds
-#                           of tests + uv sync); no testcontainers / source
-#                           infra spun up, so the PR loop stays cheap.
-#   merge_group / push    → full suite (unit + integration, auto-discovered).
-#                           Integration (testcontainers / services-script,
-#                           exercising the real extraction workflow) runs on
-#                           the exact batched state that will land — the one
-#                           point a regression could actually ship — and is
-#                           re-run in place if the base moves under the queue.
-#   e2e (label/dispatch)  → full-DAG against a real tenant (the `e2e` job).
-#   A caller-supplied `test-paths` overrides this tiering entirely.
+# Test tiering (two separate jobs → two separate checks):
+#   unit         → tests/unit/ via the lightweight connector-unit-tests action
+#                  (setup-deps + pytest + coverage; NO app server / daprd /
+#                  Temporal / services-script). Runs on EVERY event — the fast
+#                  per-commit PR signal, greens in seconds of test time.
+#   integration  → tests/integration/ via connector-integration-tests (boots
+#                  the app + testcontainers / services-script, exercising the
+#                  real extraction workflow). Skipped on pull_request (the unit
+#                  tier is the PR signal) and when the connector ships no
+#                  integration suite; runs on merge_group / push — the exact
+#                  batched state that will land, the one point a regression
+#                  could actually ship — re-run in place if the base moves under
+#                  the queue. Gated by the `detect-integration` job.
+#   e2e (label/dispatch) → full-DAG against a real tenant (the `e2e` job).
+#   A caller-supplied `test-paths` scopes the INTEGRATION job only; the unit job
+#   always runs tests/unit/.
 #
 # GitHub check name hierarchy (caller → tests-reusable):
-#   Tests / tests / Unit and integration  (unit only on pull_request; + integration on merge_group)
-#   Tests / tests / End-to-end            (label / dispatch)
-#   Tests / tests / Tests Gate            (aggregator — the required check)
+#   Tests / tests / Unit         (every event)
+#   Tests / tests / Integration  (skipped on PRs / no suite; runs in merge queue)
+#   Tests / tests / End-to-end   (label / dispatch)
+#   Tests / tests / Tests Gate   (aggregator — the required check)
 #
 # Nested reusable depth: caller → tests-reusable = 2 (GitHub max is 4).
 # secrets: inherit chains from the caller; the inlined e2e job reads secrets.*.
@@ -71,12 +73,19 @@ on:
         type: string
         default: ""
         description: |
-          Space-separated pytest target paths.  Empty = event-tiered default
-          (see the `tests` job): tests/unit/ on pull_request, full auto-
-          discovered suite (honouring testpaths in pyproject.toml) on
-          merge_group / push.  Set a non-empty value to override the tiering
-          and force an exact path set on every event (e.g. "tests/unit/
-          tests/integration/").
+          Space-separated pytest target paths for the INTEGRATION job.  Empty =
+          tests/integration/ (the default).  The unit job always runs tests/unit/
+          via the connector-unit-tests action and is NOT affected by this input.
+          Set this only to scope integration to a subset (e.g. a single file).
+      unit-coverage-fail-under:
+        required: false
+        type: string
+        default: "0"
+        description: |
+          Minimum unit-test coverage percent enforced by the unit job (the
+          connector-unit-tests `fail-under`).  Default "0" preserves the
+          historical no-coverage-gate behaviour; raise it per-app to enforce a
+          coverage floor on the fast PR signal.
       pytest-args:
         required: false
         type: string
@@ -176,41 +185,110 @@ on:
 
 jobs:
 
-  # ── Unit + Integration (testcontainers or services-script hook) ──────────
-  tests:
-    name: Unit and integration
+  # ── Unit (lightweight: no app server / daprd / Temporal / services) ──────
+  # Runs on EVERY event as the fast per-commit signal. connector-unit-tests is
+  # setup-deps + pytest tests/unit + coverage — none of the runtime infra the
+  # integration job spins up, so a PR greens in seconds of test time.
+  unit:
+    name: Unit
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.timeout-minutes }}
+    timeout-minutes: 20
     concurrency:
-      group: tests-${{ github.ref }}
+      group: tests-unit-${{ github.ref }}
       cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
     permissions:
-      pull-requests: write
+      pull-requests: write  # connector-unit-tests comments the coverage delta
       contents: read
     outputs:
-      summary: ${{ steps.tests.outputs.summary }}
+      summary: ${{ steps.unit.outputs.summary }}
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
 
-      # Tiered by event so the expensive integration tier runs only where a
-      # regression could actually ship (see the "Test tiering" note in the
-      # header):
-      #   pull_request          → tests/unit/ only        (fast per-commit signal)
-      #   merge_group/push/etc. → '' = auto-discover full suite (unit + integration)
-      # A caller-supplied test-paths always wins (explicit override). The
-      # ternary is a workflow expression in a `with:` value — not inlined
-      # conditional shell — so it stays within the CI authoring rule.
-      - name: Run tests (unit on PRs; unit + integration in the merge queue)
-        id: tests
+      - name: Run unit tests
+        id: unit
+        uses: atlanhq/application-sdk/.github/actions/connector-unit-tests@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # "0" by default (no coverage gate); apps opt up via the input.
+          fail-under: ${{ inputs.unit-coverage-fail-under }}
+          # Repin so a cross-repo SDK-PR dispatch exercises the SDK branch in the
+          # unit tier too (parity with integration); empty = lockfile version.
+          application-sdk-ref: ${{ inputs.application-sdk-ref }}
+
+  # ── Detect whether an integration suite exists ───────────────────────────
+  # The integration job runs tests/integration/ explicitly; a connector may
+  # legitimately ship no integration tier (e.g. hello-world), where pytest would
+  # otherwise error on a missing path. A checkout + a tested glob (discover-e2e-
+  # suites is a generic test_*.py counter, reused here) lets the integration job
+  # be a clean skip via a job-level `if` — no inlined conditional shell. Runs on
+  # the same non-PR events the integration job does.
+  detect-integration:
+    name: Detect integration suite
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      count: ${{ steps.detect.outputs.count }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Count integration suites
+        id: detect
+        uses: atlanhq/application-sdk/.github/actions/discover-e2e-suites@main
+        with:
+          test-dir: tests/integration
+
+  # ── Integration (boots the app + testcontainers / services-script) ───────
+  # Skipped on pull_request (unit is the per-commit signal) and when there is no
+  # integration suite (detect-integration count == 0); runs on merge_group /
+  # push / dispatch — the exact batched state that will land.
+  integration:
+    name: Integration
+    needs: detect-integration
+    # Specifying `if` drops the implied success() on `needs`, so require the
+    # detection to have actually succeeded (else count is empty and would read
+    # as "present"). On pull_request detect-integration is skipped, so this is
+    # false and integration skips — the unit tier is the PR signal.
+    if: >-
+      github.event_name != 'pull_request' &&
+      needs.detect-integration.result == 'success' &&
+      needs.detect-integration.outputs.count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      group: tests-integration-${{ github.ref }}
+      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+    permissions:
+      pull-requests: write
+      contents: read
+    outputs:
+      summary: ${{ steps.integration.outputs.summary }}
+    steps:
+      - name: echo distinct-id ${{ inputs.distinct-id }}
+        if: inputs.distinct-id != ''
+        run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
+
+      # Unit runs in its own job; integration defaults to tests/integration/.
+      # A caller test-paths override scopes THIS job only. The ternary is a
+      # workflow expression in a `with:` value — not inlined conditional shell —
+      # so it stays within the CI authoring rule.
+      - name: Run integration tests
+        id: integration
         uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@main
         with:
           app-name: ${{ inputs.app-name }}
-          test-paths: ${{ inputs.test-paths != '' && inputs.test-paths || (github.event_name == 'pull_request' && 'tests/unit/' || '') }}
+          test-paths: ${{ inputs.test-paths != '' && inputs.test-paths || 'tests/integration/' }}
           pytest-args: ${{ inputs.pytest-args }}
           services-script: ${{ inputs.services-script }}
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
+          # Scorecard stays out of the split path: this job's junit is
+          # integration-only, so an inline scorecard would misreport the unit
+          # tier as absent. Per-tier aggregation lands in a follow-up.
+          emit-scorecard: "false"
 
   # ── Discover e2e suites → matrix ─────────────────────────────────────────
   # Globs the connector's tests/e2e/test_*.py into a strategy.matrix so the
@@ -377,7 +455,7 @@ jobs:
   # empty on the connector's own same-repo pull_request/push runs.
   report-to-sdk:
     name: Report to application-sdk
-    needs: [tests, e2e]
+    needs: [unit, integration, e2e]
     if: |
       always() &&
       github.event_name == 'workflow_dispatch' &&
@@ -472,14 +550,18 @@ jobs:
       - name: Determine conclusion + build summary
         id: report
         env:
-          TESTS_RESULT: ${{ needs.tests.result }}
+          UNIT_RESULT: ${{ needs.unit.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
-          TESTS_SUMMARY: ${{ needs.tests.outputs.summary }}
+          UNIT_SUMMARY: ${{ needs.unit.outputs.summary }}
+          INTEGRATION_SUMMARY: ${{ needs.integration.outputs.summary }}
         run: |
           python3 application-sdk-scripts/.github/scripts/build_callback_summary.py \
-            --tests-result "$TESTS_RESULT" \
+            --unit-result "$UNIT_RESULT" \
+            --integration-result "$INTEGRATION_RESULT" \
             --e2e-result "$E2E_RESULT" \
-            --tests-summary "$TESTS_SUMMARY"
+            --unit-summary "$UNIT_SUMMARY" \
+            --integration-summary "$INTEGRATION_SUMMARY"
 
       - name: Complete the check run on application-sdk
         env:
@@ -499,7 +581,7 @@ jobs:
   # ── Aggregator gate (single required check for branch protection) ────────
   tests-passed:
     name: Tests Gate
-    needs: [tests, discover-e2e, e2e]
+    needs: [unit, integration, discover-e2e, e2e]
     if: always()
     runs-on: ubuntu-latest
     # Comment + gate-eval only; cap so a wedged runner can't hold the required
@@ -514,13 +596,14 @@ jobs:
       # renders, so displayed status can't drift from the enforced result.
       # Discovery skipped = e2e not requested (OK); discovery failed = requested
       # but empty (fail); the e2e matrix aggregate is success iff every leg
-      # passed.
+      # passed. Integration skipped (PR / no suite) is a pass; unit must succeed.
       - name: Evaluate Tests Gate
         id: gate
         if: always()
         uses: atlanhq/application-sdk/.github/actions/verify-test-gate@main
         with:
-          tests-result: ${{ needs.tests.result }}
+          unit-result: ${{ needs.unit.result }}
+          integration-result: ${{ needs.integration.result }}
           discover-e2e-result: ${{ needs.discover-e2e.result }}
           e2e-result: ${{ needs.e2e.result }}
 
@@ -534,7 +617,8 @@ jobs:
 
             | Job | Status | Result |
             |---|---|---|
-            | tests | ${{ steps.gate.outputs.tests-status }} | `${{ needs.tests.outputs.summary || 'no summary' }}` |
+            | unit | ${{ steps.gate.outputs.unit-status }} | `${{ needs.unit.outputs.summary || 'no summary' }}` |
+            | integration | ${{ steps.gate.outputs.integration-status }} | `${{ needs.integration.outputs.summary || 'no summary' }}` |
             | e2e | ${{ steps.gate.outputs.e2e-status }} | per-suite results + live logs in the run |
 
             **Overall:** ${{ steps.gate.outputs.overall-status }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
