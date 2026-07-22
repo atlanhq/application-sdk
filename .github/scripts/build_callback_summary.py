@@ -23,13 +23,22 @@ PASSING_E2E_RESULTS = {"success", "skipped"}
 # Integration is skipped on PRs and when a connector has no integration suite,
 # so "skipped" is a pass for it (mirrors the e2e optional-by-skip treatment).
 PASSING_INTEGRATION_RESULTS = {"success", "skipped"}
+# The suite-detection job gates the integration `if`. A *failure* there drops
+# integration to a skip, which PASSING_INTEGRATION_RESULTS would read as a pass
+# — so a failed detection must be its own failure signal here, exactly as the
+# Tests Gate treats it. skipped (pull_request) and success are passes.
+PASSING_DETECT_INTEGRATION_RESULTS = {"success", "skipped"}
 
 
 def determine_conclusion(
-    unit_result: str, integration_result: str, e2e_result: str
+    unit_result: str,
+    integration_result: str,
+    detect_integration_result: str,
+    e2e_result: str,
 ) -> str:
     if (
         unit_result == "success"
+        and detect_integration_result in PASSING_DETECT_INTEGRATION_RESULTS
         and integration_result in PASSING_INTEGRATION_RESULTS
         and e2e_result in PASSING_E2E_RESULTS
     ):
@@ -40,15 +49,28 @@ def determine_conclusion(
 def build_fallback_summary(
     unit_result: str,
     integration_result: str,
+    detect_integration_result: str,
     e2e_result: str,
     unit_summary: str,
     integration_summary: str,
 ) -> str:
+    # Show the integration line as a detection failure when detect-integration
+    # broke, so the summary never reports a clean "skipped" for a tier that was
+    # actually dropped by a failed detection.
+    if detect_integration_result not in PASSING_DETECT_INTEGRATION_RESULTS:
+        integration_line = (
+            f"**integration:** not run — suite detection "
+            f"{detect_integration_result}\n"
+        )
+    else:
+        integration_line = (
+            f"**integration:** {integration_result} "
+            f"({integration_summary or 'no summary'})\n"
+        )
     return (
         "## Tests Summary\n\n"
         f"**unit:** {unit_result} ({unit_summary or 'no summary'})\n"
-        f"**integration:** {integration_result} "
-        f"({integration_summary or 'no summary'})\n"
+        f"{integration_line}"
         f"**e2e:** {e2e_result}\n"
     )
 
@@ -58,6 +80,7 @@ def resolve_summary_file(
     fallback_path: str,
     unit_result: str,
     integration_result: str,
+    detect_integration_result: str,
     e2e_result: str,
     unit_summary: str,
     integration_summary: str,
@@ -69,6 +92,7 @@ def resolve_summary_file(
             build_fallback_summary(
                 unit_result,
                 integration_result,
+                detect_integration_result,
                 e2e_result,
                 unit_summary,
                 integration_summary,
@@ -81,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--unit-result", required=True)
     parser.add_argument("--integration-result", required=True)
+    parser.add_argument("--detect-integration-result", required=True)
     parser.add_argument("--e2e-result", required=True)
     parser.add_argument("--unit-summary", default="")
     parser.add_argument("--integration-summary", default="")
@@ -91,13 +116,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     conclusion = determine_conclusion(
-        args.unit_result, args.integration_result, args.e2e_result
+        args.unit_result,
+        args.integration_result,
+        args.detect_integration_result,
+        args.e2e_result,
     )
     summary_file = resolve_summary_file(
         args.artifact_summary_path,
         args.fallback_path,
         args.unit_result,
         args.integration_result,
+        args.detect_integration_result,
         args.e2e_result,
         args.unit_summary,
         args.integration_summary,

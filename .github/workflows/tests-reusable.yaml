@@ -455,7 +455,7 @@ jobs:
   # empty on the connector's own same-repo pull_request/push runs.
   report-to-sdk:
     name: Report to application-sdk
-    needs: [unit, integration, e2e]
+    needs: [unit, detect-integration, integration, e2e]
     if: |
       always() &&
       github.event_name == 'workflow_dispatch' &&
@@ -552,6 +552,7 @@ jobs:
         env:
           UNIT_RESULT: ${{ needs.unit.result }}
           INTEGRATION_RESULT: ${{ needs.integration.result }}
+          DETECT_INTEGRATION_RESULT: ${{ needs.detect-integration.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
           UNIT_SUMMARY: ${{ needs.unit.outputs.summary }}
           INTEGRATION_SUMMARY: ${{ needs.integration.outputs.summary }}
@@ -559,6 +560,7 @@ jobs:
           python3 application-sdk-scripts/.github/scripts/build_callback_summary.py \
             --unit-result "$UNIT_RESULT" \
             --integration-result "$INTEGRATION_RESULT" \
+            --detect-integration-result "$DETECT_INTEGRATION_RESULT" \
             --e2e-result "$E2E_RESULT" \
             --unit-summary "$UNIT_SUMMARY" \
             --integration-summary "$INTEGRATION_SUMMARY"
@@ -581,7 +583,7 @@ jobs:
   # ── Aggregator gate (single required check for branch protection) ────────
   tests-passed:
     name: Tests Gate
-    needs: [unit, integration, discover-e2e, e2e]
+    needs: [unit, detect-integration, integration, discover-e2e, e2e]
     if: always()
     runs-on: ubuntu-latest
     # Comment + gate-eval only; cap so a wedged runner can't hold the required
@@ -597,6 +599,9 @@ jobs:
       # Discovery skipped = e2e not requested (OK); discovery failed = requested
       # but empty (fail); the e2e matrix aggregate is success iff every leg
       # passed. Integration skipped (PR / no suite) is a pass; unit must succeed.
+      # detect-integration is gated too: a *failed* detection (not a PR skip)
+      # fails the gate, so a checkout/glob flake can't silently skip integration
+      # and green the required check.
       - name: Evaluate Tests Gate
         id: gate
         if: always()
@@ -604,6 +609,7 @@ jobs:
         with:
           unit-result: ${{ needs.unit.result }}
           integration-result: ${{ needs.integration.result }}
+          detect-integration-result: ${{ needs.detect-integration.result }}
           discover-e2e-result: ${{ needs.discover-e2e.result }}
           e2e-result: ${{ needs.e2e.result }}
 

@@ -8,6 +8,10 @@ the enforced result can never drift.
 Gate passes iff:
 
   * ``unit`` tests succeeded (the per-commit tier; runs on every event), AND
+  * ``detect-integration`` (the suite-detection job that gates the integration
+    tier) succeeded OR was skipped (skipped = pull_request; a *failed* detection
+    must not be indistinguishable from "no suite" — otherwise a checkout/glob
+    flake silently skips integration and greens the gate), AND
   * ``integration`` tests succeeded OR were skipped (skipped is legitimate: the
     job is skipped on pull_request — the unit tier is the PR signal — and when
     the connector ships no integration suite), AND
@@ -15,6 +19,14 @@ Gate passes iff:
     *failed* discovery means e2e was requested but no suites were found), AND
   * the e2e matrix succeeded OR was skipped (matrix aggregate is success only
     if every leg passed).
+
+Note the asymmetry with e2e: ``discover-e2e`` *fails* on count=0 (it only runs
+when e2e was explicitly requested, so zero suites is a misconfig), which is why
+``discover-e2e == success and e2e == skipped`` is an anomaly. ``detect-
+integration`` *succeeds* on count=0 (a connector with no integration suite is
+legitimate) and ``integration`` then skips cleanly, so there is no analogous
+``detect-integration == success and integration == skipped`` check — that pair
+is the normal no-suite path.
 
 It emits GitHub Actions outputs (``passed`` + per-row/overall status strings)
 and, when failing, ``::error::`` annotations. It does NOT exit non-zero — the
@@ -34,11 +46,22 @@ import sys
 _OK_OPTIONAL = ("success", "skipped")
 
 
-def evaluate(unit: str, integration: str, discover_e2e: str, e2e: str) -> list[str]:
+def evaluate(
+    unit: str, integration: str, detect_integration: str, discover_e2e: str, e2e: str
+) -> list[str]:
     """Return human-readable failure reasons (empty ⇒ the gate passes)."""
     errors: list[str] = []
     if unit != "success":
         errors.append(f"unit tests did not succeed (result={unit})")
+    # detect-integration gates the integration job's `if`. A *failure* there
+    # (checkout/glob flake) drops integration to a skip, which the check below
+    # would read as a legitimate pass — so a failed detection must fail the gate
+    # here, exactly as a failed discover-e2e does. skipped (pull_request) and
+    # success (suite present or not) are both valid.
+    if detect_integration not in _OK_OPTIONAL:
+        errors.append(
+            f"integration-suite detection did not succeed (result={detect_integration})"
+        )
     # Integration is optional-by-skip: the job is intentionally skipped on
     # pull_request and when the connector has no integration suite. Any result
     # other than success/skipped (failure, cancelled, timed_out) fails the gate.
@@ -67,7 +90,12 @@ def _unit_status(unit: str) -> str:
     return "❌ Failed"
 
 
-def _integration_status(integration: str) -> str:
+def _integration_status(integration: str, detect_integration: str) -> str:
+    # A detection failure drops integration to a skip; surface that as a failure
+    # rather than the benign "skipped" string, so the display never claims the
+    # tier was cleanly skipped when detection actually broke.
+    if detect_integration not in _OK_OPTIONAL:
+        return "❌ Integration-suite detection failed"
     if integration == "success":
         return "✅ Passed"
     if integration == "skipped":
@@ -89,13 +117,15 @@ def _e2e_status(discover_e2e: str, e2e: str) -> str:
     return "❌ Failed"
 
 
-def render(unit: str, integration: str, discover_e2e: str, e2e: str) -> dict[str, str]:
+def render(
+    unit: str, integration: str, detect_integration: str, discover_e2e: str, e2e: str
+) -> dict[str, str]:
     """Compute the gate's outputs: pass/fail + the display status strings."""
-    errors = evaluate(unit, integration, discover_e2e, e2e)
+    errors = evaluate(unit, integration, detect_integration, discover_e2e, e2e)
     return {
         "passed": "true" if not errors else "false",
         "unit-status": _unit_status(unit),
-        "integration-status": _integration_status(integration),
+        "integration-status": _integration_status(integration, detect_integration),
         "e2e-status": _e2e_status(discover_e2e, e2e),
         "overall-status": "✅ All passed" if not errors else "❌ Some failed",
     }
@@ -106,6 +136,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--unit", required=True, help="needs.unit.result")
     parser.add_argument("--integration", required=True, help="needs.integration.result")
     parser.add_argument(
+        "--detect-integration",
+        required=True,
+        help="needs.detect-integration.result",
+    )
+    parser.add_argument(
         "--discover-e2e", required=True, help="needs.discover-e2e.result"
     )
     parser.add_argument("--e2e", required=True, help="needs.e2e.result")
@@ -113,11 +148,21 @@ def main(argv: list[str] | None = None) -> int:
 
     # Annotate each failure reason (shows on the gate step regardless of the
     # zero exit; the job's enforce step turns `passed=false` into a red check).
-    for reason in evaluate(args.unit, args.integration, args.discover_e2e, args.e2e):
+    for reason in evaluate(
+        args.unit,
+        args.integration,
+        args.detect_integration,
+        args.discover_e2e,
+        args.e2e,
+    ):
         print(f"::error::{reason}", file=sys.stderr)
 
     for key, value in render(
-        args.unit, args.integration, args.discover_e2e, args.e2e
+        args.unit,
+        args.integration,
+        args.detect_integration,
+        args.discover_e2e,
+        args.e2e,
     ).items():
         print(f"{key}={value}")
     return 0

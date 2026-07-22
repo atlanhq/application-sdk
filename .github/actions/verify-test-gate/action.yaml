@@ -17,6 +17,12 @@ inputs:
       pass: the job is skipped on pull_request and when the connector has no
       integration suite.
     required: true
+  detect-integration-result:
+    description: |
+      needs.detect-integration.result (the suite-detection job gating the
+      integration tier). "skipped" (pull_request) and "success" are passes; a
+      "failure" must fail the gate rather than silently skip integration.
+    required: true
   discover-e2e-result:
     description: needs.discover-e2e.result (skipped = e2e not requested).
     required: true
@@ -51,6 +57,7 @@ runs:
       env:
         UNIT_RESULT: ${{ inputs.unit-result }}
         INTEGRATION_RESULT: ${{ inputs.integration-result }}
+        DETECT_INTEGRATION_RESULT: ${{ inputs.detect-integration-result }}
         DISCOVER_E2E_RESULT: ${{ inputs.discover-e2e-result }}
         E2E_RESULT: ${{ inputs.e2e-result }}
       run: |
@@ -58,5 +65,6 @@ runs:
         python3 "${{ github.action_path }}/verify_test_gate.py" \
           --unit "$UNIT_RESULT" \
           --integration "$INTEGRATION_RESULT" \
+          --detect-integration "$DETECT_INTEGRATION_RESULT" \
           --discover-e2e "$DISCOVER_E2E_RESULT" \
           --e2e "$E2E_RESULT" >> "$GITHUB_OUTPUT"
