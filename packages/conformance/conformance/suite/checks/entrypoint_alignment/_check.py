@@ -107,8 +107,68 @@ def check_p016(
             )
         )
 
-    # ── Single-entry-point mode: require at most 1 @entrypoint in code ────────
+    # ── Duplicate wire names in code (any mode) ──────────────────────────────
+    # Runs before the mode dispatch: single mode now legitimately hosts more
+    # than one @entrypoint (route/card split), so two methods sharing one
+    # name= must be caught here too, not only in multi mode. frozenset would
+    # otherwise collapse the duplicates silently. The SDK also raises at
+    # registration time, so this is defense-in-depth.
+    name_counts = Counter(ep.name for ep in code.entrypoints)
+    for ep in code.entrypoints:
+        if name_counts[ep.name] > 1:
+            findings.append(
+                make_finding(
+                    filename=ep.filename,
+                    rule_id=_RULE_ID,
+                    node=ep.node,
+                    message=(
+                        f"Entry point '{ep.name}' is registered by more than one "
+                        f"@entrypoint-decorated method ({name_counts[ep.name]} methods). "
+                        "The SDK raises at registration time, but the duplicate must be "
+                        "resolved: give each method a unique name= argument."
+                    ),
+                    directives=directives_by_file.get(ep.filename, _empty_directives()),
+                )
+            )
+    if any(c > 1 for c in name_counts.values()):
+        return findings
+
+    # ── Single-entry-point mode ──────────────────────────────────────────────
     if contract.mode == "single":
+        routes = contract.routes
+        if routes:
+            # Route/card split (BLDX-1342): a secondary @entrypoint is valid when
+            # the DAG declares it as a route (workflow_type "<app>:<wire>"), even
+            # though the contract stays single-generated-tree (no bundle subdirs).
+            # Flag only a code @entrypoint that is NOT a declared route — genuine
+            # drift: an entry point in code the manifest never routes to.
+            for ep in code.entrypoints:
+                if ep.name in routes:
+                    continue
+                route_list = ", ".join(sorted(routes))
+                findings.append(
+                    make_finding(
+                        filename=ep.filename,
+                        rule_id=_RULE_ID,
+                        node=ep.node,
+                        message=(
+                            f"Entry point '{ep.name}' is defined in code but is not "
+                            "declared as a route in the manifest DAG "
+                            f"(declared routes: {route_list}). Declare it in "
+                            "contract/app.pkl (a routing endpoint via the route/card "
+                            "split) and re-run pkl eval, or remove the @entrypoint. "
+                            'Pin the wire name with @entrypoint(name="<route-name>") '
+                            "if it differs."
+                        ),
+                        directives=directives_by_file.get(
+                            ep.filename, _empty_directives()
+                        ),
+                    )
+                )
+            return findings
+
+        # Legacy single-mode manifest with no "<app>:<wire>" workflow_type routes
+        # to key on → fall back to the original "at most one @entrypoint" rule.
         if len(code.entrypoints) > 1:
             # Anchor to the second entry point (the first extra one).
             extra = code.entrypoints[1]
@@ -130,30 +190,6 @@ def check_p016(
                     ),
                 )
             )
-        return findings
-
-    # ── Duplicate wire names in code (any mode) ──────────────────────────────
-    # frozenset collapses duplicates silently; catch them here before the
-    # set-equality check so two methods registering the same name both produce
-    # a finding rather than neutralising each other.
-    name_counts = Counter(ep.name for ep in code.entrypoints)
-    for ep in code.entrypoints:
-        if name_counts[ep.name] > 1:
-            findings.append(
-                make_finding(
-                    filename=ep.filename,
-                    rule_id=_RULE_ID,
-                    node=ep.node,
-                    message=(
-                        f"Entry point '{ep.name}' is registered by more than one "
-                        f"@entrypoint-decorated method ({name_counts[ep.name]} methods). "
-                        "The SDK raises at registration time, but the duplicate must be "
-                        "resolved: give each method a unique name= argument."
-                    ),
-                    directives=directives_by_file.get(ep.filename, _empty_directives()),
-                )
-            )
-    if any(c > 1 for c in name_counts.values()):
         return findings
 
     # ── Multi-entry-point mode: exact set equality ────────────────────────────
