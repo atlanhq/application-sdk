@@ -30,9 +30,10 @@ reflects the current contract.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,48 @@ class ContractEntrypointScan:
 
     mode: Literal["multi", "single", "absent"]
     """How the generated tree is structured."""
+
+    routes: frozenset[str] = field(default_factory=frozenset)
+    """Entry-point wire names declared as DAG **routes** in the single-mode
+    ``manifest.json`` — i.e. any ``workflow_type`` of the form
+    ``"<app>:<wire-name>"`` in the DAG.  A route-declared secondary entry point
+    (BLDX-1342 route/card split) is a first-class shape: one marketplace card
+    plus additional ``@entrypoint``\\ s the DAG invokes by ``workflow_type``,
+    without per-entry-point bundle subdirs.  Empty in ``multi``/``absent`` modes
+    and for older single-mode manifests that predate the ``<app>:<wire>``
+    ``workflow_type`` convention.
+    """
+
+
+def _routes_from_manifest(manifest_path: Path) -> frozenset[str]:
+    """Collect entry-point wire names declared as DAG routes in a manifest.
+
+    Walks the manifest JSON and returns the wire name of every
+    ``workflow_type`` of the form ``"<app>:<wire-name>"`` (the part after the
+    colon).  Platform/other-app nodes without the ``<app>:`` convention (e.g.
+    ``"PublishWorkflow"``) carry no colon and are ignored, so this yields only
+    this app's own DAG-routed entry points.
+    """
+    try:
+        data: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return frozenset()
+
+    wire_names: set[str] = set()
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            wt = node.get("workflow_type")
+            if isinstance(wt, str) and ":" in wt:
+                wire_names.add(wt.split(":", 1)[1])
+            for value in node.values():
+                _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(data)
+    return frozenset(wire_names)
 
 
 def scan_contract(root: Path) -> ContractEntrypointScan:
@@ -79,8 +122,13 @@ def scan_contract(root: Path) -> ContractEntrypointScan:
         return ContractEntrypointScan(names=frozenset(ep_names), mode="multi")
 
     # Single-EP: a manifest.json at the root of app/generated/
-    if (generated / "manifest.json").is_file():
-        return ContractEntrypointScan(names=frozenset(), mode="single")
+    single_manifest = generated / "manifest.json"
+    if single_manifest.is_file():
+        return ContractEntrypointScan(
+            names=frozenset(),
+            mode="single",
+            routes=_routes_from_manifest(single_manifest),
+        )
 
     # app/generated/ exists but contains no manifest.json anywhere — treat as absent
     # (e.g. a partially scaffolded repo that hasn't been generated yet).

@@ -517,9 +517,13 @@ workaround (BLDX-1425).
 `manifest.json`): the set of `@entrypoint` wire names must exactly equal the set of
 subdir names.
 
-* **Single-entry-point apps** (root `app/generated/manifest.json`, no subdirs): at most
-one `@entrypoint` is permitted in code.  The name is not constrained — the single entry
-point is the implicit default.
+* **Single-entry-point apps** (root `app/generated/manifest.json`, no subdirs): every
+code `@entrypoint` must be declared as a DAG route — a `workflow_type` of the form
+`"<app>:<wire-name>"` in the manifest DAG (the BLDX-1342 route/card split: one
+marketplace card plus additional DAG-invoked routes, without per-entry-point bundle
+subdirs). A code `@entrypoint` the DAG never routes to is flagged. When the manifest
+declares no such routes (legacy), the check falls back to permitting at most one
+`@entrypoint`.
 
 * **Non-literal `name=`:** a `@entrypoint(name=variable)` that cannot be statically
 resolved is flagged as unverifiable.

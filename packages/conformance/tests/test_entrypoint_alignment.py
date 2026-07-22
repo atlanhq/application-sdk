@@ -486,3 +486,90 @@ def test_p016_aliased_entrypoint_import(tmp_path: Path) -> None:
     }
     findings = _run(tmp_path, py, ["crawler"])
     assert _p016_ids(findings) == []
+
+
+# ---------------------------------------------------------------------------
+# Single-mode route/card split (BLDX-1342): DAG-declared secondary entrypoints
+# ---------------------------------------------------------------------------
+
+
+def _write_single_manifest_with_routes(
+    tmp_path: Path, workflow_types: list[str]
+) -> None:
+    """Write app/generated/manifest.json (single mode) whose DAG declares the
+    given ``workflow_type`` values (``"<app>:<wire>"`` for routes)."""
+    import json
+
+    gen = tmp_path / "app" / "generated"
+    gen.mkdir(parents=True)
+    dag = {f"node{i}": {"workflow_type": wt} for i, wt in enumerate(workflow_types)}
+    (gen / "manifest.json").write_text(json.dumps({"dag": dag}))
+
+
+def test_p016_single_mode_route_declared_secondary_entrypoint_ok(
+    tmp_path: Path,
+) -> None:
+    """Two @entrypoints, both declared as DAG routes → no finding (BLDX-1342)."""
+    _write_single_manifest_with_routes(
+        tmp_path,
+        ["app:extract-metadata", "app:extract-lineage", "PublishWorkflow"],
+    )
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                class MyApp(App):
+                    @entrypoint(name="extract-metadata")
+                    async def extract_metadata(self, input: Input) -> Output: ...
+                    @entrypoint(name="extract-lineage")
+                    async def extract_lineage(self, input: Input) -> Output: ...
+            """)
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    assert _p016_ids(findings) == []
+
+
+def test_p016_single_mode_unrouted_code_entrypoint_flags(tmp_path: Path) -> None:
+    """A code @entrypoint that the DAG never routes to is still flagged."""
+    _write_single_manifest_with_routes(tmp_path, ["app:extract-metadata"])
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                class MyApp(App):
+                    @entrypoint(name="extract-metadata")
+                    async def extract_metadata(self, input: Input) -> Output: ...
+                    @entrypoint(name="rogue")
+                    async def rogue(self, input: Input) -> Output: ...
+            """)
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    msgs = [f.message for f in findings if f.rule_id == "P016"]
+    assert len(msgs) == 1 and "rogue" in msgs[0]
+
+
+def test_p016_single_mode_legacy_no_routes_still_enforces_max_one(
+    tmp_path: Path,
+) -> None:
+    """Legacy single manifest with no '<app>:<wire>' routes → max-1 fallback holds."""
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                class MyApp(App):
+                    @entrypoint(name="a")
+                    async def a(self, input: Input) -> Output: ...
+                    @entrypoint(name="b")
+                    async def b(self, input: Input) -> Output: ...
+            """)
+        },
+    )
+    # "single" shape writes {"dag": {}} → no routes
+    _write_generated(tmp_path, "single")
+    findings = scan_all(paths, tmp_path)
+    assert len(_p016_ids(findings)) == 1

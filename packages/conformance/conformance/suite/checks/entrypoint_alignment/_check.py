@@ -107,8 +107,42 @@ def check_p016(
             )
         )
 
-    # ── Single-entry-point mode: require at most 1 @entrypoint in code ────────
+    # ── Single-entry-point mode ──────────────────────────────────────────────
     if contract.mode == "single":
+        routes = contract.routes
+        if routes:
+            # Route/card split (BLDX-1342): a secondary @entrypoint is valid when
+            # the DAG declares it as a route (workflow_type "<app>:<wire>"), even
+            # though the contract stays single-generated-tree (no bundle subdirs).
+            # Flag only a code @entrypoint that is NOT a declared route — genuine
+            # drift: an entry point in code the manifest never routes to.
+            for ep in code.entrypoints:
+                if ep.name in routes:
+                    continue
+                route_list = ", ".join(sorted(routes))
+                findings.append(
+                    make_finding(
+                        filename=ep.filename,
+                        rule_id=_RULE_ID,
+                        node=ep.node,
+                        message=(
+                            f"Entry point '{ep.name}' is defined in code but is not "
+                            "declared as a route in the manifest DAG "
+                            f"(declared routes: {route_list}). Declare it in "
+                            "contract/app.pkl (a routing endpoint via the route/card "
+                            "split) and re-run pkl eval, or remove the @entrypoint. "
+                            'Pin the wire name with @entrypoint(name="<route-name>") '
+                            "if it differs."
+                        ),
+                        directives=directives_by_file.get(
+                            ep.filename, _empty_directives()
+                        ),
+                    )
+                )
+            return findings
+
+        # Legacy single-mode manifest with no "<app>:<wire>" workflow_type routes
+        # to key on → fall back to the original "at most one @entrypoint" rule.
         if len(code.entrypoints) > 1:
             # Anchor to the second entry point (the first extra one).
             extra = code.entrypoints[1]
