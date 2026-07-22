@@ -86,3 +86,34 @@ jobs:
       # No GitHub Release is created: conformance-v* releases would interleave
       # with SDK v* releases on the repo's releases page, which is confusing.
       # The annotated tag, PyPI publish, and CHANGELOG.md are the authoritative record.
+
+  fan-out:
+    # After a conformance release, trigger the self-hosted Renovate runner so
+    # consumers pick up the new atlan-application-sdk-conformance version within
+    # minutes rather than waiting for the next scheduled (4-hourly) run. Consumers
+    # pin conformance in-range, so this lands as an auto-merging lockFileMaintenance
+    # PR. Skipped automatically when `publish` is skipped (non-release PR) or fails.
+    name: Fan out Renovate to consumers
+    needs: [publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+      - name: Trigger the self-hosted Renovate runner
+        # No dry_run/repos overrides: inherits renovate.yaml's live defaults (full
+        # discovery, dry_run=null). Soft-fail so a fan-out hiccup never fails the
+        # release — the 4-hourly schedule is the backstop.
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+        run: |
+          gh workflow run renovate.yaml --repo atlanhq/application-sdk \
+          || echo "::warning::Could not trigger renovate.yaml — consumers will update on the next scheduled run."
