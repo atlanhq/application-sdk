@@ -5,6 +5,13 @@
     "github>atlanhq/application-sdk//renovate-config/default.json"
   ],
   "semanticCommitType": "chore",
+  "github-actions": {
+    "description": "Also track SHA-pinned third-party actions in files outside the default github-actions fileMatch: the conformance bootstrap templates shipped in the package, and the .github/workflow-templates/ starter workflows (Renovate's default anchor for the latter is root-level workflow-templates/, so the nested copies are not matched by default). Scoped to those dirs so it never touches the .md doc examples or the actions_pinning test fixtures. Repo-local (not the fleet preset) because packages/conformance/ is SDK-specific.",
+    "managerFilePatterns": [
+      "/^packages/conformance/conformance/bootstrap/templates/.+\\.ya?ml$/",
+      "/^\\.github/workflow-templates/.+\\.ya?ml$/"
+    ]
+  },
   "ignorePaths": [
     "contract-toolkit/examples/**",
     "requirements.txt"
