@@ -146,8 +146,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # (BLDX-1499).
     # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
-    # P029/P030: SDR-readiness — only apps declare self_deployed_runtime; the SDK
-    # itself never does, so these are APP-scoped (DISTR-752).
+    # P029/P030 + P037/P038/P039: SDR-readiness — only apps declare
+    # self_deployed_runtime; the SDK itself never does, so these are APP-scoped.
     # P032–P035: preflight-gate authoring — only apps register @task activities,
     # define Handler.preflight_check, construct PreflightCheck results, and declare
     # the entrypoint Input contracts the gate rebuilds metadata from; the SDK
@@ -249,6 +249,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P033",
         "P034",
         "P035",
+        "P037",
+        "P038",
+        "P039",
         "T002",
         "T003",
         "T004",
@@ -403,6 +406,14 @@ def test_catalog_p_series_present() -> None:
     P032–P035 are the preflight-gate rules — reserved gate-name collision,
     duplicate in-workflow preflight, untyped check failures, and metadata /
     input-contract parity (BLDX-1545).
+    P036 is HandRolledProcessIsolation — a bare ProcessPoolExecutor /
+    multiprocessing child instead of the run_fault_isolated() / run_best_effort()
+    seam (CNCT-85).
+    P037 is SdrAgentJsonNotConsumed (credentials resolved by GUID only, agent_json
+    ignored), P038 is SdrArtifactMisrooted (object-store prefix rooted from an
+    empty-defaulting input field), and P039 is SdrAgentJsonDroppedByInputContract
+    (the generated extract-input contract silently drops the forwarded agent_json)
+    — the follow-on SDR-readiness rules.
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -444,6 +455,10 @@ def test_catalog_p_series_present() -> None:
         "P033",
         "P034",
         "P035",
+        "P036",
+        "P037",
+        "P038",
+        "P039",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

@@ -50,6 +50,22 @@ jobs:
           fail-under: "85"
           python-version: ${{ matrix.python-version }}
 
+  python-version-guard:
+    name: Container Python is in the unit matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Fail loudly if the container's Python (the Dockerfile golden tag) ever
+      # drifts outside the versions the unit matrix above exercises — otherwise
+      # the shipped interpreter could go untested. The matrix list is repeated
+      # here because GitHub Actions cannot share a `strategy.matrix` literal
+      # across jobs; keep it in sync with the `unit` job above.
+      - name: Assert container Python is covered by the unit matrix
+        run: |
+          VERSION=$(python3 .github/scripts/container_python_version.py print-version)
+          python3 .github/scripts/container_python_version.py check-matrix --expected "$VERSION" --matrix "3.11,3.12,3.13,3.14"
+
   script-tests:
     name: Script Tests (bats)
     runs-on: ubuntu-latest
@@ -68,7 +84,18 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Integration exercises real worker/decode code paths, so it must run on
+      # the SAME interpreter the runtime container ships — the golden base tag
+      # in the Dockerfile — not the setup-deps default (3.11). A concurrent-
+      # decode segfault (CNCT-85) reproduces only on the container's Python;
+      # running integration on a different minor would silently miss that class
+      # of bug. Read from the one place the version is declared (the Dockerfile).
+      - name: Resolve container Python version
+        id: pyver
+        run: echo "version=$(python3 .github/scripts/container_python_version.py print-version)" >> "$GITHUB_OUTPUT"
       - uses: "./.github/actions/setup-deps"
+        with:
+          python-version: ${{ steps.pyver.outputs.version }}
 
       # Temporal and Dapr are provisioned in-process by the SDK's own embedded
       # dev helpers (application_sdk.dev.embedded_runtime / embedded_dapr) — the

@@ -160,47 +160,25 @@ def _validation_matrix_json(report: "AssetValidationReport") -> str:
     return orjson.dumps(rows).decode()
 
 
-def _validate_transformed_assets_blocking(
-    local_path: str,
-) -> "AssetValidationReport | None":
-    """Blocking transformed-asset validation — runs off the event loop in a thread.
+def _resolve_transformed_target(local_path: str) -> "Path | None":
+    """Locate the ``transformed/`` asset subtree under ``local_path``, if any.
 
-    Returns the report, or ``None`` when there is nothing to validate (flag off, or
-    ``local_path`` is not a ``transformed/`` asset subtree — e.g. a raw upload).
-    All the work here (filesystem walk, msgspec decode, RocksDB spill) is
-    synchronous and CPU/IO-bound, which is why the async wrapper offloads it.
+    Returns the path to validate, or ``None`` when there is nothing to validate
+    (``local_path`` is not a ``transformed/`` asset subtree — e.g. a raw upload).
     """
-    from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
-        VALIDATE_ASSETS_ON_UPLOAD,
-    )
-
-    if not VALIDATE_ASSETS_ON_UPLOAD or not local_path:
+    if not local_path:
         return None
-
-    from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
-        validate_transformed_dir,
-    )
-
     root = Path(local_path)
     if root.is_dir():
         transformed = root / "transformed"
         if transformed.is_dir():
-            target = transformed
-        elif "transformed" in root.parts:
-            target = root
-        else:
-            return None
-    elif "transformed" in root.parts:
-        target = root
-    else:
+            return transformed
+        if "transformed" in root.parts:
+            return root
         return None
-
-    # Referential (orphan) integrity runs by default on the upload hook: extracts
-    # and transforms are full by design by default, so every referenced parent is
-    # present in the same batch and the orphan pass is accurate. It is warn-only
-    # (never blocks, never raises), so even on an atypical partial batch the worst
-    # case is a spurious warning, not a failed handoff.
-    return validate_transformed_dir(target)
+    if "transformed" in root.parts:
+        return root
+    return None
 
 
 async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) -> None:
@@ -221,39 +199,59 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     the scaffold must not break a real handoff — and it scans every record (no
     sampling) so the summary is accurate.
 
-    The scan is offloaded via :func:`application_sdk.execution.heartbeat.run_in_thread`
-    (the SDK's blocking-work escape hatch, ADR-0010) so it never blocks the event
-    loop or the activity's auto-heartbeat while a large batch is validated.
-    ``run_in_thread`` dispatches onto a dedicated ``sdk-blocking-*`` pool rather
-    than the shared default executor that Temporal's activity scheduling also
-    uses; sharing that pool risks a catastrophic worker deadlock (enforced by
-    conformance rule P031).
+    The scan runs via
+    :func:`application_sdk.execution.heartbeat.run_best_effort`, for two reasons.
+    It keeps the event loop and the activity's auto-heartbeat free while a large
+    batch is validated (ADR-0010). More importantly, it makes the never-raises
+    contract hold even against *native* faults: the decode exercises third-party
+    C extensions (msgspec via pyatlan_v9), and a segfault there is not a Python
+    exception — in-process it would kill the whole Temporal worker (as one did,
+    CNCT-85). ``run_best_effort`` isolates the scan in a child process, so a
+    crash kills only the child; it then logs the warning and the handoff
+    proceeds. The timeout bounds the scan for the same reason — a hung
+    validation must not stall an upload forever.
+
+    Referential (orphan) integrity runs by default on this hook: extracts and
+    transforms are full by design by default, so every referenced parent is
+    present in the same batch and the orphan pass is accurate. Even on an
+    atypical partial batch the worst case is a spurious warning.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
         VALIDATE_ASSETS_ON_UPLOAD,
+        VALIDATE_ASSETS_TIMEOUT_SECONDS,
     )
 
-    # Read the flag before the thread hop so a disabled feature costs nothing —
-    # no thread-pool dispatch on every upload. The blocking scan re-checks it too.
+    # Cheap checks stay in-parent so a disabled feature or a raw upload never
+    # pays for a child-process dispatch.
     if not VALIDATE_ASSETS_ON_UPLOAD:
+        return
+    target = _resolve_transformed_target(local_path)
+    if target is None:
         return
 
     from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — deferred: app.base is imported by execution (circular)
-        run_in_thread,
+        run_best_effort,
+    )
+    from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
+        validate_transformed_dir,
     )
 
-    try:
-        report = await run_in_thread(_validate_transformed_assets_blocking, local_path)
-    except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
-        _task_logger.warning(
-            "Transformed-asset validation skipped due to an unexpected error",
-            exc_info=True,
-        )
-        return
+    # Best-effort: run_best_effort isolates the scan in a child process and, on
+    # any native crash / timeout / error, logs a warning and returns None — the
+    # upload is never blocked, failed, or crashed by the validation scaffold.
+    report = await run_best_effort(
+        validate_transformed_dir,
+        str(target),
+        label="Transformed-asset validation",
+        logger=_task_logger,
+        timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
+    )
 
     if report is None:
-        # Nothing to validate (flag off, or not a transformed/ subtree) — no
-        # event, no denominator noise for uploads that never ran validation.
+        # run_best_effort swallowed a native crash / timeout / error (it already
+        # logged a warning). The "nothing to validate" cases (flag off, not a
+        # transformed/ subtree) already returned above, so reaching here with
+        # None means the scan itself failed — no counts to emit.
         return
 
     # Emit the structured outcome on every validated upload (clean + flagged) so
@@ -1136,7 +1134,8 @@ class App(ABC):
 
         # BLDX-1555 defense-in-depth: validate transformed assets against the
         # pyatlan_v9 backbone before the handoff. Warn-only, best-effort, and
-        # offloaded to a worker thread so it never blocks the event loop.
+        # run in an isolated child process (CNCT-85) so a native decode fault
+        # kills only the child and never blocks or crashes the event loop.
         await _warn_on_invalid_transformed_assets(input.local_path, self._app_name)
 
         deployment = self.context.storage

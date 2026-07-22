@@ -55,6 +55,7 @@ from application_sdk.testing.e2e._errors import (
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
     AtlanApiTimeoutError,
+    DAGProgressStalledError,
     NoWorkerOnTaskQueueError,
 )
 
@@ -106,6 +107,7 @@ _NODE_GLYPHS = {
     "Cancelled": "🚫",
     "TimedOut": "⏰",
     "Skipped": "⏭️",
+    "Omitted": "⊘",
 }
 _RUN_GLYPHS = {
     "Succeeded": "✅",
@@ -116,6 +118,53 @@ _RUN_GLYPHS = {
     "TimedOut": "⏰",
     "Skipped": "⏭️",
 }
+
+
+def _is_credential_name_conflict(status: int, body: dict[str, Any] | str) -> bool:
+    """True iff *body* is AE's unique-constraint violation on the credential name.
+
+    AE (Heracles) creates the submit credential non-idempotently, keyed on a
+    UNIQUE ``credentials_name_key``. A submit retried after a transient (a 5xx,
+    or a timeout that AE actually committed) re-sends the same credential name
+    and trips this constraint as an HTTP 400 — recoverable by rotating the name
+    (see :func:`_rotate_submit_credential_name`) and retrying, rather than
+    surfacing as a hard failure.
+
+    NOTE: detection is a substring match for the literal constraint name
+    ``credentials_name_key`` in AE's error body. If AE ever renames that
+    constraint the match silently stops firing and the conflict resurfaces as a
+    hard failure — safe (never a false retry), but revisit this if AE's error
+    shape changes.
+    """
+    if status < 400:
+        return False
+    text = body if isinstance(body, str) else repr(body)
+    return "credentials_name_key" in text
+
+
+def _rotate_submit_credential_name(body: dict[str, Any] | None) -> None:
+    """Give the submit payload's credential a fresh name, in place.
+
+    Invoked before each submit retry so the re-sent request can't collide on
+    ``credentials_name_key``. No-op when the payload carries no credential
+    (public sources). AE resolves ``{{credentialGuid}}`` to whichever credential
+    it creates, so any unique name stays self-consistent. Names rotate as
+    ``<name>-retry1``, ``-retry2``, … so orphans are traceable to the run.
+    """
+    if not isinstance(body, dict):
+        return
+    items = body.get("payload")
+    if not isinstance(items, list) or not items:
+        return
+    cred = items[0]
+    if not (isinstance(cred, dict) and isinstance(cred.get("body"), dict)):
+        return
+    name = cred["body"].get("name")
+    if not name:
+        return
+    base, _, tail = str(name).rpartition("-retry")
+    n = int(tail) + 1 if base and tail.isdigit() else 1
+    cred["body"]["name"] = f"{base or name}-retry{n}"
 
 
 def _node_glyph(node) -> str:
@@ -166,10 +215,17 @@ class DAGNodeStatus(str, Enum):
     FAILED = "Failed"
     ERROR = "Error"
     CANCELLED = "Cancelled"
-    # AE emits this when a node is bypassed (e.g. an opted-out DAG leg, or
-    # every downstream node once an upstream one fails). Terminal but not a
-    # success — a skipped node will not run without re-submission.
+    # AE reports Skipped/Omitted for DAG nodes it intentionally did not run —
+    # e.g. an opted-out DAG leg, the qi + lineage nodes when a crawl runs with
+    # lineage disabled, or every downstream node once an upstream one fails.
+    # These are terminal and NOT failures; the skip-tolerant gate
+    # (BaseE2ETest._core_dag_ok) treats them as acceptable when lineage isn't
+    # expected. Kept as explicit members so they no longer fall through
+    # _safe_node_status to PENDING (which would hang the poll's "not started"
+    # reasoning and false-fail all_nodes_succeeded). A skipped node will not run
+    # without re-submission.
     SKIPPED = "Skipped"
+    OMITTED = "Omitted"
 
     @property
     def is_terminal(self) -> bool:
@@ -180,12 +236,18 @@ class DAGNodeStatus(str, Enum):
             DAGNodeStatus.ERROR,
             DAGNodeStatus.CANCELLED,
             DAGNodeStatus.SKIPPED,
+            DAGNodeStatus.OMITTED,
         }
 
     @property
     def is_success(self) -> bool:
         """True when the node completed without error."""
         return self is DAGNodeStatus.SUCCEEDED
+
+    @property
+    def is_skipped(self) -> bool:
+        """True when AE intentionally did not run the node (not a failure)."""
+        return self in {DAGNodeStatus.SKIPPED, DAGNodeStatus.OMITTED}
 
 
 class DAGRunStatus(str, Enum):
@@ -386,6 +448,7 @@ class AEWorkflowClient:
         sleep_seconds: int,
         retryable: Callable[[int, dict[str, Any] | str], bool],
         op_name: str,
+        mutate_before_retry: Callable[[dict[str, Any] | None], None] | None = None,
         retry_network_errors: bool = True,
     ) -> tuple[int, dict[str, Any] | str]:
         """POST *path* with unified timeout + retry, returning ``(status, body)``.
@@ -405,6 +468,10 @@ class AEWorkflowClient:
                 and 2xx responses with an unexpected body shape.  Return
                 False to accept the response and return it to the caller.
             op_name: Human-readable label used in log / error messages.
+            mutate_before_retry: Optional callback invoked with ``body`` just
+                before each retry (mutates it in place). Lets a caller make a
+                retry idempotent — e.g. rotate a non-idempotent credential name
+                so a re-sent submit can't collide on a unique constraint.
             retry_network_errors: When False, a network timeout is never
                 re-POSTed (nor re-issued at the ``_request`` layer) — required
                 for non-idempotent writes like submit, where a retry after the
@@ -431,6 +498,8 @@ class AEWorkflowClient:
                         sleep_seconds,
                         exc_info=True,
                     )
+                    if mutate_before_retry is not None:
+                        mutate_before_retry(body)
                     time.sleep(sleep_seconds)
                     continue
                 raise AtlanApiTimeoutError(
@@ -462,6 +531,8 @@ class AEWorkflowClient:
                     sleep_seconds,
                     resp_body,
                 )
+                if mutate_before_retry is not None:
+                    mutate_before_retry(body)
                 time.sleep(sleep_seconds)
                 continue
             break
@@ -595,6 +666,10 @@ class AEWorkflowClient:
         response shape is not officially documented; we look for
         ``run_id`` under either the top level or a nested ``data`` key.
 
+        Retries an AE ``credentials_name_key`` conflict, rotating the
+        credential name first so the re-sent submit doesn't collide (AE creates
+        the credential non-idempotently per attempt).
+
         Unlike the other write endpoints, a submit is **not idempotent**:
         re-issuing one AE already accepted spawns a duplicate run that AE marks
         ``Skipped`` and returns as a *fresh* run_id — so a blind retry makes the
@@ -615,8 +690,18 @@ class AEWorkflowClient:
             body=payload,
             total_attempts=retries + 1,
             sleep_seconds=retry_sleep_seconds,
-            retryable=lambda s, b: s >= 500 and not _is_already_active_run(s, b),
+            # Retry genuine 5xx (transient AE/Heracles errors) EXCEPT the
+            # already-active conflict, which main surfaces as terminal below.
+            # Also retry an AE ``credentials_name_key`` 400: AE creates the
+            # credential non-idempotently on each submit, so a retry after a
+            # committed transient would re-insert the same name and 400. Rotate
+            # the credential name before every retry so the re-sent submit can't
+            # collide. ``retry_network_errors=False`` keeps submit safe on an
+            # ambiguous timeout (AE may already have accepted it).
+            retryable=lambda s, b: (s >= 500 and not _is_already_active_run(s, b))
+            or _is_credential_name_conflict(s, b),
             op_name="submit_workflow",
+            mutate_before_retry=_rotate_submit_credential_name,
             retry_network_errors=False,
         )
         if _is_already_active_run(status, body):
@@ -689,6 +774,7 @@ class AEWorkflowClient:
         max_transient_failures: int = 5,
         stall_grace_seconds: int | None = None,
         stall_task_queue: str = "",
+        progress_stall_seconds: int | None = None,
     ) -> DAGRunResult:
         """Poll until the run reaches a terminal top-level status.
 
@@ -715,6 +801,18 @@ class AEWorkflowClient:
         no worker polls its task queue — hence the check is on node-level start,
         not the run status. ``stall_task_queue`` is included in the error
         message so the operator can see which queue had no worker.
+
+        Progress watchdog: when ``progress_stall_seconds`` is a positive int
+        (``None`` / ``<= 0`` disables it), the run fails fast if NO DAG node
+        changes state for that window *after* at least one node has started.
+        This catches a node that began but is wedged ``Running`` (e.g. an
+        extract stuck on a slow/failing upload) — the start-stall guard above
+        is a one-time latch and would miss it, so the harness would otherwise
+        poll the full ``timeout_seconds``. The window is deliberately wide
+        (well above a legitimately slow single node — lineage on deep queues
+        can sit ``Running`` for many minutes) so healthy runs never trip it;
+        it exists to turn an indefinite hang into a fast, self-terminating
+        failure with the last-seen node states, instead of a manual cancel.
         """
         elapsed = 0
         last_summary: str | None = None
@@ -722,6 +820,9 @@ class AEWorkflowClient:
         transient_streak = 0
         last_log_elapsed = 0  # seconds since the last info log fired
         any_node_started = False  # any node reached Running/terminal (stall guard)
+        last_progress_elapsed = (
+            0  # elapsed at the last node-state transition (progress watchdog)
+        )
         while elapsed < timeout_seconds:
             try:
                 result = self.get_native_status(run_id)
@@ -759,6 +860,10 @@ class AEWorkflowClient:
                 any_node_started = True
             summary = " ".join(_node_glyph(n) for n in result.nodes)
             run_glyph = _RUN_GLYPHS.get(result.status.value, "•")
+            # Any change in the node-glyph summary means at least one node
+            # changed state = forward progress; reset the watchdog clock.
+            if summary != last_summary:
+                last_progress_elapsed = elapsed
             # Log on every status change. Also emit a heartbeat every
             # ``_HEARTBEAT_SECONDS`` even when the status hasn't moved,
             # so long-running stages (lineage takes 2-5 min) don't look
@@ -807,6 +912,29 @@ class AEWorkflowClient:
                         "(atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}); a "
                         "common cause is a second e2e test class using a different "
                         "agent_name than the single worker the CI job started."
+                    ),
+                )
+            # Progress watchdog: a node started but the DAG hasn't changed
+            # state for the whole window -> wedged. Fail fast with the last
+            # node states instead of polling the full timeout (see docstring).
+            if (
+                progress_stall_seconds is not None
+                and progress_stall_seconds > 0
+                and any_node_started
+                and (elapsed - last_progress_elapsed) >= progress_stall_seconds
+            ):
+                node_states = (
+                    ", ".join(f"{n.name}={n.status.value}" for n in result.nodes)
+                    or "(no nodes)"
+                )
+                raise DAGProgressStalledError(
+                    message=(
+                        f"No DAG node changed state for {progress_stall_seconds}s for "
+                        f"run {run_id} (top-level status={result.status.value}; nodes: "
+                        f"{node_states}). A node started but is not progressing — most "
+                        "often wedged on a slow/failing step (e.g. extract stuck on an "
+                        f"object-store upload). Failing fast instead of polling the full "
+                        f"{timeout_seconds}s."
                     ),
                 )
             time.sleep(interval_seconds)

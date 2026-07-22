@@ -67,12 +67,30 @@ jobs:
         with:
           python-version: "3.14"
 
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.31"
+
       - name: Compute version, bump PklProject, update CHANGELOG
         id: versions
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: python .github/scripts/contract_toolkit_release.py
+
+      - name: Regenerate conformance toolkit baseline
+        # Reuse the conformance suite's own generator — the single source of truth
+        # for the baseline's parse + serialize — so the release PR clears its own
+        # K007/K008 drift gate (test_committed_baseline_matches_fresh_read). uvx runs
+        # it straight from the in-repo package, so nothing is added to this job's
+        # dependencies. --outfile targets the repo working copy (the CLI's default
+        # writes inside the ephemeral install); the Push step below git-adds it.
+        if: steps.versions.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          uvx --from ./packages/conformance atlan-application-sdk-conformance \
+            gen-toolkit-baseline --sdk-root . \
+            --outfile packages/conformance/conformance/data/toolkit_baseline.json
 
       - name: Sanity-build package
         if: steps.versions.outputs.skip != 'true'
@@ -90,7 +108,8 @@ jobs:
           git config --global user.email 'it@atlan.com'
 
           git checkout -b "${BUMP_BRANCH}"
-          git add contract-toolkit/src/PklProject contract-toolkit/CHANGELOG.md
+          git add contract-toolkit/src/PklProject contract-toolkit/CHANGELOG.md \
+            packages/conformance/conformance/data/toolkit_baseline.json
           git commit -m "chore(contract-toolkit): release v${new_version}"
           git push origin "${BUMP_BRANCH}" --force-with-lease
 

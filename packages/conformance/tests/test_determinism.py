@@ -384,11 +384,83 @@ def test_p031_suppression() -> None:
     assert len(findings) == 1 and findings[0].suppressed
 
 
+# ── P036 HandRolledProcessIsolation ───────────────────────────────────────────
+
+
+def test_p036_flags_process_pool_executor_dotted() -> None:
+    body = (
+        "import concurrent.futures\n"
+        "def f():\n"
+        "    return concurrent.futures.ProcessPoolExecutor(max_workers=1)\n"
+    )
+    assert len(_rule(body, "P036", header="")) == 1
+
+
+def test_p036_flags_process_pool_executor_aliased_import() -> None:
+    body = (
+        "from concurrent.futures import ProcessPoolExecutor as PPE\n"
+        "def f():\n"
+        "    return PPE()\n"
+    )
+    assert len(_rule(body, "P036", header="")) == 1
+
+
+def test_p036_flags_multiprocessing_process() -> None:
+    body = (
+        "import multiprocessing\n"
+        "def f(target):\n"
+        "    return multiprocessing.Process(target=target)\n"
+    )
+    assert len(_rule(body, "P036", header="")) == 1
+
+
+def test_p036_flags_multiprocessing_pool() -> None:
+    body = "import multiprocessing\ndef f():\n    return multiprocessing.Pool(2)\n"
+    assert len(_rule(body, "P036", header="")) == 1
+
+
+def test_p036_silent_on_thread_pool_executor() -> None:
+    # ThreadPoolExecutor is a thread pool, not a process — out of scope (P031
+    # governs shared-default-executor thread offload).
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "def f():\n"
+        "    return ThreadPoolExecutor()\n"
+    )
+    assert _rule(body, "P036", header="") == []
+
+
+def test_p036_exempts_heartbeat_module() -> None:
+    from conformance.suite.checks.determinism import scan_text as _scan_text
+
+    body = (
+        "import concurrent.futures\n"
+        "def f():\n"
+        "    return concurrent.futures.ProcessPoolExecutor()\n"
+    )
+    findings = [
+        f
+        for f in _scan_text(body, "application_sdk/execution/heartbeat.py")
+        if f.rule_id == "P036"
+    ]
+    assert findings == []
+
+
+def test_p036_suppression() -> None:
+    body = (
+        "from concurrent.futures import ProcessPoolExecutor\n"
+        "def f():\n"
+        "    return ProcessPoolExecutor()  # conformance: ignore[P036] cpu-bound, off-worker\n"
+    )
+    findings = _rule(body, "P036", header="")
+    assert len(findings) == 1 and findings[0].suppressed
+
+
 # ── catalog meta-tests ───────────────────────────────────────────────────────
 
 
 def test_new_rules_present_and_scoped_both() -> None:
-    for rid in ("P020", "P021", "P022", "P023", "P024", "P031"):
+    for rid in ("P020", "P021", "P022", "P023", "P024", "P031", "P036"):
         assert rid in CATALOG, f"{rid} missing from catalog"
         assert CATALOG[rid].scope is RuleScope.BOTH
         assert CATALOG[rid].rationale.strip(), f"{rid} needs a non-empty rationale"

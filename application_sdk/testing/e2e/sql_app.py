@@ -42,7 +42,10 @@ from application_sdk.testing.e2e.payload import (
     build_agent_json,
     build_seed_dag,
 )
-from application_sdk.testing.e2e.substitutions import SQLMustacheSubstitutions
+from application_sdk.testing.e2e.substitutions import (
+    MustacheSubstitutions,
+    SQLMustacheSubstitutions,
+)
 
 
 class SQLAppE2ETest(BaseE2ETest):
@@ -80,6 +83,18 @@ class SQLAppE2ETest(BaseE2ETest):
     # --- SQL-specific class attrs ------------------------------------
     include_filter: ClassVar[str] = '{"^def$":[".*"]}'
     exclude_filter: ClassVar[str] = "{}"
+
+    # SQL connectors that declare extra manifest mustache keys only have to point
+    # this at their own SQLMustacheSubstitutions subclass (typed fields carrying
+    # the connector's config defaults); the SQL fields below are filled here and
+    # the subclass's extra fields fall to their defaults — no
+    # _mustache_substitutions() override needed.
+    # Declared with the base's type (not the narrower SQL subclass) so the
+    # ClassVar override stays invariant-compatible for the type checker; the
+    # value is still the SQL subclass, which is a valid ``type[MustacheSubstitutions]``.
+    substitutions_class: ClassVar[type[MustacheSubstitutions]] = (
+        SQLMustacheSubstitutions
+    )
 
     # Used only when manifest_path == "" (legacy hand-crafted seed DAG).
     publish_task_queue: ClassVar[str] = "atlan-publish-production"
@@ -149,8 +164,13 @@ class SQLAppE2ETest(BaseE2ETest):
             admin_roles=(self._admin_role_guid,),
         )
 
-    def _mustache_substitutions(self) -> SQLMustacheSubstitutions:
-        """Build SQL-flavoured mustache subs from database + agent specs."""
+    def _mustache_substitutions(self) -> MustacheSubstitutions:
+        """Build SQL-flavoured mustache subs from database + agent specs.
+
+        Returns the base type (the runtime value is ``substitutions_class``,
+        an ``SQLMustacheSubstitutions`` or a connector subclass of it) so the
+        override stays signature-compatible with ``BaseE2ETest``.
+        """
         spec = self.connection_spec()
         connection_ref = ConnectionRef.model_validate(
             {"typeName": "Connection", "attributes": spec.attributes()}
@@ -164,7 +184,7 @@ class SQLAppE2ETest(BaseE2ETest):
             else None
         )
 
-        return SQLMustacheSubstitutions.model_validate(
+        return self.substitutions_class.model_validate(
             {
                 "connection": connection_ref,
                 "extraction_method": self.mode.value,
@@ -172,7 +192,7 @@ class SQLAppE2ETest(BaseE2ETest):
                 "include_filter": self.include_filter,
                 "exclude_filter": self.exclude_filter,
                 "exclude_table_regex": "",
-                "preflight_check": True,
+                "preflight_check": "true",
             }
         )
 

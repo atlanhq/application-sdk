@@ -1,0 +1,28 @@
+{
+  "meta": {
+    "version": "7.6.1",
+    "branch_coverage": true,
+    "show_contexts": false
+  },
+  "files": {
+    "app/main.py": {
+      "summary": {
+        "covered_lines": 86,
+        "num_statements": 100,
+        "percent_covered": 86.0
+      }
+    }
+  },
+  "totals": {
+    "covered_lines": 86,
+    "num_statements": 100,
+    "percent_covered": 86.0,
+    "percent_covered_display": "86",
+    "missing_lines": 14,
+    "excluded_lines": 3,
+    "num_branches": 40,
+    "num_partial_branches": 2,
+    "covered_branches": 31,
+    "missing_branches": 9
+  }
+}
