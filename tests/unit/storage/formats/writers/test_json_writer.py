@@ -194,3 +194,48 @@ async def test_write_chunk_handles_pandas_timestamp(tmp_path: Path) -> None:
         record = orjson.loads(f.read().strip())
     assert record["name"] == "a"
     assert "2024-01-01" in record["ts"]
+
+
+@pytest.mark.asyncio
+async def test_write_chunk_preserves_nested_object_structure(tmp_path: Path) -> None:
+    """Nested model objects must round-trip as JSON objects, not str(obj).
+
+    Regression: the Looker ``Dialect`` SDK model (and any object with __dict__)
+    was flattened to its string repr by the ``str(obj)`` fallback, corrupting
+    the record and crashing downstream path access ("dialect/name").
+    """
+    import dataclasses as _dc
+
+    import orjson
+    import pandas as pd
+
+    @_dc.dataclass
+    class Dialect:
+        name: str
+        label: str
+
+    class Plain:
+        def __init__(self) -> None:
+            self.name = "postgres"
+
+    writer = JsonFileWriter(path=str(tmp_path / "out"))
+    df = pd.DataFrame(
+        {
+            "conn": ["c1", "c2"],
+            "dialect": [Dialect(name="postgres", label="PostgreSQL"), Plain()],
+            "ts": [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-02")],
+        }
+    )
+    out_file = str(tmp_path / "out" / "chunk.json")
+    await writer._write_chunk(df, out_file)
+
+    with open(out_file, "rb") as f:
+        records = [orjson.loads(line) for line in f.read().splitlines() if line.strip()]
+
+    # dataclass -> nested object; "dialect/name" is now traversable
+    assert records[0]["dialect"] == {"name": "postgres", "label": "PostgreSQL"}
+    assert records[0]["dialect"]["name"] == "postgres"
+    # plain object with __dict__ -> nested object
+    assert records[1]["dialect"] == {"name": "postgres"}
+    # scalar datetime-like still stringified (unchanged behaviour)
+    assert isinstance(records[0]["ts"], str) and "2024-01-01" in records[0]["ts"]

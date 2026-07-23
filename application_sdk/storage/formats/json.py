@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import warnings
 from collections.abc import AsyncIterator
@@ -22,6 +23,34 @@ if TYPE_CHECKING:
 from application_sdk.storage.formats import Reader, Writer
 
 logger = get_logger(__name__)
+
+
+def default_json_serializer(obj: object) -> Any:
+    """orjson ``default=`` hook that preserves nested-object structure.
+
+    Use this as the ``default=`` argument to ``orjson.dumps`` anywhere records
+    may contain non-native objects (connector output writers, local JSONL
+    writes behind ``RollingFileWriter``/``FileReference``). It exists so every
+    connector shares ONE correct serializer instead of copy-pasting a bare
+    ``return str(obj)`` fallback.
+
+    Why not ``str(obj)``: flattening a nested model — e.g. a Looker ``Dialect``
+    SDK object — to its string repr silently corrupts the record and later
+    crashes path access such as ``get_value_for_attr(rec, "dialect/name")`` with
+    ``'str' object has no attribute 'get'``. orjson re-serializes whatever we
+    return here, so a ``dict`` round-trips as a proper JSON object.
+
+    Scalars without ``__dict__`` (``pandas.Timestamp``, numpy scalars,
+    ``Decimal``, ``UUID``) fall through to ``str(obj)`` exactly as before.
+    """
+    if hasattr(obj, "model_dump"):  # pydantic v2 BaseModel
+        return obj.model_dump(mode="json")
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        return dataclasses.asdict(obj)
+    # attrs / plain domain objects expose their fields via __dict__.
+    if hasattr(obj, "__dict__") and vars(obj):
+        return vars(obj)
+    return str(obj)
 
 
 class JsonFileReader(Reader):
@@ -384,18 +413,13 @@ class JsonFileWriter(Writer):
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
         """Write a chunk to a JSON file using orjson."""
 
-        def _default_serializer(obj: object) -> str:
-            # pandas.Timestamp and similar datetime-like objects are not
-            # natively handled by orjson when they appear as dict values.
-            return str(obj)
-
         mode = "ab+" if SafeFileOps.exists(file_name) else "wb"
         with SafeFileOps.open(file_name, mode=mode) as f:
             for record in chunk.to_dict(orient="records"):
                 f.write(
                     orjson.dumps(
                         record,
-                        default=_default_serializer,
+                        default=default_json_serializer,
                         option=orjson.OPT_APPEND_NEWLINE,
                     )
                 )
