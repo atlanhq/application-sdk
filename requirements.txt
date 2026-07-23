@@ -4,7 +4,7 @@
 ./packages/conformance
 aiohappyeyeballs==2.7.1
     # via aiohttp
-aiohttp==3.14.2
+aiohttp==3.14.3
     # via atlan-application-sdk
 aiosignal==1.4.0
     # via aiohttp
@@ -127,7 +127,7 @@ httpx-retries==0.6.0
     # via
     #   atlan-application-sdk
     #   pyatlan
-hypothesis==6.160.0
+hypothesis==6.161.0
 identify==2.6.19
     # via pre-commit
 idna==3.18
