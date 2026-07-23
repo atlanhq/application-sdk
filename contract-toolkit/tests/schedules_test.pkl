@@ -53,6 +53,28 @@ local appWithSchedules = (App) {
       status = "PAUSED"
     }
   }
+
+  events {
+    new App.EventTriggerSpec {
+      name = "cdc-user-entity"
+      source = new App.EventSource {
+        name = "atlan-kafka"
+        topic = "app.cdc.user_entity"
+      }
+      triggerConfig = new App.EventTriggerConfig {
+        maxRetries = 5
+        ackPaths { "$.extract.outputs.ack_path" }
+      }
+    }
+    new App.EventTriggerSpec {
+      name = "cdc-group-disabled"
+      source = new App.EventSource {
+        name = "atlan-kafka"
+        topic = "app.cdc.group"
+      }
+      status = "PAUSED"
+    }
+  }
 }
 
 local appNoSchedules = (App) {
@@ -66,11 +88,41 @@ local appNoSchedules = (App) {
   }
 }
 
+// Events-only (no schedules) — the shape an event-driven entrypoint uses (e.g.
+// atlan-auth-app's event-sync, DISTR-844). Proves triggers.events renders while
+// triggers.schedules is ABSENT (not just empty).
+local appEventsOnly = (App) {
+  name = "app-events-only"
+  displayName = "App Events Only"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  uiConfig = appUiConfig
+  pipeline {
+    publish = null
+  }
+
+  events {
+    new App.EventTriggerSpec {
+      name = "cdc-user-entity"
+      source = new App.EventSource {
+        name = "atlan-kafka"
+        topic = "app.cdc.user_entity"
+      }
+      triggerConfig = new App.EventTriggerConfig {
+        ackPaths { "$.extract.outputs.ack_path" }
+      }
+    }
+  }
+}
+
 local appManifest = parser.parse(
   appWithSchedules.output.files["app/generated/manifest.json"].text
 )
 local appNoSchedManifest = parser.parse(
   appNoSchedules.output.files["app/generated/manifest.json"].text
+)
+local appEventsOnlyManifest = parser.parse(
+  appEventsOnly.output.files["app/generated/manifest.json"].text
 )
 
 // ── NativeApp.pkl ───────────────────────────────────────────────────────────
@@ -90,6 +142,19 @@ local nativeWithSchedules = (NativeApp) {
       cronExpression = "0 0 * * *"
     }
   }
+
+  events {
+    new NativeApp.EventTriggerSpec {
+      name = "cdc-user-entity"
+      source = new NativeApp.EventSource {
+        name = "atlan-kafka"
+        topic = "native.cdc.user_entity"
+      }
+      triggerConfig = new NativeApp.EventTriggerConfig {
+        ackPaths { "$.sync.outputs.ack_path" }
+      }
+    }
+  }
 }
 
 local nativeNoSchedules = (NativeApp) {
@@ -102,11 +167,38 @@ local nativeNoSchedules = (NativeApp) {
   hasPublishInputFields = false
 }
 
+// Events-only (no schedules) NativeApp — same case as appEventsOnly.
+local nativeEventsOnly = (NativeApp) {
+  name = "native-events-only"
+  displayName = "Native Events Only"
+  connector = Connectors.API
+  icon = "https://example.com/icon.svg"
+  workflowType = "NativeEventsOnlyWorkflow"
+  hasPublishStep = false
+  hasPublishInputFields = false
+
+  events {
+    new NativeApp.EventTriggerSpec {
+      name = "cdc-user-entity"
+      source = new NativeApp.EventSource {
+        name = "atlan-kafka"
+        topic = "native.cdc.user_entity"
+      }
+      triggerConfig = new NativeApp.EventTriggerConfig {
+        ackPaths { "$.extract.outputs.ack_path" }
+      }
+    }
+  }
+}
+
 local nativeManifest = parser.parse(
   nativeWithSchedules.output.files["manifest.json"].text
 )
 local nativeNoSchedManifest = parser.parse(
   nativeNoSchedules.output.files["manifest.json"].text
+)
+local nativeEventsOnlyManifest = parser.parse(
+  nativeEventsOnly.output.files["manifest.json"].text
 )
 
 facts {
@@ -127,7 +219,37 @@ facts {
     appManifest["triggers"]["schedules"][1]["status"] == "PAUSED"
   }
 
-  ["App omits triggers when no schedules are declared"] {
+  ["App renders triggers.events from declared events (AE EventTrigger shape)"] {
+    appManifest["triggers"]["events"].length == 2
+    appManifest["triggers"]["events"][0]["name"] == "cdc-user-entity"
+    appManifest["triggers"]["events"][0]["source"]["name"] == "atlan-kafka"
+    appManifest["triggers"]["events"][0]["source"]["topic"] == "app.cdc.user_entity"
+    appManifest["triggers"]["events"][0]["trigger_config"]["max_retries"] == 5
+    appManifest["triggers"]["events"][0]["trigger_config"]["ack_paths"][0] == "$.extract.outputs.ack_path"
+  }
+
+  ["App event defaults: maxRetries 3, fire-and-forget ack_paths [\"\"] (AE-valid, not [])"] {
+    appManifest["triggers"]["events"][1]["status"] == "PAUSED"
+    appManifest["triggers"]["events"][1]["trigger_config"]["max_retries"] == 3
+    // AE requires ack_paths non-empty; omitting ackPaths renders the fire-and-forget
+    // [""] (a single empty string), never [].
+    appManifest["triggers"]["events"][1]["trigger_config"]["ack_paths"].length == 1
+    appManifest["triggers"]["events"][1]["trigger_config"]["ack_paths"][0] == ""
+  }
+
+  ["App carries schedules and events in one triggers block"] {
+    appManifest["triggers"].containsKey("schedules")
+    appManifest["triggers"].containsKey("events")
+  }
+
+  ["App events-only: renders triggers.events with schedules ABSENT"] {
+    appEventsOnlyManifest["triggers"].containsKey("events")
+    appEventsOnlyManifest["triggers"]["events"].length == 1
+    appEventsOnlyManifest["triggers"]["events"][0]["source"]["topic"] == "app.cdc.user_entity"
+    !appEventsOnlyManifest["triggers"].containsKey("schedules")
+  }
+
+  ["App omits triggers when neither schedules nor events are declared"] {
     !appNoSchedManifest.containsKey("triggers")
   }
 
@@ -143,7 +265,22 @@ facts {
     nativeManifest["triggers"]["schedules"][0]["status"] == "ACTIVE"
   }
 
-  ["NativeApp omits triggers when no schedules are declared"] {
+  ["NativeApp renders triggers.events from declared events"] {
+    nativeManifest["triggers"]["events"].length == 1
+    nativeManifest["triggers"]["events"][0]["name"] == "cdc-user-entity"
+    nativeManifest["triggers"]["events"][0]["source"]["topic"] == "native.cdc.user_entity"
+    nativeManifest["triggers"]["events"][0]["trigger_config"]["ack_paths"][0] == "$.sync.outputs.ack_path"
+    nativeManifest["triggers"]["events"][0]["status"] == "ACTIVE"
+  }
+
+  ["NativeApp events-only: renders triggers.events with schedules ABSENT"] {
+    nativeEventsOnlyManifest["triggers"].containsKey("events")
+    nativeEventsOnlyManifest["triggers"]["events"].length == 1
+    nativeEventsOnlyManifest["triggers"]["events"][0]["source"]["topic"] == "native.cdc.user_entity"
+    !nativeEventsOnlyManifest["triggers"].containsKey("schedules")
+  }
+
+  ["NativeApp omits triggers when neither schedules nor events are declared"] {
     !nativeNoSchedManifest.containsKey("triggers")
   }
 }

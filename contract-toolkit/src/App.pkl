@@ -350,6 +350,16 @@ extraNodes: Mapping<String, DAGNode> = new Mapping {}
 /// fails such a contract at eval time.
 schedules: Listing<ScheduleSpec>(this.toList().map((s) -> s.name).isDistinct) = new Listing {}
 
+/// Event triggers (Kafka-CDC etc.). When non-empty, the toolkit renders a
+/// `triggers.events` block into `manifest.json` (AE EventTrigger shape) so a
+/// reconciler (Local Marketplace) can create the workflow's event triggers straight
+/// from the manifest — the AE watchdog then dispatches on each matching event. Only
+/// event-driven entrypoints set this; leave empty for cron/UI entrypoints.
+///
+/// `name` is the reconcile identity key downstream (unique within an entrypoint); the
+/// constraint fails a contract with duplicate names at eval time.
+events: Listing<EventTriggerSpec>(this.toList().map((e) -> e.name).isDistinct) = new Listing {}
+
 /// Top-level on/off for app notifications.
 ///
 /// When `true`, appends a run-level notification node (`NotificationNode`, key
@@ -2185,20 +2195,72 @@ class ScheduleSpec {
   status: "ACTIVE"|"PAUSED" = "ACTIVE"
 }
 
+/// Source of an event trigger: the Dapr pub/sub component + topic AE subscribes to.
+class EventSource {
+  name: String
+  topic: String
+}
+
+/// Per-trigger delivery config. Mirrors AE's `TriggerConfig`: `max_retries` bounds
+/// redelivery; `ack_paths` are JSONPaths (against the run's node outputs) to the ack
+/// parquet AE marks processed after the run settles.
+///
+/// AE **requires `ack_paths` non-empty** and rejects `[]`. Set real JSONPath(s) (e.g.
+/// `"$.extract.outputs.ack_path"`) so events are acked only after your DAG produces the
+/// ack parquet. Leave it empty to opt into fire-and-forget — the toolkit then renders
+/// `[""]` (AE's fire-and-forget form: auto-ack without reading a parquet), never `[]`.
+class EventTriggerConfig {
+  maxRetries: Int(this >= 0) = 3
+  ackPaths: Listing<String> = new Listing {}
+}
+
+/// One event trigger on a workflow. Renders to AE's `EventTrigger` shape
+/// (`name`, `source{name,topic}`, `trigger_config{max_retries,ack_paths}`, `status`).
+class EventTriggerSpec {
+  name: String
+  source: EventSource
+  triggerConfig: EventTriggerConfig = new EventTriggerConfig {}
+  status: "ACTIVE"|"PAUSED" = "ACTIVE"
+}
+
 local manifestData: Mapping<String, Any> = new Mapping {
   ["execution_mode"] = "automation-engine"
   ["dag"] = generateDAG()
-  // DISTR-815: emit triggers.schedules when the entrypoint declares schedules,
-  // so the cron lives in the manifest itself (not a separate file).
-  when (schedules.length > 0) {
+  // DISTR-815: emit triggers.schedules / triggers.events when the entrypoint declares
+  // them, so the trigger definition lives in the manifest itself (not a separate file
+  // or an AE-hardcoded bootstrap). One `triggers` block carries both kinds.
+  when (schedules.length > 0 || events.length > 0) {
     ["triggers"] = new Mapping {
-      ["schedules"] = new Listing {
-        for (s in schedules) {
-          new Mapping {
-            ["name"] = s.name
-            ["cron_expression"] = s.cronExpression
-            ["timezone"] = s.timezone
-            ["status"] = s.status
+      when (schedules.length > 0) {
+        ["schedules"] = new Listing {
+          for (s in schedules) {
+            new Mapping {
+              ["name"] = s.name
+              ["cron_expression"] = s.cronExpression
+              ["timezone"] = s.timezone
+              ["status"] = s.status
+            }
+          }
+        }
+      }
+      when (events.length > 0) {
+        ["events"] = new Listing {
+          for (e in events) {
+            new Mapping {
+              ["name"] = e.name
+              ["source"] = new Mapping {
+                ["name"] = e.source.name
+                ["topic"] = e.source.topic
+              }
+              ["trigger_config"] = new Mapping {
+                ["max_retries"] = e.triggerConfig.maxRetries
+                // AE rejects an empty ack_paths; render the fire-and-forget [""] when
+                // none is declared, never [].
+                ["ack_paths"] = if (e.triggerConfig.ackPaths.isEmpty) new Listing { "" }
+                                else e.triggerConfig.ackPaths
+              }
+              ["status"] = e.status
+            }
           }
         }
       }
