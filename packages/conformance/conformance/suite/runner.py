@@ -29,6 +29,7 @@ import conformance.suite.checks.sdr_test_checks as sdr_test_checks
 from conformance.suite.checks import (
     actions_pinning,
     app_name_alignment,
+    asyncio_loop_scope,
     bootstrap_drift,
     client_seam,
     coverage_config,
@@ -84,6 +85,11 @@ _CHECKS: list[CheckRegistration] = [
         series=actions_pinning.SERIES,
         discover=actions_pinning.discover,
         scan_path=actions_pinning.scan_path,
+    ),
+    CheckRegistration(
+        series=asyncio_loop_scope.SERIES,
+        discover=asyncio_loop_scope.discover,
+        scan_path=asyncio_loop_scope.scan_path,
     ),
     CheckRegistration(
         series=bootstrap_drift.SERIES,

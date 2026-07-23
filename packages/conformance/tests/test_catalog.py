@@ -480,11 +480,12 @@ def test_catalog_t_series_present() -> None:
     """The T-series test-quality rules are all present: T001 (integration
     marking), T002/T003 (SDR test-quality), T004 (dev-entrypoint), T005-T009
     (assertion/collection quality), T010-T013 (tier structure), T014/T015
-    (coverage-config), T016/T017 (e2e-CI queue isolation), and T018
-    (integration tier deselected by addopts)."""
+    (coverage-config), T016/T017 (e2e-CI queue isolation), T018
+    (integration tier deselected by addopts), and T019 (asyncio test-loop scope
+    unset relative to a broadened fixture loop scope)."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {f"T{n:03d}" for n in range(1, 19)}
+    expected = {f"T{n:03d}" for n in range(1, 20)}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
     extra = t_ids - expected

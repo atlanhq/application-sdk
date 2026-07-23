@@ -5,7 +5,7 @@
 
 # Test-Quality Rules (T-series)
 
-**18 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), `suite.checks.coverage_config` (T014-T015), `suite.checks.e2e_deployment_name` (T016), `suite.checks.e2e_agent_spec` (T017), and `suite.checks.integration_deselect` (T018) (AST/TOML/YAML-based)
+**19 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), `suite.checks.coverage_config` (T014-T015), `suite.checks.e2e_deployment_name` (T016), `suite.checks.e2e_agent_spec` (T017), `suite.checks.integration_deselect` (T018), and `suite.checks.asyncio_loop_scope` (T019) (AST/TOML/YAML-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -33,6 +33,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [T016](#t016) | `E2EDeploymentNameNotInherited` | `warn` | `app` | `e2e-ci` | — | 0.13.0 |
 | [T017](#t017) | `E2EAgentSpecPinsQueue` | `warn` | `app` | `e2e-ci` | — | 0.13.0 |
 | [T018](#t018) | `IntegrationTierDeselectedByAddopts` | `warn` | `app` | `test-collection` | — | 0.16.0 |
+| [T019](#t019) | `AsyncioTestLoopScopeUnset` | `warn` | `both` | `test-async-config` | — | 0.17.0 |
 
 ---
 
@@ -821,5 +822,90 @@ fall back to an `addopts` deselect for this: it hides the tests from the CI tier
 Suppress with `# conformance: ignore[T018] <reason>` on the `addopts` line only when the
 deselection is deliberate and the deselected tests are run by some other
 explicitly-configured CI job (rare — prefer the directory + runtime-skip pattern above).
+
+---
+
+## T019 — `AsyncioTestLoopScopeUnset` {#t019}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `test-async-config` · **Autofixable:** — · **Since:** 0.17.0
+
+> pyproject sets asyncio_default_fixture_loop_scope to a broadened scope with asyncio_default_test_loop_scope unset (defaults to 'function') AND a test drives workflow execution from its body, so that test hangs on the fixture-owned worker/client
+
+**Rationale:** pytest-asyncio has two independent loop-scope knobs in [tool.pytest.ini_options]:
+asyncio_default_fixture_loop_scope (the loop async fixtures default to) and
+asyncio_default_test_loop_scope (the loop async tests default to), and the latter
+defaults to 'function' when unset. Setting the fixture scope to a broadened value
+(session/package/module/class) without also setting the test scope puts fixtures and
+tests on different loops: async fixtures share one long-lived loop while each test runs
+on its own function-scoped loop. A fixture that owns a live resource bound to its loop —
+a Temporal worker/client, an async DB engine/pool, an httpx.AsyncClient — is then
+invisible to a test that drives that resource from the test body: the test awaits work
+the fixture's loop must service, but that loop is not being driven while the test's loop
+runs, so nothing progresses and the test hangs until the suite timeout fires. The
+failure is silent by construction — tests that only read a value a fixture already
+computed pass, so the mismatch hides until someone writes the first test that awaits
+fixture-owned work in-body. It surfaced on a canonical connector whose sole in-body
+Temporal test (a REUSE integration case) hung for the full pytest-timeout while every
+sibling test, which read a class-fixture result, passed. Like T018 (which fires only
+when an addopts deselect removes tests that exist), this rule is correlated, not
+config-only: it fires only when the risky config coincides with a collectable test whose
+body actually drives workflow execution via an awaited
+execute_app/execute_workflow/start_workflow call. A suite that runs all execution inside
+fixtures and only asserts on the result in test bodies is on the safe path and is not
+flagged.
+
+`[tool.pytest.ini_options]` in `pyproject.toml` sets
+`asyncio_default_fixture_loop_scope` to a broadened scope (`session` / `package` /
+`module` / `class`) but does not set `asyncio_default_test_loop_scope`, which **defaults
+to `function`**.
+
+Async fixtures then share one long-lived event loop, while each test runs on its own
+function-scoped loop. A fixture that owns a live resource bound to *its* loop — a
+Temporal worker/client, an async DB engine/pool, an `httpx.AsyncClient`, a broker
+consumer — is invisible to a test that drives that resource **from the test body**: the
+test awaits work the fixture's loop must service, but that loop is idle while the test's
+loop runs, so the await never completes and the test hangs until the suite timeout
+fires.
+
+The failure is silent by construction. Tests that only *read* a value a fixture already
+computed (the common case) pass, so the mismatch stays hidden until the first test that
+awaits fixture-owned work in-body is written — at which point it hangs, not fails, which
+is far costlier to diagnose.
+
+**Correlated, not config-only.** Like **T018**, this rule fires only when the risky
+config *and* real evidence coincide: a collectable test *function* (not a fixture) whose
+body awaits `execute_app` / `execute_workflow` / `start_workflow` — the SDK's
+workflow-submission surface. A suite with the mismatched config but all execution behind
+session/class-scoped fixtures (test bodies only assert on the result) is on the safe
+path and is **not** flagged.
+
+**Remediation:** set `asyncio_default_test_loop_scope` explicitly — usually to the same
+scope as the fixtures — so tests and their fixtures share a loop. Before:
+
+```toml
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+# asyncio_default_test_loop_scope unset -> defaults to 'function'
+```
+
+After:
+
+```toml
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+```
+
+Restructuring the offending test to run its async work inside a same-scope fixture
+(letting the test body only assert on the result) also removes the hang, and matches how
+most suites already drive workflow execution — but it leaves the config trap in place
+for the next author, so prefer the explicit test-scope setting as the durable fix.
+
+Suppress with `# conformance: ignore[T019] <reason>` on the
+`asyncio_default_fixture_loop_scope` line only when the mismatch is deliberate — e.g.
+every async fixture is loop-agnostic and no test drives fixture-owned work in-body — and
+state that reason.
 
 ---

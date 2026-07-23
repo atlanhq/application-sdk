@@ -141,6 +141,19 @@ Directory-scoped tiering (the Unit/Integration split, application-sdk#2852):
   wants the ``integration`` marker *present*): keep the marker, but do **not**
   ``addopts``-deselect it — the directory is the tier boundary, exactly as
   atlan-mysql-app / atlan-metabase-app already do (marker present, no deselect).
+
+* ``T019`` — ``pytest-asyncio``'s ``asyncio_default_fixture_loop_scope`` is set
+  to a broadened scope (``session`` / ``package`` / ``module`` / ``class``) while
+  ``asyncio_default_test_loop_scope`` is left unset (it defaults to
+  ``function``).  Async fixtures then share one long-lived loop but each test
+  runs on its own function-scoped loop, so a test that drives a fixture-owned
+  resource (a Temporal worker/client) *from its own body* awaits work the
+  fixture's loop must service while that loop is idle — and hangs until the suite
+  timeout.  Correlated like T018: fires only when the risky config coincides with
+  a collectable test whose body awaits ``execute_app`` / ``execute_workflow`` /
+  ``start_workflow`` (a suite that runs all execution inside fixtures is not
+  flagged).  Set ``asyncio_default_test_loop_scope`` explicitly (usually to match
+  the fixtures) so tests and fixtures share a loop.
 """
 
 from __future__ import annotations
@@ -1217,6 +1230,115 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t018"
+        ),
+    ),
+    RuleDefinition(
+        id="T019",
+        scope=RuleScope.BOTH,
+        name="AsyncioTestLoopScopeUnset",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="test-async-config",
+        autofixable=False,
+        since="0.17.0",
+        rationale=(
+            "pytest-asyncio has two independent loop-scope knobs in "
+            "[tool.pytest.ini_options]: asyncio_default_fixture_loop_scope (the "
+            "loop async fixtures default to) and asyncio_default_test_loop_scope "
+            "(the loop async tests default to), and the latter defaults to "
+            "'function' when unset. Setting the fixture scope to a broadened value "
+            "(session/package/module/class) without also setting the test scope "
+            "puts fixtures and tests on different loops: async fixtures share one "
+            "long-lived loop while each test runs on its own function-scoped loop. "
+            "A fixture that owns a live resource bound to its loop — a Temporal "
+            "worker/client, an async DB engine/pool, an httpx.AsyncClient — is then "
+            "invisible to a test that drives that resource from the test body: the "
+            "test awaits work the fixture's loop must service, but that loop is not "
+            "being driven while the test's loop runs, so nothing progresses and the "
+            "test hangs until the suite timeout fires. The failure is silent by "
+            "construction — tests that only read a value a fixture already computed "
+            "pass, so the mismatch hides until someone writes the first test that "
+            "awaits fixture-owned work in-body. It surfaced on a canonical "
+            "connector whose sole in-body Temporal test (a REUSE integration case) "
+            "hung for the full pytest-timeout while every sibling test, which read "
+            "a class-fixture result, passed. Like T018 (which fires only when an "
+            "addopts deselect removes tests that exist), this rule is correlated, "
+            "not config-only: it fires only when the risky config coincides with a "
+            "collectable test whose body actually drives workflow execution via an "
+            "awaited execute_app/execute_workflow/start_workflow call. A suite that "
+            "runs all execution inside fixtures and only asserts on the result in "
+            "test bodies is on the safe path and is not flagged."
+        ),
+        short_description=(
+            "pyproject sets asyncio_default_fixture_loop_scope to a broadened scope "
+            "with asyncio_default_test_loop_scope unset (defaults to 'function') "
+            "AND a test drives workflow execution from its body, so that test hangs "
+            "on the fixture-owned worker/client"
+        ),
+        full_description=(
+            "``[tool.pytest.ini_options]`` in ``pyproject.toml`` sets\n"
+            "``asyncio_default_fixture_loop_scope`` to a broadened scope\n"
+            "(``session`` / ``package`` / ``module`` / ``class``) but does not set\n"
+            "``asyncio_default_test_loop_scope``, which **defaults to ``function``**.\n"
+            "\n"
+            "Async fixtures then share one long-lived event loop, while each test\n"
+            "runs on its own function-scoped loop. A fixture that owns a live\n"
+            "resource bound to *its* loop — a Temporal worker/client, an async DB\n"
+            "engine/pool, an ``httpx.AsyncClient``, a broker consumer — is invisible\n"
+            "to a test that drives that resource **from the test body**: the test\n"
+            "awaits work the fixture's loop must service, but that loop is idle while\n"
+            "the test's loop runs, so the await never completes and the test hangs\n"
+            "until the suite timeout fires.\n"
+            "\n"
+            "The failure is silent by construction. Tests that only *read* a value a\n"
+            "fixture already computed (the common case) pass, so the mismatch stays\n"
+            "hidden until the first test that awaits fixture-owned work in-body is\n"
+            "written — at which point it hangs, not fails, which is far costlier to\n"
+            "diagnose.\n"
+            "\n"
+            "**Correlated, not config-only.** Like **T018**, this rule fires only when\n"
+            "the risky config *and* real evidence coincide: a collectable test\n"
+            "*function* (not a fixture) whose body awaits ``execute_app`` /\n"
+            "``execute_workflow`` / ``start_workflow`` — the SDK's workflow-submission\n"
+            "surface. A suite with the mismatched config but all execution behind\n"
+            "session/class-scoped fixtures (test bodies only assert on the result) is\n"
+            "on the safe path and is **not** flagged.\n"
+            "\n"
+            "**Remediation:** set ``asyncio_default_test_loop_scope`` explicitly —\n"
+            "usually to the same scope as the fixtures — so tests and their fixtures\n"
+            "share a loop. Before:\n"
+            "\n"
+            ".. code-block:: toml\n"
+            "\n"
+            "    [tool.pytest.ini_options]\n"
+            '    asyncio_mode = "auto"\n'
+            '    asyncio_default_fixture_loop_scope = "session"\n'
+            "    # asyncio_default_test_loop_scope unset -> defaults to 'function'\n"
+            "\n"
+            "After:\n"
+            "\n"
+            ".. code-block:: toml\n"
+            "\n"
+            "    [tool.pytest.ini_options]\n"
+            '    asyncio_mode = "auto"\n'
+            '    asyncio_default_fixture_loop_scope = "session"\n'
+            '    asyncio_default_test_loop_scope = "session"\n'
+            "\n"
+            "Restructuring the offending test to run its async work inside a\n"
+            "same-scope fixture (letting the test body only assert on the result)\n"
+            "also removes the hang, and matches how most suites already drive\n"
+            "workflow execution — but it leaves the config trap in place for the\n"
+            "next author, so prefer the explicit test-scope setting as the durable\n"
+            "fix.\n"
+            "\n"
+            "Suppress with ``# conformance: ignore[T019] <reason>`` on the\n"
+            "``asyncio_default_fixture_loop_scope`` line only when the mismatch is\n"
+            "deliberate — e.g. every async fixture is loop-agnostic and no test\n"
+            "drives fixture-owned work in-body — and state that reason.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/tests.md#t019"
         ),
     ),
 )
