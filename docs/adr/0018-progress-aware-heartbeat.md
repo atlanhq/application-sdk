@@ -78,9 +78,13 @@ that same observability *holistically and, wherever possible, automatically*:
 - **Automatic (no developer action):** built-in progress signals on the paths the
   SDK already owns — the streaming writer/emission/transfer loops, and anything
   run through `run_in_thread`.
-- **Explicit (developer chooses one mechanism):** for the residual spots the SDK
-  cannot see — a custom async loop, or a raw opaque `await` — the developer makes
-  it observable with a manual beat or a scoped bracket.
+- **Explicit (developer chooses one mechanism):** for the spots the SDK cannot see
+  — a custom async loop, or an opaque single `await` against the connector's own
+  source client — the developer makes it observable with a manual beat or a scoped
+  bracket. This is not a rare edge: because the async source path has no mandatory
+  SDK seam (unlike blocking calls, which all go through `run_in_thread`), the
+  explicit bracket is expected in nearly every connector (see *The async escape
+  hatch* below).
 
 This framing matters for expectations: **the residual work never disappears.** The
 ADR shrinks it to a small, auditable set and automates the common paths, but a task
@@ -221,12 +225,13 @@ little the app author has to do:
    Anything offloaded through `run_in_thread` is bracketed by the SDK itself, so a
    legitimate long blocking call is never false-killed (details below).
 3. **Manual `context.heartbeat(...)` or `holding_progress(...)` (explicit, app
-   action).** The residual: a custom async loop, or a raw opaque `await` that never
-   touches an SDK-instrumented path. `context.heartbeat()` already exists and now
-   also bumps progress (still carrying resume details for
-   `get_last_heartbeat_details()`); `holding_progress()` is the async analogue of
-   the blocking bracket. This is the only mechanism that asks the author to *do*
-   something — and the audit step in *Rollout* exists to find exactly these spots.
+   action).** The residual: a custom async loop, or an opaque single `await`
+   against the connector's own source client (see the asymmetry below — this is
+   *not* a rare case). `context.heartbeat()` already exists and now also bumps
+   progress (still carrying resume details for `get_last_heartbeat_details()`);
+   `holding_progress()` is the async analogue of the blocking bracket. This is the
+   mechanism that asks the author to *do* something — and the audit step in
+   *Rollout* exists to find exactly these spots.
 
 ### The blocking bracket — bounded by the call's own timeout
 
@@ -276,7 +281,7 @@ silently guess:
    multiple of `heartbeat_timeout` and emit a WARNING, so the missing timeout
    surfaces during the opt-in audit rather than hiding until a wedge.
 
-### The async escape hatch — and why authors won't have to remember it everywhere
+### The async escape hatch — and the asymmetry that makes it common
 
 For an async-opaque single `await` with no progress signal, `holding_progress()` is
 the explicit analogue of the blocking bracket:
@@ -286,15 +291,41 @@ async with self.context.holding_progress("snapshot metadata query", timeout=120)
     rows = await long_single_query(...)   # its own statement_timeout is the watchdog
 ```
 
-**Q: "Making people use it *always* might become a problem."** Correct — and the
-answer is the same one that makes the streaming hooks free: *don't rely on people
-for the common path.* The SDK's own async SQL/HTTP clients enter the bracket
-**themselves**, so an author using the standard clients gets coverage
-automatically, exactly as the write loops call `mark_progress()` for them.
-`holding_progress()` is then only ever needed for a *raw* `await` the app issues
-outside those clients — a small, auditable surface, and a **required** step for
-such calls, not a nice-to-have (a forgotten bracket false-kills at the tail; see
-*Migration*). The manual mechanism is the floor, not the plan.
+**Q: "Making people use it *always* might become a problem."** This is the most
+important open ergonomics question, and we should not pretend it away. There is a
+real asymmetry between the blocking and async paths:
+
+- **Blocking source calls are auto-covered.** `run_in_thread` is a *mandatory
+  seam* — every blocking call already goes through it (ADR-0010), so the SDK
+  brackets it for the author with no extra code.
+- **Async source calls have no equivalent mandatory seam.** A connector connects
+  to its *own* source system with its *own* async client (an async SQLAlchemy
+  engine, an `httpx.AsyncClient`, a vendor SDK). **The SDK's internal SQL/HTTP
+  clients are for the SDK's own purposes; they do not, and are not meant to, sit on
+  the connector→source path** — so there is no SDK-owned wrapper we can transparently
+  instrument for that call. Auto-bracketing "the SDK clients" would cover almost
+  none of the real source I/O.
+
+Two things soften this, but neither eliminates it:
+
+1. **Interleaved streaming reads are already covered by the write side.** The
+   common extraction shape — fetch a page, write a batch, repeat — ticks
+   `mark_progress()` on every batch write, so the read loop is covered as long as
+   one fetch+write cycle stays under the no-progress budget. `holding_progress()`
+   is *not* needed there.
+2. The residual is the genuinely **opaque single async call** — one large metadata
+   query, one slow list/export API call that returns everything at once. Those
+   emit nothing until they complete.
+
+So the honest expectation: **`holding_progress()` will very likely be needed in
+almost every connector**, because almost every connector makes at least one such
+opaque async call against its source. It is a *standard part of writing a
+long-running async task*, not a rare escape hatch. We make that acceptable by (a)
+keeping it a one-line context manager whose `timeout` is just the client timeout
+the author already sets, (b) documenting it as expected rather than exceptional,
+and (c) having the opt-in audit specifically hunt source-side opaque async calls. A
+forgotten bracket false-kills at the tail (see *Migration*), so for such calls it
+is **required**, not advisory.
 
 ## Options Considered
 
@@ -379,18 +410,36 @@ the heartbeat is progress-aware.
 
 ## Migration & backward compatibility — "what if I do nothing?"
 
-The first question every consumer asks: *if I don't touch my code, do I suddenly
-start getting "no forward progress" kills?* The answer has a reassuring half and a
-sharp half, and both must be stated plainly.
+The first question every consumer asks: *if I don't touch my code, what changes?*
+Precisely because two knobs are in play, the answer must separate them — one is
+safe to ship on upgrade, the other is not.
 
-**Upgrading the SDK alone changes nothing.** Two properties guarantee it:
+**The progress-gating flag — safe, changes nothing on upgrade.** Progress-gating is
+**flag-gated, default off** (see *Rollout*), and the framework `mark_progress()`
+hooks are **inert while the flag is off** — they bump a counter nobody reads. So
+merely bumping the SDK version produces no new "no forward progress" kill.
 
-- The behavior is **flag-gated, default off** (see *Rollout*). Progress-gating
-  activates only on explicit per-app opt-in.
-- The framework `mark_progress()` hooks are **inert while the flag is off** — they
-  bump a counter nobody reads. So merely bumping the SDK version cannot produce a
-  single new kill. There is no silent exposure; **flipping the flag is the migration
-  action.**
+**The `start_to_close` default (600s → 24h) — this one DOES change behavior, and
+must NOT ship at plain upgrade.** If the 24h default landed as part of the base
+upgrade, here is what would happen to an app that does nothing:
+
+- Apps that set `timeout_seconds` explicitly per task (including every app in the
+  failure dashboard) are unaffected — the default never reaches them. Their
+  StartToClose kills persist until they lower/remove those values and/or opt in.
+- Apps **relying on the 600s default** would get a 24h ceiling *while still running
+  the old unconditional keepalive* (because progress-gating is off). That is the
+  exact unsafe pairing from *Context*: `heartbeat_timeout` cannot catch a wedge, so
+  a **wedged-but-alive activity would squat its worker slot for up to 24h**, doing
+  no real work — starving the ~100-slot pool and badly delaying legitimate work.
+
+The 24h backstop is only safe **once the progress-aware watchdog is active for that
+app.** Therefore the default bump is **coupled to the opt-in flip** (Rollout step 4
+is per-app-gated, not a global default change at upgrade): you never get the 24h
+ceiling without the minutes-scale watchdog that makes it safe. Shipping the ceiling
+fleet-wide for fast StartToClose relief is tempting, but it buys relief for
+default-relying apps at the cost of a fleet-wide 24h-wedge exposure window — so it
+is explicitly rejected as the default path. **Flipping the flag (which brings both
+halves together) is the migration action.**
 
 **On opt-in, whether unchanged code survives depends on its shape.** This is the
 sharp half — for the last two rows, do-nothing code *will* start hitting
@@ -404,7 +453,7 @@ wedged one):
 | Already calls `context.heartbeat()` | Covered — bumps progress | none |
 | Opaque blocking call via `run_in_thread` | Covered — bracket vouches to its timeout | none (set `blocking_timeout` if not derivable) |
 | **Custom async loop doing its own I/O, never through an instrumented SDK path** | **False-killed** if any gap > `heartbeat_timeout` | add a beat/bracket |
-| **Raw opaque `await` outside an SDK client** | **False-killed** at the tail | wrap in `holding_progress()` |
+| **Opaque single `await` against the source (connector's own async client)** | **False-killed** at the tail | wrap in `holding_progress()` — expected in ~every connector |
 
 Two consequences fall out of this and are load-bearing for a safe rollout:
 
@@ -429,12 +478,16 @@ killed at `heartbeat_timeout`. Sequence:
 2. **Gate behind a flag** — `progress_aware_heartbeat` on `@task` /
    `TaskMetadata`, defaulting **off**, plus an env kill-switch.
 3. **Flip per-app after verification** — with hooks in place, the migration work is
-   auditing the two at-risk shapes from *Migration* (custom async loops, raw opaque
-   awaits) and adding a beat/bracket, and verifying against a **large-tenant / tail
-   profile**. The `heartbeat_timeout` default moves to 300s as part of this flip so
-   its new meaning and its value change together.
-4. **Then** raise the `start_to_close` default (e.g. → 24h) and retire the
-   per-task duration constants — safely, because the watchdog is now real.
+   auditing the two at-risk shapes from *Migration* (custom async loops, opaque
+   source awaits) and adding a beat/bracket, and verifying against a
+   **large-tenant / tail profile**. The `heartbeat_timeout` default moves to 300s as
+   part of this flip so its new meaning and its value change together.
+4. **Couple the 24h `start_to_close` backstop to that same per-app flip** — an app
+   gets the 24h ceiling *and* the progress-aware watchdog together, never one
+   without the other. The **global** default only changes at the very end, once the
+   flag is retired and progress-aware is universal; raising it fleet-wide any
+   earlier would expose default-relying, non-opted apps to 24h wedges (see
+   *Migration*). At that point the per-task duration constants are retired.
 
 The AE-orchestrated DAG node timeouts (`errorHandling.startToCloseTimeoutSeconds`
 in the contract toolkit, defaulting 24h/72h) are a *separate layer* consumed by
