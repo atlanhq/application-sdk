@@ -23,6 +23,7 @@ from conformance.suite.rules.entrypoint import RULES as _ENTRYPOINT_RULES
 from conformance.suite.rules.entrypoint_alignment import RULES as _EP_ALIGNMENT_RULES
 from conformance.suite.rules.error_handling import RULES as _E_RULES
 from conformance.suite.rules.logging import RULES as _L_RULES
+from conformance.suite.rules.metadata import RULES as _M_RULES
 from conformance.suite.rules.optimizations import RULES as _O_RULES
 from conformance.suite.rules.orchestration import RULES as _ORCHESTRATION_RULES
 from conformance.suite.rules.preflight import RULES as _PREFLIGHT_RULES
@@ -66,6 +67,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _B_RULES,
     _CONTRACT_TOOLKIT_RULES,
     _S_RULES,
+    _M_RULES,
 )
 
 

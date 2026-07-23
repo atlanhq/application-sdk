@@ -48,6 +48,7 @@ from conformance.suite.checks import (
     integration_marking,
     legacy_contract,
     manifest_contract,
+    metadata,
     optimizations,
     orchestration,
     preflight,
@@ -59,7 +60,11 @@ from conformance.suite.checks import (
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
-from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from conformance.suite.schema.disposition import (
+    EnforcementTier,
+    RuleMechanism,
+    RuleScope,
+)
 from conformance.suite.schema.findings import Finding, findings_to_report
 
 
@@ -260,6 +265,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=security.discover,
         scan_path=security.scan_path,
     ),
+    CheckRegistration(
+        series=metadata.SERIES,
+        discover=metadata.discover,
+        scan_path=metadata.scan_path,
+        scan_all=metadata.scan_all,
+    ),
 ]
 
 
@@ -280,6 +291,29 @@ def _rule_in_scope(rule_scope: RuleScope, active: RuleScope | None) -> bool:
     behaviour).  Otherwise a rule applies iff its scope is ``BOTH`` or matches.
     """
     return active is None or rule_scope == RuleScope.BOTH or rule_scope == active
+
+
+def _rule_matches_mechanism(
+    rule_mechanism: RuleMechanism, active: RuleMechanism | None
+) -> bool:
+    """True if a rule with ``rule_mechanism`` runs under the ``active`` filter.
+
+    ``active`` is ``None`` when ``--mechanism`` was not given — every rule runs
+    (the pre-feature behaviour).  Otherwise only rules of the requested mechanism
+    run.  This is how a model-only workflow selects the non-deterministic series
+    (``--mechanism model``) and, conversely, how the deterministic gate can
+    exclude them (``--mechanism static``/``test``) without listing series.
+    """
+    return active is None or rule_mechanism == active
+
+
+def _series_has_mechanism(series: str, active: RuleMechanism | None) -> bool:
+    """True if *any* rule in ``series`` matches the ``active`` mechanism filter."""
+    return any(
+        _rule_matches_mechanism(rule.mechanism, active)
+        for rule in CATALOG.values()
+        if rule.id[0] == series
+    )
 
 
 def _series_in_scope(series: str, active: RuleScope | None) -> bool:
@@ -454,6 +488,22 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--mechanism",
+        choices=[
+            RuleMechanism.STATIC.value,
+            RuleMechanism.TEST.value,
+            RuleMechanism.MODEL.value,
+        ],
+        default=None,
+        help=(
+            "Restrict to rules of this mechanism: 'static'/'test' (deterministic) "
+            "or 'model' (language-model verdicts, non-deterministic).  Default: "
+            "all mechanisms.  Use '--mechanism model' to run only the model-driven "
+            "series in a dedicated workflow; the deterministic gate can exclude "
+            "them without listing series."
+        ),
+    )
+    parser.add_argument(
         "--exit-zero",
         action="store_true",
         default=False,
@@ -487,11 +537,18 @@ def main(argv: list[str] | None = None) -> int:
     # from the repo under scan.  ``None`` means "scope unknown — run everything".
     active_scope = RuleScope(args.scope) if args.scope else detect_scope(root)
 
+    # Resolve the active mechanism filter (None → all mechanisms run).
+    active_mechanism = RuleMechanism(args.mechanism) if args.mechanism else None
+
     all_findings: list[Finding] = []
     for check in active:
         # Skip a whole check when none of its series' rules could be in scope
         # (e.g. the all-APP D-series when scanning the SDK itself).
         if not _series_in_scope(check.series, active_scope):
+            continue
+        # Skip when no rule in the series matches the mechanism filter (e.g. the
+        # model-driven M-series is skipped under '--mechanism static').
+        if not _series_has_mechanism(check.series, active_mechanism):
             continue
         paths: list[Path] = []
         for p in check.discover(root):
@@ -517,6 +574,7 @@ def main(argv: list[str] | None = None) -> int:
         f
         for f in all_findings
         if _rule_in_scope(get_rule(f.rule_id).scope, active_scope)
+        and _rule_matches_mechanism(get_rule(f.rule_id).mechanism, active_mechanism)
     ]
 
     # Always surface violations in a human-readable form so CI logs are actionable.

@@ -29,6 +29,11 @@ class Finding:
     suppression_justification: str | None = field(
         default=None, compare=False, hash=False
     )
+    evidence: str | None = field(default=None, compare=False, hash=False)
+    """For ``mechanism=model`` findings: the exact span of source text the model
+    flagged.  Surfaced as ``atlan/evidence`` so a human triaging the finding sees
+    *why* it fired without re-running the model.  ``None`` for deterministic
+    findings, where ``snippet`` already carries the evidence."""
 
 
 def findings_to_report(
@@ -70,5 +75,6 @@ def findings_to_report(
             message=f.message,
             snippet=f.snippet,
             suppressions=suppressions,
+            evidence=f.evidence,
         )
     return builder.build(excluded_paths=excluded_paths)
