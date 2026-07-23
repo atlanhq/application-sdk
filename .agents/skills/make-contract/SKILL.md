@@ -1,6 +1,6 @@
 ---
 name: make-contract
-description: Create, migrate, update, generate, or validate an Atlan native app Pkl contract with app-contract-toolkit and the Atlan CLI. Use when helping an app author produce contract/app.pkl, contract/PklProject, app/generated artifacts, atlan.yaml decisions, and SDK input contracts — including migrating a legacy app onto the canonical App.pkl template, moving it off the archived toolkit repo, and raising it to the SDK floor that keeps its logs visible.
+description: Create, migrate, update, generate, or validate an Atlan native app Pkl contract with app-contract-toolkit and pkl. Use when helping an app author produce contract/app.pkl, contract/PklProject, app/generated artifacts, atlan.yaml decisions, and SDK input contracts — including migrating a legacy app onto the canonical App.pkl template, moving it off the archived toolkit repo, and raising it to the SDK floor that keeps its logs visible.
 ---
 
 # make-contract
@@ -50,8 +50,8 @@ it as the source of truth; trust `README.md` + `CLAUDE.md` + `CHANGELOG.md` +
   `NativeAppBundle.pkl` are frozen legacy.** Author every new contract by
   amending `App.pkl`. Only touch the legacy modules when reading an app that
   still uses them (to migrate it, or to preserve it when the user declines).
-- Use the Atlan CLI contract commands first. Fall back to direct `pkl` commands
-  when the CLI is missing, too old, or cannot support the requested change.
+- Author, validate, and generate with `pkl` from the app repo root — this repo
+  guarantees the pkl toolchain, not any external CLI. See Contract Commands.
 - Do not hand-edit generated files under `app/generated/` except to inspect or
   compare. Fix `contract/app.pkl`, then regenerate.
 - Keep examples public and generic. Prefer the tracked examples under
@@ -86,6 +86,37 @@ When the user is unsure, choose the simplest behavior-preserving contract:
 single entrypoint, `contract/app.pkl` amending `App.pkl`, generated output in
 `app/generated`, root `atlan.yaml` as packaging source of truth, and default
 `extract -> publish` only for asset-producing connectors.
+
+## Contract Commands (pkl-native)
+
+This repo guarantees the `pkl` toolchain — there is no dependency on an external
+CLI. Run every command from the **app repo root** (not from inside `contract/`).
+Prereq: `pkl >= 0.25.1` (`brew install pkl`).
+
+```bash
+# Resolve / refresh the dependency lock (writes contract/PklProject.deps.json):
+( cd contract && pkl project resolve )
+
+# Validate AND generate — the same command. A clean eval IS the validation
+# (pkl type-checks the whole contract graph and fires every constraint), and it
+# writes atlan.yaml, app.yaml, and app/generated/*.
+pkl eval -m . contract/app.pkl
+```
+
+- `-m .` sets the module output root to the app root so each output file lands at
+  its natural path; running from inside `contract/` or with a different `-m`
+  writes artifacts to the wrong tree.
+- There is no separate validate-only verb — `pkl eval` is both validate and
+  generate.
+- **Scaffold: there is no init command.** To start a new contract, copy
+  `contract-toolkit/examples/minimal/app.pkl` to `contract/app.pkl`, change its
+  amend line to `amends "@app-contract-toolkit/App.pkl"`, and create a
+  `contract/PklProject` with the package dependency (see Migrations -> Archived
+  toolkit URL for the `uri`). Then resolve and generate. The tracked examples
+  amend a relative `../../src/App.pkl` and ship no `PklProject`; a real app repo
+  uses the package amend plus its own `contract/PklProject`.
+- **Update the toolkit version:** edit the `["app-contract-toolkit"].uri` version
+  in `contract/PklProject`, then re-run resolve + generate.
 
 ## Discovery
 
@@ -211,9 +242,9 @@ dependencies {
 }
 ```
 
-Prefer `atlan app contract update-toolkit -p . --version <LATEST>` if the CLI is
-available; it refreshes `PklProject.deps.json`. Get the bare-semver `<LATEST>`
-(from the SDK checkout) with
+Then re-resolve and regenerate (see Contract Commands) — `pkl project resolve`
+rewrites `PklProject.deps.json`. Get the bare-semver `<LATEST>` (from the SDK
+checkout) with
 `git tag --list 'contract-toolkit-v*' | sort -V | tail -1 | sed 's/^contract-toolkit-v//'`.
 
 ### `NativeApp.pkl` / `NativeAppBundle.pkl` -> `App.pkl`
@@ -335,20 +366,12 @@ Note each one's caveat — they are pattern references, not version references
 
 ## Validation
 
-Prefer the Atlan CLI (external tool — check it first, it is not defined in this
-repo, so confirm the current flags with `--help` rather than assuming):
+Validate and generate with `pkl` from the app root (see Contract Commands) — a
+clean `pkl eval` is the validation and writes the artifacts in one step:
 
 ```bash
-command -v atlan && atlan app contract --help
-atlan app contract validate -p .
-atlan app contract generate -p .
-```
-
-Direct `pkl` fallback (what this repo guarantees):
-
-```bash
-pkl project resolve contract
-pkl eval -m . contract/app.pkl   # from the app root; -m . matches the contract's own output paths
+( cd contract && pkl project resolve )
+pkl eval -m . contract/app.pkl
 ```
 
 Then verify generated output and invariants:
@@ -379,7 +402,6 @@ Summarize:
 
 - What contract source changed and which migrations were applied.
 - Which generated artifacts changed.
-- Which CLI/`pkl` validation and generation commands ran, and the `app_name`
-  invariant result.
+- Which `pkl` commands ran (resolve / eval), and the `app_name` invariant result.
 - The SDK/toolkit versions before and after, relative to the floor.
 - Any skipped validation and the concrete reason.
