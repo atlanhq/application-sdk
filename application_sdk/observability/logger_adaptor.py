@@ -274,6 +274,11 @@ def _format_printf_args(msg: str, args: tuple[Any, ...]) -> tuple[str, tuple[Any
     return msg, args
 
 
+#: BOOT-TIME lazy-import sentinel — the real class is imported on first
+#: exporter construction; tests patch this name directly.
+OTLPLogExporter = None
+
+
 def _has_remote_otlp_endpoint() -> bool:
     """True when OTEL_EXPORTER_OTLP_ENDPOINT points to a real remote collector."""
     try:
@@ -746,12 +751,16 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
             def _otlp_log_exporter_cls():
                 # BOOT-TIME: grpc + OTLP exporter modules are heavy (native
-                # .so page-in); import only when an exporter is actually wired.
+                # .so page-in); import only when an exporter is actually
+                # wired. Tests may patch the module-level ``OTLPLogExporter``
+                # sentinel; honor it when set.
+                if OTLPLogExporter is not None:
+                    return OTLPLogExporter
                 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
-                    OTLPLogExporter,
+                    OTLPLogExporter as _cls,
                 )
 
-                return OTLPLogExporter
+                return _cls
 
             if ENABLE_OTLP_LOGS or _has_remote_otlp_endpoint():
                 otlp_processors.append(

@@ -33,18 +33,25 @@ class _LazyTemporalModule:
     access. All uses of `workflow`/`activity` here run under a Temporal
     worker/client, so handler-mode boot never pays the temporalio import."""
 
-    __slots__ = ("_modname", "_alias")
+    __slots__ = ("_modname",)
 
     def __init__(self, modname: str, alias: str) -> None:
-        self._modname = modname
-        self._alias = alias
+        object.__setattr__(self, "_modname", modname)
 
-    def __getattr__(self, attr: str):
+    def _mod(self):
         import importlib
 
-        mod = importlib.import_module(self._modname)
-        globals()[self._alias] = mod
-        return getattr(mod, attr)
+        return importlib.import_module(self._modname)
+
+    def __getattr__(self, attr: str):
+        return getattr(self._mod(), attr)
+
+    def __setattr__(self, attr: str, value) -> None:
+        # forward so tests can patch e.g. base.workflow.now
+        setattr(self._mod(), attr, value)
+
+    def __delattr__(self, attr: str) -> None:
+        delattr(self._mod(), attr)
 
 
 workflow = _LazyTemporalModule("temporalio.workflow", "workflow")
