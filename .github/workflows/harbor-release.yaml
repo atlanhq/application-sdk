@@ -93,14 +93,14 @@ jobs:
           { echo "value<<${DELIM}"; cat /tmp/tags.txt; echo "${DELIM}"; } >> "$GITHUB_OUTPUT"
 
       - name: Log in to Atlan Harbor Registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        uses: docker/login-action@06fb636fac595d6fb4b28a5dfcb21a6f5091859c # v4
         with:
           registry: registry.atlan.com
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_PASSWORD }}
 
       - name: Log in to Chainguard Container Registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        uses: docker/login-action@06fb636fac595d6fb4b28a5dfcb21a6f5091859c # v4
         with:
           registry: cgr.dev
           username: ${{ secrets.CHAINGUARD_USERNAME }}
