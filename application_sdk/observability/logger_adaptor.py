@@ -8,7 +8,6 @@ from typing import Any, ClassVar
 
 from loguru import logger
 from opentelemetry._logs import LogRecord, SeverityNumber
-from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.trace.span import TraceFlags
@@ -745,10 +744,19 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         try:
             otlp_processors = []
 
+            def _otlp_log_exporter_cls():
+                # BOOT-TIME: grpc + OTLP exporter modules are heavy (native
+                # .so page-in); import only when an exporter is actually wired.
+                from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+                    OTLPLogExporter,
+                )
+
+                return OTLPLogExporter
+
             if ENABLE_OTLP_LOGS or _has_remote_otlp_endpoint():
                 otlp_processors.append(
                     BatchLogRecordProcessor(
-                        OTLPLogExporter(
+                        _otlp_log_exporter_cls()(
                             endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
                             timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
                         ),
@@ -762,7 +770,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             if ENABLE_OTLP_WORKFLOW_LOGS and OTEL_WORKFLOW_LOGS_ENDPOINT:
                 otlp_processors.append(
                     BatchLogRecordProcessor(
-                        OTLPLogExporter(
+                        _otlp_log_exporter_cls()(
                             endpoint=OTEL_WORKFLOW_LOGS_ENDPOINT,
                             timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
                         ),

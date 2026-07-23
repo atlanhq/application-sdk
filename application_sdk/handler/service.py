@@ -45,14 +45,12 @@ from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
 import orjson
-import temporalio.service
 from fastapi import FastAPI, File, Form, HTTPException
 from fastapi import Path as PathParam
 from fastapi import Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
-from temporalio.client import WorkflowFailureError
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
@@ -84,6 +82,28 @@ from application_sdk.handler.service_errors import (
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+class _TemporalioNotYetImported(Exception):
+    """BOOT-TIME placeholder. Never raised. Replaced by the real temporalio
+    WorkflowFailureError inside _get_temporal_client(), which always runs
+    before any workflow call can fail."""
+
+
+WorkflowFailureError: type[BaseException] = _TemporalioNotYetImported
+
+
+def _is_rpc_not_found(e: BaseException) -> bool:
+    """True iff e is a temporalio RPCError with NOT_FOUND status. Guarded via
+    sys.modules so handler boot never imports temporalio."""
+    import sys as _sys
+
+    ts = _sys.modules.get("temporalio.service")
+    return (
+        ts is not None
+        and isinstance(e, ts.RPCError)
+        and e.status == ts.RPCStatusCode.NOT_FOUND
+    )
 
 _CATEGORY_TO_HTTP: dict[FailureCategory, int] = {
     FailureCategory.AUTH: 401,
@@ -678,6 +698,24 @@ async def _get_temporal_client() -> Client:
         create_temporal_client,
     )
 
+    # BOOT-TIME: bind the real WorkflowFailureError now that temporalio is
+    # loading anyway; build the app data converter lazily (it was moved off
+    # the boot path in run_handler_mode).
+    global WorkflowFailureError
+    from temporalio.client import (  # noqa: PLC0415 — lazy: first workflow call
+        WorkflowFailureError as _RealWorkflowFailureError,
+    )
+
+    WorkflowFailureError = _RealWorkflowFailureError
+    if _workflow_config.data_converter is None and _workflow_config.app_class is not None:
+        from application_sdk.execution._temporal.converter import (  # noqa: PLC0415
+            create_data_converter_for_app,
+        )
+
+        _workflow_config.data_converter = create_data_converter_for_app(
+            _workflow_config.app_class
+        )
+
     api_key: str | None = None
     if _workflow_config.auth_enabled:
         from application_sdk.execution import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
@@ -1181,8 +1219,7 @@ def _register_workflow_routes(
             )
         except Exception as e:
             if (
-                isinstance(e, temporalio.service.RPCError)
-                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+                _is_rpc_not_found(e)
             ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
@@ -1368,8 +1405,7 @@ def _register_workflow_routes(
 
         except Exception as e:
             if (
-                isinstance(e, temporalio.service.RPCError)
-                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+                _is_rpc_not_found(e)
             ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
@@ -1421,8 +1457,7 @@ def _register_workflow_routes(
             )
         except Exception as e:
             if (
-                isinstance(e, temporalio.service.RPCError)
-                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
+                _is_rpc_not_found(e)
             ):
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"

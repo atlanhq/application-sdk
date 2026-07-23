@@ -9,7 +9,7 @@ from uuid import uuid4
 
 # Low-level loguru import used only as the activity-context fallback below.
 from loguru import logger as _loguru_logger
-from temporalio import workflow as _workflow
+# BOOT-TIME: temporalio imported lazily at the single use site below.
 
 from application_sdk.app.base_errors import (
     SecretStoreNotConfiguredError,
@@ -110,6 +110,7 @@ class _WorkflowSafeLogger:
                 pass
 
         if _is_in_workflow():
+            from temporalio import workflow as _workflow  # noqa: PLC0415 — lazy: workflow ctx only
             wf_logger = _workflow.logger
             log_method = getattr(wf_logger, level)
 

@@ -1158,9 +1158,8 @@ def run_handler_mode(config: AppConfig) -> None:
     Loads the handler class (or DefaultHandler) and runs the FastAPI
     server via uvicorn. This is synchronous — uvicorn manages its own loop.
     """
-    from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
-        create_data_converter_for_app,
-    )
+    # BOOT-TIME: data converter creation moved into the handler's lazy
+    # Temporal-client factory — importing it here pulls temporalio at boot.
     from application_sdk.handler import (  # noqa: PLC0415 — cold path: only loaded in handler mode
         DefaultHandler,
         run_app_handler_service,
@@ -1204,7 +1203,7 @@ def run_handler_mode(config: AppConfig) -> None:
         )
 
     handler = handler_class()
-    data_converter = create_data_converter_for_app(app_class)
+    data_converter = None  # BOOT-TIME: built lazily at first workflow call
 
     run_app_handler_service(
         handler,

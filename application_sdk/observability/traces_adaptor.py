@@ -5,7 +5,14 @@ import time
 from typing import Any, ClassVar, Dict, Optional
 
 from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+def _otlp_span_exporter_cls():
+    # BOOT-TIME: grpc + OTLP exporter modules are heavy; import only when a
+    # span exporter is actually wired.
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+
+    return OTLPSpanExporter
+
+
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from opentelemetry.trace import SpanKind
@@ -132,7 +139,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             # Add OTLP exporter if endpoint is configured
             if OTEL_EXPORTER_OTLP_ENDPOINT:
                 try:
-                    otlp_exporter = OTLPSpanExporter(
+                    otlp_exporter = _otlp_span_exporter_cls()(
                         endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
                         timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
                     )
