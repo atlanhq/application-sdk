@@ -60,6 +60,28 @@ class TestAuthInput:
         assert inp.timeout_seconds == 60
 
 
+class TestAgentJsonField:
+    """The optional SDR ``agent_json`` reference field on the handler inputs."""
+
+    def test_defaults_to_none(self):
+        assert AuthInput().agent_json is None
+        assert PreflightInput().agent_json is None
+        assert MetadataInput().agent_json is None
+
+    @pytest.mark.parametrize("key", ["agent_json", "agentJson", "agent-json"])
+    @pytest.mark.parametrize("model", [AuthInput, PreflightInput, MetadataInput])
+    def test_accepts_all_aliases(self, model, key):
+        spec = {"agent-name": "acme", "secret-path": "p"}
+        inp = model.model_validate({key: spec})
+        assert inp.agent_json == spec
+
+    def test_does_not_disturb_credentials(self):
+        creds = [HandlerCredential(key="k", value="v")]
+        inp = PreflightInput(credentials=creds, agent_json={"agent-name": "acme"})
+        assert inp.credentials == creds
+        assert inp.agent_json == {"agent-name": "acme"}
+
+
 class TestAuthOutput:
     def test_required_status(self):
         out = AuthOutput(status=AuthStatus.SUCCESS)
