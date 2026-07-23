@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.19.1] - 2026-07-23
+
+### Bug fixes
+
+- render triggers.events (app-declared event triggers) (DISTR-844) (#2768) ([7ea8ccf](https://github.com/atlanhq/application-sdk/commit/7ea8ccf))
+
 ## [0.19.0] - 2026-07-21
 
 ### Features
