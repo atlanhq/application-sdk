@@ -87,6 +87,44 @@ single entrypoint, `contract/app.pkl` amending `App.pkl`, generated output in
 `app/generated`, root `atlan.yaml` as packaging source of truth, and default
 `extract -> publish` only for asset-producing connectors.
 
+## App Repo Layout
+
+A contract-ized app has this shape. Everything at the root and under
+`app/generated/` is generated from `contract/` — never hand-edit it; edit the
+contract and regenerate.
+
+```text
+your-app/
+|-- atlan.yaml                    # generated — packaging source of truth; DO NOT EDIT
+|-- app.yaml                      # generated — DO NOT EDIT
+|-- .gitignore                    # must ignore app/generated/frontend/static
+|-- main.py
+|-- contract/                     # the source you edit
+|   |-- app.pkl                   # single source of truth (amends App.pkl)
+|   |-- PklProject                # toolkit package dependency
+|   `-- PklProject.deps.json      # resolved package lock (from `pkl project resolve`)
+`-- app/
+    `-- generated/                # served at ATLAN_CONTRACT_GENERATED_DIR
+        |-- __init__.py
+        |-- _input.py             # pydantic AppInputContract
+        |-- {name}.json           # workflow config (filename = contract name)
+        |-- atlan-connectors-{name}.json
+        `-- manifest.json
+```
+
+- **Source vs generated:** you edit only `contract/`. `atlan.yaml`, `app.yaml`,
+  and everything under `app/generated/` are outputs — regenerate, don't edit.
+- **Multi-entrypoint / bundle:** each entrypoint's artifacts render under
+  `app/generated/{entrypoint-name}/`; the root `atlan.yaml` / `app.yaml` own the
+  bundle. See the `bundle` and `card-split` examples.
+- An app may ship extra `contract/*.pkl` files (e.g. a reusable credential
+  contract amending `Credential.pkl`) that generate their own
+  `app/generated/*.json`, plus e2e codegen files (`_e2e_*.py`) for agent-mode
+  apps. `app/generated/frontend/static/` (playground dist) is gitignored.
+
+`contract-toolkit/README.md` (§ App Repo Structure) is the live source if this
+tree drifts.
+
 ## Contract Commands (pkl-native)
 
 This repo guarantees the `pkl` toolchain — there is no dependency on an external
@@ -117,6 +155,23 @@ pkl eval -m . contract/app.pkl
   uses the package amend plus its own `contract/PklProject`.
 - **Update the toolkit version:** edit the `["app-contract-toolkit"].uri` version
   in `contract/PklProject`, then re-run resolve + generate.
+
+**Capture the commands in the app's `pyproject.toml`** so they are repeatable and
+don't live only in the author's head. Add (or verify) the toolkit's recommended
+`poe` task, and ensure `poethepoet` is a dev dependency:
+
+```toml
+[tool.poe.tasks]
+generate-contract.shell = """
+  cd contract && pkl project resolve && cd ..
+  pkl eval -m . contract/app.pkl
+"""
+```
+
+Then `uv run poe generate-contract` resolves and regenerates in one step. This is
+the canonical wrapper (`contract-toolkit/README.md` § Recommended poe task) —
+prefer it over any older per-app variant that evals into a subfolder and copies
+the output up.
 
 ## Discovery
 
@@ -403,5 +458,7 @@ Summarize:
 - What contract source changed and which migrations were applied.
 - Which generated artifacts changed.
 - Which `pkl` commands ran (resolve / eval), and the `app_name` invariant result.
+- Whether the `generate-contract` poe task was added or verified in the app's
+  `pyproject.toml`.
 - The SDK/toolkit versions before and after, relative to the floor.
 - Any skipped validation and the concrete reason.
