@@ -641,10 +641,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # The scorecard is produced per-run by the Tests workflow (the
-          # connector-integration-tests action writes results/test-readiness.json
-          # into the integration-test-results artifact). Find the latest completed
-          # Tests run on the default branch and pull that artifact.
+          # The scorecard is produced per-run by the Tests workflow's `scorecard`
+          # aggregation job (it combines the unit + integration tiers' evidence
+          # and uploads results/test-readiness.json as the test-readiness-scorecard
+          # artifact). Find the latest completed Tests run on the default branch.
           RUN_ID=$(gh run list \
             --repo "${{ github.repository }}" \
             --workflow=tests.yaml \
@@ -668,8 +668,8 @@ jobs:
           # downstream steps (gated on hashFiles) simply no-op — never fail.
           gh run download "$RUN_ID" \
             --repo "${{ github.repository }}" \
-            --name integration-test-results \
-            --dir scorecard-dl || echo "::warning::no integration-test-results artifact (expired?)"
+            --name test-readiness-scorecard \
+            --dir scorecard-dl || echo "::warning::no test-readiness-scorecard artifact (expired?)"
 
       - name: Build history entry
         if: hashFiles('scorecard-dl/test-readiness.json') != ''

@@ -136,7 +136,8 @@
         "status": {
           "enum": [
             "pass",
-            "fail"
+            "fail",
+            "na"
           ],
           "title": "Status",
           "type": "string"
@@ -158,15 +159,18 @@
       "description": "The underlying measured numbers, for dashboard drill-down and recompute.",
       "properties": {
         "coverage": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CoverageMetrics"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "additionalProperties": {
+            "$ref": "#/$defs/CoverageMetrics"
+          },
+          "propertyNames": {
+            "enum": [
+              "unit",
+              "integration",
+              "e2e"
+            ]
+          },
+          "title": "Coverage",
+          "type": "object"
         },
         "tests": {
           "$ref": "#/$defs/RawTests"
@@ -202,6 +206,11 @@
           ],
           "title": "Name",
           "type": "string"
+        },
+        "applicable": {
+          "default": true,
+          "title": "Applicable",
+          "type": "boolean"
         },
         "present": {
           "title": "Present",

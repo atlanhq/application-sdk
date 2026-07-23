@@ -16,6 +16,7 @@ from conformance.scorecard.compute import build_scorecard
 from conformance.scorecard.readers import (
     parse_coverage_json,
     parse_junit,
+    parse_junit_tier,
     tier_for_path,
 )
 from conformance.scorecard.rubric import Rubric, load_rubric
@@ -35,6 +36,7 @@ from conformance.scorecard.validate import scorecard_json_schema, validate_score
 __all__ = [
     # Pipeline
     "parse_junit",
+    "parse_junit_tier",
     "parse_coverage_json",
     "tier_for_path",
     "build_scorecard",

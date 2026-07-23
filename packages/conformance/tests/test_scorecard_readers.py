@@ -8,9 +8,10 @@ import pytest
 from conformance.scorecard.readers import (
     parse_coverage_json,
     parse_junit,
+    parse_junit_tier,
     tier_for_path,
 )
-from conformance.scorecard.schema import CoverageMetrics, RawTests
+from conformance.scorecard.schema import CoverageMetrics, RawTests, TierTestCounts
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "scorecard"
 
@@ -66,6 +67,18 @@ def test_parse_junit_buckets_and_counts() -> None:
     assert tests.e2e.passed == 0
     assert tests.e2e.ran == 1
     assert tests.e2e.green is False
+
+
+def test_parse_junit_tier_attributes_all_testcases_to_one_tier() -> None:
+    """The per-tier-file reader ignores paths and sums every testcase."""
+    counts = parse_junit_tier(_FIXTURES / "junit_mixed.xml")
+    assert isinstance(counts, TierTestCounts)
+    # whole file (across all dirs): 8 total = 5 pass + 1 fail + 1 skip + 1 error
+    assert counts.total == 8
+    assert counts.passed == 5
+    assert counts.failed == 1
+    assert counts.skipped == 1
+    assert counts.errors == 1
 
 
 def test_parse_junit_classname_fallback_when_no_file_attr(tmp_path: Path) -> None:

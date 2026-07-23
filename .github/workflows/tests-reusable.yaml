@@ -285,10 +285,6 @@ jobs:
           pytest-args: ${{ inputs.pytest-args }}
           services-script: ${{ inputs.services-script }}
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
-          # Scorecard stays out of the split path: this job's junit is
-          # integration-only, so an inline scorecard would misreport the unit
-          # tier as absent. Per-tier aggregation lands in a follow-up.
-          emit-scorecard: "false"
 
   # ── Discover e2e suites → matrix ─────────────────────────────────────────
   # Globs the connector's tests/e2e/test_*.py into a strategy.matrix so the
@@ -579,6 +575,77 @@ jobs:
             --conclusion "${{ steps.report.outputs.conclusion }}" \
             --summary-file "${{ steps.report.outputs.summary_file }}" \
             --details-url "$RUN_URL"
+
+  # ── Test-readiness scorecard (per-tier aggregation) ──────────────────────
+  # Combines the unit + integration jobs' evidence (junit + coverage.json) into
+  # one quantified scorecard artifact. Non-PR only (push / merge_group), where
+  # both tiers actually ran — on a PR integration is skipped, so a scorecard
+  # would misreport it. Best-effort and NOT part of the Tests Gate: a failure
+  # here (or an older published conformance predating the per-tier CLI) only
+  # warns. e2e is intentionally not fed — it runs label/dispatch-gated via a
+  # non-junit SDR artifact, so the scorecard marks the e2e tier not-applicable
+  # (no grade cap) rather than dragging every run to a capped B.
+  scorecard:
+    name: Test-readiness scorecard
+    needs: [unit, detect-integration, integration]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.31"
+          enable-cache: true
+
+      # Both downloads are best-effort: unit always uploads its artifact, but
+      # integration is absent when it had no suite / was skipped — the CLI then
+      # scores an empty (zero) integration tier, which correctly counts against.
+      - name: Download unit evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        continue-on-error: true
+        with:
+          name: unit-test-coverage
+          path: unit-evidence
+
+      - name: Download integration evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        continue-on-error: true
+        with:
+          name: integration-test-results
+          path: integration-evidence
+
+      - name: Generate test-readiness scorecard
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          [ -f unit-evidence/results/test-results.xml ] || { echo "no unit junit; skipping scorecard"; exit 0; }
+          mkdir -p results
+          # Integration flags may point at missing files (no suite / skipped) —
+          # the CLI scores those as an empty integration tier. Trailing `|| echo`
+          # keeps this non-blocking: an older published conformance without the
+          # per-tier CLI must never redden the run (works once 0.17.0 publishes).
+          uvx atlan-application-sdk-conformance scorecard \
+            --unit-junit unit-evidence/results/test-results.xml \
+            --unit-coverage unit-evidence/coverage.json \
+            --integration-junit integration-evidence/results/test-results.xml \
+            --integration-coverage integration-evidence/coverage.json \
+            --repo "$REPO" \
+            --commit "$SHA" \
+            --out results/test-readiness.json \
+            || echo "::warning::test-readiness scorecard generation failed (skipped)"
+
+      - name: Upload scorecard
+        if: hashFiles('results/test-readiness.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-readiness-scorecard
+          path: results/test-readiness.json
+          retention-days: 14
 
   # ── Aggregator gate (single required check for branch protection) ────────
   tests-passed:
