@@ -799,6 +799,16 @@ flatManifestArgs: Boolean = true
 /// `args.metadata`, preserving the mapping keys verbatim.
 manifestMetadataArgs: Mapping<String, String>?
 
+/// Static literal args merged verbatim into the extract node's `inputs.args`.
+/// Unlike form-field args (rendered as `{{placeholder}}` and resolved per request),
+/// these are constants baked into the DAG — for config a workflow needs at dispatch
+/// that has no request context and isn't a credential or form field (e.g. an
+/// event-driven drain's `iceberg_table_name`, mirroring the AE bootstrap DAG it
+/// replaces). Emitted as-is; a reconciler (Local Marketplace) preserves them because
+/// they carry no `{{...}}` placeholder to strip. Keys must not collide with the
+/// credential/agent/form-field arg names.
+manifestStaticArgs: Mapping<String, Any> = new Mapping {}
+
 // ---------------------------------------------------------------------------
 // DAG node definitions
 // ---------------------------------------------------------------------------
@@ -2752,6 +2762,11 @@ local function generateExtractNode(): Mapping<String, Any> =
       ["argo_workflow_slug"] = ""
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
       ["args"] = new Mapping {
+        // Static literal args (e.g. an event drain's iceberg_table_name) — constants
+        // baked into the DAG, no placeholder, so a reconciler keeps them verbatim.
+        for (staticKey, staticVal in manifestStaticArgs) {
+          [staticKey] = staticVal
+        }
         ["credential"] = "{{credential}}"
         // SDR / agent-mode credential slot. Emitted whenever the app does not
         // model `agent-json` — the gap that silently broke MSSQL's SDR rollout

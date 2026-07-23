@@ -37,6 +37,11 @@ local appWithSchedules = (App) {
   hasCredentialConfig = false
   uiConfig = appUiConfig
 
+  // Static DAG arg (constant, baked into inputs.args) alongside the placeholder args.
+  manifestStaticArgs {
+    ["iceberg_table_name"] = "app_events_table"
+  }
+
   pipeline {
     publish = null
   }
@@ -135,6 +140,11 @@ local nativeWithSchedules = (NativeApp) {
   workflowType = "NativeWithSchedulesWorkflow"
   hasPublishStep = false
   hasPublishInputFields = false
+
+  // Static DAG arg (constant, baked into inputs.args) — e.g. an event drain's table.
+  manifestStaticArgs {
+    ["iceberg_table_name"] = "native_events_table"
+  }
 
   schedules {
     new NativeApp.ScheduleSpec {
@@ -242,6 +252,10 @@ facts {
     appManifest["triggers"].containsKey("events")
   }
 
+  ["App renders manifestStaticArgs into the DAG's inputs.args (verbatim)"] {
+    appManifest["dag"]["extract"]["inputs"]["args"]["iceberg_table_name"] == "app_events_table"
+  }
+
   ["App events-only: renders triggers.events with schedules ABSENT"] {
     appEventsOnlyManifest["triggers"].containsKey("events")
     appEventsOnlyManifest["triggers"]["events"].length == 1
@@ -271,6 +285,10 @@ facts {
     nativeManifest["triggers"]["events"][0]["source"]["topic"] == "native.cdc.user_entity"
     nativeManifest["triggers"]["events"][0]["trigger_config"]["ack_paths"][0] == "$.sync.outputs.ack_path"
     nativeManifest["triggers"]["events"][0]["status"] == "ACTIVE"
+  }
+
+  ["NativeApp renders manifestStaticArgs into the DAG's inputs.args (verbatim)"] {
+    nativeManifest["dag"]["extract"]["inputs"]["args"]["iceberg_table_name"] == "native_events_table"
   }
 
   ["NativeApp events-only: renders triggers.events with schedules ABSENT"] {
