@@ -210,6 +210,10 @@ def test_missing_integration_suite_counts_against() -> None:
     assert it.present is False
     assert it.score == 0
     assert sc.aggregate.maturity == "bronze"  # unit green, but no integration
+    # An absent tier is vacuously green (failed==0, errors==0) while not present,
+    # so all-green passes here. Pin that so a future change to green/all-green
+    # semantics can't silently flip this gate.
+    assert _gate(sc, "all-green").status == "pass"
 
 
 def test_all_gates_always_reported() -> None:
