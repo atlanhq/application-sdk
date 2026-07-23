@@ -294,3 +294,123 @@ class TestBuildSdrActivities:
 
         # Each concurrent call must have seen only its own credential.
         assert set(seen_credentials) == {"user-A", "user-B"}
+
+
+class TestSdrAgentJsonResolution:
+    """Worker-side resolution of the SDR ``agent_json`` reference.
+
+    Mirrors ``test_preflight_gate_activity`` — the SDR activities resolve an
+    agent-json reference to concrete credentials before binding the handler
+    context, so a ``secret-path`` reference never reaches the handler as a
+    literal string.
+    """
+
+    @staticmethod
+    def _by_name(handler: Handler) -> dict[str, object]:
+        activities = build_sdr_activities(handler, app_name="myapp")
+        return {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+
+    async def test_agent_json_resolved_and_populates_credentials(self) -> None:
+        handler = _StubHandler()
+        preflight = self._by_name(handler)[SDR_PREFLIGHT_ACTIVITY]
+
+        resolver = mock.MagicMock()
+        resolver.resolve_raw = mock.AsyncMock(
+            return_value={"host": "db", "username": "u", "extra": {"role": "r"}}
+        )
+        fake_infra = mock.MagicMock()
+        fake_infra.secret_store = mock.MagicMock(name="SecretStore")
+
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.get_infrastructure",
+                return_value=fake_infra,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.CredentialResolver",
+                return_value=resolver,
+            ),
+        ):
+            result = await preflight(
+                PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
+            )
+
+        assert result.status == PreflightStatus.READY
+        assert handler.preflight_input is not None
+        seen = {c.key: c.value for c in handler.preflight_input.credentials}
+        assert seen == {"host": "db", "username": "u", "extra.role": "r"}
+        resolver.resolve_raw.assert_awaited_once()
+        # Resolved credentials are what the handler context saw.
+        captured = handler.context_during_call
+        assert captured is not None
+        assert captured.get_credential("host") == "db"  # type: ignore[attr-defined]
+
+    async def test_agent_json_resolution_on_all_three_activities(self) -> None:
+        resolver = mock.MagicMock()
+        resolver.resolve_raw = mock.AsyncMock(return_value={"username": "u"})
+        fake_infra = mock.MagicMock()
+        fake_infra.secret_store = mock.MagicMock(name="SecretStore")
+
+        agent_json = {"agent-name": "acme", "secret-path": "p"}
+        cases = (
+            (SDR_TEST_AUTH_ACTIVITY, AuthInput(agent_json=agent_json)),
+            (SDR_PREFLIGHT_ACTIVITY, PreflightInput(agent_json=agent_json)),
+            (SDR_FETCH_METADATA_ACTIVITY, MetadataInput(agent_json=agent_json)),
+        )
+        for name, input_obj in cases:
+            handler = _StubHandler()
+            activity = self._by_name(handler)[name]
+            with (
+                mock.patch(
+                    "application_sdk.execution._temporal.sdr.get_infrastructure",
+                    return_value=fake_infra,
+                ),
+                mock.patch(
+                    "application_sdk.execution._temporal.sdr.CredentialResolver",
+                    return_value=resolver,
+                ),
+            ):
+                await activity(input_obj)
+            captured = handler.context_during_call
+            assert captured is not None
+            assert captured.get_credential("username") == "u"  # type: ignore[attr-defined]
+
+    async def test_no_agent_json_skips_resolution(self) -> None:
+        from application_sdk.handler.contracts import HandlerCredential
+
+        handler = _StubHandler()
+        preflight = self._by_name(handler)[SDR_PREFLIGHT_ACTIVITY]
+
+        creds = [HandlerCredential(key="api_key", value="secret123")]
+        with mock.patch(
+            "application_sdk.execution._temporal.sdr.CredentialResolver",
+        ) as resolver_cls:
+            await preflight(PreflightInput(credentials=creds))
+
+        # No reference => no resolver instantiation; creds pass through as-is.
+        resolver_cls.assert_not_called()
+        assert handler.preflight_input is not None
+        assert handler.preflight_input.credentials == creds
+
+    async def test_raises_when_secret_store_unavailable(self) -> None:
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        handler = _StubHandler()
+        preflight = self._by_name(handler)[SDR_PREFLIGHT_ACTIVITY]
+
+        fake_infra = mock.MagicMock()
+        fake_infra.secret_store = None
+        with mock.patch(
+            "application_sdk.execution._temporal.sdr.get_infrastructure",
+            return_value=fake_infra,
+        ):
+            with pytest.raises(DependencyUnavailableError):
+                await preflight(
+                    PreflightInput(
+                        agent_json={"agent-name": "acme", "secret-path": "p"}
+                    )
+                )
+        # Bailed before ever calling the handler.
+        assert handler.preflight_input is None
