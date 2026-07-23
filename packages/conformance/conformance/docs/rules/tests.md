@@ -829,7 +829,7 @@ explicitly-configured CI job (rare — prefer the directory + runtime-skip patte
 
 **Tier:** `warn` · **Scope:** `both` · **Category:** `test-async-config` · **Autofixable:** — · **Since:** 0.17.0
 
-> pyproject sets asyncio_default_fixture_loop_scope to a broadened scope but leaves asyncio_default_test_loop_scope unset (defaults to 'function'), so in-body async tests can hang on fixture-owned resources
+> pyproject sets asyncio_default_fixture_loop_scope to a broadened scope with asyncio_default_test_loop_scope unset (defaults to 'function') AND a test drives workflow execution from its body, so that test hangs on the fixture-owned worker/client
 
 **Rationale:** pytest-asyncio has two independent loop-scope knobs in [tool.pytest.ini_options]:
 asyncio_default_fixture_loop_scope (the loop async fixtures default to) and
@@ -846,8 +846,13 @@ failure is silent by construction — tests that only read a value a fixture alr
 computed pass, so the mismatch hides until someone writes the first test that awaits
 fixture-owned work in-body. It surfaced on a canonical connector whose sole in-body
 Temporal test (a REUSE integration case) hung for the full pytest-timeout while every
-sibling test, which read a class-fixture result, passed. Keep the two scopes consistent:
-when fixtures are broadened, set the test scope explicitly too.
+sibling test, which read a class-fixture result, passed. Like T018 (which fires only
+when an addopts deselect removes tests that exist), this rule is correlated, not
+config-only: it fires only when the risky config coincides with a collectable test whose
+body actually drives workflow execution via an awaited
+execute_app/execute_workflow/start_workflow call. A suite that runs all execution inside
+fixtures and only asserts on the result in test bodies is on the safe path and is not
+flagged.
 
 `[tool.pytest.ini_options]` in `pyproject.toml` sets
 `asyncio_default_fixture_loop_scope` to a broadened scope (`session` / `package` /
@@ -866,6 +871,13 @@ The failure is silent by construction. Tests that only *read* a value a fixture 
 computed (the common case) pass, so the mismatch stays hidden until the first test that
 awaits fixture-owned work in-body is written — at which point it hangs, not fails, which
 is far costlier to diagnose.
+
+**Correlated, not config-only.** Like **T018**, this rule fires only when the risky
+config *and* real evidence coincide: a collectable test *function* (not a fixture) whose
+body awaits `execute_app` / `execute_workflow` / `start_workflow` — the SDK's
+workflow-submission surface. A suite with the mismatched config but all execution behind
+session/class-scoped fixtures (test bodies only assert on the result) is on the safe
+path and is **not** flagged.
 
 **Remediation:** set `asyncio_default_test_loop_scope` explicitly — usually to the same
 scope as the fixtures — so tests and their fixtures share a loop. Before:

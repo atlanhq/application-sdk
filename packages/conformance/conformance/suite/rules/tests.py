@@ -147,11 +147,13 @@ Directory-scoped tiering (the Unit/Integration split, application-sdk#2852):
   ``asyncio_default_test_loop_scope`` is left unset (it defaults to
   ``function``).  Async fixtures then share one long-lived loop but each test
   runs on its own function-scoped loop, so a test that drives a fixture-owned
-  resource (a Temporal worker/client, an async DB pool) *from its own body*
-  awaits work the fixture's loop must service while that loop is idle — and hangs
-  until the suite timeout.  The failure is silent until the first in-body async
-  test is written; set ``asyncio_default_test_loop_scope`` explicitly (usually to
-  match the fixtures) so tests and fixtures share a loop.
+  resource (a Temporal worker/client) *from its own body* awaits work the
+  fixture's loop must service while that loop is idle — and hangs until the suite
+  timeout.  Correlated like T018: fires only when the risky config coincides with
+  a collectable test whose body awaits ``execute_app`` / ``execute_workflow`` /
+  ``start_workflow`` (a suite that runs all execution inside fixtures is not
+  flagged).  Set ``asyncio_default_test_loop_scope`` explicitly (usually to match
+  the fixtures) so tests and fixtures share a loop.
 """
 
 from __future__ import annotations
@@ -1259,14 +1261,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "awaits fixture-owned work in-body. It surfaced on a canonical "
             "connector whose sole in-body Temporal test (a REUSE integration case) "
             "hung for the full pytest-timeout while every sibling test, which read "
-            "a class-fixture result, passed. Keep the two scopes consistent: when "
-            "fixtures are broadened, set the test scope explicitly too."
+            "a class-fixture result, passed. Like T018 (which fires only when an "
+            "addopts deselect removes tests that exist), this rule is correlated, "
+            "not config-only: it fires only when the risky config coincides with a "
+            "collectable test whose body actually drives workflow execution via an "
+            "awaited execute_app/execute_workflow/start_workflow call. A suite that "
+            "runs all execution inside fixtures and only asserts on the result in "
+            "test bodies is on the safe path and is not flagged."
         ),
         short_description=(
             "pyproject sets asyncio_default_fixture_loop_scope to a broadened scope "
-            "but leaves asyncio_default_test_loop_scope unset (defaults to "
-            "'function'), so in-body async tests can hang on fixture-owned "
-            "resources"
+            "with asyncio_default_test_loop_scope unset (defaults to 'function') "
+            "AND a test drives workflow execution from its body, so that test hangs "
+            "on the fixture-owned worker/client"
         ),
         full_description=(
             "``[tool.pytest.ini_options]`` in ``pyproject.toml`` sets\n"
@@ -1288,6 +1295,14 @@ RULES: tuple[RuleDefinition, ...] = (
             "hidden until the first test that awaits fixture-owned work in-body is\n"
             "written — at which point it hangs, not fails, which is far costlier to\n"
             "diagnose.\n"
+            "\n"
+            "**Correlated, not config-only.** Like **T018**, this rule fires only when\n"
+            "the risky config *and* real evidence coincide: a collectable test\n"
+            "*function* (not a fixture) whose body awaits ``execute_app`` /\n"
+            "``execute_workflow`` / ``start_workflow`` — the SDK's workflow-submission\n"
+            "surface. A suite with the mismatched config but all execution behind\n"
+            "session/class-scoped fixtures (test bodies only assert on the result) is\n"
+            "on the safe path and is **not** flagged.\n"
             "\n"
             "**Remediation:** set ``asyncio_default_test_loop_scope`` explicitly —\n"
             "usually to the same scope as the fixtures — so tests and their fixtures\n"

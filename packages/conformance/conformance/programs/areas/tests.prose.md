@@ -493,16 +493,17 @@ to residue):
 - **T019 AsyncioTestLoopScopeUnset** — `[tool.pytest.ini_options]` in
   `pyproject.toml` sets `asyncio_default_fixture_loop_scope` to a broadened scope
   (`session` / `package` / `module` / `class`) but does not set
-  `asyncio_default_test_loop_scope`, which defaults to `function`. Async fixtures
-  then share one long-lived event loop while each test runs on its own
-  function-scoped loop. A fixture that owns a live resource bound to *its* loop —
-  a Temporal worker/client, an async DB engine/pool, an `httpx.AsyncClient` — is
-  invisible to a test that drives that resource from the test body: the test
-  awaits work the fixture's loop must service, but that loop is idle while the
-  test's loop runs, so the await never completes and the test hangs until the
-  suite timeout fires. The trap is silent — tests that only read a value a
-  fixture already computed pass, so it hides until the first in-body async test
-  is written.
+  `asyncio_default_test_loop_scope`, which defaults to `function` — **and** a
+  collectable test's body awaits `execute_app` / `execute_workflow` /
+  `start_workflow` (the finding message names the offending tests). Async
+  fixtures then share one long-lived event loop while each test runs on its own
+  function-scoped loop. The named test drives a fixture-owned Temporal
+  worker/client (bound to the fixture loop) from its own body: it awaits work the
+  fixture's loop must service, but that loop is idle while the test's loop runs,
+  so the await never completes and the test hangs until the suite timeout fires.
+  The trap is silent — tests that only read a value a fixture already computed
+  pass. Like T018, the rule is correlated, not config-only: a suite with the
+  mismatched config but all execution inside fixtures is not flagged.
 
   The durable fix is a one-line config edit: set `asyncio_default_test_loop_scope`
   explicitly, usually to the same scope as the fixtures, so tests and fixtures
