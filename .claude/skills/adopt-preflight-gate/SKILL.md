@@ -25,12 +25,12 @@ optional_triggers:
   - "preflight gate migration"
   - "will this app break on SDK bump"
 owner: connector-platform-team
-last_updated: "2026-07-17"
+last_updated: "2026-07-23"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
 outputs:
-  - uv.lock (SDK upgraded to a gate-capable release; pyproject floor left unchanged unless it excluded that release)
+  - uv.lock + pyproject.toml (SDK floor raised to >=3.24.0 and lockfile synced)
   - app/handler.py (status logic per the agreed check tree; typed errors on failed checks)
   - deleted app-owned preflight @task + call sites (collision class, plus any duplicate readiness activities the developer agrees to consolidate — always with a coverage diff)
   - contract/app.pkl + regenerated app/generated/ (only if form-only metadata keys must move onto the input contract)
@@ -74,6 +74,14 @@ status. Read its `app/handler.py` before proposing changes.
   reported (as `outcome="would_block"`) but the run proceeds. Blocking real
   runs is a per-app opt-in (`preflight_gate_mode = "hard"`, next section) taken
   once the app's checks are trusted.
+- The two surfaces receive **credentials** differently — a nuance the "one
+  implementation" principle hides. The UI's Test-Connection sends credentials
+  inline in the request body; the gate has no body and **resolves** credentials
+  from the extraction input's top-level triple (`credential_guid` /
+  `credential_ref` / `agent_json`). It does not read
+  `connection.attributes.defaultCredentialGuid`. So a green UI check is not
+  proof the gate will resolve the same credential — if the guid only reaches the
+  input via the connection, the gate sees none (phase-0 bucket 9).
 
 ## Hard mode — the gate-level opt-in (CNCT-81)
 
@@ -193,16 +201,45 @@ Run these detections and report the bucket(s) before changing anything:
    / `get_credentials` called inside `preflight_check`). If found, the app
    adopts the SDK `preflight_credential_refs` primitive in phase 2 (see 2g) — it
    must NOT hand-roll credential resolution or the fail-open taxonomy.
+8. **Multi-entrypoint class (crawler + miner, etc.)** — more than one
+   `@entrypoint` method on the App class (grep `@entrypoint`). The gate is
+   injected per workflow type and `PreflightInput.entrypoint` is baked from the
+   entry-point's registered name — so a miner run reliably arrives with
+   `entrypoint="miner"`, a crawler run with `entrypoint="crawler"`. The single
+   `preflight_check` must branch on `input.entrypoint` and run only that
+   entrypoint's checks; each entrypoint gets its own tree in phase 2 (see 2h).
+   Two traps: (a) a `getattr(input, "entrypoint", "crawler")`-style default is
+   dead code — the field always exists, defaulting to `""`, which is falsy
+   against `== "miner"`, so a mis-set default silently routes miner runs down
+   the crawler branch; (b) entrypoints usually differ in how credentials arrive
+   (next bucket).
+9. **Late-credential-derivation class** — the input carries the credential
+   triple, but `credential_guid` / `credential_ref` is populated *inside the
+   entrypoint body* rather than at input construction. Classic case: a miner
+   that reuses the crawler's connection, so the guid arrives only on
+   `connection.attributes.defaultCredentialGuid` and the body derives it
+   (`input.model_copy(update={"credential_guid": ...})`). The gate runs before
+   any body code, so it resolves an **empty triple** → `credentials=[]` → the
+   handler's connect step fails → soft `would_block`, while extraction (which
+   derives the guid late) still succeeds. Tell-tale triad: UI Test-Connection
+   green, miner gate soft-fails, extraction runs anyway. Detect by grepping
+   entrypoint bodies for credential assignment or `defaultCredentialGuid` reads
+   before the first extraction activity. Fix in phase 2 by lifting the
+   derivation to input construction (see 2h). SDK-side fix tracked in CNCT-92.
 
 ## Phase 1 — Bump and boot
 
-1. Pull the latest gate-capable `atlan-application-sdk` **without raising the
-   floor** in `pyproject.toml`: `uv lock --upgrade-package atlan-application-sdk`
-   then `uv sync --all-extras --all-groups`. This upgrades the lockfile to the
-   newest release the existing constraint allows — the gate and the
-   multi-credential primitive ship within the current major, so the declared
-   floor does not need to move. Only edit the pyproject constraint if the
-   existing floor actually excludes the release you need.
+1. Bump `atlan-application-sdk` to the current gate-capable floor —
+   **`>=3.24.0`** — in `pyproject.toml`, then
+   `uv lock --upgrade-package atlan-application-sdk` and
+   `uv sync --all-extras --all-groups`. 3.24.0 is the baseline that carries the
+   gate, the multi-credential primitive (`preflight_credential_refs` /
+   `credentials_by_name`), and the per-entrypoint credential handling this skill
+   relies on. Raise the declared floor if it sits below `>=3.24.0`. (Earlier
+   revisions of this skill said "don't raise the floor" — that is retired; pin
+   `>=3.24.0` from now.) After the bump, confirm the surfaces landed:
+   `PreflightInput.credentials_by_name` / `preflight_credential_refs` must be
+   importable, or the upgrade didn't take.
 2. **Boot the worker.** Boot is the collision detector.
 3. Collision fix (if bucket 1): delete the app's `@task preflight`, its call
    site in the workflow, and any now-orphaned private preflight input/output
@@ -455,6 +492,54 @@ This primitive ships in the SDK release the phase-1 lock upgrade pulls; if
 `PreflightInput.credentials_by_name` / `preflight_credential_refs` aren't present
 on the installed SDK, the upgrade didn't land — re-run phase 1 before adopting.
 
+### 2h. Multi-entrypoint apps — one handler, per-entrypoint trees + per-entrypoint creds
+
+Only if phase 0 flagged the multi-entrypoint class (bucket 8). One
+`preflight_check`, branching on `input.entrypoint`; design each entrypoint's
+tree separately in 2c (a crawler validates schemas/tables; a miner validates
+its query-history prerequisites, e.g. `pg_stat_statements`). Keep the branches
+disjoint — never run the crawler's tables probe on a miner run, or vice versa.
+
+The load-bearing gate-path issue is **credential sourcing per entrypoint**
+(bucket 9). If an entrypoint's guid arrives only on the reused connection, lift
+it onto the top-level `credential_guid` at **input construction** so the gate —
+which runs before the body — resolves it:
+
+```python
+class MyMinerInput(QueryExtractionInput):
+    @model_validator(mode="after")
+    def _lift_credential_guid_from_connection(self):
+        # gate reads the top-level triple before any body code runs, so the
+        # connection's guid must be lifted here, not in run()
+        if not self.credential_guid and self.connection is not None:
+            derived = (
+                getattr(self.connection.attributes, "default_credential_guid", "")
+                or getattr(self.connection.attributes, "defaultCredentialGuid", "")
+            )
+            if derived:
+                self.credential_guid = derived
+        return self
+```
+
+Precedence — get this exactly, especially for SDR apps:
+
+1. an explicit top-level `credential_guid` / `credential_ref` always wins —
+   never overwrite it;
+2. `agent_json` (SDR) wins over any guid sitting on the connection;
+3. fall back to `connection.attributes.defaultCredentialGuid` only when the
+   whole triple is empty.
+
+Then delete the old body-side derivation (coverage diff, corollary 3) so there
+is one source of truth. Temporal deserializes the workflow input through
+pydantic before dispatching the gate, so a `mode="after"` validator has already
+run — verify it (don't assume) by feeding a connection-only input through
+`PreflightGateInput.from_extraction_input(input, "<entrypoint>")` and asserting
+`.credential_guid` is populated.
+
+This is an app-side stopgap. The connection-carries-its-default-guid pattern is
+platform-wide, so the durable fix is the gate resolving it directly (CNCT-92);
+when that lands, delete the validator.
+
 ## Phase 3 — Tests (mandatory, thorough)
 
 Update or write unit tests so every verdict path is pinned. Minimum matrix:
@@ -473,6 +558,17 @@ Update or write unit tests so every verdict path is pinned. Minimum matrix:
 
 Then the full app suite green, pre-commit clean, and one final worker boot.
 Do not claim done with anything less.
+
+For a multi-entrypoint or late-credential-derivation app, add a gate-path check
+the unit suite can't give you: start the real workflow (`uv run main.py`,
+provision a guid via `/dev/local-vault`, then `/start?entrypoint=<ep>` with the
+guid **only** on `connection.attributes.defaultCredentialGuid`) and read the
+gate verdict from the "Preflight gate outcome" event. The console drops the
+event's structured extras, so read the local observability logs
+(`local/dapr/objectstore/artifacts/apps/observability/non-sdr/logs/**.json.gz`,
+gzipped JSONL) and confirm `outcome="proceeded"` with the entrypoint's checks in
+`check_matrix`. `no_verdict`/`ActivityError` means the gate activity fail-opened
+(e.g. flaky embedded Dapr locally), not a real verdict — re-run.
 
 ## Pitfalls (each observed live during the rollout — check all of them)
 
@@ -493,6 +589,15 @@ Do not claim done with anything less.
   credential blocks healthy runs). Use `preflight_credential_refs` +
   `credentials_by_name` (2g); declare it as a `ClassVar` — a pydantic field
   silently no-ops back to the single-triple path.
+- Credential derived from the connection in the entrypoint body → the gate sees
+  an empty triple and soft-fails `would_block` while extraction succeeds. Lift
+  the guid at input construction, not in `run()` (phase-0 bucket 9, 2h).
+- Trusting a green UI Test-Connection as gate readiness → the UI gets creds
+  inline; the gate resolves them from the triple, so they can disagree. Read the
+  "Preflight gate outcome" event (`outcome`/`reason`/`check_matrix`), not the
+  UI, to know what the gate actually did.
+- Mis-set `entrypoint` default in `preflight_check` → multi-entrypoint runs
+  routed down the wrong branch (a miner silently running the crawler's checks).
 
 ## Agent protocol — stop points and what to report at each
 
