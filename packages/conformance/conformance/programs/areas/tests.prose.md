@@ -7,9 +7,10 @@ description: >
   test-coverage gaps (T002-T003), dev-entrypoint delegation (T004), assertion
   meaningfulness and silent non-execution (T005-T009), test-tier structure and
   placement (T010-T013), coverage-config integrity (T014-T015), e2e CI
-  queue isolation (T016 worker-side overlay + T017 harness-side agent_spec), and
+  queue isolation (T016 worker-side overlay + T017 harness-side agent_spec),
   the directory-scoped integration tier being deselected by pyproject addopts
-  (T018).
+  (T018), and a broadened pytest-asyncio fixture loop scope with no matching test
+  loop scope (T019).
   Every rule in this series classifies as "judgment" — each fix requires reading
   the test's I/O intent, the app's manifest/contract, or the app's App subclass
   before a fix can be proposed with confidence.  T014/T015 are the most
@@ -18,9 +19,10 @@ description: >
   confirming an omit pattern is legitimate still requires judgment.  T016/T017
   are a matched pair (the worker queue and the harness queue must agree);
   T016 edits a file under `.github/` (outside write-scope) and T017 edits a file
-  under `tests/` (also outside write-scope), so both route to residue.  T018
-  edits `pyproject.toml` (within write-scope), but whether an integration-tier
-  deselect is legitimate is a judgment call, so it routes to residue too.
+  under `tests/` (also outside write-scope), so both route to residue.  T018 and
+  T019 both edit `pyproject.toml` (within write-scope), but whether an
+  integration-tier deselect is legitimate (T018), and which test-loop scope a
+  suite should adopt (T019), are judgment calls, so both route to residue too.
 ---
 
 ### Maintains
@@ -487,6 +489,59 @@ to residue):
   `classification` is always `"judgment"` (whether an integration-tier deselect
   is legitimate requires reading the app's CI jobs and test intent; routed to
   residue for a human to confirm).
+
+- **T019 AsyncioTestLoopScopeUnset** — `[tool.pytest.ini_options]` in
+  `pyproject.toml` sets `asyncio_default_fixture_loop_scope` to a broadened scope
+  (`session` / `package` / `module` / `class`) but does not set
+  `asyncio_default_test_loop_scope`, which defaults to `function`. Async fixtures
+  then share one long-lived event loop while each test runs on its own
+  function-scoped loop. A fixture that owns a live resource bound to *its* loop —
+  a Temporal worker/client, an async DB engine/pool, an `httpx.AsyncClient` — is
+  invisible to a test that drives that resource from the test body: the test
+  awaits work the fixture's loop must service, but that loop is idle while the
+  test's loop runs, so the await never completes and the test hangs until the
+  suite timeout fires. The trap is silent — tests that only read a value a
+  fixture already computed pass, so it hides until the first in-body async test
+  is written.
+
+  The durable fix is a one-line config edit: set `asyncio_default_test_loop_scope`
+  explicitly, usually to the same scope as the fixtures, so tests and fixtures
+  share a loop. Before:
+
+  ```toml
+  [tool.pytest.ini_options]
+  asyncio_mode = "auto"
+  asyncio_default_fixture_loop_scope = "session"
+  # asyncio_default_test_loop_scope unset -> defaults to 'function'
+  ```
+
+  After:
+
+  ```toml
+  [tool.pytest.ini_options]
+  asyncio_mode = "auto"
+  asyncio_default_fixture_loop_scope = "session"
+  asyncio_default_test_loop_scope = "session"
+  ```
+
+  Restructuring the offending test so its async work runs inside a same-scope
+  fixture (the test body only asserts on the result) also removes the hang and
+  matches how most suites already drive workflow execution — but it leaves the
+  config trap for the next author, so prefer the explicit test-scope setting.
+
+  **Route to residue** with the suggested edit. The target file
+  (`pyproject.toml`) is within write-scope, but choosing the right test-loop
+  scope — and confirming the broadened fixture scope is itself intended — is a
+  judgment call series-typical for the T-series, so T019 is not auto-applied.
+
+  Suppress with `# conformance: ignore[T019] <reason>` on the
+  `asyncio_default_fixture_loop_scope` line only when the mismatch is deliberate
+  (e.g. every async fixture is loop-agnostic and no test drives fixture-owned
+  work in-body); state that reason explicitly.
+
+  `classification` is always `"judgment"` (the correct test-loop scope depends on
+  how the suite's async fixtures and tests interact, which the finding alone
+  doesn't say; routed to residue for a human to confirm).
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
