@@ -103,7 +103,12 @@ class RawTests(BaseModel):
 class RawMetrics(BaseModel):
     """The underlying measured numbers, for dashboard drill-down and recompute."""
 
-    coverage: CoverageMetrics | None = None
+    coverage: dict[TierName, CoverageMetrics] = Field(default_factory=dict)
+    """Per-tier coverage keyed by tier name; only tiers that produced a coverage
+    report are present (e.g. ``{"unit": {...}, "integration": {...}}``).  Dict
+    keys are the literal tier names — the ``to_camel`` alias generator renames
+    model *fields*, not dict keys, so they stay lowercase on the wire."""
+
     tests: RawTests = Field(default_factory=RawTests)
 
     model_config = _COMMON
@@ -135,6 +140,12 @@ class Tier(BaseModel):
     """A test tier (unit / integration / e2e) with its weighted sub-score."""
 
     name: TierName
+    applicable: bool = True
+    """Whether this tier was measured in the scored run.  ``False`` means no
+    evidence was available (e.g. the e2e job did not run) — the tier is then
+    excluded from the aggregate (weights renormalize over applicable tiers) and
+    its gates go inactive, rather than being scored 0 and dragging the grade."""
+
     present: bool
     weight: float = Field(..., ge=0.0, le=1.0)
     score: int = Field(..., ge=0, le=100)
@@ -147,7 +158,10 @@ class Gate(BaseModel):
     """A SonarQube-style quality gate that can cap the grade regardless of score."""
 
     id: str
-    status: Literal["pass", "fail"]
+    status: Literal["pass", "fail", "na"]
+    """``na`` when the gate's tier was not measured (e.g. ``e2e-present`` on a
+    run where e2e did not execute) — it neither passes nor caps."""
+
     effect: str
     """The cap this gate applies when failing, e.g. ``"cap:B"``."""
 

@@ -2,6 +2,9 @@
 
 Co-located module (checked out with the composite action in consumer repos);
 the test lives here with the other action-script tests.
+
+Signature: evaluate/render take
+(unit, integration, detect_integration, discover_e2e, e2e).
 """
 
 from __future__ import annotations
@@ -19,52 +22,84 @@ from verify_test_gate import evaluate, main, render  # noqa: E402
 
 
 def test_all_pass() -> None:
-    assert evaluate("success", "success", "success") == []
+    assert evaluate("success", "success", "success", "success", "success") == []
 
 
-def test_all_skipped_e2e_not_requested() -> None:
-    # No `e2e` label: discovery + matrix skipped, unit tests pass.
-    assert evaluate("success", "skipped", "skipped") == []
+def test_integration_skipped_is_pass() -> None:
+    # Integration is skipped on PRs and when a connector has no integration
+    # suite — both legitimate. On a PR detect-integration is also skipped.
+    # Unit passing + e2e not requested ⇒ gate passes.
+    assert evaluate("success", "skipped", "skipped", "skipped", "skipped") == []
+
+
+def test_integration_skipped_no_suite_is_pass() -> None:
+    # Non-PR, connector ships no integration suite: detect-integration succeeds
+    # (count=0 is legitimate) and integration skips cleanly — a pass.
+    assert evaluate("success", "skipped", "success", "skipped", "skipped") == []
 
 
 # --- failing states --------------------------------------------------------
 
 
-def test_tests_fail() -> None:
-    errors = evaluate("failure", "skipped", "skipped")
+def test_unit_fail() -> None:
+    errors = evaluate("failure", "success", "success", "skipped", "skipped")
     assert len(errors) == 1
-    assert "tests job" in errors[0]
+    assert "unit tests" in errors[0]
+
+
+def test_integration_fail() -> None:
+    errors = evaluate("success", "failure", "success", "skipped", "skipped")
+    assert len(errors) == 1
+    assert "integration tests" in errors[0]
+
+
+def test_integration_cancelled_is_failure() -> None:
+    assert evaluate("success", "cancelled", "success", "skipped", "skipped") != []
+
+
+def test_detect_integration_fail_fails_gate() -> None:
+    # The core hole this closes: a detection failure drops integration to a
+    # skip (which on its own reads as a pass), so the failed detection must
+    # itself fail the gate.
+    errors = evaluate("success", "skipped", "failure", "skipped", "skipped")
+    assert len(errors) == 1
+    assert "integration-suite detection" in errors[0]
+
+
+def test_detect_integration_cancelled_is_failure() -> None:
+    assert evaluate("success", "skipped", "cancelled", "skipped", "skipped") != []
 
 
 def test_discover_fail_requested_but_empty() -> None:
     # discovery failed (e2e requested, zero suites); e2e leg then skipped.
-    errors = evaluate("success", "failure", "skipped")
+    errors = evaluate("success", "success", "success", "failure", "skipped")
     assert len(errors) == 1
     assert "discovery" in errors[0]
 
 
 def test_e2e_leg_fail() -> None:
-    errors = evaluate("success", "success", "failure")
+    errors = evaluate("success", "success", "success", "success", "failure")
     assert len(errors) == 1
     assert "e2e suites" in errors[0]
 
 
 def test_multiple_failures_all_reported() -> None:
-    errors = evaluate("failure", "failure", "failure")
-    assert len(errors) == 3
+    # unit, integration, detect-integration, discovery, e2e all bad → 5 reasons.
+    errors = evaluate("failure", "failure", "failure", "failure", "failure")
+    assert len(errors) == 5
 
 
 def test_e2e_cancelled_is_failure() -> None:
-    assert evaluate("success", "success", "cancelled") != []
+    assert evaluate("success", "success", "success", "success", "cancelled") != []
 
 
 def test_e2e_skipped_when_discovery_succeeded_is_failure() -> None:
     # Discovery success ⇒ suites exist ⇒ the matrix must run. A skipped matrix
     # here (e.g. a future caller re-wired the e2e `if`) must not green the gate.
-    errors = evaluate("success", "success", "skipped")
+    errors = evaluate("success", "success", "success", "success", "skipped")
     assert len(errors) == 1
     assert "matrix was skipped" in errors[0]
-    out = render("success", "success", "skipped")
+    out = render("success", "success", "success", "success", "skipped")
     assert out["passed"] == "false"
     assert out["e2e-status"] == "❌ Matrix skipped despite discovered suites"
 
@@ -73,53 +108,117 @@ def test_e2e_skipped_when_discovery_succeeded_is_failure() -> None:
 
 
 def test_render_all_pass() -> None:
-    out = render("success", "success", "success")
+    out = render("success", "success", "success", "success", "success")
     assert out["passed"] == "true"
-    assert out["tests-status"] == "✅ Passed"
+    assert out["unit-status"] == "✅ Passed"
+    assert out["integration-status"] == "✅ Passed"
     assert out["e2e-status"] == "✅ Passed"
     assert out["overall-status"] == "✅ All passed"
 
 
-def test_render_e2e_not_requested() -> None:
-    out = render("success", "skipped", "skipped")
+def test_render_integration_skipped() -> None:
+    out = render("success", "skipped", "skipped", "skipped", "skipped")
     assert out["passed"] == "true"
+    assert "Skipped" in out["integration-status"]
     assert "add `e2e` label" in out["e2e-status"]
     assert out["overall-status"] == "✅ All passed"
 
 
+def test_render_detect_integration_failed() -> None:
+    # A detection failure fails the gate and the integration row surfaces the
+    # detection failure rather than the benign "skipped" string.
+    out = render("success", "skipped", "failure", "skipped", "skipped")
+    assert out["passed"] == "false"
+    assert out["integration-status"] == "❌ Integration-suite detection failed"
+    assert out["overall-status"] == "❌ Some failed"
+
+
 def test_render_discovery_failed_requested_but_empty() -> None:
-    out = render("success", "failure", "skipped")
+    out = render("success", "success", "success", "failure", "skipped")
     assert out["passed"] == "false"
     assert out["e2e-status"] == "❌ No suites discovered (e2e was requested)"
     assert out["overall-status"] == "❌ Some failed"
 
 
 def test_render_e2e_leg_failed() -> None:
-    out = render("success", "success", "failure")
+    out = render("success", "success", "success", "success", "failure")
     assert out["passed"] == "false"
     assert out["e2e-status"] == "❌ Failed"
 
 
-def test_render_tests_failed() -> None:
-    out = render("failure", "skipped", "skipped")
+def test_render_unit_failed() -> None:
+    out = render("failure", "skipped", "skipped", "skipped", "skipped")
     assert out["passed"] == "false"
-    assert out["tests-status"] == "❌ Failed"
+    assert out["unit-status"] == "❌ Failed"
+
+
+def test_render_integration_failed() -> None:
+    out = render("success", "failure", "success", "skipped", "skipped")
+    assert out["passed"] == "false"
+    assert out["integration-status"] == "❌ Failed"
 
 
 # --- CLI wrapper (emits outputs; never exits non-zero — job enforces) -------
 
 
 def test_main_always_exits_zero_and_emits_passed_true(capsys) -> None:
-    rc = main(["--tests", "success", "--discover-e2e", "skipped", "--e2e", "skipped"])
+    rc = main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "skipped",
+            "--detect-integration",
+            "skipped",
+            "--discover-e2e",
+            "skipped",
+            "--e2e",
+            "skipped",
+        ]
+    )
     out = capsys.readouterr().out
     assert rc == 0
     assert "passed=true" in out
-    assert "tests-status=✅ Passed" in out
+    assert "unit-status=✅ Passed" in out
 
 
 def test_main_emits_passed_false_and_annotates_on_fail(capsys) -> None:
-    rc = main(["--tests", "success", "--discover-e2e", "success", "--e2e", "failure"])
+    rc = main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "success",
+            "--detect-integration",
+            "success",
+            "--discover-e2e",
+            "success",
+            "--e2e",
+            "failure",
+        ]
+    )
     captured = capsys.readouterr()
     assert rc == 0  # never fails itself; the gate job enforces via `passed`
     assert "passed=false" in captured.out
     assert "::error::" in captured.err
+
+
+def test_main_detect_integration_failure_annotates(capsys) -> None:
+    rc = main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "skipped",
+            "--detect-integration",
+            "failure",
+            "--discover-e2e",
+            "skipped",
+            "--e2e",
+            "skipped",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "passed=false" in captured.out
+    assert "integration-suite detection" in captured.err

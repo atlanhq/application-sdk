@@ -39,6 +39,14 @@ inputs:
       step. CLI flag overrides `[tool.coverage.report].fail_under` in the
       consumer's pyproject.toml.
     default: "60"
+  application-sdk-ref:
+    required: false
+    description: |
+      Branch/SHA of atlanhq/application-sdk to pin before running tests.
+      Empty = use the lockfile version. Used by cross-repo dispatch from
+      application-sdk PRs so the unit tier exercises the SDK branch under
+      review too — parity with connector-integration-tests.
+    default: ""
 
 runs:
   using: "composite"
@@ -47,6 +55,23 @@ runs:
       uses: atlanhq/application-sdk/.github/actions/setup-deps@main
       with:
         python-version: ${{ inputs.python-version }}
+
+    - name: Pin application-sdk to dispatched ref
+      if: inputs.application-sdk-ref != ''
+      shell: bash
+      env:
+        SDK_REF: ${{ inputs.application-sdk-ref }}
+      # Reuse the integration action's repin script (a generic pyproject
+      # [tool.uv.sources] rewriter, not integration-specific) rather than
+      # keeping a third copy. Both actions are checked out together from the
+      # application-sdk tree, so the sibling path resolves — the same
+      # cross-action-file pattern connector-integration-tests already relies on
+      # for ../../scripts/ and ../../../application_sdk/version.py.
+      run: |
+        REPIN="${{ github.action_path }}/../connector-integration-tests/repin-application-sdk.sh"
+        chmod +x "$REPIN"
+        "$REPIN"
+        uv sync --all-extras --all-groups
 
     - name: Run unit tests with coverage
       id: tests
@@ -58,14 +83,20 @@ runs:
       # overrides pyproject.toml on that step.
       run: |
         set +e
-        uv run coverage run -m pytest tests/unit -v 2>&1 | tee /tmp/unit-test-output.txt
+        mkdir -p results
+        uv run coverage run -m pytest tests/unit -v \
+          --junit-xml=results/test-results.xml 2>&1 | tee /tmp/unit-test-output.txt
         TEST_EXIT_CODE=${PIPESTATUS[0]}
         set -e
         # Extract pytest summary line for caller PR comments.
         SUMMARY=$(grep -E "^=+ .* =+$" /tmp/unit-test-output.txt | tail -1 | sed -E 's/^=+ *//; s/ *=+$//')
         echo "summary=${SUMMARY:-no summary parsed}" >> "$GITHUB_OUTPUT"
-        # Always emit coverage artifacts, even if pytest failed.
+        # Always emit coverage artifacts, even if pytest failed. `coverage json`
+        # is the machine-readable form the test-readiness scorecard reads (the
+        # aggregation job feeds it as --unit-coverage); xml/html stay for humans
+        # and the PR coverage comment.
         uv run coverage xml --fail-under=0 || true
+        uv run coverage json --fail-under=0 || true
         uv run coverage html --fail-under=0 || true
         # Propagate pytest failure first; otherwise check coverage threshold.
         if [ $TEST_EXIT_CODE -ne 0 ]; then exit $TEST_EXIT_CODE; fi
@@ -85,5 +116,7 @@ runs:
         name: unit-test-coverage
         path: |
           coverage.xml
+          coverage.json
           htmlcov/
+          results/
         retention-days: 14

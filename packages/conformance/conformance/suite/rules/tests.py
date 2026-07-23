@@ -128,6 +128,32 @@ harness's queue must agree; remediate both together, never one alone):
   inherits the leg-suffixed value (T016), the two diverge and the run hangs —
   the atlan-metabase-app regression where the overlay was fixed but the
   agent_spec was left hard-coded.
+
+Directory-scoped tiering (the Unit/Integration split, application-sdk#2852):
+
+* ``T018`` — the reusable Tests workflow now runs the integration tier by
+  *directory* (``pytest tests/integration/``) with no ``-m`` re-selection, so a
+  ``[tool.pytest.ini_options].addopts`` ``-m 'not <marker>'`` deselection that
+  matches tests living under ``tests/integration/`` removes them from the only
+  job meant to run them.  When it deselects *every* such test the integration
+  job collects nothing and hard-fails (pytest exit 5); a partial deselection
+  silently drops those tests from all tiers.  This is the inverse of T001 (which
+  wants the ``integration`` marker *present*): keep the marker, but do **not**
+  ``addopts``-deselect it — the directory is the tier boundary, exactly as
+  atlan-mysql-app / atlan-metabase-app already do (marker present, no deselect).
+
+* ``T019`` — ``pytest-asyncio``'s ``asyncio_default_fixture_loop_scope`` is set
+  to a broadened scope (``session`` / ``package`` / ``module`` / ``class``) while
+  ``asyncio_default_test_loop_scope`` is left unset (it defaults to
+  ``function``).  Async fixtures then share one long-lived loop but each test
+  runs on its own function-scoped loop, so a test that drives a fixture-owned
+  resource (a Temporal worker/client) *from its own body* awaits work the
+  fixture's loop must service while that loop is idle — and hangs until the suite
+  timeout.  Correlated like T018: fires only when the risky config coincides with
+  a collectable test whose body awaits ``execute_app`` / ``execute_workflow`` /
+  ``start_workflow`` (a suite that runs all execution inside fixtures is not
+  flagged).  Set ``asyncio_default_test_loop_scope`` explicitly (usually to match
+  the fixtures) so tests and fixtures share a loop.
 """
 
 from __future__ import annotations
@@ -1108,6 +1134,211 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t017"
+        ),
+    ),
+    RuleDefinition(
+        id="T018",
+        scope=RuleScope.APP,
+        name="IntegrationTierDeselectedByAddopts",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="test-collection",
+        autofixable=False,
+        since="0.16.0",
+        rationale=(
+            "The reusable Tests workflow (application-sdk#2852) runs the "
+            "integration tier by directory — the CI job invokes "
+            "'pytest tests/integration/' with no '-m' selection, because the unit "
+            "tier is a separate directory-scoped job ('pytest tests/unit'), not a "
+            "full-suite run that deselects integration via markers. A "
+            "[tool.pytest.ini_options].addopts '-m not <marker>' expression is "
+            "still applied to every pytest invocation, including that integration "
+            "job — so if it deselects a marker carried by tests under "
+            "tests/integration/, those tests are removed from the one job meant to "
+            "run them. When the deselection matches every collectable test in the "
+            "directory, the job collects zero tests and pytest exits 5 (a hard CI "
+            "failure); when it matches only some, those are silently dropped from "
+            "all tiers (the unit job never sees tests/integration/, and the "
+            "integration job just deselected them). This surfaced on a canonical "
+            "connector whose integration tests had in fact never executed in CI: "
+            "pre-split, the single job collected tests/unit + tests/integration "
+            "together, the unit tests made the run non-empty, and the "
+            "addopts-deselected integration tests were silently skipped on every "
+            "run. This is the inverse of T001: keep the marker present (T001), but "
+            "do not addopts-deselect it — the directory is the tier boundary."
+        ),
+        short_description=(
+            "pyproject addopts '-m not <marker>' deselects tests under "
+            "tests/integration/, emptying or thinning the directory-scoped "
+            "integration CI job"
+        ),
+        full_description=(
+            "``[tool.pytest.ini_options].addopts`` in ``pyproject.toml`` contains a\n"
+            "``-m 'not <marker>'`` selection expression, and one or more collectable\n"
+            "tests under ``tests/integration/`` carry a deselected marker.\n"
+            "\n"
+            "The reusable Tests workflow runs the integration tier **by directory**\n"
+            "(``pytest tests/integration/``) with no ``-m`` re-selection — the unit\n"
+            "tier is a separate ``pytest tests/unit`` job, so integration tests no\n"
+            "longer need a marker to be kept *out* of the unit job. But ``addopts``\n"
+            "applies to every pytest run, so a ``-m 'not <marker>'`` deselection is\n"
+            "still applied to the integration job and removes any ``tests/integration/``\n"
+            "test carrying that marker from the only job meant to run it:\n"
+            "\n"
+            "* **All deselected** — the integration job collects nothing and fails\n"
+            "  with ``pytest`` exit code 5 (``no tests ran``).\n"
+            "* **Some deselected** — those tests run in no tier at all (the unit job\n"
+            "  never collects ``tests/integration/``; the integration job deselects\n"
+            "  them), so they silently stop contributing any signal.\n"
+            "\n"
+            "This is the inverse of **T001**, which wants integration tests to *carry*\n"
+            "the ``integration`` marker. Both hold at once: keep the marker, but do\n"
+            "**not** ``addopts``-deselect it.\n"
+            "\n"
+            "**Remediation:** remove the ``-m 'not …'`` deselection from ``addopts``\n"
+            "and mark integration tests with the standard ``integration`` marker\n"
+            "(T001) — the directory is the tier boundary, exactly as\n"
+            "``atlan-mysql-app`` / ``atlan-metabase-app`` do (marker present, no\n"
+            "``addopts`` deselect). Before:\n"
+            "\n"
+            ".. code-block:: toml\n"
+            "\n"
+            "    [tool.pytest.ini_options]\n"
+            '    markers = ["s3_integration: ...", "azure_integration: ..."]\n'
+            "    addopts = \"-m 'not s3_integration and not azure_integration'\"\n"
+            "\n"
+            "After:\n"
+            "\n"
+            ".. code-block:: toml\n"
+            "\n"
+            "    [tool.pytest.ini_options]\n"
+            "    markers = [\"integration: requires external services; deselect locally with -m 'not integration'\"]\n"
+            "    # no addopts -m deselection\n"
+            "\n"
+            "For tests that need an external service (an emulator, a live source),\n"
+            "self-skip at runtime when it is unavailable — a module-scoped autouse\n"
+            "fixture that probes the endpoint and calls ``pytest.skip(...)`` — so a\n"
+            "bare local ``pytest tests/integration/`` stays green without the service\n"
+            "while CI (which provisions it) runs the tests. Do not fall back to an\n"
+            "``addopts`` deselect for this: it hides the tests from the CI tier too.\n"
+            "\n"
+            "Suppress with ``# conformance: ignore[T018] <reason>`` on the ``addopts``\n"
+            "line only when the deselection is deliberate and the deselected tests\n"
+            "are run by some other explicitly-configured CI job (rare — prefer the\n"
+            "directory + runtime-skip pattern above).\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/tests.md#t018"
+        ),
+    ),
+    RuleDefinition(
+        id="T019",
+        scope=RuleScope.BOTH,
+        name="AsyncioTestLoopScopeUnset",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="test-async-config",
+        autofixable=False,
+        since="0.17.0",
+        rationale=(
+            "pytest-asyncio has two independent loop-scope knobs in "
+            "[tool.pytest.ini_options]: asyncio_default_fixture_loop_scope (the "
+            "loop async fixtures default to) and asyncio_default_test_loop_scope "
+            "(the loop async tests default to), and the latter defaults to "
+            "'function' when unset. Setting the fixture scope to a broadened value "
+            "(session/package/module/class) without also setting the test scope "
+            "puts fixtures and tests on different loops: async fixtures share one "
+            "long-lived loop while each test runs on its own function-scoped loop. "
+            "A fixture that owns a live resource bound to its loop — a Temporal "
+            "worker/client, an async DB engine/pool, an httpx.AsyncClient — is then "
+            "invisible to a test that drives that resource from the test body: the "
+            "test awaits work the fixture's loop must service, but that loop is not "
+            "being driven while the test's loop runs, so nothing progresses and the "
+            "test hangs until the suite timeout fires. The failure is silent by "
+            "construction — tests that only read a value a fixture already computed "
+            "pass, so the mismatch hides until someone writes the first test that "
+            "awaits fixture-owned work in-body. It surfaced on a canonical "
+            "connector whose sole in-body Temporal test (a REUSE integration case) "
+            "hung for the full pytest-timeout while every sibling test, which read "
+            "a class-fixture result, passed. Like T018 (which fires only when an "
+            "addopts deselect removes tests that exist), this rule is correlated, "
+            "not config-only: it fires only when the risky config coincides with a "
+            "collectable test whose body actually drives workflow execution via an "
+            "awaited execute_app/execute_workflow/start_workflow call. A suite that "
+            "runs all execution inside fixtures and only asserts on the result in "
+            "test bodies is on the safe path and is not flagged."
+        ),
+        short_description=(
+            "pyproject sets asyncio_default_fixture_loop_scope to a broadened scope "
+            "with asyncio_default_test_loop_scope unset (defaults to 'function') "
+            "AND a test drives workflow execution from its body, so that test hangs "
+            "on the fixture-owned worker/client"
+        ),
+        full_description=(
+            "``[tool.pytest.ini_options]`` in ``pyproject.toml`` sets\n"
+            "``asyncio_default_fixture_loop_scope`` to a broadened scope\n"
+            "(``session`` / ``package`` / ``module`` / ``class``) but does not set\n"
+            "``asyncio_default_test_loop_scope``, which **defaults to ``function``**.\n"
+            "\n"
+            "Async fixtures then share one long-lived event loop, while each test\n"
+            "runs on its own function-scoped loop. A fixture that owns a live\n"
+            "resource bound to *its* loop — a Temporal worker/client, an async DB\n"
+            "engine/pool, an ``httpx.AsyncClient``, a broker consumer — is invisible\n"
+            "to a test that drives that resource **from the test body**: the test\n"
+            "awaits work the fixture's loop must service, but that loop is idle while\n"
+            "the test's loop runs, so the await never completes and the test hangs\n"
+            "until the suite timeout fires.\n"
+            "\n"
+            "The failure is silent by construction. Tests that only *read* a value a\n"
+            "fixture already computed (the common case) pass, so the mismatch stays\n"
+            "hidden until the first test that awaits fixture-owned work in-body is\n"
+            "written — at which point it hangs, not fails, which is far costlier to\n"
+            "diagnose.\n"
+            "\n"
+            "**Correlated, not config-only.** Like **T018**, this rule fires only when\n"
+            "the risky config *and* real evidence coincide: a collectable test\n"
+            "*function* (not a fixture) whose body awaits ``execute_app`` /\n"
+            "``execute_workflow`` / ``start_workflow`` — the SDK's workflow-submission\n"
+            "surface. A suite with the mismatched config but all execution behind\n"
+            "session/class-scoped fixtures (test bodies only assert on the result) is\n"
+            "on the safe path and is **not** flagged.\n"
+            "\n"
+            "**Remediation:** set ``asyncio_default_test_loop_scope`` explicitly —\n"
+            "usually to the same scope as the fixtures — so tests and their fixtures\n"
+            "share a loop. Before:\n"
+            "\n"
+            ".. code-block:: toml\n"
+            "\n"
+            "    [tool.pytest.ini_options]\n"
+            '    asyncio_mode = "auto"\n'
+            '    asyncio_default_fixture_loop_scope = "session"\n'
+            "    # asyncio_default_test_loop_scope unset -> defaults to 'function'\n"
+            "\n"
+            "After:\n"
+            "\n"
+            ".. code-block:: toml\n"
+            "\n"
+            "    [tool.pytest.ini_options]\n"
+            '    asyncio_mode = "auto"\n'
+            '    asyncio_default_fixture_loop_scope = "session"\n'
+            '    asyncio_default_test_loop_scope = "session"\n'
+            "\n"
+            "Restructuring the offending test to run its async work inside a\n"
+            "same-scope fixture (letting the test body only assert on the result)\n"
+            "also removes the hang, and matches how most suites already drive\n"
+            "workflow execution — but it leaves the config trap in place for the\n"
+            "next author, so prefer the explicit test-scope setting as the durable\n"
+            "fix.\n"
+            "\n"
+            "Suppress with ``# conformance: ignore[T019] <reason>`` on the\n"
+            "``asyncio_default_fixture_loop_scope`` line only when the mismatch is\n"
+            "deliberate — e.g. every async fixture is loop-agnostic and no test\n"
+            "drives fixture-owned work in-body — and state that reason.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/tests.md#t019"
         ),
     ),
 )

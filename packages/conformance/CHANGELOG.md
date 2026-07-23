@@ -2,6 +2,19 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.17.0] - 2026-07-23
+
+### Features
+
+- add T019 AsyncioTestLoopScopeUnset test-quality rule (#2859) ([c89a78c](https://github.com/atlanhq/application-sdk/commit/c89a78c))
+- per-tier coverage scorecard + re-enable emission (#2858) ([0e6fe02](https://github.com/atlanhq/application-sdk/commit/0e6fe02))
+- add T018 — integration tier deselected by addopts (#2857) ([993ff9f](https://github.com/atlanhq/application-sdk/commit/993ff9f))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2855) ([fa43824](https://github.com/atlanhq/application-sdk/commit/fa43824))
+- chore(deps): lock file maintenance (#2846) ([70c6816](https://github.com/atlanhq/application-sdk/commit/70c6816))
+
 ## [0.16.0] - 2026-07-22
 
 ### Features

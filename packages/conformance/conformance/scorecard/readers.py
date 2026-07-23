@@ -66,24 +66,43 @@ def parse_junit(path: str | Path) -> RawTests:
 
     for testcase in root.iter("testcase"):
         tier = tier_for_path(_testcase_location(testcase))
-        counts = buckets[tier]
-        counts.total += 1
-        counts.duration_sec += float(testcase.get("time") or 0.0)
-
-        if testcase.find("error") is not None:
-            counts.errors += 1
-        elif testcase.find("failure") is not None:
-            counts.failed += 1
-        elif testcase.find("skipped") is not None:
-            counts.skipped += 1
-        else:
-            counts.passed += 1
+        _tally(buckets[tier], testcase)
 
     return RawTests(
         unit=buckets["unit"],
         integration=buckets["integration"],
         e2e=buckets["e2e"],
     )
+
+
+def parse_junit_tier(path: str | Path) -> TierTestCounts:
+    """Parse a junit XML whose testcases all belong to ONE tier.
+
+    Post-tier-split, unit and integration run as separate CI jobs, so each
+    produces a single-tier junit.  This attributes *every* testcase in the file
+    to one tier's counts regardless of path (the file itself identifies the
+    tier), which is more robust than path-slicing when an app's directory layout
+    differs from ``tests/<tier>/``.
+    """
+    tree = ET.parse(str(path))
+    counts = TierTestCounts()
+    for testcase in tree.getroot().iter("testcase"):
+        _tally(counts, testcase)
+    return counts
+
+
+def _tally(counts: TierTestCounts, testcase: ET.Element) -> None:
+    """Fold one ``<testcase>`` into *counts* (error > failure > skipped > pass)."""
+    counts.total += 1
+    counts.duration_sec += float(testcase.get("time") or 0.0)
+    if testcase.find("error") is not None:
+        counts.errors += 1
+    elif testcase.find("failure") is not None:
+        counts.failed += 1
+    elif testcase.find("skipped") is not None:
+        counts.skipped += 1
+    else:
+        counts.passed += 1
 
 
 def parse_coverage_json(path: str | Path) -> CoverageMetrics:
