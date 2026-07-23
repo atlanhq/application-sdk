@@ -43,6 +43,7 @@ from conformance.suite.checks import (
     error_handling,
     generated_freshness,
     gitignore_entries,
+    integration_deselect,
     integration_marking,
     legacy_contract,
     manifest_contract,
@@ -163,6 +164,11 @@ _CHECKS: list[CheckRegistration] = [
         series=coverage_config.SERIES,
         discover=coverage_config.discover,
         scan_path=coverage_config.scan_path,
+    ),
+    CheckRegistration(
+        series=integration_deselect.SERIES,
+        discover=integration_deselect.discover,
+        scan_path=integration_deselect.scan_path,
     ),
     CheckRegistration(
         series=e2e_deployment_name.SERIES,

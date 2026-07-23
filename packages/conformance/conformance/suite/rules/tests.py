@@ -128,6 +128,19 @@ harness's queue must agree; remediate both together, never one alone):
   inherits the leg-suffixed value (T016), the two diverge and the run hangs —
   the atlan-metabase-app regression where the overlay was fixed but the
   agent_spec was left hard-coded.
+
+Directory-scoped tiering (the Unit/Integration split, application-sdk#2852):
+
+* ``T018`` — the reusable Tests workflow now runs the integration tier by
+  *directory* (``pytest tests/integration/``) with no ``-m`` re-selection, so a
+  ``[tool.pytest.ini_options].addopts`` ``-m 'not <marker>'`` deselection that
+  matches tests living under ``tests/integration/`` removes them from the only
+  job meant to run them.  When it deselects *every* such test the integration
+  job collects nothing and hard-fails (pytest exit 5); a partial deselection
+  silently drops those tests from all tiers.  This is the inverse of T001 (which
+  wants the ``integration`` marker *present*): keep the marker, but do **not**
+  ``addopts``-deselect it — the directory is the tier boundary, exactly as
+  atlan-mysql-app / atlan-metabase-app already do (marker present, no deselect).
 """
 
 from __future__ import annotations
@@ -1108,6 +1121,102 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t017"
+        ),
+    ),
+    RuleDefinition(
+        id="T018",
+        scope=RuleScope.APP,
+        name="IntegrationTierDeselectedByAddopts",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="test-collection",
+        autofixable=False,
+        since="0.16.0",
+        rationale=(
+            "The reusable Tests workflow (application-sdk#2852) runs the "
+            "integration tier by directory — the CI job invokes "
+            "'pytest tests/integration/' with no '-m' selection, because the unit "
+            "tier is a separate directory-scoped job ('pytest tests/unit'), not a "
+            "full-suite run that deselects integration via markers. A "
+            "[tool.pytest.ini_options].addopts '-m not <marker>' expression is "
+            "still applied to every pytest invocation, including that integration "
+            "job — so if it deselects a marker carried by tests under "
+            "tests/integration/, those tests are removed from the one job meant to "
+            "run them. When the deselection matches every collectable test in the "
+            "directory, the job collects zero tests and pytest exits 5 (a hard CI "
+            "failure); when it matches only some, those are silently dropped from "
+            "all tiers (the unit job never sees tests/integration/, and the "
+            "integration job just deselected them). This surfaced on a canonical "
+            "connector whose integration tests had in fact never executed in CI: "
+            "pre-split, the single job collected tests/unit + tests/integration "
+            "together, the unit tests made the run non-empty, and the "
+            "addopts-deselected integration tests were silently skipped on every "
+            "run. This is the inverse of T001: keep the marker present (T001), but "
+            "do not addopts-deselect it — the directory is the tier boundary."
+        ),
+        short_description=(
+            "pyproject addopts '-m not <marker>' deselects tests under "
+            "tests/integration/, emptying or thinning the directory-scoped "
+            "integration CI job"
+        ),
+        full_description=(
+            "``[tool.pytest.ini_options].addopts`` in ``pyproject.toml`` contains a\n"
+            "``-m 'not <marker>'`` selection expression, and one or more collectable\n"
+            "tests under ``tests/integration/`` carry a deselected marker.\n"
+            "\n"
+            "The reusable Tests workflow runs the integration tier **by directory**\n"
+            "(``pytest tests/integration/``) with no ``-m`` re-selection — the unit\n"
+            "tier is a separate ``pytest tests/unit`` job, so integration tests no\n"
+            "longer need a marker to be kept *out* of the unit job. But ``addopts``\n"
+            "applies to every pytest run, so a ``-m 'not <marker>'`` deselection is\n"
+            "still applied to the integration job and removes any ``tests/integration/``\n"
+            "test carrying that marker from the only job meant to run it:\n"
+            "\n"
+            "* **All deselected** — the integration job collects nothing and fails\n"
+            "  with ``pytest`` exit code 5 (``no tests ran``).\n"
+            "* **Some deselected** — those tests run in no tier at all (the unit job\n"
+            "  never collects ``tests/integration/``; the integration job deselects\n"
+            "  them), so they silently stop contributing any signal.\n"
+            "\n"
+            "This is the inverse of **T001**, which wants integration tests to *carry*\n"
+            "the ``integration`` marker. Both hold at once: keep the marker, but do\n"
+            "**not** ``addopts``-deselect it.\n"
+            "\n"
+            "**Remediation:** remove the ``-m 'not …'`` deselection from ``addopts``\n"
+            "and mark integration tests with the standard ``integration`` marker\n"
+            "(T001) — the directory is the tier boundary, exactly as\n"
+            "``atlan-mysql-app`` / ``atlan-metabase-app`` do (marker present, no\n"
+            "``addopts`` deselect). Before:\n"
+            "\n"
+            ".. code-block:: toml\n"
+            "\n"
+            "    [tool.pytest.ini_options]\n"
+            '    markers = ["s3_integration: ...", "azure_integration: ..."]\n'
+            "    addopts = \"-m 'not s3_integration and not azure_integration'\"\n"
+            "\n"
+            "After:\n"
+            "\n"
+            ".. code-block:: toml\n"
+            "\n"
+            "    [tool.pytest.ini_options]\n"
+            "    markers = [\"integration: requires external services; deselect locally with -m 'not integration'\"]\n"
+            "    # no addopts -m deselection\n"
+            "\n"
+            "For tests that need an external service (an emulator, a live source),\n"
+            "self-skip at runtime when it is unavailable — a module-scoped autouse\n"
+            "fixture that probes the endpoint and calls ``pytest.skip(...)`` — so a\n"
+            "bare local ``pytest tests/integration/`` stays green without the service\n"
+            "while CI (which provisions it) runs the tests. Do not fall back to an\n"
+            "``addopts`` deselect for this: it hides the tests from the CI tier too.\n"
+            "\n"
+            "Suppress with ``# conformance: ignore[T018] <reason>`` on the ``addopts``\n"
+            "line only when the deselection is deliberate and the deselected tests\n"
+            "are run by some other explicitly-configured CI job (rare — prefer the\n"
+            "directory + runtime-skip pattern above).\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/tests.md#t018"
         ),
     ),
 )

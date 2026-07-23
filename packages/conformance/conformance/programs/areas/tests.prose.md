@@ -6,8 +6,10 @@ description: >
   test-quality conformance findings: unmarked integration tests (T001), SDR
   test-coverage gaps (T002-T003), dev-entrypoint delegation (T004), assertion
   meaningfulness and silent non-execution (T005-T009), test-tier structure and
-  placement (T010-T013), coverage-config integrity (T014-T015), and e2e CI
-  queue isolation (T016 worker-side overlay + T017 harness-side agent_spec).
+  placement (T010-T013), coverage-config integrity (T014-T015), e2e CI
+  queue isolation (T016 worker-side overlay + T017 harness-side agent_spec), and
+  the directory-scoped integration tier being deselected by pyproject addopts
+  (T018).
   Every rule in this series classifies as "judgment" — each fix requires reading
   the test's I/O intent, the app's manifest/contract, or the app's App subclass
   before a fix can be proposed with confidence.  T014/T015 are the most
@@ -16,7 +18,9 @@ description: >
   confirming an omit pattern is legitimate still requires judgment.  T016/T017
   are a matched pair (the worker queue and the harness queue must agree);
   T016 edits a file under `.github/` (outside write-scope) and T017 edits a file
-  under `tests/` (also outside write-scope), so both route to residue.
+  under `tests/` (also outside write-scope), so both route to residue.  T018
+  edits `pyproject.toml` (within write-scope), but whether an integration-tier
+  deselect is legitimate is a judgment call, so it routes to residue too.
 ---
 
 ### Maintains
@@ -430,6 +434,59 @@ to residue):
 
   `classification` is always `"judgment"` (edits a file outside write-scope;
   routed to residue for a human to apply).
+
+- **T018 IntegrationTierDeselectedByAddopts** — `[tool.pytest.ini_options].addopts`
+  in `pyproject.toml` carries a `-m 'not <marker>'` selection expression, and one
+  or more collectable tests under `tests/integration/` carry that deselected
+  marker. The reusable Tests workflow (application-sdk#2852) runs the integration
+  tier **by directory** (`pytest tests/integration/`, no `-m` re-selection), but
+  `addopts` applies to every pytest run, so the deselect is still applied to the
+  integration job and removes those tests from the only job meant to run them.
+  When it deselects every collectable test the job collects nothing and pytest
+  exits 5 (a hard CI failure); when it deselects only some, those run in no tier
+  at all (the unit job never collects `tests/integration/`; the integration job
+  deselects them), so they silently stop contributing signal. This is the inverse
+  of T001: keep the `integration` marker present (T001), but do **not**
+  `addopts`-deselect it — the directory is the tier boundary.
+
+  The fix is to remove the `-m 'not …'` deselection from `addopts` and rely on
+  the directory boundary plus the standard `integration` marker (T001), exactly
+  as `atlan-mysql-app` / `atlan-metabase-app` do. Before:
+
+  ```toml
+  [tool.pytest.ini_options]
+  markers = ["s3_integration: ...", "azure_integration: ..."]
+  addopts = "-m 'not s3_integration and not azure_integration'"
+  ```
+
+  After:
+
+  ```toml
+  [tool.pytest.ini_options]
+  markers = ["integration: requires external services; deselect locally with -m 'not integration'"]
+  # no addopts -m deselection
+  ```
+
+  For tests that need an external service (an emulator, a live source), self-skip
+  at runtime when it is unavailable — a module-scoped autouse fixture that probes
+  the endpoint and calls `pytest.skip(...)` — so a bare local
+  `pytest tests/integration/` stays green without the service while CI (which
+  provisions it) runs the tests. Do not fall back to an `addopts` deselect for
+  this: it hides the tests from the CI tier too.
+
+  **Route to residue** with the suggested edit. Unlike T016/T017 the target file
+  (`pyproject.toml`) is within write-scope, but deciding whether a given deselect
+  is legitimate — versus one that silently drops a real integration tier — is a
+  judgment call series-typical for the T-series, so T018 is not auto-applied.
+
+  Suppress with `# conformance: ignore[T018] <reason>` on the `addopts` line only
+  when the deselection is deliberate and the deselected tests are run by some
+  other explicitly-configured CI job (rare — prefer the directory + runtime-skip
+  pattern above); state that reason explicitly.
+
+  `classification` is always `"judgment"` (whether an integration-tier deselect
+  is legitimate requires reading the app's CI jobs and test intent; routed to
+  residue for a human to confirm).
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
