@@ -1296,8 +1296,8 @@ RULES: tuple[RuleDefinition, ...] = (
             ".. code-block:: toml\n"
             "\n"
             "    [tool.pytest.ini_options]\n"
-            "    asyncio_mode = \"auto\"\n"
-            "    asyncio_default_fixture_loop_scope = \"session\"\n"
+            '    asyncio_mode = "auto"\n'
+            '    asyncio_default_fixture_loop_scope = "session"\n'
             "    # asyncio_default_test_loop_scope unset -> defaults to 'function'\n"
             "\n"
             "After:\n"
@@ -1305,9 +1305,9 @@ RULES: tuple[RuleDefinition, ...] = (
             ".. code-block:: toml\n"
             "\n"
             "    [tool.pytest.ini_options]\n"
-            "    asyncio_mode = \"auto\"\n"
-            "    asyncio_default_fixture_loop_scope = \"session\"\n"
-            "    asyncio_default_test_loop_scope = \"session\"\n"
+            '    asyncio_mode = "auto"\n'
+            '    asyncio_default_fixture_loop_scope = "session"\n'
+            '    asyncio_default_test_loop_scope = "session"\n'
             "\n"
             "Restructuring the offending test to run its async work inside a\n"
             "same-scope fixture (letting the test body only assert on the result)\n"
