@@ -26,8 +26,13 @@ authoritative sources in this repo instead of trusting any list baked below:
 - Changelog / when something changed: `contract-toolkit/CHANGELOG.md`.
 - The real example set: `git ls-files 'contract-toolkit/examples/*/app.pkl'`
   (untracked `generated/` and `__pycache__` leftover dirs are **not** examples).
-- Latest toolkit version: `git tag --list 'contract-toolkit-v*' | sort -V | tail -1`.
+- Latest toolkit version (bare semver, from the SDK checkout root):
+  `git tag --list 'contract-toolkit-v*' | sort -V | tail -1 | sed 's/^contract-toolkit-v//'`.
 - The template source of truth: `contract-toolkit/src/App.pkl`.
+
+These `contract-toolkit/...`, `git ls-files`, and `git tag` lookups only resolve
+from an `atlanhq/application-sdk` checkout — run them there (or `git -C
+<sdk-repo>`). From a consuming app repo they return nothing, silently.
 
 **`contract-toolkit/AGENTS.md` is stale** (still describes the pre-consolidation
 `NativeApp.pkl` world and references examples that no longer exist). Do not use
@@ -119,7 +124,7 @@ Route the app by what Discovery found:
 - **Archived toolkit source** — `PklProject` points at the old standalone
   toolkit URL (`package://atlanhq.github.io/app-contract-toolkit/...`) instead
   of the SDK-hosted one. Propose switching the URL and bumping the version.
-- **Below the version floor** — SDK `< 3.21.0` or toolkit `< 0.16.1`. Propose
+- **Below the version floor** — SDK `< 3.21.0` or toolkit `< 0.17.0`. Propose
   raising both (this is what keeps logs visible — see the `app_name` invariant).
 
 Migrations are opt-in and incremental. Detect, propose, get a yes, then apply
@@ -127,12 +132,12 @@ one at a time — never silently redesign.
 
 ## Version Floor (why it exists)
 
-**Enforce SDK `>= 3.21.0` and contract-toolkit `>= 0.16.1`.** Below this, an
+**Enforce SDK `>= 3.21.0` and contract-toolkit `>= 0.17.0`.** Below this, an
 app's failure logs can silently fail to surface in the Workflow Center. Hard-fail
 generation/validation guidance if the app is below the floor and the user has
 not explicitly opted to stay.
 
-Why 3.21.0 / 0.16.1 (not 3.18):
+Why 3.21.0 / 0.17.0 (not 3.18):
 
 - `app_name` is the app's **log-correlation identity**. Logs are *written*
   tagged with `app_name` = `ATLAN_APPLICATION_NAME` (from `atlan.yaml`). The UI
@@ -148,9 +153,9 @@ Why 3.21.0 / 0.16.1 (not 3.18):
   construction:
   - SDK `3.19.0` / toolkit `0.14.2` — core bake for `App.pkl` apps.
   - SDK `3.20.2` — output-path derivation prefers the resolved app name.
-  - SDK `3.21.0` / toolkit `0.16.1` — same bake applied to the legacy
+  - SDK `3.21.0` / toolkit `0.17.0` — same bake applied to the legacy
     `NativeApp.pkl` crossover template.
-- `3.21.0` / `0.16.1` is the single floor that covers both the `App.pkl` and
+- `3.21.0` / `0.17.0` is the single floor that covers both the `App.pkl` and
   `NativeApp.pkl` families. `3.18.0` carries none of these fixes.
 
 ## The `app_name` invariant (same name everywhere)
@@ -178,9 +183,9 @@ Verify after every generate:
 NAME=$(grep -E '^\s*name\s*=' contract/app.pkl | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
 echo "contract name = $NAME"
 # No literal placeholder may survive in generated manifests (smoking gun):
-grep -rn '"{app_name}"' app/generated/ && echo "FAIL: unbaked placeholder — regenerate on toolkit >= 0.16.1"
+grep -rn '"{app_name}"' app/generated/ && echo "FAIL: unbaked placeholder — regenerate on toolkit >= 0.17.0"
 # Every baked app_name must equal $NAME:
-grep -rn '"app_name"' app/generated/**/manifest.json app/generated/manifest.json 2>/dev/null
+grep -rn '"app_name"' app/generated/ 2>/dev/null
 # atlan.yaml packaging name must equal $NAME:
 grep -rn "name" atlan.yaml app/generated/atlan.yaml 2>/dev/null
 # Generated filenames must be {name}.json / atlan-connectors-{name}.json:
@@ -207,15 +212,18 @@ dependencies {
 ```
 
 Prefer `atlan app contract update-toolkit -p . --version <LATEST>` if the CLI is
-available; it refreshes `PklProject.deps.json`. Get `<LATEST>` from
-`git tag --list 'contract-toolkit-v*' | sort -V | tail -1`.
+available; it refreshes `PklProject.deps.json`. Get the bare-semver `<LATEST>`
+(from the SDK checkout) with
+`git tag --list 'contract-toolkit-v*' | sort -V | tail -1 | sed 's/^contract-toolkit-v//'`.
 
 ### `NativeApp.pkl` / `NativeAppBundle.pkl` -> `App.pkl`
 
 - Change the amend line to `amends "@app-contract-toolkit/App.pkl"`.
-- Credential primitives (`CredentialInput`, `FieldSpec`, `AuthOption`,
-  `ConditionalFieldSpec`, `NamedWidget`, `NamedProperty`) are now defined in
-  `App.pkl` — they carry over by name, no separate import.
+- Credential field primitives (`FieldSpec`, `AuthOption`, `ConditionalFieldSpec`,
+  `NamedWidget`, `NamedProperty`) are now defined in `App.pkl`, and the
+  `Widgets.CredentialInput` widget is re-exported by it — all reachable by name,
+  no separate import. (`CredentialInput` is a `uiConfig` widget, not a credential
+  field entry — don't use it inside `credentialAuthOptions`.)
 - Widgets come from `Widgets.*` (re-exported by `App.pkl`); `Connectors.pkl`
   still needs an explicit `import`.
 - Single-entrypoint: leave `entrypoints` empty; set `uiConfig` + `pipeline`.
@@ -230,7 +238,7 @@ Confirm the exact current field names against `contract-toolkit/README.md` and
 
 ### Raise to the version floor
 
-Bump the SDK dependency to `>= 3.21.0` and the toolkit to `>= 0.16.1`, then
+Bump the SDK dependency to `>= 3.21.0` and the toolkit to `>= 0.17.0`, then
 regenerate so the manifest bakes a literal `app_name`. Re-run the `app_name`
 invariant checks.
 
@@ -316,9 +324,11 @@ Note each one's caveat — they are pattern references, not version references
   Caveat: still on legacy `NativeApp.pkl` and the archived toolkit URL — it is
   itself a migration candidate, so read it for the SQL/DAG patterns, not the
   primitive or the dependency URL.
-- **`atlanhq/atlan-metabase-app`** — best modern `App.pkl` multi-entrypoint +
-  REST auth + rich DAG. Caveat: uses the **deprecated** `emitEntrypoints = false`
-  single-card collapse — do not copy that; use per-entrypoint `packageId`.
+- **`atlanhq/atlan-metabase-app`** — best modern `App.pkl` reference: REST auth,
+  a rich multi-node DAG, and the correct "two code `@entrypoint`s, one marketplace
+  card" shape via single-entrypoint contract mode (no `entrypoints` listing, so
+  the `marketplaceCard` default applies). It has already migrated off the
+  deprecated `emitEntrypoints = false` workaround — copy this pattern, not that.
 - **`atlanhq/atlan-openapi-app`** — URL-vs-cloud import modes plus an app-owned
   external object-store credential contract (a `Credential.pkl` amend). Caveat:
   task-only (no DAG/publish) and on an older toolkit.
@@ -338,7 +348,7 @@ Direct `pkl` fallback (what this repo guarantees):
 
 ```bash
 pkl project resolve contract
-pkl eval -m app/generated contract/app.pkl   # from the app root
+pkl eval -m . contract/app.pkl   # from the app root; -m . matches the contract's own output paths
 ```
 
 Then verify generated output and invariants:
@@ -346,7 +356,7 @@ Then verify generated output and invariants:
 ```bash
 ls app/generated
 python -m py_compile app/generated/_input.py
-ruby -rjson -e 'ARGV.each { |f| JSON.parse(File.read(f)); puts "OK #{f}" }' app/generated/*.json
+find app/generated -name '*.json' -print0 | xargs -0 -I{} python -c 'import json,sys; json.load(open(sys.argv[1])); print("OK", sys.argv[1])' {}
 ```
 
 - Generated JSON filenames match the contract `name`.
