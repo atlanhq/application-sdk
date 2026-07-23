@@ -28,8 +28,34 @@ from uuid import UUID
 
 import obstore as obs
 import orjson
-from temporalio import activity, workflow
-from temporalio.exceptions import FailureError
+class _LazyTemporalModule:
+    """BOOT-TIME: defers importing a temporalio submodule until first attribute
+    access. All uses of `workflow`/`activity` here run under a Temporal
+    worker/client, so handler-mode boot never pays the temporalio import."""
+
+    __slots__ = ("_modname",)
+
+    def __init__(self, modname: str, alias: str) -> None:
+        object.__setattr__(self, "_modname", modname)
+
+    def _mod(self):
+        import importlib
+
+        return importlib.import_module(self._modname)
+
+    def __getattr__(self, attr: str):
+        return getattr(self._mod(), attr)
+
+    def __setattr__(self, attr: str, value) -> None:
+        # forward so tests can patch e.g. base.workflow.now
+        setattr(self._mod(), attr, value)
+
+    def __delattr__(self, attr: str) -> None:
+        delattr(self._mod(), attr)
+
+
+workflow = _LazyTemporalModule("temporalio.workflow", "workflow")
+activity = _LazyTemporalModule("temporalio.activity", "activity")
 
 from application_sdk.app._ep_registration import (
     _apply_app_registration,
@@ -2125,6 +2151,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
                 ApplicationError,
             )
 
+            from temporalio.exceptions import FailureError  # noqa: PLC0415 — lazy: workflow error path
             if isinstance(e, FailureError):
                 raise
             if isinstance(e, _NewAppError):

@@ -9,7 +9,23 @@ from uuid import uuid4
 
 # Low-level loguru import used only as the activity-context fallback below.
 from loguru import logger as _loguru_logger
-from temporalio import workflow as _workflow
+
+
+class _LazyWorkflowModule:
+    """BOOT-TIME: stands in for ``temporalio.workflow`` without importing it at
+    module import. Forwards attribute get/set to the real module so tests can
+    patch ``context._workflow``/its attributes as before."""
+
+    def _mod(self):
+        import importlib
+
+        return importlib.import_module("temporalio.workflow")
+
+    def __getattr__(self, attr: str):
+        return getattr(self._mod(), attr)
+
+
+_workflow = _LazyWorkflowModule()
 
 from application_sdk.app.base_errors import (
     SecretStoreNotConfiguredError,

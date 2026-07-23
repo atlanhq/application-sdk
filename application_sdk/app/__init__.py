@@ -53,14 +53,7 @@ never needs to import the underlying orchestrator directly::
             return PauseOutput(message=f"paused: {input.reason}")
 """
 
-from temporalio.workflow import HandlerUnfinishedPolicy as _HandlerUnfinishedPolicy
-from temporalio.workflow import now as _now
-from temporalio.workflow import query as _query
-from temporalio.workflow import signal as _signal
-from temporalio.workflow import sleep as _sleep
-from temporalio.workflow import update as _update
-from temporalio.workflow import uuid4 as _uuid4
-from temporalio.workflow import wait_condition as _wait_condition
+# BOOT-TIME: temporalio.workflow re-exports are lazy (see __getattr__ below).
 
 from application_sdk.app.base import App, AppError, NonRetryableError, RetryableError
 from application_sdk.app.context import AppContext
@@ -82,7 +75,7 @@ from application_sdk.server.mcp.decorators import mcp_tool
 # these in the capability manifest without needing wrapper functions.
 # ---------------------------------------------------------------------------
 
-signal = _signal
+# signal: lazy re-export of temporalio.workflow (PEP 562)
 """Declare a ``@signal`` runtime interaction on an App subclass.
 
 A signal is a **pure trigger** — it carries no payload and returns nothing.
@@ -108,7 +101,7 @@ Example::
             self.paused = False
 """
 
-query = _query
+# query: lazy re-export of temporalio.workflow (PEP 562)
 """Declare a ``@query`` runtime interaction that reads live state without mutation.
 
 A query is a **read-only probe** — the caller receives a typed snapshot of
@@ -136,7 +129,7 @@ Example::
             )
 """
 
-update = _update
+# update: lazy re-export of temporalio.workflow (PEP 562)
 """Declare a ``@update`` runtime interaction that mutates state and returns a typed response.
 
 An update is delivered **exactly once** and the caller waits synchronously for
@@ -180,7 +173,7 @@ Example::
 # App-run time / UUID / sleep / condition primitives
 # ---------------------------------------------------------------------------
 
-wait_condition = _wait_condition
+# wait_condition: lazy re-export of temporalio.workflow (PEP 562)
 """Suspend ``run()`` or a runtime interaction until a predicate becomes ``True``.
 
 Prefer this over polling with ``asyncio.sleep`` — it is deterministic,
@@ -195,7 +188,7 @@ Example::
     await wait_condition(lambda: not self.paused, timeout=timedelta(minutes=5))
 """
 
-now = _now
+# now: lazy re-export of temporalio.workflow (PEP 562)
 """Return the current time from the app run's perspective (deterministic).
 
 Use this instead of ``datetime.now()`` or ``time.time()`` inside ``run()``
@@ -207,7 +200,7 @@ Example::
     elapsed = (now() - self.started_at).total_seconds()
 """
 
-sleep = _sleep
+# sleep: lazy re-export of temporalio.workflow (PEP 562)
 """Sleep for a given duration inside an app run (deterministic).
 
 Use this instead of ``asyncio.sleep`` or ``time.sleep`` inside ``run()``
@@ -221,7 +214,7 @@ Example::
     await sleep(timedelta(milliseconds=100))  # yield between batches
 """
 
-uuid4 = _uuid4
+# uuid4: lazy re-export of temporalio.workflow (PEP 562)
 """Generate a determinism-safe v4 UUID inside an app run.
 
 Use this instead of ``uuid.uuid4()`` inside ``run()`` and runtime
@@ -234,7 +227,7 @@ Example::
     run_id = str(uuid4())
 """
 
-InteractionUnfinishedPolicy = _HandlerUnfinishedPolicy
+# InteractionUnfinishedPolicy: lazy re-export of temporalio.workflow (PEP 562)
 """Policy applied to in-flight runtime interactions when an app run exits.
 
 Controls what happens if the app run completes or is cancelled before
@@ -279,3 +272,28 @@ __all__ = [
     "uuid4",
     "wait_condition",
 ]
+
+
+_LAZY_TEMPORAL_EXPORTS = {
+    "signal": "signal",
+    "query": "query",
+    "update": "update",
+    "wait_condition": "wait_condition",
+    "now": "now",
+    "sleep": "sleep",
+    "uuid4": "uuid4",
+    "InteractionUnfinishedPolicy": "HandlerUnfinishedPolicy",
+}
+
+
+def __getattr__(name: str):
+    """BOOT-TIME: defer `import temporalio` until a workflow-side symbol is
+    actually requested. Handler-mode servers never touch these."""
+    target = _LAZY_TEMPORAL_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import temporalio.workflow
+
+    value = getattr(temporalio.workflow, target)
+    globals()[name] = value
+    return value
