@@ -48,7 +48,7 @@ class RuleDefinition(BaseModel):
     """``warn`` or ``block``."""
 
     mechanism: RuleMechanism
-    """``static`` or ``test``."""
+    """``static``, ``test``, or ``model``."""
 
     scope: RuleScope
     """Where the rule applies — ``sdk``, ``app``, or ``both``.  Required (no
@@ -94,6 +94,20 @@ class RuleDefinition(BaseModel):
     """Why this rule exists — what risk it avoids, what loop it closes, or what
     value it adds. Surfaced as ``atlan/rationale`` in SARIF ``properties``."""
 
+    model_id: str | None = None
+    """For ``mechanism=model`` rules: the pinned model id that produces this
+    rule's verdicts (e.g. ``"claude-haiku-4-5"``).  Recorded on the rule (and
+    surfaced as ``atlan/modelId``) so a finding is reproducible/auditable — a
+    reviewer can see exactly which model fired.  ``None`` for deterministic
+    rules."""
+
+    prompt_version: str | None = None
+    """For ``mechanism=model`` rules: the version tag of the prompt that
+    produced this rule's verdicts (e.g. ``"m002-v1"``).  Surfaced as
+    ``atlan/promptVersion``.  Bumped whenever the prompt changes so historical
+    findings remain attributable to the prompt that generated them.  ``None``
+    for deterministic rules."""
+
     @model_validator(mode="before")
     @classmethod
     def _normalise_enums(cls, data: Any) -> Any:
@@ -125,6 +139,8 @@ class RuleDefinition(BaseModel):
             since=self.since,
             rationale=self.rationale or None,
             forces_external_influence=self.forces_external_influence,
+            model_id=self.model_id,
+            prompt_version=self.prompt_version,
         )
         return ReportingDescriptor(
             id=self.id,

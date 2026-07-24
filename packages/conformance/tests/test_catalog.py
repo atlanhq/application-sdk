@@ -202,7 +202,13 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # T017: e2e agent_spec() override must inherit the per-leg deployment queue —
     # only connector apps subclass the e2e harness and (may) override agent_spec;
     # the SDK ships the env-derived default, it doesn't hard-code a connector queue.
+    # M001/M002: customer-facing metadata (naming convention, internal jargon in
+    # descriptions) — only consumer apps declare an atlan.yaml with marketplace
+    # names and descriptions; the SDK has none, so these model-driven rules apply
+    # to apps only (BLDX-1575).
     assert app_scoped == {
+        "M001",
+        "M002",
         "B001",
         "C002",
         "D001",

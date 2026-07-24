@@ -81,6 +81,17 @@ class AtlanRuleProperties(BaseModel):
     structural counterpart to the per-result ``atlan/externalInfluence``
     property below, which is set by the remediation layer per-invocation."""
 
+    model_id: str | None = None
+    """For ``mechanism=model`` rules: the pinned model id whose verdicts this
+    rule reports (e.g. ``"claude-haiku-4-5"``).  Surfaced as ``atlan/modelId``
+    so a non-deterministic finding is attributable to a specific model.
+    ``None`` (and omitted) for deterministic rules."""
+
+    prompt_version: str | None = None
+    """For ``mechanism=model`` rules: the prompt version tag whose verdicts
+    this rule reports (e.g. ``"m002-v1"``).  Surfaced as
+    ``atlan/promptVersion``.  ``None`` (and omitted) for deterministic rules."""
+
     def to_properties(self) -> dict[str, Any]:
         """Return a ``properties`` dict ready to merge into a SARIF node."""
         out: dict[str, Any] = {
@@ -98,6 +109,10 @@ class AtlanRuleProperties(BaseModel):
             out["atlan/rationale"] = self.rationale
         if self.forces_external_influence:
             out["atlan/forcesExternalInfluence"] = True
+        if self.model_id is not None:
+            out["atlan/modelId"] = self.model_id
+        if self.prompt_version is not None:
+            out["atlan/promptVersion"] = self.prompt_version
         return out
 
     @classmethod
@@ -115,6 +130,8 @@ class AtlanRuleProperties(BaseModel):
             forces_external_influence=bool(
                 props.get("atlan/forcesExternalInfluence", False)
             ),
+            model_id=props.get("atlan/modelId"),
+            prompt_version=props.get("atlan/promptVersion"),
         )
 
 
@@ -138,12 +155,22 @@ class AtlanResultProperties(BaseModel):
     status.
     """
 
+    evidence: str | None = None
+    """For ``mechanism=model`` findings: the exact span of source text the
+    model flagged (e.g. the offending phrase in a description).  Surfaced as
+    ``atlan/evidence`` so a human triaging the Security tab sees *why* the
+    finding fired without re-running the model.  ``None`` (and omitted) for
+    deterministic findings, where the SARIF ``region.snippet`` already carries
+    the evidence."""
+
     def to_properties(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         if self.hint is not None:
             out["atlan/hint"] = self.hint
         if self.external_influence:
             out["atlan/externalInfluence"] = True
+        if self.evidence is not None:
+            out["atlan/evidence"] = self.evidence
         return out
 
     @classmethod
@@ -151,6 +178,7 @@ class AtlanResultProperties(BaseModel):
         return cls(
             hint=props.get("atlan/hint"),
             external_influence=bool(props.get("atlan/externalInfluence", False)),
+            evidence=props.get("atlan/evidence"),
         )
 
 
