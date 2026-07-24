@@ -7,5 +7,23 @@
     "CRITICAL": 7,
     "HIGH": 30
   },
-  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive."
+  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive.",
+  "CVE-2026-3644": {
+    "package": "python-3.11-base",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE (python-3.11-base in app-runtime-base:3); fixed apk revision 3.11.15-r9 exists, awaiting Chainguard rebuild + republish of app-runtime-base:3.",
+    "expires": "2026-08-23",
+    "added_by": "@atlan-ci (vuln-triage rover)",
+    "case": 4,
+    "ticket": "BLDX-1582"
+  },
+  "CVE-2026-4224": {
+    "package": "python-3.11-base",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE (python-3.11-base in app-runtime-base:3); fixed apk revision 3.11.15-r9 exists, awaiting Chainguard rebuild + republish of app-runtime-base:3.",
+    "expires": "2026-08-23",
+    "added_by": "@atlan-ci (vuln-triage rover)",
+    "case": 4,
+    "ticket": "BLDX-1582"
+  }
 }
