@@ -24,15 +24,21 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from application_sdk.credentials.ref import CredentialRef
+    from application_sdk.credentials.resolver import CredentialResolver
+    from application_sdk.credentials.spec import AgentCredentialSpec
+    from application_sdk.errors.leaves import DependencyUnavailableError
     from application_sdk.handler.context import bind_invocation_context
     from application_sdk.handler.contracts import (
         AuthInput,
         AuthOutput,
+        HandlerCredential,
         MetadataInput,
         MetadataOutput,
         PreflightInput,
         PreflightOutput,
     )
+    from application_sdk.infrastructure.context import get_infrastructure
 
 if TYPE_CHECKING:
     from application_sdk.handler.base import Handler
@@ -125,6 +131,41 @@ class _SdrBinding:
     app_name: str
 
 
+async def _resolve_agent_credentials(
+    agent_json: dict[str, Any],
+) -> list[HandlerCredential]:
+    """Resolve an SDR ``agent_json`` *reference* to concrete credentials.
+
+    SDR (customer-infra) connectors receive their credential as an agent-json
+    reference — the real secret lives in the customer's Dapr / K8s secret store
+    and only the worker can dereference it (``secret-path``). Mirrors the
+    injected preflight gate's resolution exactly: build an
+    :class:`AgentCredentialSpec` from the raw ``agent_json``, wrap it in a
+    :class:`CredentialRef`, and resolve it against the worker's secret store
+    *before* the handler runs. The resolved values are returned as the same v3
+    ``[{key, value}]`` :class:`HandlerCredential` list the handler consumes on
+    the HTTP path, so ``input.credentials`` round-trips identically regardless of
+    how the credential arrived.
+
+    Raises:
+        DependencyUnavailableError: A reference is present but no secret store is
+            available to dereference it — an infra failure, not an empty-credential
+            state. Raising (rather than calling the handler with empty creds)
+            avoids misattributing the failure as an auth error.
+    """
+    spec = AgentCredentialSpec.model_validate(agent_json)
+    ref = CredentialRef(agent_spec=spec)
+    infra = get_infrastructure()
+    secret_store = infra.secret_store if infra is not None else None
+    if secret_store is None:
+        raise DependencyUnavailableError(
+            message="No secret store available to resolve SDR agent credentials",
+            service="secret_store",
+        )
+    raw = await CredentialResolver(secret_store).resolve_raw(ref) or {}
+    return HandlerCredential.list_from_raw(raw)
+
+
 def build_sdr_activities(
     handler: Handler,
     app_name: str,
@@ -138,6 +179,14 @@ def build_sdr_activities(
     call, ensuring concurrent activities on a shared handler cannot
     overwrite each other's context.
 
+    When the input carries an ``agent_json`` reference (SDR / customer-infra
+    connections, where the credential is a ``secret-path`` reference the worker
+    dereferences via its own secret store), the activity resolves it to concrete
+    ``HandlerCredential``s *before* binding the context — mirroring the injected
+    preflight gate. Inputs without ``agent_json`` (the HTTP / direct path and
+    non-SDR callers) pass their already-resolved ``credentials`` through
+    unchanged.
+
     Activities registered here have closure access to ``handler``; they
     are resolved by name from the workflows in :data:`SDR_WORKFLOWS`.
     """
@@ -145,16 +194,22 @@ def build_sdr_activities(
 
     @activity.defn(name=SDR_TEST_AUTH_ACTIVITY)
     async def test_auth(input: AuthInput) -> AuthOutput:
+        if input.agent_json:
+            input.credentials = await _resolve_agent_credentials(input.agent_json)
         with bind_invocation_context(binding.app_name, input.credentials):
             return await binding.handler.test_auth(input)
 
     @activity.defn(name=SDR_PREFLIGHT_ACTIVITY)
     async def preflight_check(input: PreflightInput) -> PreflightOutput:
+        if input.agent_json:
+            input.credentials = await _resolve_agent_credentials(input.agent_json)
         with bind_invocation_context(binding.app_name, input.credentials):
             return await binding.handler.preflight_check(input)
 
     @activity.defn(name=SDR_FETCH_METADATA_ACTIVITY)
     async def fetch_metadata(input: MetadataInput) -> MetadataOutput:
+        if input.agent_json:
+            input.credentials = await _resolve_agent_credentials(input.agent_json)
         with bind_invocation_context(binding.app_name, input.credentials):
             return await binding.handler.fetch_metadata(input)
 
