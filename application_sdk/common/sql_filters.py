@@ -161,7 +161,14 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
         if stripped.startswith("{") and stripped.endswith("}"):
             try:
                 parsed = json.loads(stripped)
-            except json.JSONDecodeError:  # conformance: ignore[E009] JSON parse probe; None signals "not a dict filter", handled below
+            except json.JSONDecodeError as e:  # conformance: ignore[E009] JSON parse probe; a malformed {...} filter is surfaced below
+                # A value shaped like a JSON object (``{...}``) that carries a
+                # double-quote but fails to parse is a malformed JSON filter,
+                # not a raw regex. Surface it as an invalid-JSON error rather
+                # than falling through to the deny-list, which misreports the
+                # structural ``"`` as a SQL-injection risk (ZD-126979).
+                if '"' in stripped:
+                    raise InvalidSqlFilterError(cause=e) from e
                 parsed = None
             if isinstance(parsed, dict):
                 # Validate the parsed shape; ignore the returned value

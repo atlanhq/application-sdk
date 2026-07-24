@@ -26,6 +26,7 @@ from application_sdk.common.sql_filters import (
     prepare_query,
     validate_filter_no_sql_injection,
 )
+from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
 
 # ---------------------------------------------------------------------------
 # validate_filter_no_sql_injection — the deny-list itself
@@ -95,6 +96,18 @@ class TestValidateFilterNoSqlInjection:
         # single quote in the value still trips the deny-list.
         with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
             validate_filter_no_sql_injection("{ not really json ' }")
+
+    def test_quoted_malformed_json_raises_invalid_filter_json(self) -> None:
+        # ZD-126979: a JSON-object-shaped value carrying double quotes that
+        # fails to parse (e.g. markdown-escaped underscores) must surface as
+        # "Invalid filter JSON", not the misleading SQL-unsafe deny-list error.
+        with pytest.raises(InvalidSqlFilterError, match=r"Invalid filter JSON"):
+            validate_filter_no_sql_injection('{"^d\\_edw\\_stg\\_03$": []}')
+
+    def test_brace_wrapped_raw_regex_still_passes(self) -> None:
+        # A brace-quantifier raw regex is not a JSON filter and carries no
+        # double quote — it must still pass through unchanged.
+        assert validate_filter_no_sql_injection("{2,3}") == "{2,3}"
 
     def test_excessive_nested_filter_depth_raises(self) -> None:
         deeply_nested = {"a": {"b": {"c": {"d": {"e": {"f": {}}}}}}}
