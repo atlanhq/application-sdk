@@ -25,5 +25,14 @@
     "added_by": "@atlan-ci (vuln-triage rover)",
     "case": 4,
     "ticket": "BLDX-1582"
+  },
+  "CVE-2026-15308": {
+    "package": "python-3.13",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE (python-3.13 apk in app-runtime-base:3; CPython HTML parser CPU DoS); fixed apk revision 3.13.14-r3 exists, awaiting Chainguard rebuild + republish of app-runtime-base:3.",
+    "expires": "2026-08-24",
+    "added_by": "@atlan-ci (vuln-triage rover)",
+    "case": 4,
+    "ticket": "BLDX-1588"
   }
 }
