@@ -32,10 +32,10 @@ azure-core==1.41.0
     # via azure-identity
 azure-identity==1.25.3
     # via atlan-application-sdk
-boto3==1.43.55
+boto3==1.43.56
     # via atlan-application-sdk
-boto3-stubs==1.43.55
-botocore==1.43.55
+boto3-stubs==1.43.56
+botocore==1.43.56
     # via
     #   boto3
     #   s3transfer
@@ -258,7 +258,7 @@ pluggy==1.6.0
     # via pytest
 poethepoet==0.48.0
 pre-commit==4.6.1
-prometheus-client==0.25.0
+prometheus-client==0.26.0
     # via
     #   atlan-application-sdk
     #   opentelemetry-exporter-prometheus
