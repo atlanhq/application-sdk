@@ -84,7 +84,12 @@ runs:
       run: |
         set +e
         mkdir -p results
-        uv run coverage run -m pytest tests/unit -v \
+        # `coverage` is installed transiently via `uv run --with` so callers do
+        # not need to declare it as a dependency — the same pattern the
+        # connector-integration-tests action uses for pytest-cov/pytest-xdist.
+        # The `.coverage` data file persists in the cwd between invocations, so
+        # the later xml/json/html/report calls read the same run's data.
+        uv run --with coverage coverage run -m pytest tests/unit -v \
           --junit-xml=results/test-results.xml 2>&1 | tee /tmp/unit-test-output.txt
         TEST_EXIT_CODE=${PIPESTATUS[0]}
         set -e
@@ -95,12 +100,12 @@ runs:
         # is the machine-readable form the test-readiness scorecard reads (the
         # aggregation job feeds it as --unit-coverage); xml/html stay for humans
         # and the PR coverage comment.
-        uv run coverage xml --fail-under=0 || true
-        uv run coverage json --fail-under=0 || true
-        uv run coverage html --fail-under=0 || true
+        uv run --with coverage coverage xml --fail-under=0 || true
+        uv run --with coverage coverage json --fail-under=0 || true
+        uv run --with coverage coverage html --fail-under=0 || true
         # Propagate pytest failure first; otherwise check coverage threshold.
         if [ $TEST_EXIT_CODE -ne 0 ]; then exit $TEST_EXIT_CODE; fi
-        uv run coverage report --fail-under=${{ inputs.fail-under }}
+        uv run --with coverage coverage report --fail-under=${{ inputs.fail-under }}
 
     - name: Comment coverage on PR
       if: github.event_name == 'pull_request'
