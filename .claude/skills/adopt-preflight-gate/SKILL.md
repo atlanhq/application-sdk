@@ -4,9 +4,13 @@ description: >
   Bump a v3 app to the latest application-sdk and adopt the SDK-native
   preflight gate safely. The gate runs the app's preflight_check handler as the
   mandatory first activity of every extraction workflow and always reports the
-  verdict; by default it is soft (a NOT_READY verdict is reported but the run
-  proceeds), and blocking real runs on NOT_READY is a per-app opt-in
-  (preflight_gate_mode = "hard"). Classifies the app's rollout bucket,
+  verdict; by default it is soft (every outcome is reported but the run
+  proceeds), and blocking real runs is a per-app opt-in (preflight_gate_mode =
+  "hard"). Hard mode blocks on everything the gate can attribute to the source —
+  a NOT_READY verdict, a probe overrunning the enforced budget, a handler crash,
+  a provably absent credential — while failures of the gate's own plumbing always
+  fail open. Classifies the app's rollout bucket, sizes the check budget
+  (preflight_gate_timeout_seconds) against what the handler actually costs,
   fixes name collisions, audits the handler's status logic against the new
   semantics, runs an interactive check-design session with the developer
   (visualized as a decision tree: which checks block, which are advisory, what
@@ -25,7 +29,7 @@ optional_triggers:
   - "preflight gate migration"
   - "will this app break on SDK bump"
 owner: connector-platform-team
-last_updated: "2026-07-23"
+last_updated: "2026-07-26"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
@@ -62,9 +66,15 @@ status. Read its `app/handler.py` before proposing changes.
 - There is no per-check `blocking` flag. Importance is expressed by **control
   flow**: required checks short-circuit (return `NOT_READY` early), advisory
   checks run and only influence `PARTIAL`.
-- **Raising does not block.** A raise from the handler is a gate plumbing
-  failure → the SDK fails open (logs loudly, run proceeds). Blocks happen only
-  via the returned status.
+- **Return the verdict; don't raise it.** The returned status is what both
+  surfaces render, so a block belongs there. But raising is *not* a no-op, and
+  what it does depends on the error's type: a typed plumbing error
+  (`RateLimitedError`, `DependencyUnavailableError`, `ResourceExhaustedError`)
+  means "I could not determine readiness" and fails open in both postures;
+  anything else — an untyped crash, a typed source error, overrunning the budget
+  — is treated as an unverifiable source and **blocks in hard mode**. So an
+  uncaught probe exception is a run-aborting bug for a hard app, not a harmless
+  fail-open.
 - A failed check should carry `error=<SDK leaf>(...).to_failure_details()` —
   category/code/audience/suggested_action flow to the Automation Engine and
   dashboards. Untyped failures fall back to the `PREFLIGHT_CHECK_FAILED`
@@ -106,12 +116,16 @@ class MyApp(App):
 or, ops-side without an app release: `ATLAN_PREFLIGHT_GATE_MODE=hard` on the
 worker deployment (env wins over the attribute; any value other than the
 literal `hard` resolves to soft — malformed config never blocks a run by
-accident). The worker logs an INFO line per hard app at boot.
+accident). The worker logs an INFO line per hard app at boot, and emits a
+queryable `Preflight gate posture` event per app carrying the resolved mode and
+budget. Prefer the per-app attribute: the env lever applies to every app on that
+worker, including ones whose checks have never been validated against real runs.
 
 Hard mode covers every outcome the gate attributes to the **source** — a
-`NOT_READY` verdict, a probe overrunning the budget, a handler crash, a missing
-credential. Failures of the gate's own **plumbing** (rate limit, secret-store
-outage, worker unavailable) always fail open, in both postures. The outcome event
+`NOT_READY` verdict, a probe overrunning the budget, a handler crash, a provably
+absent credential. Failures of the gate's own **plumbing** (rate limit,
+secret-store outage, a credential lookup that failed for any other reason, worker
+unavailable) always fail open, in both postures. The outcome event
 carries `gate_classification` (`source_unverifiable` vs `gate_broken`) so the two
 are separable in pulse.
 
@@ -230,15 +244,17 @@ Run these detections and report the bucket(s) before changing anything:
    key read inside `preflight_check`, and cross-check each against the input
    contract's fields. On the gate path, metadata is rebuilt from the extraction
    input's `model_dump`; a UI-form-only key is **absent** — a hard `[...]` read
-   crashes (fail-open), a defensive `.get(..., default)` silently runs the
-   check with wrong config. Every unmatched key needs a decision in phase 2.
+   crashes, which is a handler crash and therefore **blocks every run in hard
+   mode**; a defensive `.get(..., default)` silently runs the check with wrong
+   config. Every unmatched key needs a decision in phase 2.
 7. **Multi-credential class** — an app that needs more than one credential to
    verify a source (e.g. an API token AND an object-store credential), whose
    per-auth-type guids live in separate input fields, not on the single
    top-level `credential_guid` triple. The gate resolves only that one triple,
    so the symptom on the gate path is the handler receiving `credentials=[]`,
    defaulting to one auth type, and raising missing-credential on every gated
-   run (100% fail-open). Detect by: multiple `*_credential_guid` fields on the
+   run — reported on every run in soft mode, and **aborting every run in hard
+   mode**. Detect by: multiple `*_credential_guid` fields on the
    input contract, or a handler that resolves guids itself (`CredentialResolver`
    / `get_credentials` called inside `preflight_check`). If found, the app
    adopts the SDK `preflight_credential_refs` primitive in phase 2 (see 2g) — it
@@ -654,18 +670,31 @@ gate verdict from the "Preflight gate outcome" event. The console drops the
 event's structured extras, so read the local observability logs
 (`local/dapr/objectstore/artifacts/apps/observability/non-sdr/logs/**.json.gz`,
 gzipped JSONL) and confirm `outcome="proceeded"` with the entrypoint's checks in
-`check_matrix`. `no_verdict`/`ActivityError` means the gate activity fail-opened
-(e.g. flaky embedded Dapr locally), not a real verdict — re-run.
+`check_matrix`. Read `gate_classification` to tell the two non-verdicts apart:
+`gate_broken` on a `no_verdict` row is the gate's own plumbing (e.g. flaky
+embedded Dapr locally) — not a real verdict, re-run. `source_unverifiable` on a
+`would_block`/`blocked` row means the handler crashed or overran its budget, which
+*is* about your checks and will abort the run once the app is on hard mode. An
+`outcome="skipped"` row means the gate never ran at all — check the `reason`
+(`input_not_credential_resolvable` is a contract problem, see step 4).
 
 ## Pitfalls (each observed live during the rollout — check all of them)
 
 - `all(c.passed)` status logic → advisory checks silently promoted to
   run-blocking.
-- Raise-to-block → does nothing but fail open; blocks are returned, not raised.
+- Raise-to-block → the verdict belongs in the returned status; a raise is
+  classified by error type instead, so it either fails open (typed plumbing
+  error) or blocks with the wrong attribution (anything else).
+- Returning `NOT_READY` for a transient (429, dependency outage) → makes a hard
+  gate fail *closed* on a blip. Raise a typed plumbing error instead.
+- Sizing checks to a budget the handler can't meet, or reading
+  `input.timeout_seconds` and then overriding it (`max(input.timeout_seconds,
+  <bigger constant>)`, or a deadline whose per-probe floor never forces an early
+  return) → the overrun blocks every run in hard mode.
 - `error` on a passed check → ignored by the gate; remove it.
 - Form-only metadata keys → silently absent on the gate path; defensive
-  `.get` hides it (checks pass with wrong config), hard access crashes to
-  fail-open. Fix the contract, not the symptom.
+  `.get` hides it (checks pass with wrong config), hard access crashes — which
+  blocks every run in hard mode. Fix the contract, not the symptom.
 - Deleting a colliding activity without the coverage diff → checks vanish.
 - Wrong audience on an internal failure → customer's SLA split absorbs an app
   bug.
