@@ -809,7 +809,11 @@ def build_preflight_gate_activity(
                 "blocking the run before extraction"
                 if enforce
                 else "proceeding without source verification",
-                exc_info=True,
+                # The exception, not exc_info=True: on the budget-overrun path this
+                # runs outside any ``except`` (the AppTimeoutError is constructed,
+                # not caught), so sys.exc_info() is empty and True would attach
+                # nothing — on the one path where the cause is the whole diagnostic.
+                exc_info=exc,
             )
             logger.info(
                 PREFLIGHT_OUTCOME_EVENT,
@@ -904,6 +908,12 @@ def build_preflight_gate_activity(
                     # Ask it to stop, but never await it — an uncooperative
                     # handler must not be able to hold the activity open.
                     check.cancel()
+                    # Abandoning a task without awaiting leaves any exception it
+                    # later raises unretrieved, which asyncio logs on GC. Consume
+                    # it (same fire-and-forget idiom as execution/heartbeat.py).
+                    check.add_done_callback(
+                        lambda f: None if f.cancelled() else f.exception()
+                    )
                     timed_out = True
         except Exception as e:
             # A handler that raises the deliberate block itself already carries a

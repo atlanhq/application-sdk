@@ -31,6 +31,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     GATE_TIMEOUT_MAX_SECONDS,
     GATE_TIMEOUT_MIN_SECONDS,
     PREFLIGHT_FAILED_ERROR_TYPE,
+    PREFLIGHT_NO_VERDICT_ERROR_TYPE,
     PREFLIGHT_POSTURE_EVENT,
     PreflightGateInput,
     build_preflight_gate_activity,
@@ -484,9 +485,11 @@ class TestRetryAwareness:
             with pytest.raises(Exception) as excinfo:
                 await gate(PreflightGateInput())
 
-        # Retryable, and specifically NOT the deliberate block — otherwise the
-        # workflow would abort on the first slow attempt.
-        assert getattr(excinfo.value, "type", None) != PREFLIGHT_FAILED_ERROR_TYPE
+        # Pin the positive type: "not the block type" would pass for any error
+        # at all. The workflow must see a retryable no-verdict, so that it does
+        # not abort on the first slow attempt and the retry actually happens.
+        assert getattr(excinfo.value, "type", None) == PREFLIGHT_NO_VERDICT_ERROR_TYPE
+        assert excinfo.value.non_retryable is False
         assert _no_outcome(mock_logger)
 
     async def test_final_attempt_applies_mode(self) -> None:
