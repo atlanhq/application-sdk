@@ -94,11 +94,24 @@ def _gate(handler, *, enforce: bool, budget: float = 0.3):
     )
 
 
+def _outcome_rows(mock_logger) -> list[dict]:
+    return [
+        c.kwargs
+        for c in mock_logger.info.call_args_list
+        if c.args and c.args[0] == "Preflight gate outcome"
+    ]
+
+
 def _outcome(mock_logger) -> dict:
-    for c in mock_logger.info.call_args_list:
-        if c.args and c.args[0] == "Preflight gate outcome":
-            return c.kwargs
-    raise AssertionError("no outcome event emitted")
+    """The single outcome row for one gate invocation.
+
+    Asserts exactly one: a gate call emits at most one outcome row, and
+    returning the *first* match would hide a double-emission — which is exactly
+    how a re-entrant ``_no_verdict`` slipped past this suite once already.
+    """
+    rows = _outcome_rows(mock_logger)
+    assert len(rows) == 1, f"expected exactly 1 outcome event, got {len(rows)}: {rows}"
+    return rows[0]
 
 
 def _no_outcome(mock_logger) -> bool:
@@ -252,6 +265,12 @@ class TestSourceUnverifiableAppliesMode:
         assert event[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_SOURCE_UNVERIFIABLE
         assert event[GATE_MODE_KEY] == "hard"
         assert handler.completed is False  # actually cancelled, not just timed out
+        # The overrun must stay attributed as a timeout. _no_verdict raises in
+        # hard mode, so calling it from inside the guarded try re-caught its own
+        # raise and re-classified TIMEOUT -> INTERNAL, losing the budget message.
+        assert event["reason"] == "TIMEOUT"
+        assert "budget" in str(excinfo.value)
+        assert mock_logger.error.call_count == 1
 
     async def test_budget_overrun_reports_and_proceeds_in_soft_mode(self) -> None:
         handler = _SlowHandler()
@@ -404,6 +423,26 @@ class TestCollapsedPlumbingIsNotACredentialProblem:
             _outcome(mock_logger)[GATE_CLASSIFICATION_KEY]
             == CLASSIFICATION_SOURCE_UNVERIFIABLE
         )
+
+
+class TestHandlerRaisedBlockPassesThrough:
+    async def test_deliberate_block_is_not_rewrapped(self) -> None:
+        # A handler that raises the block itself already carries a verdict; the
+        # gate must pass it through rather than re-wrap it as an unverifiable
+        # source, which would emit a second row and relabel the failure.
+        from application_sdk.execution.errors import ApplicationError
+
+        block = ApplicationError(
+            "Preflight failed: bad creds",
+            type=PREFLIGHT_FAILED_ERROR_TYPE,
+            non_retryable=True,
+        )
+        gate = _gate(_RaisingHandler(block), enforce=True, budget=5)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.raises(Exception) as excinfo:
+                await gate(PreflightGateInput())
+        assert excinfo.value is block
+        assert _outcome_rows(mock_logger) == []
 
 
 class TestGateBrokenAlwaysFailsOpen:

@@ -856,6 +856,10 @@ def build_preflight_gate_activity(
                 service="secret_store",
             )
 
+        # Floor of the remaining budget, and the one number the handler is told —
+        # the timeout message quotes it too, so what we enforce, what we report,
+        # and what we blame are all the same value.
+        handler_budget = max(1, int(remaining))
         # Build form config from the extraction-input snapshot in the activity
         # frame so app field reads stay outside the deterministic workflow.
         metadata_dump = _config_from_snapshot(
@@ -870,7 +874,7 @@ def build_preflight_gate_activity(
             # What is actually left, not the nominal budget: resolution above has
             # already spent part of it. A handler sizing probes to this number is
             # sizing to the deadline the wait_for below really enforces.
-            timeout_seconds=max(1, int(remaining)),
+            timeout_seconds=handler_budget,
         )
         # Redact every resolved secret from logs — the single-triple list and
         # every named group, without assuming which path populated which.
@@ -878,6 +882,11 @@ def build_preflight_gate_activity(
             *credentials,
             *(c for group in credentials_by_name.values() for c in group),
         ]
+        # _no_verdict raises in hard mode, so it must never be called from inside
+        # this try — the raise would be re-caught below and _no_verdict would run
+        # a second time, double-emitting the outcome row and reclassifying the
+        # failure. Hence the flag: the timeout is handled after the try closes.
+        timed_out = False
         try:
             with bind_invocation_context(app_name, all_creds):
                 # Deliberately not asyncio.wait_for: it cancels the handler and
@@ -889,25 +898,32 @@ def build_preflight_gate_activity(
                 # lets us classify *at* the deadline, whatever the handler does.
                 check = asyncio.ensure_future(handler.preflight_check(preflight_input))
                 done, _ = await asyncio.wait({check}, timeout=remaining)
-                if not done:
+                if done:
+                    result = check.result()
+                else:
                     # Ask it to stop, but never await it — an uncooperative
                     # handler must not be able to hold the activity open.
                     check.cancel()
-                    return _no_verdict(
-                        AppTimeoutError(
-                            message=(
-                                "Preflight checks did not finish within the "
-                                f"{int(remaining)}s budget"
-                            ),
-                            app_name=app_name,
-                            retryable=False,
-                        )
-                    )
-                result = check.result()
+                    timed_out = True
         except Exception as e:
-            if _is_gate_broken(e):
+            # A handler that raises the deliberate block itself already carries a
+            # verdict and its own emitted row; pass it straight through rather
+            # than re-wrapping it as an unverifiable source.
+            if _is_gate_broken(e) or is_preflight_block(e):
                 raise
             return _no_verdict(e)
+
+        if timed_out:
+            return _no_verdict(
+                AppTimeoutError(
+                    message=(
+                        "Preflight checks did not finish within the "
+                        f"{handler_budget}s budget"
+                    ),
+                    app_name=app_name,
+                    retryable=False,
+                )
+            )
         # The outcome event is the gate's queryable row (connector-pulse builds the
         # dashboard from it). The activity holds the verdict, so it emits the
         # proceeded/blocked rows; the workflow emits only no_verdict (fail-open).
