@@ -23,9 +23,16 @@ Rules in this check module:
   Dapr component YAMLs from ``raw.githubusercontent.com`` or the GitHub
   contents API for ``atlanhq/application-sdk``; the installed SDK wheel
   bundles them at ``application_sdk/components/``.
+* **D010 QueryTransformerWithoutDuckdb** — an app that imports the SDK query
+  transformer (``application_sdk.transformers.query``) must resolve
+  ``duckdb``: as a locked package when ``uv.lock`` exists, else via a direct
+  dependency or an ``atlan-application-sdk[sql]``/``[incremental]`` extra.
+  On SDK >= 3.22 (empty ``[daft]`` extra) a missing duckdb is a guaranteed
+  runtime ``ImportError`` in every transform.
 
 D004/D005 are metadata-based (need the SDK importable) like D002; D006/D007/D008/D009
-are pure-text.
+are pure-text.  D010 is cross-file (source imports + lock/pyproject) and runs in
+``scan_all``.
 
 Self-check exemption: any pyproject whose ``[project].name`` starts with
 ``atlan-application-sdk`` is skipped entirely (the SDK and its sibling packages
@@ -63,6 +70,7 @@ RULE_D006 = "D006"
 RULE_D007 = "D007"
 RULE_D008 = "D008"
 RULE_D009 = "D009"
+RULE_D010 = "D010"
 
 SDK_PACKAGE = "atlan-application-sdk"
 
@@ -1001,6 +1009,144 @@ def scan_path(
 
 
 # ---------------------------------------------------------------------------
+# D010 — query transformer imported without a resolvable duckdb
+# ---------------------------------------------------------------------------
+
+#: The SDK module whose import gates an app into D010: everything under it
+#: (``transform_metadata`` / ``QueryBasedTransformer``) executes transform SQL
+#: through ``DuckDBConnectionManager``.
+_QUERY_TRANSFORMER_MODULE = "application_sdk.transformers.query"
+
+#: The parent package, for the ``from application_sdk.transformers import
+#: query`` form.
+_TRANSFORMERS_PACKAGE = "application_sdk.transformers"
+
+#: SDK extras that provide duckdb (per the SDK's published extras; the
+#: ``[daft]`` extra is empty on SDK >= 3.22 and provides nothing).
+_DUCKDB_PROVIDING_EXTRAS = frozenset({"sql", "incremental"})
+
+#: Matches a locked duckdb package block in uv.lock (``[[package]]`` entries
+#: serialise as ``name = "duckdb"`` on its own line).
+_UV_LOCK_DUCKDB_RE = re.compile(r'^name = "duckdb"$', re.MULTILINE)
+
+
+def _first_query_transformer_import(
+    py_files: Iterable[Path], root: Path
+) -> tuple[str, int] | None:
+    """Return ``(rel_file, lineno)`` of the first query-transformer import.
+
+    Matches ``import application_sdk.transformers.query`` (or a submodule),
+    ``from application_sdk.transformers.query import ...``, and
+    ``from application_sdk.transformers import query``.
+    """
+    for path in py_files:
+        try:
+            tree = ast.parse(path.read_bytes())
+        except (OSError, SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            hit = False
+            if isinstance(node, ast.Import):
+                hit = any(
+                    alias.name == _QUERY_TRANSFORMER_MODULE
+                    or alias.name.startswith(_QUERY_TRANSFORMER_MODULE + ".")
+                    for alias in node.names
+                )
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                if node.module == _QUERY_TRANSFORMER_MODULE or node.module.startswith(
+                    _QUERY_TRANSFORMER_MODULE + "."
+                ):
+                    hit = True
+                elif node.module == _TRANSFORMERS_PACKAGE:
+                    hit = any(alias.name == "query" for alias in node.names)
+            if hit:
+                try:
+                    rel = str(path.relative_to(root))
+                except ValueError:
+                    rel = str(path)
+                return rel, node.lineno
+    return None
+
+
+def _duckdb_resolved(root: Path, pyproject_text: str) -> bool:
+    """Whether ``duckdb`` resolves for the repo at *root*.
+
+    With a ``uv.lock`` present the lock is the ground truth: duckdb must
+    appear as a locked package.  Without a lock, fall back to declaration
+    intent in ``pyproject.toml``: a direct ``duckdb`` dependency anywhere
+    (core, extras, or dependency groups) or an ``atlan-application-sdk``
+    reference carrying a duckdb-providing extra (``sql``/``incremental``).
+    """
+    uv_lock = root / "uv.lock"
+    if uv_lock.is_file():
+        try:
+            return (
+                _UV_LOCK_DUCKDB_RE.search(uv_lock.read_text(encoding="utf-8"))
+                is not None
+            )
+        except OSError:
+            pass  # unreadable lock — fall back to pyproject intent
+
+    sdk_norm = _normalise_name(SDK_PACKAGE)
+    for entry in [
+        *_iter_dep_entries(pyproject_text),
+        *_iter_dependency_group_entries(pyproject_text),
+    ]:
+        if entry.name == "duckdb":
+            return True
+        if entry.name == sdk_norm and _DUCKDB_PROVIDING_EXTRAS & {
+            _normalise_name(e) for e in _sdk_extras_in(entry.raw)
+        }:
+            return True
+    return False
+
+
+def _scan_query_transformer_duckdb(
+    py_files: list[Path],
+    root: Path,
+    pyproject_text: str,
+    file: str,
+) -> list[Finding]:
+    """D010: query-transformer import present but duckdb does not resolve."""
+    import_site = _first_query_transformer_import(py_files, root)
+    if import_site is None:
+        return []
+    if _duckdb_resolved(root, pyproject_text):
+        return []
+
+    rel_import, import_line = import_site
+    suppressions = parse_toml_suppressions(pyproject_text)
+    # Anchor at the SDK dependency line (where the extra belongs) so the
+    # finding lands where the fix goes; fall back to the [project] header.
+    sdk_norm = _normalise_name(SDK_PACKAGE)
+    anchor_line = 1
+    for entry in _iter_dep_entries(pyproject_text):
+        if entry.name == sdk_norm and entry.array_path == "project.dependencies":
+            anchor_line = entry.line
+            break
+    return [
+        _make_finding(
+            rule_id=RULE_D010,
+            file=file,
+            line=anchor_line,
+            column=1,
+            message=(
+                f"The SDK query transformer is imported ({rel_import}:{import_line}"
+                f" — application_sdk.transformers.query) but 'duckdb' does not "
+                f"resolve: it is not locked in uv.lock and no "
+                f"'{SDK_PACKAGE}[sql]'/'[incremental]' extra or direct duckdb "
+                f"dependency is declared. On SDK >= 3.22 (the [daft] extra is "
+                f"empty) every transform_metadata call fails at runtime with "
+                f"ImportError: 'duckdb is required for DuckDBConnectionManager'. "
+                f"Reference the SDK as '{SDK_PACKAGE}[sql]' (or [incremental]) "
+                f"and relock."
+            ),
+            suppressions=suppressions,
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # D003 — unused dependency (cross-file: pyproject deps vs. source imports)
 # ---------------------------------------------------------------------------
 
@@ -1203,7 +1349,6 @@ def scan_all(
     for pyproject in pyprojects:
         findings.extend(scan_path(pyproject, root))
 
-    # ── D003 ────────────────────────────────────────────────────────────────
     root_pyproject = root / "pyproject.toml"
     if not root_pyproject.is_file():
         return findings
@@ -1213,6 +1358,18 @@ def scan_all(
     except tomllib.TOMLDecodeError:
         return findings
 
+    try:
+        rel_pyproject = str(root_pyproject.relative_to(root))
+    except ValueError:
+        rel_pyproject = str(root_pyproject)
+
+    # ── D010 (cross-file; app-only like the rest of the per-pyproject rules) ─
+    if not _is_self_check(_project_name(text)):
+        findings.extend(
+            _scan_query_transformer_duckdb(py_files, root, text, rel_pyproject)
+        )
+
+    # ── D003 ────────────────────────────────────────────────────────────────
     dep_entries = [
         e
         for e in _iter_dep_entries(text)

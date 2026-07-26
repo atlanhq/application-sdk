@@ -1242,3 +1242,193 @@ def test_d003_skips_non_utf8_source_without_crashing(tmp_path: Path) -> None:
     )
     modules = _collect_top_level_imports([src])
     assert "requests" in modules
+
+
+# ── D010 QueryTransformerWithoutDuckdb ───────────────────────────────────────
+
+_D010_PYPROJECT_NO_EXTRA = (
+    "[project]\n"
+    'name = "my-connector"\n'
+    'version = "0.1.0"\n'
+    "dependencies = [\n"
+    '    "atlan-application-sdk>=3.22.0,<4.0.0",\n'
+    "]\n"
+)
+
+_D010_PYPROJECT_SQL_EXTRA = (
+    "[project]\n"
+    'name = "my-connector"\n'
+    'version = "0.1.0"\n'
+    "dependencies = [\n"
+    '    "atlan-application-sdk[sql]>=3.22.0,<4.0.0",\n'
+    "]\n"
+)
+
+_D010_TRANSFORMER_IMPORT = (
+    "from application_sdk.transformers.query import QueryBasedTransformer\n"
+)
+
+
+def _d010_scan(
+    tmp_path: Path,
+    *,
+    pyproject: str,
+    source: str,
+    uv_lock: str | None = None,
+) -> list:
+    """Write a repo shape and return only the D010 findings from scan_all."""
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(pyproject, encoding="utf-8")
+    src = tmp_path / "app" / "transformer.py"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(source, encoding="utf-8")
+    if uv_lock is not None:
+        (tmp_path / "uv.lock").write_text(uv_lock, encoding="utf-8")
+    findings = scan_all(
+        [pp, src],
+        tmp_path,
+        imported_modules=set(),
+        dist_import_map={},
+        dialect_drivers=set(),
+    )
+    return [f for f in findings if f.rule_id == "D010"]
+
+
+def test_d010_fires_when_lock_lacks_duckdb(tmp_path: Path) -> None:
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_NO_EXTRA,
+        source=_D010_TRANSFORMER_IMPORT,
+        uv_lock='[[package]]\nname = "atlan-application-sdk"\nversion = "3.24.0"\n',
+    )
+    assert len(findings) == 1
+    assert "duckdb" in findings[0].message
+    assert "app/transformer.py" in findings[0].message
+    # Anchored at the SDK dependency line in pyproject.toml (where the fix goes).
+    assert findings[0].file == "pyproject.toml"
+    assert findings[0].line == 5
+
+
+def test_d010_silent_when_lock_has_duckdb(tmp_path: Path) -> None:
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_NO_EXTRA,
+        source=_D010_TRANSFORMER_IMPORT,
+        uv_lock=(
+            '[[package]]\nname = "atlan-application-sdk"\nversion = "3.24.0"\n\n'
+            '[[package]]\nname = "duckdb"\nversion = "1.3.0"\n'
+        ),
+    )
+    assert findings == []
+
+
+def test_d010_silent_without_transformer_import(tmp_path: Path) -> None:
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_NO_EXTRA,
+        source="from application_sdk.io import ParquetFileReader\n",
+        uv_lock='[[package]]\nname = "atlan-application-sdk"\nversion = "3.24.0"\n',
+    )
+    assert findings == []
+
+
+def test_d010_no_lock_sql_extra_resolves(tmp_path: Path) -> None:
+    """Without a uv.lock the [sql] extra on the SDK reference clears the rule."""
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_SQL_EXTRA,
+        source=_D010_TRANSFORMER_IMPORT,
+    )
+    assert findings == []
+
+
+def test_d010_no_lock_incremental_extra_resolves(tmp_path: Path) -> None:
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_NO_EXTRA.replace(
+            "atlan-application-sdk>=", "atlan-application-sdk[incremental]>="
+        ),
+        source=_D010_TRANSFORMER_IMPORT,
+    )
+    assert findings == []
+
+
+def test_d010_no_lock_direct_duckdb_dep_resolves(tmp_path: Path) -> None:
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=(
+            "[project]\n"
+            'name = "my-connector"\n'
+            'version = "0.1.0"\n'
+            "dependencies = [\n"
+            '    "atlan-application-sdk>=3.22.0,<4.0.0",\n'
+            '    "duckdb>=1.1.3,<1.6.0",\n'
+            "]\n"
+        ),
+        source=_D010_TRANSFORMER_IMPORT,
+    )
+    assert findings == []
+
+
+def test_d010_fires_without_lock_or_extra(tmp_path: Path) -> None:
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_NO_EXTRA,
+        source=_D010_TRANSFORMER_IMPORT,
+    )
+    assert len(findings) == 1
+    assert "[sql]" in findings[0].message
+
+
+def test_d010_matches_from_transformers_import_query_form(tmp_path: Path) -> None:
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_NO_EXTRA,
+        source="from application_sdk.transformers import query\n",
+    )
+    assert len(findings) == 1
+
+
+def test_d010_lock_wins_over_extra_declaration(tmp_path: Path) -> None:
+    """With a uv.lock present the lock is ground truth: a declared [sql] extra
+    that is not reflected in the lock (stale lock) still fires."""
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_SQL_EXTRA,
+        source=_D010_TRANSFORMER_IMPORT,
+        uv_lock='[[package]]\nname = "atlan-application-sdk"\nversion = "3.24.0"\n',
+    )
+    assert len(findings) == 1
+
+
+def test_d010_skips_sdk_repo_itself(tmp_path: Path) -> None:
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=(
+            "[project]\n"
+            'name = "atlan-application-sdk"\n'
+            'version = "3.24.0"\n'
+            "dependencies = []\n"
+        ),
+        source=_D010_TRANSFORMER_IMPORT,
+    )
+    assert findings == []
+
+
+def test_d010_suppressed_inline_directive(tmp_path: Path) -> None:
+    pyproject = (
+        "[project]\n"
+        'name = "my-connector"\n'
+        'version = "0.1.0"\n'
+        "dependencies = [\n"
+        "    # conformance: ignore[D010] duckdb vendored in the runtime image\n"
+        '    "atlan-application-sdk>=3.22.0,<4.0.0",\n'
+        "]\n"
+    )
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=pyproject,
+        source=_D010_TRANSFORMER_IMPORT,
+    )
+    assert len(findings) == 1
+    assert findings[0].suppressed
