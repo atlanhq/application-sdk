@@ -202,8 +202,21 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # T017: e2e agent_spec() override must inherit the per-leg deployment queue —
     # only connector apps subclass the e2e harness and (may) override agent_spec;
     # the SDK ships the env-derived default, it doesn't hard-code a connector queue.
+    # B007: daft-only DataFrame APIs on SDK reader frames — only consumer apps
+    # call daft surfaces on frames the SDK hands them; the SDK's own transformer
+    # code is the pyarrow/pandas bridge itself (fleet SDR sweep).
+    # D010: query-transformer-without-duckdb — the app's lock must resolve
+    # duckdb; the SDK is the publisher of the [sql]/[incremental] extras.
+    # P040: transform-template reserved keywords — only connector apps ship
+    # transform YAML templates consumed by the query transformer.
+    # P041: hard preflight gate in an SDR app — gated on self_deployed_runtime,
+    # which the SDK never declares (fleet SDR sweep).
     assert app_scoped == {
         "B001",
+        "B007",
+        "D010",
+        "P040",
+        "P041",
         "C002",
         "D001",
         "D002",
@@ -378,6 +391,7 @@ def test_catalog_d_series_present() -> None:
         "D007",
         "D008",
         "D009",
+        "D010",
     }
     missing = expected - d_ids
     assert not missing, f"Missing D-series rules: {missing}"
@@ -415,6 +429,12 @@ def test_catalog_p_series_present() -> None:
     empty-defaulting input field), and P039 is SdrAgentJsonDroppedByInputContract
     (the generated extract-input contract silently drops the forwarded agent_json)
     — the follow-on SDR-readiness rules.
+    P040 is TransformTemplateReservedKeyword — an unquoted DuckDB reserved
+    keyword used as an identifier in a transform SQL template (ParserException
+    at runtime on the daft-less SDK >= 3.22 runtime; fleet SDR sweep).
+    P041 is SdrHardPreflightGate — an SDR app that unconditionally sets
+    preflight_gate_mode = "hard", aborting agent-mode workflows on
+    non-secret-config preflight failures (fleet SDR sweep).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -460,6 +480,8 @@ def test_catalog_p_series_present() -> None:
         "P037",
         "P038",
         "P039",
+        "P040",
+        "P041",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -493,10 +515,16 @@ def test_catalog_t_series_present() -> None:
 
 
 def test_catalog_b_series_present() -> None:
-    """The B-series backwards-compatibility / deprecation rules are all present."""
+    """The B-series backwards-compatibility / deprecation rules are all present.
+
+    B007 is DaftOnlyDataframeApiUsage — daft-only DataFrame APIs
+    (count_rows/to_pylist/.names, DataframeType.daft) that are dead on the
+    daft-less SDK >= 3.22 runtime; third-party surfaces the generated
+    deprecated-symbol manifest cannot carry (fleet SDR sweep).
+    """
     rules = load_catalog()
     b_ids = {r.id for r in rules if r.id.startswith("B")}
-    expected = {"B001", "B002", "B003", "B004", "B005", "B006"}
+    expected = {"B001", "B002", "B003", "B004", "B005", "B006", "B007"}
     missing = expected - b_ids
     assert not missing, f"Missing B-series rules: {missing}"
     extra = b_ids - expected

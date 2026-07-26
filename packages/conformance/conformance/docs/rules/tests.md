@@ -153,6 +153,17 @@ Add the agent-mode e2e test **first** and confirm T002 is satisfied, then delete
 `BaseSDRIntegrationTest` subclass — an app that removes the SDR test before adding the
 e2e replacement would fail T002.
 
+**Also remove the orphaned old SDR CI** when deleting the legacy suite (fleet
+remediation found it in two shapes; either leaves a permanently failing check once the
+suite is gone):
+
+* an `sdr:` job inside `.github/workflows/tests.yaml` that runs the   deleted suite —
+delete the job AND drop `sdr` from the   `tests-passed` job's `needs:` list and its
+verify step; * a standalone `sdr-integration*.yaml` workflow plus its
+`.github/sdr-e2e/` config directory — delete both.
+
+The agent-mode full-DAG e2e workflow replaces the old SDR CI.
+
 Suppress with `# conformance: ignore[T003] <reason>` on the class definition line for a
 legitimate exception (e.g. a shim that intentionally keeps the legacy harness during
 migration).

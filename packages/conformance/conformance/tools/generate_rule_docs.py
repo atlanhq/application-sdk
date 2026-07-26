@@ -124,7 +124,8 @@ _SERIES_META: list[SeriesMeta] = [
             "conformance/suite/rules/entrypoint.py, "
             "conformance/suite/rules/client_seam.py, "
             "conformance/suite/rules/determinism.py, "
-            "conformance/suite/rules/app_name_alignment.py"
+            "conformance/suite/rules/app_name_alignment.py, "
+            "conformance/suite/rules/transform_templates.py"
         ),
         output_filename="prescriptions.md",
         checker=(
@@ -135,7 +136,8 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.client_seam` (P019), "
             "`suite.checks.determinism` (P020–P024, P031), "
             "`suite.checks.app_name_alignment` (P025), "
-            "`suite.checks.sdr` (P029/P030, P037/P038/P039) "
+            "`suite.checks.sdr` (P029/P030, P037/P038/P039, P041), "
+            "`suite.checks.transform_templates` (P040, scans template YAML) "
             "(all AST-based / cross-artifact)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
