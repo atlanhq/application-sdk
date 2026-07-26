@@ -56,6 +56,8 @@ from application_sdk.version import __version__ as _SDK_VERSION
 # single edit that keeps the emit call-site and the allowlist below in sync.
 CHECK_MATRIX_KEY = "check_matrix"
 GATE_MODE_KEY = "gate_mode"
+GATE_CLASSIFICATION_KEY = "gate_classification"
+GATE_TIMEOUT_KEY = "gate_timeout_seconds"
 
 # Transformed-asset validation outcome-event key, shared with the emitter
 # (``application_sdk.app.base._warn_on_invalid_transformed_assets``) so a rename
@@ -118,6 +120,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "checks",
         CHECK_MATRIX_KEY,
         GATE_MODE_KEY,
+        GATE_CLASSIFICATION_KEY,
+        GATE_TIMEOUT_KEY,
         # ── Transformed-asset validation outcome event ───────────────────
         ASSET_VALIDATION_MATRIX_KEY,
         "assets_total",

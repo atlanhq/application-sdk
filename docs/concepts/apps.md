@@ -299,6 +299,64 @@ class MyConnector(App):
     preflight_gate_mode = "hard"   # checks are trusted to block runs
 ```
 
+#### What hard mode covers
+
+Hard mode applies to every outcome the gate can attribute to the **source**, not only a
+`NOT_READY` verdict. Failures of the gate's own **plumbing** always fail open, in both postures —
+a platform blip must not fail a healthy run. The gate stamps which of the two happened as
+`gate_classification` on the outcome event, so the two are separable downstream:
+
+| Gate outcome | `gate_classification` | soft | hard |
+| -- | -- | -- | -- |
+| Verdict `READY` / `PARTIAL` | — | proceed | proceed |
+| Verdict `NOT_READY` | — | report `would_block` | **block** |
+| Probe overran the budget | `source_unverifiable` | report `would_block` | **block** |
+| Handler crashed | `source_unverifiable` | report `would_block` | **block** |
+| Credential not found | `source_unverifiable` | report `would_block` | **block** |
+| Rate limited (429) | `gate_broken` | fail open | fail open |
+| Secret-store / dependency outage | `gate_broken` | fail open | fail open |
+| Worker unavailable | `gate_broken` | fail open | fail open |
+| Gate skipped (replay, source-less app) | — | `skipped` | `skipped` |
+
+A handler signals "I could not determine readiness" — as opposed to "the source is not ready" — by
+raising a typed error whose category is plumbing-side (`RateLimitedError`,
+`DependencyUnavailableError`, `ResourceExhaustedError`). Returning `NOT_READY` for a transient
+makes hard mode fail *closed* on a blip, which is the mirror-image bug.
+
+Two queryable events come out of the gate. The per-run **outcome** event carries `outcome`,
+`gate_mode`, `gate_classification` and the per-check `check_matrix`. A boot-time **posture** event
+(`Preflight gate posture`) is emitted once per gate-registered app — soft ones included — carrying
+`app_name`, `gate_mode` and `gate_timeout_seconds`. The posture event is the denominator the outcome
+events cannot supply: an app that never reaches a verdict emits no outcome row at all, so "which
+apps believe they are gated" is only answerable from posture rows.
+
+**Upgrading an app that is already on hard mode:** the three `source_unverifiable` rows above
+previously fell through to fail-open, so hard mode enforced only the `NOT_READY` verdict. They now
+block. Before taking this SDK version, confirm the handler finishes inside
+`preflight_gate_timeout_seconds` — an app whose preflight has been quietly overrunning the budget
+was proceeding on every run and will now abort on every run. The worker logs the budget alongside
+the hard-mode line at boot.
+
+#### Sizing the check budget
+
+The handler gets `preflight_gate_timeout_seconds` (default 25, clamped 5-120) to run all its
+checks, and the SDK **enforces** it — the gate cancels `preflight_check` when it elapses:
+
+```python
+class MyConnector(App):
+    preflight_gate_mode = "hard"
+    preflight_gate_timeout_seconds = 60   # this source's catalog probe is genuinely slow
+```
+
+`PreflightInput.timeout_seconds` carries what is *left* after credential resolution, so a handler
+sizing probes to that field is sizing to the real deadline. Two rules follow:
+
+- **In hard mode an overrun blocks the run**, so the declared budget and the handler's actual cost
+  must agree. Raise the budget for a demonstrably slow source rather than letting checks overrun.
+- **Keep probes awaitable.** Cancellation lands at an `await`; blocking synchronous I/O on the
+  event loop cannot be interrupted, so it escapes the budget and also stalls the worker's other
+  activities. Run blocking drivers in a thread.
+
 Ops can override the posture without an app release via `ATLAN_PREFLIGHT_GATE_MODE=hard` on the
 worker deployment. The env var wins over the attribute; any set value other than the literal `hard`
 resolves to soft, so malformed config never blocks a run by accident. An empty or unset value is

@@ -108,11 +108,53 @@ worker deployment (env wins over the attribute; any value other than the
 literal `hard` resolves to soft — malformed config never blocks a run by
 accident). The worker logs an INFO line per hard app at boot.
 
+Hard mode covers every outcome the gate attributes to the **source** — a
+`NOT_READY` verdict, a probe overrunning the budget, a handler crash, a missing
+credential. Failures of the gate's own **plumbing** (rate limit, secret-store
+outage, worker unavailable) always fail open, in both postures. The outcome event
+carries `gate_classification` (`source_unverifiable` vs `gate_broken`) so the two
+are separable in pulse.
+
+## The check budget — size it before flipping to hard
+
+`Handler.preflight_check` gets `App.preflight_gate_timeout_seconds` (default 25,
+clamped 5-120) and the SDK **enforces** it: the gate cancels the handler when it
+elapses. In hard mode an overrun *blocks the run*, so this is not a formality.
+
+```python
+class MyApp(App):
+    preflight_gate_mode = "hard"
+    preflight_gate_timeout_seconds = 60   # this source's probe is genuinely slow
+```
+
+What the skill checks during adoption:
+
+- **Measure the handler's real cost before flipping to hard.** If the app runs a
+  comparable probe as a `@task` elsewhere, its `timeout_seconds` is the honest
+  estimate — a check that mirrors a 600s task will not fit in 25s.
+- **Size probes to `PreflightInput.timeout_seconds`, don't defeat it.** That field
+  carries what remains *after* credential resolution. `max(input.timeout_seconds,
+  <bigger constant>)` discards it; a `deadline` whose per-probe floor never forces
+  an early return makes it decorative. Both read as "budget honoured" in review
+  and are not.
+- **Bound the whole handler, not just the probes.** Client build, connect, and
+  auth are network I/O and count against the budget.
+- **Keep probes awaitable.** Cancellation lands at an `await`, so blocking
+  synchronous I/O on the event loop escapes the budget entirely *and* stalls the
+  worker's other activities. Run blocking drivers in a thread.
+- **Fan-out is where budgets die.** A per-catalog/per-schema loop scales with the
+  source, not with the code. Prefer a bounded scope, concurrency, or an early exit
+  once the check is satisfied.
+
 Rules the skill enforces during adoption:
 
 - Never soften the handler to dodge the gate. Returning `PARTIAL` for a
   failure that should block hides the truth from every surface; posture
   belongs on the App class, verdicts belong in the handler.
+- **Never return `NOT_READY` for a transient.** A 429 or a dependency outage is
+  "ask me later", not "the source is not ready" — collapsing them makes hard mode
+  fail *closed* on a blip. Raise a typed `RateLimitedError` /
+  `DependencyUnavailableError` instead; the gate routes those to fail-open.
 - Soft is the default landing state with an exit: when pulse shows the app's
   `would_block` rows track real workflow failures (checks are right), add
   `preflight_gate_mode = "hard"` — that is the whole hard-fail flip.

@@ -1,0 +1,408 @@
+"""Gate budget resolution and no-verdict classification (CNCT-99).
+
+Separate from ``test_preflight_gate_activity`` (verdict/credential plumbing) —
+this module covers the budget the gate enforces and what it does when it cannot
+reach a verdict at all.
+
+The load-bearing rule: a failure the *source* caused (probe overran the budget,
+handler crashed, credential absent) is ``source_unverifiable`` and is subject to
+gate mode; a failure the *gate's own plumbing* caused (secret-store outage, rate
+limit, worker gone) is ``gate_broken`` and always fails open, in both modes.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from unittest import mock
+
+import pytest
+
+from application_sdk.credentials.errors import CredentialNotFoundError
+from application_sdk.errors.leaves import (
+    AuthError,
+    DependencyUnavailableError,
+    RateLimitedError,
+)
+from application_sdk.execution._temporal.preflight_gate import (
+    CLASSIFICATION_SOURCE_UNVERIFIABLE,
+    GATE_RETRY,
+    GATE_TIMEOUT_DEFAULT_SECONDS,
+    GATE_TIMEOUT_MAX_SECONDS,
+    GATE_TIMEOUT_MIN_SECONDS,
+    PREFLIGHT_FAILED_ERROR_TYPE,
+    PREFLIGHT_POSTURE_EVENT,
+    PreflightGateInput,
+    build_preflight_gate_activity,
+    gate_timeouts,
+    log_gate_posture,
+    resolve_gate_budget_seconds,
+)
+from application_sdk.handler.base import DefaultHandler
+from application_sdk.handler.contracts import (
+    PreflightInput,
+    PreflightOutput,
+    PreflightStatus,
+)
+from application_sdk.observability.logger_adaptor import (
+    _KNOWN_EXTRA_KEYS,
+    GATE_CLASSIFICATION_KEY,
+    GATE_MODE_KEY,
+    GATE_TIMEOUT_KEY,
+)
+
+_GATE = "application_sdk.execution._temporal.preflight_gate"
+
+
+class _SlowHandler(DefaultHandler):
+    """Sleeps past the budget, so the gate's own wait_for fires."""
+
+    def __init__(self, sleep_for: float = 5.0) -> None:
+        self._sleep_for = sleep_for
+        self.completed = False
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        await asyncio.sleep(self._sleep_for)
+        self.completed = True
+        return PreflightOutput(status=PreflightStatus.READY, checks=[])
+
+
+class _RaisingHandler(DefaultHandler):
+    """Raises a caller-supplied exception from preflight_check."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        raise self._exc
+
+
+class _RecordingHandler(DefaultHandler):
+    """Records the budget it was handed."""
+
+    def __init__(self) -> None:
+        self.preflight_input: PreflightInput | None = None
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        self.preflight_input = input
+        return PreflightOutput(status=PreflightStatus.READY, checks=[])
+
+
+def _gate(handler, *, enforce: bool, budget: float = 0.3):
+    return build_preflight_gate_activity(
+        handler, app_name="myapp", enforce=enforce, budget_seconds=budget
+    )
+
+
+def _outcome(mock_logger) -> dict:
+    for c in mock_logger.info.call_args_list:
+        if c.args and c.args[0] == "Preflight gate outcome":
+            return c.kwargs
+    raise AssertionError("no outcome event emitted")
+
+
+def _no_outcome(mock_logger) -> bool:
+    return not any(
+        c.args and c.args[0] == "Preflight gate outcome"
+        for c in mock_logger.info.call_args_list
+    )
+
+
+class TestBudgetResolution:
+    """The per-app budget is clamped once, at resolution, never at use."""
+
+    def test_default_when_unset(self) -> None:
+        assert resolve_gate_budget_seconds(None) == GATE_TIMEOUT_DEFAULT_SECONDS
+
+    def test_in_range_value_is_honoured(self) -> None:
+        assert resolve_gate_budget_seconds(60) == 60
+
+    def test_above_ceiling_is_clamped(self) -> None:
+        # A slow source is an app-specific fact, but an unbounded gate budget
+        # stalls every run's time-to-first-activity — hence a hard ceiling.
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            assert resolve_gate_budget_seconds(500) == GATE_TIMEOUT_MAX_SECONDS
+        mock_logger.warning.assert_called_once()
+
+    def test_below_floor_is_clamped(self) -> None:
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            assert resolve_gate_budget_seconds(2) == GATE_TIMEOUT_MIN_SECONDS
+        mock_logger.warning.assert_called_once()
+
+    @pytest.mark.parametrize("raw", ["abc", "", [], {}, object()])
+    def test_garbage_falls_back_to_default(self, raw) -> None:
+        # Never raise — a malformed ClassVar must not stop the worker booting.
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            assert resolve_gate_budget_seconds(raw) == GATE_TIMEOUT_DEFAULT_SECONDS
+        mock_logger.warning.assert_called_once()
+
+    def test_numeric_string_is_accepted(self) -> None:
+        assert resolve_gate_budget_seconds("60") == 60
+
+    def test_bool_is_not_a_budget(self) -> None:
+        # bool is an int subclass; True would silently clamp to the floor.
+        with mock.patch(f"{_GATE}.logger"):
+            assert resolve_gate_budget_seconds(True) == GATE_TIMEOUT_DEFAULT_SECONDS
+
+
+class TestTimeoutDerivation:
+    """start_to_close and schedule_to_close both derive from the one budget."""
+
+    def test_start_to_close_adds_headroom_for_classification(self) -> None:
+        # The activity's own wait_for must fire *before* Temporal's timeout,
+        # otherwise the activity never runs its except and the classification
+        # is lost — which is the whole CNCT-99 defect.
+        start_to_close, _ = gate_timeouts(25)
+        assert start_to_close.total_seconds() > 25
+
+    def test_schedule_to_close_fits_two_attempts(self) -> None:
+        # Otherwise GATE_RETRY is cosmetic: the second attempt cannot start
+        # before the schedule cap fires.
+        for budget in (GATE_TIMEOUT_MIN_SECONDS, 25, GATE_TIMEOUT_MAX_SECONDS):
+            start_to_close, schedule_to_close = gate_timeouts(budget)
+            assert schedule_to_close.total_seconds() >= (
+                GATE_RETRY.maximum_attempts * start_to_close.total_seconds()
+            )
+
+    def test_scales_with_budget(self) -> None:
+        small, _ = gate_timeouts(GATE_TIMEOUT_MIN_SECONDS)
+        large, _ = gate_timeouts(GATE_TIMEOUT_MAX_SECONDS)
+        assert large > small
+
+    @pytest.mark.parametrize("raw", [None, "abc", 10_000, -5, True])
+    def test_clamps_its_own_input_silently(self, raw) -> None:
+        # The workflow sizes activity timeouts from this on every run, so it must
+        # land on the same number the activity was built with — without
+        # re-warning per run about a value the worker already complained about
+        # once at boot.
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            start_to_close, schedule_to_close = gate_timeouts(raw)
+        assert start_to_close.total_seconds() > GATE_TIMEOUT_MIN_SECONDS
+        assert schedule_to_close > start_to_close
+        mock_logger.warning.assert_not_called()
+
+    def test_agrees_with_the_worker_side_resolution(self) -> None:
+        # Two independent readers of the same ClassVar: the workflow (timeouts)
+        # and the worker (activity budget). If they diverged, Temporal's timeout
+        # could beat the activity's own and the classification would be lost.
+        for raw in (None, "abc", 10_000, 60):
+            with mock.patch(f"{_GATE}.logger"):
+                budget = resolve_gate_budget_seconds(raw)
+                from_workflow, _ = gate_timeouts(raw)
+            assert from_workflow.total_seconds() > budget
+
+
+class TestRemainingBudget:
+    """The handler is handed what is *left*, not the nominal budget."""
+
+    async def test_handler_receives_budget_minus_resolution(self) -> None:
+        handler = _RecordingHandler()
+        gate = _gate(handler, enforce=False, budget=30)
+
+        async def _slow_resolve(_input):
+            await asyncio.sleep(0.2)
+            return [], {}
+
+        with (
+            mock.patch(f"{_GATE}._resolve_gate_credentials", _slow_resolve),
+            mock.patch(f"{_GATE}.logger"),
+        ):
+            await gate(PreflightGateInput())
+
+        assert handler.preflight_input is not None
+        # Strictly less than the nominal budget: resolution already spent some.
+        assert handler.preflight_input.timeout_seconds < 30
+
+    async def test_budget_exhausted_by_resolution_is_gate_broken(self) -> None:
+        # Credential resolution is gate plumbing, not the source. If the vault
+        # is slow enough to eat the whole budget, that is not evidence about
+        # the source — so it fails open even in hard mode, and the handler is
+        # never called with a zero budget.
+        handler = _RecordingHandler()
+        gate = _gate(handler, enforce=True, budget=0.2)
+
+        async def _slow_resolve(_input):
+            await asyncio.sleep(0.4)
+            return [], {}
+
+        with (
+            mock.patch(f"{_GATE}._resolve_gate_credentials", _slow_resolve),
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+        ):
+            with pytest.raises(DependencyUnavailableError):
+                await gate(PreflightGateInput())
+
+        assert handler.preflight_input is None
+        assert _no_outcome(mock_logger)
+
+
+class TestSourceUnverifiableAppliesMode:
+    """Budget overrun / crash / missing credential — mode decides."""
+
+    async def test_budget_overrun_blocks_in_hard_mode(self) -> None:
+        handler = _SlowHandler()
+        gate = _gate(handler, enforce=True)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.raises(Exception) as excinfo:
+                await gate(PreflightGateInput())
+
+        assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
+        event = _outcome(mock_logger)
+        assert event["outcome"] == "blocked"
+        assert event[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_SOURCE_UNVERIFIABLE
+        assert event[GATE_MODE_KEY] == "hard"
+        assert handler.completed is False  # actually cancelled, not just timed out
+
+    async def test_budget_overrun_reports_and_proceeds_in_soft_mode(self) -> None:
+        handler = _SlowHandler()
+        gate = _gate(handler, enforce=False)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            result = await gate(PreflightGateInput())
+
+        assert result.status is PreflightStatus.NOT_READY
+        event = _outcome(mock_logger)
+        assert event["outcome"] == "would_block"
+        assert event[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_SOURCE_UNVERIFIABLE
+        assert event[GATE_MODE_KEY] == "soft"
+
+    async def test_handler_crash_blocks_in_hard_mode(self) -> None:
+        gate = _gate(_RaisingHandler(RuntimeError("boom")), enforce=True)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.raises(Exception) as excinfo:
+                await gate(PreflightGateInput())
+
+        assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
+        assert (
+            _outcome(mock_logger)[GATE_CLASSIFICATION_KEY]
+            == CLASSIFICATION_SOURCE_UNVERIFIABLE
+        )
+
+    async def test_handler_crash_proceeds_in_soft_mode(self) -> None:
+        gate = _gate(_RaisingHandler(RuntimeError("boom")), enforce=False)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        assert _outcome(mock_logger)["outcome"] == "would_block"
+
+    async def test_credential_not_found_blocks_in_hard_mode(self) -> None:
+        gate = _gate(_RaisingHandler(CredentialNotFoundError("nope")), enforce=True)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.raises(Exception) as excinfo:
+                await gate(PreflightGateInput())
+        assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
+        assert (
+            _outcome(mock_logger)[GATE_CLASSIFICATION_KEY]
+            == CLASSIFICATION_SOURCE_UNVERIFIABLE
+        )
+
+    async def test_typed_source_error_blocks_in_hard_mode(self) -> None:
+        # AUTH is the source's own answer about readiness, not gate plumbing.
+        gate = _gate(_RaisingHandler(AuthError(message="bad creds")), enforce=True)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.raises(Exception):
+                await gate(PreflightGateInput())
+        assert (
+            _outcome(mock_logger)[GATE_CLASSIFICATION_KEY]
+            == CLASSIFICATION_SOURCE_UNVERIFIABLE
+        )
+
+
+class TestGateBrokenAlwaysFailsOpen:
+    """Plumbing failures propagate to the workflow's fail-open, in both modes."""
+
+    @pytest.mark.parametrize("enforce", [True, False])
+    async def test_dependency_outage_propagates(self, enforce: bool) -> None:
+        exc = DependencyUnavailableError(message="dapr down", service="secret_store")
+        gate = _gate(_RaisingHandler(exc), enforce=enforce)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.raises(DependencyUnavailableError):
+                await gate(PreflightGateInput())
+        # The workflow owns the no_verdict row for this path, not the activity.
+        assert _no_outcome(mock_logger)
+
+    @pytest.mark.parametrize("enforce", [True, False])
+    async def test_rate_limit_is_not_a_verdict(self, enforce: bool) -> None:
+        # A 429 says "ask me later", not "the source is not ready". Collapsing
+        # it into NOT_READY makes hard mode fail *closed* on a transient.
+        gate = _gate(_RaisingHandler(RateLimitedError(message="429")), enforce=enforce)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.raises(RateLimitedError):
+                await gate(PreflightGateInput())
+        assert _no_outcome(mock_logger)
+
+
+class TestRetryAwareness:
+    """A non-final attempt retries; only the last one becomes a verdict."""
+
+    async def test_non_final_attempt_retries_without_emitting(self) -> None:
+        gate = _gate(_SlowHandler(), enforce=True)
+        info = mock.MagicMock()
+        info.attempt = 1
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=info),
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+        ):
+            with pytest.raises(Exception) as excinfo:
+                await gate(PreflightGateInput())
+
+        # Retryable, and specifically NOT the deliberate block — otherwise the
+        # workflow would abort on the first slow attempt.
+        assert getattr(excinfo.value, "type", None) != PREFLIGHT_FAILED_ERROR_TYPE
+        assert _no_outcome(mock_logger)
+
+    async def test_final_attempt_applies_mode(self) -> None:
+        gate = _gate(_SlowHandler(), enforce=True)
+        info = mock.MagicMock()
+        info.attempt = GATE_RETRY.maximum_attempts
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=info),
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+        ):
+            with pytest.raises(Exception) as excinfo:
+                await gate(PreflightGateInput())
+
+        assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
+        assert _outcome(mock_logger)["outcome"] == "blocked"
+
+    async def test_missing_activity_context_treated_as_final(self) -> None:
+        # Outside an activity (unit tests, direct calls) enforcement must not be
+        # silently skipped — default to producing the verdict.
+        gate = _gate(_SlowHandler(), enforce=True)
+        with (
+            mock.patch(f"{_GATE}.activity.info", side_effect=RuntimeError("no ctx")),
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+        ):
+            with pytest.raises(Exception) as excinfo:
+                await gate(PreflightGateInput())
+        assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
+        assert _outcome(mock_logger)["outcome"] == "blocked"
+
+
+class TestClassificationIsQueryable:
+    def test_classification_key_reaches_otlp(self) -> None:
+        # Unregistered kwargs are dropped by _build_extra_dict and never reach
+        # ClickHouse — which would make the whole telemetry half a no-op.
+        assert GATE_CLASSIFICATION_KEY in _KNOWN_EXTRA_KEYS
+
+    def test_timeout_key_reaches_otlp(self) -> None:
+        assert GATE_TIMEOUT_KEY in _KNOWN_EXTRA_KEYS
+
+
+class TestPostureEvent:
+    """The boot-time denominator: which apps believe they are gated."""
+
+    @pytest.mark.parametrize(("enforce", "expected"), [(True, "hard"), (False, "soft")])
+    def test_emits_mode_and_budget(self, enforce: bool, expected: str) -> None:
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            log_gate_posture("myapp", enforce=enforce, budget_seconds=60)
+        call = mock_logger.info.call_args
+        assert call.args[0] == PREFLIGHT_POSTURE_EVENT
+        assert call.kwargs["app_name"] == "myapp"
+        assert call.kwargs[GATE_MODE_KEY] == expected
+        assert call.kwargs[GATE_TIMEOUT_KEY] == 60
+
+    def test_emitted_for_soft_apps_too(self) -> None:
+        # A hard-only row gives no denominator: adoption and posture drift are
+        # only measurable if soft apps appear as well.
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            log_gate_posture("softapp", enforce=False, budget_seconds=25)
+        mock_logger.info.assert_called_once()
