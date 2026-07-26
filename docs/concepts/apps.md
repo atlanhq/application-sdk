@@ -312,7 +312,8 @@ a platform blip must not fail a healthy run. The gate stamps which of the two ha
 | Verdict `NOT_READY` | — | report `would_block` | **block** |
 | Probe overran the budget | `source_unverifiable` | report `would_block` | **block** |
 | Handler crashed | `source_unverifiable` | report `would_block` | **block** |
-| Credential not found | `source_unverifiable` | report `would_block` | **block** |
+| Credential provably absent | `source_unverifiable` | report `would_block` | **block** |
+| Credential lookup failed for another reason | `gate_broken` | fail open | fail open |
 | Rate limited (429) | `gate_broken` | fail open | fail open |
 | Secret-store / dependency outage | `gate_broken` | fail open | fail open |
 | Worker unavailable | `gate_broken` | fail open | fail open |
@@ -356,6 +357,11 @@ sizing probes to that field is sizing to the real deadline. Two rules follow:
 - **Keep probes awaitable.** Cancellation lands at an `await`; blocking synchronous I/O on the
   event loop cannot be interrupted, so it escapes the budget and also stalls the worker's other
   activities. Run blocking drivers in a thread.
+
+Note the ops override below now carries more weight than it used to: setting it to `hard`
+fleet-wide makes every app block on a handler crash or an absent credential, including apps that
+never opted in and whose checks have not been validated against real runs. Prefer the per-app
+attribute.
 
 Ops can override the posture without an app release via `ATLAN_PREFLIGHT_GATE_MODE=hard` on the
 worker deployment. The env var wins over the attribute; any set value other than the literal `hard`

@@ -13,6 +13,7 @@ limit, worker gone) is ``gate_broken`` and always fails open, in both modes.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from unittest import mock
 
 import pytest
@@ -306,6 +307,105 @@ class TestSourceUnverifiableAppliesMode:
         )
 
 
+class _CancellationSwallowingHandler(DefaultHandler):
+    """Catches the gate's cancellation and keeps going — the defensive-handler
+    shape that defeats ``asyncio.wait_for`` entirely."""
+
+    def __init__(self, *, then_return: bool) -> None:
+        self._then_return = then_return
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        try:
+            await asyncio.sleep(5)
+        except BaseException:
+            if self._then_return:
+                # wait_for would hand this straight back as a real verdict.
+                return PreflightOutput(status=PreflightStatus.READY, checks=[])
+            await asyncio.sleep(5)  # ignores the cancel and keeps working
+        return PreflightOutput(status=PreflightStatus.READY, checks=[])
+
+
+class TestUncooperativeHandlerCannotDefeatTheBudget:
+    """The budget must hold even when the handler does not cooperate.
+
+    ``asyncio.wait_for`` cancels the handler and then *awaits* it, so a handler
+    that swallows CancelledError either returns a value (enforcement silently
+    skipped) or runs past start_to_close (Temporal kills the activity and the
+    classification is lost — the original CNCT-99 defect through another door).
+    """
+
+    async def test_swallow_and_return_does_not_become_a_verdict(self) -> None:
+        gate = _gate(
+            _CancellationSwallowingHandler(then_return=True), enforce=True, budget=0.3
+        )
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.raises(Exception) as excinfo:
+                await gate(PreflightGateInput())
+        assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
+        event = _outcome(mock_logger)
+        assert event["outcome"] == "blocked"
+        assert event[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_SOURCE_UNVERIFIABLE
+
+    async def test_ignoring_the_cancel_does_not_hold_the_activity_open(self) -> None:
+        # The gate must classify at the deadline, not wait for the handler to
+        # unwind — otherwise it blows start_to_close and loses the verdict.
+        gate = _gate(
+            _CancellationSwallowingHandler(then_return=False), enforce=True, budget=0.3
+        )
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        with mock.patch(f"{_GATE}.logger"):
+            with pytest.raises(Exception) as excinfo:
+                await gate(PreflightGateInput())
+        elapsed = loop.time() - started
+        assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
+        assert elapsed < 2.0, f"gate waited {elapsed:.1f}s for an uncooperative handler"
+
+
+class TestCollapsedPlumbingIsNotACredentialProblem:
+    """The resolver collapses any unexpected vault error into
+    ``CredentialNotFoundError``, so not-found alone cannot be trusted as a
+    config fact — otherwise a transport blip hard-blocks a healthy run."""
+
+    @pytest.mark.parametrize("enforce", [True, False])
+    async def test_not_found_wrapping_a_transport_error_fails_open(
+        self, enforce: bool
+    ) -> None:
+        collapsed = CredentialNotFoundError("guid-1")
+        collapsed.__cause__ = ConnectionResetError("dapr socket closed")
+
+        async def _raise(_input):
+            raise collapsed
+
+        gate = _gate(_RecordingHandler(), enforce=enforce, budget=5)
+        with (
+            mock.patch(f"{_GATE}._resolve_gate_credentials", _raise),
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+        ):
+            with pytest.raises(CredentialNotFoundError):
+                await gate(PreflightGateInput())
+        assert _no_outcome(mock_logger)
+
+    async def test_definitive_absence_still_applies_mode(self) -> None:
+        # A genuinely missing credential (no cause) remains a config fact the
+        # run can be blamed for — that behaviour must survive the fix above.
+        async def _raise(_input):
+            raise CredentialNotFoundError("guid-1")
+
+        gate = _gate(_RecordingHandler(), enforce=True, budget=5)
+        with (
+            mock.patch(f"{_GATE}._resolve_gate_credentials", _raise),
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+        ):
+            with pytest.raises(Exception) as excinfo:
+                await gate(PreflightGateInput())
+        assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
+        assert (
+            _outcome(mock_logger)[GATE_CLASSIFICATION_KEY]
+            == CLASSIFICATION_SOURCE_UNVERIFIABLE
+        )
+
+
 class TestGateBrokenAlwaysFailsOpen:
     """Plumbing failures propagate to the workflow's fail-open, in both modes."""
 
@@ -337,6 +437,7 @@ class TestRetryAwareness:
         gate = _gate(_SlowHandler(), enforce=True)
         info = mock.MagicMock()
         info.attempt = 1
+        info.start_to_close_timeout = timedelta(seconds=30)
         with (
             mock.patch(f"{_GATE}.activity.info", return_value=info),
             mock.patch(f"{_GATE}.logger") as mock_logger,
@@ -353,6 +454,7 @@ class TestRetryAwareness:
         gate = _gate(_SlowHandler(), enforce=True)
         info = mock.MagicMock()
         info.attempt = GATE_RETRY.maximum_attempts
+        info.start_to_close_timeout = timedelta(seconds=30)
         with (
             mock.patch(f"{_GATE}.activity.info", return_value=info),
             mock.patch(f"{_GATE}.logger") as mock_logger,

@@ -1868,8 +1868,11 @@ async def _run_preflight_gate(
         _emit_skipped("input_not_credential_resolvable")
         return
 
-    start_to_close, schedule_to_close = gate_timeouts(budget_seconds)
     try:
+        # Inside the guard: an exception escaping here would become a workflow
+        # *task* failure, which Temporal retries indefinitely (see
+        # _validate_workflow_input). Nothing on the gate's own path may do that.
+        start_to_close, schedule_to_close = gate_timeouts(budget_seconds)
         gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
         await workflow.execute_activity(
             preflight_gate_activity_name(app_name),

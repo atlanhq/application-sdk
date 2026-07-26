@@ -2,11 +2,22 @@
 
 A core SDK extraction-lifecycle activity. Every generated workflow's ``_run``
 dispatches ``{app}:preflight`` as its first step (see
-:func:`application_sdk.app.base._run_preflight_gate`). The activity raises
-``ApplicationError(type="PreflightFailed")`` when the verdict is ``NOT_READY``
-so the abort shows red in Temporal and attributes to preflight; ``READY`` and
-``PARTIAL`` return normally. Credential resolution happens *inside* the activity
-— the deterministic workflow only forwards the secret-free
+:func:`application_sdk.app.base._run_preflight_gate`). ``READY`` and ``PARTIAL``
+return normally.
+
+The activity raises ``ApplicationError(type="PreflightFailed")`` — red in Temporal,
+attributed to preflight — for anything it can attribute to the **source** while the
+app is in hard mode: a ``NOT_READY`` verdict, a probe overrunning the budget, a
+handler crash, or a provably absent credential. Failures of the gate's own
+**plumbing** propagate instead, so the workflow fails open in either mode; a
+platform blip must never fail a healthy run. ``_is_gate_broken`` draws that line
+off the raised error's own ``FailureCategory`` (CNCT-99).
+
+Enforcement lives here rather than in the workflow because this is the only frame
+holding the resolved posture, and because the activity bounds the handler itself —
+if Temporal's ``start_to_close`` killed it first there would be no frame left to
+classify the failure in. Credential resolution also happens *inside* the activity;
+the deterministic workflow only forwards the secret-free
 :class:`PreflightGateInput`.
 """
 
@@ -29,11 +40,12 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.credentials.ref import CredentialRef, CredentialResolvable
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.spec import AgentCredentialSpec
-    from application_sdk.errors.base import AppError
+    from application_sdk.errors.base import AppError, sanitize_cause_repr
     from application_sdk.errors.categories import FailureCategory
     from application_sdk.errors.leaves import (
         AppTimeoutError,
         DependencyUnavailableError,
+        InternalError,
         PreconditionError,
     )
     from application_sdk.handler.context import bind_invocation_context
@@ -275,6 +287,11 @@ def _min_handler_seconds(budget_seconds: float) -> float:
 CLASSIFICATION_SOURCE_UNVERIFIABLE = "source_unverifiable"
 CLASSIFICATION_GATE_BROKEN = "gate_broken"
 
+# The handler returned a real verdict. Stamped explicitly rather than left absent
+# so consumers key on a value: "field missing" would otherwise have to mean both
+# "this was a genuine verdict" and "this row predates the classification".
+CLASSIFICATION_VERDICT = "verdict"
+
 # Synthetic check name for a no-verdict outcome, so the check matrix and the red
 # activity pane carry a row rather than showing zero checks.
 UNVERIFIABLE_CHECK_NAME = "preflightVerdict"
@@ -336,8 +353,11 @@ def _clamp_budget(raw: Any) -> tuple[int, str]:
         return GATE_TIMEOUT_DEFAULT_SECONDS, f"{raw!r} is not a number"
     try:
         value = int(float(raw))
-    except (TypeError, ValueError):
-        return GATE_TIMEOUT_DEFAULT_SECONDS, f"{raw!r} is not a number"
+    # OverflowError, not ValueError, for inf / "1e400" — and this function is on
+    # the workflow path, where an escaping exception becomes a workflow *task*
+    # failure that Temporal retries indefinitely.
+    except (TypeError, ValueError, OverflowError):
+        return GATE_TIMEOUT_DEFAULT_SECONDS, f"{raw!r} is not a usable number"
     clamped = max(GATE_TIMEOUT_MIN_SECONDS, min(GATE_TIMEOUT_MAX_SECONDS, value))
     if clamped != value:
         return clamped, (
@@ -509,6 +529,64 @@ def _is_gate_broken(exc: BaseException) -> bool:
     return isinstance(exc, AppError) and type(exc).category in _GATE_BROKEN_CATEGORIES
 
 
+def _effective_budget(budget_seconds: float) -> float:
+    """The handler budget, capped by the deadline Temporal actually enforces.
+
+    The worker builds the activity with the app's budget while the workflow sizes
+    ``start_to_close`` from the same ``ClassVar`` — two independent reads that can
+    skew during a rolling deploy, or when the worker cannot resolve the app class
+    and falls back to the default. If the workflow's deadline turns out to be the
+    tighter one, Temporal would kill the activity before its own timeout fired and
+    the classification would be lost. Reading the real deadline back off
+    ``activity.info()`` makes "the gate's own timeout wins" true by construction.
+    """
+    try:
+        start_to_close = activity.info().start_to_close_timeout
+        if not isinstance(start_to_close, timedelta):
+            return budget_seconds
+        ceiling = start_to_close.total_seconds() - GATE_ACTIVITY_HEADROOM_SECONDS
+        return min(budget_seconds, ceiling) if ceiling > 0 else budget_seconds
+    except RuntimeError:
+        # No activity context (direct call, unit test) — expected, not notable.
+        return budget_seconds
+    # This function exists to stop a budget skew from breaking a run, so it must
+    # never become the thing that breaks one; anything unexpected degrades to the
+    # declared budget.
+    except Exception:
+        logger.debug(
+            "Could not read the activity's start_to_close; using the declared "
+            "preflight budget of %ss",
+            budget_seconds,
+            exc_info=True,
+        )
+        return budget_seconds
+
+
+def _is_definitive_credential_absence(exc: BaseException) -> bool:
+    """Whether ``exc`` proves the credential is genuinely not there.
+
+    The resolver deliberately collapses *any* unexpected vault error into
+    ``CredentialNotFoundError`` (see ``CredentialResolver.resolve_raw``) so the
+    handler, not the resolver, decides what a missing credential means. That is
+    fine when the gate fails open on everything, but under gate mode it would
+    turn a transport blip into "your credential is missing" and abort a healthy
+    run in hard mode.
+
+    So a not-found is only source-attributable when it is *provably* an absence:
+    no cause at all, or a cause that is itself a definitive
+    ``SecretNotFoundError``. Anything else is a collapsed plumbing failure and
+    fails open.
+    """
+    from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — avoid import cycle at module load
+        SecretNotFoundError,
+    )
+
+    if not isinstance(exc, CredentialNotFoundError):
+        return False
+    cause = exc.__cause__ or exc.cause
+    return cause is None or isinstance(cause, SecretNotFoundError)
+
+
 def _is_final_attempt() -> bool:
     """Whether this is the gate activity's last retry attempt.
 
@@ -519,7 +597,7 @@ def _is_final_attempt() -> bool:
     """
     try:
         attempt = activity.info().attempt
-    except Exception:
+    except RuntimeError:  # not inside an activity context
         return True
     return attempt >= (GATE_RETRY.maximum_attempts or 1)
 
@@ -537,11 +615,22 @@ def _unverifiable_result(exc: BaseException, app_name: str) -> PreflightOutput:
         if details.app_name is None:
             details = details.model_copy(update={"app_name": app_name})
     else:
-        details = AppTimeoutError(
-            message=f"Preflight could not be verified: {exc}",
+        # An untyped handler crash is an app fault, not a timeout — INTERNAL with
+        # classification_pending is what the taxonomy has for "unclassified, needs
+        # a typed leaf". Labelling it TIMEOUT would report every AttributeError to
+        # the Automation Engine as a slow source.
+        #
+        # The raw message is sanitized, never interpolated: a driver exception
+        # routinely carries the connection string (see credentials/errors.py), and
+        # this text lands on FailureDetails.message, in Temporal history, and in
+        # ClickHouse. to_failure_details() sanitizes cause_repr but not message.
+        details = InternalError(
+            message=f"Preflight could not be verified: {sanitize_cause_repr(exc)}",
             app_name=app_name,
             cause=exc,
             retryable=False,
+            component="preflight_handler",
+            classification_pending=True,
         ).to_failure_details()
     return PreflightOutput(
         status=PreflightStatus.NOT_READY,
@@ -708,7 +797,8 @@ def build_preflight_gate_activity(
                 )
 
                 raise ApplicationError(
-                    f"Preflight could not reach a verdict: {exc}",
+                    "Preflight could not reach a verdict: "
+                    f"{sanitize_cause_repr(exc)}",
                     type=PREFLIGHT_NO_VERDICT_ERROR_TYPE,
                 )
             unverifiable = _unverifiable_result(exc, app_name)
@@ -739,25 +829,29 @@ def build_preflight_gate_activity(
             return unverifiable
 
         started = time.monotonic()
+        budget = _effective_budget(budget_seconds)
         # Resolve inside the activity (the workflow forwarded only references).
         try:
             credentials, credentials_by_name = await _resolve_gate_credentials(input)
         except Exception as e:
-            # A confirmed outage propagates (fail open); a missing credential is
-            # a config fact about this run, so gate mode applies to it.
-            if _is_gate_broken(e):
+            # Resolution is gate plumbing, so the default here is the opposite of
+            # the handler path below: only a *provable* credential absence is a
+            # config fact this run can be blamed for. Everything else — including
+            # the resolver's collapsed "unexpected vault error" not-founds —
+            # propagates and fails open.
+            if not _is_definitive_credential_absence(e):
                 raise
             return _no_verdict(e)
 
-        remaining = budget_seconds - (time.monotonic() - started)
-        if remaining < _min_handler_seconds(budget_seconds):
+        remaining = budget - (time.monotonic() - started)
+        if remaining < _min_handler_seconds(budget):
             # Resolution ate the budget. That is the secret store being slow, not
             # the source being unready — fail open rather than calling the handler
             # with no time and blaming it for the timeout.
             raise DependencyUnavailableError(
                 message=(
                     "Credential resolution consumed the entire preflight budget "
-                    f"({budget_seconds:.0f}s); no time left to verify the source"
+                    f"({budget:.0f}s); no time left to verify the source"
                 ),
                 service="secret_store",
             )
@@ -786,13 +880,30 @@ def build_preflight_gate_activity(
         ]
         try:
             with bind_invocation_context(app_name, all_creds):
-                result = await asyncio.wait_for(
-                    handler.preflight_check(preflight_input), timeout=remaining
-                )
-        except TimeoutError as e:
-            # The source could not answer a readiness probe in the budget. That
-            # *is* a readiness signal, not a plumbing failure.
-            return _no_verdict(e)
+                # Deliberately not asyncio.wait_for: it cancels the handler and
+                # then *awaits* it, so a handler that swallows CancelledError
+                # either returns a value (wait_for hands it back and the budget
+                # is never enforced) or keeps running past start_to_close (the
+                # activity is killed and the classification is lost — the very
+                # defect this gate exists to fix). Waiting on the task instead
+                # lets us classify *at* the deadline, whatever the handler does.
+                check = asyncio.ensure_future(handler.preflight_check(preflight_input))
+                done, _ = await asyncio.wait({check}, timeout=remaining)
+                if not done:
+                    # Ask it to stop, but never await it — an uncooperative
+                    # handler must not be able to hold the activity open.
+                    check.cancel()
+                    return _no_verdict(
+                        AppTimeoutError(
+                            message=(
+                                "Preflight checks did not finish within the "
+                                f"{int(remaining)}s budget"
+                            ),
+                            app_name=app_name,
+                            retryable=False,
+                        )
+                    )
+                result = check.result()
         except Exception as e:
             if _is_gate_broken(e):
                 raise
@@ -815,6 +926,7 @@ def build_preflight_gate_activity(
                 **{
                     CHECK_MATRIX_KEY: _check_matrix_json(result.checks),
                     GATE_MODE_KEY: gate_mode,
+                    GATE_CLASSIFICATION_KEY: CLASSIFICATION_VERDICT,
                 },
             )
             if enforce:
@@ -832,6 +944,7 @@ def build_preflight_gate_activity(
             **{
                 CHECK_MATRIX_KEY: _check_matrix_json(result.checks),
                 GATE_MODE_KEY: gate_mode,
+                GATE_CLASSIFICATION_KEY: CLASSIFICATION_VERDICT,
             },
         )
         return result

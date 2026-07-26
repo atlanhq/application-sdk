@@ -148,14 +148,30 @@ class Handler(ABC):
         One method, two surfaces: the HTTP ``/check`` endpoint (Sage UI) and the
         injected pre-extraction gate. To abort a run, return
         ``status=PreflightStatus.NOT_READY``; ``READY``/``PARTIAL`` proceed.
-        Express a blocking failure through the returned status, not by raising —
-        the gate fails open on any error it cannot turn into a verdict (handler
-        bug, secret store down, timeout), so a raise does not reliably block.
+        Express a readiness verdict through the returned status — that is the
+        contract, and it is what both surfaces render.
+
+        Raising is not equivalent, and what it means depends on the error's type:
+
+        - A **typed plumbing** error (``RateLimitedError``,
+          ``DependencyUnavailableError``, ``ResourceExhaustedError``) means "I could
+          not determine readiness". The gate fails open on it in both postures.
+          This is the right way to report a transient — returning ``NOT_READY``
+          for a 429 makes a hard-mode gate fail *closed* on a blip.
+        - Anything else — an untyped crash, a typed source error, or overrunning
+          ``input.timeout_seconds`` — is treated as an unverifiable source and is
+          subject to the app's ``preflight_gate_mode``. In hard mode it aborts the
+          run, attributed to preflight.
+
+        Keep probes awaitable: the gate cancels this method at the budget, and
+        cancellation only lands at an ``await``. Blocking synchronous I/O on the
+        event loop escapes the budget and stalls the worker's other activities.
 
         Args:
             input: Credentials, connection config, and checks to run. On the gate
-                path connectivity comes from ``credentials`` (there is no
-                ``connection_config``/form ``metadata`` on that path).
+                path ``connection_config`` and ``metadata`` are derived from the
+                extraction input's own fields, and ``timeout_seconds`` is the
+                remaining enforced budget.
 
         Returns:
             PreflightOutput whose ``status`` decides the gate.
