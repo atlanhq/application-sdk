@@ -151,7 +151,20 @@ to residue):
   satisfied, THEN delete the `BaseSDRIntegrationTest` subclass (`test_sdr.py`) —
   an app that removes the SDR test before adding the e2e replacement would fail
   T002.  Carry over any behaviour the SDR suite validated (e.g. `manifest_path`
-  assertions) into the e2e test.  Suppress with
+  assertions) into the e2e test.
+
+  **Also remove the orphaned old SDR CI** in the same change — deleting the
+  legacy suite otherwise leaves a permanently failing check.  Fleet
+  remediation found two shapes:
+
+  1. an `sdr:` job inside `.github/workflows/tests.yaml` that runs the
+     deleted suite (usually via the SDK composite action, pushing a PR-tagged
+     image) — delete the job AND drop `sdr` from the `tests-passed` job's
+     `needs:` list and its verify step;
+  2. a standalone `sdr-integration*.yaml` workflow plus its
+     `.github/sdr-e2e/` config directory — delete both.
+
+  The agent-mode full-DAG e2e workflow replaces the old SDR CI.  Suppress with
   `# conformance: ignore[T003] <reason>` on the class definition line for a
   legitimate exception (e.g. a shim intentionally keeping the legacy harness
   during migration).

@@ -992,3 +992,186 @@ def test_scan_path_is_noop(tmp_path: Path) -> None:
     f = tmp_path / "app.py"
     f.write_text("pass\n")
     assert scan_path(f, tmp_path) == []
+
+
+# ── P030: upload-bridge shapes (fleet-sweep hardening) ───────────────────────
+
+_NOOP_BRIDGE = (
+    "class Connector:\n"
+    "    async def upload_to_atlan(self, prefix):\n"
+    "        # publish owns the transfer\n"
+    "        return None\n"
+)
+
+_REAL_BRIDGE = (
+    "class Connector:\n"
+    "    async def upload_to_atlan(self, prefix):\n"
+    "        store = self._object_store\n"
+    "        await store.upload_prefix(prefix, tier='retained')\n"
+)
+
+
+def test_p030_flags_noop_upload_bridge_stub(tmp_path: Path) -> None:
+    """An upload_to_atlan whose body performs no storage-transfer call is a
+    no-op stub — the mongodbatlas-class silent-zero-asset shape — and is
+    flagged at the definition, not as a generic absence."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _NOOP_BRIDGE,
+        },
+    )
+    p030 = [f for f in _run(tmp_path) if f.rule_id == "P030"]
+    assert len(p030) == 1
+    assert p030[0].file == "app/connector.py"
+    assert p030[0].line == 2
+    assert "no-op stub" in p030[0].message
+    assert "full-DAG e2e" in p030[0].message
+
+
+def test_p030_real_bridge_not_flagged_as_absent(tmp_path: Path) -> None:
+    """A bridge that performs a real storage transfer is not flagged — the
+    key-preserving custom-upload shape (documented false-positive path,
+    arbitrated by the live e2e)."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _REAL_BRIDGE,
+        },
+    )
+    assert not any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p030_noop_stub_flagged_even_with_self_upload_elsewhere(
+    tmp_path: Path,
+) -> None:
+    """A dead no-op stub alongside a real self.upload() still fires — it masks
+    the real transfer path."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _NOOP_BRIDGE,
+            "app/main.py": (
+                "class App:\n"
+                "    async def run(self):\n"
+                "        await self.upload('output')\n"
+            ),
+        },
+    )
+    p030 = [f for f in _run(tmp_path) if f.rule_id == "P030"]
+    assert len(p030) == 1
+    assert "no-op stub" in p030[0].message
+
+
+def test_p030_absence_message_covers_sqlapp_run_delegation(tmp_path: Path) -> None:
+    """The absence finding explains that delegating to SqlApp.run() does not
+    satisfy the rule (deployment store only) and demands e2e evidence before a
+    false-positive call — the clickhouse-class shape."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/main.py": (
+                "from application_sdk.templates import SqlApp\n"
+                "app = SqlApp(name='c')\n"
+                "app.run()\n"
+            ),
+        },
+    )
+    p030 = [f for f in _run(tmp_path) if f.rule_id == "P030"]
+    assert len(p030) == 1
+    assert "SqlApp.run()" in p030[0].message
+    assert "full-DAG e2e" in p030[0].message
+
+
+# ── P041: hard preflight gate in an SDR app ──────────────────────────────────
+
+
+def test_p041_rule_metadata() -> None:
+    rule = get_rule("P041")
+    assert rule.name == "SdrHardPreflightGate"
+    assert rule.tier == EnforcementTier.WARN
+    assert rule.scope == RuleScope.APP
+    assert rule.autofixable is False
+    assert rule.rationale.strip()
+    assert rule.since == "0.18.0"
+    assert rule.category == "sdr-readiness"
+
+
+_APP_WITH_UPLOAD = (
+    "class Connector:\n    async def run(self):\n        await self.upload('o')\n"
+)
+
+
+def test_p041_fires_on_unconditional_hard_gate(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _APP_WITH_UPLOAD,
+            "app/main.py": ("class MyApp(App):\n" '    preflight_gate_mode = "hard"\n'),
+        },
+    )
+    p041 = [f for f in _run(tmp_path) if f.rule_id == "P041"]
+    assert len(p041) == 1
+    assert p041[0].file == "app/main.py"
+    assert p041[0].line == 2
+    assert "ATLAN_PREFLIGHT_GATE_MODE" in p041[0].message
+
+
+def test_p041_fires_on_annotated_assignment(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _APP_WITH_UPLOAD,
+            "app/main.py": (
+                "class MyApp(App):\n" '    preflight_gate_mode: str = "hard"\n'
+            ),
+        },
+    )
+    assert any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+def test_p041_silent_on_soft_gate(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _APP_WITH_UPLOAD,
+            "app/main.py": ("class MyApp(App):\n" '    preflight_gate_mode = "soft"\n'),
+        },
+    )
+    assert not any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+def test_p041_silent_on_run_mode_conditional(tmp_path: Path) -> None:
+    """The recommended interim posture — a run-mode conditional — never fires."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _APP_WITH_UPLOAD,
+            "app/main.py": (
+                "class MyApp(App):\n"
+                "    preflight_gate_mode = (\n"
+                '        "soft" if ENABLE_ATLAN_UPLOAD else "hard"\n'
+                "    )\n"
+            ),
+        },
+    )
+    assert not any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+def test_p041_silent_on_non_sdr_app(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _NON_SDR_ATLAN_YAML,
+            "app/main.py": ("class MyApp(App):\n" '    preflight_gate_mode = "hard"\n'),
+        },
+    )
+    assert not any(f.rule_id == "P041" for f in _run(tmp_path))

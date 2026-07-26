@@ -1,7 +1,7 @@
-"""P-series SDR-readiness checks (P029, P030, P037, P038, P039).
+"""P-series SDR-readiness checks (P029, P030, P037, P038, P039, P041).
 
 Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
-``atlan.yaml`` and verify five structural invariants:
+``atlan.yaml`` and verify six structural invariants:
 
 * ``P029`` — an agent extraction manifest under ``app/generated/`` must surface
   ``agent_json`` AND ``extraction_method`` at the TOP LEVEL of
@@ -15,7 +15,13 @@ Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
 * ``P030`` — at least one Python source file (outside ``tests/``) must contain
   a ``self.upload(`` call so the ``ENABLE_ATLAN_UPLOAD`` path is reachable.
   Without it extraction "passes" but no assets transfer to the Atlan tenant
-  bucket in SDR deployments.  Only applies to apps that actually have a
+  bucket in SDR deployments.  Delegating to SDK ``SqlApp.run()`` does NOT
+  satisfy this — ``run()`` persists to the deployment store only, while the
+  publish stage reads the tenant bucket.  A defined custom
+  ``upload_to_atlan`` bridge counts as an upload path, but a bridge whose
+  body performs no storage/store-transfer call is a **no-op stub** and is
+  flagged specifically (the shape fleet remediation found behind a real
+  silent-zero-asset publish).  Only applies to apps that actually have a
   publish stage: an app whose ``contract/app.pkl`` sets
   ``pipeline.publish = null`` compiles to a ``manifest.json`` with no
   ``dag.publish`` node, and has nowhere for ``self.upload()`` to hand
@@ -52,6 +58,15 @@ Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
   ``*ExtractionInput`` family (which declares ``agent_json``) or set
   ``allow_unbounded_fields=True`` / ``extra="allow"`` are exempt.  WARN.
 
+* ``P041`` — an SDR app that unconditionally sets
+  ``preflight_gate_mode = "hard"``.  In agent mode, preflight checks that
+  depend on non-secret config (a database name for a schema-existence check)
+  fail spuriously because customers rightly mirror only secrets into the
+  secret store — a hard gate then aborts the whole workflow (observed for a
+  query-engine connector in fleet testing).  A run-mode-differentiated
+  conditional (``"soft" if ENABLE_ATLAN_UPLOAD else "hard"``) is not
+  flagged.  WARN (suggest-only).
+
 P026–P028 are reserved by a concurrent PR (GetattrOnTypedContractField,
 AppStateAsCrossTaskChannel, ManualQualifiedNameFString — PR #2417).
 
@@ -79,6 +94,7 @@ RULE_P030 = "P030"
 RULE_P037 = "P037"
 RULE_P038 = "P038"
 RULE_P039 = "P039"
+RULE_P041 = "P041"
 
 _SDR_FLAG_RE = re.compile(
     r"^self_deployed_runtime:\s*(true|false)\b",
@@ -263,31 +279,154 @@ def _check_p029(manifests: list[Path], root: Path) -> list[Finding]:
     return findings
 
 
-def _check_p030(paths: list[Path]) -> list[Finding]:
-    """P030: at least one source file must contain self.upload(."""
+#: Method names an app uses for a custom deployment-store → tenant-bucket
+#: transfer bridge in place of the SDK-standard ``self.upload()``.
+_UPLOAD_BRIDGE_METHOD_NAMES = frozenset({"upload_to_atlan"})
+
+#: Callee-name substrings that indicate a *real* storage/store transfer inside
+#: an ``upload_to_atlan`` bridge body (ObjectStore/StorageClient uploads, file
+#: copies, put-object calls, store-to-store migrations).  A bridge body with
+#: none of these is a no-op stub: it satisfies a code-reviewer glance but moves
+#: no bytes.
+_STORAGE_TRANSFER_CALL_MARKERS = ("upload", "copy", "put", "transfer", "migrate")
+
+
+def _is_storage_transfer_call(node: ast.Call) -> bool:
+    """Whether *node* looks like a storage/store-transfer call by callee name."""
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        name = func.attr
+    elif isinstance(func, ast.Name):
+        name = func.id
+    else:
+        return False
+    lowered = name.lower()
+    return any(marker in lowered for marker in _STORAGE_TRANSFER_CALL_MARKERS)
+
+
+def _find_upload_bridges(
+    paths: list[Path], root: Path
+) -> list[tuple[str, int, str, bool]]:
+    """Locate custom upload-bridge method definitions across the app source.
+
+    Returns ``(rel_file, lineno, name, is_noop)`` per defined bridge method,
+    where ``is_noop`` is True when the method body contains no
+    storage/store-transfer call (by callee name) — the no-op stub shape.
+    """
+    bridges: list[tuple[str, int, str, bool]] = []
+    for path in paths:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+        try:
+            rel = str(path.relative_to(root))
+        except ValueError:
+            rel = str(path)
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name in _UPLOAD_BRIDGE_METHOD_NAMES
+            ):
+                has_transfer = any(
+                    isinstance(inner, ast.Call) and _is_storage_transfer_call(inner)
+                    for inner in ast.walk(node)
+                )
+                bridges.append((rel, node.lineno, node.name, not has_transfer))
+    return bridges
+
+
+def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
+    """P030: the tenant-bucket upload path must be structurally reachable.
+
+    Two shapes are checked:
+
+    * **No upload at all** — no source file contains ``self.upload(`` and no
+      custom upload-bridge method (``upload_to_atlan``) is defined.  The
+      ENABLE_ATLAN_UPLOAD path is unreachable; delegating to SDK
+      ``SqlApp.run()`` does NOT count (it persists to the deployment store
+      only — publish reads the tenant bucket).
+    * **No-op bridge stub** — an ``upload_to_atlan`` method IS defined but its
+      body performs no storage/store-transfer call (by callee name).  The stub
+      looks like a bridge at review time but moves no bytes; fleet remediation
+      found one whose comment claimed the publish stage owned the transfer.
+
+    An app with ``self.upload(`` somewhere is not flagged for absence, but a
+    no-op stub alongside it is still flagged (the stub is dead weight that
+    masks the real transfer path).  A bridge whose body DOES transfer is
+    reported with the standard absence finding only when ``self.upload(`` is
+    also missing — the message directs the reviewer to prove it with a green
+    full-DAG e2e before treating the finding as a false positive.
+    """
+    has_self_upload = False
     for path in paths:
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:
             continue
         if "self.upload(" in text:
-            return []
+            has_self_upload = True
+            break
 
-    return [
+    bridges = _find_upload_bridges(paths, root)
+    findings: list[Finding] = []
+
+    # No-op stubs are flagged regardless of self.upload presence: a stub that
+    # moves no bytes is either the (real) silent-zero-asset bug or dead code
+    # masking the real transfer path.
+    for rel, lineno, name, is_noop in bridges:
+        if not is_noop:
+            continue
+        findings.append(
+            Finding(
+                rule_id=RULE_P030,
+                file=rel,
+                line=lineno,
+                column=1,
+                message=(
+                    f"{rel}:{lineno}: '{name}' is defined but its body performs no "
+                    "storage/store-transfer call — a no-op stub. In SDR mode the "
+                    "extracted assets never reach the Atlan tenant bucket, so the "
+                    "workflow reports 'success' with 0 assets published. Implement a "
+                    "key-preserving deployment-store→tenant-bucket transfer (preserve "
+                    "the workflows/{workflow_id}/{run_id}/ key layout) or call "
+                    "self.upload(...), and verify with a green full-DAG e2e proving "
+                    "assets land in Atlas."
+                ),
+            )
+        )
+
+    if has_self_upload or bridges:
+        # With self.upload present there is no absence.  With a bridge present
+        # the story is already told: a transferring bridge is the documented
+        # false-positive shape (whether it preserves the key layout end-to-end
+        # is beyond static reach — the full-DAG e2e is the arbiter, see rule
+        # docs), and a no-op stub already carries its own, sharper finding
+        # above — a second app-level absence finding would double-report it.
+        return findings
+
+    findings.append(
         Finding(
             rule_id=RULE_P030,
             file="atlan.yaml",
             line=1,
             column=1,
             message=(
-                "No self.upload() call found in any app source file. In SDR mode "
+                "No self.upload() call (and no custom upload_to_atlan transfer "
+                "bridge) found in any app source file. In SDR mode "
                 "ENABLE_ATLAN_UPLOAD gates whether extracted assets are transferred "
                 "to the Atlan tenant bucket — if the gate is structurally unreachable "
                 "the workflow completes with status 'success' but no assets land in "
-                "the bucket. Add await self.upload(...) to the entrypoint or run() method."
+                "the bucket. Delegating to SDK SqlApp.run() does NOT satisfy this: "
+                "run() persists to the deployment store only, while publish reads "
+                "the tenant bucket. Add await self.upload(...) to the entrypoint or "
+                "run() method (or wire a key-preserving upload_to_atlan bridge into "
+                "every entrypoint), and never mark this finding a false positive "
+                "without a green full-DAG e2e proving assets land in Atlas."
             ),
         )
-    ]
+    )
+    return findings
 
 
 # ── P037: agent_json ignored by a custom GUID-only credential path ──────────
@@ -738,21 +877,90 @@ def _check_p039(manifests: list[Path], root: Path) -> list[Finding]:
     return findings
 
 
+# ── P041: hard preflight gate in an SDR app ──────────────────────────────────
+
+#: The SDK ``App`` class attribute that opts preflight verdicts into aborting
+#: the run (``"hard"``) instead of logging-and-proceeding (``"soft"``).
+_PREFLIGHT_GATE_MODE_ATTR = "preflight_gate_mode"
+
+
+def _check_p041(paths: list[Path], root: Path) -> list[Finding]:
+    """P041: an SDR app must not hard-code ``preflight_gate_mode = "hard"``.
+
+    Flags an *unconditional* assignment of the string constant ``"hard"`` to
+    ``preflight_gate_mode`` (plain or annotated assignment).  A conditional
+    expression (``"soft" if ENABLE_ATLAN_UPLOAD else "hard"``) is a
+    run-mode-differentiated posture and is not flagged — the conditional's
+    value node is an ``ast.IfExp``, not a ``"hard"`` constant.
+    """
+    findings: list[Finding] = []
+    for path in paths:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+        try:
+            rel = str(path.relative_to(root))
+        except ValueError:
+            rel = str(path)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+                value = node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+                value = node.value
+            else:
+                continue
+            if value is None:
+                continue
+            names = [t.id for t in targets if isinstance(t, ast.Name)] + [
+                t.attr for t in targets if isinstance(t, ast.Attribute)
+            ]
+            if _PREFLIGHT_GATE_MODE_ATTR not in names:
+                continue
+            if isinstance(value, ast.Constant) and value.value == "hard":
+                findings.append(
+                    Finding(
+                        rule_id=RULE_P041,
+                        file=rel,
+                        line=node.lineno,
+                        column=1,
+                        message=(
+                            f"{rel}:{node.lineno}: preflight_gate_mode is "
+                            "unconditionally 'hard' in an SDR app. In agent mode the "
+                            "app resolves config through the customer's secret "
+                            "store, and non-secret values (e.g. a database name for "
+                            "a schema-existence check) are rightly not mirrored "
+                            "there — the preflight check then fails spuriously and "
+                            "the hard gate aborts the whole workflow. Derive the "
+                            "gate from the run mode instead (e.g. "
+                            "preflight_gate_mode = 'soft' if ENABLE_ATLAN_UPLOAD "
+                            "else 'hard') and keep it env-overridable via "
+                            "ATLAN_PREFLIGHT_GATE_MODE, until SDK-side run-mode-"
+                            "differentiated gate enforcement lands."
+                        ),
+                    )
+                )
+    return findings
+
+
 def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
     """No-op: the SDR checks require cross-artifact analysis; use scan_all."""
     return []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    """Check the SDR-readiness rules (P029, P030, P037, P038, P039) for the repo.
+    """Check the SDR-readiness rules (P029, P030, P037–P039, P041) for the repo.
 
     Parameters
     ----------
     paths:
         Python source files to inspect (as returned by :func:`discover`).
-        These are the files checked by P030 for a ``self.upload(`` call, by
-        P037 for the credential-resolution shape, and by P038 for the
-        object-store prefix rooting.
+        These are the files checked by P030 for a ``self.upload(`` call /
+        upload-bridge shape, by P037 for the credential-resolution shape, by
+        P038 for the object-store prefix rooting, and by P041 for the
+        preflight-gate posture.
     root:
         Repo root — used to locate ``atlan.yaml`` and ``app/generated/`` (P039
         also inspects the generated ``_input.py`` contract models).
@@ -765,10 +973,11 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     findings: list[Finding] = []
     findings.extend(_check_p029(manifests, root))
     if _app_has_publish_stage(manifests):
-        findings.extend(_check_p030(paths))
+        findings.extend(_check_p030(paths, root))
     findings.extend(_check_p037(paths, root))
     findings.extend(_check_p038(paths, root))
     findings.extend(_check_p039(manifests, root))
+    findings.extend(_check_p041(paths, root))
     return findings
 
 
@@ -776,9 +985,10 @@ main = make_cli_main(
     scan_all=scan_all,
     description=(
         "SDR-readiness checks — manifest agent_json slot (P029), "
-        "upload call presence (P030), agent-aware credential resolution (P037), "
-        "object-store prefix rooting (P038), and agent_json input-contract "
-        "consumption (P039)."
+        "upload call presence / no-op bridge stubs (P030), agent-aware "
+        "credential resolution (P037), object-store prefix rooting (P038), "
+        "agent_json input-contract consumption (P039), and preflight-gate "
+        "posture (P041)."
     ),
 )
 
