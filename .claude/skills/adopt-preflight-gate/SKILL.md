@@ -34,8 +34,10 @@ staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
 outputs:
-  - uv.lock + pyproject.toml (SDK floor raised to >=3.24.0 and lockfile synced)
+  - uv.lock + pyproject.toml (SDK floor raised and lockfile synced — >=3.24.0 for the gate itself; the no-verdict/budget semantics need the first release after CNCT-99, so read the changelog rather than assuming 3.24.0 covers them)
   - app/handler.py (status logic per the agreed check tree; typed errors on failed checks)
+  - app/failures.py (every app-specific typed class in one module — created or extended, shared with /typed-failures)
+  - app/<app>.py (preflight_gate_mode, and preflight_gate_timeout_seconds when the default budget does not fit)
   - deleted app-owned preflight @task + call sites (collision class, plus any duplicate readiness activities the developer agrees to consolidate — always with a coverage diff)
   - contract/app.pkl + regenerated app/generated/ (only if form-only metadata keys must move onto the input contract)
   - updated unit tests covering every verdict path
@@ -513,6 +515,73 @@ During the interactive session: when the developer picks the same leaf with
 the same custom message/action for two or more checks, proactively offer to
 extract a subclass into `app/failures.py`.
 
+**One module, no exceptions.** Every typed class the app raises — from preflight
+checks *and* from extraction tasks — lives in `app/failures.py` (or whatever
+single module the app already uses; match it, don't add a second). Scattered
+definitions are how the same root cause ends up with two different codes
+depending on which surface hit it, which silently splits its aggregation in AE
+and the dashboards. If the app has untyped raise sites left over, run
+`/typed-failures` first — it owns the sweep and this skill assumes its output.
+
+**Pick the leaf by who must act, because that is what the SLA split reads.**
+`audience` is a ClassVar, so the leaf choice *is* the routing decision:
+
+| Audience | Leaves | Means |
+| -- | -- | -- |
+| `USER` | `AuthError`, `AppPermissionDeniedError`, `NotFoundError`, `PreconditionError`, `InvalidInputError`, `AlreadyExistsError`, `SourceUnavailableError`, `RateLimitedError` | the connector owner must fix credentials, permissions, or source config |
+| `PLATFORM` | `DependencyUnavailableError`, `ColdStartRaceError`, `ResourceExhaustedError` | infra ops must act |
+| `APP_OWNER` | `InternalError`, `DataIntegrityError`, `UnimplementedError`, `AppTimeoutError`, bare `AppError` | **the app team owns it** — a connector or SDK bug |
+
+Two traps that land a source problem on the app's ledger:
+
+- **Untyped is not neutral.** A bare `Exception`, a bare `AppError`, or
+  `InternalError` resolves to `APP_OWNER`. Leaving a source failure untyped does
+  not defer the decision — it silently files the bug against the app.
+- **A slow source is not `AppTimeoutError`.** That leaf is `APP_OWNER` (and
+  retryable). A source that will not answer belongs in `SourceUnavailableError`
+  (`USER`). Reach for `AppTimeoutError` only when *our own* deadline is the fact
+  being reported.
+
+### 2f-bis. Soft mode and the failure-rate SLA (do this before flipping to hard)
+
+Soft mode deliberately lets a run proceed after the gate has already said the
+source is not ready or could not be verified. That run will often fail later, in
+extraction, on **the same root cause the gate just reported** — and if those
+downstream raise sites are untyped, each of those failures is filed against the
+app (`APP_OWNER`, per the table above) even though the gate's own row already
+attributed it correctly. The app's failure rate absorbs a source problem it
+diagnosed but was told not to block on.
+
+So while the app is still soft, walk the failure paths for each check the gate
+can report and confirm the extraction-side failure for that same cause carries
+the same leaf the check does:
+
+1. **Take each blocking check** and ask: if the gate reports this and the run
+   proceeds anyway, where does extraction die? Name the raise site.
+2. **Make it the same leaf.** If the check reports `AuthError`, the extraction
+   failure for bad credentials must also be `AuthError` — not `InternalError`,
+   not untyped. One root cause, one code, one audience, on both surfaces.
+3. **Do not swallow it into a retry loop** that eventually raises something
+   generic. The last error standing is the one the Automation Engine attributes,
+   so a typed cause wrapped in an untyped retry-exhausted error routes to
+   `APP_OWNER`.
+4. **Do not pre-empt the gate.** Deleting a check because "extraction will fail
+   anyway" loses the early, cheap, correctly-attributed signal and keeps only
+   the late, expensive one.
+
+Why this matters beyond tidiness: the gate's outcome row and the workflow's
+failure share `workflow_run_id`, so a run that failed downstream of a
+`would_block` is identifiable — the pair is the evidence that the failure was an
+accepted-risk proceed, not a regression. That evidence is only usable if the
+downstream failure is typed; otherwise the two rows disagree about whose fault
+it was and the app's is the one that counts.
+
+Logging on those paths, per `docs/standards/logging.md`: log the typed error
+(pass the exception, not `str(exc)` interpolated into a message), keep the level
+at `error` only for genuine failures, and never log credential values or a
+driver message that embeds a connection string — the SDK redacts
+`FailureDetails.cause_repr`, but a hand-built log line is yours to keep clean.
+
 ### 2g. Multi-credential apps — declare named refs, don't hand-roll
 
 Only if phase 0 flagged the multi-credential class. The gate resolves exactly
@@ -698,6 +767,13 @@ embedded Dapr locally) — not a real verdict, re-run. `source_unverifiable` on 
 - Deleting a colliding activity without the coverage diff → checks vanish.
 - Wrong audience on an internal failure → customer's SLA split absorbs an app
   bug.
+- Untyped extraction failure for a cause the gate already reports → in soft mode
+  the run proceeds, dies later on that same cause, and defaults to `APP_OWNER`;
+  the app's failure rate absorbs a source problem it correctly diagnosed (2f-bis).
+- Typed cause swallowed by a retry loop that finally raises something generic →
+  the last error standing is what AE attributes, so the typing is wasted.
+- Typed classes spread across modules → one root cause aggregates under two
+  codes depending on which surface raised it. One `app/failures.py`.
 - Skipping the boot check before pushing a bump → collision discovered as a
   prod crash-loop instead of locally.
 - Multi-credential app hand-rolling credential resolution + fail-open taxonomy
@@ -746,6 +822,9 @@ fleet has ~80 apps and this skill has met seven of them.
 ## Done means
 
 Bucket reported → bumped and booting → check tree agreed with the developer
-and implemented → typed errors on failed checks → test matrix green → suite +
-pre-commit green. Summarize the final tree in the PR description so reviewers
-see the blocking structure at a glance.
+and implemented → typed errors on failed checks, all defined in one module
+(`app/failures.py`) → each blocking check's extraction-side counterpart raises
+the same leaf, so a soft-mode proceed cannot file a source failure against the
+app → budget sized to what the handler actually costs → test matrix green →
+suite + pre-commit green. Summarize the final tree in the PR description so
+reviewers see the blocking structure at a glance.
