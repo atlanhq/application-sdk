@@ -505,3 +505,104 @@ def test_parse_version_and_reached() -> None:
     assert version_reached((3, 2, 0), (3, 18, 0)) is True
     assert version_reached((4, 0), (3, 18, 0)) is False
     assert version_reached((3, 2), (3, 2, 0)) is True
+
+
+# ── B007 DaftOnlyDataframeApiUsage (consumer / app scope) ───────────────────────
+
+from conformance.suite.checks.deprecation._daft_runtime import (  # noqa: E402
+    scan_daft_runtime,
+)
+
+_SDK_IMPORT = "from application_sdk.io import ParquetFileReader\n"
+
+
+def _b007(src: str) -> list:
+    tree, directives = _tree_and_directives(src)
+    return scan_daft_runtime(tree, "x.py", directives)
+
+
+def test_b007_fires_on_count_rows() -> None:
+    src = _SDK_IMPORT + "n = dataframe.count_rows()\n"
+    findings = _b007(src)
+    assert [f.rule_id for f in findings] == ["B007"]
+    assert "count_rows" in findings[0].message
+    assert "len(frame)" in findings[0].message
+
+
+def test_b007_fires_on_to_pylist_on_reader_frame() -> None:
+    src = _SDK_IMPORT + "records = dataframe.to_pylist()\n"
+    findings = _b007(src)
+    assert [f.rule_id for f in findings] == ["B007"]
+    assert 'to_dict("records")' in findings[0].message
+
+
+def test_b007_exempts_to_pylist_on_pyarrow_table() -> None:
+    # pyarrow.Table.to_pylist() is a real API — the SDK itself uses it.
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "table = pa.Table.from_pandas(df)\n"
+        + "rows = table.to_pylist()\n"
+        + "direct = db.execute(sql).to_arrow_table().to_pylist()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_fires_on_names_attribute() -> None:
+    src = _SDK_IMPORT + "cols = dataframe.names\n"
+    findings = _b007(src)
+    assert [f.rule_id for f in findings] == ["B007"]
+    assert "frame.columns" in findings[0].message
+
+
+def test_b007_exempts_attribute_chain_names() -> None:
+    # pyarrow's schema.names and pandas' index.names are legitimate chains;
+    # self.names is the app's own attribute.
+    src = (
+        _SDK_IMPORT
+        + "a = dataframe.schema.names\n"
+        + "b = frame.index.names\n"
+        + "c = self.names\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_fires_on_dataframetype_daft() -> None:
+    src = (
+        "from application_sdk.common.types import DataframeType\n"
+        "t = DataframeType.daft\n"
+    )
+    findings = _b007(src)
+    assert [f.rule_id for f in findings] == ["B007"]
+    assert "DataframeType.pandas" in findings[0].message
+
+
+def test_b007_dataframetype_daft_respects_alias() -> None:
+    src = (
+        "from application_sdk.common.types import DataframeType as DfType\n"
+        "t = DfType.daft\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_silent_without_sdk_import() -> None:
+    # A standalone daft script is not consuming SDK reader frames.
+    src = "import daft\nn = df.count_rows()\ncols = df.names\n"
+    assert _b007(src) == []
+
+
+def test_b007_silent_on_unrelated_daft_attribute() -> None:
+    # .daft on a non-DataframeType receiver is not the enum alias.
+    src = _SDK_IMPORT + "x = config.daft\n"
+    assert _b007(src) == []
+
+
+def test_b007_suppressed_inline() -> None:
+    src = (
+        _SDK_IMPORT
+        + "# conformance: ignore[B007] receiver is a daft frame from a local path\n"
+        + "n = frame.count_rows()\n"
+    )
+    findings = _b007(src)
+    assert len(findings) == 1
+    assert findings[0].suppressed

@@ -2,8 +2,11 @@
 
 One checker, two halves plus a contract-compat pass, dispatched by scope:
 
-* **consumer half (B001, scope ``app``)** — flags app usage of any SDK symbol the
-  committed manifest marks deprecated;
+* **consumer half (B001/B007, scope ``app``)** — B001 flags app usage of any SDK
+  symbol the committed manifest marks deprecated; B007 flags daft-only
+  DataFrame APIs (``count_rows``/``to_pylist``/``.names``,
+  ``DataframeType.daft``) that are dead on the daft-less SDK >= 3.22 runtime —
+  third-party surfaces the generated manifest cannot carry;
 * **authoring half (B002/B003/B004, scope ``sdk``)** — flags the SDK declaring
   its own deprecations incorrectly (malformed notice, overdue removal, or an
   unmarked docstring claim);
@@ -18,7 +21,7 @@ never depends on this dispatch alone.
 
 Inline suppression
 ------------------
-Add ``# conformance: ignore[B001] <reason>`` (or B002–B006) on the offending
+Add ``# conformance: ignore[B001] <reason>`` (or B002–B007) on the offending
 line or the comment-only line directly above it.
 """
 
@@ -41,6 +44,7 @@ from conformance.suite.schema.findings import Finding
 from ._authoring import scan_authoring
 from ._consumer import scan_consumer
 from ._contract_compat import scan_contract_compat
+from ._daft_runtime import scan_daft_runtime
 from ._ledger_schema import load_ledger
 from ._manifest import load_manifest
 
@@ -55,6 +59,7 @@ __all__ = [
     "scan_authoring",
     "scan_consumer",
     "scan_contract_compat",
+    "scan_daft_runtime",
     "scan_path",
 ]
 
@@ -101,6 +106,8 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         directives = _parse_directives(text)
         if run_consumer and manifest is not None:
             findings.extend(scan_consumer(tree, rel, manifest, directives))
+        if run_consumer:
+            findings.extend(scan_daft_runtime(tree, rel, directives))
         if run_authoring:
             findings.extend(scan_authoring(tree, rel, version, directives))
 

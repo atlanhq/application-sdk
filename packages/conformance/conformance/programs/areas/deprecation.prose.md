@@ -3,7 +3,8 @@ kind: responsibility
 name: deprecation-area
 description: >
   Maintains the current B-series violation-set and drives remediation of
-  deprecation findings.  B001 (app: stop consuming a deprecated SDK symbol) and
+  deprecation findings.  B001 (app: stop consuming a deprecated SDK symbol),
+  B007 (app: daft-only DataFrame APIs dead on the daft-less runtime), and
   B002 (sdk: fix a malformed deprecation notice) are guided fixes; B003 (overdue
   removal) and B004 (unmarked claim) are detect-only and route to residue.
 ---
@@ -24,8 +25,9 @@ empty (warnings do not fail the gate).  In **strict** mode the fingerprint-set
 includes unsuppressed WARNING results, which is where B-series remediation
 actually runs.
 
-The active scope decides which rules can appear: on a consumer app only B001
-(scope `app`) surfaces; on the SDK only B002/B003/B004 (scope `sdk`).  The runner
+The active scope decides which rules can appear: on a consumer app only
+B001/B007 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
+The runner
 auto-detects scope, so each repo only ever sees its own half.
 
 This facet's fingerprint moves when any B-series finding is resolved (fixed or
@@ -153,6 +155,24 @@ human audit):
   Because the migration is non-trivial, `classification` is always `"judgment"`.
   The orthogonal test gate is what makes applying it safe: if the migration
   breaks behaviour, the gate reverts and routes to residue.
+
+- **B007 DaftOnlyDataframeApiUsage** (app source) — a daft-only DataFrame API is
+  used on frames the SDK hands the app; on SDK >= 3.22 the `[daft]` extra is
+  empty and readers return **pandas**, so the call raises `AttributeError` at
+  runtime while imports and mocked tests stay green (latent-on-main breakage
+  found in the fleet SDR sweep).  Apply the pandas migration named in the
+  finding message:
+  - `frame.count_rows()` → `len(frame)`;
+  - `frame.to_pylist()` → `frame.to_dict("records")` (pyarrow-Table receivers
+    are already exempted by the checker — `pa.Table.to_pylist()` is real);
+  - `frame.names` → `frame.columns`;
+  - `DataframeType.daft` → `DataframeType.pandas` (daft is a deprecated no-op
+    alias, removal in v4.0).
+  Do NOT fix these one CI cycle at a time: run the app's transforms locally
+  against synthetic raw data and migrate every call in one pass.  Matching is
+  attribute-name-anchored, so when the receiver is genuinely not an SDK reader
+  frame propose a `# conformance: ignore[B007] <reason>` suppression instead.
+  `classification` is always `"judgment"`.
 
 - **B002 MalformedDeprecationNotice** (SDK source) — the notice is missing a
   migration target and/or a removal version.  Edit the notice string in place to
