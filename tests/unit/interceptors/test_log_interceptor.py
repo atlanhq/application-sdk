@@ -573,7 +573,7 @@ class TestLogWorkflowInboundInterceptor:
         assert kwargs["failure.audience"] == "USER"
         assert kwargs["failure.code"] == "INVALID_INPUT"
 
-    async def test_generates_new_correlation_id_when_no_headers_no_memo(
+    async def test_defaults_correlation_id_to_run_id_when_no_headers_no_memo(
         self, interceptor
     ):
         with patch(
@@ -585,8 +585,9 @@ class TestLogWorkflowInboundInterceptor:
             await interceptor.execute_workflow(MockExecuteWorkflowInput(headers={}))
 
         assert interceptor._correlation_id != ""
-        # Should look like a UUID (36 chars with hyphens)
-        assert len(interceptor._correlation_id) == 36
+        # CNCT-104: no memo/header/args → correlation defaults to the run's
+        # own Temporal run_id (a discoverable identity), not a random uuid4.
+        assert interceptor._correlation_id == "run-id"
 
     async def test_restores_correlation_id_from_memo(self, interceptor):
         with patch(
@@ -659,7 +660,7 @@ class TestLogWorkflowInboundInterceptor:
     async def test_falls_through_args_when_first_arg_is_not_a_dict(self, interceptor):
         # Typed args (Pydantic model, dataclass, primitive) are skipped
         # silently — those callers should use memo / header. Verifies we
-        # fall through to the uuid4 fallback instead of crashing.
+        # fall through to the run_id fallback instead of crashing.
         with patch(
             "application_sdk.execution._temporal.interceptors.log.workflow"
         ) as mock_wf:
@@ -670,16 +671,16 @@ class TestLogWorkflowInboundInterceptor:
                 MockExecuteWorkflowInput(headers={}, args=["just-a-string"])
             )
 
-        assert interceptor._correlation_id != ""
         assert interceptor._correlation_id != "just-a-string"
-        # Falls back to the priority-4 uuid4 path.
-        assert len(interceptor._correlation_id) == 36
+        # Falls back to the priority-4 run_id path (CNCT-104): the run's own
+        # Temporal run_id, never a random uuid the run page can't query.
+        assert interceptor._correlation_id == "run-id"
 
     async def test_falls_through_args_when_dict_lacks_correlation_id_key(
         self, interceptor
     ):
-        # Dict args without the magic key fall through cleanly to uuid4
-        # rather than raising or returning an empty string.
+        # Dict args without the magic key fall through cleanly to the run_id
+        # fallback rather than raising or returning an empty string.
         with patch(
             "application_sdk.execution._temporal.interceptors.log.workflow"
         ) as mock_wf:
@@ -692,7 +693,7 @@ class TestLogWorkflowInboundInterceptor:
                 )
             )
 
-        assert len(interceptor._correlation_id) == 36
+        assert interceptor._correlation_id == "run-id"
 
     async def test_reads_correlation_id_from_typed_object_with_attr(self, interceptor):
         # Real-world v3 case: the SDK-generated workflow wrapper takes a
@@ -759,7 +760,42 @@ class TestLogWorkflowInboundInterceptor:
                 MockExecuteWorkflowInput(headers={}, args=[TypedInputWithoutCorrId()])
             )
 
-        # uuid4 fallback — 36 chars with hyphens.
+        # run_id fallback (CNCT-104) — correlation defaults to the run's own
+        # Temporal run_id so the identity is always discoverable.
+        assert interceptor._correlation_id == "run-id"
+
+    async def test_priority_4_defaults_to_workflow_run_id(self, interceptor):
+        # CNCT-104: a top-level workflow with no memo / header / args
+        # correlation gets its own Temporal run_id — never a random uuid4.
+        # A uuid4 here exists nowhere else in the platform, so the run page
+        # (which queries by correlation_id) rendered such runs as "no logs".
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo(run_id="the-run-id")
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(headers={}, args=[])
+            )
+
+        assert interceptor._correlation_id == "the-run-id"
+
+    async def test_priority_4_uuid_last_resort_when_run_id_empty(self, interceptor):
+        # Defensive last resort: an empty run_id (should be unreachable in a
+        # real workflow) still mints a uuid4 rather than returning an empty
+        # correlation — an empty string would silently break header injection.
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo(run_id="")
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(headers={}, args=[])
+            )
+
+        # Empty run_id → falls to the uuid4 last resort (36 chars, hyphens).
         assert len(interceptor._correlation_id) == 36
 
     async def test_reads_correlation_id_from_header(self, interceptor):

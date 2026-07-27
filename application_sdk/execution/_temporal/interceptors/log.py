@@ -303,7 +303,25 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 "Failed to read correlation_id from workflow args", exc_info=True
             )
 
-        # Priority 4: top-level workflow — generate a fresh correlation ID.
+        # Priority 4: top-level workflow with no caller-supplied correlation —
+        # default to this run's Temporal run_id. A random uuid4 here (the
+        # pre-CNCT-104 behavior) produced an identity that existed nowhere
+        # else in the platform: the run page queries logs by the caller's
+        # correlation_id, so uuid4-stamped runs rendered as "no logs". The
+        # run_id is at least discoverable from run metadata, and it matches
+        # the documented invariant ("correlation_id defaults to the Temporal
+        # run_id") that app/base.py and AppContext already implement — every
+        # layer now agrees on the same fallback.
+        try:
+            run_id = workflow.info().run_id
+            if run_id:
+                return str(run_id)
+        except Exception:
+            logger.warning(
+                "Failed to read workflow run_id for correlation fallback",
+                exc_info=True,
+            )
+        # Defensive last resort — should be unreachable inside a workflow.
         return str(uuid4())
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
