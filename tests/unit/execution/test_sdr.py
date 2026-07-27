@@ -136,6 +136,10 @@ class TestSdrTimeoutsAndRetries:
         monkeypatch.setenv("ATLAN_SDR_PREFLIGHT_START_TO_CLOSE_SECONDS", "190")
         # Non-integer values fall back to the default rather than raising.
         monkeypatch.setenv("ATLAN_SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", "not-an-int")
+        # Non-positive values also fall back — a 0/negative timeout would be
+        # rejected by Temporal at schedule time.
+        monkeypatch.setenv("ATLAN_SDR_METADATA_SCHEDULE_TO_CLOSE_SECONDS", "0")
+        monkeypatch.setenv("ATLAN_SDR_METADATA_START_TO_CLOSE_SECONDS", "-5")
         reloaded = importlib.reload(sdr)
         try:
             from datetime import timedelta
@@ -143,6 +147,8 @@ class TestSdrTimeoutsAndRetries:
             assert reloaded._PREFLIGHT_SCHEDULE_TO_CLOSE == timedelta(seconds=200)
             assert reloaded._PREFLIGHT_START_TO_CLOSE == timedelta(seconds=190)
             assert reloaded._AUTH_SCHEDULE_TO_CLOSE == timedelta(seconds=60)
+            assert reloaded._METADATA_SCHEDULE_TO_CLOSE == timedelta(seconds=150)
+            assert reloaded._METADATA_START_TO_CLOSE == timedelta(seconds=140)
         finally:
             # Restore module-level defaults for the rest of the suite.
             monkeypatch.undo()
@@ -445,6 +451,29 @@ class TestSdrAgentJsonResolution:
             await preflight(PreflightInput(credentials=creds))
 
         # No reference => no resolver instantiation; creds pass through as-is.
+        resolver_cls.assert_not_called()
+        assert handler.preflight_input is not None
+        assert handler.preflight_input.credentials == creds
+
+    async def test_unpopulated_agent_json_skips_resolution(self) -> None:
+        """A present-but-unpopulated spec (no ``agent-name``) is truthy as a
+        pydantic model but must NOT resolve — otherwise an empty spec resolves to
+        a bundle of empty strings and overwrites real credentials. Matches the
+        ``is_populated()`` population gate in ``CredentialRef.resolve``."""
+        from application_sdk.handler.contracts import HandlerCredential
+
+        handler = _StubHandler()
+        preflight = self._by_name(handler)[SDR_PREFLIGHT_ACTIVITY]
+
+        creds = [HandlerCredential(key="api_key", value="secret123")]
+        # secret-path but no agent-name => is_populated() is False.
+        with mock.patch(
+            "application_sdk.execution._temporal.sdr.CredentialResolver",
+        ) as resolver_cls:
+            await preflight(
+                PreflightInput(credentials=creds, agent_json={"secret-path": "p"})
+            )
+
         resolver_cls.assert_not_called()
         assert handler.preflight_input is not None
         assert handler.preflight_input.credentials == creds

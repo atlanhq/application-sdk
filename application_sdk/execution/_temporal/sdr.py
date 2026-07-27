@@ -16,6 +16,7 @@ without a Handler (see ``create_worker(handler=...)``).
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -25,8 +26,6 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    import time
-
     from application_sdk.credentials.ref import CredentialRef
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.spec import AgentCredentialSpec
@@ -69,16 +68,41 @@ SDR_FETCH_METADATA_ACTIVITY = "sdr:fetch_metadata"
 
 
 def _env_seconds(name: str, default: int) -> int:
-    """Read an int number of seconds from ``name``, falling back on default.
+    """Read a positive int number of seconds from ``name``, falling back on default.
 
     Mirrors the helper in LM's ``sdr_handler_proxy`` so the two sides tune from
-    the same env-var convention. A missing or non-integer value falls back to
-    ``default`` rather than raising.
+    the same env-var convention. A missing, non-integer, or non-positive value
+    falls back to ``default`` rather than raising — a ``0`` or negative timeout
+    would otherwise flow into ``timedelta`` and be rejected by Temporal at
+    activity-schedule time (a failure the inverted-pair warning below would not
+    catch). Fallbacks on a *set* value are logged so the misconfig is visible.
     """
-    try:
-        return int(os.getenv(name, str(default)))
-    except ValueError:
+    raw = os.getenv(name)
+    if raw is None:
         return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = None
+    # Log the fallback outside the except so a routine bad-config value doesn't
+    # attach a stack trace (the parse error carries no useful traceback here).
+    if value is None:
+        logger.warning(
+            "SDR timeout env var %s=%r is not an integer; using default %ds.",
+            name,
+            raw,
+            default,
+        )
+        return default
+    if value < 1:
+        logger.warning(
+            "SDR timeout env var %s=%d is non-positive; using default %ds.",
+            name,
+            value,
+            default,
+        )
+        return default
+    return value
 
 
 # UI-facing wall-clock caps. schedule_to_close is the only timeout that ticks
@@ -228,10 +252,12 @@ async def _resolve_agent_credentials(
     SDR (customer-infra) connectors receive their credential as an agent-json
     reference — the real secret lives in the customer's Dapr / K8s secret store
     and only the worker can dereference it (``secret-path``). Mirrors the
-    injected preflight gate's resolution exactly: the already-parsed
-    :class:`AgentCredentialSpec` (validated at the input parse boundary) is
-    wrapped in a :class:`CredentialRef` and resolved against the worker's secret
-    store *before* the handler runs. The resolved values are returned as the same
+    injected preflight gate's resolution: the caller only invokes this for a
+    *populated* spec (``is_populated()``), matching the population gate in
+    :meth:`CredentialRef.resolve`, so an empty spec never resolves to a bundle of
+    empty strings. The already-parsed :class:`AgentCredentialSpec` (validated at
+    the input parse boundary) is wrapped in a :class:`CredentialRef` and resolved
+    against the worker's secret store *before* the handler runs. The resolved values are returned as the same
     v3 ``[{key, value}]`` :class:`HandlerCredential` list the handler consumes on
     the HTTP path, so ``input.credentials`` round-trips identically regardless of
     how the credential arrived.
@@ -343,14 +369,14 @@ def build_sdr_activities(
 
     @activity.defn(name=SDR_TEST_AUTH_ACTIVITY)
     async def test_auth(input: AuthInput) -> AuthOutput:
-        if input.agent_json:
+        if input.agent_json is not None and input.agent_json.is_populated():
             input.credentials = await _resolve_agent_credentials(input.agent_json)
         with bind_invocation_context(binding.app_name, input.credentials):
             return await binding.handler.test_auth(input)
 
     @activity.defn(name=SDR_PREFLIGHT_ACTIVITY)
     async def preflight_check(input: PreflightInput) -> PreflightOutput:
-        if input.agent_json:
+        if input.agent_json is not None and input.agent_json.is_populated():
             input.credentials = await _resolve_agent_credentials(input.agent_json)
         with bind_invocation_context(binding.app_name, input.credentials):
             output = await binding.handler.preflight_check(input)
@@ -361,7 +387,7 @@ def build_sdr_activities(
 
     @activity.defn(name=SDR_FETCH_METADATA_ACTIVITY)
     async def fetch_metadata(input: MetadataInput) -> MetadataOutput:
-        if input.agent_json:
+        if input.agent_json is not None and input.agent_json.is_populated():
             input.credentials = await _resolve_agent_credentials(input.agent_json)
         with bind_invocation_context(binding.app_name, input.credentials):
             return await binding.handler.fetch_metadata(input)
