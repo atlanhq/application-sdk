@@ -15,6 +15,7 @@ without a Handler (see ``create_worker(handler=...)``).
 
 from __future__ import annotations
 
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -49,23 +50,58 @@ SDR_PREFLIGHT_ACTIVITY = "sdr:preflight_check"
 SDR_FETCH_METADATA_ACTIVITY = "sdr:fetch_metadata"
 
 
+def _env_seconds(name: str, default: int) -> int:
+    """Read an int number of seconds from ``name``, falling back on default.
+
+    Mirrors the helper in LM's ``sdr_handler_proxy`` so the two sides tune from
+    the same env-var convention. A missing or non-integer value falls back to
+    ``default`` rather than raising.
+    """
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
 # UI-facing wall-clock caps. schedule_to_close is the only timeout that ticks
 # even when no worker is polling the queue — without it, a UI request to an
 # offline SDR worker would hang forever. start_to_close still bounds in-flight
 # execution once a worker picks the activity up.
+#
+# These defaults are deliberately generous: SDR handlers resolve credentials
+# from a customer-side secret store (Dapr / K8s / cloud secret manager) which
+# can be slow to respond, and the source check itself runs over the customer's
+# network. Each cap is env-tunable (SDR_{AUTH,PREFLIGHT,METADATA}_{SCHEDULE,
+# START}_TO_CLOSE_SECONDS) so a deployment fronting an especially slow store can
+# raise them without an SDK release. Invariant: start_to_close < schedule_to_close
+# in each pair, so at least one retry attempt fits inside the schedule cap.
+# Computed once at module load; the LM proxy's own WorkflowExecutionTimeout
+# backstops sit just above these schedule_to_close values.
 #
 # NOTE: deliberately NO heartbeat_timeout. These activities run a single
 # handler call (test_auth / preflight_check / fetch_metadata) and never call
 # activity.heartbeat(), so setting a heartbeat_timeout would hard-cap runtime at
 # that interval and fail any real source check that runs longer than it —
 # start_to_close is the correct in-flight bound here.
-_AUTH_SCHEDULE_TO_CLOSE = timedelta(seconds=30)
-_PREFLIGHT_SCHEDULE_TO_CLOSE = timedelta(seconds=60)
-_METADATA_SCHEDULE_TO_CLOSE = timedelta(seconds=90)
+_AUTH_SCHEDULE_TO_CLOSE = timedelta(
+    seconds=_env_seconds("SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", 60)
+)
+_PREFLIGHT_SCHEDULE_TO_CLOSE = timedelta(
+    seconds=_env_seconds("SDR_PREFLIGHT_SCHEDULE_TO_CLOSE_SECONDS", 120)
+)
+_METADATA_SCHEDULE_TO_CLOSE = timedelta(
+    seconds=_env_seconds("SDR_METADATA_SCHEDULE_TO_CLOSE_SECONDS", 150)
+)
 
-_AUTH_START_TO_CLOSE = timedelta(seconds=25)
-_PREFLIGHT_START_TO_CLOSE = timedelta(seconds=55)
-_METADATA_START_TO_CLOSE = timedelta(seconds=85)
+_AUTH_START_TO_CLOSE = timedelta(
+    seconds=_env_seconds("SDR_AUTH_START_TO_CLOSE_SECONDS", 55)
+)
+_PREFLIGHT_START_TO_CLOSE = timedelta(
+    seconds=_env_seconds("SDR_PREFLIGHT_START_TO_CLOSE_SECONDS", 110)
+)
+_METADATA_START_TO_CLOSE = timedelta(
+    seconds=_env_seconds("SDR_METADATA_START_TO_CLOSE_SECONDS", 140)
+)
 
 # test_auth: fail-fast. A wrong password should not retry; transient network
 # errors get one extra attempt only because the user is sitting on the UI.

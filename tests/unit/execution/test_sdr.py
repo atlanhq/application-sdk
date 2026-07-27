@@ -89,9 +89,41 @@ class TestSdrTimeoutsAndRetries:
 
         from application_sdk.execution._temporal import sdr
 
-        assert sdr._AUTH_SCHEDULE_TO_CLOSE == timedelta(seconds=30)
-        assert sdr._PREFLIGHT_SCHEDULE_TO_CLOSE == timedelta(seconds=60)
-        assert sdr._METADATA_SCHEDULE_TO_CLOSE == timedelta(seconds=90)
+        # Bumped defaults (env-tunable) — generous enough for a slow customer
+        # secret store. See the module-level comment.
+        assert sdr._AUTH_SCHEDULE_TO_CLOSE == timedelta(seconds=60)
+        assert sdr._PREFLIGHT_SCHEDULE_TO_CLOSE == timedelta(seconds=120)
+        assert sdr._METADATA_SCHEDULE_TO_CLOSE == timedelta(seconds=150)
+
+    def test_start_to_close_below_schedule_to_close(self) -> None:
+        from application_sdk.execution._temporal import sdr
+
+        # Invariant: start_to_close < schedule_to_close in each pair so a retry
+        # attempt can fit inside the schedule cap.
+        assert sdr._AUTH_START_TO_CLOSE < sdr._AUTH_SCHEDULE_TO_CLOSE
+        assert sdr._PREFLIGHT_START_TO_CLOSE < sdr._PREFLIGHT_SCHEDULE_TO_CLOSE
+        assert sdr._METADATA_START_TO_CLOSE < sdr._METADATA_SCHEDULE_TO_CLOSE
+
+    def test_timeouts_are_env_overridable(self, monkeypatch) -> None:
+        import importlib
+
+        from application_sdk.execution._temporal import sdr
+
+        monkeypatch.setenv("SDR_PREFLIGHT_SCHEDULE_TO_CLOSE_SECONDS", "200")
+        monkeypatch.setenv("SDR_PREFLIGHT_START_TO_CLOSE_SECONDS", "190")
+        # Non-integer values fall back to the default rather than raising.
+        monkeypatch.setenv("SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", "not-an-int")
+        reloaded = importlib.reload(sdr)
+        try:
+            from datetime import timedelta
+
+            assert reloaded._PREFLIGHT_SCHEDULE_TO_CLOSE == timedelta(seconds=200)
+            assert reloaded._PREFLIGHT_START_TO_CLOSE == timedelta(seconds=190)
+            assert reloaded._AUTH_SCHEDULE_TO_CLOSE == timedelta(seconds=60)
+        finally:
+            # Restore module-level defaults for the rest of the suite.
+            monkeypatch.undo()
+            importlib.reload(sdr)
 
     def test_auth_retry_is_fail_fast(self) -> None:
         from application_sdk.execution._temporal import sdr
