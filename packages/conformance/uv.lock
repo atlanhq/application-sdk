@@ -189,7 +189,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.24.0"
+version = "3.24.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -212,9 +212,9 @@ dependencies = [
     { name = "temporalio" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/53/cc/926f55b06eb38011c7bde58783c7e67f02b281203d16a9b0eb6cf94d2dc9/atlan_application_sdk-3.24.0.tar.gz", hash = "sha256:5878900baecd32ddbcfd45da95f4ee52fbeecc5cc48e8955e6335b1d204d99d9", size = 4510003, upload-time = "2026-07-21T23:48:12.704Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/55/a7/e4168503bd75eca2490c82d0287f17f9eda9bf5f7a24a7cab10fdc3b311c/atlan_application_sdk-3.24.1.tar.gz", hash = "sha256:fa1da1070b6c6c67adc49b17e71ff1a05194546555d92951091f0bc7e3b28188", size = 4622757, upload-time = "2026-07-27T15:18:55.151Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1d/d8/8fad7589131461cfa87ce08522ed4226ccac1ece23e80580772358e8ab0d/atlan_application_sdk-3.24.0-py3-none-any.whl", hash = "sha256:9554860e41b787d05f8fec5bab44629bda090cd9cb856e32c9d225be55af2cad", size = 996821, upload-time = "2026-07-21T23:48:11.14Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/1c/cbd566faa38c337ceb0293cb20d44ac4067cc32a48fcf23c4f1dd5964638/atlan_application_sdk-3.24.1-py3-none-any.whl", hash = "sha256:2b456699f0e567589e124920d0686be92c7187180d6589328357be48ff40ad24", size = 1006972, upload-time = "2026-07-27T15:18:53.59Z" },
 ]
 
 [[package]]
@@ -2217,11 +2217,11 @@ wheels = [
 
 [[package]]
 name = "pytz"
-version = "2026.2"
+version = "2026.3.post1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ff/46/dd499ec9038423421951e4fad73051febaa13d2df82b4064f87af8b8c0c3/pytz-2026.2.tar.gz", hash = "sha256:0e60b47b29f21574376f218fe21abc009894a2321ea16c6754f3cad6eb7cdd6a", size = 320861, upload-time = "2026-05-04T01:35:29.667Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fb/48/fb042503b6ca6cd271261dc559fd6432f7d8c713153e9ec5c591af4dfc1c/pytz-2026.3.post1.tar.gz", hash = "sha256:2211d3fcf9a797d3405cac96ac7f61d80e6a644f72a3309607282fe8a2010c5d", size = 319745, upload-time = "2026-07-25T15:12:07.385Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/dd/96da98f892250475bdf2328112d7468abdd4acc7b902b6af23f4ed958ea0/pytz-2026.2-py2.py3-none-any.whl", hash = "sha256:04156e608bee23d3792fd45c94ae47fae1036688e75032eea2e3bf0323d1f126", size = 510141, upload-time = "2026-05-04T01:35:27.408Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/7b/39c34ca613b0b198cb866466651b26b045e2009864c5183c979a3b83f383/pytz-2026.3.post1-py2.py3-none-any.whl", hash = "sha256:dd95840dd199baea12d9cc096a1d452caa6596a1c1e4b5f3dbd1541855d5e815", size = 508283, upload-time = "2026-07-25T15:12:05.782Z" },
 ]
 
 [[package]]

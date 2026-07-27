@@ -127,7 +127,7 @@ httpx-retries==0.6.0
     # via
     #   atlan-application-sdk
     #   pyatlan
-hypothesis==6.161.2
+hypothesis==6.161.6
 identify==2.6.19
     # via pre-commit
 idna==3.18
@@ -323,7 +323,7 @@ python-dotenv==1.2.2
     #   uvicorn
 python-multipart==0.0.32
     # via fastapi
-pytz==2026.2
+pytz==2026.3.post1
     # via pyatlan
 pyyaml==6.0.3
     # via
