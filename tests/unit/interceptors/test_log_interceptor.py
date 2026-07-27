@@ -276,12 +276,12 @@ class TestLogWorkflowInboundInterceptor:
         ended_warn = [
             c
             for c in mock_logger.warning.call_args_list
-            if c.args and c.args[0] == "workflow.ended"
+            if c.args and c.args[0].startswith("workflow.ended")
         ]
         ended_error = [
             c
             for c in mock_logger.error.call_args_list
-            if c.args and c.args[0] == "workflow.ended"
+            if c.args and c.args[0].startswith("workflow.ended")
         ]
         assert ended_warn, "preflight block should log workflow.ended at warning"
         assert not ended_error, "preflight block must not log workflow.ended at error"
@@ -313,12 +313,12 @@ class TestLogWorkflowInboundInterceptor:
         ended_warn = [
             c
             for c in mock_logger.warning.call_args_list
-            if c.args and c.args[0] == "workflow.ended"
+            if c.args and c.args[0].startswith("workflow.ended")
         ]
         ended_error = [
             c
             for c in mock_logger.error.call_args_list
-            if c.args and c.args[0] == "workflow.ended"
+            if c.args and c.args[0].startswith("workflow.ended")
         ]
         assert ended_warn, "cause-wrapped preflight block should log at warning"
         assert not ended_error, "cause-wrapped preflight block must not log at error"
@@ -344,7 +344,7 @@ class TestLogWorkflowInboundInterceptor:
         ended_error = [
             c
             for c in mock_logger.error.call_args_list
-            if c.args and c.args[0] == "workflow.ended"
+            if c.args and c.args[0].startswith("workflow.ended")
         ]
         assert ended_error, "unexpected failure should log workflow.ended at error"
         assert ended_error[0].kwargs.get("exc_info") is True
@@ -448,7 +448,9 @@ class TestLogWorkflowInboundInterceptor:
                 await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
         started_calls = [
-            c for c in mock_logger.info.call_args_list if c[0][0] == "workflow.started"
+            c
+            for c in mock_logger.info.call_args_list
+            if c[0][0].startswith("workflow.started")
         ]
         assert len(started_calls) == 1
         kwargs = started_calls[0][1]
@@ -468,7 +470,9 @@ class TestLogWorkflowInboundInterceptor:
                 await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
         ended_calls = [
-            c for c in mock_logger.info.call_args_list if c[0][0] == "workflow.ended"
+            c
+            for c in mock_logger.info.call_args_list
+            if c[0][0].startswith("workflow.ended")
         ]
         assert len(ended_calls) == 1
         kwargs = ended_calls[0][1]
@@ -494,7 +498,9 @@ class TestLogWorkflowInboundInterceptor:
                 await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
         ended_calls = [
-            c for c in mock_logger.error.call_args_list if c[0][0] == "workflow.ended"
+            c
+            for c in mock_logger.error.call_args_list
+            if c[0][0].startswith("workflow.ended")
         ]
         assert len(ended_calls) == 1
         kwargs = ended_calls[0][1]
@@ -528,7 +534,9 @@ class TestLogWorkflowInboundInterceptor:
                 await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
         ended_calls = [
-            c for c in mock_logger.error.call_args_list if c[0][0] == "workflow.ended"
+            c
+            for c in mock_logger.error.call_args_list
+            if c[0][0].startswith("workflow.ended")
         ]
         assert len(ended_calls) == 1
         kwargs = ended_calls[0][1]
@@ -566,7 +574,9 @@ class TestLogWorkflowInboundInterceptor:
                 await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
         ended_calls = [
-            c for c in mock_logger.error.call_args_list if c[0][0] == "workflow.ended"
+            c
+            for c in mock_logger.error.call_args_list
+            if c[0][0].startswith("workflow.ended")
         ]
         kwargs = ended_calls[0][1]
         assert kwargs["failure.category"] == "INVALID_INPUT"
@@ -842,7 +852,9 @@ class TestLogActivityInboundInterceptor:
                 await interceptor.execute_activity(MockExecuteActivityInput())
 
         started_calls = [
-            c for c in mock_logger.info.call_args_list if c[0][0] == "activity.started"
+            c
+            for c in mock_logger.info.call_args_list
+            if c[0][0].startswith("activity.started")
         ]
         assert len(started_calls) == 1
         kwargs = started_calls[0][1]
@@ -861,7 +873,9 @@ class TestLogActivityInboundInterceptor:
                 await interceptor.execute_activity(MockExecuteActivityInput())
 
         ended_calls = [
-            c for c in mock_logger.info.call_args_list if c[0][0] == "activity.ended"
+            c
+            for c in mock_logger.info.call_args_list
+            if c[0][0].startswith("activity.ended")
         ]
         assert len(ended_calls) == 1
         kwargs = ended_calls[0][1]
@@ -887,7 +901,9 @@ class TestLogActivityInboundInterceptor:
                 await interceptor.execute_activity(MockExecuteActivityInput())
 
         ended_calls = [
-            c for c in mock_logger.error.call_args_list if c[0][0] == "activity.ended"
+            c
+            for c in mock_logger.error.call_args_list
+            if c[0][0].startswith("activity.ended")
         ]
         assert len(ended_calls) == 1
         kwargs = ended_calls[0][1]
@@ -915,10 +931,14 @@ class TestLogActivityInboundInterceptor:
             ):
                 await interceptor.execute_activity(MockExecuteActivityInput())
         warn = [
-            c for c in mock_logger.warning.call_args_list if c[0][0] == "activity.ended"
+            c
+            for c in mock_logger.warning.call_args_list
+            if c[0][0].startswith("activity.ended")
         ]
         err = [
-            c for c in mock_logger.error.call_args_list if c[0][0] == "activity.ended"
+            c
+            for c in mock_logger.error.call_args_list
+            if c[0][0].startswith("activity.ended")
         ]
         assert warn, "preflight block should log activity.ended at warning"
         assert not err, "preflight block must not log activity.ended at error"
@@ -945,10 +965,14 @@ class TestLogActivityInboundInterceptor:
             ):
                 await interceptor.execute_activity(MockExecuteActivityInput())
         warn = [
-            c for c in mock_logger.warning.call_args_list if c[0][0] == "activity.ended"
+            c
+            for c in mock_logger.warning.call_args_list
+            if c[0][0].startswith("activity.ended")
         ]
         err = [
-            c for c in mock_logger.error.call_args_list if c[0][0] == "activity.ended"
+            c
+            for c in mock_logger.error.call_args_list
+            if c[0][0].startswith("activity.ended")
         ]
         assert (
             warn
@@ -975,7 +999,9 @@ class TestLogActivityInboundInterceptor:
                 await interceptor.execute_activity(MockExecuteActivityInput())
 
         ended_calls = [
-            c for c in mock_logger.error.call_args_list if c[0][0] == "activity.ended"
+            c
+            for c in mock_logger.error.call_args_list
+            if c[0][0].startswith("activity.ended")
         ]
         kwargs = ended_calls[0][1]
         assert kwargs["failure.category"] == "AUTH"
@@ -1011,7 +1037,9 @@ class TestLogActivityInboundInterceptor:
                 await interceptor.execute_activity(MockExecuteActivityInput(headers={}))
 
         started_calls = [
-            c for c in mock_logger.info.call_args_list if c[0][0] == "activity.started"
+            c
+            for c in mock_logger.info.call_args_list
+            if c[0][0].startswith("activity.started")
         ]
         assert len(started_calls) == 1
         assert started_calls[0][1]["atlan.correlation_id"] == "ctx-id"
@@ -1303,3 +1331,111 @@ class TestReplayPredicateInjection:
             f"Predicate must be injected before is_replaying() gate; "
             f"got order {injection_order}"
         )
+
+
+class TestLifecycleMessageBodies:
+    """CNCT-105: lifecycle messages are self-describing.
+
+    The event token stays the exact message PREFIX (compat contract for
+    dashboards/alerts matching on it); the subject makes the line readable
+    without the structured attributes (which many renderers drop).
+    """
+
+    @pytest.fixture
+    def wf_next(self):
+        n = AsyncMock()
+        n.execute_workflow = AsyncMock(return_value="wf-result")
+        return n
+
+    @pytest.fixture
+    def act_next(self):
+        n = AsyncMock()
+        n.execute_activity = AsyncMock(return_value="act-result")
+        return n
+
+    async def test_activity_started_message_names_the_activity(self, act_next):
+        interceptor = _LogActivityInboundInterceptor(act_next)
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.activity"
+        ) as mock_act:
+            mock_act.info.return_value = MockActivityInfo()
+            with patch(
+                "application_sdk.execution._temporal.interceptors.log.logger"
+            ) as mock_logger:
+                await interceptor.execute_activity(MockExecuteActivityInput())
+        started = [
+            c[0][0]
+            for c in mock_logger.info.call_args_list
+            if c[0][0].startswith("activity.started")
+        ]
+        assert started == ["activity.started TestActivity"]
+
+    async def test_activity_ended_ok_message_has_type_and_duration(self, act_next):
+        interceptor = _LogActivityInboundInterceptor(act_next)
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.activity"
+        ) as mock_act:
+            mock_act.info.return_value = MockActivityInfo()
+            with patch(
+                "application_sdk.execution._temporal.interceptors.log.logger"
+            ) as mock_logger:
+                await interceptor.execute_activity(MockExecuteActivityInput())
+        ended = [
+            c[0][0]
+            for c in mock_logger.info.call_args_list
+            if c[0][0].startswith("activity.ended")
+        ]
+        assert len(ended) == 1
+        assert ended[0].startswith("activity.ended TestActivity OK (")
+        assert ended[0].endswith("ms)")
+
+    async def test_activity_ended_error_message_carries_reason_and_frame(
+        self, act_next
+    ):
+        act_next.execute_activity = AsyncMock(
+            side_effect=ValueError("could not connect: timeout after 30s")
+        )
+        interceptor = _LogActivityInboundInterceptor(act_next)
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.activity"
+        ) as mock_act:
+            mock_act.info.return_value = MockActivityInfo()
+            with patch(
+                "application_sdk.execution._temporal.interceptors.log.logger"
+            ) as mock_logger:
+                with pytest.raises(ValueError):
+                    await interceptor.execute_activity(MockExecuteActivityInput())
+        errors = [
+            c[0][0]
+            for c in mock_logger.error.call_args_list
+            if c[0][0].startswith("activity.ended")
+        ]
+        assert len(errors) == 1
+        msg = errors[0]
+        # activity.ended TestActivity FAILED (ValueError): could not connect… — at file:line in fn
+        assert msg.startswith("activity.ended TestActivity FAILED (ValueError):")
+        assert "could not connect: timeout after 30s" in msg
+        assert " — at " in msg and " in " in msg
+
+    async def test_workflow_started_and_ended_messages_name_the_workflow(self, wf_next):
+        interceptor = _LogWorkflowInboundInterceptor(wf_next)
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            with patch(
+                "application_sdk.execution._temporal.interceptors.log.logger"
+            ) as mock_logger:
+                await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        infos = [c[0][0] for c in mock_logger.info.call_args_list]
+        assert "workflow.started TestWorkflow" in infos
+        assert any(m.startswith("workflow.ended TestWorkflow OK (") for m in infos)
+
+    async def test_failure_suffix_prefers_typed_failure_code(self):
+        from application_sdk.execution._temporal.interceptors.log import _failure_suffix
+
+        exc = ValueError("boom")
+        suffix = _failure_suffix(exc, {"failure.code": "auth_error"})
+        assert suffix.startswith("FAILED (auth_error): boom")
