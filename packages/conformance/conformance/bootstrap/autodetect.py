@@ -13,6 +13,7 @@ import pathlib
 
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
+    extract_apt_packages,
     extract_field,
     resolve_renovate_fallback_exit_zero,
 )
@@ -31,6 +32,21 @@ def _read_workflow_field(path: pathlib.Path, field: str) -> str:
         return ""
     try:
         return extract_field(path.read_text(encoding="utf-8"), field)
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _read_apt_packages(path: pathlib.Path) -> str:
+    """Return the apt packages *path* (a ``checks.yml``) already installs, or ``""``.
+
+    Delegates to ``conformance.bootstrap.extract``'s ``extract_apt_packages``
+    — the same extractor the C002 drift checker uses — so a detected step is
+    re-rendered byte-identically and can't read as drift.
+    """
+    if not path.exists():
+        return ""
+    try:
+        return extract_apt_packages(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):
         return ""
 
@@ -150,6 +166,16 @@ def apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) ->
     if not kwargs["app_name"]:
         kwargs["app_name"] = _read_atlan_yaml_name(root) or derive_app_name_from_dir(
             root
+        )
+    # pre-commit-system-deps: the apt packages an existing checks.yml already
+    # installs, else unset. checks.yml is always-overwrite, so without this a
+    # bare re-run silently deletes a repo's build-header step (pykerberos et al
+    # have no manylinux wheel) and its pre-commit job then fails on a cold
+    # cache -- which is exactly what happened to the repos that hand-added the
+    # step back after every bootstrap.
+    if not kwargs["pre_commit_system_deps"]:
+        kwargs["pre_commit_system_deps"] = _read_apt_packages(
+            root / ".github" / "workflows" / "checks.yml"
         )
     # services-script: existing .github/test/setup-services.sh, else unset.
     if not kwargs["services_script"]:

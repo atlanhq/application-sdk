@@ -21,6 +21,31 @@ import re
 # — the boolean is the last token before the closing `}}`.
 EXIT_ZERO_RE = re.compile(r"exit-zero:.*\|\|\s*(true|false)\s*\}\}")
 
+# checks.yml's optional system-deps step is rendered as an apt-get command
+# inside a `run: |` block, not a `key: value` pair, so its packages are read
+# back off the install line itself. Deliberately tolerant of how the step was
+# hand-written before this flag existed (any `apt-get install` line in the
+# file, with or without `sudo`, with flags in any order) — the repos this
+# needs to detect are exactly the ones carrying a pre-existing hand-added
+# step, and failing to detect one means bootstrap deletes it.
+# The argument list runs to end-of-line, continuing across any `\`-escaped
+# newlines so a multi-line `apt-get install -y \` step is read whole.
+_APT_INSTALL_RE = re.compile(
+    r"apt-get\s+install\b(?P<args>(?:[^\n\\]|\\[ \t]*\n)*)",
+)
+# Debian package names allow lowercase letters, digits, '+', '-', '.'; the
+# apt-get argument list also legitimately carries a version pin ('pkg=1.2-3')
+# or an explicit release ('pkg/bookworm'), and uppercase appears in a few real
+# archive names. This doubles as the validator for the ``--pre-commit-system-deps``
+# flag (see ``bootstrap.args.normalize_system_deps``): the value is interpolated
+# into a `run:` block in a generated workflow, so anything outside this set —
+# above all shell metacharacters and `$` expansions — is rejected on input and
+# dropped on extraction rather than escaped.
+APT_PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+/=:-]*$")
+
+# Ends the package list: whatever follows belongs to another command.
+_SHELL_OPERATOR_RE = re.compile(r"[;&|]")
+
 
 def extract_field(text: str, field: str) -> str:
     """Return the value of ``field: <value>`` in *text*, or ``""`` if absent.
@@ -38,6 +63,49 @@ def extract_field(text: str, field: str) -> str:
         if m:
             return m.group(1).strip("\"'")
     return ""
+
+
+def extract_apt_packages(text: str) -> str:
+    """Return the apt packages installed by *text*'s ``apt-get install`` step.
+
+    *text* is a rendered (or hand-written) ``checks.yml``. Returns a single
+    space-separated package list, or ``""`` when the file installs nothing.
+    Anything that isn't a plausible package name per ``APT_PACKAGE_RE`` is
+    dropped — flags (``-y``, ``--no-install-recommends``, ...), line
+    continuations, and any shell construct a hand-written step may carry
+    (``$VAR``, ``&&``, a pipe). Dropping rather than raising matters: this runs
+    during ``bootstrap``'s autodetection over whatever a consumer repo happens
+    to have on disk, and aborting a whole re-sync over one odd token would be
+    worse than rendering the packages it could read.
+    Single source of truth for reading this step back off disk —
+    both ``bootstrap``'s re-run autodetection (which must preserve an existing
+    step across an always-overwrite re-sync) and the C002 drift checker (which
+    must not report a preserved step as drift) call it, so the two cannot
+    diverge on what counts as "this repo installs these packages".
+
+    Package order is preserved as written rather than sorted: the value round-
+    trips through ``normalize_system_deps`` into the same rendered line, and
+    re-ordering it would make every already-bootstrapped repo report C002
+    drift once.
+
+    Every ``apt-get install`` occurrence contributes (deduplicated, first
+    occurrence wins), so a repo that hand-wrote two separate install steps has
+    both preserved — bootstrap then consolidates them into the one managed
+    step, and C002 flags the pre-consolidation file as drift until it does.
+    """
+    packages: list[str] = []
+    for m in _APT_INSTALL_RE.finditer(text):
+        # Truncate at the first shell operator: everything after `&&`, `||`,
+        # `|` or `;` is a different command, and its words are not packages
+        # (no package name may contain these characters, so splitting on them
+        # can't cut a real one short).
+        args = _SHELL_OPERATOR_RE.split(m.group("args"))[0]
+        for token in args.split():
+            if not APT_PACKAGE_RE.match(token):
+                continue
+            if token not in packages:
+                packages.append(token)
+    return " ".join(packages)
 
 
 def extract_renovate_automerge(text: str) -> str:
