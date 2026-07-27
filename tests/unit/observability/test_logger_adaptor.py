@@ -2942,20 +2942,18 @@ class TestLogSourceProvenance:
     @pytest.mark.parametrize(
         ("logger_name", "expected"),
         [
-            ("dapr.runtime", "dapr"),
-            ("dapr.sidecar", "dapr"),
-            (
-                "application_sdk.execution._temporal.interceptors.log",
-                "sdk-lifecycle",
-            ),
-            ("application_sdk.observability.logger_adaptor", "sdk-framework"),
-            ("application_sdk", "sdk-framework"),
+            # daprd sidecar lines fold into the dependency bucket
+            ("dapr.runtime", "dependency"),
+            ("dapr.sidecar", "dependency"),
+            # everything inside application_sdk — framework and the
+            # interceptor lifecycle lines alike — is simply "sdk"
+            ("application_sdk.execution._temporal.interceptors.log", "sdk"),
+            ("application_sdk.observability.logger_adaptor", "sdk"),
+            ("application_sdk", "sdk"),
             ("httpx", "dependency"),
             ("httpx.client", "dependency"),
             ("temporalio.worker", "dependency"),
             ("daft_io.stats", "dependency"),
-            ("app.mysql", "app"),
-            ("my_connector.handler", "app"),
         ],
     )
     def test_derive_log_source_buckets(self, logger_name, expected):
@@ -2963,20 +2961,33 @@ class TestLogSourceProvenance:
 
         assert _derive_log_source(logger_name) == expected
 
+    @pytest.mark.parametrize(
+        "logger_name", ["app.mysql", "my_connector.handler", "app.handler"]
+    )
+    def test_app_code_stamps_the_application_name(self, logger_name):
+        # The app bucket carries the application's own name (WHICH app spoke),
+        # not a generic "app" literal; ATLAN_LOG_SOURCE overrides (AE → "ae").
+        from application_sdk.constants import LOG_SOURCE_APP_LABEL
+        from application_sdk.observability.logger_adaptor import _derive_log_source
+
+        assert _derive_log_source(logger_name) == LOG_SOURCE_APP_LABEL
+
     def test_process_stamps_source_automatically(self):
+        from application_sdk.constants import LOG_SOURCE_APP_LABEL
+
         adapter = get_logger("app.some_module")
         _, kwargs = adapter.process("hello", {})
-        assert kwargs["source"] == "app"
+        assert kwargs["source"] == LOG_SOURCE_APP_LABEL
 
     def test_process_respects_caller_supplied_source(self):
         adapter = get_logger("app.some_module_2")
         _, kwargs = adapter.process("hello", {"source": "custom"})
         assert kwargs["source"] == "custom"
 
-    def test_sdk_module_logger_stamps_sdk_framework(self):
+    def test_sdk_module_logger_stamps_sdk(self):
         adapter = get_logger("application_sdk.clients.rest")
         _, kwargs = adapter.process("hello", {})
-        assert kwargs["source"] == "sdk-framework"
+        assert kwargs["source"] == "sdk"
 
     def test_source_is_allowlisted_for_otlp(self):
         assert "source" in _KNOWN_EXTRA_KEYS

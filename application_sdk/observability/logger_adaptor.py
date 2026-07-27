@@ -198,20 +198,19 @@ def _derive_log_source(logger_name: str) -> str:
     authors cannot get it wrong; an explicit caller-supplied ``source`` wins.
 
     Buckets:
-        ``dapr``           daprd sidecar lines re-emitted by the log forwarder
-        ``sdk-lifecycle``  the Temporal interceptor lifecycle lines
-                           (workflow/activity started/ended)
-        ``sdk-framework``  everything else inside application_sdk
-        ``dependency``     known third-party loggers (httpx, daft, temporalio…)
-        app label          everything else — ``"app"`` by default;
-                           ``ATLAN_LOG_SOURCE`` overrides (e.g. AE sets "ae")
+        ``sdk``         anything inside application_sdk (framework +
+                        interceptor lifecycle lines)
+        ``dependency``  known third-party loggers (httpx, daft, temporalio…)
+                        and the daprd sidecar lines re-emitted by the forwarder
+        app label       everything else — the application's own name by
+                        default (e.g. ``mysql``), so the reader sees WHICH
+                        app spoke; ``ATLAN_LOG_SOURCE`` overrides
+                        (the Automation Engine sets ``ae``)
     """
     if logger_name == "dapr.runtime" or logger_name.startswith("dapr."):
-        return "dapr"
-    if logger_name.startswith("application_sdk.execution._temporal.interceptors"):
-        return "sdk-lifecycle"
+        return "dependency"
     if logger_name == "application_sdk" or logger_name.startswith("application_sdk."):
-        return "sdk-framework"
+        return "sdk"
     if logger_name == "temporalio" or logger_name.startswith("temporalio."):
         return "dependency"
     for dep in DEPENDENCY_LOGGERS:
@@ -1014,9 +1013,9 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         kwargs["app_name"] = APPLICATION_NAME
         kwargs["deployment_name"] = DEPLOYMENT_NAME
         # Provenance (CNCT-106): stamp the record's origin automatically so
-        # every line answers "who emitted this" (sdk-lifecycle / sdk-framework
-        # / app / ae / dapr / dependency). setdefault so a caller-supplied
-        # ``source=...`` kwarg wins.
+        # every line answers "who emitted this" (sdk / <app name> / ae /
+        # dependency). setdefault so a caller-supplied ``source=...`` kwarg
+        # wins.
         kwargs.setdefault("source", _derive_log_source(self.logger_name))
         # Enrichment is shared with :class:`InterceptHandler` so stdlib-bridged
         # records carry the same Atlan context; see :func:`_apply_atlan_context`.
