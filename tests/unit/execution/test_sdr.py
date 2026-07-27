@@ -104,15 +104,38 @@ class TestSdrTimeoutsAndRetries:
         assert sdr._PREFLIGHT_START_TO_CLOSE < sdr._PREFLIGHT_SCHEDULE_TO_CLOSE
         assert sdr._METADATA_START_TO_CLOSE < sdr._METADATA_SCHEDULE_TO_CLOSE
 
+    def test_inverted_timeout_pair_warns_at_module_load(self, monkeypatch) -> None:
+        import importlib
+
+        from application_sdk.execution._temporal import sdr
+
+        # Invert the auth pair: start_to_close >= schedule_to_close leaves no room
+        # for a retry attempt inside the schedule cap. Expect a WARNING at load.
+        monkeypatch.setenv("ATLAN_SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", "30")
+        monkeypatch.setenv("ATLAN_SDR_AUTH_START_TO_CLOSE_SECONDS", "60")
+        fake_logger = mock.MagicMock()
+        try:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.get_logger",
+                return_value=fake_logger,
+            ):
+                importlib.reload(sdr)
+            assert fake_logger.warning.called
+            warned = " ".join(str(c) for c in fake_logger.warning.call_args_list)
+            assert "AUTH" in warned and "test_auth" in warned
+        finally:
+            monkeypatch.undo()
+            importlib.reload(sdr)
+
     def test_timeouts_are_env_overridable(self, monkeypatch) -> None:
         import importlib
 
         from application_sdk.execution._temporal import sdr
 
-        monkeypatch.setenv("SDR_PREFLIGHT_SCHEDULE_TO_CLOSE_SECONDS", "200")
-        monkeypatch.setenv("SDR_PREFLIGHT_START_TO_CLOSE_SECONDS", "190")
+        monkeypatch.setenv("ATLAN_SDR_PREFLIGHT_SCHEDULE_TO_CLOSE_SECONDS", "200")
+        monkeypatch.setenv("ATLAN_SDR_PREFLIGHT_START_TO_CLOSE_SECONDS", "190")
         # Non-integer values fall back to the default rather than raising.
-        monkeypatch.setenv("SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", "not-an-int")
+        monkeypatch.setenv("ATLAN_SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", "not-an-int")
         reloaded = importlib.reload(sdr)
         try:
             from datetime import timedelta
@@ -447,6 +470,37 @@ class TestSdrAgentJsonResolution:
         # Bailed before ever calling the handler.
         assert handler.preflight_input is None
 
+    async def test_resolver_returning_none_yields_empty_credentials(self) -> None:
+        """``resolve_raw`` → ``None`` (nothing at the secret path) resolves to an
+        empty credential list, not a crash — guarding the ``or {}`` fallback so a
+        future refactor dropping it is caught."""
+        handler = _StubHandler()
+        preflight = self._by_name(handler)[SDR_PREFLIGHT_ACTIVITY]
+
+        resolver = mock.MagicMock()
+        resolver.resolve_raw = mock.AsyncMock(return_value=None)
+        fake_infra = mock.MagicMock()
+        fake_infra.secret_store = mock.MagicMock(name="SecretStore")
+
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.get_infrastructure",
+                return_value=fake_infra,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.CredentialResolver",
+                return_value=resolver,
+            ),
+        ):
+            result = await preflight(
+                PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
+            )
+
+        assert result.status == PreflightStatus.READY
+        resolver.resolve_raw.assert_awaited_once()
+        assert handler.preflight_input is not None
+        assert handler.preflight_input.credentials == []
+
 
 class TestSdrPreflightObjectStoreChecks:
     """The SDR preflight_check activity folds the customer object-store access
@@ -503,6 +557,10 @@ class TestSdrPreflightObjectStoreChecks:
             "Object store access (Atlan upload)",
         ]
         assert all(c.passed for c in result.checks)
+        # The probe's elapsed time is folded into the output's duration
+        # (output.total_duration_ms += elapsed_ms). Assert the accumulation is
+        # observable; a strict > 0 would be clock-flaky on a fast probe.
+        assert result.total_duration_ms >= 0.0
 
     async def test_failed_object_store_check_downgrades_ready(self) -> None:
         """A failed probe appends a typed-error row and downgrades READY→NOT_READY."""

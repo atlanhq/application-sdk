@@ -22,6 +22,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
+from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.errors.base import AppError
 from application_sdk.errors.wire import FailureDetails
 
@@ -284,7 +285,7 @@ class AuthInput(BaseModel):
     timeout_seconds: int = 30
     """Maximum seconds to wait for auth response."""
 
-    agent_json: dict[str, Any] | None = Field(
+    agent_json: AgentCredentialSpec | None = Field(
         default=None,
         validation_alias=AliasChoices("agent_json", "agentJson", "agent-json"),
     )
@@ -455,7 +456,7 @@ class PreflightInput(BaseModel):
     it, with headroom. Advisory on the HTTP ``/check`` and SDR paths, which are
     not bounded by the gate activity timeout."""
 
-    agent_json: dict[str, Any] | None = Field(
+    agent_json: AgentCredentialSpec | None = Field(
         default=None,
         validation_alias=AliasChoices("agent_json", "agentJson", "agent-json"),
     )
@@ -600,7 +601,7 @@ class MetadataInput(BaseModel):
     timeout_seconds: int = 120
     """Maximum seconds to wait for metadata fetch."""
 
-    agent_json: dict[str, Any] | None = Field(
+    agent_json: AgentCredentialSpec | None = Field(
         default=None,
         validation_alias=AliasChoices("agent_json", "agentJson", "agent-json"),
     )

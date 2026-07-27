@@ -89,10 +89,12 @@ def _env_seconds(name: str, default: int) -> int:
 # These defaults are deliberately generous: SDR handlers resolve credentials
 # from a customer-side secret store (Dapr / K8s / cloud secret manager) which
 # can be slow to respond, and the source check itself runs over the customer's
-# network. Each cap is env-tunable (SDR_{AUTH,PREFLIGHT,METADATA}_{SCHEDULE,
-# START}_TO_CLOSE_SECONDS) so a deployment fronting an especially slow store can
-# raise them without an SDK release. Invariant: start_to_close < schedule_to_close
-# in each pair, so at least one retry attempt fits inside the schedule cap.
+# network. Each cap is env-tunable (ATLAN_SDR_{AUTH,PREFLIGHT,METADATA}_{SCHEDULE,
+# START}_TO_CLOSE_SECONDS — ATLAN_ prefixed per ADR-0009, matching the sibling
+# ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS) so a deployment fronting an especially slow
+# store can raise them without an SDK release. Invariant: start_to_close <
+# schedule_to_close in each pair, so at least one retry attempt fits inside the
+# schedule cap; an inverted override is warned about at module load (below).
 # Computed once at module load; the LM proxy's own WorkflowExecutionTimeout
 # backstops sit just above these schedule_to_close values.
 #
@@ -102,24 +104,55 @@ def _env_seconds(name: str, default: int) -> int:
 # that interval and fail any real source check that runs longer than it —
 # start_to_close is the correct in-flight bound here.
 _AUTH_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", 60)
+    seconds=_env_seconds("ATLAN_SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", 60)
 )
 _PREFLIGHT_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("SDR_PREFLIGHT_SCHEDULE_TO_CLOSE_SECONDS", 120)
+    seconds=_env_seconds("ATLAN_SDR_PREFLIGHT_SCHEDULE_TO_CLOSE_SECONDS", 120)
 )
 _METADATA_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("SDR_METADATA_SCHEDULE_TO_CLOSE_SECONDS", 150)
+    seconds=_env_seconds("ATLAN_SDR_METADATA_SCHEDULE_TO_CLOSE_SECONDS", 150)
 )
 
 _AUTH_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("SDR_AUTH_START_TO_CLOSE_SECONDS", 55)
+    seconds=_env_seconds("ATLAN_SDR_AUTH_START_TO_CLOSE_SECONDS", 55)
 )
 _PREFLIGHT_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("SDR_PREFLIGHT_START_TO_CLOSE_SECONDS", 110)
+    seconds=_env_seconds("ATLAN_SDR_PREFLIGHT_START_TO_CLOSE_SECONDS", 110)
 )
 _METADATA_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("SDR_METADATA_START_TO_CLOSE_SECONDS", 140)
+    seconds=_env_seconds("ATLAN_SDR_METADATA_START_TO_CLOSE_SECONDS", 140)
 )
+
+# The start_to_close < schedule_to_close invariant holds for the defaults, but an
+# operator can override either half independently. Warn (don't raise) at module
+# load if any resolved pair is inverted: start_to_close >= schedule_to_close
+# leaves no room for a retry attempt inside the schedule cap, so a misconfig is
+# visible before the worker accepts work rather than surfacing as silent no-retry.
+for _op, _token, _start, _schedule in (
+    ("test_auth", "AUTH", _AUTH_START_TO_CLOSE, _AUTH_SCHEDULE_TO_CLOSE),
+    (
+        "preflight_check",
+        "PREFLIGHT",
+        _PREFLIGHT_START_TO_CLOSE,
+        _PREFLIGHT_SCHEDULE_TO_CLOSE,
+    ),
+    (
+        "fetch_metadata",
+        "METADATA",
+        _METADATA_START_TO_CLOSE,
+        _METADATA_SCHEDULE_TO_CLOSE,
+    ),
+):
+    if _start >= _schedule:
+        logger.warning(
+            "SDR %s: start_to_close (%.0fs) >= schedule_to_close (%.0fs); the "
+            "schedule cap leaves no room for a retry attempt. Check the "
+            "ATLAN_SDR_%s_{START,SCHEDULE}_TO_CLOSE_SECONDS overrides.",
+            _op,
+            _start.total_seconds(),
+            _schedule.total_seconds(),
+            _token,
+        )
 
 # test_auth: fail-fast. A wrong password should not retry; transient network
 # errors get one extra attempt only because the user is sitting on the UI.
@@ -188,18 +221,18 @@ class _SdrBinding:
 
 
 async def _resolve_agent_credentials(
-    agent_json: dict[str, Any],
+    agent_json: AgentCredentialSpec,
 ) -> list[HandlerCredential]:
     """Resolve an SDR ``agent_json`` *reference* to concrete credentials.
 
     SDR (customer-infra) connectors receive their credential as an agent-json
     reference — the real secret lives in the customer's Dapr / K8s secret store
     and only the worker can dereference it (``secret-path``). Mirrors the
-    injected preflight gate's resolution exactly: build an
-    :class:`AgentCredentialSpec` from the raw ``agent_json``, wrap it in a
-    :class:`CredentialRef`, and resolve it against the worker's secret store
-    *before* the handler runs. The resolved values are returned as the same v3
-    ``[{key, value}]`` :class:`HandlerCredential` list the handler consumes on
+    injected preflight gate's resolution exactly: the already-parsed
+    :class:`AgentCredentialSpec` (validated at the input parse boundary) is
+    wrapped in a :class:`CredentialRef` and resolved against the worker's secret
+    store *before* the handler runs. The resolved values are returned as the same
+    v3 ``[{key, value}]`` :class:`HandlerCredential` list the handler consumes on
     the HTTP path, so ``input.credentials`` round-trips identically regardless of
     how the credential arrived.
 
@@ -209,8 +242,7 @@ async def _resolve_agent_credentials(
             state. Raising (rather than calling the handler with empty creds)
             avoids misattributing the failure as an auth error.
     """
-    spec = AgentCredentialSpec.model_validate(agent_json)
-    ref = CredentialRef(agent_spec=spec)
+    ref = CredentialRef(agent_spec=agent_json)
     infra = get_infrastructure()
     secret_store = infra.secret_store if infra is not None else None
     if secret_store is None:
