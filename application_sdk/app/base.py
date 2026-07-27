@@ -710,19 +710,32 @@ class App(ABC):
     store outage, rate limit, worker unavailable) always fail open, in both
     postures — a platform blip must not fail a healthy run."""
 
-    preflight_gate_timeout_seconds: ClassVar[int] = 25
+    preflight_gate_timeout_seconds: ClassVar[int] = 120
     """Seconds the preflight handler gets to run all its checks.
 
-    Clamped to 5-120s. The SDK *enforces* this — the gate cancels
-    ``preflight_check`` when it elapses — and passes what remains after credential
-    resolution as ``PreflightInput.timeout_seconds``, so a handler that sizes its
-    probes to that value is sizing to the real deadline.
+    Clamped to 5-300s. Note this bounds the *whole* handler call, not each check —
+    one slow probe can consume the budget and leave the rest unrun. The SDK
+    *enforces* this — the gate cancels ``preflight_check`` when it elapses — and
+    passes what remains after credential resolution as
+    ``PreflightInput.timeout_seconds``, so a handler that sizes its probes to that
+    value is sizing to the real deadline.
 
-    Raise it only for a source that is demonstrably slower than the default, and
-    size checks to finish inside it with headroom. In hard mode an overrun blocks
+    The 120s default is deliberately generous while the fleet's real check
+    durations are being measured; expect it to come down once the distribution is
+    known. Raise it only for a source demonstrably slower than that, and size
+    checks to finish inside it with headroom. In hard mode an overrun blocks
     the run, so this value and the handler's actual cost must agree. Probes must
     also stay awaitable: cancellation lands at an ``await``, so blocking
     synchronous I/O on the event loop cannot be interrupted."""
+
+    preflight_gate_max_attempts: ClassVar[int] = 2
+    """Attempts the gate activity gets before its no-verdict becomes a verdict.
+
+    Clamped to 1-3. A retry rescues a *transient* slow probe (cold pool, cluster
+    resuming); it cannot rescue a systematically slow one, it just doubles
+    time-to-verdict and the worker time held. So an app declaring a large
+    :attr:`preflight_gate_timeout_seconds` usually wants ``1`` here — at the 300s
+    ceiling, two attempts reserve a ~10 minute ``schedule_to_close``."""
 
     # Marker to track if class has been registered
     _app_registered: ClassVar[bool] = False
@@ -1800,6 +1813,7 @@ async def _run_preflight_gate(
     app_name: str,
     entrypoint: str,
     budget_seconds: int | None = None,
+    max_attempts: int | None = None,
 ) -> None:
     """Run the SDK-owned pre-extraction preflight gate (HYP-1883).
 
@@ -1839,10 +1853,12 @@ async def _run_preflight_gate(
             CredentialResolvable,
         )
         from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            CHECK_MATRIX_KEY,
             CLASSIFICATION_GATE_BROKEN,
-            GATE_RETRY,
+            EMPTY_CHECK_MATRIX,
             PREFLIGHT_OUTCOME_EVENT,
             PreflightGateInput,
+            gate_retry_policy,
             gate_timeouts,
             is_preflight_block,
             preflight_gate_activity_name,
@@ -1858,6 +1874,7 @@ async def _run_preflight_gate(
             entrypoint=entry,
             outcome="skipped",
             reason=reason,
+            **{CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX},
         )
 
     if not workflow.patched("preflight-gate"):
@@ -1872,14 +1889,14 @@ async def _run_preflight_gate(
         # Inside the guard: an exception escaping here would become a workflow
         # *task* failure, which Temporal retries indefinitely (see
         # _validate_workflow_input). Nothing on the gate's own path may do that.
-        start_to_close, schedule_to_close = gate_timeouts(budget_seconds)
+        start_to_close, schedule_to_close = gate_timeouts(budget_seconds, max_attempts)
         gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
         await workflow.execute_activity(
             preflight_gate_activity_name(app_name),
             gate_input,
             schedule_to_close_timeout=schedule_to_close,
             start_to_close_timeout=start_to_close,
-            retry_policy=GATE_RETRY,
+            retry_policy=gate_retry_policy(max_attempts),
         )
     except Exception as e:
         # The activity emits the blocked outcome event before it raises; the
@@ -1904,6 +1921,7 @@ async def _run_preflight_gate(
             outcome="no_verdict",
             reason=type(e).__name__,
             gate_classification=CLASSIFICATION_GATE_BROKEN,
+            **{CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX},
         )
         return
 
@@ -2132,6 +2150,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
                 app_name,
                 entrypoint_name,
                 getattr(app_cls, "preflight_gate_timeout_seconds", None),
+                getattr(app_cls, "preflight_gate_max_attempts", None),
             )
             entry_method = getattr(app_instance, entry_method_name)
             result = await entry_method(input_data)

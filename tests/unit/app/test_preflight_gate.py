@@ -18,6 +18,7 @@ from application_sdk.execution._temporal.preflight_gate import (
 )
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.handler.contracts import PreflightOutput, PreflightStatus
+from application_sdk.observability.logger_adaptor import CHECK_MATRIX_KEY
 
 
 class _ResolvableInput:
@@ -210,3 +211,45 @@ class TestRunPreflightGate:
         assert gate_input.credential_guid == "abc"
         assert gate_input.extraction_method == "agent"
         assert gate_input.entrypoint == "asset-export"
+
+
+def _outcome_kwargs(safe_log) -> list[dict]:
+    return [c.kwargs for c in safe_log.call_args_list if "outcome" in c.kwargs]
+
+
+class TestEveryOutcomeCarriesTheCheckMatrix:
+    """``check_matrix`` is present on all outcomes, empty where nothing ran.
+
+    A consumer should be able to ``JSONExtractArrayRaw(check_matrix)`` on any gate
+    row without first testing ``mapContains``. An absent field forces every
+    consumer to branch, and that branch is easy to get wrong in the direction that
+    silently drops rows — which is how a gate that never reached a verdict
+    disappears from the numerator it belongs in.
+    """
+
+    async def test_skipped_on_pre_gate_replay(self, safe_log) -> None:
+        _, exec_patch = _exec()
+        with _patched(False), exec_patch:
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        row = _outcome_kwargs(safe_log)[0]
+        assert row["outcome"] == "skipped"
+        assert row[CHECK_MATRIX_KEY] == "[]"
+
+    async def test_skipped_on_non_resolvable_input(self, safe_log) -> None:
+        _, exec_patch = _exec()
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(_NonResolvableInput(), "myapp", "crawl")
+        row = _outcome_kwargs(safe_log)[0]
+        assert row["outcome"] == "skipped"
+        assert row[CHECK_MATRIX_KEY] == "[]"
+
+    async def test_no_verdict_on_fail_open(self, safe_log) -> None:
+        _, exec_patch = _exec(side_effect=RuntimeError("worker gone"))
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        row = _outcome_kwargs(safe_log)[0]
+        assert row["outcome"] == "no_verdict"
+        # Empty, not synthetic: the activity never returned, so the workflow has
+        # no checks to report and must not invent one.
+        assert row[CHECK_MATRIX_KEY] == "[]"
+        assert row["gate_classification"] == CLASSIFICATION_GATE_BROKEN

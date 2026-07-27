@@ -26,6 +26,9 @@ from application_sdk.errors.leaves import (
 )
 from application_sdk.execution._temporal.preflight_gate import (
     CLASSIFICATION_SOURCE_UNVERIFIABLE,
+    GATE_ATTEMPTS_DEFAULT,
+    GATE_ATTEMPTS_MAX,
+    GATE_ATTEMPTS_MIN,
     GATE_RETRY,
     GATE_TIMEOUT_DEFAULT_SECONDS,
     GATE_TIMEOUT_MAX_SECONDS,
@@ -37,17 +40,21 @@ from application_sdk.execution._temporal.preflight_gate import (
     build_preflight_gate_activity,
     gate_timeouts,
     log_gate_posture,
+    resolve_gate_attempts,
     resolve_gate_budget_seconds,
 )
 from application_sdk.handler.base import DefaultHandler
 from application_sdk.handler.contracts import (
+    PreflightCheck,
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
 )
 from application_sdk.observability.logger_adaptor import (
     _KNOWN_EXTRA_KEYS,
+    GATE_ATTEMPTS_KEY,
     GATE_CLASSIFICATION_KEY,
+    GATE_DURATION_KEY,
     GATE_MODE_KEY,
     GATE_TIMEOUT_KEY,
 )
@@ -550,3 +557,140 @@ class TestPostureEvent:
         with mock.patch(f"{_GATE}.logger") as mock_logger:
             log_gate_posture("softapp", enforce=False, budget_seconds=25)
         mock_logger.info.assert_called_once()
+
+
+class TestAttemptResolution:
+    """Attempts are per-app, clamped, and never raise at boot."""
+
+    def test_default_when_unset(self) -> None:
+        assert resolve_gate_attempts(None) == GATE_ATTEMPTS_DEFAULT
+
+    def test_in_range_value_is_honoured(self) -> None:
+        assert resolve_gate_attempts(1) == 1
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"), [(0, GATE_ATTEMPTS_MIN), (9, GATE_ATTEMPTS_MAX)]
+    )
+    def test_out_of_range_is_clamped(self, raw: int, expected: int) -> None:
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            assert resolve_gate_attempts(raw) == expected
+        mock_logger.warning.assert_called_once()
+
+    @pytest.mark.parametrize("raw", ["abc", [], object(), True])
+    def test_garbage_falls_back_to_default(self, raw) -> None:
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            assert resolve_gate_attempts(raw) == GATE_ATTEMPTS_DEFAULT
+        mock_logger.warning.assert_called_once()
+
+
+class TestCeilingRaisedToThreeHundred:
+    """A source that genuinely needs two minutes must be declarable.
+
+    Measured p95 for one federated source sits near 124s, so the previous 120s
+    ceiling could not express a budget that source could actually meet.
+    """
+
+    def test_ceiling_is_three_hundred(self) -> None:
+        assert GATE_TIMEOUT_MAX_SECONDS == 300
+
+    def test_a_slow_source_budget_survives_resolution(self) -> None:
+        assert resolve_gate_budget_seconds(180) == 180
+
+    def test_schedule_to_close_tracks_attempts(self) -> None:
+        # One attempt at the ceiling must not reserve the two-attempt window:
+        # that would hold a worker slot for twice as long as the owner asked.
+        _, one = gate_timeouts(GATE_TIMEOUT_MAX_SECONDS, attempts=1)
+        _, two = gate_timeouts(GATE_TIMEOUT_MAX_SECONDS, attempts=2)
+        assert one < two
+
+    def test_single_attempt_still_fits_its_own_attempt(self) -> None:
+        start_to_close, schedule_to_close = gate_timeouts(
+            GATE_TIMEOUT_MAX_SECONDS, attempts=1
+        )
+        assert schedule_to_close > start_to_close
+
+
+class TestFinalAttemptFollowsThePerAppPolicy:
+    """``_is_final_attempt`` must read the app's attempts, not a module default."""
+
+    async def test_single_attempt_app_reaches_a_verdict_on_attempt_one(self) -> None:
+        # With attempts=1 there is no retry to wait for, so attempt 1 is final
+        # and the no-verdict must be applied rather than deferred.
+        gate = build_preflight_gate_activity(
+            _SlowHandler(5.0),
+            app_name="myapp",
+            enforce=False,
+            budget_seconds=0.3,
+            attempts=1,
+        )
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            with mock.patch(f"{_GATE}.activity.info") as info:
+                info.return_value = mock.Mock(attempt=1, start_to_close_timeout=None)
+                await gate(PreflightGateInput())
+        assert _outcome(mock_logger)["outcome"] == "would_block"
+
+
+class TestMeasuredDurationIsEmitted:
+    """The gate reports its own elapsed time, not the handler's self-report.
+
+    Production ``check_matrix`` durations proved untrustworthy: a handler
+    abandoned at ``start_to_close`` keeps running and logs a duration far past
+    the budget. A gate-measured number is the only one that can size a budget.
+    """
+
+    async def test_outcome_row_carries_measured_duration(self) -> None:
+        gate = _gate(_RecordingHandler(), enforce=False, budget=30)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            await gate(PreflightGateInput())
+        row = _outcome(mock_logger)
+        assert row[GATE_DURATION_KEY] >= 0
+        assert row[GATE_DURATION_KEY] < 30_000
+
+    async def test_outcome_row_carries_the_budget_in_force(self) -> None:
+        # Headroom is duration / budget, so the denominator must be on the row —
+        # otherwise every consumer has to join against the posture event.
+        gate = _gate(_RecordingHandler(), enforce=False, budget=45)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            await gate(PreflightGateInput())
+        assert _outcome(mock_logger)[GATE_TIMEOUT_KEY] == 45
+
+    async def test_outcome_row_carries_the_attempt(self) -> None:
+        # Distinguishes a first-try success from a retry rescue; without it a
+        # flaky-but-passing app is indistinguishable from a healthy one.
+        gate = _gate(_RecordingHandler(), enforce=False, budget=30)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            await gate(PreflightGateInput())
+        assert _outcome(mock_logger)[GATE_ATTEMPTS_KEY] >= 1
+
+    async def test_measured_duration_ignores_a_lying_handler(self) -> None:
+        class _Liar(DefaultHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                return PreflightOutput(
+                    status=PreflightStatus.READY,
+                    checks=[
+                        PreflightCheck(name="c", passed=True, duration_ms=292_800.0)
+                    ],
+                )
+
+        gate = _gate(_Liar(), enforce=False, budget=30)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            await gate(PreflightGateInput())
+        assert _outcome(mock_logger)[GATE_DURATION_KEY] < 292_800.0
+
+    async def test_timeout_row_also_carries_the_duration(self) -> None:
+        # The row that matters most for sizing: it must not be the one that
+        # omits the number.
+        gate = _gate(_SlowHandler(5.0), enforce=False, budget=0.3)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            await gate(PreflightGateInput())
+        row = _outcome(mock_logger)
+        assert row["outcome"] == "would_block"
+        assert row[GATE_DURATION_KEY] > 0
+
+
+class TestNewKeysReachTheWire:
+    """Unregistered kwargs are dropped before OTLP, so registration is the wire."""
+
+    @pytest.mark.parametrize("key", [GATE_DURATION_KEY, GATE_ATTEMPTS_KEY])
+    def test_key_is_registered(self, key: str) -> None:
+        assert key in _KNOWN_EXTRA_KEYS

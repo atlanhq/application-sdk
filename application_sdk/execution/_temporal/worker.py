@@ -378,6 +378,7 @@ def create_worker(
         build_preflight_gate_activity,
         log_gate_posture,
         preflight_gate_activity_name,
+        resolve_gate_attempts,
         resolve_gate_budget_seconds,
     )
     from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
@@ -436,6 +437,9 @@ def create_worker(
         budget_seconds = resolve_gate_budget_seconds(
             getattr(app_cls, "preflight_gate_timeout_seconds", None)
         )
+        attempts = resolve_gate_attempts(
+            getattr(app_cls, "preflight_gate_max_attempts", None)
+        )
         # Every app, soft included: this row is the denominator for ranking
         # hard-mode apps that never reach a verdict (such an app emits no outcome
         # row carrying gate_mode, so it is invisible from outcomes alone).
@@ -453,7 +457,11 @@ def create_worker(
             )
         gate_activities.append(
             build_preflight_gate_activity(
-                gate_handler, name, enforce=enforce, budget_seconds=budget_seconds
+                gate_handler,
+                name,
+                enforce=enforce,
+                budget_seconds=budget_seconds,
+                attempts=attempts,
             )
         )
     task_activities = [*task_activities, *gate_activities]

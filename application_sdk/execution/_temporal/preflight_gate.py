@@ -61,7 +61,9 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.infrastructure.context import get_infrastructure
     from application_sdk.observability.logger_adaptor import (
         CHECK_MATRIX_KEY,
+        GATE_ATTEMPTS_KEY,
         GATE_CLASSIFICATION_KEY,
+        GATE_DURATION_KEY,
         GATE_MODE_KEY,
         GATE_TIMEOUT_KEY,
         get_logger,
@@ -89,6 +91,14 @@ PREFLIGHT_POSTURE_EVENT = "Preflight gate posture"
 # un-migrated block from a typed one (whose reason is the handler error's own code,
 # e.g. AUTH). category/audience/retryable are unchanged.
 PREFLIGHT_FALLBACK_CODE = "PREFLIGHT_CHECK_FAILED"
+
+# The check matrix for an outcome where no check ran — a skipped gate, or a
+# fail-open the workflow reports without ever seeing the activity's result.
+# Emitted rather than omitted so ``check_matrix`` is present on *every* outcome:
+# a consumer can then parse it unconditionally instead of branching on presence,
+# and a branch mishandled in the dropping direction is how a gate that never
+# reached a verdict vanishes from the numerator it belongs in.
+EMPTY_CHECK_MATRIX = "[]"
 
 
 def is_preflight_block(exc: BaseException | None) -> bool:
@@ -253,9 +263,25 @@ GATE_RETRY = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
 # fact, so a fleet-wide bump is the wrong lever (it costs every app's
 # time-to-first-activity). The ceiling keeps an app from stalling extraction start
 # indefinitely; the floor keeps a typo from leaving no time to run any check.
-GATE_TIMEOUT_DEFAULT_SECONDS = 25
+# 120s, not 25s. Measured p95 across the fleet is under 14s for every app but one
+# federated source (~124s), so on a healthy run this changes nothing — the handler
+# returns long before the budget. What it changes is the *pathological* run: it now
+# gets 120s to finish and report a real verdict instead of being cut at 25s, which
+# is how a censored measurement became a fail-open. The cost is bounded to runs
+# that were already failing.
+GATE_TIMEOUT_DEFAULT_SECONDS = 120
 GATE_TIMEOUT_MIN_SECONDS = 5
-GATE_TIMEOUT_MAX_SECONDS = 120
+# 300s ceiling: headroom above the slowest observed source, so an owner who needs
+# more than the default can still declare it without an SDK change.
+GATE_TIMEOUT_MAX_SECONDS = 300
+
+# Retry attempts for the gate activity, per-app via ``App.preflight_gate_max_attempts``.
+# A second attempt rescues a *transient* slow probe (cold pool, cluster resuming);
+# it cannot rescue a systematically slow one, it just doubles time-to-verdict. So
+# an app declaring a large budget should usually pair it with one attempt.
+GATE_ATTEMPTS_DEFAULT = 2
+GATE_ATTEMPTS_MIN = 1
+GATE_ATTEMPTS_MAX = 3
 
 # Slack between the budget the handler gets and Temporal's start_to_close, so the
 # gate's own ``asyncio.wait_for`` always fires first. If Temporal won the race the
@@ -338,33 +364,55 @@ def log_gate_posture(app_name: str, *, enforce: bool, budget_seconds: int) -> No
     )
 
 
-def _clamp_budget(raw: Any) -> tuple[int, str]:
-    """Coerce and clamp a declared budget. Returns ``(budget, complaint)``.
+def _clamp_declared_int(
+    raw: Any, *, low: int, high: int, default: int, unit: str
+) -> tuple[int, str]:
+    """Coerce and clamp a declared ``ClassVar`` int. Returns ``(value, complaint)``.
 
-    Pure and silent so both the warn-once boot path and the per-run workflow path
-    can share it and cannot disagree about the resulting number. ``complaint`` is
+    Pure and silent so the warn-once boot path and the per-run workflow path can
+    share it and cannot disagree about the resulting number. ``complaint`` is
     empty when the declaration was already valid.
     """
     if raw is None:
-        return GATE_TIMEOUT_DEFAULT_SECONDS, ""
+        return default, ""
     # bool is an int subclass; True would otherwise clamp to the floor and read
-    # as a deliberate 5s budget.
+    # as a deliberate declaration.
     if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
-        return GATE_TIMEOUT_DEFAULT_SECONDS, f"{raw!r} is not a number"
+        return default, f"{raw!r} is not a number"
     try:
         value = int(float(raw))
-    # OverflowError, not ValueError, for inf / "1e400" — and this function is on
-    # the workflow path, where an escaping exception becomes a workflow *task*
+    # OverflowError, not ValueError, for inf / "1e400" — and this runs on the
+    # workflow path, where an escaping exception becomes a workflow *task*
     # failure that Temporal retries indefinitely.
     except (TypeError, ValueError, OverflowError):
-        return GATE_TIMEOUT_DEFAULT_SECONDS, f"{raw!r} is not a usable number"
-    clamped = max(GATE_TIMEOUT_MIN_SECONDS, min(GATE_TIMEOUT_MAX_SECONDS, value))
+        return default, f"{raw!r} is not a usable number"
+    clamped = max(low, min(high, value))
     if clamped != value:
-        return clamped, (
-            f"{value}s is outside the supported "
-            f"{GATE_TIMEOUT_MIN_SECONDS}-{GATE_TIMEOUT_MAX_SECONDS}s range"
+        return (
+            clamped,
+            f"{value}{unit} is outside the supported {low}-{high}{unit} range",
         )
     return clamped, ""
+
+
+def _clamp_budget(raw: Any) -> tuple[int, str]:
+    return _clamp_declared_int(
+        raw,
+        low=GATE_TIMEOUT_MIN_SECONDS,
+        high=GATE_TIMEOUT_MAX_SECONDS,
+        default=GATE_TIMEOUT_DEFAULT_SECONDS,
+        unit="s",
+    )
+
+
+def _clamp_attempts(raw: Any) -> tuple[int, str]:
+    return _clamp_declared_int(
+        raw,
+        low=GATE_ATTEMPTS_MIN,
+        high=GATE_ATTEMPTS_MAX,
+        default=GATE_ATTEMPTS_DEFAULT,
+        unit="",
+    )
 
 
 def resolve_gate_budget_seconds(raw: Any) -> int:
@@ -382,23 +430,41 @@ def resolve_gate_budget_seconds(raw: Any) -> int:
     return budget
 
 
-def gate_timeouts(budget_seconds: Any) -> tuple[timedelta, timedelta]:
-    """Derive ``(start_to_close, schedule_to_close)`` from the handler budget.
+def resolve_gate_attempts(raw: Any) -> int:
+    """Resolve an app's declared gate attempts, warning once about a bad value."""
+    attempts, complaint = _clamp_attempts(raw)
+    if complaint:
+        logger.warning("preflight_gate_max_attempts: %s; using %d", complaint, attempts)
+    return attempts
 
-    Clamps its own input so the workflow can size activity timeouts without
+
+def gate_retry_policy(attempts: Any) -> RetryPolicy:
+    """The gate's retry policy for one app, from its declared attempts."""
+    resolved, _ = _clamp_attempts(attempts)
+    return RetryPolicy(maximum_attempts=resolved, backoff_coefficient=2)
+
+
+def gate_timeouts(
+    budget_seconds: Any, attempts: Any = None
+) -> tuple[timedelta, timedelta]:
+    """Derive ``(start_to_close, schedule_to_close)`` from the budget and attempts.
+
+    Clamps its own inputs so the workflow can size activity timeouts without
     re-warning on every run (the worker already complained once at boot) and
-    still lands on the same number the activity was built with.
+    still lands on the same numbers the activity was built with.
 
     Both timeouts must move together with the budget. ``start_to_close`` adds
     headroom so the activity's own timeout wins the race; ``schedule_to_close``
-    fits every retry attempt, otherwise ``GATE_RETRY`` is cosmetic — the second
-    attempt could not start before the schedule cap fired.
+    fits every retry attempt, otherwise the retry policy is cosmetic — the second
+    attempt could not start before the schedule cap fired. It also tracks
+    ``attempts``: a one-attempt app must not reserve a two-attempt window, or it
+    holds its slot for twice as long as its owner asked for.
     """
     budget, _ = _clamp_budget(budget_seconds)
+    resolved_attempts, _ = _clamp_attempts(attempts)
     start_to_close = budget + GATE_ACTIVITY_HEADROOM_SECONDS
-    attempts = GATE_RETRY.maximum_attempts or 1
     # +10s absorbs the retry backoff between attempts.
-    schedule_to_close = attempts * start_to_close + 10
+    schedule_to_close = resolved_attempts * start_to_close + 10
     return timedelta(seconds=start_to_close), timedelta(seconds=schedule_to_close)
 
 
@@ -587,19 +653,29 @@ def _is_definitive_credential_absence(exc: BaseException) -> bool:
     return cause is None or isinstance(cause, SecretNotFoundError)
 
 
-def _is_final_attempt() -> bool:
+def _current_attempt() -> int:
+    """This activity attempt, or 1 outside an activity context."""
+    try:
+        return activity.info().attempt
+    except RuntimeError:  # not inside an activity context
+        return 1
+
+
+def _is_final_attempt(attempts: int) -> bool:
     """Whether this is the gate activity's last retry attempt.
 
-    A slow source deserves the retry ``GATE_RETRY`` already grants, so a
-    no-verdict only becomes a verdict once retries are exhausted. Outside an
-    activity context (direct calls, unit tests) the answer is ``True``:
+    A slow source deserves the retries the app's policy grants, so a no-verdict
+    only becomes a verdict once they are exhausted. Reads the app's own
+    ``attempts`` rather than a module default: a one-attempt app has no retry to
+    wait for, and deferring its verdict would mean never reaching one. Outside an
+    activity context (direct calls, unit tests) the answer is ``True`` —
     enforcement must never be skipped just because the attempt is unknown.
     """
     try:
         attempt = activity.info().attempt
     except RuntimeError:  # not inside an activity context
         return True
-    return attempt >= (GATE_RETRY.maximum_attempts or 1)
+    return attempt >= max(1, attempts)
 
 
 def _unverifiable_result(exc: BaseException, app_name: str) -> PreflightOutput:
@@ -746,6 +822,7 @@ def build_preflight_gate_activity(
     *,
     enforce: bool = False,
     budget_seconds: float = GATE_TIMEOUT_DEFAULT_SECONDS,
+    attempts: int = GATE_ATTEMPTS_DEFAULT,
 ) -> Callable[..., Awaitable[Any]]:
     """Build the injected preflight-gate activity (``{app}:preflight``).
 
@@ -781,6 +858,41 @@ def build_preflight_gate_activity(
         entry = input.entrypoint or "<implicit>"
         gate_mode = "hard" if enforce else "soft"
 
+        def _emit_outcome(
+            outcome: str,
+            reason: str,
+            checks: list[PreflightCheck],
+            classification: str,
+        ) -> None:
+            """Emit the gate's one queryable row.
+
+            Single site for all three activity-side outcomes so the attribute set
+            cannot drift between them — a consumer that finds ``gate_duration_ms``
+            on ``proceeded`` but not on ``would_block`` cannot compute headroom
+            for the runs that need it most.
+
+            ``gate_duration_ms`` is measured here rather than summed from
+            ``check_matrix``: per-check durations are handler-authored and a
+            handler abandoned at ``start_to_close`` keeps running and reports a
+            duration past the budget.
+            """
+            logger.info(
+                PREFLIGHT_OUTCOME_EVENT,
+                outcome=outcome,
+                reason=reason,
+                app_name=app_name,
+                entrypoint=entry,
+                checks=len(checks),
+                **{
+                    CHECK_MATRIX_KEY: _check_matrix_json(checks),
+                    GATE_MODE_KEY: gate_mode,
+                    GATE_CLASSIFICATION_KEY: classification,
+                    GATE_DURATION_KEY: round((time.monotonic() - started) * 1000, 1),
+                    GATE_TIMEOUT_KEY: int(budget_seconds),
+                    GATE_ATTEMPTS_KEY: _current_attempt(),
+                },
+            )
+
         def _no_verdict(exc: BaseException) -> PreflightOutput:
             """Apply gate mode to a source we could not verify.
 
@@ -788,10 +900,10 @@ def build_preflight_gate_activity(
             ``NOT_READY`` in soft. Plumbing failures never reach here — they
             propagate to the workflow's fail-open.
             """
-            if not _is_final_attempt():
-                # Let GATE_RETRY have its turn; a slow source may answer next
-                # attempt. Not the block error type, so the workflow does not
-                # abort on a first slow attempt.
+            if not _is_final_attempt(attempts):
+                # Let the app's retry policy have its turn; a slow source may
+                # answer next attempt. Not the block error type, so the workflow
+                # does not abort on a first slow attempt.
                 from application_sdk.execution.errors import (  # noqa: PLC0415 — avoid import cycle at module load
                     ApplicationError,
                 )
@@ -815,18 +927,11 @@ def build_preflight_gate_activity(
                 # nothing — on the one path where the cause is the whole diagnostic.
                 exc_info=exc,
             )
-            logger.info(
-                PREFLIGHT_OUTCOME_EVENT,
-                outcome="blocked" if enforce else "would_block",
-                reason=block_error.details[0].code,
-                app_name=app_name,
-                entrypoint=entry,
-                checks=len(unverifiable.checks),
-                **{
-                    CHECK_MATRIX_KEY: _check_matrix_json(unverifiable.checks),
-                    GATE_MODE_KEY: gate_mode,
-                    GATE_CLASSIFICATION_KEY: CLASSIFICATION_SOURCE_UNVERIFIABLE,
-                },
+            _emit_outcome(
+                "blocked" if enforce else "would_block",
+                block_error.details[0].code,
+                unverifiable.checks,
+                CLASSIFICATION_SOURCE_UNVERIFIABLE,
             )
             if enforce:
                 raise block_error
@@ -942,36 +1047,19 @@ def build_preflight_gate_activity(
         # completion can re-emit — consumers dedupe on (workflow_run_id, outcome).
         if result.status is PreflightStatus.NOT_READY:
             block_error = _build_block_error(result, app_name)
-            logger.info(
-                PREFLIGHT_OUTCOME_EVENT,
-                outcome="blocked" if enforce else "would_block",
-                reason=block_error.details[0].code,
-                app_name=app_name,
-                entrypoint=entry,
-                checks=len(result.checks),
-                **{
-                    CHECK_MATRIX_KEY: _check_matrix_json(result.checks),
-                    GATE_MODE_KEY: gate_mode,
-                    GATE_CLASSIFICATION_KEY: CLASSIFICATION_VERDICT,
-                },
+            _emit_outcome(
+                "blocked" if enforce else "would_block",
+                block_error.details[0].code,
+                result.checks,
+                CLASSIFICATION_VERDICT,
             )
             if enforce:
                 raise block_error
             # Soft: the verdict stays honest NOT_READY; the gate just does not
             # enforce it. The would_block row above is the loud record.
             return result
-        logger.info(
-            PREFLIGHT_OUTCOME_EVENT,
-            outcome="proceeded",
-            reason=result.status.value,
-            app_name=app_name,
-            entrypoint=entry,
-            checks=len(result.checks),
-            **{
-                CHECK_MATRIX_KEY: _check_matrix_json(result.checks),
-                GATE_MODE_KEY: gate_mode,
-                GATE_CLASSIFICATION_KEY: CLASSIFICATION_VERDICT,
-            },
+        _emit_outcome(
+            "proceeded", result.status.value, result.checks, CLASSIFICATION_VERDICT
         )
         return result
 

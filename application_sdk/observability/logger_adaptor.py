@@ -59,6 +59,15 @@ GATE_MODE_KEY = "gate_mode"
 GATE_CLASSIFICATION_KEY = "gate_classification"
 GATE_TIMEOUT_KEY = "gate_timeout_seconds"
 
+# The gate's *own* measurement of how long it took, and which attempt produced
+# the row. Per-check ``duration_ms`` inside ``check_matrix`` is written by the
+# app and cannot be trusted for sizing: an activity abandoned at
+# ``start_to_close`` keeps running and logs a duration far past the budget. These
+# two are measured by the SDK, so ``gate_duration_ms / (gate_timeout_seconds *
+# 1000)`` is a headroom figure no handler can distort.
+GATE_DURATION_KEY = "gate_duration_ms"
+GATE_ATTEMPTS_KEY = "gate_attempt"
+
 # Transformed-asset validation outcome-event key, shared with the emitter
 # (``application_sdk.app.base._warn_on_invalid_transformed_assets``) so a rename
 # is a single edit that keeps the emit call-site and the allowlist below in sync.
@@ -122,6 +131,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         GATE_MODE_KEY,
         GATE_CLASSIFICATION_KEY,
         GATE_TIMEOUT_KEY,
+        GATE_DURATION_KEY,
+        GATE_ATTEMPTS_KEY,
         # ── Transformed-asset validation outcome event ───────────────────
         ASSET_VALIDATION_MATRIX_KEY,
         "assets_total",
