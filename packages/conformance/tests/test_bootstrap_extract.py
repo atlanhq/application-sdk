@@ -94,6 +94,36 @@ def test_extract_apt_packages_drops_shell_constructs() -> None:
     assert extract_apt_packages(text) == "libpq-dev"
 
 
+def test_extract_apt_packages_ignores_commented_out_install() -> None:
+    """A commented-out install names packages the repo chose NOT to install;
+    rendering them would produce a step the on-disk file lacks, i.e. C002 drift
+    no bootstrap re-run could ever clear."""
+    text = (
+        "      # sudo apt-get install -y libpq-dev\n"
+        "      #   apt-get install -y libkrb5-dev\n"
+    )
+    assert extract_apt_packages(text) == ""
+
+
+def test_extract_apt_packages_ignores_comments_alongside_a_real_step() -> None:
+    text = (
+        "      # apt-get install -y libpq-dev  (not needed any more)\n"
+        "        run: |\n"
+        "          sudo apt-get install -y libkrb5-dev\n"
+    )
+    assert extract_apt_packages(text) == "libkrb5-dev"
+
+
+def test_extract_apt_packages_from_rendered_checks_yml_ignores_its_comment_block() -> (
+    None
+):
+    """The rendered step carries an explanatory comment block above it; the
+    round trip must read the command, not the prose."""
+    rendered = render("checks.yml", pre_commit_system_deps="libkrb5-dev")
+    assert "# Extra apt packages" in rendered
+    assert extract_apt_packages(rendered) == "libkrb5-dev"
+
+
 def test_extract_apt_packages_keeps_version_pin() -> None:
     text = "          apt-get install -y libkrb5-dev=1.20.1-2 gcc/bookworm\n"
     assert extract_apt_packages(text) == "libkrb5-dev=1.20.1-2 gcc/bookworm"

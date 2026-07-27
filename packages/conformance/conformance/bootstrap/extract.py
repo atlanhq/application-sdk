@@ -46,6 +46,14 @@ APT_PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+/=:-]*$")
 # Ends the package list: whatever follows belongs to another command.
 _SHELL_OPERATOR_RE = re.compile(r"[;&|]")
 
+# A commented-out install line describes packages the repo decided NOT to
+# install, so it must not be extracted: bootstrap would render them into the
+# managed step, and the re-rendered file would then never match the on-disk one
+# (the comment stays, the step is added) — permanent C002 drift no re-run can
+# clear. Dropped before matching rather than inside the loop so a `\`-continued
+# comment block can't leak its later lines in either.
+_COMMENT_LINE_RE = re.compile(r"^[ \t]*#.*$", re.MULTILINE)
+
 
 def extract_field(text: str, field: str) -> str:
     """Return the value of ``field: <value>`` in *text*, or ``""`` if absent.
@@ -88,13 +96,16 @@ def extract_apt_packages(text: str) -> str:
     re-ordering it would make every already-bootstrapped repo report C002
     drift once.
 
-    Every ``apt-get install`` occurrence contributes (deduplicated, first
-    occurrence wins), so a repo that hand-wrote two separate install steps has
-    both preserved — bootstrap then consolidates them into the one managed
-    step, and C002 flags the pre-consolidation file as drift until it does.
+    Every *uncommented* ``apt-get install`` occurrence contributes
+    (deduplicated, first occurrence wins), so a repo that hand-wrote two
+    separate install steps has both preserved — bootstrap then consolidates
+    them into the one managed step, and C002 flags the pre-consolidation file
+    as drift until it does. Commented-out install lines are excluded: they name
+    packages the repo chose not to install, and extracting them would render a
+    step the on-disk file doesn't have, leaving C002 drift that no re-run clears.
     """
     packages: list[str] = []
-    for m in _APT_INSTALL_RE.finditer(text):
+    for m in _APT_INSTALL_RE.finditer(_COMMENT_LINE_RE.sub("", text)):
         # Truncate at the first shell operator: everything after `&&`, `||`,
         # `|` or `;` is a different command, and its words are not packages
         # (no package name may contain these characters, so splitting on them
