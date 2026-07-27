@@ -25,10 +25,14 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    import time
+
     from application_sdk.credentials.ref import CredentialRef
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.spec import AgentCredentialSpec
+    from application_sdk.errors.categories import FailureCategory
     from application_sdk.errors.leaves import DependencyUnavailableError
+    from application_sdk.errors.wire import FailureDetails
     from application_sdk.handler.context import bind_invocation_context
     from application_sdk.handler.contracts import (
         AuthInput,
@@ -36,13 +40,27 @@ with workflow.unsafe.imports_passed_through():
         HandlerCredential,
         MetadataInput,
         MetadataOutput,
+        PreflightCheck,
         PreflightInput,
         PreflightOutput,
+        PreflightStatus,
     )
     from application_sdk.infrastructure.context import get_infrastructure
+    from application_sdk.observability.logger_adaptor import get_logger
+    from application_sdk.storage.preflight import check_object_store_access
 
 if TYPE_CHECKING:
     from application_sdk.handler.base import Handler
+
+logger = get_logger(__name__)
+
+# UI-facing check-row names for the object-store access probes appended to the
+# SDR interactive preflight output.  "deployment" is the customer's own store;
+# "upstream" is the Atlan upload proxy.
+_OBJECT_STORE_CHECK_NAMES: dict[str, str] = {
+    "deployment": "Object store access (deployment)",
+    "upstream": "Object store access (Atlan upload)",
+}
 
 
 SDR_TEST_AUTH_ACTIVITY = "sdr:test_auth"
@@ -204,6 +222,67 @@ async def _resolve_agent_credentials(
     return HandlerCredential.list_from_raw(raw)
 
 
+async def _append_object_store_checks(output: PreflightOutput) -> None:
+    """Fold SDR object-store access probes into a handler's ``PreflightOutput``.
+
+    Runs the customer object-store access check (deployment store + upstream
+    Atlan upload proxy) and appends one ``PreflightCheck`` per probed store to
+    ``output.checks`` so they render as UI check rows alongside the handler's own
+    source/credential checks.  A failed probe carries a typed ``FailureDetails``
+    (``DEPENDENCY_UNAVAILABLE`` / ``OBJECT_STORE_ACCESS``) so the message and
+    remediation hint surface in the UI.
+
+    No-op when not in SDR mode (``check_object_store_access`` returns ``[]`` when
+    ``ENABLE_ATLAN_UPLOAD`` is falsy).  If any object-store check fails and the
+    handler reported ``READY``, the verdict is downgraded to ``NOT_READY``; an
+    already ``NOT_READY``/``PARTIAL`` verdict is left untouched.
+
+    Never raises — any unexpected error is logged and the handler's own result is
+    returned unchanged.
+    """
+    try:
+        start = time.monotonic()
+        results = await check_object_store_access(get_infrastructure())
+        elapsed_ms = (time.monotonic() - start) * 1000.0
+        if not results:
+            return
+
+        any_failed = False
+        for result in results:
+            name = _OBJECT_STORE_CHECK_NAMES.get(
+                result.label, f"Object store access ({result.label})"
+            )
+            error: FailureDetails | None = None
+            if not result.passed:
+                any_failed = True
+                error = FailureDetails(
+                    category=FailureCategory.DEPENDENCY_UNAVAILABLE,
+                    code="OBJECT_STORE_ACCESS",
+                    retryable=False,
+                    message=result.message,
+                    suggested_action=result.hint,
+                )
+            output.checks.append(
+                PreflightCheck(
+                    name=name,
+                    passed=result.passed,
+                    message=result.message,
+                    error=error,
+                )
+            )
+
+        output.total_duration_ms += elapsed_ms
+        if any_failed and output.status == PreflightStatus.READY:
+            output.status = PreflightStatus.NOT_READY
+    except Exception:
+        # Must never break the handler's own preflight result.
+        logger.warning(
+            "SDR preflight: object-store access check augmentation failed; "
+            "leaving handler result unchanged",
+            exc_info=True,
+        )
+
+
 def build_sdr_activities(
     handler: Handler,
     app_name: str,
@@ -242,7 +321,11 @@ def build_sdr_activities(
         if input.agent_json:
             input.credentials = await _resolve_agent_credentials(input.agent_json)
         with bind_invocation_context(binding.app_name, input.credentials):
-            return await binding.handler.preflight_check(input)
+            output = await binding.handler.preflight_check(input)
+        # SDR-only: fold the customer object-store access check into the
+        # interactive preflight so it shows up as a UI check row. Non-raising.
+        await _append_object_store_checks(output)
+        return output
 
     @activity.defn(name=SDR_FETCH_METADATA_ACTIVITY)
     async def fetch_metadata(input: MetadataInput) -> MetadataOutput:
