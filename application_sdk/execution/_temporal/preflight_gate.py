@@ -263,13 +263,15 @@ GATE_RETRY = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
 # fact, so a fleet-wide bump is the wrong lever (it costs every app's
 # time-to-first-activity). The ceiling keeps an app from stalling extraction start
 # indefinitely; the floor keeps a typo from leaving no time to run any check.
-# 120s, not 25s. Measured p95 across the fleet is under 14s for every app but one
-# federated source (~124s), so on a healthy run this changes nothing — the handler
-# returns long before the budget. What it changes is the *pathological* run: it now
-# gets 120s to finish and report a real verdict instead of being cut at 25s, which
-# is how a censored measurement became a fail-open. The cost is bounded to runs
-# that were already failing.
-GATE_TIMEOUT_DEFAULT_SECONDS = 120
+# 150s, not 25s. The budget is a deadline, not a reservation: a handler that
+# returns in 3s holds the slot for 3s whatever the budget says. Measured p95 across
+# the fleet is under 14s for every app but one federated source (~124s), so raising
+# it changes nothing on a healthy run. What it changes is the *pathological* run —
+# it now has time to reach a real verdict instead of being cut at 25s, which is how
+# a censored measurement became a fail-open. 150 covers the slowest observed p95
+# with headroom while leaving the 300s ceiling meaningful for an app that needs
+# more. Expected to come down once a few weeks of gate_duration_ms exist.
+GATE_TIMEOUT_DEFAULT_SECONDS = 150
 GATE_TIMEOUT_MIN_SECONDS = 5
 # 300s ceiling: headroom above the slowest observed source, so an owner who needs
 # more than the default can still declare it without an SDK change.

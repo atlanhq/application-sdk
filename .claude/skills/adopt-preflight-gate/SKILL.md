@@ -10,7 +10,9 @@ description: >
   a NOT_READY verdict, a probe overrunning the enforced budget, a handler crash,
   a provably absent credential — while failures of the gate's own plumbing always
   fail open. Classifies the app's rollout bucket, sizes the check budget
-  (preflight_gate_timeout_seconds) against what the handler actually costs,
+  (preflight_gate_timeout_seconds, default 150s, ceiling 300s) and retry attempts
+  (preflight_gate_max_attempts) against what the handler actually costs, sizing
+  from SDK-measured gate_duration_ms rather than handler-authored check durations,
   fixes name collisions, audits the handler's status logic against the new
   semantics, runs an interactive check-design session with the developer
   (visualized as a decision tree: which checks block, which are advisory, what
@@ -28,8 +30,9 @@ optional_triggers:
   - "update preflight checks for the gate"
   - "preflight gate migration"
   - "will this app break on SDK bump"
+  - "size the preflight budget"
 owner: connector-platform-team
-last_updated: "2026-07-26"
+last_updated: "2026-07-27"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
@@ -37,7 +40,7 @@ outputs:
   - uv.lock + pyproject.toml (SDK floor raised and lockfile synced — >=3.24.0 for the gate itself; the no-verdict/budget semantics need the first release after CNCT-99, so read the changelog rather than assuming 3.24.0 covers them)
   - app/handler.py (status logic per the agreed check tree; typed errors on failed checks)
   - app/failures.py (every app-specific typed class in one module — created or extended, shared with /typed-failures)
-  - app/<app>.py (preflight_gate_mode, and preflight_gate_timeout_seconds when the default budget does not fit)
+  - app/<app>.py (preflight_gate_mode, plus preflight_gate_timeout_seconds / preflight_gate_max_attempts when the default budget does not fit)
   - deleted app-owned preflight @task + call sites (collision class, plus any duplicate readiness activities the developer agrees to consolidate — always with a coverage diff)
   - contract/app.pkl + regenerated app/generated/ (only if form-only metadata keys must move onto the input contract)
   - updated unit tests covering every verdict path
@@ -133,21 +136,43 @@ are separable in pulse.
 
 ## The check budget — size it before flipping to hard
 
-`Handler.preflight_check` gets `App.preflight_gate_timeout_seconds` (default 25,
-clamped 5-120) and the SDK **enforces** it: the gate cancels the handler when it
+`Handler.preflight_check` gets `App.preflight_gate_timeout_seconds` (default 150,
+clamped 5-300) and the SDK **enforces** it: the gate cancels the handler when it
 elapses. In hard mode an overrun *blocks the run*, so this is not a formality.
+
+It bounds the **whole handler call**, not each check — one slow probe can consume
+the budget and leave the rest unrun. And it is a **deadline, not a reservation**: a
+handler returning in 3s holds its worker slot for 3s regardless of the budget. So
+a generous budget costs nothing on a healthy run; it only changes the run that
+would otherwise have been cut short.
+
+`App.preflight_gate_max_attempts` (default 2, clamped 1-3) sets the retries. A
+retry rescues a *transient* — a cold pool, a cluster resuming — by trying **again**;
+it cannot rescue a systematically slow check, which needs a bigger budget instead.
+Both timeouts derive from these two numbers, so an app declaring a large budget
+usually wants `1`: at the 300s ceiling, two attempts reserve a ~10 minute
+`schedule_to_close`.
 
 ```python
 class MyApp(App):
     preflight_gate_mode = "hard"
-    preflight_gate_timeout_seconds = 60   # this source's probe is genuinely slow
+    preflight_gate_timeout_seconds = 250   # this source's probe is genuinely slow
+    preflight_gate_max_attempts = 1        # a retry won't rescue a slow check
 ```
 
 What the skill checks during adoption:
 
+- **Size from the p99 of *successful* runs, not the max.** Sizing to the worst
+  observed run makes the timeout decorative — nothing ever overruns, so hard mode
+  is back to enforcing only `NOT_READY` verdicts. Sizing to p95 blocks 5% of runs.
+- **Read `gate_duration_ms`, never `check_matrix` durations.** Per-check
+  `duration_ms` is written by the app, and rows predating SDK 3.25 carry durations
+  from *abandoned* attempts (see the orphaned-attempt note below), so they read far
+  above any budget that was ever in force. `gate_duration_ms` is measured by the
+  SDK. Headroom is `gate_duration_ms / (gate_timeout_seconds * 1000)`.
 - **Measure the handler's real cost before flipping to hard.** If the app runs a
   comparable probe as a `@task` elsewhere, its `timeout_seconds` is the honest
-  estimate — a check that mirrors a 600s task will not fit in 25s.
+  estimate — a check that mirrors a 600s task will not fit in the default.
 - **Size probes to `PreflightInput.timeout_seconds`, don't defeat it.** That field
   carries what remains *after* credential resolution. `max(input.timeout_seconds,
   <bigger constant>)` discards it; a `deadline` whose per-probe floor never forces
@@ -171,11 +196,55 @@ Rules the skill enforces during adoption:
   "ask me later", not "the source is not ready" — collapsing them makes hard mode
   fail *closed* on a blip. Raise a typed `RateLimitedError` /
   `DependencyUnavailableError` instead; the gate routes those to fail-open.
-- Soft is the default landing state with an exit: when pulse shows the app's
-  `would_block` rows track real workflow failures (checks are right), add
-  `preflight_gate_mode = "hard"` — that is the whole hard-fail flip.
+- Soft is the default landing state with two exit conditions, both required
+  before adding `preflight_gate_mode = "hard"`:
+  1. the app's `would_block` rows track real workflow failures (the checks are
+     right, not just loud), and
+  2. the app's p99 `gate_duration_ms` sits comfortably inside its declared
+     budget (the checks fit, so an overrun is signal rather than routine).
+  Flipping on (1) alone converts a fail-open into a block on every slow run.
 - An app with no `preflight_check` handler needs no posture: the DefaultHandler
   never returns `NOT_READY`, so the gate never has anything to enforce.
+
+## What the gate emits, and which numbers to trust
+
+Every outcome writes one `Preflight gate outcome` row. v3 apps log to
+`otel_logs.service_logs` (not `combined_workflow_logs`, which is the Argo path),
+and `LogAttributes` is a `Map`, so `LogAttributes['outcome']` works directly while
+`check_matrix` needs `JSONExtractArrayRaw` on the string value.
+
+| attribute | meaning |
+| --- | --- |
+| `outcome` | `proceeded` / `would_block` / `blocked` / `no_verdict` / `skipped` |
+| `gate_mode` | resolved posture; absent on the workflow-emitted rows |
+| `gate_classification` | `verdict` / `source_unverifiable` / `gate_broken` |
+| `gate_duration_ms` | **SDK-measured** elapsed; the only number that can size a budget |
+| `gate_timeout_seconds` | the budget in force, so headroom needs no join |
+| `gate_attempt` | distinguishes a first-try pass from a retry rescue |
+| `check_matrix` | per-check name/passed/error_code/duration_ms; `[]` where no check ran |
+
+`check_matrix` is present on **every** outcome, so parse it unconditionally rather
+than branching on field presence — a branch mishandled in the dropping direction
+is how a gate that never reached a verdict vanishes from the numerator.
+
+**The orphaned-attempt caveat, for anything sized on historical data.** Before SDK
+3.25 the gate had no timeout of its own. Temporal's `start_to_close` is enforced
+server-side, and a non-heartbeating activity's coroutine is *not* stopped by it — so
+the workflow gave up at 25s and failed open while the abandoned handler kept
+running, finished minutes later, and emitted its own outcome row. Consequences when
+reading old data:
+
+- a `blocked` row does **not** prove the run was blocked; the workflow may have
+  moved on long before it was written
+- the same `workflow_run_id` can carry both `blocked` and `no_verdict`, both at
+  attempt 1 — that pair is the signature
+- `check_matrix` durations far above any budget come from those orphans, not from
+  probes that were permitted to run that long
+
+The SDK-side cancel fixes this: the gate's own timer fires before Temporal's, so the
+work actually stops and the row means what it says. Size budgets from
+`gate_duration_ms` going forward, or from `temporal.activity.duration_ms` on the
+`activity.ended` event, which the log interceptor has always measured honestly.
 
 ## The design principle every decision flows from
 
@@ -788,6 +857,21 @@ embedded Dapr locally) — not a real verdict, re-run. `source_unverifiable` on 
   inline; the gate resolves them from the triple, so they can disagree. Read the
   "Preflight gate outcome" event (`outcome`/`reason`/`check_matrix`), not the
   UI, to know what the gate actually did.
+- Sizing a budget from `check_matrix` `duration_ms` → those are handler-authored,
+  and on pre-3.25 rows they come from *abandoned* attempts that kept running after
+  the workflow gave up, so they read far above any budget that was in force. Use
+  `gate_duration_ms`.
+- Sizing a budget from the worst observed run → the timeout becomes decorative
+  (nothing ever overruns, so hard mode is back to enforcing only `NOT_READY`).
+  Size from the p99 of *successful* runs; p95 blocks 5% of them.
+- Reading a `blocked` row on pre-3.25 data as proof the run was blocked → an
+  orphaned attempt writes that row minutes after the workflow already failed open.
+  The signature is `blocked` and `no_verdict` on the same `workflow_run_id`, both
+  at attempt 1.
+- Raising `preflight_gate_timeout_seconds` toward the ceiling while leaving
+  `preflight_gate_max_attempts` at 2 → at 300s that reserves a ~10 minute
+  `schedule_to_close`, and a retry cannot rescue a systematically slow check
+  anyway. Pair a large budget with `1`.
 - Mis-set `entrypoint` default in `preflight_check` → multi-entrypoint runs
   routed down the wrong branch (a miner silently running the crawler's checks).
 - `extraction_method` names an extraction *kind* (e.g. `query_history`), not a

@@ -710,7 +710,7 @@ class App(ABC):
     store outage, rate limit, worker unavailable) always fail open, in both
     postures — a platform blip must not fail a healthy run."""
 
-    preflight_gate_timeout_seconds: ClassVar[int] = 120
+    preflight_gate_timeout_seconds: ClassVar[int] = 150
     """Seconds the preflight handler gets to run all its checks.
 
     Clamped to 5-300s. Note this bounds the *whole* handler call, not each check —
@@ -720,10 +720,11 @@ class App(ABC):
     ``PreflightInput.timeout_seconds``, so a handler that sizes its probes to that
     value is sizing to the real deadline.
 
-    The 120s default is deliberately generous while the fleet's real check
-    durations are being measured; expect it to come down once the distribution is
-    known. Raise it only for a source demonstrably slower than that, and size
-    checks to finish inside it with headroom. In hard mode an overrun blocks
+    A deadline, not a reservation: a handler returning in 3s holds its slot for 3s
+    whatever this says. The 150s default is deliberately generous while the fleet's
+    real check durations are being measured; expect it to come down once the
+    distribution is known. Raise it only for a source demonstrably slower than
+    that, and size checks to finish inside it with headroom. In hard mode an overrun blocks
     the run, so this value and the handler's actual cost must agree. Probes must
     also stay awaitable: cancellation lands at an ``await``, so blocking
     synchronous I/O on the event loop cannot be interrupted."""

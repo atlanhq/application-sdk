@@ -340,20 +340,34 @@ the hard-mode line at boot.
 
 #### Sizing the check budget
 
-The handler gets `preflight_gate_timeout_seconds` (default 25, clamped 5-120) to run all its
-checks, and the SDK **enforces** it — the gate cancels `preflight_check` when it elapses:
+The handler gets `preflight_gate_timeout_seconds` (default 150, clamped 5-300) to run all its
+checks, and the SDK **enforces** it — the gate cancels `preflight_check` when it elapses.
+`preflight_gate_max_attempts` (default 2, clamped 1-3) sets the retries, and both Temporal
+timeouts derive from the pair:
 
 ```python
 class MyConnector(App):
     preflight_gate_mode = "hard"
-    preflight_gate_timeout_seconds = 60   # this source's catalog probe is genuinely slow
+    preflight_gate_timeout_seconds = 250   # this source's catalog probe is genuinely slow
+    preflight_gate_max_attempts = 1        # a retry cannot rescue a slow check
 ```
 
+The budget bounds the **whole handler call**, not each check, and it is a **deadline, not a
+reservation** — a handler returning in 3s holds its worker slot for 3s whatever the budget says.
+A generous budget therefore costs nothing on a healthy run; it only changes the run that would
+otherwise have been cut short.
+
 `PreflightInput.timeout_seconds` carries what is *left* after credential resolution, so a handler
-sizing probes to that field is sizing to the real deadline. Two rules follow:
+sizing probes to that field is sizing to the real deadline. Three rules follow:
 
 - **In hard mode an overrun blocks the run**, so the declared budget and the handler's actual cost
   must agree. Raise the budget for a demonstrably slow source rather than letting checks overrun.
+- **Size from the p99 of successful runs**, read off the SDK-measured `gate_duration_ms` on the
+  outcome event. Sizing to the worst observed run makes the timeout decorative; sizing to p95
+  blocks 5% of runs. Per-check `duration_ms` inside `check_matrix` is handler-authored and is not
+  a substitute.
+- **Pair a large budget with one attempt.** A retry rescues a transient by trying *again*, not by
+  trying *longer*; at the 300s ceiling two attempts reserve a ~10 minute `schedule_to_close`.
 - **Keep probes awaitable.** Cancellation lands at an `await`; blocking synchronous I/O on the
   event loop cannot be interrupted, so it escapes the budget and also stalls the worker's other
   activities. Run blocking drivers in a thread.
