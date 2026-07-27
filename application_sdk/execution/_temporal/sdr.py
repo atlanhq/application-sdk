@@ -53,11 +53,16 @@ SDR_FETCH_METADATA_ACTIVITY = "sdr:fetch_metadata"
 # even when no worker is polling the queue — without it, a UI request to an
 # offline SDR worker would hang forever. start_to_close still bounds in-flight
 # execution once a worker picks the activity up.
+#
+# NOTE: deliberately NO heartbeat_timeout. These activities run a single
+# handler call (test_auth / preflight_check / fetch_metadata) and never call
+# activity.heartbeat(), so setting a heartbeat_timeout would hard-cap runtime at
+# that interval and fail any real source check that runs longer than it —
+# start_to_close is the correct in-flight bound here.
 _AUTH_SCHEDULE_TO_CLOSE = timedelta(seconds=30)
 _PREFLIGHT_SCHEDULE_TO_CLOSE = timedelta(seconds=60)
 _METADATA_SCHEDULE_TO_CLOSE = timedelta(seconds=90)
 
-_DEFAULT_HEARTBEAT = timedelta(seconds=15)
 _AUTH_START_TO_CLOSE = timedelta(seconds=25)
 _PREFLIGHT_START_TO_CLOSE = timedelta(seconds=55)
 _METADATA_START_TO_CLOSE = timedelta(seconds=85)
@@ -82,7 +87,6 @@ class SdrTestAuthWorkflow:
             retry_policy=_AUTH_RETRY,
             schedule_to_close_timeout=_AUTH_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_AUTH_START_TO_CLOSE,
-            heartbeat_timeout=_DEFAULT_HEARTBEAT,
         )
 
 
@@ -98,7 +102,6 @@ class SdrPreflightCheckWorkflow:
             retry_policy=_DEFAULT_RETRY,
             schedule_to_close_timeout=_PREFLIGHT_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_PREFLIGHT_START_TO_CLOSE,
-            heartbeat_timeout=_DEFAULT_HEARTBEAT,
         )
 
 
@@ -114,7 +117,6 @@ class SdrFetchMetadataWorkflow:
             retry_policy=_DEFAULT_RETRY,
             schedule_to_close_timeout=_METADATA_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_METADATA_START_TO_CLOSE,
-            heartbeat_timeout=_DEFAULT_HEARTBEAT,
         )
 
 
