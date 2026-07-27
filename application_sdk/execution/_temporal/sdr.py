@@ -128,7 +128,7 @@ _METADATA_START_TO_CLOSE = timedelta(
 # load if any resolved pair is inverted: start_to_close >= schedule_to_close
 # leaves no room for a retry attempt inside the schedule cap, so a misconfig is
 # visible before the worker accepts work rather than surfacing as silent no-retry.
-for _op, _token, _start, _schedule in (
+for _op, _env_label, _start, _schedule in (
     ("test_auth", "AUTH", _AUTH_START_TO_CLOSE, _AUTH_SCHEDULE_TO_CLOSE),
     (
         "preflight_check",
@@ -151,7 +151,7 @@ for _op, _token, _start, _schedule in (
             _op,
             _start.total_seconds(),
             _schedule.total_seconds(),
-            _token,
+            _env_label,
         )
 
 # test_auth: fail-fast. A wrong password should not retry; transient network
