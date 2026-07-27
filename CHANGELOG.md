@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.24.1 (July 27, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.24.0...v3.24.1
+
+### Bug Fixes
+
+- apply gate mode to no-verdict outcomes; per-app enforced budget (CNCT-99) (#2896) (by @fyzanshaik-atlan in [f749a60](https://github.com/atlanhq/application-sdk/commit/f749a60))
+
+
 ## v3.24.0 (July 21, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.23.1...v3.24.0
