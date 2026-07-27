@@ -103,7 +103,7 @@ def render(
     app_image_name: str = "",
     enable_e2e: str = "true",
     services_script: str = "",
-    pre_commit_system_deps: str = "",
+    system_deps: str = "",
     exit_zero: str = "false",
     automerge: str = "true",
 ) -> str:
@@ -116,7 +116,7 @@ def render(
     - ``conformance.yaml``: ``exit_zero`` (default ``"false"``; set to ``"true"``
       for soft-enforcement rollouts where violations are tracked but do not block
       merges — flip to ``"false"`` when the app is ready for hard gating).
-    - ``checks.yml``: ``pre_commit_system_deps`` (default ``""`` — no
+    - ``checks.yml``: ``system_deps`` (default ``""`` — no
       system-dependency step; supply a space-separated apt package list to
       render an ``apt-get install`` step before ``setup-deps``, for a repo whose
       dependencies build from sdist and need C headers on the runner). Its
@@ -155,7 +155,7 @@ def render(
         app_image_name=app_image_name,
         enable_e2e=enable_e2e,
         services_script=services_script,
-        pre_commit_system_deps=pre_commit_system_deps,
+        system_deps=system_deps,
         exit_zero=exit_zero,
         automerge=automerge,
     )

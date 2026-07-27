@@ -47,9 +47,9 @@ def test_extract_apt_packages_from_rendered_checks_yml() -> None:
     """The round trip bootstrap's re-run autodetection and C002 both depend on:
     what render() wrote must read back as the exact value it was given."""
     deps = "libkrb5-dev gcc python3-dev"
-    rendered = render("checks.yml", pre_commit_system_deps=deps)
+    rendered = render("checks.yml", system_deps=deps)
     assert extract_apt_packages(rendered) == deps
-    assert render("checks.yml", pre_commit_system_deps=deps) == rendered
+    assert render("checks.yml", system_deps=deps) == rendered
 
 
 def test_extract_apt_packages_absent_returns_empty() -> None:
@@ -119,7 +119,7 @@ def test_extract_apt_packages_from_rendered_checks_yml_ignores_its_comment_block
 ):
     """The rendered step carries an explanatory comment block above it; the
     round trip must read the command, not the prose."""
-    rendered = render("checks.yml", pre_commit_system_deps="libkrb5-dev")
+    rendered = render("checks.yml", system_deps="libkrb5-dev")
     assert "# Extra apt packages" in rendered
     assert extract_apt_packages(rendered) == "libkrb5-dev"
 

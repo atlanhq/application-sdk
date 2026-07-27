@@ -36,7 +36,7 @@ _APT_INSTALL_RE = re.compile(
 # Debian package names allow lowercase letters, digits, '+', '-', '.'; the
 # apt-get argument list also legitimately carries a version pin ('pkg=1.2-3')
 # or an explicit release ('pkg/bookworm'), and uppercase appears in a few real
-# archive names. This doubles as the validator for the ``--pre-commit-system-deps``
+# archive names. This doubles as the validator for the ``--system-deps``
 # flag (see ``bootstrap.args.normalize_system_deps``): the value is interpolated
 # into a `run:` block in a generated workflow, so anything outside this set —
 # above all shell metacharacters and `$` expansions — is rejected on input and
@@ -106,17 +106,27 @@ def extract_apt_packages(text: str) -> str:
     """
     packages: list[str] = []
     for m in _APT_INSTALL_RE.finditer(_COMMENT_LINE_RE.sub("", text)):
-        # Truncate at the first shell operator: everything after `&&`, `||`,
-        # `|` or `;` is a different command, and its words are not packages
-        # (no package name may contain these characters, so splitting on them
-        # can't cut a real one short).
-        args = _SHELL_OPERATOR_RE.split(m.group("args"))[0]
-        for token in args.split():
-            if not APT_PACKAGE_RE.match(token):
-                continue
+        for token in sanitize_package_list(m.group("args")):
             if token not in packages:
                 packages.append(token)
     return " ".join(packages)
+
+
+def sanitize_package_list(text: str) -> list[str]:
+    """Return the plausible apt package names in *text*, in order.
+
+    Truncates at the first shell operator — everything after ``&&``, ``||``,
+    ``|`` or ``;`` belongs to another command, and no package name may contain
+    those characters, so the split can never cut a real one short — then keeps
+    only tokens matching ``APT_PACKAGE_RE`` (dropping flags and anything else).
+
+    Shared by the ``checks.yml`` extraction above and the
+    ``.github/ci-system-deps.txt`` reader in ``bootstrap.autodetect``, so a
+    hand-edited value cannot reach a generated workflow's ``run:`` block by
+    whichever of the two paths happens to read it.
+    """
+    args = _SHELL_OPERATOR_RE.split(text)[0]
+    return [token for token in args.split() if APT_PACKAGE_RE.match(token)]
 
 
 def extract_renovate_automerge(text: str) -> str:

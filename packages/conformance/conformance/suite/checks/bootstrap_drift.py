@@ -257,7 +257,7 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
         # `uv sync` keeps them, and only structural drift is flagged. Without
         # this, every such repo would report permanent C002 drift whose only
         # "fix" (re-run bootstrap) deletes the step its CI needs.
-        kwargs["pre_commit_system_deps"] = extract_apt_packages(on_disk)
+        kwargs["system_deps"] = extract_apt_packages(on_disk)
 
     canonical = render(name, **kwargs)
 

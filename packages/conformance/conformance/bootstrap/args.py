@@ -18,7 +18,7 @@ FLAGS = {
     "--app-image-name": "app_image_name",
     "--enable-e2e": "enable_e2e",
     "--services-script": "services_script",
-    "--pre-commit-system-deps": "pre_commit_system_deps",
+    "--system-deps": "system_deps",
     "--enforce": "enforce",
 }
 
@@ -37,7 +37,7 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         "app_image_name": "",
         "enable_e2e": "true",
         "services_script": "",
-        "pre_commit_system_deps": "",
+        "system_deps": "",
         "enforce": "",  # "" = not explicitly set; "true"/"false" = explicit
     }
     i = 0
@@ -76,9 +76,7 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         )
         sys.exit(2)
 
-    result["pre_commit_system_deps"] = normalize_system_deps(
-        result["pre_commit_system_deps"]
-    )
+    result["system_deps"] = normalize_system_deps(result["system_deps"])
 
     return result
 
@@ -101,7 +99,7 @@ def normalize_system_deps(value: str) -> str:
     for token in tokens:
         if not APT_PACKAGE_RE.match(token):
             print(
-                f"error: --pre-commit-system-deps got invalid package name {token!r}"
+                f"error: --system-deps got invalid package name {token!r}"
                 " (expected apt package names, e.g. 'libkrb5-dev gcc python3-dev')",
                 file=sys.stderr,
             )
@@ -128,14 +126,18 @@ options:
   --app-image-name NAME       GHCR image name for tests.yaml (default: atlan-<app-name>-app)
   --enable-e2e true|false     enable e2e in tests.yaml (default: true, line omitted)
   --services-script PATH      services setup script (default: auto-detected from .github/test/setup-services.sh)
-  --pre-commit-system-deps "PKG..."
-                              apt packages checks.yml installs before pre-commit's
-                              `uv sync` — for a dependency with no manylinux wheel that
-                              needs build headers (e.g. "libkrb5-dev gcc python3-dev"
-                              for pykerberos). Omit to auto-detect from an existing
-                              checks.yml, so a bare re-run preserves the step instead
-                              of deleting it (checks.yml is always-overwrite). To drop
-                              the step, delete it from checks.yml and re-run.
+  --system-deps "PKG..."
+                              apt packages CI installs before any `uv sync` — for a
+                              dependency with no manylinux wheel that needs build
+                              headers (e.g. "libkrb5-dev gcc python3-dev" for
+                              pykerberos). Rendered inline into checks.yml (pre-commit)
+                              and written to .github/ci-system-deps.txt, which the
+                              vendored run-conformance-detect action reads before the
+                              D-series resolved-env sync. Omit to auto-detect from an
+                              existing checks.yml (else that file), so a bare re-run
+                              preserves both instead of deleting the step — checks.yml
+                              is always-overwrite. To drop it, delete the step from
+                              checks.yml and the txt file, then re-run.
   --enforce true|false        enforcement mode; omit to auto-detect from an existing
                               conformance.yaml (else hard-gate). Pass explicitly (either
                               value) to also force-update renovate.json.

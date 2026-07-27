@@ -254,15 +254,13 @@ def test_build_and_publish_custom_unit_tests_workflow_not_flagged(
 
 
 def test_checks_custom_system_deps_not_flagged(tmp_path: pathlib.Path) -> None:
-    """A repo that used --pre-commit-system-deps must not be flagged: the only
+    """A repo that used --system-deps must not be flagged: the only
     "fix" for a C002 finding here is re-running bootstrap, which would delete
     the build-header step its pre-commit job needs."""
     wf_dir = tmp_path / ".github" / "workflows"
     wf_dir.mkdir(parents=True)
     wf = wf_dir / "checks.yml"
-    wf.write_text(
-        render("checks.yml", pre_commit_system_deps="libkrb5-dev gcc python3-dev")
-    )
+    wf.write_text(render("checks.yml", system_deps="libkrb5-dev gcc python3-dev"))
     assert scan_path(wf, tmp_path) == []
 
 
@@ -271,7 +269,7 @@ def test_checks_system_deps_structural_drift_flagged(tmp_path: pathlib.Path) -> 
     wf_dir = tmp_path / ".github" / "workflows"
     wf_dir.mkdir(parents=True)
     wf = wf_dir / "checks.yml"
-    canonical = render("checks.yml", pre_commit_system_deps="libkrb5-dev")
+    canonical = render("checks.yml", system_deps="libkrb5-dev")
     wf.write_text(
         canonical.replace("    timeout-minutes: 10", "    timeout-minutes: 5")
     )
