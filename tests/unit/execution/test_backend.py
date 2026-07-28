@@ -190,6 +190,26 @@ class TestTemporalExecutorBackendExecute:
         assert inp._correlation_id == "ctx-corr"
 
     @pytest.mark.asyncio
+    async def test_execute_frozen_input_still_gets_memo(self) -> None:
+        # An input that rejects attribute assignment (dict/frozen shapes)
+        # must still be correlated via the memo — the reliable channel. The
+        # attribute stamps are best-effort mirrors and must not abort the
+        # start when they fail.
+        class _FrozenInput:
+            __slots__ = ()
+
+        client = mock.MagicMock()
+        client.execute_workflow = mock.AsyncMock(return_value=None)
+        backend = TemporalExecutorBackend(client=client, task_queue="q")
+        app_cls = _make_app_cls()
+        ctx = mock.MagicMock(app_name="my-app", correlation_id="ctx-corr")
+        await backend.execute(
+            app_cls, _FrozenInput(), context=ctx, retry_policy=SdkRetryPolicy()
+        )
+        kwargs = client.execute_workflow.await_args.kwargs
+        assert kwargs["memo"] == {"correlation_id": "ctx-corr"}
+
+    @pytest.mark.asyncio
     async def test_execute_respects_caller_supplied_correlation(self) -> None:
         # A caller-supplied input.correlation_id wins over the context's.
         client = mock.MagicMock()

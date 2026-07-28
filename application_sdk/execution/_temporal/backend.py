@@ -131,10 +131,11 @@ def _stamp_start_correlation(input_data: Any, context: "AppContext") -> str:
 
     A caller-supplied ``input_data.correlation_id`` wins; otherwise the
     AppContext's correlation_id (which AppContext defaults deterministically)
-    is used. The value is stamped onto both the public contract field (read
-    by the LogInterceptor's args-based resolution) and the legacy private
-    attribute, and returned so the caller can put it in the Temporal start
-    **memo** — the preferred channel. Before this, ``execute``/``start`` set
+    is used. The returned value goes into the Temporal start **memo** — the
+    reliable channel the LogInterceptor reads first. The attribute stamps
+    (public contract field + legacy private attr) are best-effort mirrors:
+    an input that rejects attribute assignment (dict/frozen shapes) still
+    gets correlated via the memo. Before this, ``execute``/``start`` set
     only the private attribute and passed no memo, so the interceptor fell
     through to its fallback and the run's logs were stamped with an identity
     the run page never queries.
@@ -144,10 +145,10 @@ def _stamp_start_correlation(input_data: Any, context: "AppContext") -> str:
     )
     try:
         input_data.correlation_id = correlation_id
+        input_data._correlation_id = correlation_id
     # conformance: ignore[E004] best-effort stamp; dict/frozen inputs still get the memo channel
-    except Exception:  # noqa: S110 — input shapes without a settable field rely on memo
+    except Exception:  # noqa: S110 — attribute stamps are best-effort; the memo is the reliable channel
         pass
-    input_data._correlation_id = correlation_id
     return correlation_id
 
 

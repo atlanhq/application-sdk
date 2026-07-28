@@ -798,6 +798,21 @@ class TestLogWorkflowInboundInterceptor:
         # Empty run_id → falls to the uuid4 last resort (36 chars, hyphens).
         assert len(interceptor._correlation_id) == 36
 
+    def test_priority_4_uuid_last_resort_when_info_raises(self, interceptor):
+        # The third fallback branch: workflow.info() itself raising inside
+        # _resolve_correlation_id must land on the uuid4 last resort, not
+        # propagate — logging identity must never break workflow execution.
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.memo.return_value = {}
+            mock_wf.info.side_effect = RuntimeError("info unavailable")
+            cid = interceptor._resolve_correlation_id(
+                MockExecuteWorkflowInput(headers={}, args=[])
+            )
+
+        assert len(cid) == 36
+
     async def test_reads_correlation_id_from_header(self, interceptor):
         payload = _encode_header("header-corr-id")
         headers = {"x-correlation-id": payload}
