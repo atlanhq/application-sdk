@@ -701,7 +701,42 @@ class App(ABC):
     app's checks are trusted to gate real runs. The ``ATLAN_PREFLIGHT_GATE_MODE``
     env var overrides this at deploy time; any set value other than ``"hard"``
     resolves to soft. An empty or unset value is not an override — resolution
-    falls through to this declared attribute. See the adopt-preflight-gate skill."""
+    falls through to this declared attribute. See the adopt-preflight-gate skill.
+
+    Note this posture applies to *every* outcome the gate can attribute to the
+    source, not only a ``NOT_READY`` verdict: a probe that overruns
+    :attr:`preflight_gate_timeout_seconds`, a handler crash, and a missing
+    credential all block in hard mode. Failures of the gate's own plumbing (secret
+    store outage, rate limit, worker unavailable) always fail open, in both
+    postures — a platform blip must not fail a healthy run."""
+
+    preflight_gate_timeout_seconds: ClassVar[int] = 150
+    """Seconds the preflight handler gets to run all its checks.
+
+    Clamped to 5-300s. Note this bounds the *whole* handler call, not each check —
+    one slow probe can consume the budget and leave the rest unrun. The SDK
+    *enforces* this — the gate cancels ``preflight_check`` when it elapses — and
+    passes what remains after credential resolution as
+    ``PreflightInput.timeout_seconds``, so a handler that sizes its probes to that
+    value is sizing to the real deadline.
+
+    A deadline, not a reservation: a handler returning in 3s holds its slot for 3s
+    whatever this says. The 150s default is deliberately generous while the fleet's
+    real check durations are being measured; expect it to come down once the
+    distribution is known. Raise it only for a source demonstrably slower than
+    that, and size checks to finish inside it with headroom. In hard mode an overrun blocks
+    the run, so this value and the handler's actual cost must agree. Probes must
+    also stay awaitable: cancellation lands at an ``await``, so blocking
+    synchronous I/O on the event loop cannot be interrupted."""
+
+    preflight_gate_max_attempts: ClassVar[int] = 2
+    """Attempts the gate activity gets before its no-verdict becomes a verdict.
+
+    Clamped to 1-3. A retry rescues a *transient* slow probe (cold pool, cluster
+    resuming); it cannot rescue a systematically slow one, it just doubles
+    time-to-verdict and the worker time held. So an app declaring a large
+    :attr:`preflight_gate_timeout_seconds` usually wants ``1`` here — at the 300s
+    ceiling, two attempts reserve a ~10 minute ``schedule_to_close``."""
 
     # Marker to track if class has been registered
     _app_registered: ClassVar[bool] = False
@@ -1775,59 +1810,94 @@ def _collect_interaction_relays(
 
 
 async def _run_preflight_gate(
-    input_data: Input, app_name: str, entrypoint: str
+    input_data: Input,
+    app_name: str,
+    entrypoint: str,
+    budget_seconds: int | None = None,
+    max_attempts: int | None = None,
 ) -> None:
     """Run the SDK-owned pre-extraction preflight gate (HYP-1883).
 
-    Dispatches the app's preflight handler as a mandatory first activity. The
-    activity raises ``PreflightFailed`` when the verdict is ``NOT_READY``; this
-    re-raises only that deliberate block and aborts the run. Every other activity
-    failure (timeout, secret-store/transport error, handler crash) fails open —
-    logged loudly, run proceeds — because the gate is an injected guardrail the
-    app never opted into, so its own plumbing must not kill a run.
+    Dispatches the app's preflight handler as a mandatory first activity and
+    re-raises only the deliberate ``PreflightFailed`` block, aborting the run.
+
+    Everything the gate can attribute to the *source* — a probe overrunning the
+    budget, a handler crash, a missing credential — is classified and enforced
+    **inside the activity**, which is the only frame that holds the gate mode (see
+    ``build_preflight_gate_activity``). That is deliberate: the mode is baked into
+    the activity closure at worker build, and the activity bounds the handler
+    itself so it survives its own timeout and can still consult that mode. Were
+    the decision made here instead, Temporal would already have killed the
+    activity and the classification would be gone.
+
+    What reaches this fail-open is therefore only the gate's own plumbing
+    breaking — secret-store outage, rate limit, worker unavailable,
+    ``schedule_to_close``, a lost completion. Those fail open in **both** modes by
+    design (a platform blip must not fail a healthy run), so this path does not
+    need the mode and stays mode-blind. It is logged loudly and emitted as
+    ``outcome="no_verdict"`` with ``gate_broken``.
 
     Guards: ``workflow.patched("preflight-gate")`` keeps pre-gate runs replaying
     deterministically; ``isinstance(input_data, CredentialResolvable)`` skips
-    source-less apps. Credential resolution happens inside the activity — the
-    deterministic workflow forwards only secret-free references. Dispatch is to
-    the one app-level handler, with ``entrypoint`` threaded through for internal
-    branching.
+    source-less apps. Both emit a ``skipped`` row so a gate that never ran is
+    visible rather than silent. Credential resolution happens inside the activity
+    — the deterministic workflow forwards only secret-free references.
 
-    The ``no_verdict`` outcome event emitted here (fail-open path) omits
-    ``gate_mode``, unlike the ``blocked``/``would_block``/``proceeded`` events
-    the activity emits: the workflow layer never sees ``enforce`` (it is baked
-    into the activity closure at worker build), so the mode is not available to
-    stamp on this row.
+    ``budget_seconds`` comes from the app's declared
+    ``App.preflight_gate_timeout_seconds`` (a ``ClassVar``, so reading it here is
+    replay-deterministic) and sizes both activity timeouts. ``None`` means "use
+    the SDK default" — ``gate_timeouts`` owns the clamp, so this never needs to
+    know the default value.
     """
-    if not workflow.patched("preflight-gate"):
-        return
-
     with workflow.unsafe.imports_passed_through():
         from application_sdk.credentials.ref import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             CredentialResolvable,
         )
         from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
-            GATE_RETRY,
-            GATE_SCHEDULE_TO_CLOSE,
-            GATE_START_TO_CLOSE,
+            CHECK_MATRIX_KEY,
+            CLASSIFICATION_GATE_BROKEN,
+            EMPTY_CHECK_MATRIX,
             PREFLIGHT_OUTCOME_EVENT,
             PreflightGateInput,
+            gate_retry_policy,
+            gate_timeouts,
             is_preflight_block,
             preflight_gate_activity_name,
         )
 
-    if not isinstance(input_data, CredentialResolvable):
+    entry = entrypoint or "<implicit>"
+
+    def _emit_skipped(reason: str) -> None:
+        _safe_log(
+            "info",
+            PREFLIGHT_OUTCOME_EVENT,
+            app_name=app_name,
+            entrypoint=entry,
+            outcome="skipped",
+            reason=reason,
+            **{CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX},
+        )
+
+    if not workflow.patched("preflight-gate"):
+        _emit_skipped("pre_gate_replay")
         return
 
-    entry = entrypoint or "<implicit>"
+    if not isinstance(input_data, CredentialResolvable):
+        _emit_skipped("input_not_credential_resolvable")
+        return
+
     try:
+        # Inside the guard: an exception escaping here would become a workflow
+        # *task* failure, which Temporal retries indefinitely (see
+        # _validate_workflow_input). Nothing on the gate's own path may do that.
+        start_to_close, schedule_to_close = gate_timeouts(budget_seconds, max_attempts)
         gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
         await workflow.execute_activity(
             preflight_gate_activity_name(app_name),
             gate_input,
-            schedule_to_close_timeout=GATE_SCHEDULE_TO_CLOSE,
-            start_to_close_timeout=GATE_START_TO_CLOSE,
-            retry_policy=GATE_RETRY,
+            schedule_to_close_timeout=schedule_to_close,
+            start_to_close_timeout=start_to_close,
+            retry_policy=gate_retry_policy(max_attempts),
         )
     except Exception as e:
         # The activity emits the blocked outcome event before it raises; the
@@ -1851,6 +1921,8 @@ async def _run_preflight_gate(
             entrypoint=entry,
             outcome="no_verdict",
             reason=type(e).__name__,
+            gate_classification=CLASSIFICATION_GATE_BROKEN,
+            **{CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX},
         )
         return
 
@@ -2074,7 +2146,13 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             _safe_log("warning", "Failed to log input summary", exc_info=True)
 
         try:
-            await _run_preflight_gate(input_data, app_name, entrypoint_name)
+            await _run_preflight_gate(
+                input_data,
+                app_name,
+                entrypoint_name,
+                getattr(app_cls, "preflight_gate_timeout_seconds", None),
+                getattr(app_cls, "preflight_gate_max_attempts", None),
+            )
             entry_method = getattr(app_instance, entry_method_name)
             result = await entry_method(input_data)
             return cast("Output", result)

@@ -16,7 +16,7 @@ Suppress a finding on the violating line or the line directly above it:
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
 | [L001](#l001) | `FStringInLogMessage` | `block` | `both` | `log-format` | yes | 0.4.0 |
-| [L002](#l002) | `NonCanonicalLoggerFactory` | `warn` | `both` | `log-format` | yes | 0.4.0 |
+| [L002](#l002) | `NonCanonicalLoggerFactory` | `block` | `both` | `log-format` | yes | 0.4.0 |
 | [L003](#l003) | `ExtraKwargsWrongFramework` | `warn` | `both` | `log-format` | — | 0.4.0 |
 | [L004](#l004) | `ExceptBlockMissingExcInfoLog` | `block` | `both` | `missing-traceback` | yes | 0.4.0 |
 | [L005](#l005) | `PrintInProductionCode` | `warn` | `both` | `log-format` | yes | 0.4.0 |
@@ -65,7 +65,7 @@ string, do not move values to kwargs.
 
 ## L002 — `NonCanonicalLoggerFactory` {#l002}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Non-canonical logger factory — use `from application_sdk.observability.logger_adaptor import get_logger`
 
@@ -74,7 +74,9 @@ sanctioned way to obtain a logger. It injects Temporal context (workflow_id, run
 activity_type) as top-level indexed columns in ClickHouse/Grafana and routes records
 through OTel. Direct use of logging.getLogger(), structlog.get_logger(), or loguru's
 logger bypasses all of this — correlation IDs are lost and records may not reach the
-observability store.
+observability store. Promoted from warn to block (CNCT-108, parent CNCT-93): rolled-own
+loggers strip correlation_id/workflow context/source provenance, making those lines
+unfindable on the tenant UI.
 
 Every module must obtain its logger via the SDK adapter:
 
@@ -92,7 +94,11 @@ log records through OTel so they appear in the observability   store; * enforces
 project's five-level model   (DEBUG/INFO/WARNING/ERROR/CRITICAL).
 
 Adapter definition files are exempt — the file that defines `AtlanLoggerAdapter` or
-`get_logger` itself is skipped.
+`get_logger` itself is skipped.  Dev harnesses are exempt too: files under `scripts/`
+and `run_dev*.py` never run inside a workflow, so the provenance argument does not apply
+(test files are already excluded by discovery).  Block-tier since CNCT-108 (parent
+CNCT-93): a rolled-own logger loses correlation IDs and source provenance, making its
+records unfindable on the tenant UI.
 
 ---
 

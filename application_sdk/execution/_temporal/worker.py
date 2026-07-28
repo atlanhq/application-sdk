@@ -376,7 +376,10 @@ def create_worker(
 
     from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — lazy: handler-activity machinery loaded at worker assembly
         build_preflight_gate_activity,
+        log_gate_posture,
         preflight_gate_activity_name,
+        resolve_gate_attempts,
+        resolve_gate_budget_seconds,
     )
     from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
 
@@ -429,16 +432,37 @@ def create_worker(
     name_to_app_cls = {m.name: m.app_cls for m in sdr_registered_apps}
     gate_activities = []
     for name in gate_app_names:
-        enforce = _resolve_gate_enforcement(name_to_app_cls.get(name))
+        app_cls = name_to_app_cls.get(name)
+        enforce = _resolve_gate_enforcement(app_cls)
+        budget_seconds = resolve_gate_budget_seconds(
+            getattr(app_cls, "preflight_gate_timeout_seconds", None)
+        )
+        attempts = resolve_gate_attempts(
+            getattr(app_cls, "preflight_gate_max_attempts", None)
+        )
+        # Every app, soft included: this row is the denominator for ranking
+        # hard-mode apps that never reach a verdict (such an app emits no outcome
+        # row carrying gate_mode, so it is invisible from outcomes alone).
+        log_gate_posture(name, enforce=enforce, budget_seconds=budget_seconds)
         if enforce:
             logger.info(
-                "Preflight gate is HARD for app %r — a NOT_READY verdict WILL "
-                "abort the run before extraction. This is the per-app opt-in; "
-                "the default posture is soft (report only, never block).",
+                "Preflight gate is HARD for app %r — the run WILL abort before "
+                "extraction on a NOT_READY verdict, and on any outcome the gate "
+                "attributes to the source (probe overrunning the %ds budget, "
+                "handler crash, missing credential). Gate plumbing failures still "
+                "fail open. This is the per-app opt-in; the default posture is "
+                "soft (report only, never block).",
                 name,
+                budget_seconds,
             )
         gate_activities.append(
-            build_preflight_gate_activity(gate_handler, name, enforce=enforce)
+            build_preflight_gate_activity(
+                gate_handler,
+                name,
+                enforce=enforce,
+                budget_seconds=budget_seconds,
+                attempts=attempts,
+            )
         )
     task_activities = [*task_activities, *gate_activities]
 
