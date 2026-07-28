@@ -897,6 +897,73 @@ def test_l002_suppression_directive(tmp_path: Path) -> None:
     assert all(f.suppressed for f in l002)
 
 
+def test_l002_is_block_tier() -> None:
+    """L002 is promoted to block tier (CNCT-108) — pin against regression."""
+    rule = get_rule("L002")
+    assert rule is not None
+    assert rule.tier == EnforcementTier.BLOCK
+
+
+def test_l002_block_disposition_failing(tmp_path: Path) -> None:
+    """L002 is BLOCK-tier — active findings must map to FAILING disposition."""
+    from conformance.suite.schema.findings import findings_to_report
+
+    src = "import logging\nlogger = logging.getLogger(__name__)\n"
+    findings = [f for f in _scan_files(tmp_path, {"prod.py": src}) if not f.suppressed]
+    l002 = [f for f in findings if f.rule_id == "L002"]
+    assert l002
+
+    report = findings_to_report(l002, tool_version="0.0.0")
+    results = report.runs[0].results or []
+    l002_results = [r for r in results if r.rule_id == "L002"]
+    assert l002_results
+    for result in l002_results:
+        disp = derive_disposition(result)
+        assert disp == Disposition.FAILING
+
+
+def test_l002_silent_scripts_dir(tmp_path: Path) -> None:
+    """Files under scripts/ are dev harnesses — exempt from L002."""
+    src = "import logging\nlogger = logging.getLogger(__name__)\n"
+    findings = _scan_files(tmp_path, {"scripts/seed_store.py": src})
+    assert not any(f.rule_id == "L002" for f in findings)
+
+
+def test_l002_silent_run_dev_harness(tmp_path: Path) -> None:
+    """run_dev*.py files are dev harnesses — exempt from L002."""
+    src = "from loguru import logger\n"
+    findings = _scan_files(tmp_path, {"run_dev_combined.py": src})
+    assert not any(f.rule_id == "L002" for f in findings)
+
+
+def test_l002_silent_nested_scripts_dir(tmp_path: Path) -> None:
+    """A ``scripts/`` segment at any path depth is exempt, not just top-level."""
+    src = "import logging\nlogger = logging.getLogger(__name__)\n"
+    findings = _scan_files(tmp_path, {"app/scripts/db_helper.py": src})
+    assert not any(f.rule_id == "L002" for f in findings)
+
+
+def test_l002_silent_nested_run_dev_harness(tmp_path: Path) -> None:
+    """``run_dev*.py`` is matched by basename at any depth (e.g. ``app/run_dev.py``)."""
+    src = "from loguru import logger\n"
+    findings = _scan_files(tmp_path, {"app/run_dev.py": src})
+    assert not any(f.rule_id == "L002" for f in findings)
+
+
+def test_l002_harness_exemption_does_not_leak_to_prod(tmp_path: Path) -> None:
+    """The dev-harness exemption is per-file: production siblings still fail."""
+    src = "import logging\nlogger = logging.getLogger(__name__)\n"
+    files = {
+        "scripts/tool.py": src,
+        "run_dev.py": src,
+        "app/auth.py": src,
+    }
+    findings = _scan_files(tmp_path, files)
+    l002 = [f for f in findings if f.rule_id == "L002"]
+    assert len(l002) == 1
+    assert "app/auth.py" in l002[0].file
+
+
 # ---------------------------------------------------------------------------
 # scan_path round-trip
 # ---------------------------------------------------------------------------

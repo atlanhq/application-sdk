@@ -20,6 +20,7 @@ from urllib.parse import quote
 import httpx
 import orjson
 from httpx_retries import Retry, RetryTransport
+from opentelemetry import metrics as _otel_metrics
 from pydantic import BaseModel
 
 from application_sdk.constants import (
@@ -46,6 +47,38 @@ _DEFAULT_TIMEOUT = 30.0
 # retries across ~15s rather than giving up in ~1.5s (the old total=3,
 # backoff=0.5). Retries only fire on failures; healthy calls are unaffected.
 _DEFAULT_RETRY_TOTAL = 5
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
+_METER_NAME = "application_sdk.infrastructure.dapr"
+
+# Lazily created singleton — meters/instruments are cheap to look up but we
+# only want one per process (mirrors the pattern in
+# ``application_sdk.execution._temporal.interceptors.metrics``).
+_INSTRUMENTS: dict[str, Any] = {}
+
+
+def _meter():
+    return _otel_metrics.get_meter(_METER_NAME)
+
+
+def _sidecar_wait_duration():
+    if "sidecar_wait_dur" not in _INSTRUMENTS:
+        _INSTRUMENTS["sidecar_wait_dur"] = _meter().create_histogram(
+            "dapr.sidecar.wait.duration",
+            unit="s",
+            description=(
+                "Wall-clock time spent in wait_for_dapr_sidecar() at startup, "
+                "partitioned by outcome (ready / reachable_not_ready / "
+                "timed_out) — a leading indicator for boot-time regressions "
+                "that would otherwise only surface later as liveness-probe "
+                "restart loops."
+            ),
+        )
+    return _INSTRUMENTS["sidecar_wait_dur"]
+
 
 # Dapr HTTP API v1.0 building blocks
 _API_PREFIX = "/v1.0"
@@ -146,6 +179,11 @@ async def wait_for_dapr_sidecar(
     Skipped entirely in local dev — /v1.0/healthz returns 500 because
     AWS-backed components can't initialize without real credentials.
     All components have ignoreErrors: true so the sidecar works fine.
+
+    Records ``dapr.sidecar.wait.duration`` (histogram, seconds, label
+    ``outcome`` in ``{ready, reachable_not_ready, timed_out}``) so a slow or
+    misconfigured sidecar shows up as a boot-time trend instead of only
+    surfacing later as a liveness-probe restart loop.
     """
     global _dapr_sidecar_confirmed_ready
 
@@ -155,47 +193,57 @@ async def wait_for_dapr_sidecar(
 
     url = f"{_dapr_base_url()}{_HEALTHZ_PATH}"
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
+    start = loop.time()
+    deadline = start + timeout
     last_exc: Exception | None = None
-    async with httpx.AsyncClient(timeout=2.0) as client:
-        while True:
-            try:
-                r = await client.get(url)
-            # conformance: ignore[E004] sidecar health probe; connection errors are expected while daprd is still cold-booting and are logged at debug
-            except Exception as exc:
-                last_exc = exc
-                logger.debug("Dapr sidecar poll failed", exc_info=True)
-            else:
-                if r.status_code == 204:
-                    _dapr_sidecar_confirmed_ready = True
+    outcome = "timed_out"
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            while True:
+                try:
+                    r = await client.get(url)
+                # conformance: ignore[E004] sidecar health probe; connection errors are expected while daprd is still cold-booting and are logged at debug
+                except Exception as exc:
+                    last_exc = exc
+                    logger.debug("Dapr sidecar poll failed", exc_info=True)
+                else:
+                    if r.status_code == 204:
+                        _dapr_sidecar_confirmed_ready = True
+                        outcome = "ready"
+                        return
+                    # Reachable but not fully initialized: this is the load-bearing
+                    # "proceed early" decision (the only path that fires whenever
+                    # healthz never reaches 204, e.g. SDR / optional non-init
+                    # components). INFO, not DEBUG, so it survives the prod INFO
+                    # floor and leaves a breadcrumb; not WARNING, since this is an
+                    # expected steady state and per-call cold-start retries cover
+                    # component readiness.
+                    # conformance: ignore[L006] not a per-iteration log — this INFO fires at most once and immediately returns; it is the single "proceeded early" decision, not loop-body volume
+                    logger.info(
+                        "Dapr sidecar HTTP API reachable (healthz=%d) but not fully "
+                        "initialized; proceeding without the full-component wait — "
+                        "per-call cold-start retries cover component readiness",
+                        r.status_code,
+                    )
+                    outcome = "reachable_not_ready"
                     return
-                # Reachable but not fully initialized: this is the load-bearing
-                # "proceed early" decision (the only path that fires whenever
-                # healthz never reaches 204, e.g. SDR / optional non-init
-                # components). INFO, not DEBUG, so it survives the prod INFO
-                # floor and leaves a breadcrumb; not WARNING, since this is an
-                # expected steady state and per-call cold-start retries cover
-                # component readiness.
-                # conformance: ignore[L006] not a per-iteration log — this INFO fires at most once and immediately returns; it is the single "proceeded early" decision, not loop-body volume
-                logger.info(
-                    "Dapr sidecar HTTP API reachable (healthz=%d) but not fully "
-                    "initialized; proceeding without the full-component wait — "
-                    "per-call cold-start retries cover component readiness",
-                    r.status_code,
-                )
-                return
-            if loop.time() >= deadline:
-                # Only the connection-error path can reach here (any HTTP
-                # response returns above), so surface the last error — a
-                # genuinely unreachable/misconfigured sidecar (wrong port, DNS,
-                # perms) should be diagnosable, not just "timed out".
-                logger.warning(
-                    "Dapr sidecar not reachable after %.0fs — proceeding anyway",
-                    timeout,
-                    exc_info=last_exc,
-                )
-                return
-            await asyncio.sleep(interval)
+                if loop.time() >= deadline:
+                    # Only the connection-error path can reach here (any HTTP
+                    # response returns above), so surface the last error — a
+                    # genuinely unreachable/misconfigured sidecar (wrong port, DNS,
+                    # perms) should be diagnosable, not just "timed out".
+                    logger.warning(
+                        "Dapr sidecar not reachable after %.0fs — proceeding anyway",
+                        timeout,
+                        exc_info=last_exc,
+                    )
+                    return
+                await asyncio.sleep(interval)
+    finally:
+        try:
+            _sidecar_wait_duration().record(loop.time() - start, {"outcome": outcome})
+        except Exception:  # noqa: S110 — best-effort observability; never block startup on metric emission
+            pass
 
 
 #: How long an idempotent Dapr-backed call may retry a transient
