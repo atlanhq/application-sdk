@@ -57,9 +57,24 @@ logger = get_logger(__name__)
 # SDR interactive preflight output.  "deployment" is the customer's own store;
 # "upstream" is the Atlan upload proxy.
 _OBJECT_STORE_CHECK_NAMES: dict[str, str] = {
-    "deployment": "Object store access (deployment)",
-    "upstream": "Object store access (Atlan upload)",
+    "deployment": "Object store (SDR deployment)",
+    "upstream": "Metadata / egress connectivity (SDR → Atlan)",
 }
+
+# User-facing success copy per object-store role. Keeps the interactive
+# preflight rows readable; the technical ObjectStoreCheckResult.message is still
+# used for the *failure* case so the operator sees the real diagnostic + hint.
+_OBJECT_STORE_SUCCESS_MESSAGES: dict[str, str] = {
+    "deployment": "Object Store configuration for SDR deployment successful",
+    "upstream": (
+        "Metadata/Egress connectivity from SDR to Atlan SaaS tenant successful"
+    ),
+}
+
+# Leading row asserting the SDR deployment itself is reachable: if this activity
+# is executing, a worker on the customer's task queue picked it up.
+_SDR_REACHABLE_CHECK_NAME = "SDR deployment"
+_SDR_REACHABLE_MESSAGE = "SDR Deployment is reachable."
 
 
 SDR_TEST_AUTH_ACTIVITY = "sdr:test_auth"
@@ -305,14 +320,30 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
         if not results:
             return
 
+        # SDR mode confirmed (a worker is executing this activity), so the
+        # deployment is reachable — surface that as the first check row.
+        output.checks.insert(
+            0,
+            PreflightCheck(
+                name=_SDR_REACHABLE_CHECK_NAME,
+                passed=True,
+                message=_SDR_REACHABLE_MESSAGE,
+            ),
+        )
+
         any_failed = False
         for result in results:
             name = _OBJECT_STORE_CHECK_NAMES.get(
                 result.label, f"Object store access ({result.label})"
             )
             error: FailureDetails | None = None
-            if not result.passed:
+            if result.passed:
+                message = _OBJECT_STORE_SUCCESS_MESSAGES.get(
+                    result.label, result.message
+                )
+            else:
                 any_failed = True
+                message = result.message  # technical diagnostic on failure
                 error = FailureDetails(
                     category=FailureCategory.DEPENDENCY_UNAVAILABLE,
                     code="OBJECT_STORE_ACCESS",
@@ -324,7 +355,7 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
                 PreflightCheck(
                     name=name,
                     passed=result.passed,
-                    message=result.message,
+                    message=message,
                     error=error,
                 )
             )

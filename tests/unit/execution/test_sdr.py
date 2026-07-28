@@ -582,8 +582,15 @@ class TestSdrPreflightObjectStoreChecks:
         assert result.status == PreflightStatus.READY
         names = [c.name for c in result.checks]
         assert names == [
-            "Object store access (deployment)",
-            "Object store access (Atlan upload)",
+            "SDR deployment",
+            "Object store (SDR deployment)",
+            "Metadata / egress connectivity (SDR → Atlan)",
+        ]
+        messages = [c.message for c in result.checks]
+        assert messages == [
+            "SDR Deployment is reachable.",
+            "Object Store configuration for SDR deployment successful",
+            "Metadata/Egress connectivity from SDR to Atlan SaaS tenant successful",
         ]
         assert all(c.passed for c in result.checks)
         # The probe's elapsed time is folded into the output's duration
@@ -617,8 +624,11 @@ class TestSdrPreflightObjectStoreChecks:
             result = await preflight(PreflightInput(credentials=[]))
 
         assert result.status == PreflightStatus.NOT_READY
-        assert len(result.checks) == 1
-        check = result.checks[0]
+        # Row 0 is the "SDR deployment reachable" marker; row 1 is the failed probe.
+        assert len(result.checks) == 2
+        assert result.checks[0].passed is True
+        assert result.checks[0].message == "SDR Deployment is reachable."
+        check = result.checks[1]
         assert check.passed is False
         assert check.error is not None
         assert check.error.category == FailureCategory.DEPENDENCY_UNAVAILABLE
@@ -658,7 +668,8 @@ class TestSdrPreflightObjectStoreChecks:
 
         # PARTIAL is preserved — the downgrade only fires from READY.
         assert result.status == PreflightStatus.PARTIAL
-        assert len(result.checks) == 1
+        # Reachable marker + the failed probe row.
+        assert len(result.checks) == 2
 
     async def test_augmentation_never_breaks_handler_result(self) -> None:
         """An unexpected error in the object-store check is a no-op."""
