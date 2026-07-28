@@ -91,27 +91,43 @@ worker startup for any registered entrypoint whose input is not gate-eligible. T
 is to put the input on `ExtractionInput` (via the toolkit) rather than hand-rolling the
 lift.
 
-**(ii) Block by returning `NOT_READY`, never by raising.** The handler blocks a run by
-**returning** `PreflightOutput(status=NOT_READY, ...)`. Attach a typed `error` to each
-failed check — `PreflightCheck(passed=False, error=AuthError(message=..., suggested_action=...,
-cause=exc))` — and the gate carries the primary failure's `FailureDetails` on the abort.
-A handler that **raises** does *not* reliably block: the exception escapes to the gate,
-which fails open and proceeds (see below). So `preflight_check` must catch its own probe
-exceptions and express the block through the returned status.
+**(ii) Express the verdict by returning `NOT_READY`, not by raising.** The handler
+reports readiness by **returning** `PreflightOutput(status=NOT_READY, ...)`. Attach a typed
+`error` to each failed check — `PreflightCheck(passed=False, error=AuthError(message=...,
+suggested_action=..., cause=exc))` — and the gate carries the primary failure's
+`FailureDetails` on the abort. Catch probe exceptions and turn them into checks; the
+returned status is what both surfaces render.
+
+Raising is not a no-op, though, and the error's type decides what happens — see below.
 
 ### Fail-open semantics
 
-Gate failures (infra errors, timeouts, handler crashes, activity dispatch errors) are
-**non-blocking**: the workflow logs at `error` and proceeds. Only a deliberate
-`NOT_READY` verdict — surfaced as the activity raising `PreflightFailed` — aborts the
-run. Every gated run emits a structured `Preflight gate outcome` event
-(`outcome ∈ {proceeded, blocked, no_verdict}`).
+Enforcement is scoped by **who caused the failure**, not by whether a verdict was reached.
+
+- **Source-attributable** (`gate_classification="source_unverifiable"`) — a `NOT_READY`
+  verdict, a probe overrunning `App.preflight_gate_timeout_seconds`, a handler crash, or a
+  provably absent credential. Subject to `preflight_gate_mode`: hard aborts the run, soft
+  reports `would_block` and proceeds.
+- **Gate plumbing** (`gate_classification="gate_broken"`) — a typed
+  `DependencyUnavailableError` / `RateLimitedError` / `ResourceExhaustedError`, a
+  secret-store outage, a collapsed not-found wrapping a transport error, an unavailable
+  worker, or `schedule_to_close`. **Always** fails open, in both postures: a platform blip
+  must never fail a healthy run.
+
+So a handler signals "ask me later" by raising a typed plumbing error, and never by
+returning `NOT_READY` for a transient — that would make a hard gate fail closed on a blip.
+
+Every gated run emits a structured `Preflight gate outcome` event
+(`outcome ∈ {proceeded, blocked, would_block, no_verdict, skipped}`), plus a
+`Preflight gate posture` event per app at worker boot.
 
 ### Logging contract
 
-- **Gate blocks** (`PreflightFailed` `ApplicationError`) — `warning`, no stack trace.
-  The block is an expected typed outcome, not a crash.
-- **Gate infra failures** (exception during dispatch) — `error` with `exc_info=True`.
+- **Verdict blocks** (`PreflightFailed` from a handler `NOT_READY`) — `warning`, no stack
+  trace. The block is an expected typed outcome, not a crash.
+- **No-verdict blocks** (budget overrun, handler crash) — `error` with `exc_info=True`.
+  There is a real exception behind these and it is the only diagnostic.
+- **Gate plumbing failures** (exception during dispatch) — `error` with `exc_info=True`.
 
 ## Contract Evolution
 
