@@ -1191,7 +1191,14 @@ async def _dispatch_sdr_workflow(
     try:
         return await asyncio.wait_for(handle.result(), timeout=pickup.total_seconds())
     except asyncio.TimeoutError:
-        pass
+        # Expected control flow, not an error: the pickup window elapsed without a
+        # result. Fall through to the started-check below, which distinguishes a
+        # worker running the job from an unreachable deployment and logs each.
+        logger.debug(
+            "SDR workflow %s pickup wait (%.0fs) elapsed; checking worker pickup",
+            workflow_id,
+            pickup.total_seconds(),
+        )
     except WorkflowFailureError as exc:
         _handle_workflow_failure(exc)
 
