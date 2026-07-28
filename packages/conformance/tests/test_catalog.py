@@ -202,6 +202,13 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # T017: e2e agent_spec() override must inherit the per-leg deployment queue —
     # only connector apps subclass the e2e harness and (may) override agent_spec;
     # the SDK ships the env-derived default, it doesn't hard-code a connector queue.
+    # T020-T022: full-DAG e2e CI wiring — only connector apps call
+    # tests-reusable.yaml / the sdr-e2e action, ship tests/e2e/ suites the reusable
+    # discovers, and declare self_deployed_runtime in atlan.yaml. The SDK *is* the
+    # publisher of the reusable and the action, so none of the three grade it.
+    # T023/T024: e2e harness scaffold + run mode — only connector apps have a
+    # contract/app.pkl the toolkit generates _e2e_base/_e2e_credential/
+    # _e2e_substitutions from, and only they subclass the harness the SDK ships.
     # B007: daft-only DataFrame APIs on SDK reader frames — only consumer apps
     # call daft surfaces on frames the SDK hands them; the SDK's own transformer
     # code is the pyarrow/pandas bridge itself (fleet SDR sweep).
@@ -276,6 +283,11 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "T016",
         "T017",
         "T018",
+        "T020",
+        "T021",
+        "T022",
+        "T023",
+        "T024",
         "O002",
         "O003",
         "O004",
@@ -503,11 +515,14 @@ def test_catalog_t_series_present() -> None:
     marking), T002/T003 (SDR test-quality), T004 (dev-entrypoint), T005-T009
     (assertion/collection quality), T010-T013 (tier structure), T014/T015
     (coverage-config), T016/T017 (e2e-CI queue isolation), T018
-    (integration tier deselected by addopts), and T019 (asyncio test-loop scope
-    unset relative to a broadened fixture loop scope)."""
+    (integration tier deselected by addopts), T019 (asyncio test-loop scope
+    unset relative to a broadened fixture loop scope), T020-T022 (full-DAG e2e
+    must run through the reusable Tests workflow: no bespoke sdr-e2e workflow,
+    suites reachable in CI, two-store posture on SDR apps), and T023/T024 (e2e
+    harness scaffold generated from contract/app.pkl; RunMode declared)."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {f"T{n:03d}" for n in range(1, 20)}
+    expected = {f"T{n:03d}" for n in range(1, 25)}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
     extra = t_ids - expected

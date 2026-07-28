@@ -9,8 +9,11 @@ description: >
   placement (T010-T013), coverage-config integrity (T014-T015), e2e CI
   queue isolation (T016 worker-side overlay + T017 harness-side agent_spec),
   the directory-scoped integration tier being deselected by pyproject addopts
-  (T018), and a broadened pytest-asyncio fixture loop scope with no matching test
-  loop scope (T019).
+  (T018), a broadened pytest-asyncio fixture loop scope with no matching test
+  loop scope (T019), full-DAG e2e CI wiring (T020 bespoke sdr-e2e workflow,
+  T021 suites nothing runs, T022 missing two-store posture on an SDR app), and
+  the e2e harness scaffold being hand-written rather than generated from
+  contract/app.pkl (T023) or running without a declared RunMode (T024).
   Every rule in this series classifies as "judgment" — each fix requires reading
   the test's I/O intent, the app's manifest/contract, or the app's App subclass
   before a fix can be proposed with confidence.  T014/T015 are the most
@@ -23,6 +26,8 @@ description: >
   T019 both edit `pyproject.toml` (within write-scope), but whether an
   integration-tier deselect is legitimate (T018), and which test-loop scope a
   suite should adopt (T019), are judgment calls, so both route to residue too.
+  T020-T022 edit files under `.github/` and T023/T024 edit files under `tests/`
+  — both outside write-scope — so the whole e2e-wiring block routes to residue.
 ---
 
 ### Maintains
@@ -556,6 +561,197 @@ to residue):
   `classification` is always `"judgment"` (the correct test-loop scope depends on
   how the suite's async fixtures and tests interact, which the finding alone
   doesn't say; routed to residue for a human to confirm).
+
+- **T020 BespokeFullDagE2EWorkflow** — a workflow calls
+  `atlanhq/application-sdk/.github/actions/sdr-e2e` directly instead of
+  delegating to `tests-reusable.yaml`.
+
+  The reusable owns everything the hand-rolled copy re-implements: the `e2e`
+  label gate, the `discover-e2e-suites` matrix (one leg per
+  `tests/e2e/test_*.py`), the per-leg `ATLAN_DEPLOYMENT_NAME` derivation that
+  keeps worker and harness on one Temporal queue (T016/T017), the GHCR image
+  build, the full-DAG `config-dir` / `secrets-script` / `components-dir` /
+  `compose-overlay` set, the two-store posture, and the `Tests Gate` aggregator.
+  A copy pins one hard-coded `test-path` (a second suite is silently never run),
+  ships no matrix and therefore no queue isolation, skips the required gate, and
+  misses every input the reusable later gains.
+
+  Fix — the whole workflow collapses to:
+
+  ```yaml
+  jobs:
+    tests:
+      uses: atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main
+      with:
+        app-name: "<connector>"
+        app-image-name: "atlan-<connector>-app"
+        two-store: true
+      secrets: inherit
+  ```
+
+  Two shapes, two different edits — read `finding.file` before proposing one:
+  a standalone `sdr-full-dag.yaml` / `sdr-integration*.yaml` is **deleted**; an
+  `sdr:` job that grew inside `tests.yaml` is **replaced in place** by the caller
+  (do not delete `tests.yaml`). Keep the repo's real e2e assets either way — the
+  `tests/e2e/` suites and the `.github/e2e/` config dir (`app.yaml`,
+  `make-secrets-e2e-full.py`, `e2e-full-components/`,
+  `e2e-full-docker-compose.yaml`) — the reusable points the action at exactly
+  those paths. The trigger changes from a bespoke `sdr-full-dag` label to the
+  reusable's `e2e` label. `atlan-mysql-app/.github/workflows/tests.yaml` is the
+  reference; `atlan-application-sdk-conformance bootstrap` regenerates it.
+
+  **Route to residue** — the target is under `.github/` (outside write-scope),
+  and converting a bespoke workflow means reconciling its inputs (native build
+  steps, extra secrets, disk-reclaim steps) against what the reusable already
+  does.
+
+  Suppress with `# conformance: ignore[T020] <reason>` on the `uses:` line when
+  the connector needs OS-level native build deps before `uv sync` (ODBC, SAP
+  JCo, Kerberos headers) — the reusable's own header documents that exemption.
+  Name the dependency in the justification.
+
+  `classification` is always `"judgment"`.
+
+- **T021 E2ESuiteUnreachableInCI** — the repo ships collectable `tests/e2e/`
+  suites and nothing under `.github/workflows/` runs them. The finding message
+  names which of the three shapes applies: no runner at all, a caller with
+  `enable-e2e: false`, or a caller with an empty `app-image-name` (which disables
+  the connector image build the e2e worker container starts from).
+
+  Fix: add or repair the caller (see T020's snippet). `enable-e2e` defaults to
+  true and should be left alone; `app-image-name` must be the repo's GHCR package
+  name. Wiring it costs nothing per-commit — the e2e job still only runs on the
+  `e2e` label or a `workflow_dispatch` with `run_e2e: true`.
+
+  This most often appears *after* a T020 remediation: the bespoke workflow was
+  deleted and the caller never wired, turning "wrong runner" into "no runner".
+  When both fire on the same repo, fix them as one edit.
+
+  **Route to residue** (target under `.github/`).
+
+  Suppress with `# conformance: ignore[T021] <reason>` when the suites are
+  deliberately local-only (e.g. a manual scale harness that must never run in
+  CI); say so explicitly.
+
+  `classification` is always `"judgment"`.
+
+- **T022 E2ETwoStorePostureDisabled** — `atlan.yaml` declares
+  `self_deployed_runtime: true`, the repo ships e2e suites, and the caller does
+  not pass `two-store: true`.
+
+  Under the default single-store posture the e2e worker's `objectstore` and
+  `atlan-objectstore` bindings resolve to the same bucket, so a connector that
+  writes transformed artifacts to the deployment store and never bridges them
+  upstream still publishes assets. On a real tenant the two stores differ,
+  publish reads an empty prefix, and the run reports success with zero
+  created/updated/deleted assets — the P030 silent-zero class, masked by the very
+  e2e meant to catch it.
+
+  Fix: add `two-store: true` to the caller's `with:` block. It forwards to the
+  sdr-e2e action's `enable-two-store`, forcing `objectstore` to the CI-local
+  binding and setting `ENABLE_ATLAN_UPLOAD=true` on the worker. See ADR-0014
+  (`docs/adr/0014-two-store-storage-architecture.md`) and `atlan-mysql-app#381`.
+
+  Expect the first run under the new posture to fail if the bridge is missing —
+  that failure is the point. Check for a P030 finding on the same repo and treat
+  them together: P030 names the missing `App.upload()` bridge statically, T022
+  is what makes the e2e able to prove it.
+
+  **Route to residue** (target under `.github/`).
+
+  Suppress with `# conformance: ignore[T022] <reason>` only for an app whose
+  extract genuinely produces no artifacts to bridge.
+
+  `classification` is always `"judgment"`.
+
+- **T023 E2EHarnessScaffoldHandWritten** — a module under `tests/` declares
+  scaffold the contract toolkit generates from `contract/app.pkl`. The finding
+  message names which of the three shapes applies:
+
+  1. identity attrs (`connector_short_name`, `argo_package_name`,
+     `argo_template_name`, `app_service_url`, `connection_type`,
+     `connection_category`) on an e2e harness subclass — generated into
+     `app/generated/_e2e_base.py` as `<Name>GeneratedE2EBase`;
+  2. a `CredentialBody` subclass — generated into `_e2e_credential.py` as
+     `<Name>CredentialBody` / `<Name>AgentCredentialBody`;
+  3. a `MustacheSubstitutions` / `SQLMustacheSubstitutions` subclass — generated
+     into `_e2e_substitutions.py` as `<Name>MustacheSubstitutions`.
+
+  The hand-written copy is owned by no generator. It is *not* reverted by the
+  next `poe generate` — it simply stops agreeing with the contract the moment the
+  contract moves, and the drift surfaces as a tenant-side AE failure inside a
+  120-minute e2e run rather than as a diff.
+
+  Fix: import the generated modules and keep only what the contract cannot know —
+  the source under test, the asset floors, and the run mode.
+  `atlan-mysql-app/tests/e2e/test_mysql_full_dag.py` is the reference:
+
+  ```python
+  from application_sdk.testing.e2e import RunMode
+  from app.generated._e2e_base import MysqlGeneratedE2EBase
+  from app.generated._e2e_credential import MysqlAgentCredentialBody
+
+  class TestMySQLFullDAG(MysqlGeneratedE2EBase):
+      mode = RunMode.AGENT
+      include_filter = r"^def\.e2e_main$"
+      expected_min_asset_counts = {"Database": 1, "Table": 2}
+
+      def database_spec(self) -> DatabaseSpec: ...
+      def _credential_body(self) -> MysqlAgentCredentialBody: ...
+  ```
+
+  If the generated modules are absent, the repo will also be showing **K010**
+  (missing `_e2e_base.py`) and possibly **K007** (toolkit version floor):
+  regenerate with `pkl eval -m . contract/app.pkl` (or `uv run poe generate`) and
+  commit the output first, then re-parent the test. Never hand-edit generated
+  files — when the contract cannot express something the test needs, fix it at
+  the pkl source and regenerate.
+
+  **Route to residue** — the target is under `tests/` (outside write-scope), and
+  re-parenting a test class requires confirming the generated base's values match
+  what the test was asserting.
+
+  Suppress with `# conformance: ignore[T023] <reason>` when a genuinely test-only
+  model is meant (e.g. a negative-path credential body that must be malformed).
+
+  `classification` is always `"judgment"`.
+
+- **T024 E2ERunModeUnset** — a collectable e2e test class (`Test*`) transitively
+  subclasses the SDK e2e harness and neither it nor any repo-visible ancestor
+  sets a class-level `mode`, so it inherits `BaseE2ETest`'s `RunMode.DIRECT`.
+
+  The reusable e2e job always starts a CI-side worker container on a per-leg
+  Temporal queue and expects the AE extract activity to be routed to it — routing
+  that only happens under `RunMode.AGENT`, where the harness rewrites the extract
+  node's `task_queue` to `atlan-{agent_name}`. Left at the default, the harness
+  dispatches extraction to the tenant's own production queue: the container under
+  test never runs, and the run either hangs on a queue no CI worker polls or
+  greens against code the PR never exercised.
+
+  Fix: declare it explicitly on the test class.
+
+  ```python
+  from application_sdk.testing.e2e import RunMode
+
+  class TestMyConnectorFullDAG(MyconnGeneratedE2EBase):
+      mode = RunMode.AGENT
+  ```
+
+  `RunMode.AGENT` is the right answer for the normal CI-worker run and is also
+  what T002 accepts as an SDR app's coverage. An explicit `mode = RunMode.DIRECT`
+  is never flagged — a deliberate tier-5 run against a deployed tenant pod is
+  legitimate; the rule asks only that the choice be written down. A shared in-repo
+  base that sets `mode` for its subclasses satisfies the rule.
+
+  **Route to residue** (target under `tests/`), and check for a T022 finding on
+  the same repo: the SDK warns at runtime when `TWO_STORE` is on and the suite
+  runs DIRECT, so the two interact.
+
+  Suppress with `# conformance: ignore[T024] <reason>` on the `class` line when
+  the mode is set dynamically (e.g. parametrised from an env var) rather than as
+  a class attribute.
+
+  `classification` is always `"judgment"`.
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 

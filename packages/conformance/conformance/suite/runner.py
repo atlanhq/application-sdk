@@ -40,6 +40,8 @@ from conformance.suite.checks import (
     dockerfile_conformance,
     e2e_agent_spec,
     e2e_deployment_name,
+    e2e_generated_harness,
+    e2e_workflow_shape,
     entrypoint_alignment,
     error_handling,
     generated_freshness,
@@ -186,6 +188,18 @@ _CHECKS: list[CheckRegistration] = [
         series=e2e_agent_spec.SERIES,
         discover=e2e_agent_spec.discover,
         scan_path=e2e_agent_spec.scan_path,
+    ),
+    CheckRegistration(
+        series=e2e_workflow_shape.SERIES,
+        discover=e2e_workflow_shape.discover,
+        scan_path=e2e_workflow_shape.scan_path,
+        scan_all=e2e_workflow_shape.scan_all,
+    ),
+    CheckRegistration(
+        series=e2e_generated_harness.SERIES,
+        discover=e2e_generated_harness.discover,
+        scan_path=e2e_generated_harness.scan_path,
+        scan_all=e2e_generated_harness.scan_all,
     ),
     CheckRegistration(
         series=dockerfile_conformance.SERIES,
