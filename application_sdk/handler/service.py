@@ -171,45 +171,81 @@ def _coerce_agent_json(value: Any) -> dict[str, Any] | None:
     return None
 
 
+def _rank_agent_json(raw: Any, key: str) -> int:
+    """Preference score for competing agent-json bindings (higher wins).
+
+    A request can carry several agent-json copies at once, and they are *not*
+    interchangeable. The FE normalizes its form into duplicate keys: the live
+    ``agent-json`` (hyphen) holds the current form object, while ``agent_json``
+    (underscore) is a serialized string snapshot that lags behind edits. Picking
+    the wrong one silently runs the check against stale credentials. So prefer a
+    parsed object over a serialized string (freshness), and the canonical hyphen
+    ``agent-json`` over the underscore/camel aliases (tie-break)."""
+    return (2 if isinstance(raw, dict) else 0) + (1 if key == "agent-json" else 0)
+
+
 def _lift_agent_json(body: dict[str, Any]) -> dict[str, Any]:
-    """Surface a nested agent-json binding to the top level for SDR detection.
+    """Surface the freshest agent-json binding to the top level for SDR detection.
 
     The three endpoints detect SDR (customer-infra) runs by reading a *top-level*
     ``agent_json`` off the typed input. Heracles, however, forwards the FE payload
     verbatim: the agent-json arrives nested inside ``metadata``/``connection_config``
     (the form's ``agent-json`` field → app ``metadata``) or inside ``credentials``
-    (the credential object), never at the top level. Lift the first binding found
-    so the dispatch gate can see it, popping it from its container so credential
-    flattening never turns it into a bogus credential pair.
+    (the credential object), and the FE may include *several* copies at once (a
+    live object plus a stale serialized string, under hyphen and underscore keys).
 
-    No-op when a top-level agent-json is already present, or when none is found
-    (direct-mode requests) — in both cases the body is returned unchanged."""
+    Pick the highest-ranked copy (see :func:`_rank_agent_json`) across the top
+    level and every container, surface it as top-level ``agent_json`` (overriding
+    any stale top-level alias Pydantic would otherwise resolve first), and strip
+    every agent-json key from the containers so credential flattening never turns
+    one into a bogus pair. No-op when none is found (direct-mode requests)."""
+    best_rank = -1
+    best_aj: dict[str, Any] | None = None
+
     for key in _AGENT_JSON_KEYS:
-        if _coerce_agent_json(body.get(key)) is not None:
-            return body
+        if key in body:
+            aj = _coerce_agent_json(body[key])
+            if aj is not None and _rank_agent_json(body[key], key) > best_rank:
+                best_rank, best_aj = _rank_agent_json(body[key], key), aj
 
     for container in ("metadata", "connection_config", "credentials"):
         c = body.get(container)
         if isinstance(c, dict):
             for key in _AGENT_JSON_KEYS:
-                agent_json = _coerce_agent_json(c.get(key))
-                if agent_json is not None:
-                    stripped = {k: v for k, v in c.items() if k not in _AGENT_JSON_KEYS}
-                    return {**body, container: stripped, "agent_json": agent_json}
+                if key in c:
+                    aj = _coerce_agent_json(c[key])
+                    if aj is not None and _rank_agent_json(c[key], key) > best_rank:
+                        best_rank, best_aj = _rank_agent_json(c[key], key), aj
         elif isinstance(c, list):  # v3 credentials: list[{key, value}]
             for item in c:
                 if isinstance(item, dict) and item.get("key") in _AGENT_JSON_KEYS:
-                    agent_json = _coerce_agent_json(item.get("value"))
-                    if agent_json is not None:
-                        stripped = [
-                            i
-                            for i in c
-                            if not (
-                                isinstance(i, dict) and i.get("key") in _AGENT_JSON_KEYS
-                            )
-                        ]
-                        return {**body, container: stripped, "agent_json": agent_json}
-    return body
+                    raw = item.get("value")
+                    aj = _coerce_agent_json(raw)
+                    rank = _rank_agent_json(raw, item["key"])
+                    if aj is not None and rank > best_rank:
+                        best_rank, best_aj = rank, aj
+
+    if best_aj is None:
+        return body
+
+    result: dict[str, Any] = {}
+    for k, v in body.items():
+        if k in _AGENT_JSON_KEYS:
+            continue  # drop stale top-level aliases; re-added canonically below
+        if k in ("metadata", "connection_config") and isinstance(v, dict):
+            result[k] = {kk: vv for kk, vv in v.items() if kk not in _AGENT_JSON_KEYS}
+        elif k == "credentials" and isinstance(v, list):
+            result[k] = [
+                i
+                for i in v
+                if not (isinstance(i, dict) and i.get("key") in _AGENT_JSON_KEYS)
+            ]
+        elif k == "credentials" and isinstance(v, dict):
+            result[k] = {kk: vv for kk, vv in v.items() if kk not in _AGENT_JSON_KEYS}
+        else:
+            result[k] = v
+    result["agent_json"] = best_aj
+    return result
 
 
 # v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
