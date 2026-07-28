@@ -3,6 +3,7 @@
 import pytest
 from pydantic import ConfigDict, Field, ValidationError
 
+from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import AuthError
 from application_sdk.errors.wire import FailureDetails
@@ -58,6 +59,33 @@ class TestAuthInput:
         inp = AuthInput(credentials=creds, connection_id="conn-1", timeout_seconds=60)
         assert len(inp.credentials) == 1
         assert inp.timeout_seconds == 60
+
+
+class TestAgentJsonField:
+    """The optional SDR ``agent_json`` reference field on the handler inputs."""
+
+    def test_defaults_to_none(self):
+        assert AuthInput().agent_json is None
+        assert PreflightInput().agent_json is None
+        assert MetadataInput().agent_json is None
+
+    @pytest.mark.parametrize("key", ["agent_json", "agentJson", "agent-json"])
+    @pytest.mark.parametrize("model", [AuthInput, PreflightInput, MetadataInput])
+    def test_accepts_all_aliases(self, model, key):
+        # The field is typed AgentCredentialSpec | None, so a raw dict is
+        # validated into a spec at the parse boundary (mirrors PreflightGateInput).
+        spec = {"agent-name": "acme", "secret-path": "p"}
+        inp = model.model_validate({key: spec})
+        assert isinstance(inp.agent_json, AgentCredentialSpec)
+        assert inp.agent_json == AgentCredentialSpec.model_validate(spec)
+        assert inp.agent_json.agent_name == "acme"
+        assert inp.agent_json.secret_path == "p"
+
+    def test_does_not_disturb_credentials(self):
+        creds = [HandlerCredential(key="k", value="v")]
+        inp = PreflightInput(credentials=creds, agent_json={"agent-name": "acme"})
+        assert inp.credentials == creds
+        assert inp.agent_json == AgentCredentialSpec(agent_name="acme")
 
 
 class TestAuthOutput:
