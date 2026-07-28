@@ -152,6 +152,66 @@ _CREDENTIAL_KEYS = frozenset(
 )
 
 
+_AGENT_JSON_KEYS = ("agent_json", "agentJson", "agent-json")
+
+
+def _coerce_agent_json(value: Any) -> dict[str, Any] | None:
+    """Return *value* as an agent-json dict, or ``None`` if it isn't one.
+
+    Form fields cross the wire as JSON strings, so an agent-json binding may
+    arrive either already-parsed (``dict``) or as a serialized string."""
+    if isinstance(value, dict):
+        return value if value else None
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) and parsed else None
+    return None
+
+
+def _lift_agent_json(body: dict[str, Any]) -> dict[str, Any]:
+    """Surface a nested agent-json binding to the top level for SDR detection.
+
+    The three endpoints detect SDR (customer-infra) runs by reading a *top-level*
+    ``agent_json`` off the typed input. Heracles, however, forwards the FE payload
+    verbatim: the agent-json arrives nested inside ``metadata``/``connection_config``
+    (the form's ``agent-json`` field → app ``metadata``) or inside ``credentials``
+    (the credential object), never at the top level. Lift the first binding found
+    so the dispatch gate can see it, popping it from its container so credential
+    flattening never turns it into a bogus credential pair.
+
+    No-op when a top-level agent-json is already present, or when none is found
+    (direct-mode requests) — in both cases the body is returned unchanged."""
+    for key in _AGENT_JSON_KEYS:
+        if _coerce_agent_json(body.get(key)) is not None:
+            return body
+
+    for container in ("metadata", "connection_config", "credentials"):
+        c = body.get(container)
+        if isinstance(c, dict):
+            for key in _AGENT_JSON_KEYS:
+                agent_json = _coerce_agent_json(c.get(key))
+                if agent_json is not None:
+                    stripped = {k: v for k, v in c.items() if k not in _AGENT_JSON_KEYS}
+                    return {**body, container: stripped, "agent_json": agent_json}
+        elif isinstance(c, list):  # v3 credentials: list[{key, value}]
+            for item in c:
+                if isinstance(item, dict) and item.get("key") in _AGENT_JSON_KEYS:
+                    agent_json = _coerce_agent_json(item.get("value"))
+                    if agent_json is not None:
+                        stripped = [
+                            i
+                            for i in c
+                            if not (
+                                isinstance(i, dict) and i.get("key") in _AGENT_JSON_KEYS
+                            )
+                        ]
+                        return {**body, container: stripped, "agent_json": agent_json}
+    return body
+
+
 # v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
 def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     """Normalize v2 credential formats to v3 list[{key, value}] format.
@@ -197,7 +257,7 @@ def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
     """Normalize preflight-specific compatibility fields before validation."""
-    normalized = _normalize_credentials(body)
+    normalized = _normalize_credentials(_lift_agent_json(body))
     has_metadata = "metadata" in normalized and normalized["metadata"] is not None
     has_connection_config = (
         "connection_config" in normalized
@@ -2533,7 +2593,7 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/auth")
     async def test_auth(request: Request) -> JSONResponse:
-        body = _normalize_credentials(await request.json())
+        body = _normalize_credentials(_lift_agent_json(await request.json()))
         auth_input = AuthInput.model_validate(body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
@@ -2797,7 +2857,7 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/metadata")
     async def fetch_metadata(request: Request) -> JSONResponse:
-        body = _normalize_credentials(await request.json())
+        body = _normalize_credentials(_lift_agent_json(await request.json()))
         metadata_input = MetadataInput.model_validate(body)
         # The widget routing key (``metadataTemplateKey`` / ``type`` on the
         # wire) now lands in its documented home, ``metadata_template_key``,
