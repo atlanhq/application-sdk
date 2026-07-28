@@ -242,7 +242,7 @@ Same manifest, with the inputs in the request body instead of the query string. 
 
 > **Legacy alias:** An unversioned `POST /manifest` is also registered (`include_in_schema=false`), so a caller can migrate method and path independently.
 
-**Body** (all fields optional; `{}` is equivalent to a bare `GET`):
+**Body** (all fields optional; `{}`, `null` and an absent body are all equivalent to a bare `GET`):
 
 ```json
 {
@@ -252,7 +252,9 @@ Same manifest, with the inputs in the request body instead of the query string. 
 }
 ```
 
-`user_id` is accepted for parity with the GET query parameter and is not read by the SDK.
+`user_id` is accepted and ignored, so callers that already send it (as a GET query param, where it is likewise ignored) keep working.
+
+`fe_inputs` must be a JSON **object**, not a JSON string — a caller porting the GET query parameter must pass the decoded object rather than the encoded string that rode in the URL.
 
 **Why this exists:** on `GET`, `fe_inputs` is bounded by the HTTP request line. Over 8 KB decoded the SDK returns `413` before `compute_manifest` runs, and past ~64 KB on the wire the URL is silently truncated by the parser — the app then answers `200` on a corrupt payload. A near-"select-all" asset-export-advanced submission decodes to ~11 KB and hit exactly this (CSA-539). The body has neither limit, so **no size cap applies to `POST`**.
 

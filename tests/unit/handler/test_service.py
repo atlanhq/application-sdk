@@ -6890,6 +6890,49 @@ class TestManifestPostTransport:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            pytest.param({"json": {}}, id="empty-object"),
+            pytest.param({"json": {"fe_inputs": None}}, id="fe_inputs-null"),
+            pytest.param({"json": {"entrypoint": None}}, id="entrypoint-null"),
+            pytest.param({"content": b"null"}, id="literal-null-body"),
+            pytest.param({"content": b""}, id="empty-body"),
+            pytest.param({}, id="no-body-at-all"),
+        ],
+    )
+    def test_post_empty_ish_bodies_behave_like_a_bare_get(
+        self, tmp_path: Path, kwargs: dict
+    ) -> None:
+        """All of these mean "no inputs". Callers fall back only on 405, so a 400
+        here would hard-fail them instead of degrading."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+        (contract_dir / "manifest.json").write_text(
+            json.dumps({"app_name": "flat-app"})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().post("/workflows/v1/manifest", **kwargs)
+            assert response.status_code == 200
+            assert response.json()["app_name"] == "flat-app"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_post_fe_inputs_must_be_an_object_not_a_json_string(self) -> None:
+        """A caller porting a GET query param must pass the decoded object, not
+        the JSON string the query string carried."""
+        response = _make_client().post(
+            "/workflows/v1/manifest",
+            json={"fe_inputs": json.dumps({"a": "b"})},
+        )
+        assert response.status_code == 400
+        assert "fe_inputs must be a JSON object" in response.json()["detail"]
+
     def test_post_malformed_json_returns_400(self) -> None:
         response = _make_client().post(
             "/workflows/v1/manifest",

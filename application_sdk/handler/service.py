@@ -1908,7 +1908,9 @@ def _register_workflow_routes(
             # static apps that work today. A dict came from the POST body, where
             # the query-string cap does not apply.
             fe_inputs_decoded = (
-                fe_inputs if isinstance(fe_inputs, dict) else _decode_fe_inputs(fe_inputs)
+                fe_inputs
+                if isinstance(fe_inputs, dict)
+                else _decode_fe_inputs(fe_inputs)
             )
             manifest_dict = orjson.loads(raw)
             try:
@@ -2066,20 +2068,29 @@ def _register_workflow_routes(
         """Serve a manifest with ``fe_inputs`` in the request body.
 
         Body: ``{"entrypoint": str | null, "fe_inputs": {...}, "user_id": str | null}``
-        — all optional, so ``{}`` is equivalent to a bare GET.
+        — all optional. ``{}``, ``null`` and an absent body are all equivalent to
+        a bare GET. ``fe_inputs`` must be a JSON object, not a JSON *string*: a
+        caller porting a GET query param must pass the decoded object.
 
         Exists because ``fe_inputs`` on the query string is bounded by the
         request line: an ~11 KB payload was rejected with 413 before
         ``compute_manifest`` ran, and past ~64 KB the URL is silently truncated
-        (CSA-539). A body has neither limit. ``user_id`` is accepted for wire
-        parity with the GET param and is not read by the SDK.
+        (CSA-539). A body has neither limit. ``user_id`` is accepted and ignored
+        so callers that already send it (as a GET query param, where it is
+        likewise ignored) keep working.
         """
-        try:
-            body: Any = await request.json()
-        except Exception as exc:
-            raise HTTPException(
-                status_code=400, detail=f"Request body is not valid JSON: {exc}"
-            ) from exc
+        raw = await request.body()
+        if not raw.strip():
+            # Absent/empty body means "no inputs", same as a bare GET. Callers
+            # fall back only on 405, so 400-ing this would hard-fail them.
+            body: Any = {}
+        else:
+            try:
+                body = await request.json()
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400, detail=f"Request body is not valid JSON: {exc}"
+                ) from exc
         if body is None:
             body = {}
         if not isinstance(body, dict):
@@ -2089,9 +2100,7 @@ def _register_workflow_routes(
 
         entrypoint = body.get("entrypoint")
         if entrypoint is not None and not isinstance(entrypoint, str):
-            raise HTTPException(
-                status_code=400, detail="entrypoint must be a string"
-            )
+            raise HTTPException(status_code=400, detail="entrypoint must be a string")
 
         fe_inputs = body.get("fe_inputs")
         if fe_inputs is None:
