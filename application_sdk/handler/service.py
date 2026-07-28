@@ -28,6 +28,8 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import dataclasses
 import inspect
 import json
@@ -845,28 +847,87 @@ async def _get_temporal_client() -> Client:
 # local-handler path.
 _SDR_FALLBACK_TO_LOCAL: Any = object()
 
-# UI-facing message when the customer's SDR worker is not polling its task queue
-# (fail-fast, no workflow started) or a dispatch times out with no underlying
-# worker-side error. Mirrors the LM proxy's wording so the two removal paths
-# read identically to the customer.
-_SDR_WORKER_DOWN_MESSAGE = (
-    "SDR Worker appears down or unreachable. Check that the SDR Worker is "
-    "running on your infrastructure and try again."
-)
+# Human-readable op label for the worker-down message, keyed by the ``op``
+# passed to _dispatch_sdr_workflow. Keeps the fail-fast copy accurate whether
+# the down worker was hit for a preflight, an auth test, or a metadata fetch.
+_SDR_OP_LABELS = {
+    "preflight-check": "Preflight tests",
+    "test-auth": "Authentication test",
+    "fetch-metadata": "Metadata fetch",
+}
 
 
-def _sdr_sync_timeout() -> timedelta:
-    """Wall-clock cap for an SDR synchronous handler dispatch.
+def _sdr_worker_down_message(op: str) -> str:
+    """UI-facing message when the customer's SDR deployment is not reachable.
 
-    Env-tunable via ``SDR_SYNC_TIMEOUT_SECONDS`` (default 120s). Passed as the
-    workflow ``execution_timeout`` so a dispatch to an unresponsive worker
-    fails within the budget instead of hanging the UI request. A missing or
-    non-integer value falls back to the default rather than raising."""
+    Used both for the fail-fast (no active pollers, no workflow started) and for
+    a dispatch that never gets picked up within the connection window. The op
+    label keeps the second sentence accurate for whichever endpoint was hit."""
+    label = _SDR_OP_LABELS.get(op, "The check")
+    return f"SDR Deployment is not active/reachable. {label} not run."
+
+
+def _env_timedelta(name: str, default: int) -> timedelta:
+    """Read a positive-int seconds env var into a timedelta, else *default*."""
     try:
-        seconds = int(os.getenv("SDR_SYNC_TIMEOUT_SECONDS", "120"))
-    except ValueError:
-        seconds = 120
+        seconds = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        seconds = default
+    if seconds <= 0:
+        seconds = default
     return timedelta(seconds=seconds)
+
+
+def _sdr_worker_pickup_timeout() -> timedelta:
+    """Connection window: how long to wait for a worker to *begin* the workflow.
+
+    Env-tunable via ``SDR_WORKER_PICKUP_TIMEOUT_SECONDS`` (default 60s). This
+    bounds only the "is the SDR deployment responding" phase — if no worker
+    starts processing within it, the dispatch fails fast as unreachable. It is
+    deliberately separate from (and shorter than) the job-execution budget so a
+    down worker never makes the user wait out the whole test timeout."""
+    return _env_timedelta("SDR_WORKER_PICKUP_TIMEOUT_SECONDS", 60)
+
+
+def _sdr_job_timeout() -> timedelta:
+    """Execution budget for the actual check once a worker has picked it up.
+
+    Env-tunable via ``SDR_JOB_EXECUTION_TIMEOUT_SECONDS`` (default 180s). Applies
+    only after pickup, so a slow-but-alive worker gets the full budget while an
+    unresponsive one still fails fast at :func:`_sdr_worker_pickup_timeout`."""
+    return _env_timedelta("SDR_JOB_EXECUTION_TIMEOUT_SECONDS", 180)
+
+
+async def _sdr_workflow_started(handle: Any) -> bool:
+    """Return True once an SDR worker has begun processing *handle*'s workflow.
+
+    Distinguishes "worker slow/absent" from "worker running a long job": scans
+    the workflow history for the first event a worker only emits once it has
+    polled and executed the workflow task (task completed, activity scheduled/
+    started, or a terminal event). Best-effort — any history-fetch error returns
+    ``False`` so the caller treats an indeterminate state as not-yet-started."""
+    from temporalio.api.enums.v1 import EventType  # noqa: PLC0415
+
+    progressed = {
+        EventType.EVENT_TYPE_WORKFLOW_TASK_COMPLETED,
+        EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED,
+        EventType.EVENT_TYPE_ACTIVITY_TASK_STARTED,
+        EventType.EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED,
+        EventType.EVENT_TYPE_WORKFLOW_EXECUTION_FAILED,
+        EventType.EVENT_TYPE_WORKFLOW_EXECUTION_TIMED_OUT,
+    }
+    try:
+        async for event in handle.fetch_history_events():
+            if event.event_type in progressed:
+                return True
+    except Exception:
+        logger.warning(
+            "SDR: could not inspect workflow history to confirm worker pickup; "
+            "treating as not-yet-started",
+            exc_info=True,
+        )
+        return False
+    return False
 
 
 def _sdr_agent_name(agent_json: Any) -> str | None:
@@ -1002,7 +1063,7 @@ async def _dispatch_sdr_workflow(
     Raises:
         HTTPException: Fail-fast when the worker has no active pollers or the
             dispatch times out with no underlying error (503,
-            :data:`_SDR_WORKER_DOWN_MESSAGE`); or the classified worker-side
+            :func:`_sdr_worker_down_message`); or the classified worker-side
             error when the workflow surfaces an ``ApplicationError``.
     """
     if not _workflow_config.host:
@@ -1027,6 +1088,7 @@ async def _dispatch_sdr_workflow(
         return _SDR_FALLBACK_TO_LOCAL
 
     task_queue = f"atlan-{agent_name}"
+    worker_down_message = _sdr_worker_down_message(op)
 
     if await _sdr_task_queue_has_pollers(client, task_queue) is False:
         logger.warning(
@@ -1034,7 +1096,7 @@ async def _dispatch_sdr_workflow(
             "without dispatching a workflow",
             task_queue,
         )
-        raise HTTPException(status_code=503, detail=_SDR_WORKER_DOWN_MESSAGE)
+        raise HTTPException(status_code=503, detail=worker_down_message)
 
     workflow_id = f"sdr-{op}-atlan-{DEPLOYMENT_NAME}-{uuid4().hex}"
     logger.info(
@@ -1043,17 +1105,11 @@ async def _dispatch_sdr_workflow(
         workflow_id,
         task_queue,
     )
-    try:
-        handle = await client.start_workflow(
-            workflow_name,
-            args=[input],
-            id=workflow_id,
-            task_queue=task_queue,
-            execution_timeout=_sdr_sync_timeout(),
-            result_type=output_type,
-        )
-        return await handle.result()
-    except WorkflowFailureError as exc:
+    pickup = _sdr_worker_pickup_timeout()
+    job = _sdr_job_timeout()
+
+    def _handle_workflow_failure(exc: WorkflowFailureError) -> None:
+        """Classify a worker-side failure into an HTTPException (never returns)."""
         app_err = _innermost_application_error(exc)
         if app_err is not None:
             logger.warning(
@@ -1070,7 +1126,55 @@ async def _dispatch_sdr_workflow(
             workflow_id,
             exc_info=True,
         )
-        raise HTTPException(status_code=503, detail=_SDR_WORKER_DOWN_MESSAGE) from None
+        raise HTTPException(status_code=503, detail=worker_down_message) from None
+
+    # execution_timeout bounds the whole workflow on the server; size it to the
+    # full connection + job budget so Temporal never reaps a legitimately slow
+    # but alive job before the client-side phases below do.
+    handle = await client.start_workflow(
+        workflow_name,
+        args=[input],
+        id=workflow_id,
+        task_queue=task_queue,
+        execution_timeout=pickup + job,
+        result_type=output_type,
+    )
+
+    # Phase 1 — connection: bound the wait for a worker to *begin* the workflow.
+    try:
+        return await asyncio.wait_for(handle.result(), timeout=pickup.total_seconds())
+    except asyncio.TimeoutError:
+        pass
+    except WorkflowFailureError as exc:
+        _handle_workflow_failure(exc)
+
+    # Pickup window elapsed without a result — is a worker actually processing
+    # this, or is the deployment unreachable (e.g. a stale poller registration)?
+    if not await _sdr_workflow_started(handle):
+        logger.warning(
+            "SDR workflow %s not picked up within %.0fs; SDR deployment unreachable",
+            workflow_id,
+            pickup.total_seconds(),
+        )
+        with contextlib.suppress(Exception):
+            await handle.terminate(reason="SDR worker not responding")
+        raise HTTPException(status_code=503, detail=worker_down_message) from None
+
+    # Phase 2 — execution: a worker is running the job; allow the longer budget.
+    logger.info(
+        "SDR workflow %s picked up by a worker; awaiting job completion", workflow_id
+    )
+    try:
+        return await asyncio.wait_for(handle.result(), timeout=job.total_seconds())
+    except asyncio.TimeoutError:
+        with contextlib.suppress(Exception):
+            await handle.terminate(reason="SDR job exceeded execution budget")
+        raise HTTPException(
+            status_code=504,
+            detail="SDR check did not complete within the execution budget.",
+        ) from None
+    except WorkflowFailureError as exc:
+        _handle_workflow_failure(exc)
 
 
 # ---------------------------------------------------------------------------

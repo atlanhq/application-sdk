@@ -6828,7 +6828,7 @@ class TestSdrDispatch:
             json={"agent_json": self._AGENT_JSON},
         )
         assert resp.status_code == 503
-        assert "SDR Worker appears down or unreachable" in resp.json()["detail"]
+        assert "SDR Deployment is not active/reachable" in resp.json()["detail"]
         # Fail-fast: no workflow was started.
         assert mock_client.start_workflow.call_count == 0
 
@@ -6871,7 +6871,92 @@ class TestSdrDispatch:
             json={"agent_json": self._AGENT_JSON},
         )
         assert resp.status_code == 503
-        assert "SDR Worker appears down or unreachable" in resp.json()["detail"]
+        assert "SDR Deployment is not active/reachable" in resp.json()["detail"]
+
+    # -- Two-phase connection vs execution timeout ------------------------
+
+    def _two_phase_client(
+        self, monkeypatch, *, result_coro, events, pickup=0.05, job=5.0
+    ):
+        """Build a client whose workflow handle we drive for the two-phase path.
+
+        ``result_coro`` is the coroutine function ``handle.result()`` returns;
+        ``events`` is the async-generator function backing history inspection.
+        """
+        from datetime import timedelta
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from application_sdk.handler import service
+
+        svc = create_app_handler_service(_TestHandler(), app_name="test-app")
+        monkeypatch.setattr(service._workflow_config, "host", "temporal:7233")
+        monkeypatch.setattr(service._workflow_config, "namespace", "default")
+        monkeypatch.setattr(
+            service, "_sdr_worker_pickup_timeout", lambda: timedelta(seconds=pickup)
+        )
+        monkeypatch.setattr(service, "_sdr_job_timeout", lambda: timedelta(seconds=job))
+
+        mock_client = MagicMock()
+        mock_client.workflow_service.describe_task_queue = AsyncMock(
+            return_value=SimpleNamespace(pollers=[object()])
+        )
+        mock_handle = MagicMock()
+        mock_handle.result = result_coro
+        mock_handle.fetch_history_events = events
+        mock_handle.terminate = AsyncMock()
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        monkeypatch.setattr(
+            service, "_get_temporal_client", AsyncMock(return_value=mock_client)
+        )
+        return TestClient(svc, raise_server_exceptions=False), mock_handle
+
+    def test_sdr_pickup_timeout_unreachable_fails_fast_and_terminates(
+        self, monkeypatch
+    ) -> None:
+        import asyncio as _asyncio
+
+        async def _never():
+            await _asyncio.sleep(30)
+
+        async def _no_progress():
+            return
+            yield  # noqa: unreachable — makes this an async generator
+
+        client, handle = self._two_phase_client(
+            monkeypatch, result_coro=_never, events=_no_progress
+        )
+        resp = client.post("/workflows/v1/auth", json={"agent_json": self._AGENT_JSON})
+        # No worker began the workflow within the connection window ⇒ 503.
+        assert resp.status_code == 503
+        assert "SDR Deployment is not active/reachable" in resp.json()["detail"]
+        handle.terminate.assert_awaited()
+
+    def test_sdr_pickup_timeout_but_started_awaits_longer_job(
+        self, monkeypatch
+    ) -> None:
+        import asyncio as _asyncio
+
+        async def _slow_then_ok():
+            await _asyncio.sleep(0.2)  # slower than the 0.05s pickup window
+            return AuthOutput(status=AuthStatus.SUCCESS, message="sdr auth ok")
+
+        async def _with_progress():
+            from types import SimpleNamespace as _NS
+
+            from temporalio.api.enums.v1 import EventType
+
+            yield _NS(event_type=EventType.EVENT_TYPE_WORKFLOW_TASK_COMPLETED)
+
+        client, handle = self._two_phase_client(
+            monkeypatch, result_coro=_slow_then_ok, events=_with_progress
+        )
+        resp = client.post("/workflows/v1/auth", json={"agent_json": self._AGENT_JSON})
+        # Worker picked it up (history shows progress) ⇒ the longer job budget
+        # applies and the result comes back rather than a fail-fast 503.
+        assert resp.status_code == 200
+        assert resp.json()["data"]["status"] == "success"
+        handle.terminate.assert_not_awaited()
 
     # -- Non-SDR request is unchanged (no dispatch) -----------------------
 
