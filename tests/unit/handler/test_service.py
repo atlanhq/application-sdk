@@ -6827,8 +6827,11 @@ class TestSdrDispatch:
             "/workflows/v1/auth",
             json={"agent_json": self._AGENT_JSON},
         )
-        assert resp.status_code == 503
-        assert "SDR Deployment is not active/reachable" in resp.json()["detail"]
+        assert resp.status_code == 424
+        body = resp.json()
+        # message (not just detail) so Heracles' BodyMessage can forward it
+        assert "SDR Deployment is not active/reachable" in body["message"]
+        assert "SDR Deployment is not active/reachable" in body["detail"]
         # Fail-fast: no workflow was started.
         assert mock_client.start_workflow.call_count == 0
 
@@ -6870,8 +6873,11 @@ class TestSdrDispatch:
             "/workflows/v1/auth",
             json={"agent_json": self._AGENT_JSON},
         )
-        assert resp.status_code == 503
-        assert "SDR Deployment is not active/reachable" in resp.json()["detail"]
+        assert resp.status_code == 424
+        body = resp.json()
+        # message (not just detail) so Heracles' BodyMessage can forward it
+        assert "SDR Deployment is not active/reachable" in body["message"]
+        assert "SDR Deployment is not active/reachable" in body["detail"]
 
     # -- Two-phase connection vs execution timeout ------------------------
 
@@ -6928,8 +6934,11 @@ class TestSdrDispatch:
         )
         resp = client.post("/workflows/v1/auth", json={"agent_json": self._AGENT_JSON})
         # No worker began the workflow within the connection window ⇒ 503.
-        assert resp.status_code == 503
-        assert "SDR Deployment is not active/reachable" in resp.json()["detail"]
+        assert resp.status_code == 424
+        body = resp.json()
+        # message (not just detail) so Heracles' BodyMessage can forward it
+        assert "SDR Deployment is not active/reachable" in body["message"]
+        assert "SDR Deployment is not active/reachable" in body["detail"]
         handle.terminate.assert_awaited()
 
     def test_sdr_pickup_timeout_but_started_awaits_longer_job(

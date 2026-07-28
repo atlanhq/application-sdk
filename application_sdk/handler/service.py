@@ -867,6 +867,38 @@ def _sdr_worker_down_message(op: str) -> str:
     return f"SDR Deployment is not active/reachable. {label} not run."
 
 
+# Fail-fast statuses for SDR dispatch. Both are 4xx on purpose: Heracles'
+# app-client error mapping only forwards the app's own message for 4xx
+# responses (``ValidationError`` → ``body["message"]``); a 5xx collapses to a
+# generic "App service returned an internal error". 424 (Failed Dependency)
+# reads as "the SDR deployment we depend on is unavailable"; 408 as the
+# job-execution timeout. Env-overridable only if a gateway needs a specific code.
+_SDR_UNREACHABLE_STATUS = 424
+_SDR_JOB_TIMEOUT_STATUS = 408
+
+
+class _SdrDispatchError(HTTPException):
+    """SDR dispatch failure rendered with a top-level ``message`` field.
+
+    A plain ``HTTPException`` renders as ``{"detail": ...}``, which Heracles'
+    ``BodyMessage`` (it reads ``message`` / ``data.message``) can't surface, so
+    the customer-facing reason is lost. This subclass pairs with
+    :func:`_render_sdr_dispatch_error` to emit ``message`` (alongside ``detail``)
+    at a 4xx status, letting the reason reach the UI unchanged — no Heracles
+    change required. Subclassing ``HTTPException`` means the endpoints'
+    ``except HTTPException: raise`` passes it straight through to the handler."""
+
+
+async def _render_sdr_dispatch_error(
+    _request: Request, exc: _SdrDispatchError
+) -> JSONResponse:
+    """Render :class:`_SdrDispatchError` with a Heracles-forwardable ``message``."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"success": False, "message": exc.detail, "detail": exc.detail},
+    )
+
+
 def _env_timedelta(name: str, default: int) -> timedelta:
     """Read a positive-int seconds env var into a timedelta, else *default*."""
     try:
@@ -1061,10 +1093,13 @@ async def _dispatch_sdr_workflow(
         endpoint then runs its handler locally).
 
     Raises:
-        HTTPException: Fail-fast when the worker has no active pollers or the
-            dispatch times out with no underlying error (503,
-            :func:`_sdr_worker_down_message`); or the classified worker-side
-            error when the workflow surfaces an ``ApplicationError``.
+        _SdrDispatchError: Fail-fast when the worker has no active pollers, the
+            workflow isn't picked up within the connection window, or the job
+            exceeds its execution budget — a 4xx carrying
+            :func:`_sdr_worker_down_message` so the reason survives Heracles'
+            error mapping.
+        HTTPException: The classified worker-side error when the workflow
+            surfaces an ``ApplicationError``.
     """
     if not _workflow_config.host:
         logger.info(
@@ -1096,7 +1131,9 @@ async def _dispatch_sdr_workflow(
             "without dispatching a workflow",
             task_queue,
         )
-        raise HTTPException(status_code=503, detail=worker_down_message)
+        raise _SdrDispatchError(
+            status_code=_SDR_UNREACHABLE_STATUS, detail=worker_down_message
+        )
 
     workflow_id = f"sdr-{op}-atlan-{DEPLOYMENT_NAME}-{uuid4().hex}"
     logger.info(
@@ -1126,7 +1163,9 @@ async def _dispatch_sdr_workflow(
             workflow_id,
             exc_info=True,
         )
-        raise HTTPException(status_code=503, detail=worker_down_message) from None
+        raise _SdrDispatchError(
+            status_code=_SDR_UNREACHABLE_STATUS, detail=worker_down_message
+        ) from None
 
     # execution_timeout bounds the whole workflow on the server; size it to the
     # full connection + job budget so Temporal never reaps a legitimately slow
@@ -1158,7 +1197,9 @@ async def _dispatch_sdr_workflow(
         )
         with contextlib.suppress(Exception):
             await handle.terminate(reason="SDR worker not responding")
-        raise HTTPException(status_code=503, detail=worker_down_message) from None
+        raise _SdrDispatchError(
+            status_code=_SDR_UNREACHABLE_STATUS, detail=worker_down_message
+        ) from None
 
     # Phase 2 — execution: a worker is running the job; allow the longer budget.
     logger.info(
@@ -1169,8 +1210,8 @@ async def _dispatch_sdr_workflow(
     except asyncio.TimeoutError:
         with contextlib.suppress(Exception):
             await handle.terminate(reason="SDR job exceeded execution budget")
-        raise HTTPException(
-            status_code=504,
+        raise _SdrDispatchError(
+            status_code=_SDR_JOB_TIMEOUT_STATUS,
             detail="SDR check did not complete within the execution budget.",
         ) from None
     except WorkflowFailureError as exc:
@@ -2702,6 +2743,10 @@ def create_app_handler_service(
         )
     else:
         app = FastAPI(title=title, description=description, version=version)
+
+    # Render SDR dispatch fail-fasts with a top-level ``message`` so the
+    # customer-facing reason survives Heracles' app-client error mapping.
+    app.add_exception_handler(_SdrDispatchError, _render_sdr_dispatch_error)
 
     from opentelemetry.instrumentation.fastapi import (  # noqa: PLC0415 — cold path: FastAPI instrumentor wired at app creation
         FastAPIInstrumentor,
