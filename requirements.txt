@@ -127,7 +127,7 @@ httpx-retries==0.6.0
     # via
     #   atlan-application-sdk
     #   pyatlan
-hypothesis==6.161.8
+hypothesis==6.163.0
 identify==2.6.19
     # via pre-commit
 idna==3.18
@@ -439,7 +439,7 @@ websockets==16.1.1
     # via uvicorn
 win32-setctime==1.2.0 ; sys_platform == 'win32'
     # via loguru
-wrapt==2.2.2
+wrapt==2.3.0
     # via opentelemetry-instrumentation
 yarl==1.24.5
     # via aiohttp
