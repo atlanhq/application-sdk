@@ -869,17 +869,22 @@ def _sdr_sync_timeout() -> timedelta:
     return timedelta(seconds=seconds)
 
 
-def _sdr_agent_name(agent_json: dict[str, Any] | None) -> str | None:
+def _sdr_agent_name(agent_json: Any) -> str | None:
     """Return the SDR agent name when *agent_json* marks an SDR connection.
 
     A request is SDR when its typed input carries an ``agent_json`` reference
-    that names an agent (``agent-name``, mirroring
-    :class:`~application_sdk.credentials.spec.AgentCredentialSpec`). Direct-mode
+    that names an agent. The input models type ``agent_json`` as an
+    :class:`~application_sdk.credentials.spec.AgentCredentialSpec` (attribute
+    ``agent_name``), but the same helper also accepts the raw ``dict`` /
+    ``agent-name`` form for callers that pass an unvalidated payload. Direct-mode
     requests carry no ``agent_json`` (or an empty name) and return ``None`` — the
     endpoint then runs its handler locally, byte-identical to today."""
     if not agent_json:
         return None
-    name = agent_json.get("agent-name")
+    if isinstance(agent_json, dict):
+        name = agent_json.get("agent-name") or agent_json.get("agent_name")
+    else:  # AgentCredentialSpec (or any model exposing ``agent_name``)
+        name = getattr(agent_json, "agent_name", None)
     return name if isinstance(name, str) and name else None
 
 

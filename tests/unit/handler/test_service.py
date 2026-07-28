@@ -32,7 +32,9 @@ from application_sdk.handler.contracts import (
 )
 from application_sdk.handler.service import (
     _flatten_to_pairs,
+    _lift_agent_json,
     _normalize_credentials,
+    _rank_agent_json,
     _wrap_response,
     create_app_handler_service,
 )
@@ -6912,3 +6914,82 @@ class TestSdrDispatch:
         )
         assert resp.status_code == 200
         get_client.assert_not_awaited()
+
+
+class TestAgentJsonLift:
+    """`_lift_agent_json` / `_rank_agent_json`: surface the freshest agent-json.
+
+    Heracles forwards the FE payload verbatim, so the agent-json binding can
+    arrive nested (metadata / connection_config / credentials) and in several
+    competing copies at once — a live hyphen `agent-json` object next to a stale
+    underscore `agent_json` serialized string. The lift must surface the freshest
+    copy at the top level where the SDR dispatch gate reads it.
+    """
+
+    _FRESH = {"agent-name": "acme", "basic.username": "USERNAME", "host": "h"}
+    _STALE = '{"agent-name": "acme", "basic.username": "username", "host": "h"}'
+
+    def test_rank_prefers_object_over_string_and_hyphen_over_underscore(self) -> None:
+        assert _rank_agent_json({}, "agent-json") > _rank_agent_json({}, "agent_json")
+        assert _rank_agent_json({}, "agent_json") > _rank_agent_json("{}", "agent-json")
+        # object beats string even when the string uses the canonical hyphen key
+        assert _rank_agent_json({}, "agent_json") > _rank_agent_json("{}", "agent_json")
+
+    def test_sage_shape_picks_fresh_object_over_stale_string(self) -> None:
+        # /sage: heracles forwards formData -> metadata carrying BOTH copies.
+        body = {
+            "credentials": {"connectorConfigName": "atlan-connectors-mssql"},
+            "metadata": {
+                "agent_json": self._STALE,
+                "agent-json": self._FRESH,
+                "extraction-method": "agent",
+            },
+        }
+        out = _lift_agent_json(body)
+        assert out["agent_json"] == self._FRESH
+        assert out["agent_json"]["basic.username"] == "USERNAME"
+        # both agent-json keys stripped from the container
+        assert "agent_json" not in out["metadata"]
+        assert "agent-json" not in out["metadata"]
+        assert out["metadata"]["extraction-method"] == "agent"
+
+    def test_serialized_string_used_as_fallback_when_no_object(self) -> None:
+        out = _lift_agent_json({"metadata": {"agent_json": self._STALE}})
+        assert out["agent_json"]["basic.username"] == "username"
+
+    def test_top_level_fresh_hyphen_overrides_stale_underscore(self) -> None:
+        out = _lift_agent_json({"agent_json": self._STALE, "agent-json": self._FRESH})
+        assert out["agent_json"] == self._FRESH
+        # stale aliases are dropped; only the canonical top-level key remains
+        assert "agent-json" not in out
+
+    def test_agent_json_inside_credentials_dict(self) -> None:
+        out = _lift_agent_json(
+            {"credentials": {"agent-json": self._FRESH, "connectorConfigName": "x"}}
+        )
+        assert out["agent_json"] == self._FRESH
+        assert "agent-json" not in out["credentials"]
+        assert out["credentials"]["connectorConfigName"] == "x"
+
+    def test_agent_json_inside_v3_credentials_list(self) -> None:
+        out = _lift_agent_json(
+            {
+                "credentials": [
+                    {"key": "agent-json", "value": self._FRESH},
+                    {"key": "connectorConfigName", "value": "x"},
+                ]
+            }
+        )
+        assert out["agent_json"] == self._FRESH
+        assert all(c["key"] != "agent-json" for c in out["credentials"])
+
+    def test_direct_mode_body_unchanged(self) -> None:
+        body = {"credentials": {"host": "h", "username": "u"}}
+        assert _lift_agent_json(body) == body
+
+    def test_empty_agent_json_ignored(self) -> None:
+        assert "agent_json" not in _lift_agent_json({"metadata": {"agent-json": {}}})
+        assert "agent_json" not in _lift_agent_json({"metadata": {"agent_json": ""}})
+
+    def test_unparseable_string_ignored(self) -> None:
+        assert "agent_json" not in _lift_agent_json({"metadata": {"agent_json": "{"}})
