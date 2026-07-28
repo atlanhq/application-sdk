@@ -27,6 +27,19 @@ from application_sdk.infrastructure.secrets import (
 
 
 @pytest.fixture
+def mock_meter():
+    """Patch _sidecar_wait_duration directly so tests don't depend on the
+    module-level _INSTRUMENTS cache, which may already hold a real
+    (unmocked) histogram from another test's earlier call in this file."""
+    histogram = MagicMock()
+    with patch(
+        "application_sdk.infrastructure._dapr.http._sidecar_wait_duration",
+        return_value=histogram,
+    ):
+        yield histogram
+
+
+@pytest.fixture
 def mock_client():
     """Create an AsyncDaprClient with a mocked httpx.AsyncClient."""
     with (
@@ -624,6 +637,97 @@ class TestWaitForDaprSidecar:
         import application_sdk.infrastructure._dapr.http as http_mod
 
         assert http_mod._dapr_sidecar_confirmed_ready is False
+
+    async def test_ready_records_duration_with_outcome_ready(self, mock_meter):
+        """A 204 response records the histogram with outcome=ready."""
+        mock_response = MagicMock()
+        mock_response.status_code = 204
+        mock_get = AsyncMock(return_value=mock_response)
+        with (
+            self._DEPLOYED,
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
+
+        mock_meter.record.assert_called_once()
+        duration, labels = mock_meter.record.call_args[0]
+        assert duration >= 0
+        assert labels == {"outcome": "ready"}
+
+    async def test_non_204_records_duration_with_outcome_reachable_not_ready(
+        self, mock_meter
+    ):
+        """A reachable-but-not-204 response records outcome=reachable_not_ready."""
+        not_ready = MagicMock()
+        not_ready.status_code = 503
+        mock_get = AsyncMock(return_value=not_ready)
+        with (
+            self._DEPLOYED,
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+            patch("application_sdk.infrastructure._dapr.http.logger"),
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
+
+        mock_meter.record.assert_called_once()
+        duration, labels = mock_meter.record.call_args[0]
+        assert duration >= 0
+        assert labels == {"outcome": "reachable_not_ready"}
+
+    async def test_timeout_records_duration_with_outcome_timed_out(self, mock_meter):
+        """Giving up on connection errors records outcome=timed_out."""
+        import httpx as _httpx
+
+        mock_get = AsyncMock(side_effect=_httpx.ConnectError("refused"))
+        with (
+            self._DEPLOYED,
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+            patch("application_sdk.infrastructure._dapr.http.logger"),
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=0.05, interval=0.01)
+
+        mock_meter.record.assert_called_once()
+        duration, labels = mock_meter.record.call_args[0]
+        assert duration >= 0
+        assert labels == {"outcome": "timed_out"}
+
+    async def test_metric_emission_failure_does_not_crash(self):
+        """A broken meter must not prevent wait_for_dapr_sidecar from returning."""
+        mock_response = MagicMock()
+        mock_response.status_code = 204
+        mock_get = AsyncMock(return_value=mock_response)
+        with (
+            self._DEPLOYED,
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+            patch(
+                "application_sdk.infrastructure._dapr.http._sidecar_wait_duration",
+                side_effect=RuntimeError("meter down"),
+            ),
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
 
 
 class TestRetryPastDaprColdStart:

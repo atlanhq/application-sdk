@@ -47,10 +47,11 @@ RULES: tuple[RuleDefinition, ...] = (
         id="L002",
         scope=RuleScope.BOTH,
         name="NonCanonicalLoggerFactory",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
+        orthogonal_gate="tests",
         since="0.4.0",
         rationale=(
             "The SDK adapter (application_sdk.observability.logger_adaptor.get_logger) "
@@ -59,7 +60,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "ClickHouse/Grafana and routes records through OTel. Direct use of "
             "logging.getLogger(), structlog.get_logger(), or loguru's logger bypasses "
             "all of this — correlation IDs are lost and records may not reach the "
-            "observability store."
+            "observability store. Promoted from warn to block (CNCT-108, parent "
+            "CNCT-93): rolled-own loggers strip correlation_id/workflow context/source "
+            "provenance, making those lines unfindable on the tenant UI."
         ),
         short_description=(
             "Non-canonical logger factory — use "
@@ -83,7 +86,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "  (DEBUG/INFO/WARNING/ERROR/CRITICAL).\n"
             "\n"
             "Adapter definition files are exempt — the file that defines\n"
-            "``AtlanLoggerAdapter`` or ``get_logger`` itself is skipped.\n"
+            "``AtlanLoggerAdapter`` or ``get_logger`` itself is skipped.  Dev\n"
+            "harnesses are exempt too: files under ``scripts/`` and\n"
+            "``run_dev*.py`` never run inside a workflow, so the provenance\n"
+            "argument does not apply (test files are already excluded by\n"
+            "discovery).  Block-tier since CNCT-108 (parent CNCT-93): a\n"
+            "rolled-own logger loses correlation IDs and source provenance,\n"
+            "making its records unfindable on the tenant UI.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l002",
     ),

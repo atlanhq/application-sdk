@@ -4,9 +4,15 @@ description: >
   Bump a v3 app to the latest application-sdk and adopt the SDK-native
   preflight gate safely. The gate runs the app's preflight_check handler as the
   mandatory first activity of every extraction workflow and always reports the
-  verdict; by default it is soft (a NOT_READY verdict is reported but the run
-  proceeds), and blocking real runs on NOT_READY is a per-app opt-in
-  (preflight_gate_mode = "hard"). Classifies the app's rollout bucket,
+  verdict; by default it is soft (every outcome is reported but the run
+  proceeds), and blocking real runs is a per-app opt-in (preflight_gate_mode =
+  "hard"). Hard mode blocks on everything the gate can attribute to the source —
+  a NOT_READY verdict, a probe overrunning the enforced budget, a handler crash,
+  a provably absent credential — while failures of the gate's own plumbing always
+  fail open. Classifies the app's rollout bucket, sizes the check budget
+  (preflight_gate_timeout_seconds, default 150s, ceiling 300s) and retry attempts
+  (preflight_gate_max_attempts) against what the handler actually costs, sizing
+  from SDK-measured gate_duration_ms rather than handler-authored check durations,
   fixes name collisions, audits the handler's status logic against the new
   semantics, runs an interactive check-design session with the developer
   (visualized as a decision tree: which checks block, which are advisory, what
@@ -24,14 +30,17 @@ optional_triggers:
   - "update preflight checks for the gate"
   - "preflight gate migration"
   - "will this app break on SDK bump"
+  - "size the preflight budget"
 owner: connector-platform-team
-last_updated: "2026-07-23"
+last_updated: "2026-07-27"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
 outputs:
-  - uv.lock + pyproject.toml (SDK floor raised to >=3.24.0 and lockfile synced)
+  - uv.lock + pyproject.toml (SDK floor raised and lockfile synced — >=3.24.0 for the gate itself; the no-verdict/budget semantics need the first release after CNCT-99, so read the changelog rather than assuming 3.24.0 covers them)
   - app/handler.py (status logic per the agreed check tree; typed errors on failed checks)
+  - app/failures.py (every app-specific typed class in one module — created or extended, shared with /typed-failures)
+  - app/<app>.py (preflight_gate_mode, plus preflight_gate_timeout_seconds / preflight_gate_max_attempts when the default budget does not fit)
   - deleted app-owned preflight @task + call sites (collision class, plus any duplicate readiness activities the developer agrees to consolidate — always with a coverage diff)
   - contract/app.pkl + regenerated app/generated/ (only if form-only metadata keys must move onto the input contract)
   - updated unit tests covering every verdict path
@@ -62,9 +71,15 @@ status. Read its `app/handler.py` before proposing changes.
 - There is no per-check `blocking` flag. Importance is expressed by **control
   flow**: required checks short-circuit (return `NOT_READY` early), advisory
   checks run and only influence `PARTIAL`.
-- **Raising does not block.** A raise from the handler is a gate plumbing
-  failure → the SDK fails open (logs loudly, run proceeds). Blocks happen only
-  via the returned status.
+- **Return the verdict; don't raise it.** The returned status is what both
+  surfaces render, so a block belongs there. But raising is *not* a no-op, and
+  what it does depends on the error's type: a typed plumbing error
+  (`RateLimitedError`, `DependencyUnavailableError`, `ResourceExhaustedError`)
+  means "I could not determine readiness" and fails open in both postures;
+  anything else — an untyped crash, a typed source error, overrunning the budget
+  — is treated as an unverifiable source and **blocks in hard mode**. So an
+  uncaught probe exception is a run-aborting bug for a hard app, not a harmless
+  fail-open.
 - A failed check should carry `error=<SDK leaf>(...).to_failure_details()` —
   category/code/audience/suggested_action flow to the Automation Engine and
   dashboards. Untyped failures fall back to the `PREFLIGHT_CHECK_FAILED`
@@ -106,18 +121,130 @@ class MyApp(App):
 or, ops-side without an app release: `ATLAN_PREFLIGHT_GATE_MODE=hard` on the
 worker deployment (env wins over the attribute; any value other than the
 literal `hard` resolves to soft — malformed config never blocks a run by
-accident). The worker logs an INFO line per hard app at boot.
+accident). The worker logs an INFO line per hard app at boot, and emits a
+queryable `Preflight gate posture` event per app carrying the resolved mode and
+budget. Prefer the per-app attribute: the env lever applies to every app on that
+worker, including ones whose checks have never been validated against real runs.
+
+Hard mode covers every outcome the gate attributes to the **source** — a
+`NOT_READY` verdict, a probe overrunning the budget, a handler crash, a provably
+absent credential. Failures of the gate's own **plumbing** (rate limit,
+secret-store outage, a credential lookup that failed for any other reason, worker
+unavailable) always fail open, in both postures. The outcome event
+carries `gate_classification` (`source_unverifiable` vs `gate_broken`) so the two
+are separable in pulse.
+
+## The check budget — size it before flipping to hard
+
+`Handler.preflight_check` gets `App.preflight_gate_timeout_seconds` (default 150,
+clamped 5-300) and the SDK **enforces** it: the gate cancels the handler when it
+elapses. In hard mode an overrun *blocks the run*, so this is not a formality.
+
+It bounds the **whole handler call**, not each check — one slow probe can consume
+the budget and leave the rest unrun. And it is a **deadline, not a reservation**: a
+handler returning in 3s holds its worker slot for 3s regardless of the budget. So
+a generous budget costs nothing on a healthy run; it only changes the run that
+would otherwise have been cut short.
+
+`App.preflight_gate_max_attempts` (default 2, clamped 1-3) sets the retries. A
+retry rescues a *transient* — a cold pool, a cluster resuming — by trying **again**;
+it cannot rescue a systematically slow check, which needs a bigger budget instead.
+Both timeouts derive from these two numbers, so an app declaring a large budget
+usually wants `1`: at the 300s ceiling, two attempts reserve a ~10 minute
+`schedule_to_close`.
+
+```python
+class MyApp(App):
+    preflight_gate_mode = "hard"
+    preflight_gate_timeout_seconds = 250   # this source's probe is genuinely slow
+    preflight_gate_max_attempts = 1        # a retry won't rescue a slow check
+```
+
+What the skill checks during adoption:
+
+- **Size from the p99 of *successful* runs, not the max.** Sizing to the worst
+  observed run makes the timeout decorative — nothing ever overruns, so hard mode
+  is back to enforcing only `NOT_READY` verdicts. Sizing to p95 blocks 5% of runs.
+- **Read `gate_duration_ms`, never `check_matrix` durations.** Per-check
+  `duration_ms` is written by the app, and rows predating SDK 3.25 carry durations
+  from *abandoned* attempts (see the orphaned-attempt note below), so they read far
+  above any budget that was ever in force. `gate_duration_ms` is measured by the
+  SDK. Headroom is `gate_duration_ms / (gate_timeout_seconds * 1000)`.
+- **Measure the handler's real cost before flipping to hard.** If the app runs a
+  comparable probe as a `@task` elsewhere, its `timeout_seconds` is the honest
+  estimate — a check that mirrors a 600s task will not fit in the default.
+- **Size probes to `PreflightInput.timeout_seconds`, don't defeat it.** That field
+  carries what remains *after* credential resolution. `max(input.timeout_seconds,
+  <bigger constant>)` discards it; a `deadline` whose per-probe floor never forces
+  an early return makes it decorative. Both read as "budget honoured" in review
+  and are not.
+- **Bound the whole handler, not just the probes.** Client build, connect, and
+  auth are network I/O and count against the budget.
+- **Keep probes awaitable.** Cancellation lands at an `await`, so blocking
+  synchronous I/O on the event loop escapes the budget entirely *and* stalls the
+  worker's other activities. Run blocking drivers in a thread.
+- **Fan-out is where budgets die.** A per-catalog/per-schema loop scales with the
+  source, not with the code. Prefer a bounded scope, concurrency, or an early exit
+  once the check is satisfied.
 
 Rules the skill enforces during adoption:
 
 - Never soften the handler to dodge the gate. Returning `PARTIAL` for a
   failure that should block hides the truth from every surface; posture
   belongs on the App class, verdicts belong in the handler.
-- Soft is the default landing state with an exit: when pulse shows the app's
-  `would_block` rows track real workflow failures (checks are right), add
-  `preflight_gate_mode = "hard"` — that is the whole hard-fail flip.
+- **Never return `NOT_READY` for a transient.** A 429 or a dependency outage is
+  "ask me later", not "the source is not ready" — collapsing them makes hard mode
+  fail *closed* on a blip. Raise a typed `RateLimitedError` /
+  `DependencyUnavailableError` instead; the gate routes those to fail-open.
+- Soft is the default landing state with two exit conditions, both required
+  before adding `preflight_gate_mode = "hard"`:
+  1. the app's `would_block` rows track real workflow failures (the checks are
+     right, not just loud), and
+  2. the app's p99 `gate_duration_ms` sits comfortably inside its declared
+     budget (the checks fit, so an overrun is signal rather than routine).
+  Flipping on (1) alone converts a fail-open into a block on every slow run.
 - An app with no `preflight_check` handler needs no posture: the DefaultHandler
   never returns `NOT_READY`, so the gate never has anything to enforce.
+
+## What the gate emits, and which numbers to trust
+
+Every outcome writes one `Preflight gate outcome` row. v3 apps log to
+`otel_logs.service_logs` (not `combined_workflow_logs`, which is the Argo path),
+and `LogAttributes` is a `Map`, so `LogAttributes['outcome']` works directly while
+`check_matrix` needs `JSONExtractArrayRaw` on the string value.
+
+| attribute | meaning |
+| --- | --- |
+| `outcome` | `proceeded` / `would_block` / `blocked` / `no_verdict` / `skipped` |
+| `gate_mode` | resolved posture; absent on the workflow-emitted rows |
+| `gate_classification` | `verdict` / `source_unverifiable` / `gate_broken` |
+| `gate_duration_ms` | **SDK-measured** elapsed; the only number that can size a budget |
+| `gate_timeout_seconds` | the budget in force, so headroom needs no join |
+| `gate_attempt` | distinguishes a first-try pass from a retry rescue |
+| `check_matrix` | per-check name/passed/error_code/duration_ms; `[]` where no check ran |
+
+`check_matrix` is present on **every** outcome, so parse it unconditionally rather
+than branching on field presence — a branch mishandled in the dropping direction
+is how a gate that never reached a verdict vanishes from the numerator.
+
+**The orphaned-attempt caveat, for anything sized on historical data.** Before SDK
+3.25 the gate had no timeout of its own. Temporal's `start_to_close` is enforced
+server-side, and a non-heartbeating activity's coroutine is *not* stopped by it — so
+the workflow gave up at 25s and failed open while the abandoned handler kept
+running, finished minutes later, and emitted its own outcome row. Consequences when
+reading old data:
+
+- a `blocked` row does **not** prove the run was blocked; the workflow may have
+  moved on long before it was written
+- the same `workflow_run_id` can carry both `blocked` and `no_verdict`, both at
+  attempt 1 — that pair is the signature
+- `check_matrix` durations far above any budget come from those orphans, not from
+  probes that were permitted to run that long
+
+The SDK-side cancel fixes this: the gate's own timer fires before Temporal's, so the
+work actually stops and the row means what it says. Size budgets from
+`gate_duration_ms` going forward, or from `temporal.activity.duration_ms` on the
+`activity.ended` event, which the log interceptor has always measured honestly.
 
 ## The design principle every decision flows from
 
@@ -188,15 +315,17 @@ Run these detections and report the bucket(s) before changing anything:
    key read inside `preflight_check`, and cross-check each against the input
    contract's fields. On the gate path, metadata is rebuilt from the extraction
    input's `model_dump`; a UI-form-only key is **absent** — a hard `[...]` read
-   crashes (fail-open), a defensive `.get(..., default)` silently runs the
-   check with wrong config. Every unmatched key needs a decision in phase 2.
+   crashes, which is a handler crash and therefore **blocks every run in hard
+   mode**; a defensive `.get(..., default)` silently runs the check with wrong
+   config. Every unmatched key needs a decision in phase 2.
 7. **Multi-credential class** — an app that needs more than one credential to
    verify a source (e.g. an API token AND an object-store credential), whose
    per-auth-type guids live in separate input fields, not on the single
    top-level `credential_guid` triple. The gate resolves only that one triple,
    so the symptom on the gate path is the handler receiving `credentials=[]`,
    defaulting to one auth type, and raising missing-credential on every gated
-   run (100% fail-open). Detect by: multiple `*_credential_guid` fields on the
+   run — reported on every run in soft mode, and **aborting every run in hard
+   mode**. Detect by: multiple `*_credential_guid` fields on the
    input contract, or a handler that resolves guids itself (`CredentialResolver`
    / `get_credentials` called inside `preflight_check`). If found, the app
    adopts the SDK `preflight_credential_refs` primitive in phase 2 (see 2g) — it
@@ -455,6 +584,73 @@ During the interactive session: when the developer picks the same leaf with
 the same custom message/action for two or more checks, proactively offer to
 extract a subclass into `app/failures.py`.
 
+**One module, no exceptions.** Every typed class the app raises — from preflight
+checks *and* from extraction tasks — lives in `app/failures.py` (or whatever
+single module the app already uses; match it, don't add a second). Scattered
+definitions are how the same root cause ends up with two different codes
+depending on which surface hit it, which silently splits its aggregation in AE
+and the dashboards. If the app has untyped raise sites left over, run
+`/typed-failures` first — it owns the sweep and this skill assumes its output.
+
+**Pick the leaf by who must act, because that is what the SLA split reads.**
+`audience` is a ClassVar, so the leaf choice *is* the routing decision:
+
+| Audience | Leaves | Means |
+| -- | -- | -- |
+| `USER` | `AuthError`, `AppPermissionDeniedError`, `NotFoundError`, `PreconditionError`, `InvalidInputError`, `AlreadyExistsError`, `SourceUnavailableError`, `RateLimitedError` | the connector owner must fix credentials, permissions, or source config |
+| `PLATFORM` | `DependencyUnavailableError`, `ColdStartRaceError`, `ResourceExhaustedError` | infra ops must act |
+| `APP_OWNER` | `InternalError`, `DataIntegrityError`, `UnimplementedError`, `AppTimeoutError`, bare `AppError` | **the app team owns it** — a connector or SDK bug |
+
+Two traps that land a source problem on the app's ledger:
+
+- **Untyped is not neutral.** A bare `Exception`, a bare `AppError`, or
+  `InternalError` resolves to `APP_OWNER`. Leaving a source failure untyped does
+  not defer the decision — it silently files the bug against the app.
+- **A slow source is not `AppTimeoutError`.** That leaf is `APP_OWNER` (and
+  retryable). A source that will not answer belongs in `SourceUnavailableError`
+  (`USER`). Reach for `AppTimeoutError` only when *our own* deadline is the fact
+  being reported.
+
+### 2f-bis. Soft mode and the failure-rate SLA (do this before flipping to hard)
+
+Soft mode deliberately lets a run proceed after the gate has already said the
+source is not ready or could not be verified. That run will often fail later, in
+extraction, on **the same root cause the gate just reported** — and if those
+downstream raise sites are untyped, each of those failures is filed against the
+app (`APP_OWNER`, per the table above) even though the gate's own row already
+attributed it correctly. The app's failure rate absorbs a source problem it
+diagnosed but was told not to block on.
+
+So while the app is still soft, walk the failure paths for each check the gate
+can report and confirm the extraction-side failure for that same cause carries
+the same leaf the check does:
+
+1. **Take each blocking check** and ask: if the gate reports this and the run
+   proceeds anyway, where does extraction die? Name the raise site.
+2. **Make it the same leaf.** If the check reports `AuthError`, the extraction
+   failure for bad credentials must also be `AuthError` — not `InternalError`,
+   not untyped. One root cause, one code, one audience, on both surfaces.
+3. **Do not swallow it into a retry loop** that eventually raises something
+   generic. The last error standing is the one the Automation Engine attributes,
+   so a typed cause wrapped in an untyped retry-exhausted error routes to
+   `APP_OWNER`.
+4. **Do not pre-empt the gate.** Deleting a check because "extraction will fail
+   anyway" loses the early, cheap, correctly-attributed signal and keeps only
+   the late, expensive one.
+
+Why this matters beyond tidiness: the gate's outcome row and the workflow's
+failure share `workflow_run_id`, so a run that failed downstream of a
+`would_block` is identifiable — the pair is the evidence that the failure was an
+accepted-risk proceed, not a regression. That evidence is only usable if the
+downstream failure is typed; otherwise the two rows disagree about whose fault
+it was and the app's is the one that counts.
+
+Logging on those paths, per `docs/standards/logging.md`: log the typed error
+(pass the exception, not `str(exc)` interpolated into a message), keep the level
+at `error` only for genuine failures, and never log credential values or a
+driver message that embeds a connection string — the SDK redacts
+`FailureDetails.cause_repr`, but a hand-built log line is yours to keep clean.
+
 ### 2g. Multi-credential apps — declare named refs, don't hand-roll
 
 Only if phase 0 flagged the multi-credential class. The gate resolves exactly
@@ -612,21 +808,41 @@ gate verdict from the "Preflight gate outcome" event. The console drops the
 event's structured extras, so read the local observability logs
 (`local/dapr/objectstore/artifacts/apps/observability/non-sdr/logs/**.json.gz`,
 gzipped JSONL) and confirm `outcome="proceeded"` with the entrypoint's checks in
-`check_matrix`. `no_verdict`/`ActivityError` means the gate activity fail-opened
-(e.g. flaky embedded Dapr locally), not a real verdict — re-run.
+`check_matrix`. Read `gate_classification` to tell the two non-verdicts apart:
+`gate_broken` on a `no_verdict` row is the gate's own plumbing (e.g. flaky
+embedded Dapr locally) — not a real verdict, re-run. `source_unverifiable` on a
+`would_block`/`blocked` row means the handler crashed or overran its budget, which
+*is* about your checks and will abort the run once the app is on hard mode. An
+`outcome="skipped"` row means the gate never ran at all — check the `reason`
+(`input_not_credential_resolvable` is a contract problem, see step 4).
 
 ## Pitfalls (each observed live during the rollout — check all of them)
 
 - `all(c.passed)` status logic → advisory checks silently promoted to
   run-blocking.
-- Raise-to-block → does nothing but fail open; blocks are returned, not raised.
+- Raise-to-block → the verdict belongs in the returned status; a raise is
+  classified by error type instead, so it either fails open (typed plumbing
+  error) or blocks with the wrong attribution (anything else).
+- Returning `NOT_READY` for a transient (429, dependency outage) → makes a hard
+  gate fail *closed* on a blip. Raise a typed plumbing error instead.
+- Sizing checks to a budget the handler can't meet, or reading
+  `input.timeout_seconds` and then overriding it (`max(input.timeout_seconds,
+  <bigger constant>)`, or a deadline whose per-probe floor never forces an early
+  return) → the overrun blocks every run in hard mode.
 - `error` on a passed check → ignored by the gate; remove it.
 - Form-only metadata keys → silently absent on the gate path; defensive
-  `.get` hides it (checks pass with wrong config), hard access crashes to
-  fail-open. Fix the contract, not the symptom.
+  `.get` hides it (checks pass with wrong config), hard access crashes — which
+  blocks every run in hard mode. Fix the contract, not the symptom.
 - Deleting a colliding activity without the coverage diff → checks vanish.
 - Wrong audience on an internal failure → customer's SLA split absorbs an app
   bug.
+- Untyped extraction failure for a cause the gate already reports → in soft mode
+  the run proceeds, dies later on that same cause, and defaults to `APP_OWNER`;
+  the app's failure rate absorbs a source problem it correctly diagnosed (2f-bis).
+- Typed cause swallowed by a retry loop that finally raises something generic →
+  the last error standing is what AE attributes, so the typing is wasted.
+- Typed classes spread across modules → one root cause aggregates under two
+  codes depending on which surface raised it. One `app/failures.py`.
 - Skipping the boot check before pushing a bump → collision discovered as a
   prod crash-loop instead of locally.
 - Multi-credential app hand-rolling credential resolution + fail-open taxonomy
@@ -641,6 +857,21 @@ gzipped JSONL) and confirm `outcome="proceeded"` with the entrypoint's checks in
   inline; the gate resolves them from the triple, so they can disagree. Read the
   "Preflight gate outcome" event (`outcome`/`reason`/`check_matrix`), not the
   UI, to know what the gate actually did.
+- Sizing a budget from `check_matrix` `duration_ms` → those are handler-authored,
+  and on pre-3.25 rows they come from *abandoned* attempts that kept running after
+  the workflow gave up, so they read far above any budget that was in force. Use
+  `gate_duration_ms`.
+- Sizing a budget from the worst observed run → the timeout becomes decorative
+  (nothing ever overruns, so hard mode is back to enforcing only `NOT_READY`).
+  Size from the p99 of *successful* runs; p95 blocks 5% of them.
+- Reading a `blocked` row on pre-3.25 data as proof the run was blocked → an
+  orphaned attempt writes that row minutes after the workflow already failed open.
+  The signature is `blocked` and `no_verdict` on the same `workflow_run_id`, both
+  at attempt 1.
+- Raising `preflight_gate_timeout_seconds` toward the ceiling while leaving
+  `preflight_gate_max_attempts` at 2 → at 300s that reserves a ~10 minute
+  `schedule_to_close`, and a retry cannot rescue a systematically slow check
+  anyway. Pair a large budget with `1`.
 - Mis-set `entrypoint` default in `preflight_check` → multi-entrypoint runs
   routed down the wrong branch (a miner silently running the crawler's checks).
 - `extraction_method` names an extraction *kind* (e.g. `query_history`), not a
@@ -675,6 +906,9 @@ fleet has ~80 apps and this skill has met seven of them.
 ## Done means
 
 Bucket reported → bumped and booting → check tree agreed with the developer
-and implemented → typed errors on failed checks → test matrix green → suite +
-pre-commit green. Summarize the final tree in the PR description so reviewers
-see the blocking structure at a glance.
+and implemented → typed errors on failed checks, all defined in one module
+(`app/failures.py`) → each blocking check's extraction-side counterpart raises
+the same leaf, so a soft-mode proceed cannot file a source failure against the
+app → budget sized to what the handler actually costs → test matrix green →
+suite + pre-commit green. Summarize the final tree in the PR description so
+reviewers see the blocking structure at a glance.

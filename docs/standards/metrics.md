@@ -232,6 +232,7 @@ Names emitted by the consolidated SDK surface (all use OTel base units
 | `http_server_active_requests` | gauge | same |
 | `temporal_*` (Rust-core families) | various | Temporal SDK Rust core, scraped via FastAPI proxy or pushed via `TemporalCoreCollector` |
 | `temporal_core_metrics_proxy_failures_total` | counter | `handler/service.py` — bumped (with `reason` label) when the in-process Temporal-core proxy fetch from `127.0.0.1:9464` fails (timeout, non-200, etc.) so `up=1` scrapes with missing `temporal_*` series are observable from VictoriaMetrics rather than only from logs |
+| `dapr_sidecar_wait_duration_seconds` | histogram | `infrastructure/_dapr/http.py` — `wait_for_dapr_sidecar()`, label `outcome` (`ready` / `reachable_not_ready` / `timed_out`); surfaces a slow/misconfigured sidecar as a boot-time metric instead of only as a downstream liveness-probe restart loop |
 
 ## User-facing Metrics Shim
 
