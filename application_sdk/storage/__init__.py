@@ -73,7 +73,11 @@ from application_sdk.storage.ops import (
     put_json,
     upload_file,
 )
-from application_sdk.storage.preflight import verify_object_store_access
+from application_sdk.storage.preflight import (
+    ObjectStoreCheckResult,
+    check_object_store_access,
+    verify_object_store_access,
+)
 
 __all__ = [
     # Cloud store (external customer buckets)
@@ -115,4 +119,6 @@ __all__ = [
     "create_store_from_binding_with_put_attrs",
     # SDR preflight
     "verify_object_store_access",
+    "check_object_store_access",
+    "ObjectStoreCheckResult",
 ]

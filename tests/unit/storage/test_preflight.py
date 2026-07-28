@@ -15,8 +15,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk.storage.preflight import (
+    ObjectStoreCheckResult,
     _classify_access_error,
     _probe_store,
+    check_object_store_access,
     verify_object_store_access,
 )
 
@@ -303,3 +305,181 @@ async def test_verify_probe_failure_propagates_to_preflight_error(monkeypatch) -
     assert "write failed" in msg
     assert "permission denied" in msg
     assert DEPLOYMENT_OBJECT_STORE_NAME in msg
+
+
+# ---------------------------------------------------------------------------
+# check_object_store_access — non-raising structured probe (interactive path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_returns_empty_when_sdr_disabled(monkeypatch) -> None:
+    """ENABLE_ATLAN_UPLOAD=False → [] with no probing."""
+    import application_sdk.constants as constants_mod
+
+    monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", False)
+
+    infra = _make_infra(storage=_fake_store(), upstream_storage=_fake_store())
+    assert await check_object_store_access(infra) == []
+
+
+@pytest.mark.asyncio
+async def test_check_returns_empty_when_infra_none(monkeypatch) -> None:
+    """infra=None → [] even in SDR mode."""
+    import application_sdk.constants as constants_mod
+
+    monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", True)
+    assert await check_object_store_access(None) == []
+
+
+@pytest.mark.asyncio
+async def test_check_success_both_stores(monkeypatch) -> None:
+    """Both stores healthy → one passed result each, no error fields."""
+    import application_sdk.constants as constants_mod
+
+    monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", True)
+
+    fake_obstore = MagicMock()
+    fake_obstore.put_async = AsyncMock()
+    fake_obstore.head_async = AsyncMock()
+    infra = _make_infra(storage=_fake_store(), upstream_storage=_fake_store())
+
+    with patch.dict("sys.modules", {"obstore": fake_obstore}):
+        results = await check_object_store_access(infra)
+
+    assert len(results) == 2
+    labels = [r.label for r in results]
+    assert labels == ["deployment", "upstream"]
+    assert all(r.passed for r in results)
+    assert all(r.error_class is None and r.cause is None for r in results)
+
+
+@pytest.mark.asyncio
+async def test_check_deployment_only_when_no_upstream(monkeypatch) -> None:
+    """Upstream absent → only the deployment store is probed (no hard-fail here)."""
+    import application_sdk.constants as constants_mod
+
+    monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", True)
+
+    fake_obstore = MagicMock()
+    fake_obstore.put_async = AsyncMock()
+    fake_obstore.head_async = AsyncMock()
+    infra = _make_infra(storage=_fake_store(), upstream_storage=None)
+
+    with patch.dict("sys.modules", {"obstore": fake_obstore}):
+        results = await check_object_store_access(infra)
+
+    assert len(results) == 1
+    assert results[0].label == "deployment"
+    assert results[0].passed is True
+
+
+@pytest.mark.asyncio
+async def test_check_write_failure_returns_failed_result(monkeypatch) -> None:
+    """A write failure → failed result carrying class/cause/hint and a message."""
+    import application_sdk.constants as constants_mod
+
+    monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", True)
+
+    fake_obstore = MagicMock()
+    fake_obstore.put_async = AsyncMock(side_effect=Exception("403 Forbidden"))
+    fake_obstore.head_async = AsyncMock()
+    infra = _make_infra(storage=_fake_store(), upstream_storage=None)
+
+    with patch.dict("sys.modules", {"obstore": fake_obstore}):
+        results = await check_object_store_access(infra)
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.passed is False
+    assert result.error_class == "permission denied"
+    assert result.cause is not None and "403" in result.cause
+    assert result.hint
+    assert "access check failed" in result.message
+
+
+@pytest.mark.asyncio
+async def test_check_head_failure_returns_failed_result(monkeypatch) -> None:
+    """Write succeeds, HEAD fails → failed result flagged read/head."""
+    import application_sdk.constants as constants_mod
+
+    monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", True)
+
+    fake_obstore = MagicMock()
+    fake_obstore.put_async = AsyncMock()
+    fake_obstore.head_async = AsyncMock(side_effect=Exception("401 Unauthorized"))
+    infra = _make_infra(storage=_fake_store(), upstream_storage=None)
+
+    with patch.dict("sys.modules", {"obstore": fake_obstore}):
+        results = await check_object_store_access(infra)
+
+    assert results[0].passed is False
+    assert results[0].failed_operation == "read/head"
+    assert results[0].error_class == "invalid credentials"
+
+
+@pytest.mark.asyncio
+async def test_check_store_none_returns_not_configured(monkeypatch) -> None:
+    """A None deployment store → a failed 'not configured' result, no raise."""
+    import application_sdk.constants as constants_mod
+
+    monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", True)
+
+    infra = _make_infra(storage=None, upstream_storage=None)
+    results = await check_object_store_access(infra)
+
+    assert len(results) == 1
+    assert results[0].passed is False
+    assert results[0].error_class == "not configured"
+
+
+@pytest.mark.asyncio
+async def test_check_timeout_returns_connectivity_failure(monkeypatch) -> None:
+    """A probe that times out → a connectivity failure result, no raise."""
+    import application_sdk.constants as constants_mod
+
+    monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", True)
+
+    async def _stall(*args, **kwargs):
+        await asyncio.sleep(9999)
+
+    infra = _make_infra(storage=_fake_store(), upstream_storage=None)
+    with (
+        patch(
+            "application_sdk.storage.preflight._probe_store_structured",
+            side_effect=_stall,
+        ),
+        patch("application_sdk.storage.preflight._PROBE_TIMEOUT_SECS", 0.01),
+    ):
+        results = await check_object_store_access(infra)
+
+    assert len(results) == 1
+    assert results[0].passed is False
+    assert results[0].error_class == "connectivity / unknown"
+    assert "timed out" in (results[0].cause or "")
+
+
+def test_object_store_check_result_message_passed() -> None:
+    """A passed result renders a positive, single-line message."""
+    result = ObjectStoreCheckResult(
+        label="deployment", binding_name="objectstore", passed=True
+    )
+    assert "read/write access confirmed" in result.message
+
+
+def test_boot_formatter_renders_structured_result() -> None:
+    """The boot wrapper formats a structured result into the historical block."""
+    import application_sdk.storage.preflight as preflight_mod
+
+    result = ObjectStoreCheckResult(
+        label="deployment",
+        binding_name="objectstore",
+        passed=False,
+        error_class="permission denied",
+        cause="403 Forbidden",
+        hint="grant access",
+        failed_operation="write",
+    )
+    formatted = preflight_mod._format_boot_failure(result)
+    assert "write failed [permission denied]" in formatted
+    assert "403 Forbidden" in formatted

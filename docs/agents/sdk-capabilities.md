@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.23.0
-source-sha:    fc856c0cd89c08315c80b0131d706e08fed2ec17
-source-date:   2026-07-17T11:37:53+00:00
+sdk-version:   3.24.1
+source-sha:    b7db0fe6c87c5b883187e215e5ecc11a438d5514
+source-date:   2026-07-27T23:07:04+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 33 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 35 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -2037,6 +2037,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Async client for external customer-provided cloud object stores.
 - **Defined in:** `application_sdk/storage/cloud.py`
 
+#### `ObjectStoreCheckResult`
+
+- **Import:** `from application_sdk.storage import ObjectStoreCheckResult`
+- **Signature:** `class ObjectStoreCheckResult(label: str, ...)`
+- **Summary:** Structured outcome of a single object-store access probe.
+- **Defined in:** `application_sdk/storage/preflight.py`
+
 #### `ObjectStorePreflightError`
 
 - **Import:** `from application_sdk.storage import ObjectStorePreflightError`
@@ -2087,6 +2094,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Defined in:** `application_sdk/storage/errors.py`
 
 ### Functions
+
+#### `check_object_store_access`
+
+- **Import:** `from application_sdk.storage import check_object_store_access`
+- **Signature:** `check_object_store_access(infra: InfrastructureContext | None)`
+- **Summary:** Non-raising object-store access probe for the interactive SDR preflight.
+- **Defined in:** `application_sdk/storage/preflight.py`
 
 #### `create_local_store`
 
@@ -2574,6 +2588,25 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 
 ### `application_sdk.handler.contracts`
 
+#### `AgentCredentialSpec`
+
+- **Import:** `from application_sdk.handler.contracts import AgentCredentialSpec`
+- **Summary:** Typed envelope for an agent-shape credential payload.
+- **Fields:**
+  - `agent_name: str` `= Field(default='', alias='agent-name')` — Name of the Secure Agent instance. Used by ``is_populated()`` to
+  - `secret_manager: str` `= Field(default='', alias='secret-manager')` — Secret store backend: ``awssecretmanager``, ``azurekeyvault``,
+  - `secret_path: str` `= Field(default='', alias='secret-path')` — Path / ARN / name of the secret in the external secret manager.
+  - `auth_type: str` `= Field(default='', alias='auth-type')` — Authentication strategy: ``basic``, ``noauth``, ``gcp-wif``,
+  - `host: str` `= ''` — Database / service hostname. Required for JDBC connectors.
+  - `port: int` `= 0` — Database / service port.
+  - `connect_by: str` `= Field(default='', alias='connectBy')` — Connection method hint (``host``, ``url``, etc.).
+  - `agent_type: str` `= Field(default='', alias='agent-type')` — Agent framework version. ``new-app-framework`` for SA 2.0 agents.
+  - `key_type: str` `= Field(default='', alias='key-type')` — Secret key layout: ``multi-key``, ``single-key``, etc.
+  - `aws_region: str` `= Field(default='', alias='aws-region')` — AWS region for the secret manager.
+  - `aws_auth_method: str` `= Field(default='', alias='aws-auth-method')` — AWS auth method: ``iam``, ``iam-assume-role``, ``access-key``.
+  - `azure_auth_method: str` `= Field(default='', alias='azure-auth-method')` — Azure auth method: ``managed_identity``, ``service_principal``.
+- **Defined in:** `application_sdk/credentials/spec.py`
+
 #### `ApiMetadataObject`
 
 - **Import:** `from application_sdk.handler.contracts import ApiMetadataObject`
@@ -2603,6 +2636,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
   - `timeout_seconds: int` `= 30` — Maximum seconds to wait for auth response.
+  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `AuthOutput`
@@ -2713,6 +2747,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `include_fields: bool` `= True` — Whether to include field/column details.
   - `max_objects: int` `= 1000` — Maximum number of objects to return.
   - `timeout_seconds: int` `= 120` — Maximum seconds to wait for metadata fetch.
+  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `MetadataOutput`
@@ -2750,6 +2785,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
   - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).
   - `timeout_seconds: int` `= 60` — Maximum seconds the handler has to run all checks.
+  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `PreflightOutput`
