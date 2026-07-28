@@ -104,8 +104,16 @@ def extract_apt_packages(text: str) -> str:
     packages the repo chose not to install, and extracting them would render a
     step the on-disk file doesn't have, leaving C002 drift that no re-run clears.
     """
+    # Dropping a comment line leaves its trailing newline behind. If the comment
+    # sat *between* two `\`-continuation lines, that stray blank line is a bare
+    # newline `_APT_INSTALL_RE`'s continuation arm cannot cross, so every package
+    # after it would be lost. Collapse runs of blank lines back to one so the
+    # continuation stays whole; the canonical render never uses `\`-continuation,
+    # so this only rescues a near-invalid hand-written form and leaves the
+    # C002 round-trip untouched.
+    cleaned = re.sub(r"\n{2,}", "\n", _COMMENT_LINE_RE.sub("", text))
     packages: list[str] = []
-    for m in _APT_INSTALL_RE.finditer(_COMMENT_LINE_RE.sub("", text)):
+    for m in _APT_INSTALL_RE.finditer(cleaned):
         for token in sanitize_package_list(m.group("args")):
             if token not in packages:
                 packages.append(token)

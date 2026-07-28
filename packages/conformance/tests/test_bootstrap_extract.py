@@ -73,6 +73,21 @@ def test_extract_apt_packages_reads_multiline_continuation() -> None:
     assert extract_apt_packages(text) == "libkrb5-dev gcc"
 
 
+def test_extract_apt_packages_reads_continuation_with_interleaved_comment() -> None:
+    """A comment placed *between* two `\\`-continuation lines must not drop the
+    packages that follow it: comment removal leaves a blank line, and a bare
+    newline cannot be crossed by the continuation arm unless the blank run is
+    collapsed first."""
+    text = (
+        "        run: |\n"
+        "          apt-get install -y \\\n"
+        "            # build headers for pykerberos\n"
+        "            libkrb5-dev \\\n"
+        "            gcc\n"
+    )
+    assert extract_apt_packages(text) == "libkrb5-dev gcc"
+
+
 def test_extract_apt_packages_stops_at_end_of_command() -> None:
     """Content after the install command is not mistaken for a package."""
     text = "          sudo apt-get install -y libpq-dev\n          echo done\n"
@@ -127,6 +142,14 @@ def test_extract_apt_packages_from_rendered_checks_yml_ignores_its_comment_block
 def test_extract_apt_packages_keeps_version_pin() -> None:
     text = "          apt-get install -y libkrb5-dev=1.20.1-2 gcc/bookworm\n"
     assert extract_apt_packages(text) == "libkrb5-dev=1.20.1-2 gcc/bookworm"
+
+
+def test_extract_apt_packages_round_trips_version_pin_through_render() -> None:
+    """`APT_PACKAGE_RE` deliberately allows `=` and `/` for version pins and
+    release qualifiers; lock the full render->extract round trip for those forms
+    so the extra characters stay in step with the rendered `checks.yml`."""
+    deps = "libkrb5-dev=1.20.1-2 gcc/bookworm"
+    assert extract_apt_packages(render("checks.yml", system_deps=deps)) == deps
 
 
 def test_extract_renovate_automerge_soft_mode() -> None:
