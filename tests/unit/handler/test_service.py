@@ -6848,12 +6848,43 @@ class TestSdrDispatch:
             "/workflows/v1/auth",
             json={"agent_json": self._AGENT_JSON},
         )
-        # Classified worker-side error reaches the caller (type + message),
-        # not a generic 500 "Internal server error".
-        detail = resp.json()["detail"]
-        assert "CredentialNotFoundError" in detail
-        assert "secret not found" in detail
-        assert detail != "Internal server error"
+        # Classified worker-side error reaches the caller (type + message) under
+        # BOTH message and detail, and at a 4xx — so Heracles forwards it rather
+        # than collapsing to a generic "App service returned an internal error".
+        assert resp.status_code < 500
+        body = resp.json()
+        for field in (body["message"], body["detail"]):
+            assert "CredentialNotFoundError" in field
+            assert "secret not found" in field
+            assert field != "Internal server error"
+
+    def test_sdr_worker_5xx_category_floored_to_4xx_with_reason(
+        self, monkeypatch
+    ) -> None:
+        """A Dapr SECRET_NOT_FOUND (DEPENDENCY_UNAVAILABLE → 503) surfaces its
+        reason as a 4xx + message, not a swallowed generic internal error."""
+        from temporalio.client import WorkflowFailureError
+        from temporalio.exceptions import ApplicationError
+
+        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.errors.wire import FailureDetails
+
+        app_err = ApplicationError(
+            "secret 'db-password' not found in store",
+            FailureDetails(
+                category=FailureCategory.DEPENDENCY_UNAVAILABLE,
+                code="SECRET_NOT_FOUND",
+                retryable=False,
+                message="secret 'db-password' not found in store",
+            ),
+            type="DependencyUnavailableError",
+        )
+        wfe = WorkflowFailureError(cause=app_err)
+        client, _ = self._sdr_client(monkeypatch, pollers=[object()], result_exc=wfe)
+        resp = client.post("/workflows/v1/auth", json={"agent_json": self._AGENT_JSON})
+        # 503 category is floored to a 4xx so Heracles forwards the message.
+        assert 400 <= resp.status_code < 500
+        assert "secret 'db-password' not found" in resp.json()["message"]
 
     def test_sdr_workflow_failure_without_app_error_reports_worker_down(
         self, monkeypatch

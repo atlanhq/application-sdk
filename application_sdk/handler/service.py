@@ -1042,15 +1042,21 @@ def _innermost_application_error(exc: BaseException) -> Any | None:
     return found
 
 
-def _sdr_error_response(app_err: Any) -> HTTPException:
+def _sdr_error_response(app_err: Any) -> "_SdrDispatchError":
     """Build the endpoint error for a classified SDR worker-side failure.
 
     Surfaces the innermost ApplicationError's ``type`` and ``message`` (never a
     traceback or secret value). When the error carries a
     :class:`~application_sdk.errors.wire.FailureDetails` (SDK-typed leaves do),
-    its category maps to the same HTTP status the direct path would use;
-    otherwise the status defaults to 500 — but always with the *specific*
-    classified detail, not a generic ``Internal server error``."""
+    its category chooses the HTTP status; otherwise it defaults to 500.
+
+    Two things make the classified reason actually reach the UI (rather than
+    Heracles' generic "App service returned an internal error"): it is returned
+    as an :class:`_SdrDispatchError` (rendered with a top-level ``message``), and
+    any server-side (5xx) category is floored to a 4xx — because Heracles only
+    forwards the app's own message for 4xx responses. So a worker-side failure
+    like a Dapr ``SECRET_NOT_FOUND`` (which classifies as DEPENDENCY_UNAVAILABLE →
+    503) surfaces its specific reason instead of a generic internal error."""
     from application_sdk.errors.wire import FailureDetails  # noqa: PLC0415
 
     type_name = getattr(app_err, "type", None) or type(app_err).__name__
@@ -1068,7 +1074,9 @@ def _sdr_error_response(app_err: Any) -> HTTPException:
             "SDR: could not decode FailureDetails from ApplicationError",
             exc_info=True,
         )
-    return HTTPException(status_code=status, detail=f"{type_name}: {message}")
+    if status >= 500:
+        status = _SDR_UNREACHABLE_STATUS
+    return _SdrDispatchError(status_code=status, detail=f"{type_name}: {message}")
 
 
 async def _dispatch_sdr_workflow(

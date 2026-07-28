@@ -582,10 +582,13 @@ class TestSdrPreflightObjectStoreChecks:
         assert result.status == PreflightStatus.READY
         names = [c.name for c in result.checks]
         assert names == [
-            "SDR deployment",
-            "Object store (SDR deployment)",
-            "Metadata / egress connectivity (SDR → Atlan)",
+            "Deployment reachability",
+            "Object store (deployment)",
+            "Metadata / egress connectivity",
         ]
+        # Names avoid the "SDR" acronym so the frontend title-caser doesn't
+        # render it as "S D R"; the SDR context lives in the messages.
+        assert not any("SDR" in n for n in names)
         messages = [c.message for c in result.checks]
         assert messages == [
             "SDR Deployment is reachable.",

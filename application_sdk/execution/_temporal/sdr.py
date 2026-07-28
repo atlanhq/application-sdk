@@ -56,9 +56,12 @@ logger = get_logger(__name__)
 # UI-facing check-row names for the object-store access probes appended to the
 # SDR interactive preflight output.  "deployment" is the customer's own store;
 # "upstream" is the Atlan upload proxy.
+# Check *names* deliberately avoid the "SDR" acronym: the frontend title-cases
+# the name by inserting a space before every capital, so "SDR" would render as
+# "S D R". The SDR context lives in the (verbatim) messages below instead.
 _OBJECT_STORE_CHECK_NAMES: dict[str, str] = {
-    "deployment": "Object store (SDR deployment)",
-    "upstream": "Metadata / egress connectivity (SDR → Atlan)",
+    "deployment": "Object store (deployment)",
+    "upstream": "Metadata / egress connectivity",
 }
 
 # User-facing success copy per object-store role. Keeps the interactive
@@ -72,8 +75,9 @@ _OBJECT_STORE_SUCCESS_MESSAGES: dict[str, str] = {
 }
 
 # Leading row asserting the SDR deployment itself is reachable: if this activity
-# is executing, a worker on the customer's task queue picked it up.
-_SDR_REACHABLE_CHECK_NAME = "SDR deployment"
+# is executing, a worker on the customer's task queue picked it up. Name avoids
+# the "SDR" acronym (frontend spaces out capitals → "S D R"); the message keeps it.
+_SDR_REACHABLE_CHECK_NAME = "Deployment reachability"
 _SDR_REACHABLE_MESSAGE = "SDR Deployment is reachable."
 
 
