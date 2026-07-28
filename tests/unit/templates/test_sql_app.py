@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1798,6 +1799,87 @@ class TestPrimeSqlAuth:
         # ... but the password is gone and userinfo is collapsed to ***@.
         assert "s3cr3t" not in logged
         assert "postgresql://***@db.host" in logged
+
+    # ── Configurable budget ─────────────────────────────────────────────
+
+    def test_budget_is_wired_into_the_activity_and_defaults_to_120s(self):
+        """The durable guard, and the one that needs no module reload: whatever
+        the module constant resolves to *is* the activity's StartToClose."""
+        from application_sdk.app.task import get_task_metadata
+        from application_sdk.templates.sql_app import PRIME_SQL_AUTH_TIMEOUT_SECONDS
+
+        meta = get_task_metadata(SqlApp.prime_sql_auth)
+        assert meta is not None
+        assert meta.timeout_seconds == PRIME_SQL_AUTH_TIMEOUT_SECONDS
+        assert PRIME_SQL_AUTH_TIMEOUT_SECONDS == 120
+        assert meta.retry_max_attempts == 1, (
+            "making the budget configurable must not disturb the load-bearing "
+            "retry_max_attempts=1 — activity retry here would re-stack "
+            "failed_login_attempts on the source"
+        )
+
+    def test_budget_cannot_outlive_the_heartbeat(self):
+        """A 120s StartToClose is only reachable if the activity keeps
+        heartbeating: ``auto_heartbeat_loop`` runs as a background asyncio task
+        whenever both knobs are set, so an activity parked in an ``await`` still
+        beats. If either were disabled, the 60s heartbeat timeout would fire
+        first and the raised budget would be dead config."""
+        from application_sdk.app.task import get_task_metadata
+        from application_sdk.templates.sql_app import PRIME_SQL_AUTH_TIMEOUT_SECONDS
+
+        meta = get_task_metadata(SqlApp.prime_sql_auth)
+        assert meta is not None
+        assert meta.heartbeat_timeout_seconds is not None
+        assert meta.auto_heartbeat_seconds is not None
+        assert meta.auto_heartbeat_seconds < meta.heartbeat_timeout_seconds
+        assert PRIME_SQL_AUTH_TIMEOUT_SECONDS > meta.heartbeat_timeout_seconds, (
+            "this guard is only meaningful while the budget exceeds the "
+            "heartbeat timeout — if that stops being true, revisit it"
+        )
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("180", 180),
+            ("not-a-number", 120),  # a typo in deploy config must not crash boot
+            ("", 120),
+        ],
+    )
+    def test_budget_env_var_parsing(self, raw: str, expected: int):
+        """The read itself, isolated from import-time wiring (covered above)."""
+        from application_sdk.common._env import env_int
+
+        with patch.dict(os.environ, {"ATLAN_PRIME_SQL_AUTH_TIMEOUT_SECONDS": raw}):
+            assert env_int("ATLAN_PRIME_SQL_AUTH_TIMEOUT_SECONDS", 120) == expected
+
+    def test_env_override_reaches_the_activity_end_to_end(self):
+        """Closes the loop the two tests above only imply: the env var really
+        does change the activity's StartToClose.
+
+        Needs a module reload because the constant is read at import time.
+        ``importlib.reload`` re-executes the module into its *existing*
+        namespace dict rather than making a new module object, so already-bound
+        method code objects keep resolving globals through that same dict — which
+        is why string-target patches in sibling tests still work afterwards. The
+        ``finally`` reload restores the default so ordering can't leak.
+        """
+        import importlib
+
+        import application_sdk.templates.sql_app as sql_app_mod
+        from application_sdk.app.task import get_task_metadata
+
+        try:
+            with patch.dict(
+                os.environ, {"ATLAN_PRIME_SQL_AUTH_TIMEOUT_SECONDS": "180"}
+            ):
+                importlib.reload(sql_app_mod)
+                assert sql_app_mod.PRIME_SQL_AUTH_TIMEOUT_SECONDS == 180
+                meta = get_task_metadata(sql_app_mod.SqlApp.prime_sql_auth)
+                assert meta is not None
+                assert meta.timeout_seconds == 180
+        finally:
+            importlib.reload(sql_app_mod)
+        assert sql_app_mod.PRIME_SQL_AUTH_TIMEOUT_SECONDS == 120
 
     # ── Bug-reproduction via call ordering ──────────────────────────────
 
