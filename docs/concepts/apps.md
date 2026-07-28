@@ -279,6 +279,32 @@ from application_sdk.storage import verify_object_store_access, ObjectStorePrefl
 Both symbols are exported from `application_sdk.storage`. The function is normally called by
 the SDK boot path — connectors do not need to call it manually.
 
+### SDR: Interactive Activity Timeouts
+
+The three interactive SDR operations (`sdr:test_auth`, `sdr:preflight_check`, `sdr:fetch_metadata`)
+run as Temporal activities. Each is bounded by a `schedule_to_close` cap (ticks even when no worker
+is polling, so a request to an offline worker fails instead of hanging) and a `start_to_close` cap
+(bounds in-flight execution once a worker picks it up). The defaults are deliberately generous —
+SDR handlers resolve credentials from a customer-side secret store and probe the customer's own
+network — and each cap is env-tunable so a deployment fronting an especially slow store can raise it
+without an SDK release. All follow the `ATLAN_` prefix convention (ADR-0009), matching
+`ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS`.
+
+| Env var | Default (s) | Who sets it | Bounds |
+|---|---|---|---|
+| `ATLAN_SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS` | 60 | Deployment / operator | `test_auth` total wall-clock |
+| `ATLAN_SDR_AUTH_START_TO_CLOSE_SECONDS` | 55 | Deployment / operator | `test_auth` in-flight run |
+| `ATLAN_SDR_PREFLIGHT_SCHEDULE_TO_CLOSE_SECONDS` | 120 | Deployment / operator | `preflight_check` total wall-clock |
+| `ATLAN_SDR_PREFLIGHT_START_TO_CLOSE_SECONDS` | 110 | Deployment / operator | `preflight_check` in-flight run |
+| `ATLAN_SDR_METADATA_SCHEDULE_TO_CLOSE_SECONDS` | 150 | Deployment / operator | `fetch_metadata` total wall-clock |
+| `ATLAN_SDR_METADATA_START_TO_CLOSE_SECONDS` | 140 | Deployment / operator | `fetch_metadata` in-flight run |
+
+Invariant: `start_to_close < schedule_to_close` in each pair, so at least one retry attempt fits
+inside the schedule cap. An inverted override is logged as a WARNING at worker start so the misconfig
+is visible before the worker accepts work. These activities set **no** `heartbeat_timeout` — they run
+a single handler call and never call `activity.heartbeat()`, so a heartbeat cap would hard-limit
+runtime; `start_to_close` is the correct in-flight bound.
+
 ### Preflight Gate Posture
 
 Distinct from the SDR object-store preflight above, a connector can run a `preflight_check`
