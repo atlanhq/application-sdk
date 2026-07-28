@@ -63,10 +63,12 @@ from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
     AuthInput,
+    AuthOutput,
     EventTriggerConfig,
     FileUploadResponse,
     HandlerCredential,
     MetadataInput,
+    MetadataOutput,
     PreflightCheck,
     PreflightInput,
     PreflightOutput,
@@ -724,6 +726,250 @@ async def _get_temporal_client() -> Client:
         logger.info("Background token refresh started for handler")
 
     return _temporal_client
+
+
+# ---------------------------------------------------------------------------
+# SDR synchronous dispatch (customer-infra connections)
+# ---------------------------------------------------------------------------
+#
+# An SDR (customer-infra) connection's preflight / test-auth / metadata request
+# is routed by Heracles to the connector's atlan-infra app pod exactly like a
+# direct-mode request. The difference is *where the handler runs*: for SDR the
+# handler lives on the customer's own worker, reachable only over Temporal. The
+# three endpoints below detect the SDR case (``input.agent_json`` naming an
+# agent) and, instead of running the handler locally, start the matching
+# ``sdr:*`` workflow on the customer's task queue and await the result — then
+# serialise it through the endpoint's *existing* direct-mode response path so
+# Heracles / the UI observe an identical response shape. Non-SDR requests never
+# enter this path and stay byte-identical to today.
+
+# Sentinel: run the endpoint's handler locally (direct mode). Returned by
+# _dispatch_sdr_workflow when the request is not SDR-dispatchable or the
+# Temporal client is unavailable, so the caller falls back to the unchanged
+# local-handler path.
+_SDR_FALLBACK_TO_LOCAL: Any = object()
+
+# UI-facing message when the customer's SDR worker is not polling its task queue
+# (fail-fast, no workflow started) or a dispatch times out with no underlying
+# worker-side error. Mirrors the LM proxy's wording so the two removal paths
+# read identically to the customer.
+_SDR_WORKER_DOWN_MESSAGE = (
+    "SDR Worker appears down or unreachable. Check that the SDR Worker is "
+    "running on your infrastructure and try again."
+)
+
+
+def _sdr_sync_timeout() -> timedelta:
+    """Wall-clock cap for an SDR synchronous handler dispatch.
+
+    Env-tunable via ``SDR_SYNC_TIMEOUT_SECONDS`` (default 120s). Passed as the
+    workflow ``execution_timeout`` so a dispatch to an unresponsive worker
+    fails within the budget instead of hanging the UI request. A missing or
+    non-integer value falls back to the default rather than raising."""
+    try:
+        seconds = int(os.getenv("SDR_SYNC_TIMEOUT_SECONDS", "120"))
+    except ValueError:
+        seconds = 120
+    return timedelta(seconds=seconds)
+
+
+def _sdr_agent_name(agent_json: dict[str, Any] | None) -> str | None:
+    """Return the SDR agent name when *agent_json* marks an SDR connection.
+
+    A request is SDR when its typed input carries an ``agent_json`` reference
+    that names an agent (``agent-name``, mirroring
+    :class:`~application_sdk.credentials.spec.AgentCredentialSpec`). Direct-mode
+    requests carry no ``agent_json`` (or an empty name) and return ``None`` — the
+    endpoint then runs its handler locally, byte-identical to today."""
+    if not agent_json:
+        return None
+    name = agent_json.get("agent-name")
+    return name if isinstance(name, str) and name else None
+
+
+async def _sdr_task_queue_has_pollers(client: Client, task_queue: str) -> bool | None:
+    """Best-effort DescribeTaskQueue poller probe for an SDR worker.
+
+    Uses the low-level ``client.workflow_service.describe_task_queue`` RPC
+    (temporalio ``DescribeTaskQueueRequest`` with ``task_queue_type=WORKFLOW``)
+    and inspects the returned ``pollers`` list. Returns ``True`` / ``False`` when
+    the poller count is known, or ``None`` when it could not be determined
+    (RPC errored or unsupported) — the caller then falls through to dispatch
+    rather than failing the request."""
+    from temporalio.api.enums.v1 import (  # noqa: PLC0415 — cold path: only on SDR dispatch
+        TaskQueueType,
+    )
+    from temporalio.api.taskqueue.v1 import TaskQueue  # noqa: PLC0415
+    from temporalio.api.workflowservice.v1 import (  # noqa: PLC0415
+        DescribeTaskQueueRequest,
+    )
+
+    try:
+        resp = await client.workflow_service.describe_task_queue(
+            DescribeTaskQueueRequest(
+                namespace=_workflow_config.namespace,
+                task_queue=TaskQueue(name=task_queue),
+                task_queue_type=TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW,
+            )
+        )
+    except Exception:
+        # Best-effort: never fail the request on a probe error — fall through
+        # to dispatch (the workflow's own schedule_to_close will bound the wait).
+        logger.warning(
+            "SDR DescribeTaskQueue probe failed for task_queue=%s; proceeding to dispatch",
+            task_queue,
+            exc_info=True,
+        )
+        return None
+    return len(resp.pollers) > 0
+
+
+def _innermost_application_error(exc: BaseException) -> Any | None:
+    """Walk a Temporal failure cause chain to the innermost ApplicationError.
+
+    ``WorkflowFailureError`` → ``ActivityError`` → ``ApplicationError`` is the
+    usual shape; we return the *deepest* ApplicationError so the handler's own
+    typed error (e.g. ``CredentialNotFoundError``) wins over any wrapping frame.
+    Returns ``None`` when the chain carries no ApplicationError (e.g. a bare
+    timeout)."""
+    from temporalio.exceptions import ApplicationError  # noqa: PLC0415
+
+    found: Any | None = None
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, ApplicationError):
+            found = cur
+        nxt = getattr(cur, "cause", None)
+        if nxt is None:
+            nxt = cur.__cause__
+        cur = nxt
+    return found
+
+
+def _sdr_error_response(app_err: Any) -> HTTPException:
+    """Build the endpoint error for a classified SDR worker-side failure.
+
+    Surfaces the innermost ApplicationError's ``type`` and ``message`` (never a
+    traceback or secret value). When the error carries a
+    :class:`~application_sdk.errors.wire.FailureDetails` (SDK-typed leaves do),
+    its category maps to the same HTTP status the direct path would use;
+    otherwise the status defaults to 500 — but always with the *specific*
+    classified detail, not a generic ``Internal server error``."""
+    from application_sdk.errors.wire import FailureDetails  # noqa: PLC0415
+
+    type_name = getattr(app_err, "type", None) or type(app_err).__name__
+    message = getattr(app_err, "message", None) or str(app_err)
+    status = 500
+    try:
+        for detail in app_err.details or ():
+            if isinstance(detail, FailureDetails):
+                status = _CATEGORY_TO_HTTP.get(detail.category, 500)
+                if detail.message:
+                    message = detail.message
+                break
+    except Exception:  # conformance: ignore[E002] best-effort detail decode; falls back to type+message
+        logger.debug(
+            "SDR: could not decode FailureDetails from ApplicationError",
+            exc_info=True,
+        )
+    return HTTPException(status_code=status, detail=f"{type_name}: {message}")
+
+
+async def _dispatch_sdr_workflow(
+    *,
+    op: str,
+    workflow_name: str,
+    input: Any,
+    output_type: type,
+    agent_name: str,
+) -> Any:
+    """Synchronously dispatch an SDR handler op to the customer's worker.
+
+    Starts ``workflow_name`` (one of the ``sdr:*`` workflows) on
+    ``atlan-<agent-name>`` — the customer task queue, mirroring Heracles'
+    ``sdrConnectorTaskQueue`` — and awaits the typed result so the endpoint can
+    serialise it through its existing direct-mode response path.
+
+    Returns:
+        The typed handler output (``AuthOutput`` / ``PreflightOutput`` /
+        ``MetadataOutput``) on success, or :data:`_SDR_FALLBACK_TO_LOCAL` when
+        Temporal is not configured / the client is unavailable (defensive — the
+        endpoint then runs its handler locally).
+
+    Raises:
+        HTTPException: Fail-fast when the worker has no active pollers or the
+            dispatch times out with no underlying error (503,
+            :data:`_SDR_WORKER_DOWN_MESSAGE`); or the classified worker-side
+            error when the workflow surfaces an ``ApplicationError``.
+    """
+    if not _workflow_config.host:
+        logger.info(
+            "SDR request for agent=%s but Temporal host not configured; "
+            "running handler locally",
+            agent_name,
+        )
+        return _SDR_FALLBACK_TO_LOCAL
+
+    try:
+        client = await _get_temporal_client()
+    except Exception:
+        # Defensive: a client that cannot be built must not break the endpoint —
+        # fall back to the local handler rather than 500-ing the request.
+        logger.warning(
+            "SDR request for agent=%s but Temporal client unavailable; "
+            "running handler locally",
+            agent_name,
+            exc_info=True,
+        )
+        return _SDR_FALLBACK_TO_LOCAL
+
+    task_queue = f"atlan-{agent_name}"
+
+    if await _sdr_task_queue_has_pollers(client, task_queue) is False:
+        logger.warning(
+            "SDR worker task_queue=%s has no active pollers; failing fast "
+            "without dispatching a workflow",
+            task_queue,
+        )
+        raise HTTPException(status_code=503, detail=_SDR_WORKER_DOWN_MESSAGE)
+
+    workflow_id = f"sdr-{op}-atlan-{DEPLOYMENT_NAME}-{uuid4().hex}"
+    logger.info(
+        "SDR dispatch: workflow=%s id=%s task_queue=%s",
+        workflow_name,
+        workflow_id,
+        task_queue,
+    )
+    try:
+        handle = await client.start_workflow(
+            workflow_name,
+            args=[input],
+            id=workflow_id,
+            task_queue=task_queue,
+            execution_timeout=_sdr_sync_timeout(),
+            result_type=output_type,
+        )
+        return await handle.result()
+    except WorkflowFailureError as exc:
+        app_err = _innermost_application_error(exc)
+        if app_err is not None:
+            logger.warning(
+                "SDR workflow %s failed with classified worker-side error type=%s",
+                workflow_id,
+                getattr(app_err, "type", None),
+                exc_info=True,
+            )
+            raise _sdr_error_response(app_err) from None
+        # No underlying ApplicationError ⇒ execution timed out (or the worker
+        # went away mid-flight). Surface the same worker-down message.
+        logger.warning(
+            "SDR workflow %s failed with no classified error (timeout / worker down)",
+            workflow_id,
+            exc_info=True,
+        )
+        raise HTTPException(status_code=503, detail=_SDR_WORKER_DOWN_MESSAGE) from None
 
 
 # ---------------------------------------------------------------------------
@@ -2300,22 +2546,40 @@ def create_app_handler_service(
                     app_name,
                     context.request_id_str,
                 )
-                # Per-entrypoint dispatch: multi-entrypoint apps may ship
-                # `app.<segment>.handler.test_auth`. The orchestrator sends the
-                # exact entry-point name (resolved from the marketplace
-                # catalog), so this is a direct lookup — when it maps to a
-                # per-entrypoint module, route to it; else (empty/single-
-                # entrypoint) fall through to the app-level `Handler` instance.
-                entrypoint = _validated_entrypoint(auth_input.entrypoint)
-                ep_fn = (
-                    _discover_handler_fn(entrypoint, "test_auth")
-                    if entrypoint
-                    else None
+                # SDR (customer-infra): dispatch to the customer's worker over
+                # Temporal and await the result; the direct-mode local-handler
+                # path below is unchanged for non-SDR requests.
+                agent_name = _sdr_agent_name(auth_input.agent_json)
+                sdr_result = (
+                    await _dispatch_sdr_workflow(
+                        op="test-auth",
+                        workflow_name="sdr:test_auth",
+                        input=auth_input,
+                        output_type=AuthOutput,
+                        agent_name=agent_name,
+                    )
+                    if agent_name is not None
+                    else _SDR_FALLBACK_TO_LOCAL
                 )
-                if ep_fn is not None:
-                    result = await ep_fn(auth_input, context)
+                if sdr_result is not _SDR_FALLBACK_TO_LOCAL:
+                    result = sdr_result
                 else:
-                    result = await handler.test_auth(auth_input)
+                    # Per-entrypoint dispatch: multi-entrypoint apps may ship
+                    # `app.<segment>.handler.test_auth`. The orchestrator sends the
+                    # exact entry-point name (resolved from the marketplace
+                    # catalog), so this is a direct lookup — when it maps to a
+                    # per-entrypoint module, route to it; else (empty/single-
+                    # entrypoint) fall through to the app-level `Handler` instance.
+                    entrypoint = _validated_entrypoint(auth_input.entrypoint)
+                    ep_fn = (
+                        _discover_handler_fn(entrypoint, "test_auth")
+                        if entrypoint
+                        else None
+                    )
+                    if ep_fn is not None:
+                        result = await ep_fn(auth_input, context)
+                    else:
+                        result = await handler.test_auth(auth_input)
                 logger.info(
                     "Auth test completed: app=%s request=%s status=%s",
                     app_name,
@@ -2398,17 +2662,35 @@ def create_app_handler_service(
                     app_name,
                     context.request_id_str,
                 )
-                # Per-entrypoint dispatch (see test_auth above for rationale).
-                entrypoint = _validated_entrypoint(preflight_input.entrypoint)
-                ep_fn = (
-                    _discover_handler_fn(entrypoint, "preflight_check")
-                    if entrypoint
-                    else None
+                # SDR (customer-infra): dispatch to the customer's worker over
+                # Temporal and await the result; the direct-mode local-handler
+                # path below is unchanged for non-SDR requests.
+                agent_name = _sdr_agent_name(preflight_input.agent_json)
+                sdr_result = (
+                    await _dispatch_sdr_workflow(
+                        op="preflight-check",
+                        workflow_name="sdr:preflight_check",
+                        input=preflight_input,
+                        output_type=PreflightOutput,
+                        agent_name=agent_name,
+                    )
+                    if agent_name is not None
+                    else _SDR_FALLBACK_TO_LOCAL
                 )
-                if ep_fn is not None:
-                    result = await ep_fn(preflight_input, context)
+                if sdr_result is not _SDR_FALLBACK_TO_LOCAL:
+                    result = sdr_result
                 else:
-                    result = await handler.preflight_check(preflight_input)
+                    # Per-entrypoint dispatch (see test_auth above for rationale).
+                    entrypoint = _validated_entrypoint(preflight_input.entrypoint)
+                    ep_fn = (
+                        _discover_handler_fn(entrypoint, "preflight_check")
+                        if entrypoint
+                        else None
+                    )
+                    if ep_fn is not None:
+                        result = await ep_fn(preflight_input, context)
+                    else:
+                        result = await handler.preflight_check(preflight_input)
                 logger.info(
                     "Preflight check completed: app=%s request=%s status=%s checks=%d",
                     app_name,
@@ -2539,22 +2821,48 @@ def create_app_handler_service(
                     app_name,
                     context.request_id_str,
                 )
-                # Per-entrypoint dispatch (see test_auth above for rationale).
-                entrypoint = _validated_entrypoint(metadata_input.entrypoint)
-                ep_fn = (
-                    _discover_handler_fn(entrypoint, "fetch_metadata")
-                    if entrypoint
-                    else None
+                # SDR (customer-infra): dispatch to the customer's worker over
+                # Temporal and await the result; the direct-mode local-handler
+                # path below is unchanged for non-SDR requests.
+                agent_name = _sdr_agent_name(metadata_input.agent_json)
+                sdr_result = (
+                    await _dispatch_sdr_workflow(
+                        op="fetch-metadata",
+                        workflow_name="sdr:fetch_metadata",
+                        input=metadata_input,
+                        output_type=MetadataOutput,
+                        agent_name=agent_name,
+                    )
+                    if agent_name is not None
+                    else _SDR_FALLBACK_TO_LOCAL
                 )
-                if ep_fn is not None:
-                    result = await ep_fn(metadata_input, context)
+                if sdr_result is not _SDR_FALLBACK_TO_LOCAL:
+                    result = sdr_result
                 else:
-                    result = await handler.fetch_metadata(metadata_input)
+                    # Per-entrypoint dispatch (see test_auth above for rationale).
+                    entrypoint = _validated_entrypoint(metadata_input.entrypoint)
+                    ep_fn = (
+                        _discover_handler_fn(entrypoint, "fetch_metadata")
+                        if entrypoint
+                        else None
+                    )
+                    if ep_fn is not None:
+                        result = await ep_fn(metadata_input, context)
+                    else:
+                        result = await handler.fetch_metadata(metadata_input)
 
                 # Both SqlMetadataOutput and ApiMetadataOutput expose
                 # .objects — model_dump() produces the correct shape for
                 # the corresponding frontend widget (sqltree / apitree).
-                data = [obj.model_dump() for obj in result.objects]
+                # On the SDR path the result is deserialised as the base
+                # ``MetadataOutput`` (``objects: list[Any]``), so each element
+                # arrives as a plain dict already in wire shape; pass those
+                # through. Direct-mode objects are pydantic models and take the
+                # ``model_dump()`` branch, so the envelope is byte-identical.
+                data = [
+                    obj.model_dump() if hasattr(obj, "model_dump") else obj
+                    for obj in result.objects
+                ]
                 count = len(result.objects)
                 logger.info(
                     "Metadata fetch completed: app=%s request=%s type=%s objects=%d",

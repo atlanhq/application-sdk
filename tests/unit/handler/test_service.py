@@ -6681,3 +6681,234 @@ class TestDefaultEntrypoint:
             assert resp.status_code == 200
         finally:
             patcher.stop()
+
+
+# ---------------------------------------------------------------------------
+# SDR synchronous dispatch (POST /workflows/v1/{auth,check,metadata})
+# ---------------------------------------------------------------------------
+
+
+class TestSdrDispatch:
+    """Tests for in-SDK synchronous SDR dispatch on the handler endpoints.
+
+    An SDR (customer-infra) request carries an ``agent_json`` naming an agent;
+    the endpoint starts the matching ``sdr:*`` workflow on the customer task
+    queue (``atlan-<agent-name>``) and awaits the result, then serialises it
+    through the endpoint's existing direct-mode response path. Non-SDR requests
+    never enter this path.
+    """
+
+    _AGENT_JSON = {"agent-name": "acme", "secret-path": "secret/acme"}
+
+    def _sdr_client(
+        self,
+        monkeypatch,
+        *,
+        handler: Handler | None = None,
+        pollers: list | None = None,
+        result=None,
+        result_exc: BaseException | None = None,
+    ):
+        """Build a TestClient with Temporal + poller probe + workflow mocked.
+
+        ``pollers`` seeds the DescribeTaskQueue probe response; ``result`` is the
+        awaited workflow output (or ``result_exc`` is raised from
+        ``handle.result()``). Returns ``(client, mock_client)`` so callers can
+        assert on ``mock_client.start_workflow``.
+        """
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from application_sdk.handler import service
+
+        svc = create_app_handler_service(handler or _TestHandler(), app_name="test-app")
+        # Gate on host presence (the SDR branch's only config requirement).
+        monkeypatch.setattr(service._workflow_config, "host", "temporal:7233")
+        monkeypatch.setattr(service._workflow_config, "namespace", "default")
+
+        mock_client = MagicMock()
+        mock_client.workflow_service = MagicMock()
+        mock_client.workflow_service.describe_task_queue = AsyncMock(
+            return_value=SimpleNamespace(pollers=pollers if pollers is not None else [])
+        )
+        mock_handle = MagicMock()
+        if result_exc is not None:
+            mock_handle.result = AsyncMock(side_effect=result_exc)
+        else:
+            mock_handle.result = AsyncMock(return_value=result)
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+
+        monkeypatch.setattr(
+            service, "_get_temporal_client", AsyncMock(return_value=mock_client)
+        )
+        client = TestClient(svc, raise_server_exceptions=False)
+        return client, mock_client
+
+    # -- Dispatch + envelope (with pollers) -------------------------------
+
+    def test_sdr_auth_with_pollers_dispatches_and_matches_envelope(
+        self, monkeypatch
+    ) -> None:
+        client, mock_client = self._sdr_client(
+            monkeypatch,
+            pollers=[object()],
+            result=AuthOutput(status=AuthStatus.SUCCESS, message="sdr auth ok"),
+        )
+        resp = client.post(
+            "/workflows/v1/auth",
+            json={"agent_json": self._AGENT_JSON},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        # Envelope identical to the direct (local-handler) auth path.
+        assert set(body.keys()) == {"success", "message", "data"}
+        assert body["success"] is True
+        assert body["data"]["status"] == "success"
+        assert body["message"] == "sdr auth ok"
+        # A workflow was actually started on the customer task queue.
+        assert mock_client.start_workflow.call_count == 1
+        call = mock_client.start_workflow.call_args
+        assert call.args[0] == "sdr:test_auth"
+        assert call.kwargs["task_queue"] == "atlan-acme"
+
+    def test_sdr_preflight_with_pollers_dispatches_and_matches_envelope(
+        self, monkeypatch
+    ) -> None:
+        from application_sdk.handler.contracts import PreflightCheck
+
+        result = PreflightOutput(
+            status=PreflightStatus.READY,
+            message="ready",
+            checks=[PreflightCheck(name="AuthCheck", passed=True, message="ok")],
+        )
+        client, mock_client = self._sdr_client(
+            monkeypatch, pollers=[object()], result=result
+        )
+        resp = client.post(
+            "/workflows/v1/check",
+            json={"agent_json": self._AGENT_JSON},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        # Same shape as the direct preflight path: v2 per-check keys + preflight summary.
+        assert set(body.keys()) >= {"success", "message", "data", "preflight"}
+        assert body["data"]["authCheck"]["success"] is True
+        assert body["preflight"]["status"] == "ready"
+        assert mock_client.start_workflow.call_args.args[0] == "sdr:preflight_check"
+        assert mock_client.start_workflow.call_args.kwargs["task_queue"] == "atlan-acme"
+
+    def test_sdr_metadata_with_pollers_dispatches_and_matches_envelope(
+        self, monkeypatch
+    ) -> None:
+        # SDR path deserialises as base MetadataOutput → objects are plain dicts.
+        result = MetadataOutput(
+            objects=[{"TABLE_CATALOG": "DB", "TABLE_SCHEMA": "PUBLIC"}]
+        )
+        client, mock_client = self._sdr_client(
+            monkeypatch, pollers=[object()], result=result
+        )
+        resp = client.post(
+            "/workflows/v1/metadata",
+            json={"agent_json": self._AGENT_JSON},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert body["data"] == [{"TABLE_CATALOG": "DB", "TABLE_SCHEMA": "PUBLIC"}]
+        assert mock_client.start_workflow.call_args.args[0] == "sdr:fetch_metadata"
+
+    # -- Fail-fast (no pollers) -------------------------------------------
+
+    def test_sdr_no_pollers_fails_fast_without_dispatch(self, monkeypatch) -> None:
+        client, mock_client = self._sdr_client(monkeypatch, pollers=[])
+        resp = client.post(
+            "/workflows/v1/auth",
+            json={"agent_json": self._AGENT_JSON},
+        )
+        assert resp.status_code == 503
+        assert "SDR Worker appears down or unreachable" in resp.json()["detail"]
+        # Fail-fast: no workflow was started.
+        assert mock_client.start_workflow.call_count == 0
+
+    # -- Error surfacing (WorkflowFailureError → classified message) -------
+
+    def test_sdr_workflow_failure_surfaces_classified_error(self, monkeypatch) -> None:
+        from temporalio.client import WorkflowFailureError
+        from temporalio.exceptions import ApplicationError
+
+        app_err = ApplicationError("secret not found", type="CredentialNotFoundError")
+        wfe = WorkflowFailureError(cause=app_err)
+        client, _ = self._sdr_client(monkeypatch, pollers=[object()], result_exc=wfe)
+        resp = client.post(
+            "/workflows/v1/auth",
+            json={"agent_json": self._AGENT_JSON},
+        )
+        # Classified worker-side error reaches the caller (type + message),
+        # not a generic 500 "Internal server error".
+        detail = resp.json()["detail"]
+        assert "CredentialNotFoundError" in detail
+        assert "secret not found" in detail
+        assert detail != "Internal server error"
+
+    def test_sdr_workflow_failure_without_app_error_reports_worker_down(
+        self, monkeypatch
+    ) -> None:
+        from temporalio.client import WorkflowFailureError
+        from temporalio.exceptions import TimeoutError as TemporalTimeoutError
+        from temporalio.exceptions import TimeoutType
+
+        timeout = TemporalTimeoutError(
+            "execution timeout",
+            type=TimeoutType.START_TO_CLOSE,
+            last_heartbeat_details=[],
+        )
+        wfe = WorkflowFailureError(cause=timeout)
+        client, _ = self._sdr_client(monkeypatch, pollers=[object()], result_exc=wfe)
+        resp = client.post(
+            "/workflows/v1/auth",
+            json={"agent_json": self._AGENT_JSON},
+        )
+        assert resp.status_code == 503
+        assert "SDR Worker appears down or unreachable" in resp.json()["detail"]
+
+    # -- Non-SDR request is unchanged (no dispatch) -----------------------
+
+    def test_non_sdr_request_runs_local_handler_no_dispatch(self, monkeypatch) -> None:
+        from unittest.mock import AsyncMock
+
+        from application_sdk.handler import service
+
+        # Temporal is configured, but a non-SDR request must never touch it.
+        svc = create_app_handler_service(_TestHandler(), app_name="test-app")
+        monkeypatch.setattr(service._workflow_config, "host", "temporal:7233")
+        get_client = AsyncMock()
+        monkeypatch.setattr(service, "_get_temporal_client", get_client)
+
+        resp = TestClient(svc, raise_server_exceptions=False).post(
+            "/workflows/v1/auth",
+            json={"credentials": [{"key": "api_key", "value": "x"}]},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["status"] == "success"
+        # No SDR dispatch attempted for a direct-mode request.
+        get_client.assert_not_awaited()
+
+    def test_agent_json_without_agent_name_runs_local_handler(
+        self, monkeypatch
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        from application_sdk.handler import service
+
+        svc = create_app_handler_service(_TestHandler(), app_name="test-app")
+        monkeypatch.setattr(service._workflow_config, "host", "temporal:7233")
+        get_client = AsyncMock()
+        monkeypatch.setattr(service, "_get_temporal_client", get_client)
+
+        # agent_json present but with no 'agent-name' ⇒ not SDR-dispatchable.
+        resp = TestClient(svc, raise_server_exceptions=False).post(
+            "/workflows/v1/auth",
+            json={"agent_json": {"secret-path": "secret/acme"}},
+        )
+        assert resp.status_code == 200
+        get_client.assert_not_awaited()
