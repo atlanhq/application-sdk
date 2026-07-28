@@ -936,6 +936,20 @@ def test_l002_silent_run_dev_harness(tmp_path: Path) -> None:
     assert not any(f.rule_id == "L002" for f in findings)
 
 
+def test_l002_silent_nested_scripts_dir(tmp_path: Path) -> None:
+    """A ``scripts/`` segment at any path depth is exempt, not just top-level."""
+    src = "import logging\nlogger = logging.getLogger(__name__)\n"
+    findings = _scan_files(tmp_path, {"app/scripts/db_helper.py": src})
+    assert not any(f.rule_id == "L002" for f in findings)
+
+
+def test_l002_silent_nested_run_dev_harness(tmp_path: Path) -> None:
+    """``run_dev*.py`` is matched by basename at any depth (e.g. ``app/run_dev.py``)."""
+    src = "from loguru import logger\n"
+    findings = _scan_files(tmp_path, {"app/run_dev.py": src})
+    assert not any(f.rule_id == "L002" for f in findings)
+
+
 def test_l002_harness_exemption_does_not_leak_to_prod(tmp_path: Path) -> None:
     """The dev-harness exemption is per-file: production siblings still fail."""
     src = "import logging\nlogger = logging.getLogger(__name__)\n"
