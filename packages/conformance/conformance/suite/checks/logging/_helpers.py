@@ -3,11 +3,31 @@
 from __future__ import annotations
 
 import ast
+from pathlib import PurePosixPath
 from typing import Literal
 
 from ._constants import ADAPTER_MARKERS, LOG_METHODS, LOGGER_NAMES
 
 Framework = Literal["stdlib", "structlog", "loguru", "unknown"]
+
+# Dev-harness exemption for the block-tier L002 rule (mirrors the S-series
+# policy in ``checks/security``): ``run_dev*.py`` and anything under
+# ``scripts/`` are local dev entry points, never shipped workflow code, so
+# the correlation-ID/provenance argument behind L002 does not apply there.
+_HARNESS_DIRS: frozenset[str] = frozenset({"scripts"})
+
+
+def is_dev_harness(rel_path: str) -> bool:
+    """True when *rel_path* is a dev harness (``scripts/`` or ``run_dev*.py``).
+
+    *rel_path* is a repo-root-relative path string as carried on findings.
+    Used by the L002 cross-file pass; test files are already excluded by the
+    shared discovery walk and need no handling here.
+    """
+    parts = PurePosixPath(rel_path.replace("\\", "/")).parts
+    if parts and parts[-1].startswith("run_dev"):
+        return True
+    return bool(set(parts[:-1]) & _HARNESS_DIRS)
 
 
 # ---------------------------------------------------------------------------
