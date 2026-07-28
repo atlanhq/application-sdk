@@ -6686,14 +6686,8 @@ class TestDefaultEntrypoint:
 class TestManifestPostTransport:
     """``POST /manifest`` — the body transport for ``fe_inputs`` (CSA-539).
 
-    ``fe_inputs`` on the query string is bounded by the HTTP request line: a
-    near-"select-all" asset-export-advanced submission decodes to ~11 KB and was
-    rejected with 413 before ``compute_manifest`` ran, and past ~64 KB on the
-    wire the URL is silently truncated. POST removes both limits.
-
-    GET keeps its existing behaviour, cap included — these tests pin that too,
-    since the playground, connector integration tests and AE/marketplace probes
-    all still use it.
+    GET keeps its existing behaviour, cap included; these pin that too, since
+    the playground, connector tests and AE/marketplace probes still use it.
     """
 
     @staticmethod
@@ -6750,7 +6744,7 @@ class TestManifestPostTransport:
         contract_dir = self._make_ep(tmp_path, "big-form")
         self._install_fake_core(monkeypatch, "big-form", compute_manifest)
 
-        # Comfortably over the query-string cap, in the shape that broke ngs.
+        # Comfortably over the query-string cap.
         oversized = {
             "attribute-selector": ",".join(f"table:attr{i:04d}" for i in range(900))
         }
@@ -6780,8 +6774,7 @@ class TestManifestPostTransport:
     def test_get_and_post_agree_for_the_same_inputs(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Transport must not change the answer — the two routes share one
-        code path and this pins that they stay in step."""
+        """Transport must not change the answer."""
         from application_sdk.handler import service as svc_module
 
         async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
@@ -6865,8 +6858,7 @@ class TestManifestPostTransport:
             svc_module.DEPLOYMENT_NAME = original_dep
 
     def test_post_legacy_unversioned_alias(self, tmp_path: Path) -> None:
-        """Callers migrate method and path independently, so the unversioned
-        path must accept POST too."""
+        """Callers migrate method and path independently."""
         from application_sdk.handler import service as svc_module
 
         contract_dir = self._make_ep(tmp_path, "legacy-ep", {"app_name": "legacy"})
@@ -6882,7 +6874,7 @@ class TestManifestPostTransport:
             svc_module.CONTRACT_GENERATED_DIR = original
 
     def test_post_user_id_is_accepted_and_ignored(self, tmp_path: Path) -> None:
-        """Wire parity with the GET query param, which the SDK also ignores."""
+        """Wire parity with the GET param, which the SDK also ignores."""
         from application_sdk.handler import service as svc_module
 
         contract_dir = self._make_ep(tmp_path, "ep-u", {"app_name": "u"})
@@ -6954,9 +6946,7 @@ class TestManifestPostTransport:
     def test_get_with_oversize_fe_inputs_still_ok_without_a_hook(
         self, tmp_path: Path
     ) -> None:
-        """An app with no compute_manifest has always ignored fe_inputs, and
-        the refactor must keep decoding lazy: decoding at the route instead
-        would start 413-ing static apps that are fine today."""
+        """Decoding must stay lazy — at the route it would 413 static apps."""
         from application_sdk.handler import service as svc_module
 
         contract_dir = self._make_ep(tmp_path, "static-ep", {"app_name": "static"})

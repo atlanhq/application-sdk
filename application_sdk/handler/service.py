@@ -1903,12 +1903,10 @@ def _register_workflow_routes(
         # the hook get the static manifest unchanged (current behavior).
         compute = _discover_compute_manifest(entrypoint_name)
         if compute is not None:
-            # Decode lazily, and only here: an app with no compute hook has
-            # always ignored fe_inputs entirely, oversized or not. Decoding
-            # eagerly at the route would start 413-ing static apps that are
-            # fine today. A dict means the POST body already parsed it, so the
-            # size cap — a property of the query string, not of the payload —
-            # does not apply.
+            # Decode lazily and only here: an app with no hook has always
+            # ignored fe_inputs, so decoding at the route would start 413-ing
+            # static apps that work today. A dict came from the POST body, where
+            # the query-string cap does not apply.
             fe_inputs_decoded = (
                 fe_inputs if isinstance(fe_inputs, dict) else _decode_fe_inputs(fe_inputs)
             )
@@ -1953,11 +1951,9 @@ def _register_workflow_routes(
     ) -> Response:
         """Resolve the entrypoint and serve its manifest.
 
-        Transport-agnostic: the GET routes hand in the raw ``fe_inputs`` query
-        string, the POST routes hand in the parsed body dict. Everything after
-        that — entrypoint validation, the flat single-entrypoint layout, and the
-        default/alphabetical candidate fallback — is identical, and lives here
-        exactly once so the two methods cannot drift apart.
+        Transport-agnostic: GET hands in the raw query string, POST the parsed
+        body dict. Everything downstream is identical and lives here once so the
+        two methods cannot drift.
         """
         deployment = (DEPLOYMENT_NAME or "default").encode()
 
@@ -2056,31 +2052,27 @@ def _register_workflow_routes(
         entrypoint: str | None = None,
         fe_inputs: str | None = None,
     ) -> Response:
-        """Serve a manifest, with ``fe_inputs`` supplied as a query parameter.
+        """Serve a manifest with ``fe_inputs`` as a query parameter.
 
-        Retained indefinitely: the app playground, connector integration tests
-        and the AE/marketplace registration probes all fetch manifests this way,
-        and none of them send ``fe_inputs``. Callers that DO send ``fe_inputs``
-        should use ``POST`` — the query string caps the payload at
-        :data:`_MAX_FE_INPUTS_BYTES` (CSA-539).
+        Retained: the playground, connector integration tests and the
+        AE/marketplace probes fetch manifests this way and send no
+        ``fe_inputs``. Callers that do should use ``POST`` — the query string
+        caps the payload at :data:`_MAX_FE_INPUTS_BYTES` (CSA-539).
         """
         return await _serve_manifest(entrypoint, fe_inputs)
 
     @app.post("/workflows/v1/manifest")
     async def post_manifest(request: Request) -> Response:
-        """Serve a manifest, with ``fe_inputs`` supplied in the request body.
+        """Serve a manifest with ``fe_inputs`` in the request body.
 
         Body: ``{"entrypoint": str | null, "fe_inputs": {...}, "user_id": str | null}``
-        — every field optional, so ``{}`` is equivalent to a bare GET.
+        — all optional, so ``{}`` is equivalent to a bare GET.
 
         Exists because ``fe_inputs`` on the query string is bounded by the
-        request line. A near-"select-all" asset-export-advanced submission
-        decodes to ~11 KB and was rejected with 413 before ``compute_manifest``
-        ever ran (CSA-539); past ~64 KB on the wire the URL is silently
-        truncated by the HTTP parser, which is worse. A body has neither limit.
-
-        ``user_id`` is accepted for wire parity with the GET query parameter and
-        is not read by the SDK, exactly as before.
+        request line: an ~11 KB payload was rejected with 413 before
+        ``compute_manifest`` ran, and past ~64 KB the URL is silently truncated
+        (CSA-539). A body has neither limit. ``user_id`` is accepted for wire
+        parity with the GET param and is not read by the SDK.
         """
         try:
             body: Any = await request.json()
@@ -2105,9 +2097,8 @@ def _register_workflow_routes(
         if fe_inputs is None:
             fe_inputs = {}
         if not isinstance(fe_inputs, dict):
-            # Mirrors the GET path's "fe_inputs must be a JSON object" contract,
-            # so a caller that mis-shapes the payload gets the same answer on
-            # either transport.
+            # Same contract as the GET path, so a mis-shaped payload gets the
+            # same answer on either transport.
             raise HTTPException(
                 status_code=400, detail="fe_inputs must be a JSON object"
             )
@@ -2144,12 +2135,10 @@ def _register_workflow_routes(
         """Unversioned alias for ``POST /workflows/v1/manifest``.
 
         .. deprecated::
-            Same deprecation as the GET alias above. It exists so a caller can
-            migrate method and path independently: Heracles / native-migration /
-            local-marketplace all call the unversioned path today, and moving
-            both at once would stack a second fleet-wide compatibility gate
-            (v2-era images serve only this path) on top of the method change.
-            Do **not** add new callers of this endpoint.
+            Same deprecation as the GET alias above. Exists so callers can
+            migrate method and path independently — they all call the
+            unversioned path today, and v2-era images serve only this path.
+            Do **not** add new callers.
         """
         return await post_manifest(request)
 
