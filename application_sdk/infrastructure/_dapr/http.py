@@ -48,6 +48,40 @@ _DEFAULT_TIMEOUT = 30.0
 # backoff=0.5). Retries only fire on failures; healthy calls are unaffected.
 _DEFAULT_RETRY_TOTAL = 5
 
+#: Statuses the transport retries blindly, i.e. on the status code alone.
+_RETRYABLE_STATUSES = [500, 502, 503, 504]
+
+#: Same, minus 500, for the *secrets* GET path only.
+#:
+#: Dapr overloads HTTP 500 on the secrets API: it returns a plain 5xx
+#: (``ERR_SECRET_GET``) both for a genuinely-missing key in an already-ready
+#: store and for a store that isn't up yet (``ERR_SECRET_STORES_NOT_CONFIGURED``).
+#: The transport can only see the status code — :meth:`Retry.is_retryable_status_code`
+#: is not given the response body — so retrying 500 here means retrying a
+#: *definitive* "no such secret" for the full ~15s ladder.
+#:
+#: That is not hypothetical: single-key agent credentials
+#: (``credentials/agent.py::_fetch_per_key_bundle``) probe every non-literal
+#: field value as a candidate secret key, so "not found" is the common,
+#: expected outcome for any field holding a literal (a database name, a
+#: region). Each such probe paid ~15s, serially — enough to blow a fixed
+#: activity budget on credential resolution alone.
+#:
+#: Dropping 500 here does not lose cold-start coverage, it moves it to the
+#: layer that can actually discriminate:
+#: :func:`~application_sdk.infrastructure._dapr.client.classify_secret_fetch_error`
+#: reads the Dapr ``errorCode`` and maps ``ERR_SECRET_STORES_NOT_CONFIGURED``
+#: → :class:`SecretStoreUnavailableError` (a ``ColdStartRaceError``), which
+#: :func:`retry_past_dapr_cold_start` then retries on a *wider* budget
+#: (:data:`DAPR_COLD_START_MAX_WAIT_SECONDS`, 120s) than the transport's 15s.
+#: ``ERR_SECRET_GET`` maps to :class:`SecretNotFoundError` and returns
+#: immediately, which is the whole point.
+#:
+#: 502/503/504 stay retryable: those come from a proxy or a refusing socket,
+#: never from a Dapr component reporting on a specific key, so they carry no
+#: "not found" ambiguity. Transport-level exceptions are unchanged.
+_SECRETS_RETRYABLE_STATUSES = [502, 503, 504]
+
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
@@ -402,32 +436,46 @@ class AsyncDaprClient:
         self._base_url = base_url or _dapr_base_url()
         transport = RetryTransport(
             transport=httpx.AsyncHTTPTransport(limits=_HTTP_POOL_LIMITS),
-            retry=Retry(
-                total=retries,
-                backoff_factor=1.0,
-                status_forcelist=[500, 502, 503, 504],
-                # Pin the retried transport errors to httpx-retries' own default
-                # set, stated explicitly so it can't silently narrow/widen if the
-                # library changes its default. These three base classes cover
-                # connect/read/WRITE/close/pool + protocol errors alike, so
-                # POST/DELETE calls (save_state/publish_event/invoke_binding/
-                # delete_state) keep the exact retry coverage they had before —
-                # listing leaf classes like ConnectError/ReadError would have
-                # narrowed it and dropped WriteError/WriteTimeout/CloseError.
-                # NOTE: these errors were already retried by default; the real
-                # change in this fix is the wider *budget* above (total 3->5,
-                # backoff 0.5->1.0, ~1.5s -> ~15s) that bridges a daprd cold start.
-                retry_on_exceptions=[
-                    httpx.TimeoutException,
-                    httpx.NetworkError,
-                    httpx.RemoteProtocolError,
-                ],
-            ),
+            retry=self._build_retry(retries, _RETRYABLE_STATUSES),
         )
+        # Per-request override consumed by RetryTransport via
+        # ``request.extensions.setdefault("retry", ...)``. Built once here so a
+        # custom ``retries=`` still applies to the secrets path.
+        self._secrets_retry = self._build_retry(retries, _SECRETS_RETRYABLE_STATUSES)
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=httpx.Timeout(timeout, pool=_HTTP_POOL_TIMEOUT_SECONDS),
             transport=transport,
+        )
+
+    @staticmethod
+    def _build_retry(total: int, status_forcelist: list[int]) -> Retry:
+        """Build a :class:`Retry` that differs only in which statuses it retries.
+
+        ``status_forcelist`` is the one axis that varies (see
+        :data:`_SECRETS_RETRYABLE_STATUSES`); every other knob is shared so the
+        secrets path and the default path can't drift apart.
+        """
+        return Retry(
+            total=total,
+            backoff_factor=1.0,
+            status_forcelist=status_forcelist,
+            # Pin the retried transport errors to httpx-retries' own default
+            # set, stated explicitly so it can't silently narrow/widen if the
+            # library changes its default. These three base classes cover
+            # connect/read/WRITE/close/pool + protocol errors alike, so
+            # POST/DELETE calls (save_state/publish_event/invoke_binding/
+            # delete_state) keep the exact retry coverage they had before —
+            # listing leaf classes like ConnectError/ReadError would have
+            # narrowed it and dropped WriteError/WriteTimeout/CloseError.
+            # NOTE: these errors were already retried by default; the real
+            # change in this fix is the wider *budget* above (total 3->5,
+            # backoff 0.5->1.0, ~1.5s -> ~15s) that bridges a daprd cold start.
+            retry_on_exceptions=[
+                httpx.TimeoutException,
+                httpx.NetworkError,
+                httpx.RemoteProtocolError,
+            ],
         )
 
     async def close(self) -> None:
@@ -471,8 +519,13 @@ class AsyncDaprClient:
     # ------------------------------------------------------------------
 
     async def get_secret(self, store_name: str, key: str) -> dict[str, str]:
+        # Do not blind-retry a 500 here — on the secrets API it is ambiguous
+        # between "no such key" and "store not up yet", and only
+        # ``classify_secret_fetch_error`` can tell them apart. See
+        # :data:`_SECRETS_RETRYABLE_STATUSES`.
         resp = await self._client.get(
-            SECRET_STORE_PATH.format(store_name=store_name, key=quote(key, safe=""))
+            SECRET_STORE_PATH.format(store_name=store_name, key=quote(key, safe="")),
+            extensions={"retry": self._secrets_retry},
         )
         resp.raise_for_status()
         return resp.json()

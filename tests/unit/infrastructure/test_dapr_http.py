@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from application_sdk.infrastructure._dapr.http import (
@@ -403,6 +404,142 @@ class TestRetryConfiguration:
         assert retry.is_retryable_exception(httpx.CloseError("x")) is True
         assert _DEFAULT_RETRY_TOTAL >= 5
         assert retry.backoff_factor >= 1.0
+
+
+class TestSecretsRetryScoping:
+    """A 500 on the *secrets* GET must not be blind-retried.
+
+    Dapr returns a plain 500 (``ERR_SECRET_GET``) for a key that simply isn't in
+    an already-ready store. Only ``classify_secret_fetch_error`` can tell that
+    apart from ``ERR_SECRET_STORES_NOT_CONFIGURED`` (a real cold start), because
+    ``Retry.is_retryable_status_code`` never sees the response body. Retrying it
+    at the transport burned the full ~15s ladder per lookup — and single-key
+    agent credentials probe every non-literal field as a candidate key, so
+    "not found" is the *expected* outcome for any field holding a literal.
+    """
+
+    @staticmethod
+    def _counting_client(status: int, body: dict, calls: list, **kwargs):
+        """An AsyncDaprClient whose underlying transport records every request."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            return httpx.Response(status, json=body)
+
+        client = AsyncDaprClient(base_url="http://localhost:3500", **kwargs)
+        client._client._transport._async_transport = httpx.MockTransport(handler)
+        return client
+
+    @pytest.fixture(autouse=True)
+    def _no_backoff_sleep(self):
+        """Keep the retry-positive cases fast — assert counts, not wall-clock."""
+
+        async def _noop(self, response):
+            return None
+
+        with patch("httpx_retries.Retry.asleep", _noop):
+            yield
+
+    async def test_secret_get_does_not_retry_missing_key_500(self):
+        """The regression this class exists for: exactly one request, not six."""
+        calls: list[str] = []
+        client = self._counting_client(
+            500,
+            {"errorCode": "ERR_SECRET_GET", "message": "failed to get secret"},
+            calls,
+        )
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_secret("secretstore", "a-literal-database-name")
+        assert len(calls) == 1
+        await client.close()
+
+    async def test_secret_get_still_retries_gateway_statuses(self):
+        """502/503/504 come from a proxy or a refusing socket, never from a
+        component reporting on a specific key — no "not found" ambiguity, so
+        they must stay retryable."""
+        for status in (502, 503, 504):
+            calls: list[str] = []
+            client = self._counting_client(status, {"errorCode": "X"}, calls, retries=3)
+            with pytest.raises(httpx.HTTPStatusError):
+                await client.get_secret("secretstore", "key")
+            assert len(calls) == 4, f"status {status} should retry 3 times"
+            await client.close()
+
+    async def test_non_secret_paths_still_retry_500(self):
+        """The narrowing is scoped to the secrets GET. State/binding/pubsub have
+        no equivalent classifier above them, so their 500 retry is unchanged."""
+        calls: list[str] = []
+        client = self._counting_client(500, {"errorCode": "X"}, calls, retries=3)
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_state("statestore", "key")
+        assert len(calls) == 4
+        await client.close()
+
+    async def test_bulk_secret_retry_unchanged(self):
+        """``get_bulk_secret`` isn't on the per-key probe path; left as-is so the
+        narrowing stays as small as the bug requires."""
+        calls: list[str] = []
+        client = self._counting_client(500, {"errorCode": "X"}, calls, retries=3)
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_bulk_secret("secretstore")
+        assert len(calls) == 4
+        await client.close()
+
+    async def test_secrets_retry_shares_every_knob_but_statuses(self):
+        """Guard against the two Retry configs drifting apart."""
+        client = AsyncDaprClient(base_url="http://localhost:3500", retries=7)
+        default, secrets = client._client._transport.retry, client._secrets_retry
+        assert secrets.total == default.total == 7
+        assert secrets.backoff_factor == default.backoff_factor
+        assert secrets.retryable_exceptions == default.retryable_exceptions
+        assert secrets.allowed_methods == default.allowed_methods
+        assert secrets.is_retryable_status_code(500) is False
+        assert default.is_retryable_status_code(500) is True
+        for status in (502, 503, 504):
+            assert secrets.is_retryable_status_code(status) is True
+
+    async def test_missing_key_resolves_to_none_in_one_request(self):
+        """End-to-end through the classifier: a missing key is a fast, silent
+        ``None`` from ``get_optional`` — the contract ``_fetch_per_key_bundle``
+        relies on when probing non-secret fields."""
+        from application_sdk.infrastructure._dapr.client import DaprSecretStore
+
+        calls: list[str] = []
+        client = self._counting_client(500, {"errorCode": "ERR_SECRET_GET"}, calls)
+        store = DaprSecretStore(client, "secretstore")
+        assert await store.get_optional("a-literal-database-name") is None
+        assert len(calls) == 1
+        await client.close()
+
+    async def test_cold_start_500_still_classified_unavailable_and_retried(self):
+        """Cold-start coverage is not lost, it moves up a layer — to the one that
+        can read the Dapr error code, and whose budget (120s) is wider than the
+        transport's ~15s."""
+        import application_sdk.infrastructure._dapr.http as http_mod
+        from application_sdk.infrastructure._dapr.client import DaprSecretStore
+
+        calls: list[str] = []
+        client = self._counting_client(
+            500, {"errorCode": "ERR_SECRET_STORES_NOT_CONFIGURED"}, calls
+        )
+        store = DaprSecretStore(client, "secretstore")
+
+        # The one-shot readiness gates are module-level; clear them so this test
+        # exercises the retry loop rather than its short-circuit.
+        with (
+            patch.object(http_mod, "_dapr_sidecar_confirmed_ready", False),
+            patch.object(http_mod, "_dapr_component_confirmed_ready", set()),
+            patch.object(http_mod, "DAPR_COLD_START_MAX_WAIT_SECONDS", 0.3),
+            patch.object(http_mod, "DAPR_COLD_START_BASE_DELAY_SECONDS", 0.05),
+        ):
+            with pytest.raises(SecretStoreUnavailableError):
+                await http_mod.retry_past_dapr_cold_start(
+                    lambda: store.get("key"),
+                    description="probe",
+                    component="secretstore",
+                )
+        assert len(calls) > 1, "a real cold start must still be retried"
+        await client.close()
 
 
 class TestSidecarWaitTimeout:
