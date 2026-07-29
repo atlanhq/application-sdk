@@ -386,11 +386,15 @@ Run these detections and report the bucket(s) before changing anything:
    attribute lost. Only when its step-4 evidence is green does phase 1
    continue; the daft migration and the gate adoption land as separable
    changes, in that order.
-1. **Always resolve the current latest SDK first** —
+1. **Always resolve the current latest SDK first.** `.info.version` alone
+   may still be inside the release cooldown, so list versions with upload
+   dates and pick the newest one older than 7 days:
    `curl -s https://pypi.org/pypi/atlan-application-sdk/json | jq -r
-   .info.version` — and pin the newest version outside the 7-day release
-   cooldown that satisfies the gate floor —
-   **`>=3.24.1`** — in `pyproject.toml`. Then refresh the whole lock, not
+   '.releases | to_entries[] | [.key, .value[0].upload_time] | @tsv'`.
+   Pin that version — it must also satisfy the gate floor,
+   **`>=3.24.1`** — in `pyproject.toml`. (Pinning an in-cooldown version and
+   then locking with the `--exclude-newer` bound below is unsatisfiable and
+   fails with an unhelpful resolution error.) Then refresh the whole lock, not
    just the SDK:
    `uv lock --upgrade --exclude-newer "$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)"`
    (GNU date: `date -u -d '7 days ago' ...`) followed by

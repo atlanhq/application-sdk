@@ -386,6 +386,63 @@ def test_transform_metadata_list_input_unifies_keys_across_records(
     assert coerced.to_pylist()[1]["view_definition"] == "SELECT 1"
 
 
+LITERAL_STATUS_TEMPLATE = textwrap.dedent("""
+columns:
+  status:
+    source_query: "'ACTIVE'"
+  attributes:
+    name:
+      source_query: table_name
+""")
+
+
+def test_template_literal_wins_when_colliding_column_is_all_null(
+    sql_transformer, tmp_path
+):
+    """Records carrying only explicit Nones for a literal-declared name must
+    still get the template literal, not a null column."""
+    template = tmp_path / "table.yaml"
+    template.write_text(LITERAL_STATUS_TEMPLATE)
+    records = [
+        {"table_name": "t1", "status": None},
+        {"table_name": "t2", "status": None},
+    ]
+
+    result = sql_transformer.transform_metadata(
+        "TABLE",
+        records,
+        "wf",
+        "run",
+        entity_class_definitions={"TABLE": str(template)},
+        connection_qualified_name="default/snowflake/1",
+    )
+
+    assert [row["status"] for row in result] == ["ACTIVE", "ACTIVE"]
+
+
+def test_colliding_source_column_wins_over_template_literal(sql_transformer, tmp_path):
+    """A genuinely populated source column takes precedence over a template
+    literal (post-3.20 semantics), deterministically — regardless of which
+    record carries the value. Collisions belong fixed at the extractor."""
+    template = tmp_path / "table.yaml"
+    template.write_text(LITERAL_STATUS_TEMPLATE)
+    records = [
+        {"table_name": "t1"},
+        {"table_name": "t2", "status": "DELETED"},
+    ]
+
+    result = sql_transformer.transform_metadata(
+        "TABLE",
+        records,
+        "wf",
+        "run",
+        entity_class_definitions={"TABLE": str(template)},
+        connection_qualified_name="default/snowflake/1",
+    )
+
+    assert [row["status"] for row in result] == [None, "DELETED"]
+
+
 @patch(
     "application_sdk.transformers.query.QueryBasedTransformer.prepare_template_and_attributes"
 )

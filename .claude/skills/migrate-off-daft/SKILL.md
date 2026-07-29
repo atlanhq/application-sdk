@@ -154,7 +154,7 @@ those sites (declared directly — see step 3's boundary policy) or replace
 them per step 2c; either way each site needs a decision with parity
 evidence, and no daft object may cross an SDK boundary afterwards.
 
-## Step 2 — The seven breakage classes (mechanism + fix)
+## Step 2 — The core breakage classes (1–7, plus 1b/2b; heavy-user classes 8–12 are in step 2c)
 
 ### 1. `[daft]` extra is declared but empty — daft silently leaves the lock
 
@@ -244,13 +244,19 @@ daft's `from_pylist` unified schemas across records, so apps never had to
 care.
 
 The SDK's own `list[dict]` coercion had this hazard until it was fixed to
-normalize records to the union of keys (`query/__init__.py:338`, test:
+build the table over the union of keys (the list branch of
+`QueryBasedTransformer.transform_metadata`; test:
 `tests/unit/transformers/query/test_sql_transformer.py::test_transform_metadata_list_input_unifies_keys_across_records`).
-**Check the app's pinned SDK actually contains that fix** (the test above, or
-read the coercion) — on older 3.2x pins, passing heterogeneous `list[dict]`
-is lossy and the app must guard: normalize keys itself or build the
-`pa.Table` with an explicit schema. App-side `pa.Table.from_pylist` calls the
-app writes are **always** the app's problem — same guard applies.
+The same fix keeps class-5 precedence sane: a colliding column that is
+entirely null still yields the template literal; a column with any real
+value wins deterministically, regardless of which record carries it (tests:
+`test_template_literal_wins_when_colliding_column_is_all_null`,
+`test_colliding_source_column_wins_over_template_literal`).
+**Check the app's pinned SDK actually contains that fix** (the tests above,
+or read the coercion) — on older 3.2x pins, passing heterogeneous
+`list[dict]` is lossy and the app must guard: normalize keys itself or build
+the `pa.Table` with an explicit schema. App-side `pa.Table.from_pylist`
+calls the app writes are **always** the app's problem — same guard applies.
 
 ### 1b. A pin that looks protective and isn't
 
@@ -360,7 +366,11 @@ rows = transformer.transform_metadata(dataframe=records, ...) or []
    `to_pylist()`.
 2. `pyproject.toml`: `[daft,...]` → the extras actually needed (`[sql]` for
    transformer users; keep `[pandas]`/`[workflows]` etc. as-is). Then
-   `uv lock` + `uv sync --all-extras --all-groups`, and **verify the lock**:
+   `uv lock --exclude-newer "$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)"` (GNU
+   date: `date -u -d '7 days ago' ...`) + `uv sync --all-extras
+   --all-groups` — the extras change resolves fresh packages (duckdb and
+   friends), and the bound keeps them inside the release cooldown. Then
+   **verify the lock**:
    `grep -c 'name = "duckdb"' uv.lock` ≥1, `grep -c 'name = "daft"' uv.lock`
    = 0.
 3. Apply the class-6 guard if the pinned SDK predates the key-union fix, or

@@ -305,11 +305,19 @@ class QueryBasedTransformer(TransformerInterface):
             }
         )
 
-        # Append default attribute columns as constant arrays to the table
+        # Append default attribute columns as constant arrays to the table.
+        # A column that exists but is entirely null carries no source data,
+        # so the default/literal still wins there; a column with any real
+        # value is genuine source data and takes precedence.
         n = len(dataframe)
         for col_name, value in default_attributes.items():
-            if col_name not in dataframe.schema.names:
+            names = dataframe.schema.names
+            if col_name not in names:
                 dataframe = dataframe.append_column(col_name, pa.array([value] * n))
+            elif dataframe.column(col_name).null_count == n:
+                dataframe = dataframe.set_column(
+                    names.index(col_name), col_name, pa.array([value] * n)
+                )
 
         return dataframe, entity_sql_template
 
@@ -338,12 +346,11 @@ class QueryBasedTransformer(TransformerInterface):
         if isinstance(dataframe, list):
             if dataframe:
                 # pa.Table.from_pylist infers the schema from the first record
-                # only; normalize every record to the union of keys so an
-                # optional key missing from the first record is not silently
-                # dropped for the whole batch.
-                all_keys = {key: None for record in dataframe for key in record}
-                dataframe = pa.Table.from_pylist(
-                    [{key: record.get(key) for key in all_keys} for record in dataframe]
+                # only, silently dropping any key it lacks; build the table
+                # column-wise over the union of keys instead.
+                all_keys = dict.fromkeys(key for record in dataframe for key in record)
+                dataframe = pa.Table.from_pydict(
+                    {key: [record.get(key) for record in dataframe] for key in all_keys}
                 )
             else:
                 dataframe = None
