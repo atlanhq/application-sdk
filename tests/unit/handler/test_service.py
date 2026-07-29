@@ -5150,7 +5150,12 @@ class TestEventTriggerEndpoint:
             # the run page never queries → the run's logs were unfindable).
             kwargs = mock_client.start_workflow.await_args.kwargs
             memo = kwargs["memo"]
-            assert memo["correlation_id"]
+            # A real UUID was minted (not merely any truthy string), matching
+            # the rigor of the event-supplied sibling test below.
+            import uuid as _uuid
+
+            assert len(memo["correlation_id"]) == 36
+            assert _uuid.UUID(memo["correlation_id"])  # raises if not a valid UUID
             # The minted id is returned to the caller so the run's logs are
             # addressable, and it matches what was stamped on the input.
             assert body["correlation_id"] == memo["correlation_id"]

@@ -2954,6 +2954,9 @@ class TestLogSourceProvenance:
             ("httpx.client", "dependency"),
             ("temporalio.worker", "dependency"),
             ("daft_io.stats", "dependency"),
+            # every declared DEPENDENCY_LOGGERS entry, incl. a child prefix
+            ("tracing.span", "dependency"),
+            ("tracing.span.exporter", "dependency"),
         ],
     )
     def test_derive_log_source_buckets(self, logger_name, expected):
@@ -3098,3 +3101,18 @@ class TestOtlpShutdownFlush:
             la.flush_otlp_logs()  # must not raise
         finally:
             adapter.logger_provider = None
+
+    def test_shutdown_survives_provider_errors(self):
+        from application_sdk.observability import logger_adaptor as la
+
+        la._otlp_shutdown_done.clear()
+        adapter = get_logger("app.shutdown_err_test")
+        provider = mock.MagicMock()
+        provider.shutdown.side_effect = RuntimeError("exporter gone")
+        adapter.logger_provider = provider
+        try:
+            la.shutdown_otlp_logs()  # must not raise (except Exception: pass)
+            provider.shutdown.assert_called_once()
+        finally:
+            adapter.logger_provider = None
+            la._otlp_shutdown_done.clear()
