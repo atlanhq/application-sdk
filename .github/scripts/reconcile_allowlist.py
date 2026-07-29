@@ -41,8 +41,9 @@ GitHub/Linear I/O is wired in main(), per docs/standards/ci.md.
 
 Environment:
     REPO                 owner/name (default atlanhq/application-sdk)
-    GH_TOKEN             atlan-ci PAT (push branch + Actions reads for the
-                         debounce window)
+    GH_TOKEN             atlan-ci PAT: Actions reads for the debounce window +
+                         `gh pr create` fallback (the branch itself is pushed
+                         with the checkout token — the fleet App in CI)
     PR_AUTHOR_TOKEN      atlan-app-fleet App token, used ONLY for `gh pr create`
                          so the removal PR is AUTHORED by the fleet App rather
                          than by atlan-ci. atlan-ci must stay free to approve it
