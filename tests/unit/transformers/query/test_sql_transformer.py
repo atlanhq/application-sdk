@@ -420,10 +420,11 @@ def test_template_literal_wins_when_colliding_column_is_all_null(
     assert [row["status"] for row in result] == ["ACTIVE", "ACTIVE"]
 
 
-def test_colliding_source_column_wins_over_template_literal(sql_transformer, tmp_path):
-    """A genuinely populated source column takes precedence over a template
-    literal (post-3.20 semantics), deterministically — regardless of which
-    record carries the value. Collisions belong fixed at the extractor."""
+def test_literal_precedence_is_row_local_on_colliding_column(sql_transformer, tmp_path):
+    """A genuine source value wins for its own row; rows without one get the
+    template literal. Row-local, so the outcome is independent of batch
+    membership and record order. Collisions still belong fixed at the
+    extractor."""
     template = tmp_path / "table.yaml"
     template.write_text(LITERAL_STATUS_TEMPLATE)
     records = [
@@ -440,7 +441,42 @@ def test_colliding_source_column_wins_over_template_literal(sql_transformer, tmp
         connection_qualified_name="default/snowflake/1",
     )
 
-    assert [row["status"] for row in result] == [None, "DELETED"]
+    assert [row["status"] for row in result] == ["ACTIVE", "DELETED"]
+
+
+def test_reserved_default_fills_null_rows_of_colliding_column(
+    sql_transformer, tmp_path
+):
+    """Reserved defaults (connection_qualified_name etc.) follow the same
+    row-local rule as template literals when records carry a colliding key."""
+    template = tmp_path / "table.yaml"
+    template.write_text(
+        textwrap.dedent("""
+        columns:
+          attributes:
+            qualifiedName:
+              source_query: concat(connection_qualified_name, '/', table_name)
+              source_columns: [connection_qualified_name, table_name]
+        """)
+    )
+    records = [
+        {"table_name": "t1", "connection_qualified_name": None},
+        {"table_name": "t2", "connection_qualified_name": "custom/cqn/2"},
+    ]
+
+    result = sql_transformer.transform_metadata(
+        "TABLE",
+        records,
+        "wf",
+        "run",
+        entity_class_definitions={"TABLE": str(template)},
+        connection_qualified_name="default/snowflake/1",
+    )
+
+    assert [row["attributes"]["qualifiedName"] for row in result] == [
+        "default/snowflake/1/t1",
+        "custom/cqn/2/t2",
+    ]
 
 
 @patch(

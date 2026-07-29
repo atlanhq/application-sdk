@@ -394,7 +394,14 @@ Run these detections and report the bucket(s) before changing anything:
    Pin that version — it must also satisfy the gate floor,
    **`>=3.24.1`** — in `pyproject.toml`. (Pinning an in-cooldown version and
    then locking with the `--exclude-newer` bound below is unsatisfiable and
-   fails with an unhelpful resolution error.) Then refresh the whole lock, not
+   fails with an unhelpful resolution error.)
+   **Tiebreak when the floor itself is still inside the cooldown** (no
+   version satisfies both): the floor wins. Adopt the in-cooldown version,
+   drop the `--exclude-newer` bound for the SDK only (keep it for everything
+   else via `uv lock --upgrade-package atlan-application-sdk` after the
+   bounded full refresh), and flag the fresh pick for human review in the PR
+   — per the org's fresh-dependency rule — noting the date the cooldown
+   clears. Then refresh the whole lock, not
    just the SDK:
    `uv lock --upgrade --exclude-newer "$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)"`
    (GNU date: `date -u -d '7 days ago' ...`) followed by

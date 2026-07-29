@@ -176,7 +176,8 @@ extras with what it actually needs — `[sql]` supplies `duckdb` +
 
 ### 2. `transform_metadata` input contract: daft DataFrame → `pa.Table | pd.DataFrame | list[dict]`
 
-The coercion (`application_sdk/transformers/query/__init__.py:338-341`)
+The coercion (the input-normalization branch at the top of
+`QueryBasedTransformer.transform_metadata`)
 converts lists and pandas frames; a daft DataFrame matches **neither branch
 and passes through unconverted** — there is no `else: raise`. It then dies
 inside `db.connection.register("dataframe", <daft df>)`, deep in DuckDB,
@@ -195,7 +196,8 @@ attribute 'names'` = a daft DataFrame reached code expecting pyarrow.
 3.19 executed the generated YAML-template SQL on daft-SQL (which bound the
 `FROM dataframe` identifier by *inspecting the caller's local variables*).
 3.20+ registers the table explicitly and executes on DuckDB
-(`query/__init__.py:367-378`). The `duckdb` import is **function-local**, so
+(the `DuckDBConnectionManager` block in `transform_metadata`). The
+`duckdb` import is **function-local**, so
 nothing fails at boot or import — the first real transform call raises
 `ModuleNotFoundError: duckdb`. Ships only in the SDK's `[sql]` and
 `[incremental]` extras.
@@ -216,9 +218,10 @@ SDK code, not folklore):
 - A quoted-literal template column (`status: source_query: "'ACTIVE'"`) is
   classified as a literal and its SQL expression is emitted as
   `"status" AS "status"` — a **self-reference to a dataframe column**, not
-  the literal (`query/__init__.py:119-120`, `:143-163`).
+  the literal (`convert_to_sql_expression(is_literal=True)` via
+  `get_sql_column_expressions`).
 - The literal's value is moved into `default_attributes`
-  (`query/__init__.py:296-306`) and appended as a constant column **only
+  (in `prepare_template_and_attributes`) and applied **only
   `if col_name not in dataframe.schema.names`** (`:308-312`).
 - So when the extractor's records already carry a key with the same name,
   the source column always wins and the template literal is silently
@@ -273,7 +276,7 @@ believed to be load-bearing; it wasn't).
 An app that fully overrides `transform_metadata` and never calls the SDK's
 still breaks if the override calls SDK **internals**:
 `prepare_template_and_attributes` / `generate_sql_query` read
-`dataframe.schema.names` (`query/__init__.py:141`), `len(dataframe)` and
+`dataframe.schema.names` (`get_sql_column_expressions`), `len(dataframe)` and
 `.append_column` (`:309-312`) — none of which work on a daft frame — and
 `get_grouped_dataframe_by_prefix` now takes a `pa.Table` and returns
 `list[dict]`, so the override's own return type changes out from under its

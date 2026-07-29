@@ -305,19 +305,30 @@ class QueryBasedTransformer(TransformerInterface):
             }
         )
 
-        # Append default attribute columns as constant arrays to the table.
-        # A column that exists but is entirely null carries no source data,
-        # so the default/literal still wins there; a column with any real
-        # value is genuine source data and takes precedence.
+        # Append default attribute columns to the table. The decision is
+        # row-local: a genuine source value always wins for its row, and the
+        # default/literal fills the rows that have none — so the output does
+        # not depend on batch membership or record order.
+        import pyarrow.compute as pc  # noqa: PLC0415 — optional dep: pyarrow
+
         n = len(dataframe)
         for col_name, value in default_attributes.items():
             names = dataframe.schema.names
             if col_name not in names:
                 dataframe = dataframe.append_column(col_name, pa.array([value] * n))
-            elif dataframe.column(col_name).null_count == n:
-                dataframe = dataframe.set_column(
-                    names.index(col_name), col_name, pa.array([value] * n)
-                )
+                continue
+            column = dataframe.column(col_name)
+            if column.null_count == 0 or value is None:
+                continue
+            if column.null_count == n:
+                # rebuild rather than fill: also repairs a null-typed column,
+                # which fill_null cannot cast
+                replacement = pa.array([value] * n)
+            else:
+                replacement = pc.fill_null(column, value)
+            dataframe = dataframe.set_column(
+                names.index(col_name), col_name, replacement
+            )
 
         return dataframe, entity_sql_template
 
