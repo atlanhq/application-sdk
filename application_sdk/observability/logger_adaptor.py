@@ -702,6 +702,11 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             file_name=LOG_FILE_NAME,
         )
         self.logger_name = logger_name
+        # Provenance bucket is a pure function of the (immutable) logger name,
+        # so derive it once here rather than on every process() call. The
+        # InterceptHandler path must stay per-record — there, ``record.name``
+        # varies per log line.
+        self._source_label = _derive_log_source(logger_name)
         # Bind the logger name when creating the logger instance
         self.logger = logger
         # Declared here so _log_sink can use ``is not None`` instead of hasattr —
@@ -1030,8 +1035,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # Provenance (CNCT-106): stamp the record's origin automatically so
         # every line answers "who emitted this" (sdk / <app name> / ae /
         # dependency). setdefault so a caller-supplied ``source=...`` kwarg
-        # wins.
-        kwargs.setdefault("source", _derive_log_source(self.logger_name))
+        # wins. Derived once in __init__ — see ``self._source_label``.
+        kwargs.setdefault("source", self._source_label)
         # Enrichment is shared with :class:`InterceptHandler` so stdlib-bridged
         # records carry the same Atlan context; see :func:`_apply_atlan_context`.
         # ``prefer_caller=False`` preserves the historic SDK-adapter behaviour

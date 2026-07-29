@@ -1488,3 +1488,43 @@ class TestLifecycleMessageBodies:
         exc = ValueError("boom")
         suffix = _failure_suffix(exc, {"failure.code": "auth_error"})
         assert suffix.startswith("FAILED (auth_error): boom")
+
+    async def test_failure_suffix_without_exception_reports_unknown(self):
+        # The ended log is built in a `finally`, so a status of ERROR with no
+        # captured exception is reachable; the body must still name a reason.
+        from application_sdk.execution._temporal.interceptors.log import _failure_suffix
+
+        assert _failure_suffix(None, {}) == "FAILED (unknown)"
+
+    async def test_failure_suffix_truncates_long_message(self):
+        # Full text still ships via exc_info -> exception.message; the body is
+        # capped so one huge message cannot dominate the log line.
+        from application_sdk.execution._temporal.interceptors.log import (
+            _FAILURE_MSG_MAX_CHARS,
+            _failure_suffix,
+        )
+
+        suffix = _failure_suffix(ValueError("x" * 500), {})
+        assert "x" * _FAILURE_MSG_MAX_CHARS in suffix
+        assert "x" * (_FAILURE_MSG_MAX_CHARS + 1) not in suffix
+
+    async def test_failure_suffix_omits_frame_when_traceback_missing(self):
+        # An exception that never propagated (or whose traceback was cleared)
+        # has no frame to name — degrade to code+message, not a crash.
+        from application_sdk.execution._temporal.interceptors.log import _failure_suffix
+
+        exc = ValueError("no frames here")
+        exc.__traceback__ = None
+        suffix = _failure_suffix(exc, {})
+        assert suffix == "FAILED (ValueError): no frames here"
+        assert " — at " not in suffix
+
+    async def test_failure_suffix_survives_whitespace_only_message(self):
+        # str(exc) is truthy but strips to empty, so splitlines() yields [] —
+        # indexing that would raise IndexError, and the caller's best-effort
+        # guard would swallow it and drop the entire ended log.
+        from application_sdk.execution._temporal.interceptors.log import _failure_suffix
+
+        suffix = _failure_suffix(ValueError("\n  \n"), {"failure.code": "blank"})
+        assert suffix.startswith("FAILED (blank)")
+        assert "FAILED (blank):" not in suffix  # no empty ": " tail

@@ -2984,6 +2984,22 @@ class TestLogSourceProvenance:
         _, kwargs = adapter.process("hello", {"source": "custom"})
         assert kwargs["source"] == "custom"
 
+    def test_source_is_derived_once_not_per_log_call(self):
+        # logger_name is fixed at construction, so the bucket is invariant per
+        # adapter — process() must not re-derive it on every line.
+        from application_sdk.constants import LOG_SOURCE_APP_LABEL
+
+        adapter = get_logger("app.cached_source_module")
+        assert adapter._source_label == LOG_SOURCE_APP_LABEL
+
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor._derive_log_source"
+        ) as mock_derive:
+            for _ in range(3):
+                _, kwargs = adapter.process("hello", {})
+                assert kwargs["source"] == LOG_SOURCE_APP_LABEL
+        mock_derive.assert_not_called()
+
     def test_sdk_module_logger_stamps_sdk(self):
         adapter = get_logger("application_sdk.clients.rest")
         _, kwargs = adapter.process("hello", {})

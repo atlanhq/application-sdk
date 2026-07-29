@@ -84,9 +84,10 @@ def _lifecycle_message(event: str, subject: str) -> str:
 
     Terminology: the SDK's unit of work is a **task** (``@task``), so the
     task-level tokens are ``task.started``/``task.ended`` — deliberately
-    renamed from the pre-v3.24 ``activity.*`` tokens in the same release
-    that enriched the bodies. Anything matching the old literal must move
-    to the new token (called out in the release notes / PR).
+    renamed in v3.25 from the ``activity.*`` tokens used through v3.24, in
+    the same release that enriched the bodies. Anything matching the old
+    literal must move to the new token; the operator-facing note lives in
+    ``docs/concepts/monitoring.md`` (Lifecycle log lines).
     """
     return f"{event} {subject}".rstrip() if subject else event
 
@@ -105,11 +106,12 @@ def _failure_suffix(exc: BaseException | None, attrs: dict[str, Any]) -> str:
     )
     msg = ""
     if exc is not None:
-        msg = (
-            str(exc).strip().splitlines()[0][:_FAILURE_MSG_MAX_CHARS]
-            if str(exc)
-            else ""
-        )
+        # ``or [""]`` guards a whitespace-only message ("\n"), where strip()
+        # empties the string and splitlines() yields [] — an IndexError here
+        # would be swallowed by the caller's best-effort guard and take the
+        # whole ended log with it.
+        first_line = (str(exc).strip().splitlines() or [""])[0]
+        msg = first_line[:_FAILURE_MSG_MAX_CHARS]
     frame = ""
     try:
         if exc is not None and exc.__traceback__ is not None:

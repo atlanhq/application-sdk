@@ -6,7 +6,7 @@
 deployment-time-known set. Anything that scales with users, tenants, requests,
 queries, exceptions, or runtime state belongs in **logs**, not in metric labels.
 
-**Diagnostic detail belongs in logs.** The activity.ended log records emitted
+**Diagnostic detail belongs in logs.** The `task.ended` log records emitted
 by `LogInterceptor` already carry `exception.type`, `exception.message`,
 `atlan.exception.cause_chain`, and `atlan.exception.fingerprint` — do not
 duplicate that detail as metric labels.

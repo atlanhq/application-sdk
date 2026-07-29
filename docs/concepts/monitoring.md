@@ -187,6 +187,7 @@ env:
 | `app_name` | The app's kebab-case name |
 | `workflow_run_id` | Temporal workflow run ID (canonical name; `run_id` is a backwards-compat alias) |
 | `correlation_id` | Platform-level correlation identifier |
+| `source` | Which layer emitted the line — `sdk`, `dependency`, or the app's own name (see [Log provenance](#log-provenance-the-source-field)) |
 
 These fields appear on every log entry without any manual binding — use `self.logger` directly.
 
@@ -209,6 +210,74 @@ the exported record; unlisted keys are dropped. This keeps the exported attribut
 adding a new queryable field is a deliberate one-line change next to the emitter. Certain dotted
 prefixes (`atlan.`, `temporal.`, `failure.`, `exception.`, `otel.`, `tenant.`, `workflow_run.`) pass
 through without being individually listed.
+
+### Log provenance: the `source` field
+
+Every record carries a low-cardinality `source` attribute answering *which layer emitted this line*.
+It is stamped centrally — by both `AtlanLoggerAdapter` and the stdlib-logging bridge — so app authors
+cannot get it wrong, and it is allowlisted for OTLP, so it is queryable alongside `app_name`:
+
+| `source` | Records it covers |
+|----------|-------------------|
+| `sdk` | Anything logged from inside `application_sdk` — framework internals and the interceptor lifecycle lines |
+| `dependency` | Known third-party loggers (`httpx`, `daft_io`, `temporalio`, …) and the forwarded `daprd` sidecar lines |
+| *the app label* | Everything else — by default the app's own `APPLICATION_NAME` (e.g. `mysql`), so a reader sees *which* app spoke |
+
+`source` answers a different question from `app_name`: `app_name` says *which connector* the record
+came from, `source` says *which layer within it*. That makes `source = sdk` the filter for "is this
+the framework or the connector's own code" during triage.
+
+The app label is overridable with the `ATLAN_LOG_SOURCE` environment variable — the Automation
+Engine sets `ATLAN_LOG_SOURCE=ae` so its orchestration lines are attributable to the engine rather
+than to whichever app it happens to be running. Apps should leave it unset. See
+[Common Utilities → Logging Configuration](common.md#configuration).
+
+An explicit `source=` kwarg on an individual log call still wins over the derived value.
+
+### Log↔trace correlation (`trace_id` / `span_id`)
+
+OTLP log records carry real trace context: `trace_id` and `span_id` are populated from the span
+active in the emitting thread, so a log line joins to its span in the trace UI. Previously both were
+hard-coded to zero, which made log↔trace correlation impossible.
+
+When no span is active — which includes the case where trace export is off
+(`ATLAN_ENABLE_OTLP_TRACES` unset, the current production default) — both fall back to zero and the
+record is exported untraced, exactly as before. Enabling traces is therefore what turns this
+correlation on.
+
+`correlation_id` remains the business-level join key and is **not** replaced by trace context: it
+spans an entire platform-level operation across process and workflow boundaries, whereas a
+`trace_id` covers one trace. See [Correlation IDs](#correlation-ids).
+
+### Lifecycle log lines
+
+`LogInterceptor` emits four lifecycle lines per run, with OTel semantic-convention attributes
+attached. The **event token is the exact message prefix** — that is the stable, greppable contract
+for dashboards and alerts:
+
+| Token | Level | Message body |
+|-------|-------|--------------|
+| `workflow.started` | INFO | `workflow.started <WorkflowType>` |
+| `workflow.ended` | INFO / WARNING / ERROR | `workflow.ended <WorkflowType> OK (<ms>ms)`, `… BLOCKED (preflight gate)`, or `… FAILED (<code>): <message> — at <file>:<line> in <fn>` |
+| `task.started` | INFO | `task.started <ActivityType>` |
+| `task.ended` | INFO / WARNING / ERROR | same three shapes as `workflow.ended` |
+
+The body after the token is a **human-readable summary, not a contract** — it names the subject and,
+on failure, folds in the first line of the exception message (truncated) and the root-cause frame, so
+a line stays diagnosable in renderers that drop structured attributes. Match on the token prefix and
+the structured attributes, never on the body text.
+
+!!! warning "Breaking change: `activity.*` tokens renamed to `task.*`"
+
+    Through v3.24 the task-level tokens were `activity.started` / `activity.ended`. As of v3.25 they are
+    `task.started` / `task.ended`, aligning the log surface with the SDK's own vocabulary — the unit
+    of work an app author writes is a `@task`.
+
+    **Operators must update anything matching the old literal**: Grafana/ClickHouse dashboard
+    queries, saved log searches, and alert rules that filter on the message string. A rule still
+    matching `activity.ended` will silently match nothing and stop firing rather than error, so this
+    will not announce itself. The workflow-level tokens (`workflow.started` / `workflow.ended`) are
+    unchanged.
 
 ### Asset-validation outcome event
 
