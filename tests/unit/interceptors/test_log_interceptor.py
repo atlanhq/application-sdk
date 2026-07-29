@@ -1025,7 +1025,9 @@ class TestLogActivityInboundInterceptor:
             for c in mock_logger.error.call_args_list
             if c[0][0].startswith("activity.ended")
         ]
-        assert warn, "cause-wrapped preflight block should log activity.ended at warning"
+        assert (
+            warn
+        ), "cause-wrapped preflight block should log activity.ended at warning"
         assert not err
         assert "exc_info" not in warn[0][1]
 
