@@ -360,6 +360,38 @@ def test_transform_metadata_empty_dataframe(sql_transformer):
 @patch(
     "application_sdk.transformers.query.QueryBasedTransformer.get_grouped_dataframe_by_prefix"
 )
+def test_transform_metadata_list_input_unifies_keys_across_records(
+    mock_group, mock_prepare, sql_transformer
+):
+    """Keys absent from the first record must not be dropped from the batch.
+
+    pa.Table.from_pylist infers the schema from the first record only, so a
+    naive coercion silently loses any column the first record lacks.
+    """
+    records = [
+        {"table_name": "table1"},
+        {"table_name": "table2", "view_definition": "SELECT 1"},
+    ]
+    mock_prepare.side_effect = lambda dataframe, *a, **k: (
+        dataframe,
+        "SELECT * FROM dataframe",
+    )
+    mock_group.return_value = [{"typeName": "Table"}]
+
+    sql_transformer.transform_metadata("TABLE", records, "test_workflow", "test_run")
+
+    coerced = mock_prepare.call_args.args[0]
+    assert coerced.schema.names == ["table_name", "view_definition"]
+    assert coerced.to_pylist()[0]["view_definition"] is None
+    assert coerced.to_pylist()[1]["view_definition"] == "SELECT 1"
+
+
+@patch(
+    "application_sdk.transformers.query.QueryBasedTransformer.prepare_template_and_attributes"
+)
+@patch(
+    "application_sdk.transformers.query.QueryBasedTransformer.get_grouped_dataframe_by_prefix"
+)
 def test_transform_metadata(
     mock_group, mock_prepare, sql_transformer, sample_dataframe
 ):

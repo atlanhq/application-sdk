@@ -336,7 +336,17 @@ class QueryBasedTransformer(TransformerInterface):
         pd = sys.modules.get("pandas")
 
         if isinstance(dataframe, list):
-            dataframe = pa.Table.from_pylist(dataframe) if dataframe else None
+            if dataframe:
+                # pa.Table.from_pylist infers the schema from the first record
+                # only; normalize every record to the union of keys so an
+                # optional key missing from the first record is not silently
+                # dropped for the whole batch.
+                all_keys = {key: None for record in dataframe for key in record}
+                dataframe = pa.Table.from_pylist(
+                    [{key: record.get(key) for key in all_keys} for record in dataframe]
+                )
+            else:
+                dataframe = None
         elif pd is not None and isinstance(dataframe, pd.DataFrame):
             dataframe = pa.Table.from_pandas(dataframe, preserve_index=False)
         if dataframe is None or len(dataframe) == 0:
