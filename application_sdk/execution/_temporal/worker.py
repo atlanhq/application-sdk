@@ -12,7 +12,7 @@ import os
 from datetime import timedelta
 from typing import TYPE_CHECKING, Callable
 
-import pydantic
+from pydantic import ValidationError
 from temporalio.client import Client
 from temporalio.worker import Interceptor as TemporalInterceptor
 from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
@@ -50,7 +50,7 @@ logger = get_logger(__name__)
 # Fails the workflow RUN rather than the retryable workflow TASK. Matched by
 # type, so only never-retryable types belong here.
 _WORKFLOW_FAILURE_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (
-    pydantic.ValidationError,
+    ValidationError,
     InvalidInputError,
 )
 
