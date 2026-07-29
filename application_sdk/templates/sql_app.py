@@ -86,7 +86,6 @@ from temporalio import workflow as _temporal_workflow
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
-from application_sdk.common._env import env_int
 from application_sdk.common.sql_filters import (
     normalize_filters,
     safe_substitute_placeholders,
@@ -134,8 +133,7 @@ _MapperFn = Callable[[dict[str, Any], str], Union["Asset", dict[str, Any]]]
 #: ``_EXTRACT_BATCH_SIZE * row_size`` regardless of total result size.
 _EXTRACT_BATCH_SIZE: int = 10_000
 
-#: StartToClose budget for :meth:`SqlApp.prime_sql_auth`, overridable per
-#: deployment via ``ATLAN_PRIME_SQL_AUTH_TIMEOUT_SECONDS``.
+#: StartToClose budget for :meth:`SqlApp.prime_sql_auth`.
 #:
 #: The probe itself — open one connection, ``SELECT 1``, close — is typically
 #: well under a second. But the activity's budget also covers everything
@@ -147,9 +145,9 @@ _EXTRACT_BATCH_SIZE: int = 10_000
 #: resolution and never reaches the source. ``retry_max_attempts=1`` makes that
 #: terminal for the workflow attempt, and it fails the whole extraction DAG.
 #:
-#: The default is 120s rather than the original 60s because an observed
-#: production shape spent ~55s in credential resolution — ~92% of a 60s budget,
-#: so runs succeeded or failed on a few seconds of jitter. 120s is still modest
+#: 120s rather than the original 60s because an observed production shape
+#: spent ~55s in credential resolution — ~92% of a 60s budget, so runs
+#: succeeded or failed on a few seconds of jitter. 120s is still modest
 #: next to the 1800s the ``extract_*`` tasks below carry.
 #:
 #: Safe with respect to heartbeating: ``@task`` leaves
@@ -158,12 +156,7 @@ _EXTRACT_BATCH_SIZE: int = 10_000
 #: (``execution/_temporal/activities.py``), so an activity parked in an
 #: ``await`` for 120s keeps heartbeating and cannot trip the 60s heartbeat
 #: timeout ahead of StartToClose.
-#:
-#: Read once at import time, matching ``ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS``
-#: and ``ATLAN_HEARTBEAT_TIMEOUT_SECONDS`` in ``application_sdk/app/task.py``.
-PRIME_SQL_AUTH_TIMEOUT_SECONDS: int = env_int(
-    "ATLAN_PRIME_SQL_AUTH_TIMEOUT_SECONDS", 120
-)
+PRIME_SQL_AUTH_TIMEOUT_SECONDS: int = 120
 
 
 def _orjson_default(obj: Any) -> Any:
@@ -281,11 +274,11 @@ class SqlApp(App):
     # ``retry_max_attempts=3`` (application_sdk/app/task.py), so we MUST
     # override explicitly. See application-sdk#1835 mothership review
     # comment-3287629972.
-    # The budget is env-overridable (see PRIME_SQL_AUTH_TIMEOUT_SECONDS): the
-    # activity has to cover credential resolution as well as the probe, and on
-    # some deployments the former dominates. retry_max_attempts=1 means a
-    # timeout is terminal for the workflow attempt, so a merely-slow deployment
-    # needs a way to buy headroom without an SDK release.
+    # The budget is 120s, not the @task default (see
+    # PRIME_SQL_AUTH_TIMEOUT_SECONDS): the activity has to cover credential
+    # resolution as well as the probe, and on some deployments the former
+    # dominates. retry_max_attempts=1 means a timeout is terminal for the
+    # workflow attempt, so the budget needs headroom.
     @task(
         timeout_seconds=PRIME_SQL_AUTH_TIMEOUT_SECONDS,
         retry_max_attempts=1,
