@@ -158,7 +158,7 @@ runs:
       id: return_dispatch_callback
       if: inputs.wait-mode == 'callback'
       continue-on-error: true
-      uses: codex-/return-dispatch@16fa9d14771c4d56ae0196bbda1d3c17f7f3650f # v3
+      uses: codex-/return-dispatch@2e404d40b641ba1deb44be941660bb34828e4f6d # v4
       with:
         token: "${{ inputs.github-token }}"
         ref: ${{ inputs.target-branch }}
@@ -189,7 +189,7 @@ runs:
     # ── poll mode (legacy): dispatch, busy-poll, fetch artifact, comment ──
     - name: Trigger E2E Integrations Tests
       if: inputs.wait-mode != 'callback'
-      uses: codex-/return-dispatch@16fa9d14771c4d56ae0196bbda1d3c17f7f3650f # v3
+      uses: codex-/return-dispatch@2e404d40b641ba1deb44be941660bb34828e4f6d # v4
       id: return_dispatch
       with:
         token: "${{ inputs.github-token }}"
