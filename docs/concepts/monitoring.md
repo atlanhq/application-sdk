@@ -259,26 +259,21 @@ for dashboards and alerts:
 |-------|-------|--------------|
 | `workflow.started` | INFO | `workflow.started <WorkflowType>` |
 | `workflow.ended` | INFO / WARNING / ERROR | `workflow.ended <WorkflowType> OK (<ms>ms)`, `… BLOCKED (preflight gate)`, or `… FAILED (<code>): <message> — at <file>:<line> in <fn>` |
-| `task.started` | INFO | `task.started <ActivityType>` |
-| `task.ended` | INFO / WARNING / ERROR | same three shapes as `workflow.ended` |
+| `activity.started` | INFO | `activity.started <ActivityType>` |
+| `activity.ended` | INFO / WARNING / ERROR | same three shapes as `workflow.ended` |
 
 The body after the token is a **human-readable summary, not a contract** — it names the subject and,
 on failure, folds in the first line of the exception message (truncated) and the root-cause frame, so
 a line stays diagnosable in renderers that drop structured attributes. Match on the token prefix and
 the structured attributes, never on the body text.
 
-!!! warning "Breaking change: `activity.*` tokens renamed to `task.*`"
+!!! note "Token stability"
 
-    Through v3.24 the task-level tokens were `activity.started` / `activity.ended`. They are renamed
-    to `task.started` / `task.ended` in the next release (expected v3.25.0 — check `CHANGELOG.md` for
-    the exact version), aligning the log surface with the SDK's own vocabulary: the unit of work an
-    app author writes is a `@task`.
-
-    **Operators must update anything matching the old literal**: Grafana/ClickHouse dashboard
-    queries, saved log searches, and alert rules that filter on the message string. A rule still
-    matching `activity.ended` will silently match nothing and stop firing rather than error, so this
-    will not announce itself. The workflow-level tokens (`workflow.started` / `workflow.ended`) are
-    unchanged.
+    The task-level tokens (`activity.started` / `activity.ended`) and workflow-level tokens
+    (`workflow.started` / `workflow.ended`) are a stable contract — dashboard queries, saved log
+    searches, and alert rules may match on these literal prefixes. The bodies after the token are
+    human-readable summaries and may change; match on the token prefix and the structured
+    attributes, not the body text.
 
 ### Asset-validation outcome event
 

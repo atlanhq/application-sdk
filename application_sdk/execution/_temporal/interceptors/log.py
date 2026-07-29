@@ -10,11 +10,11 @@ Folds the work of four legacy interceptors into one:
   legacy ``correlation_id``) header at inbound, generates a fresh ID on
   top-level workflows, restores from memo on continue-as-new, and injects the
   header on outbound ``start_activity`` / ``start_child_workflow``.
-* ``TaskFailureLoggingInterceptor`` — folded into the ``task.ended``
+* ``TaskFailureLoggingInterceptor`` — folded into the ``activity.ended``
   failure log.
 * ``AppVitalsInterceptor`` — replaced by the four lifecycle log lines below
-  (``workflow.started``, ``workflow.ended``, ``task.started``,
-  ``task.ended``) emitted with OTel semantic-convention attributes.
+  (``workflow.started``, ``workflow.ended``, ``activity.started``,
+  ``activity.ended``) emitted with OTel semantic-convention attributes.
 """
 
 from __future__ import annotations
@@ -76,18 +76,17 @@ _FAILURE_MSG_MAX_CHARS = 200
 def _lifecycle_message(event: str, subject: str) -> str:
     """Build a lifecycle log message body (CNCT-105).
 
-    The event token (``task.ended`` …) is the **exact message prefix** —
+    The event token (``activity.ended`` …) is the **exact message prefix** —
     the stable, greppable contract for downstream consumers — and the
     subject makes the line self-describing: before this, every lifecycle
     line rendered as a bare token and a reader could not tell *which* task
     started or *why* one failed without the (dropped) structured attributes.
 
-    Terminology: the SDK's unit of work is a **task** (``@task``), so the
-    task-level tokens are ``task.started``/``task.ended`` — deliberately
-    renamed from the ``activity.*`` tokens used through v3.24, in the same
-    release that enriched the bodies. Anything matching the old literal must
-    move to the new token; the operator-facing note lives in
-    ``docs/concepts/monitoring.md`` (Lifecycle log lines).
+    The task-level tokens are ``activity.started``/``activity.ended`` (Temporal's
+    activity vocabulary — the unit an app author writes as a ``@task`` runs as a
+    Temporal activity); the workflow-level tokens are ``workflow.started``/
+    ``workflow.ended``. These literals are the stable contract operators match on;
+    see ``docs/concepts/monitoring.md`` (Lifecycle log lines).
     """
     return f"{event} {subject}".rstrip() if subject else event
 
@@ -500,7 +499,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
 class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
     """Activity inbound: set ContextVars, read correlation header, emit
-    ``task.started`` / ``task.ended`` log lines."""
+    ``activity.started`` / ``activity.ended`` log lines."""
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
         info = activity.info()
@@ -571,7 +570,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
 
         try:
             started_msg = _lifecycle_message(
-                "task.started", str(identity["temporal.activity.type"])
+                "activity.started", str(identity["temporal.activity.type"])
             )
             logger.info(started_msg, **identity)
         # conformance: ignore[E004] best-effort observability guard; logging failure must never block activity execution
@@ -604,18 +603,18 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                     # the log. Every other failure keeps the ERROR traceback.
                     if is_preflight_block(exc_caught):
                         blocked_msg = _lifecycle_message(
-                            "task.ended", f"{act_type} BLOCKED (preflight gate)"
+                            "activity.ended", f"{act_type} BLOCKED (preflight gate)"
                         )
                         logger.warning(blocked_msg, **ended_attrs)
                     else:
                         failed_msg = _lifecycle_message(
-                            "task.ended",
+                            "activity.ended",
                             f"{act_type} {_failure_suffix(exc_caught, ended_attrs)}",
                         )
                         logger.error(failed_msg, exc_info=True, **ended_attrs)
                 else:
                     ok_msg = _lifecycle_message(
-                        "task.ended", f"{act_type} OK ({duration_ms}ms)"
+                        "activity.ended", f"{act_type} OK ({duration_ms}ms)"
                     )
                     logger.info(ok_msg, **ended_attrs)
             # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block activity completion
@@ -632,7 +631,7 @@ class LogInterceptor(Interceptor):
     """Unified observability logging interceptor.
 
     Emits four lifecycle log lines per execution — ``workflow.started``,
-    ``workflow.ended``, ``task.started``, ``task.ended`` — with
+    ``workflow.ended``, ``activity.started``, ``activity.ended`` — with
     OpenTelemetry semantic-convention attributes. Also sets the
     ``ExecutionContext`` and ``CorrelationContext`` ContextVars for downstream
     code, and propagates ``x-correlation-id`` across activity / child-workflow

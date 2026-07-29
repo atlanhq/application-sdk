@@ -905,7 +905,7 @@ class TestLogActivityInboundInterceptor:
         started_calls = [
             c
             for c in mock_logger.info.call_args_list
-            if c[0][0].startswith("task.started")
+            if c[0][0].startswith("activity.started")
         ]
         assert len(started_calls) == 1
         kwargs = started_calls[0][1]
@@ -926,7 +926,7 @@ class TestLogActivityInboundInterceptor:
         ended_calls = [
             c
             for c in mock_logger.info.call_args_list
-            if c[0][0].startswith("task.ended")
+            if c[0][0].startswith("activity.ended")
         ]
         assert len(ended_calls) == 1
         kwargs = ended_calls[0][1]
@@ -954,7 +954,7 @@ class TestLogActivityInboundInterceptor:
         ended_calls = [
             c
             for c in mock_logger.error.call_args_list
-            if c[0][0].startswith("task.ended")
+            if c[0][0].startswith("activity.ended")
         ]
         assert len(ended_calls) == 1
         kwargs = ended_calls[0][1]
@@ -963,7 +963,7 @@ class TestLogActivityInboundInterceptor:
 
     async def test_preflight_block_activity_ended_terse(self, mock_next):
         # A deliberate preflight-gate block is an expected, typed outcome —
-        # task.ended logs at WARNING with no stack (mirrors workflow.ended).
+        # activity.ended logs at WARNING with no stack (mirrors workflow.ended).
         mock_next.execute_activity = AsyncMock(
             side_effect=ApplicationError(
                 "Preflight failed", type="PreflightFailed", non_retryable=True
@@ -984,15 +984,15 @@ class TestLogActivityInboundInterceptor:
         warn = [
             c
             for c in mock_logger.warning.call_args_list
-            if c[0][0].startswith("task.ended")
+            if c[0][0].startswith("activity.ended")
         ]
         err = [
             c
             for c in mock_logger.error.call_args_list
-            if c[0][0].startswith("task.ended")
+            if c[0][0].startswith("activity.ended")
         ]
-        assert warn, "preflight block should log task.ended at warning"
-        assert not err, "preflight block must not log task.ended at error"
+        assert warn, "preflight block should log activity.ended at warning"
+        assert not err, "preflight block must not log activity.ended at error"
         assert "exc_info" not in warn[0][1]
 
     async def test_cause_wrapped_preflight_block_activity_ended_terse(self, mock_next):
@@ -1018,14 +1018,14 @@ class TestLogActivityInboundInterceptor:
         warn = [
             c
             for c in mock_logger.warning.call_args_list
-            if c[0][0].startswith("task.ended")
+            if c[0][0].startswith("activity.ended")
         ]
         err = [
             c
             for c in mock_logger.error.call_args_list
-            if c[0][0].startswith("task.ended")
+            if c[0][0].startswith("activity.ended")
         ]
-        assert warn, "cause-wrapped preflight block should log task.ended at warning"
+        assert warn, "cause-wrapped preflight block should log activity.ended at warning"
         assert not err
         assert "exc_info" not in warn[0][1]
 
@@ -1050,7 +1050,7 @@ class TestLogActivityInboundInterceptor:
         ended_calls = [
             c
             for c in mock_logger.error.call_args_list
-            if c[0][0].startswith("task.ended")
+            if c[0][0].startswith("activity.ended")
         ]
         kwargs = ended_calls[0][1]
         assert kwargs["failure.category"] == "AUTH"
@@ -1088,7 +1088,7 @@ class TestLogActivityInboundInterceptor:
         started_calls = [
             c
             for c in mock_logger.info.call_args_list
-            if c[0][0].startswith("task.started")
+            if c[0][0].startswith("activity.started")
         ]
         assert len(started_calls) == 1
         assert started_calls[0][1]["atlan.correlation_id"] == "ctx-id"
@@ -1415,9 +1415,9 @@ class TestLifecycleMessageBodies:
         started = [
             c[0][0]
             for c in mock_logger.info.call_args_list
-            if c[0][0].startswith("task.started")
+            if c[0][0].startswith("activity.started")
         ]
-        assert started == ["task.started TestActivity"]
+        assert started == ["activity.started TestActivity"]
 
     async def test_activity_ended_ok_message_has_type_and_duration(self, act_next):
         interceptor = _LogActivityInboundInterceptor(act_next)
@@ -1432,10 +1432,10 @@ class TestLifecycleMessageBodies:
         ended = [
             c[0][0]
             for c in mock_logger.info.call_args_list
-            if c[0][0].startswith("task.ended")
+            if c[0][0].startswith("activity.ended")
         ]
         assert len(ended) == 1
-        assert ended[0].startswith("task.ended TestActivity OK (")
+        assert ended[0].startswith("activity.ended TestActivity OK (")
         assert ended[0].endswith("ms)")
 
     async def test_activity_ended_error_message_carries_reason_and_frame(
@@ -1457,12 +1457,12 @@ class TestLifecycleMessageBodies:
         errors = [
             c[0][0]
             for c in mock_logger.error.call_args_list
-            if c[0][0].startswith("task.ended")
+            if c[0][0].startswith("activity.ended")
         ]
         assert len(errors) == 1
         msg = errors[0]
-        # task.ended TestActivity FAILED (ValueError): could not connect… — at file:line in fn
-        assert msg.startswith("task.ended TestActivity FAILED (ValueError):")
+        # activity.ended TestActivity FAILED (ValueError): could not connect… — at file:line in fn
+        assert msg.startswith("activity.ended TestActivity FAILED (ValueError):")
         assert "could not connect: timeout after 30s" in msg
         assert " — at " in msg and " in " in msg
 

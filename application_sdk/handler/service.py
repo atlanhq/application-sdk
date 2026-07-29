@@ -1691,7 +1691,14 @@ def _register_workflow_routes(
 
             from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
                 CorrelationContext,
+                set_correlation_context,
             )
+
+            # Mirror the /workflows/v1/start path: bind the ContextVar so every
+            # handler-side line for this request — including the except branch on
+            # a failed dispatch — carries the correlation_id we just returned to
+            # the caller, keeping the run addressable even when the start fails.
+            set_correlation_context(CorrelationContext(correlation_id=correlation_id))
 
             handle = await client.start_workflow(
                 _workflow_config.app_name,
