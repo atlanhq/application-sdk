@@ -422,7 +422,7 @@ urllib3==2.7.0
     #   botocore
     #   requests
     #   sentry-sdk
-uvicorn==0.51.0
+uvicorn==0.52.0
     # via
     #   fastapi
     #   fastapi-cli
