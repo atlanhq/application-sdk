@@ -37,7 +37,7 @@ staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
 outputs:
-  - uv.lock + pyproject.toml (SDK floor raised and lockfile synced — >=3.24.0 for the gate itself; the no-verdict/budget semantics need the first release after CNCT-99, so read the changelog rather than assuming 3.24.0 covers them)
+  - uv.lock + pyproject.toml (floor raised to >=3.24.1 — the gate plus the budget knobs — then pinned to the resolved latest outside the release cooldown, with the whole lock refreshed via `uv lock --upgrade`; the no-verdict/budget semantics need the first release after CNCT-99, so read the changelog rather than assuming the floor covers them)
   - app/handler.py (status logic per the agreed check tree; typed errors on failed checks)
   - app/failures.py (every app-specific typed class in one module — created or extended, shared with /typed-failures)
   - app/<app>.py (preflight_gate_mode, plus preflight_gate_timeout_seconds / preflight_gate_max_attempts when the default budget does not fit)
@@ -374,15 +374,41 @@ Run these detections and report the bucket(s) before changing anything:
 
 ## Phase 1 — Bump and boot
 
-1. Bump `atlan-application-sdk` to the current gate-capable floor —
-   **`>=3.24.0`** — in `pyproject.toml`, then
-   `uv lock --upgrade-package atlan-application-sdk` and
-   `uv sync --all-extras --all-groups`. 3.24.0 is the baseline that carries the
-   gate, the multi-credential primitive (`preflight_credential_refs` /
-   `credentials_by_name`), and the per-entrypoint credential handling this skill
-   relies on. Raise the declared floor if it sits below `>=3.24.0`. (Earlier
-   revisions of this skill said "don't raise the floor" — that is retired; pin
-   `>=3.24.0` from now.) After the bump, confirm the surfaces landed:
+0. **Daft-cliff pre-check (mandatory when the lock resolves SDK <3.20.0).**
+   SDK v3.20.0 removed daft and moved the transformation layer to
+   DuckDB/pyarrow — the bump below drags the app across that cliff. Check
+   `uv.lock`'s resolved `atlan-application-sdk` version; if it is below
+   3.20.0, or `grep -rn "import daft" app/` hits, **invoke
+   `/migrate-off-daft` now** and complete it before proceeding — it owns the
+   breakage taxonomy (empty `[daft]` extra, changed transformer contracts,
+   missing `duckdb`, the silent literal-vs-column precedence flip) and its
+   done-bar is output parity: transformed output structurally identical, no
+   attribute lost. Only when its step-4 evidence is green does phase 1
+   continue; the daft migration and the gate adoption land as separable
+   changes, in that order.
+1. **Always resolve the current latest SDK first** —
+   `curl -s https://pypi.org/pypi/atlan-application-sdk/json | jq -r
+   .info.version` — and pin the newest version outside the 7-day release
+   cooldown that satisfies the gate floor —
+   **`>=3.24.1`** — in `pyproject.toml`. Then refresh the whole lock, not
+   just the SDK:
+   `uv lock --upgrade --exclude-newer "$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)"`
+   (GNU date: `date -u -d '7 days ago' ...`) followed by
+   `uv sync --all-extras --all-groups` — the `--exclude-newer` bound keeps
+   every transitive pick inside the org's release-age cooldown, and the full
+   refresh means stale transitive pins don't surface as unrelated breakage
+   mid-adoption. (If the full upgrade drags in
+   an unrelated failure, bisect by falling back to
+   `uv lock --upgrade-package atlan-application-sdk` and report the
+   offending dep — but the full refresh is the default.)
+   3.24.0 carries the gate, the multi-credential primitive
+   (`preflight_credential_refs` / `credentials_by_name`), and the
+   per-entrypoint credential handling this skill relies on; **3.24.1 adds the
+   budget knobs** (`preflight_gate_timeout_seconds` /
+   `preflight_gate_max_attempts`), which the sizing steps below need — hence
+   the floor. Raise the declared floor if it sits below `>=3.24.1`. (Earlier
+   revisions of this skill said "don't raise the floor", then pinned
+   `>=3.24.0` — both retired.) After the bump, confirm the surfaces landed:
    `PreflightInput.credentials_by_name` / `preflight_credential_refs` must be
    importable, or the upgrade didn't take.
 2. **Boot the worker.** Boot is the collision detector.
