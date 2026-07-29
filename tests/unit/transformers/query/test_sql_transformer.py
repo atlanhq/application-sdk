@@ -478,23 +478,34 @@ def test_castable_default_is_coerced_to_the_column_type(sql_transformer, tmp_pat
     assert [row["status"] for row in result] == ["0", "OK"]
 
 
-def test_uncastable_default_raises_typed_error_not_silent_corruption(
-    sql_transformer, tmp_path
+@pytest.mark.parametrize(
+    "status_values",
+    [
+        pytest.param([None, ["a", "b"]], id="partially-null"),
+        pytest.param([None, None], id="all-null"),
+    ],
+)
+def test_uncastable_default_raises_regardless_of_null_shape(
+    sql_transformer, tmp_path, status_values
 ):
     """A string literal cannot fill a list-typed colliding column: pyarrow's
     fill_null would explode 'ACTIVE' into single characters silently. The
-    guard must raise a typed error naming the column instead."""
+    guard must raise a typed error naming the column — and the answer must
+    not depend on how many of the column's values happen to be null in this
+    batch."""
     template = tmp_path / "table.yaml"
     template.write_text(LITERAL_STATUS_TEMPLATE)
-    records = [
-        {"table_name": "t1", "status": None},
-        {"table_name": "t2", "status": ["a", "b"]},
-    ]
+    table = pa.table(
+        {
+            "table_name": ["t1", "t2"],
+            "status": pa.array(status_values, type=pa.list_(pa.string())),
+        }
+    )
 
     with pytest.raises(IncompatibleDefaultTypeError) as exc_info:
         sql_transformer.transform_metadata(
             "TABLE",
-            records,
+            table,
             "wf",
             "run",
             entity_class_definitions={"TABLE": str(template)},
@@ -502,6 +513,41 @@ def test_uncastable_default_raises_typed_error_not_silent_corruption(
         )
 
     assert "status" in str(exc_info.value)
+
+
+def test_compatible_default_fills_typed_all_null_column_preserving_type(
+    sql_transformer, tmp_path
+):
+    """A castable default filling a typed all-null column must keep the
+    column's Arrow type, not re-infer its own."""
+    template = tmp_path / "table.yaml"
+    template.write_text(
+        textwrap.dedent("""
+        columns:
+          status:
+            source_query: 0
+          attributes:
+            name:
+              source_query: table_name
+        """)
+    )
+    table = pa.table(
+        {
+            "table_name": ["t1", "t2"],
+            "status": pa.array([None, None], type=pa.string()),
+        }
+    )
+
+    prepared, _ = sql_transformer.prepare_template_and_attributes(
+        table,
+        "wf",
+        "run",
+        connection_qualified_name="default/snowflake/1",
+        entity_sql_template_path=str(template),
+    )
+
+    assert prepared.column("status").type == pa.string()
+    assert prepared.column("status").to_pylist() == ["0", "0"]
 
 
 def test_reserved_default_fills_null_rows_of_colliding_column(

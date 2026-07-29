@@ -323,15 +323,17 @@ class QueryBasedTransformer(TransformerInterface):
             column = dataframe.column(col_name)
             if column.null_count == 0 or value is None:
                 continue
-            if column.null_count == n:
-                # rebuild rather than fill: also repairs a null-typed column,
-                # which fill_null cannot cast
+            if pa.types.is_null(column.type):
+                # untyped all-null column: there is no source type to
+                # preserve, so the default legitimately defines the column
+                # (fill_null cannot cast a null-typed column)
                 replacement = pa.array([value] * n)
             else:
                 # fill_null does not type-check: a str default against a list
                 # column silently explodes into single characters. Cast first
                 # so representable defaults coerce and unrepresentable ones
-                # fail loudly, naming the collision.
+                # fail loudly, naming the collision — the same answer whatever
+                # the batch's null shape.
                 try:
                     fill = pa.scalar(value).cast(column.type)
                 except (
@@ -345,11 +347,16 @@ class QueryBasedTransformer(TransformerInterface):
                             f"incompatible with source column type {column.type}; "
                             "rename the colliding extractor key"
                         ),
-                        column_name=col_name,
-                        column_type=str(column.type),
-                        default_type=type(value).__name__,
+                        expectation=f"default castable to {column.type}",
+                        observed=type(value).__name__,
+                        location=col_name,
                     ) from exc
-                replacement = pc.fill_null(column, fill)
+                if column.null_count == n:
+                    # keep the column's type; a bare rebuild would re-infer
+                    # the default's own
+                    replacement = pa.array([fill.as_py()] * n, type=column.type)
+                else:
+                    replacement = pc.fill_null(column, fill)
             dataframe = dataframe.set_column(
                 names.index(col_name), col_name, replacement
             )
