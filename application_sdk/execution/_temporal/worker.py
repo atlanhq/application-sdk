@@ -30,7 +30,7 @@ from application_sdk.constants import (
     PREFLIGHT_GATE_MODE_ENV,
     SHUTDOWN_DRAIN_DELAY_SECONDS,
 )
-from application_sdk.errors import AppError
+from application_sdk.errors.leaves import InvalidInputError
 from application_sdk.execution._temporal.activities import get_all_task_activities
 from application_sdk.execution._temporal.workflows import get_all_app_workflows
 from application_sdk.execution.sandbox import SandboxConfig
@@ -47,38 +47,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Exceptions that fail the workflow RUN rather than the workflow TASK
-# (CONNECT-551).
-#
-# Temporal's default is that any exception escaping workflow code fails only the
-# workflow *task*, which is retryable — the server reschedules it forever. For a
-# transient fault that is what you want. For a deterministic one it is a trap,
-# and the trap has teeth: cancellation is delivered *inside* a workflow task, so
-# a workflow that cannot get far enough to observe the cancel can never be
-# stopped. The run reports ``Running`` until ``workflowRunTimeout`` (24h on a
-# crawler) or an operator terminates it by hand, and the UI Stop button is a
-# no-op by construction.
-#
-# Input decoding is the canonical case: it happens before the first activity, so
-# ADR-032's preflight gate never gets to run either. Everything listed here is
-# deterministic — a retry cannot change the outcome, so failing fast with the
-# real error on the run is strictly better than an unkillable retry loop.
-#
-# Deliberately NOT listed: ``asyncio.CancelledError`` (would break cooperative
-# cancellation) and ``ActivityError`` (would defeat activity retry policies).
-# Activity-raised errors reach the workflow wrapped in ``ActivityError``, so an
-# ``AppError`` from inside an activity does not match ``AppError`` here — this
-# list only ever catches failures raised in workflow context.
+# Fails the workflow RUN rather than the retryable workflow TASK. Matched by
+# type, so only never-retryable types belong here.
 _WORKFLOW_FAILURE_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (
-    # Undecodable workflow input — a malformed filter, a bad credential ref.
     pydantic.ValidationError,
-    # Typed SDK failures raised in workflow context, e.g. InvalidSqlFilterError
-    # escaping a contract's field validator.
-    AppError,
-    # Deterministic programming errors: a bad workflow signature, a missing
-    # attribute in generated workflow code.
-    TypeError,
-    AttributeError,
+    InvalidInputError,
 )
 
 
