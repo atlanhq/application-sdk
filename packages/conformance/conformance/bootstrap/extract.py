@@ -125,7 +125,11 @@ def sanitize_package_list(text: str) -> list[str]:
 
     Truncates at the first shell operator — everything after ``&&``, ``||``,
     ``|`` or ``;`` belongs to another command, and no package name may contain
-    those characters, so the split can never cut a real one short — then keeps
+    those characters, so the split can never cut a real one short — and at the
+    first ``#`` — an inline trailing comment (``libkrb5-dev  # build deps``)
+    describes the line, not more packages, and its words are otherwise valid
+    ``APT_PACKAGE_RE`` tokens that would leak into the list. ``APT_PACKAGE_RE``
+    forbids ``#`` too, so this can't cut a real name short either. Then keeps
     only tokens matching ``APT_PACKAGE_RE`` (dropping flags and anything else).
 
     Shared by the ``checks.yml`` extraction above and the
@@ -133,7 +137,7 @@ def sanitize_package_list(text: str) -> list[str]:
     hand-edited value cannot reach a generated workflow's ``run:`` block by
     whichever of the two paths happens to read it.
     """
-    args = _SHELL_OPERATOR_RE.split(text)[0]
+    args = _SHELL_OPERATOR_RE.split(text)[0].split("#", 1)[0]
     return [token for token in args.split() if APT_PACKAGE_RE.match(token)]
 
 

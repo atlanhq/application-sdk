@@ -129,6 +129,20 @@ def test_extract_apt_packages_ignores_comments_alongside_a_real_step() -> None:
     assert extract_apt_packages(text) == "libkrb5-dev"
 
 
+def test_extract_apt_packages_ignores_inline_trailing_comment() -> None:
+    """An inline trailing `#` comment describes the install line, not more
+    packages. Its words are otherwise valid `APT_PACKAGE_RE` tokens, so without
+    truncating at `#` they would leak into the list -- and a bare `bootstrap`
+    re-run would then render `apt-get install -y ... build deps`, failing CI on
+    the phantom packages: the very "re-run breaks CI" anti-pattern this feature
+    removes, in its inline-comment form."""
+    text = (
+        "          sudo apt-get install -y libkrb5-dev gcc python3-dev"
+        "  # pykerberos build deps\n"
+    )
+    assert extract_apt_packages(text) == "libkrb5-dev gcc python3-dev"
+
+
 def test_extract_apt_packages_from_rendered_checks_yml_ignores_its_comment_block() -> (
     None
 ):
