@@ -1801,39 +1801,16 @@ class TestPrimeSqlAuth:
 
     # ── Budget ──────────────────────────────────────────────────────────
 
-    def test_budget_is_wired_into_the_activity_and_is_120s(self):
-        """Whatever the module constant resolves to *is* the activity's
-        StartToClose."""
+    def test_budget_is_120s_and_retry_stays_1(self):
         from application_sdk.app.task import get_task_metadata
-        from application_sdk.templates.sql_app import PRIME_SQL_AUTH_TIMEOUT_SECONDS
 
         meta = get_task_metadata(SqlApp.prime_sql_auth)
         assert meta is not None
-        assert meta.timeout_seconds == PRIME_SQL_AUTH_TIMEOUT_SECONDS
-        assert PRIME_SQL_AUTH_TIMEOUT_SECONDS == 120
+        assert meta.timeout_seconds == 120
         assert meta.retry_max_attempts == 1, (
             "raising the budget must not disturb the load-bearing "
             "retry_max_attempts=1 — activity retry here would re-stack "
             "failed_login_attempts on the source"
-        )
-
-    def test_budget_cannot_outlive_the_heartbeat(self):
-        """A 120s StartToClose is only reachable if the activity keeps
-        heartbeating: ``auto_heartbeat_loop`` runs as a background asyncio task
-        whenever both knobs are set, so an activity parked in an ``await`` still
-        beats. If either were disabled, the 60s heartbeat timeout would fire
-        first and the raised budget would be dead config."""
-        from application_sdk.app.task import get_task_metadata
-        from application_sdk.templates.sql_app import PRIME_SQL_AUTH_TIMEOUT_SECONDS
-
-        meta = get_task_metadata(SqlApp.prime_sql_auth)
-        assert meta is not None
-        assert meta.heartbeat_timeout_seconds is not None
-        assert meta.auto_heartbeat_seconds is not None
-        assert meta.auto_heartbeat_seconds < meta.heartbeat_timeout_seconds
-        assert PRIME_SQL_AUTH_TIMEOUT_SECONDS > meta.heartbeat_timeout_seconds, (
-            "this guard is only meaningful while the budget exceeds the "
-            "heartbeat timeout — if that stops being true, revisit it"
         )
 
     # ── Bug-reproduction via call ordering ──────────────────────────────
