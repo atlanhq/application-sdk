@@ -6,11 +6,14 @@ import asyncio
 from dataclasses import dataclass
 from unittest import mock
 
+import pydantic
 import pytest
+from temporalio.exceptions import ActivityError
 
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
+from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
 from application_sdk.contracts.base import Input, Output
 from application_sdk.execution._temporal._activity_errors import (
     WorkerActivityNameCollisionError,
@@ -1096,3 +1099,89 @@ class TestResolveGateEnforcement:
                 return _WorkerOutput()
 
         assert _resolve_gate_enforcement(_Hard) is True
+
+
+class TestWorkflowFailureExceptionTypes:
+    """Non-retryable failure types must be declared on the worker (CONNECT-551).
+
+    Anything raised before user workflow code runs — input decoding above all —
+    surfaces as ``WorkflowTaskFailed``, which Temporal retries forever. Because
+    cancellation is delivered *inside* a workflow task, a workflow that cannot
+    finish decoding its input can never observe a cancel either: the run sits in
+    ``Running`` until ``workflowRunTimeout`` (24h on a crawler) or a manual
+    terminate. Declaring the decode failure as a workflow failure type converts
+    that into a terminal failure in seconds, with the real error on the run.
+    """
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @staticmethod
+    def _worker_kwargs() -> dict:
+        class _FailureTypesApp(App):
+            @task(timeout_seconds=60)
+            async def do_work(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured.update(kwargs)
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(_make_mock_client())
+
+        return captured
+
+    def test_failure_types_are_passed_to_the_worker(self) -> None:
+        kwargs = self._worker_kwargs()
+        assert "workflow_failure_exception_types" in kwargs, (
+            "create_worker must declare workflow_failure_exception_types; without "
+            "it every pre-user-code error is an unkillable retry loop"
+        )
+        assert kwargs[
+            "workflow_failure_exception_types"
+        ], "the declared sequence must not be empty"
+
+    def test_pydantic_validation_error_fails_the_run_terminally(self) -> None:
+        declared = self._worker_kwargs().get("workflow_failure_exception_types") or []
+        assert any(
+            isinstance(t, type) and issubclass(pydantic.ValidationError, t)
+            for t in declared
+        ), (
+            "an input that cannot be decoded must fail the run, not retry it "
+            f"forever; declared types were {list(declared)!r}"
+        )
+
+    def test_typed_sdk_errors_fail_the_run_terminally(self) -> None:
+        # A malformed filter raises InvalidSqlFilterError out of the contract's
+        # field validator. Because that is an AppError rather than a ValueError,
+        # Pydantic propagates it raw instead of wrapping it in a
+        # ValidationError — so the pydantic entry alone would not catch the very
+        # input shape this incident was about.
+        declared = self._worker_kwargs().get("workflow_failure_exception_types") or []
+        assert any(
+            isinstance(t, type) and issubclass(InvalidSqlFilterError, t)
+            for t in declared
+        ), f"typed SDK failures must be terminal; declared {list(declared)!r}"
+
+    def test_cancellation_is_not_declared_as_a_failure(self) -> None:
+        # Declaring CancelledError / ActivityError here would break cooperative
+        # cancellation and activity retries, so the set must stay narrow.
+        declared = self._worker_kwargs().get("workflow_failure_exception_types") or []
+        for forbidden in (asyncio.CancelledError, ActivityError):
+            assert not any(
+                isinstance(t, type) and issubclass(forbidden, t) for t in declared
+            ), f"{forbidden.__name__} must not be a workflow failure type"
