@@ -1799,6 +1799,20 @@ class TestPrimeSqlAuth:
         assert "s3cr3t" not in logged
         assert "postgresql://***@db.host" in logged
 
+    # ── Budget ──────────────────────────────────────────────────────────
+
+    def test_budget_is_120s_and_retry_stays_1(self):
+        from application_sdk.app.task import get_task_metadata
+
+        meta = get_task_metadata(SqlApp.prime_sql_auth)
+        assert meta is not None
+        assert meta.timeout_seconds == 120
+        assert meta.retry_max_attempts == 1, (
+            "raising the budget must not disturb the load-bearing "
+            "retry_max_attempts=1 — activity retry here would re-stack "
+            "failed_login_attempts on the source"
+        )
+
     # ── Bug-reproduction via call ordering ──────────────────────────────
 
     async def test_reproduces_parallel_auth_burst_when_prime_skipped(self):
