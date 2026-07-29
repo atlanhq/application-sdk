@@ -45,6 +45,17 @@ dependencies = [
     # Temporal runtime (httpx-retries at L29 is the Dapr HTTP client replacement)
     "temporalio>=1.25.0,<2.0.0",
     "orjson>=3.11.6,<4.0.0",
+    # Security floors on transitive deps. Declared here rather than in
+    # [tool.uv] constraint-dependencies because tool.uv settings are
+    # workspace-local — they guard this repo's own lock but are not published
+    # in wheel metadata, so consumers resolving against the released SDK never
+    # see them and can pin a vulnerable version. Floors only, no upper bounds:
+    # the direct requirers (fastapi for starlette/python-multipart; azure-identity,
+    # google-auth, authlib, msal, pyjwt[crypto] for cryptography) keep owning the
+    # ceiling. Drop a floor once every requirer's own floor has passed it.
+    "cryptography>=48.0.1",      # GHSA-537c-gmf6-5ccf
+    "starlette>=1.1.0",          # CVE-2026-48818, CVE-2026-54283
+    "python-multipart>=0.0.30",  # CVE-2026-53539
 ]
 
 [project.scripts]
