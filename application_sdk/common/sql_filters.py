@@ -91,6 +91,15 @@ _FORBIDDEN_FILTER_SEQUENCES: tuple[str, ...] = (
 SAFE_FILTER_PATTERN: str = r"^[^'\";\x00]*$"
 _SAFE_FILTER_PATTERN = SAFE_FILTER_PATTERN  # backward-compat alias
 
+# Applied to an unparseable ``{...}`` filter string (CONNECT-551). The
+# envelope's double-quotes are JSON syntax the caller never authored, so
+# judging them yields a SQL-injection verdict on a malformed payload; every
+# other forbidden sequence still has to be caught, since a broken envelope
+# can carry a genuine injection just as easily as a well-formed one.
+_FORBIDDEN_OUTSIDE_JSON_ENVELOPE: tuple[str, ...] = tuple(
+    seq for seq in _FORBIDDEN_FILTER_SEQUENCES if seq != '"'
+)
+
 FilterValue: TypeAlias = list[str] | str | dict[str, dict[str, Any]]
 
 _MAX_FILTER_NESTING_DEPTH = 4
@@ -106,7 +115,11 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
     * JSON-encoded strings (legacy AE payload shape) — parsed first;
       the parsed dict is then checked. The JSON's own structural
       double-quotes are stripped by the parse, so we only ever apply
-      the deny-list to the actual filter contents.
+      the deny-list to the actual filter contents. A ``{...}`` string
+      that fails to parse raises :class:`InvalidSqlFilterError` naming
+      the parse position rather than a deny-list verdict on the
+      envelope's quotes — but only after the envelope-independent
+      forbidden sequences have been ruled out.
     * Structured dict filters (``FilterMap``) — checks every key and
       every string in every value list.
 
@@ -124,10 +137,16 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
 
     Raises:
         ValueError: When any forbidden sequence is found.
+        InvalidSqlFilterError: When the value looks like a JSON object
+            but cannot be parsed.
     """
 
-    def _check_str(label: str, value: str) -> None:
-        for seq in _FORBIDDEN_FILTER_SEQUENCES:
+    def _check_str(
+        label: str,
+        value: str,
+        sequences: tuple[str, ...] = _FORBIDDEN_FILTER_SEQUENCES,
+    ) -> None:
+        for seq in sequences:
             if seq in value:
                 # conformance: ignore[E012] Pydantic @field_validator requires ValueError to collect validation errors; any other type bypasses Pydantic's error collection and propagates raw, breaking model instantiation for all callers
                 raise ValueError(
@@ -163,7 +182,23 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
         if stripped.startswith("{") and stripped.endswith("}"):
             try:
                 parsed = orjson.loads(stripped)
-            except json.JSONDecodeError:  # conformance: ignore[E009] JSON parse probe; None signals "not a dict filter", handled below
+            except json.JSONDecodeError as e:
+                # A malformed filter must fail as a malformed filter. Falling
+                # through to the full deny-list here would report the JSON
+                # envelope's own quote as an injection attempt, which is both
+                # untrue and unactionable. Screen for the sequences that are
+                # unsafe regardless of the envelope first, so a broken payload
+                # can't smuggle one past the deny-list, then surface the parse
+                # position.
+                #
+                # Gated on the payload actually containing a double-quote: a
+                # JSON object always quotes its keys, so a brace-wrapped value
+                # without one was never a JSON attempt. It has no structural
+                # quotes to protect and keeps its original raw-regex handling
+                # rather than becoming a hard error.
+                if '"' in stripped:
+                    _check_str("value", stripped, _FORBIDDEN_OUTSIDE_JSON_ENVELOPE)
+                    raise InvalidSqlFilterError(cause=e) from e
                 parsed = None
             if isinstance(parsed, dict):
                 # Validate the parsed shape; ignore the returned value
