@@ -9,6 +9,7 @@ from application_sdk.transformers.query import QueryBasedTransformer
 from application_sdk.transformers.query.errors import (
     BuildStructLevelRequiredError,
     BuildStructPrefixRequiredError,
+    IncompatibleDefaultTypeError,
 )
 
 
@@ -352,6 +353,236 @@ def test_transform_metadata_empty_dataframe(sql_transformer):
         "TABLE", empty_df, "test_workflow", "test_run"
     )
     assert result is None
+
+
+@patch(
+    "application_sdk.transformers.query.QueryBasedTransformer.prepare_template_and_attributes"
+)
+@patch(
+    "application_sdk.transformers.query.QueryBasedTransformer.get_grouped_dataframe_by_prefix"
+)
+def test_transform_metadata_list_input_unifies_keys_across_records(
+    mock_group, mock_prepare, sql_transformer
+):
+    """Keys absent from the first record must not be dropped from the batch.
+
+    pa.Table.from_pylist infers the schema from the first record only, so a
+    naive coercion silently loses any column the first record lacks.
+    """
+    records = [
+        {"table_name": "table1"},
+        {"table_name": "table2", "view_definition": "SELECT 1"},
+    ]
+    mock_prepare.side_effect = lambda dataframe, *a, **k: (
+        dataframe,
+        "SELECT * FROM dataframe",
+    )
+    mock_group.return_value = [{"typeName": "Table"}]
+
+    sql_transformer.transform_metadata("TABLE", records, "test_workflow", "test_run")
+
+    coerced = mock_prepare.call_args.args[0]
+    assert coerced.schema.names == ["table_name", "view_definition"]
+    assert coerced.to_pylist()[0]["view_definition"] is None
+    assert coerced.to_pylist()[1]["view_definition"] == "SELECT 1"
+
+
+LITERAL_STATUS_TEMPLATE = textwrap.dedent("""
+columns:
+  status:
+    source_query: "'ACTIVE'"
+  attributes:
+    name:
+      source_query: table_name
+""")
+
+
+def test_template_literal_wins_when_colliding_column_is_all_null(
+    sql_transformer, tmp_path
+):
+    """Records carrying only explicit Nones for a literal-declared name must
+    still get the template literal, not a null column."""
+    template = tmp_path / "table.yaml"
+    template.write_text(LITERAL_STATUS_TEMPLATE)
+    records = [
+        {"table_name": "t1", "status": None},
+        {"table_name": "t2", "status": None},
+    ]
+
+    result = sql_transformer.transform_metadata(
+        "TABLE",
+        records,
+        "wf",
+        "run",
+        entity_class_definitions={"TABLE": str(template)},
+        connection_qualified_name="default/snowflake/1",
+    )
+
+    assert [row["status"] for row in result] == ["ACTIVE", "ACTIVE"]
+
+
+def test_literal_precedence_is_row_local_on_colliding_column(sql_transformer, tmp_path):
+    """A genuine source value wins for its own row; rows without one get the
+    template literal. Row-local, so the outcome is independent of batch
+    membership and record order. Collisions still belong fixed at the
+    extractor."""
+    template = tmp_path / "table.yaml"
+    template.write_text(LITERAL_STATUS_TEMPLATE)
+    records = [
+        {"table_name": "t1"},
+        {"table_name": "t2", "status": "DELETED"},
+    ]
+
+    result = sql_transformer.transform_metadata(
+        "TABLE",
+        records,
+        "wf",
+        "run",
+        entity_class_definitions={"TABLE": str(template)},
+        connection_qualified_name="default/snowflake/1",
+    )
+
+    assert [row["status"] for row in result] == ["ACTIVE", "DELETED"]
+
+
+def test_castable_default_is_coerced_to_the_column_type(sql_transformer, tmp_path):
+    """An int template literal colliding with a string source column is cast
+    to the column's type and filled row-locally ('0', not a crash). Lossy but
+    representable casts are accepted deliberately; only unrepresentable
+    combinations raise (see the list-column test below)."""
+    template = tmp_path / "table.yaml"
+    template.write_text(
+        textwrap.dedent("""
+        columns:
+          status:
+            source_query: 0
+          attributes:
+            name:
+              source_query: table_name
+        """)
+    )
+    records = [
+        {"table_name": "t1", "status": None},
+        {"table_name": "t2", "status": "OK"},
+    ]
+
+    result = sql_transformer.transform_metadata(
+        "TABLE",
+        records,
+        "wf",
+        "run",
+        entity_class_definitions={"TABLE": str(template)},
+        connection_qualified_name="default/snowflake/1",
+    )
+
+    assert [row["status"] for row in result] == ["0", "OK"]
+
+
+@pytest.mark.parametrize(
+    "status_values",
+    [
+        pytest.param([None, ["a", "b"]], id="partially-null"),
+        pytest.param([None, None], id="all-null"),
+    ],
+)
+def test_uncastable_default_raises_regardless_of_null_shape(
+    sql_transformer, tmp_path, status_values
+):
+    """A string literal cannot fill a list-typed colliding column: pyarrow's
+    fill_null would explode 'ACTIVE' into single characters silently. The
+    guard must raise a typed error naming the column — and the answer must
+    not depend on how many of the column's values happen to be null in this
+    batch."""
+    template = tmp_path / "table.yaml"
+    template.write_text(LITERAL_STATUS_TEMPLATE)
+    table = pa.table(
+        {
+            "table_name": ["t1", "t2"],
+            "status": pa.array(status_values, type=pa.list_(pa.string())),
+        }
+    )
+
+    with pytest.raises(IncompatibleDefaultTypeError) as exc_info:
+        sql_transformer.transform_metadata(
+            "TABLE",
+            table,
+            "wf",
+            "run",
+            entity_class_definitions={"TABLE": str(template)},
+            connection_qualified_name="default/snowflake/1",
+        )
+
+    assert "status" in str(exc_info.value)
+
+
+def test_compatible_default_fills_typed_all_null_column_preserving_type(
+    sql_transformer, tmp_path
+):
+    """A castable default filling a typed all-null column must keep the
+    column's Arrow type, not re-infer its own."""
+    template = tmp_path / "table.yaml"
+    template.write_text(
+        textwrap.dedent("""
+        columns:
+          status:
+            source_query: 0
+          attributes:
+            name:
+              source_query: table_name
+        """)
+    )
+    table = pa.table(
+        {
+            "table_name": ["t1", "t2"],
+            "status": pa.array([None, None], type=pa.string()),
+        }
+    )
+
+    prepared, _ = sql_transformer.prepare_template_and_attributes(
+        table,
+        "wf",
+        "run",
+        connection_qualified_name="default/snowflake/1",
+        entity_sql_template_path=str(template),
+    )
+
+    assert prepared.column("status").type == pa.string()
+    assert prepared.column("status").to_pylist() == ["0", "0"]
+
+
+def test_reserved_default_fills_null_rows_of_colliding_column(
+    sql_transformer, tmp_path
+):
+    """Reserved defaults (connection_qualified_name etc.) follow the same
+    row-local rule as template literals when records carry a colliding key."""
+    template = tmp_path / "table.yaml"
+    template.write_text(
+        textwrap.dedent("""
+        columns:
+          attributes:
+            qualifiedName:
+              source_query: concat(connection_qualified_name, '/', table_name)
+              source_columns: [connection_qualified_name, table_name]
+        """)
+    )
+    records = [
+        {"table_name": "t1", "connection_qualified_name": None},
+        {"table_name": "t2", "connection_qualified_name": "custom/cqn/2"},
+    ]
+
+    result = sql_transformer.transform_metadata(
+        "TABLE",
+        records,
+        "wf",
+        "run",
+        entity_class_definitions={"TABLE": str(template)},
+        connection_qualified_name="default/snowflake/1",
+    )
+
+    assert [row["attributes"]["qualifiedName"] for row in result] == [
+        "default/snowflake/1/t1",
+        "custom/cqn/2/t2",
+    ]
 
 
 @patch(

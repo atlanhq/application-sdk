@@ -25,6 +25,9 @@ from application_sdk.transformers.query.errors import (
     BuildStructPrefixRequiredError as BuildStructPrefixRequiredError,
 )
 from application_sdk.transformers.query.errors import (
+    IncompatibleDefaultTypeError as IncompatibleDefaultTypeError,
+)
+from application_sdk.transformers.query.errors import (
     SqlTransformNotRegisteredError as SqlTransformNotRegisteredError,
 )
 
@@ -305,11 +308,58 @@ class QueryBasedTransformer(TransformerInterface):
             }
         )
 
-        # Append default attribute columns as constant arrays to the table
+        # Append default attribute columns to the table. The decision is
+        # row-local: a genuine source value always wins for its row, and the
+        # default/literal fills the rows that have none — so the output does
+        # not depend on batch membership or record order.
+        import pyarrow.compute as pc  # noqa: PLC0415 — optional dep: pyarrow
+
         n = len(dataframe)
         for col_name, value in default_attributes.items():
-            if col_name not in dataframe.schema.names:
+            names = dataframe.schema.names
+            if col_name not in names:
                 dataframe = dataframe.append_column(col_name, pa.array([value] * n))
+                continue
+            column = dataframe.column(col_name)
+            if column.null_count == 0 or value is None:
+                continue
+            if pa.types.is_null(column.type):
+                # untyped all-null column: there is no source type to
+                # preserve, so the default legitimately defines the column
+                # (fill_null cannot cast a null-typed column)
+                replacement = pa.array([value] * n)
+            else:
+                # fill_null does not type-check: a str default against a list
+                # column silently explodes into single characters. Cast first
+                # so representable defaults coerce and unrepresentable ones
+                # fail loudly, naming the collision — the same answer whatever
+                # the batch's null shape.
+                try:
+                    fill = pa.scalar(value).cast(column.type)
+                except (
+                    pa.ArrowInvalid,
+                    pa.ArrowNotImplementedError,
+                    pa.ArrowTypeError,
+                ) as exc:
+                    raise IncompatibleDefaultTypeError(
+                        message=(
+                            f"default {col_name!r} ({type(value).__name__}) is "
+                            f"incompatible with source column type {column.type}; "
+                            "rename the colliding extractor key"
+                        ),
+                        expectation=f"default castable to {column.type}",
+                        observed=type(value).__name__,
+                        location=col_name,
+                    ) from exc
+                if column.null_count == n:
+                    # keep the column's type; a bare rebuild would re-infer
+                    # the default's own
+                    replacement = pa.array([fill.as_py()] * n, type=column.type)
+                else:
+                    replacement = pc.fill_null(column, fill)
+            dataframe = dataframe.set_column(
+                names.index(col_name), col_name, replacement
+            )
 
         return dataframe, entity_sql_template
 
@@ -336,7 +386,16 @@ class QueryBasedTransformer(TransformerInterface):
         pd = sys.modules.get("pandas")
 
         if isinstance(dataframe, list):
-            dataframe = pa.Table.from_pylist(dataframe) if dataframe else None
+            if dataframe:
+                # pa.Table.from_pylist infers the schema from the first record
+                # only, silently dropping any key it lacks; build the table
+                # column-wise over the union of keys instead.
+                all_keys = dict.fromkeys(key for record in dataframe for key in record)
+                dataframe = pa.Table.from_pydict(
+                    {key: [record.get(key) for record in dataframe] for key in all_keys}
+                )
+            else:
+                dataframe = None
         elif pd is not None and isinstance(dataframe, pd.DataFrame):
             dataframe = pa.Table.from_pandas(dataframe, preserve_index=False)
         if dataframe is None or len(dataframe) == 0:
