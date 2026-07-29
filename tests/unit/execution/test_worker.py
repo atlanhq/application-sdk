@@ -13,7 +13,6 @@ from temporalio.exceptions import ActivityError
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
-from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.leaves import (
     AppTimeoutError,
@@ -1143,9 +1142,6 @@ class TestWorkflowFailureExceptionTypes:
 
     def test_undecodable_input_fails_the_run_terminally(self) -> None:
         assert issubclass(pydantic.ValidationError, self._declared_types())
-
-    def test_typed_input_rejections_fail_the_run_terminally(self) -> None:
-        assert issubclass(InvalidSqlFilterError, self._declared_types())
 
     def test_retryable_errors_are_not_declared(self) -> None:
         declared = self._declared_types()

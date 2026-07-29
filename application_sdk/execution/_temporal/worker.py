@@ -30,7 +30,6 @@ from application_sdk.constants import (
     PREFLIGHT_GATE_MODE_ENV,
     SHUTDOWN_DRAIN_DELAY_SECONDS,
 )
-from application_sdk.errors.leaves import InvalidInputError
 from application_sdk.execution._temporal.activities import get_all_task_activities
 from application_sdk.execution._temporal.workflows import get_all_app_workflows
 from application_sdk.execution.sandbox import SandboxConfig
@@ -49,10 +48,7 @@ logger = get_logger(__name__)
 
 # Fails the workflow RUN rather than the retryable workflow TASK. Matched by
 # type, so only never-retryable types belong here.
-_WORKFLOW_FAILURE_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (
-    ValidationError,
-    InvalidInputError,
-)
+_WORKFLOW_FAILURE_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (ValidationError,)
 
 
 def _resolve_gate_enforcement(app_cls: type | None) -> bool:
