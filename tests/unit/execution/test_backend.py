@@ -168,6 +168,61 @@ class TestTemporalExecutorBackendExecute:
             "execution_timeout"
         ] == timedelta(minutes=5)
 
+    @pytest.mark.asyncio
+    async def test_execute_passes_correlation_memo_from_context(self) -> None:
+        # CNCT-104: execute() must put the correlation id in the Temporal
+        # start memo — the memo is what the LogInterceptor reads (priority 1).
+        # Before the fix only the private ``_correlation_id`` attr was set and
+        # no memo was passed, so the interceptor fell through to its fallback
+        # and the run's logs were stamped with an unqueryable identity.
+        client = mock.MagicMock()
+        client.execute_workflow = mock.AsyncMock(return_value=None)
+        backend = TemporalExecutorBackend(client=client, task_queue="q")
+        app_cls = _make_app_cls()
+        ctx = mock.MagicMock(app_name="my-app", correlation_id="ctx-corr")
+        inp = _make_input_data()
+        inp.correlation_id = ""  # no caller-supplied value → context wins
+        await backend.execute(app_cls, inp, context=ctx, retry_policy=SdkRetryPolicy())
+        kwargs = client.execute_workflow.await_args.kwargs
+        assert kwargs["memo"] == {"correlation_id": "ctx-corr"}
+        # Stamped on both the public contract field and the legacy attr.
+        assert inp.correlation_id == "ctx-corr"
+        assert inp._correlation_id == "ctx-corr"
+
+    @pytest.mark.asyncio
+    async def test_execute_frozen_input_still_gets_memo(self) -> None:
+        # An input that rejects attribute assignment (dict/frozen shapes)
+        # must still be correlated via the memo — the reliable channel. The
+        # attribute stamps are best-effort mirrors and must not abort the
+        # start when they fail.
+        class _FrozenInput:
+            __slots__ = ()
+
+        client = mock.MagicMock()
+        client.execute_workflow = mock.AsyncMock(return_value=None)
+        backend = TemporalExecutorBackend(client=client, task_queue="q")
+        app_cls = _make_app_cls()
+        ctx = mock.MagicMock(app_name="my-app", correlation_id="ctx-corr")
+        await backend.execute(
+            app_cls, _FrozenInput(), context=ctx, retry_policy=SdkRetryPolicy()
+        )
+        kwargs = client.execute_workflow.await_args.kwargs
+        assert kwargs["memo"] == {"correlation_id": "ctx-corr"}
+
+    @pytest.mark.asyncio
+    async def test_execute_respects_caller_supplied_correlation(self) -> None:
+        # A caller-supplied input.correlation_id wins over the context's.
+        client = mock.MagicMock()
+        client.execute_workflow = mock.AsyncMock(return_value=None)
+        backend = TemporalExecutorBackend(client=client, task_queue="q")
+        app_cls = _make_app_cls()
+        ctx = mock.MagicMock(app_name="my-app", correlation_id="ctx-corr")
+        inp = _make_input_data()
+        inp.correlation_id = "caller-corr"
+        await backend.execute(app_cls, inp, context=ctx, retry_policy=SdkRetryPolicy())
+        kwargs = client.execute_workflow.await_args.kwargs
+        assert kwargs["memo"] == {"correlation_id": "caller-corr"}
+
 
 class TestTemporalExecutorBackendStart:
     @pytest.mark.asyncio
@@ -203,6 +258,23 @@ class TestTemporalExecutorBackendStart:
             entry_point="do",
         )
         assert client.start_workflow.await_args.args[0] == "ep:do"
+
+    @pytest.mark.asyncio
+    async def test_start_passes_correlation_memo_from_context(self) -> None:
+        # CNCT-104: start() mirrors execute() — correlation memo always set.
+        handle = mock.MagicMock(id="abc")
+        client = mock.MagicMock()
+        client.start_workflow = mock.AsyncMock(return_value=handle)
+        backend = TemporalExecutorBackend(client=client)
+        app_cls = _make_app_cls(name="starter")
+        ctx = mock.MagicMock(app_name="starter", correlation_id="ctx-corr")
+        inp = _make_input_data()
+        inp.correlation_id = ""
+        await backend.start(app_cls, inp, context=ctx, retry_policy=SdkRetryPolicy())
+        kwargs = client.start_workflow.await_args.kwargs
+        assert kwargs["memo"] == {"correlation_id": "ctx-corr"}
+        assert inp.correlation_id == "ctx-corr"
+        assert inp._correlation_id == "ctx-corr"
 
 
 class TestTemporalExecutorBackendHandleOps:

@@ -20,7 +20,9 @@ Folds the work of four legacy interceptors into one:
 from __future__ import annotations
 
 import dataclasses
+import posixpath
 import time
+import traceback as tb_module
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -65,6 +67,62 @@ logger = get_logger(__name__)
 # Must match _MAX_CHAIN_DEPTH in activities.py: an AppError sitting between the
 # walk cap and the sever cap would be silently invisible to OTel attributes.
 _MAX_CHAIN_WALK = 50
+
+# Cap the exception message folded into a lifecycle message body — the full
+# text still ships in exception.message / the traceback in exception.stacktrace.
+_FAILURE_MSG_MAX_CHARS = 200
+
+
+def _lifecycle_message(event: str, subject: str) -> str:
+    """Build a lifecycle log message body (CNCT-105).
+
+    The event token (``activity.ended`` …) is the **exact message prefix** —
+    the stable, greppable contract for downstream consumers — and the
+    subject makes the line self-describing: before this, every lifecycle
+    line rendered as a bare token and a reader could not tell *which* task
+    started or *why* one failed without the (dropped) structured attributes.
+
+    The task-level tokens are ``activity.started``/``activity.ended`` (Temporal's
+    activity vocabulary — the unit an app author writes as a ``@task`` runs as a
+    Temporal activity); the workflow-level tokens are ``workflow.started``/
+    ``workflow.ended``. These literals are the stable contract operators match on;
+    see ``docs/concepts/monitoring.md`` (Lifecycle log lines).
+    """
+    return f"{event} {subject}".rstrip() if subject else event
+
+
+def _failure_suffix(exc: BaseException | None, attrs: dict[str, Any]) -> str:
+    """One-line failure summary for a lifecycle ERROR message body.
+
+    Shape: ``FAILED (<failure.code|exception type>): <message> — at
+    <file>:<line> in <fn>``. The root-cause frame is the innermost traceback
+    frame; the full stacktrace still rides ``exc_info=True`` → OTel
+    ``exception.stacktrace``. Deterministic (string handling only) — safe in
+    the Temporal workflow sandbox.
+    """
+    code = str(attrs.get("failure.code") or "") or (
+        type(exc).__name__ if exc is not None else "unknown"
+    )
+    msg = ""
+    if exc is not None:
+        # ``or [""]`` guards a whitespace-only message ("\n"), where strip()
+        # empties the string and splitlines() yields [] — an IndexError here
+        # would be swallowed by the caller's best-effort guard and take the
+        # whole ended log with it.
+        first_line = (str(exc).strip().splitlines() or [""])[0]
+        msg = first_line[:_FAILURE_MSG_MAX_CHARS]
+    frame = ""
+    try:
+        if exc is not None and exc.__traceback__ is not None:
+            last = tb_module.extract_tb(exc.__traceback__)[-1]
+            frame = (
+                f" — at {posixpath.basename(str(last.filename))}"
+                f":{last.lineno} in {last.name}"
+            )
+    # conformance: ignore[E004] best-effort message enrichment; a broken traceback must never block the ended log
+    except Exception:  # noqa: S110 — degrade to code+message, never drop the log
+        pass
+    return f"FAILED ({code}): {msg}{frame}" if msg else f"FAILED ({code}){frame}"
 
 
 def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
@@ -303,7 +361,25 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 "Failed to read correlation_id from workflow args", exc_info=True
             )
 
-        # Priority 4: top-level workflow — generate a fresh correlation ID.
+        # Priority 4: top-level workflow with no caller-supplied correlation —
+        # default to this run's Temporal run_id. A random uuid4 here (the
+        # pre-CNCT-104 behavior) produced an identity that existed nowhere
+        # else in the platform: the run page queries logs by the caller's
+        # correlation_id, so uuid4-stamped runs rendered as "no logs". The
+        # run_id is at least discoverable from run metadata, and it matches
+        # the documented invariant ("correlation_id defaults to the Temporal
+        # run_id") that app/base.py and AppContext already implement — every
+        # layer now agrees on the same fallback.
+        try:
+            run_id = workflow.info().run_id
+            if run_id:
+                return str(run_id)
+        except Exception:
+            logger.warning(
+                "Failed to read workflow run_id for correlation fallback",
+                exc_info=True,
+            )
+        # Defensive last resort — should be unreachable inside a workflow.
         return str(uuid4())
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
@@ -362,7 +438,10 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         }
 
         try:
-            logger.info("workflow.started", **identity)
+            started_msg = _lifecycle_message(
+                "workflow.started", str(identity["temporal.workflow.type"])
+            )
+            logger.info(started_msg, **identity)
         # conformance: ignore[E004] best-effort observability guard; logging failure must never block workflow execution
         except Exception:  # noqa: S110 — best-effort observability; never block the workflow on logging
             pass
@@ -385,6 +464,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 "temporal.workflow.duration_ms": duration_ms,
             }
             try:
+                wf_type = str(identity["temporal.workflow.type"])
                 if status == "ERROR":
                     ended_attrs.update(_extract_failure_attrs(exc_caught))
                     # A deliberate preflight-gate block is an expected, typed
@@ -392,11 +472,21 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     # classification is already in ended_attrs via the failure
                     # details. Real failures keep the ERROR traceback.
                     if is_preflight_block(exc_caught):
-                        logger.warning("workflow.ended", **ended_attrs)
+                        blocked_msg = _lifecycle_message(
+                            "workflow.ended", f"{wf_type} BLOCKED (preflight gate)"
+                        )
+                        logger.warning(blocked_msg, **ended_attrs)
                     else:
-                        logger.error("workflow.ended", exc_info=True, **ended_attrs)
+                        failed_msg = _lifecycle_message(
+                            "workflow.ended",
+                            f"{wf_type} {_failure_suffix(exc_caught, ended_attrs)}",
+                        )
+                        logger.error(failed_msg, exc_info=True, **ended_attrs)
                 else:
-                    logger.info("workflow.ended", **ended_attrs)
+                    ok_msg = _lifecycle_message(
+                        "workflow.ended", f"{wf_type} OK ({duration_ms}ms)"
+                    )
+                    logger.info(ok_msg, **ended_attrs)
             # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block workflow completion
             except Exception:  # noqa: S110 — best-effort observability; never block the workflow on logging
                 pass
@@ -479,7 +569,10 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
         }
 
         try:
-            logger.info("activity.started", **identity)
+            started_msg = _lifecycle_message(
+                "activity.started", str(identity["temporal.activity.type"])
+            )
+            logger.info(started_msg, **identity)
         # conformance: ignore[E004] best-effort observability guard; logging failure must never block activity execution
         except Exception:  # noqa: S110 — best-effort observability; never block the activity on logging
             pass
@@ -502,17 +595,28 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                 "temporal.activity.duration_ms": duration_ms,
             }
             try:
+                act_type = str(identity["temporal.activity.type"])
                 if status == "ERROR":
                     ended_attrs.update(_extract_failure_attrs(exc_caught))
                     # A deliberate preflight-gate block logs terse (no stack);
                     # the activity's Temporal redness comes from the raise, not
                     # the log. Every other failure keeps the ERROR traceback.
                     if is_preflight_block(exc_caught):
-                        logger.warning("activity.ended", **ended_attrs)
+                        blocked_msg = _lifecycle_message(
+                            "activity.ended", f"{act_type} BLOCKED (preflight gate)"
+                        )
+                        logger.warning(blocked_msg, **ended_attrs)
                     else:
-                        logger.error("activity.ended", exc_info=True, **ended_attrs)
+                        failed_msg = _lifecycle_message(
+                            "activity.ended",
+                            f"{act_type} {_failure_suffix(exc_caught, ended_attrs)}",
+                        )
+                        logger.error(failed_msg, exc_info=True, **ended_attrs)
                 else:
-                    logger.info("activity.ended", **ended_attrs)
+                    ok_msg = _lifecycle_message(
+                        "activity.ended", f"{act_type} OK ({duration_ms}ms)"
+                    )
+                    logger.info(ok_msg, **ended_attrs)
             # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block activity completion
             except Exception:  # noqa: S110 — best-effort observability; never block the activity on logging
                 pass
