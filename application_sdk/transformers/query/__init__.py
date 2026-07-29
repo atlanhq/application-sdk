@@ -25,6 +25,9 @@ from application_sdk.transformers.query.errors import (
     BuildStructPrefixRequiredError as BuildStructPrefixRequiredError,
 )
 from application_sdk.transformers.query.errors import (
+    IncompatibleDefaultTypeError as IncompatibleDefaultTypeError,
+)
+from application_sdk.transformers.query.errors import (
     SqlTransformNotRegisteredError as SqlTransformNotRegisteredError,
 )
 
@@ -325,7 +328,28 @@ class QueryBasedTransformer(TransformerInterface):
                 # which fill_null cannot cast
                 replacement = pa.array([value] * n)
             else:
-                replacement = pc.fill_null(column, value)
+                # fill_null does not type-check: a str default against a list
+                # column silently explodes into single characters. Cast first
+                # so representable defaults coerce and unrepresentable ones
+                # fail loudly, naming the collision.
+                try:
+                    fill = pa.scalar(value).cast(column.type)
+                except (
+                    pa.ArrowInvalid,
+                    pa.ArrowNotImplementedError,
+                    pa.ArrowTypeError,
+                ) as exc:
+                    raise IncompatibleDefaultTypeError(
+                        message=(
+                            f"default {col_name!r} ({type(value).__name__}) is "
+                            f"incompatible with source column type {column.type}; "
+                            "rename the colliding extractor key"
+                        ),
+                        column_name=col_name,
+                        column_type=str(column.type),
+                        default_type=type(value).__name__,
+                    ) from exc
+                replacement = pc.fill_null(column, fill)
             dataframe = dataframe.set_column(
                 names.index(col_name), col_name, replacement
             )

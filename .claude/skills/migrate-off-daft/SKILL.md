@@ -133,7 +133,9 @@ grep -rln "daft" tests/ | xargs grep -ln "golden\|parity\|_golden_records" 2>/de
 
 For (h), extract each literal column *name* (e.g. `status: source_query:
 "'ACTIVE'"` → `status`) and intersect it with the keys the app's extractors
-actually emit for that typename. Any intersection is a live corruption site.
+actually emit for that typename. Any intersection is a live corruption site
+on SDKs predating the row-local precedence fix, and a design smell to review
+with the developer after it (see class 5 for the version split).
 The membership check is **case-sensitive Python** (`in
 dataframe.schema.names`) while DuckDB resolves identifiers
 case-insensitively — a same-name-different-case pair is a latent trap even
@@ -220,20 +222,37 @@ SDK code, not folklore):
   `"status" AS "status"` — a **self-reference to a dataframe column**, not
   the literal (`convert_to_sql_expression(is_literal=True)` via
   `get_sql_column_expressions`).
-- The literal's value is moved into `default_attributes`
-  (in `prepare_template_and_attributes`) and applied **only
-  `if col_name not in dataframe.schema.names`** (`:308-312`).
-- So when the extractor's records already carry a key with the same name,
-  the source column always wins and the template literal is silently
-  discarded. Under daft-SQL the literal won; the engine swap inverted it.
+- The literal's value is moved into `default_attributes` (in
+  `prepare_template_and_attributes`) and applied only where the table has no
+  source data for that name.
+- So when the extractor's records carry a genuine value under the same name,
+  the source value wins and the template literal does not apply. Under
+  daft-SQL the literal always won; the engine swap inverted it.
 
-Symptom seen live: every published entity of one typename carrying the
-source system's lifecycle status instead of the reserved Atlan `ACTIVE`.
-Fix at the **source of the collision**, not downstream: rename the extractor
-key (`record["analysisStatus"] = record.pop("status", None)`) so the reserved
-name is unambiguous. Run the step-1(h) intersection for *every* template ×
-extractor pair; blast radius is exactly the typenames whose records carry a
-colliding key.
+**How much wins depends on the SDK version** (same before/after split as
+class 6):
+
+- **Before the row-local fix** (3.20 through 3.24.x): the decision is
+  column-level — if the colliding key is in the table's schema, the literal
+  is discarded for the *whole batch*, including rows that had no value
+  (published as null). On pre-key-union pins it is also record-order
+  dependent. Symptom seen live: every published entity of one typename
+  carrying the source system's lifecycle status instead of the reserved
+  Atlan `ACTIVE`. Against these SDKs, **any** step-1(h) intersection is a
+  live corruption site.
+- **After the row-local fix** (first release carrying
+  `test_literal_precedence_is_row_local_on_colliding_column`): a genuine
+  source value wins for its own row, the literal fills the rows without
+  one, and a type-incompatible collision raises a typed
+  `IncompatibleDefaultTypeError` instead of corrupting. An intersection is
+  then a *design smell* to review with the developer, not automatic
+  corruption.
+
+Either way, fix collisions at the **source**, not downstream: rename the
+extractor key (`record["analysisStatus"] = record.pop("status", None)`) so
+the reserved name is unambiguous. Run the step-1(h) intersection for
+*every* template × extractor pair; blast radius is exactly the typenames
+whose records carry a colliding key.
 
 ### 6. `pa.Table.from_pylist` infers schema from the FIRST record only
 
@@ -250,11 +269,10 @@ The SDK's own `list[dict]` coercion had this hazard until it was fixed to
 build the table over the union of keys (the list branch of
 `QueryBasedTransformer.transform_metadata`; test:
 `tests/unit/transformers/query/test_sql_transformer.py::test_transform_metadata_list_input_unifies_keys_across_records`).
-The same fix keeps class-5 precedence sane: a colliding column that is
-entirely null still yields the template literal; a column with any real
-value wins deterministically, regardless of which record carries it (tests:
-`test_template_literal_wins_when_colliding_column_is_all_null`,
-`test_colliding_source_column_wins_over_template_literal`).
+The same fix keeps class-5 precedence sane and row-local: a genuine source
+value wins for its own row, the template literal fills the rows without one
+(tests: `test_template_literal_wins_when_colliding_column_is_all_null`,
+`test_literal_precedence_is_row_local_on_colliding_column`).
 **Check the app's pinned SDK actually contains that fix** (the tests above,
 or read the coercion) — on older 3.2x pins, passing heterogeneous
 `list[dict]` is lossy and the app must guard: normalize keys itself or build
@@ -277,7 +295,8 @@ An app that fully overrides `transform_metadata` and never calls the SDK's
 still breaks if the override calls SDK **internals**:
 `prepare_template_and_attributes` / `generate_sql_query` read
 `dataframe.schema.names` (`get_sql_column_expressions`), `len(dataframe)` and
-`.append_column` (`:309-312`) — none of which work on a daft frame — and
+`.append_column` (the default-attributes loop) — none of which work on a
+daft frame — and
 `get_grouped_dataframe_by_prefix` now takes a `pa.Table` and returns
 `list[dict]`, so the override's own return type changes out from under its
 callers (class 4, one hop removed). Grep the helpers (step 1j), not just the

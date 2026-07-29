@@ -23,6 +23,17 @@ class BuildStructPrefixRequiredError(InternalError):
 
 
 @dataclass(kw_only=True)
+class IncompatibleDefaultTypeError(InternalError):
+    code: ClassVar[str] = "INTERNAL_QUERY_DEFAULT_TYPE_MISMATCH"
+    message: str = (
+        "Default value type is incompatible with the colliding source column type"
+    )
+    column_name: str | None = None
+    column_type: str | None = None
+    default_type: str | None = None
+
+
+@dataclass(kw_only=True)
 class SqlTransformNotRegisteredError(UnimplementedError):
     code: ClassVar[str] = "UNIMPLEMENTED_QUERY_SQL_TRANSFORM"
     message: str = "No SQL transformation registered"

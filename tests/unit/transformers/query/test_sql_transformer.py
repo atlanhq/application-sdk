@@ -9,6 +9,7 @@ from application_sdk.transformers.query import QueryBasedTransformer
 from application_sdk.transformers.query.errors import (
     BuildStructLevelRequiredError,
     BuildStructPrefixRequiredError,
+    IncompatibleDefaultTypeError,
 )
 
 
@@ -442,6 +443,65 @@ def test_literal_precedence_is_row_local_on_colliding_column(sql_transformer, tm
     )
 
     assert [row["status"] for row in result] == ["ACTIVE", "DELETED"]
+
+
+def test_castable_default_is_coerced_to_the_column_type(sql_transformer, tmp_path):
+    """An int template literal colliding with a string source column is cast
+    to the column's type and filled row-locally ('0', not a crash). Lossy but
+    representable casts are accepted deliberately; only unrepresentable
+    combinations raise (see the list-column test below)."""
+    template = tmp_path / "table.yaml"
+    template.write_text(
+        textwrap.dedent("""
+        columns:
+          status:
+            source_query: 0
+          attributes:
+            name:
+              source_query: table_name
+        """)
+    )
+    records = [
+        {"table_name": "t1", "status": None},
+        {"table_name": "t2", "status": "OK"},
+    ]
+
+    result = sql_transformer.transform_metadata(
+        "TABLE",
+        records,
+        "wf",
+        "run",
+        entity_class_definitions={"TABLE": str(template)},
+        connection_qualified_name="default/snowflake/1",
+    )
+
+    assert [row["status"] for row in result] == ["0", "OK"]
+
+
+def test_uncastable_default_raises_typed_error_not_silent_corruption(
+    sql_transformer, tmp_path
+):
+    """A string literal cannot fill a list-typed colliding column: pyarrow's
+    fill_null would explode 'ACTIVE' into single characters silently. The
+    guard must raise a typed error naming the column instead."""
+    template = tmp_path / "table.yaml"
+    template.write_text(LITERAL_STATUS_TEMPLATE)
+    records = [
+        {"table_name": "t1", "status": None},
+        {"table_name": "t2", "status": ["a", "b"]},
+    ]
+
+    with pytest.raises(IncompatibleDefaultTypeError) as exc_info:
+        sql_transformer.transform_metadata(
+            "TABLE",
+            records,
+            "wf",
+            "run",
+            entity_class_definitions={"TABLE": str(template)},
+            connection_qualified_name="default/snowflake/1",
+        )
+
+    assert "status" in str(exc_info.value)
 
 
 def test_reserved_default_fills_null_rows_of_colliding_column(
