@@ -30,6 +30,7 @@ from pathlib import Path
 
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
+    extract_apt_packages,
     extract_field,
     extract_renovate_automerge,
     resolve_renovate_fallback_exit_zero,
@@ -250,6 +251,13 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
         kwargs["unit_tests_workflow"] = _extract_unit_tests_workflow(on_disk)
     elif name == "conformance.yaml":
         kwargs["exit_zero"] = _extract_exit_zero(on_disk, root)
+    elif name == "checks.yml":
+        # The optional system-deps step is a per-repo value like any other
+        # rendered param: a repo that legitimately needs build headers before
+        # `uv sync` keeps them, and only structural drift is flagged. Without
+        # this, every such repo would report permanent C002 drift whose only
+        # "fix" (re-run bootstrap) deletes the step its CI needs.
+        kwargs["system_deps"] = extract_apt_packages(on_disk)
 
     canonical = render(name, **kwargs)
 
