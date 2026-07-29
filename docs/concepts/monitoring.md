@@ -269,9 +269,10 @@ the structured attributes, never on the body text.
 
 !!! warning "Breaking change: `activity.*` tokens renamed to `task.*`"
 
-    Through v3.24 the task-level tokens were `activity.started` / `activity.ended`. As of v3.25 they are
-    `task.started` / `task.ended`, aligning the log surface with the SDK's own vocabulary — the unit
-    of work an app author writes is a `@task`.
+    Through v3.24 the task-level tokens were `activity.started` / `activity.ended`. They are renamed
+    to `task.started` / `task.ended` in the next release (expected v3.25.0 — check `CHANGELOG.md` for
+    the exact version), aligning the log surface with the SDK's own vocabulary: the unit of work an
+    app author writes is a `@task`.
 
     **Operators must update anything matching the old literal**: Grafana/ClickHouse dashboard
     queries, saved log searches, and alert rules that filter on the message string. A rule still

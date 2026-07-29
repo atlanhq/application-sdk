@@ -6,7 +6,7 @@
 !!! note "Token rename since this ADR"
 
     The task-level lifecycle tokens named below as `activity.started` / `activity.ended` were
-    renamed to `task.started` / `task.ended` in v3.25. The decision recorded here is unchanged —
+    renamed to `task.started` / `task.ended` after v3.24. The decision recorded here is unchanged —
     only the literals moved. See
     [Monitoring → Lifecycle log lines](../concepts/monitoring.md#lifecycle-log-lines) for the
     current tokens and the operator migration note.

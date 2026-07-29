@@ -84,9 +84,9 @@ def _lifecycle_message(event: str, subject: str) -> str:
 
     Terminology: the SDK's unit of work is a **task** (``@task``), so the
     task-level tokens are ``task.started``/``task.ended`` — deliberately
-    renamed in v3.25 from the ``activity.*`` tokens used through v3.24, in
-    the same release that enriched the bodies. Anything matching the old
-    literal must move to the new token; the operator-facing note lives in
+    renamed from the ``activity.*`` tokens used through v3.24, in the same
+    release that enriched the bodies. Anything matching the old literal must
+    move to the new token; the operator-facing note lives in
     ``docs/concepts/monitoring.md`` (Lifecycle log lines).
     """
     return f"{event} {subject}".rstrip() if subject else event
