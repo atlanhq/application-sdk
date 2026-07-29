@@ -17,5 +17,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
+<% if system_deps %>      # Extra apt packages this repo needs before setup-deps' `uv sync`: a
+      # dependency with no manylinux wheel is built from sdist on the runner
+      # and needs its C headers present first. Managed by bootstrap's
+      # --system-deps and auto-detected off this file on re-run, so
+      # the step survives an always-overwrite re-sync (and C002 doesn't read it
+      # as drift).
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y << system_deps >>
+<% endif %>      - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1

@@ -1679,11 +1679,35 @@ def _register_workflow_routes(
             # Inject workflow_id so run() can access it via input.workflow_id
             input_data.workflow_id = workflow_id
 
+            # Correlation memo (CNCT-104): event-triggered starts previously
+            # passed no memo, so the LogInterceptor fell back to a value the
+            # run page never queries and the run's logs were unfindable.
+            # Respect an event-supplied correlation_id; otherwise mint one —
+            # the same contract as the /workflows/v1/start path above — and
+            # return it to the caller so the run's logs are addressable.
+            correlation_id = getattr(input_data, "correlation_id", "") or str(uuid4())
+            input_data.correlation_id = correlation_id
+            input_data._correlation_id = correlation_id
+
+            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
+                CorrelationContext,
+                set_correlation_context,
+            )
+
+            # Mirror the /workflows/v1/start path: bind the ContextVar so every
+            # handler-side line for this request — including the except branch on
+            # a failed dispatch — carries the correlation_id we just returned to
+            # the caller, keeping the run addressable even when the start fails.
+            set_correlation_context(CorrelationContext(correlation_id=correlation_id))
+
             handle = await client.start_workflow(
                 _workflow_config.app_name,
                 args=[input_data],
                 id=workflow_id,
                 task_queue=_workflow_config.task_queue,
+                memo=CorrelationContext(
+                    correlation_id=correlation_id
+                ).to_temporal_memo(),
                 execution_timeout=(
                     timedelta(hours=_workflow_config.workflow_max_timeout_hours)
                     if _workflow_config.workflow_max_timeout_hours
@@ -1695,6 +1719,7 @@ def _register_workflow_routes(
                     "status": "SUCCESS",
                     "workflow_id": handle.id,
                     "run_id": handle.result_run_id,
+                    "correlation_id": correlation_id,
                 }
             )
         except Exception as e:

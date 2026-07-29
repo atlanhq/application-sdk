@@ -21,6 +21,39 @@ import re
 # — the boolean is the last token before the closing `}}`.
 EXIT_ZERO_RE = re.compile(r"exit-zero:.*\|\|\s*(true|false)\s*\}\}")
 
+# checks.yml's optional system-deps step is rendered as an apt-get command
+# inside a `run: |` block, not a `key: value` pair, so its packages are read
+# back off the install line itself. Deliberately tolerant of how the step was
+# hand-written before this flag existed (any `apt-get install` line in the
+# file, with or without `sudo`, with flags in any order) — the repos this
+# needs to detect are exactly the ones carrying a pre-existing hand-added
+# step, and failing to detect one means bootstrap deletes it.
+# The argument list runs to end-of-line, continuing across any `\`-escaped
+# newlines so a multi-line `apt-get install -y \` step is read whole.
+_APT_INSTALL_RE = re.compile(
+    r"apt-get\s+install\b(?P<args>(?:[^\n\\]|\\[ \t]*\n)*)",
+)
+# Debian package names allow lowercase letters, digits, '+', '-', '.'; the
+# apt-get argument list also legitimately carries a version pin ('pkg=1.2-3')
+# or an explicit release ('pkg/bookworm'), and uppercase appears in a few real
+# archive names. This doubles as the validator for the ``--system-deps``
+# flag (see ``bootstrap.args.normalize_system_deps``): the value is interpolated
+# into a `run:` block in a generated workflow, so anything outside this set —
+# above all shell metacharacters and `$` expansions — is rejected on input and
+# dropped on extraction rather than escaped.
+APT_PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+/=:-]*$")
+
+# Ends the package list: whatever follows belongs to another command.
+_SHELL_OPERATOR_RE = re.compile(r"[;&|]")
+
+# A commented-out install line describes packages the repo decided NOT to
+# install, so it must not be extracted: bootstrap would render them into the
+# managed step, and the re-rendered file would then never match the on-disk one
+# (the comment stays, the step is added) — permanent C002 drift no re-run can
+# clear. Dropped before matching rather than inside the loop so a `\`-continued
+# comment block can't leak its later lines in either.
+_COMMENT_LINE_RE = re.compile(r"^[ \t]*#.*$", re.MULTILINE)
+
 
 def extract_field(text: str, field: str) -> str:
     """Return the value of ``field: <value>`` in *text*, or ``""`` if absent.
@@ -38,6 +71,74 @@ def extract_field(text: str, field: str) -> str:
         if m:
             return m.group(1).strip("\"'")
     return ""
+
+
+def extract_apt_packages(text: str) -> str:
+    """Return the apt packages installed by *text*'s ``apt-get install`` step.
+
+    *text* is a rendered (or hand-written) ``checks.yml``. Returns a single
+    space-separated package list, or ``""`` when the file installs nothing.
+    Anything that isn't a plausible package name per ``APT_PACKAGE_RE`` is
+    dropped — flags (``-y``, ``--no-install-recommends``, ...), line
+    continuations, and any shell construct a hand-written step may carry
+    (``$VAR``, ``&&``, a pipe). Dropping rather than raising matters: this runs
+    during ``bootstrap``'s autodetection over whatever a consumer repo happens
+    to have on disk, and aborting a whole re-sync over one odd token would be
+    worse than rendering the packages it could read.
+    Single source of truth for reading this step back off disk —
+    both ``bootstrap``'s re-run autodetection (which must preserve an existing
+    step across an always-overwrite re-sync) and the C002 drift checker (which
+    must not report a preserved step as drift) call it, so the two cannot
+    diverge on what counts as "this repo installs these packages".
+
+    Package order is preserved as written rather than sorted: the value round-
+    trips through ``normalize_system_deps`` into the same rendered line, and
+    re-ordering it would make every already-bootstrapped repo report C002
+    drift once.
+
+    Every *uncommented* ``apt-get install`` occurrence contributes
+    (deduplicated, first occurrence wins), so a repo that hand-wrote two
+    separate install steps has both preserved — bootstrap then consolidates
+    them into the one managed step, and C002 flags the pre-consolidation file
+    as drift until it does. Commented-out install lines are excluded: they name
+    packages the repo chose not to install, and extracting them would render a
+    step the on-disk file doesn't have, leaving C002 drift that no re-run clears.
+    """
+    # Dropping a comment line leaves its trailing newline behind. If the comment
+    # sat *between* two `\`-continuation lines, that stray blank line is a bare
+    # newline `_APT_INSTALL_RE`'s continuation arm cannot cross, so every package
+    # after it would be lost. Collapse runs of blank lines back to one so the
+    # continuation stays whole; the canonical render never uses `\`-continuation,
+    # so this only rescues a near-invalid hand-written form and leaves the
+    # C002 round-trip untouched.
+    cleaned = re.sub(r"\n{2,}", "\n", _COMMENT_LINE_RE.sub("", text))
+    packages: list[str] = []
+    for m in _APT_INSTALL_RE.finditer(cleaned):
+        for token in sanitize_package_list(m.group("args")):
+            if token not in packages:
+                packages.append(token)
+    return " ".join(packages)
+
+
+def sanitize_package_list(text: str) -> list[str]:
+    """Return the plausible apt package names in *text*, in order.
+
+    Truncates at the first shell operator — everything after ``&&``, ``||``,
+    ``|`` or ``;`` belongs to another command, and no package name may contain
+    those characters, so the split can never cut a real one short — and at the
+    first ``#`` — an inline trailing comment (``libkrb5-dev  # build deps``)
+    describes the line, not more packages, and its words are otherwise valid
+    ``APT_PACKAGE_RE`` tokens that would leak into the list. ``APT_PACKAGE_RE``
+    forbids ``#`` too, so this can't cut a real name short either. Then keeps
+    only tokens matching ``APT_PACKAGE_RE`` (dropping flags and anything else).
+
+    Shared by the ``checks.yml`` extraction above and the
+    ``.github/ci-system-deps.txt`` reader in ``bootstrap.autodetect``, so a
+    hand-edited value cannot reach a generated workflow's ``run:`` block by
+    whichever of the two paths happens to read it.
+    """
+    args = _SHELL_OPERATOR_RE.split(text)[0].split("#", 1)[0]
+    return [token for token in args.split() if APT_PACKAGE_RE.match(token)]
 
 
 def extract_renovate_automerge(text: str) -> str:

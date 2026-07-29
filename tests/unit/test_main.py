@@ -1108,13 +1108,21 @@ class TestFlushObservability:
     """Tests for _flush_observability()."""
 
     async def test_calls_atlan_observability_flush_all(self) -> None:
-        """Happy path: AtlanObservability.flush_all() is awaited."""
-        with patch(
-            "application_sdk.observability.observability.AtlanObservability.flush_all",
-            new_callable=AsyncMock,
-        ) as mock_flush:
+        """Happy path: flush_all() is awaited, then the OTLP batch is drained."""
+        with (
+            patch(
+                "application_sdk.observability.observability.AtlanObservability.flush_all",
+                new_callable=AsyncMock,
+            ) as mock_flush,
+            patch(
+                "application_sdk.observability.logger_adaptor.flush_otlp_logs",
+            ) as mock_otlp,
+        ):
             await _flush_observability()
         mock_flush.assert_awaited_once()
+        # CNCT-107: the OTLP BatchLogRecordProcessor queue is drained on graceful
+        # shutdown, not left to the atexit backstop alone.
+        mock_otlp.assert_called_once()
 
     async def test_swallows_exception_and_logs_warning(self) -> None:
         """If flush_all raises, the exception is swallowed and logged."""
@@ -1124,9 +1132,29 @@ class TestFlushObservability:
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("flush failed"),
             ),
+            patch(
+                "application_sdk.observability.logger_adaptor.flush_otlp_logs",
+            ),
             patch("application_sdk.main.logger") as mock_log,
         ):
             await _flush_observability()  # must not raise
+        assert mock_log.warning.called
+
+    async def test_swallows_otlp_drain_failure(self) -> None:
+        """A failing OTLP drain is swallowed and logged; flush_all still runs."""
+        with (
+            patch(
+                "application_sdk.observability.observability.AtlanObservability.flush_all",
+                new_callable=AsyncMock,
+            ) as mock_flush,
+            patch(
+                "application_sdk.observability.logger_adaptor.flush_otlp_logs",
+                side_effect=RuntimeError("otlp drain failed"),
+            ),
+            patch("application_sdk.main.logger") as mock_log,
+        ):
+            await _flush_observability()  # must not raise
+        mock_flush.assert_awaited_once()
         assert mock_log.warning.called
 
 

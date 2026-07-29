@@ -2934,3 +2934,185 @@ class TestReplayLogSuppression:
         """log_during_replay defaults to False (env flag default=false)."""
         adapter, _ = self._make_adapter_with_sink()
         assert adapter.log_during_replay is False
+
+
+class TestLogSourceProvenance:
+    """CNCT-106: automatic ``source`` provenance on every record."""
+
+    @pytest.mark.parametrize(
+        ("logger_name", "expected"),
+        [
+            # daprd sidecar lines fold into the dependency bucket
+            ("dapr.runtime", "dependency"),
+            ("dapr.sidecar", "dependency"),
+            # everything inside application_sdk — framework and the
+            # interceptor lifecycle lines alike — is simply "sdk"
+            ("application_sdk.execution._temporal.interceptors.log", "sdk"),
+            ("application_sdk.observability.logger_adaptor", "sdk"),
+            ("application_sdk", "sdk"),
+            ("httpx", "dependency"),
+            ("httpx.client", "dependency"),
+            ("temporalio.worker", "dependency"),
+            ("daft_io.stats", "dependency"),
+            # every declared DEPENDENCY_LOGGERS entry, incl. a child prefix
+            ("tracing.span", "dependency"),
+            ("tracing.span.exporter", "dependency"),
+        ],
+    )
+    def test_derive_log_source_buckets(self, logger_name, expected):
+        from application_sdk.observability.logger_adaptor import _derive_log_source
+
+        assert _derive_log_source(logger_name) == expected
+
+    @pytest.mark.parametrize(
+        "logger_name", ["app.mysql", "my_connector.handler", "app.handler"]
+    )
+    def test_app_code_stamps_the_application_name(self, logger_name):
+        # The app bucket carries the application's own name (WHICH app spoke),
+        # not a generic "app" literal; ATLAN_LOG_SOURCE overrides (AE → "ae").
+        from application_sdk.constants import LOG_SOURCE_APP_LABEL
+        from application_sdk.observability.logger_adaptor import _derive_log_source
+
+        assert _derive_log_source(logger_name) == LOG_SOURCE_APP_LABEL
+
+    def test_process_stamps_source_automatically(self):
+        from application_sdk.constants import LOG_SOURCE_APP_LABEL
+
+        adapter = get_logger("app.some_module")
+        _, kwargs = adapter.process("hello", {})
+        assert kwargs["source"] == LOG_SOURCE_APP_LABEL
+
+    def test_process_respects_caller_supplied_source(self):
+        adapter = get_logger("app.some_module_2")
+        _, kwargs = adapter.process("hello", {"source": "custom"})
+        assert kwargs["source"] == "custom"
+
+    def test_source_is_derived_once_not_per_log_call(self):
+        # logger_name is fixed at construction, so the bucket is invariant per
+        # adapter — process() must not re-derive it on every line.
+        from application_sdk.constants import LOG_SOURCE_APP_LABEL
+
+        adapter = get_logger("app.cached_source_module")
+        assert adapter._source_label == LOG_SOURCE_APP_LABEL
+
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor._derive_log_source"
+        ) as mock_derive:
+            for _ in range(3):
+                _, kwargs = adapter.process("hello", {})
+                assert kwargs["source"] == LOG_SOURCE_APP_LABEL
+        mock_derive.assert_not_called()
+
+    def test_sdk_module_logger_stamps_sdk(self):
+        adapter = get_logger("application_sdk.clients.rest")
+        _, kwargs = adapter.process("hello", {})
+        assert kwargs["source"] == "sdk"
+
+    def test_source_is_allowlisted_for_otlp(self):
+        assert "source" in _KNOWN_EXTRA_KEYS
+
+
+class TestOtelTraceContextOnLogRecord:
+    """CNCT-106: real trace_id/span_id from the active span (not hard-coded 0)."""
+
+    def _record(self) -> dict:
+        return {
+            "timestamp": 1700000000.0,
+            "level": "INFO",
+            "message": "m",
+            "file": "f.py",
+            "line": 1,
+            "function": "fn",
+            "extra": {},
+        }
+
+    def test_no_active_span_falls_back_to_zeros(self):
+        adapter = get_logger("app.trace_test")
+        log_record = adapter._create_log_record(self._record())
+        assert log_record.trace_id == 0
+        assert log_record.span_id == 0
+
+    def test_active_span_context_is_propagated(self):
+        adapter = get_logger("app.trace_test_2")
+        span_ctx = mock.MagicMock()
+        span_ctx.is_valid = True
+        span_ctx.trace_id = 0xABCDEF
+        span_ctx.span_id = 0x123456
+        span_ctx.trace_flags = 1
+        span = mock.MagicMock()
+        span.get_span_context.return_value = span_ctx
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.otel_trace.get_current_span",
+            return_value=span,
+        ):
+            log_record = adapter._create_log_record(self._record())
+        assert log_record.trace_id == 0xABCDEF
+        assert log_record.span_id == 0x123456
+
+    def test_broken_span_context_never_blocks_emission(self):
+        adapter = get_logger("app.trace_test_3")
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.otel_trace.get_current_span",
+            side_effect=RuntimeError("boom"),
+        ):
+            log_record = adapter._create_log_record(self._record())
+        assert log_record.trace_id == 0
+        assert log_record.span_id == 0
+
+
+class TestOtlpShutdownFlush:
+    """CNCT-107: flush/shutdown the OTLP provider on process exit."""
+
+    def test_flush_otlp_logs_calls_force_flush_on_providers(self):
+        from application_sdk.observability import logger_adaptor as la
+
+        adapter = get_logger("app.flush_test")
+        provider = mock.MagicMock()
+        adapter.logger_provider = provider
+        try:
+            la.flush_otlp_logs(timeout_millis=123)
+            provider.force_flush.assert_called_once_with(timeout_millis=123)
+        finally:
+            adapter.logger_provider = None
+
+    def test_shutdown_otlp_logs_is_idempotent(self):
+        from application_sdk.observability import logger_adaptor as la
+
+        la._otlp_shutdown_done.clear()
+        adapter = get_logger("app.shutdown_test")
+        provider = mock.MagicMock()
+        adapter.logger_provider = provider
+        try:
+            la.shutdown_otlp_logs()
+            la.shutdown_otlp_logs()
+            assert provider.shutdown.call_count == 1
+        finally:
+            adapter.logger_provider = None
+            la._otlp_shutdown_done.clear()
+
+    def test_flush_survives_provider_errors(self):
+        from application_sdk.observability import logger_adaptor as la
+
+        adapter = get_logger("app.flush_err_test")
+        provider = mock.MagicMock()
+        provider.force_flush.side_effect = RuntimeError("exporter gone")
+        adapter.logger_provider = provider
+        try:
+            la.flush_otlp_logs()  # must not raise
+        finally:
+            adapter.logger_provider = None
+
+    def test_shutdown_survives_provider_errors(self):
+        from application_sdk.observability import logger_adaptor as la
+
+        la._otlp_shutdown_done.clear()
+        adapter = get_logger("app.shutdown_err_test")
+        provider = mock.MagicMock()
+        provider.shutdown.side_effect = RuntimeError("exporter gone")
+        adapter.logger_provider = provider
+        try:
+            la.shutdown_otlp_logs()  # must not raise (except Exception: pass)
+            provider.shutdown.assert_called_once()
+        finally:
+            adapter.logger_provider = None
+            la._otlp_shutdown_done.clear()

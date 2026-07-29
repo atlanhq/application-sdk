@@ -249,7 +249,10 @@ class SqlApp(App):
     # ``retry_max_attempts=3`` (application_sdk/app/task.py), so we MUST
     # override explicitly. See application-sdk#1835 mothership review
     # comment-3287629972.
-    @task(timeout_seconds=60, retry_max_attempts=1)
+    # The budget is 120s because the activity has to cover credential
+    # resolution (which can be slow on some deployments) as well as the probe,
+    # and retry_max_attempts=1 makes a timeout terminal for the workflow attempt.
+    @task(timeout_seconds=120, retry_max_attempts=1)
     async def prime_sql_auth(self, input: ExtractionTaskInput) -> PrimeAuthOutput:
         """Single sequential probe that primes the SQL server's auth cache
         before the parallel ``_extract_entity`` burst.

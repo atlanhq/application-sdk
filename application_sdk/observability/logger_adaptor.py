@@ -1,4 +1,5 @@
 import asyncio
+import atexit
 import logging
 import sys
 import threading
@@ -7,6 +8,7 @@ import traceback as tb_module
 from typing import Any, ClassVar
 
 from loguru import logger
+from opentelemetry import trace as otel_trace
 from opentelemetry._logs import LogRecord, SeverityNumber
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider
@@ -27,6 +29,7 @@ from application_sdk.constants import (
     LOG_FLUSH_INTERVAL_SECONDS,
     LOG_LEVEL,
     LOG_RETENTION_DAYS,
+    LOG_SOURCE_APP_LABEL,
     OTEL_BATCH_DELAY_MS,
     OTEL_BATCH_SIZE,
     OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -144,6 +147,7 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "log_type",
         "app_name",
         "deployment_name",
+        "source",
         "trace_id",
         "span_id",
         "correlation_id",
@@ -190,6 +194,44 @@ _PREFIXES_PASSTHROUGH = (
     # carrying typed FailureDetails (category, code, audience,
     # retryable, evidence) projected from the cause chain.
 )
+
+
+# Known third-party dependency loggers. Declared here (before the stdlib
+# bridge is installed) so ``_derive_log_source`` can never hit a NameError on
+# a record emitted during module import; the level-pinning loop further down
+# reuses this same list.
+DEPENDENCY_LOGGERS = ["daft_io.stats", "tracing.span", "httpx"]
+
+
+def _derive_log_source(logger_name: str) -> str:
+    """Classify a log line's origin from its logger name (CNCT-106).
+
+    Every record gets a low-cardinality ``source`` attribute answering "who
+    emitted this line" — previously only inferable by parsing the free-text
+    ``logger_name`` module path (and ``app_name`` says *which connector*, not
+    *which layer*). Stamped centrally (adapter + stdlib bridge) so app
+    authors cannot get it wrong; an explicit caller-supplied ``source`` wins.
+
+    Buckets:
+        ``sdk``         anything inside application_sdk (framework +
+                        interceptor lifecycle lines)
+        ``dependency``  known third-party loggers (httpx, daft, temporalio…)
+                        and the daprd sidecar lines re-emitted by the forwarder
+        app label       everything else — the application's own name by
+                        default (e.g. ``mysql``), so the reader sees WHICH
+                        app spoke; ``ATLAN_LOG_SOURCE`` overrides
+                        (the Automation Engine sets ``ae``)
+    """
+    if logger_name == "dapr.runtime" or logger_name.startswith("dapr."):
+        return "dependency"
+    if logger_name == "application_sdk" or logger_name.startswith("application_sdk."):
+        return "sdk"
+    if logger_name == "temporalio" or logger_name.startswith("temporalio."):
+        return "dependency"
+    for dep in DEPENDENCY_LOGGERS:
+        if logger_name == dep or logger_name.startswith(dep + "."):
+            return "dependency"
+    return LOG_SOURCE_APP_LABEL
 
 
 def _build_extra_dict(
@@ -434,6 +476,9 @@ class InterceptHandler(logging.Handler):
         # ``extra={"app_name": "X", ...}``.
         logger_extras.setdefault("app_name", APPLICATION_NAME)
         logger_extras.setdefault("deployment_name", DEPLOYMENT_NAME)
+        # Provenance (CNCT-106): classify the record's origin from the stdlib
+        # logger name. setdefault so an explicit extra={"source": ...} wins.
+        logger_extras.setdefault("source", _derive_log_source(record.name))
         _apply_atlan_context(logger_extras, prefer_caller=True)
 
         logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
@@ -509,7 +554,7 @@ logging.basicConfig(
     level=logging.getLevelNamesMapping()[LOG_LEVEL], handlers=[_intercept_handler]
 )
 
-DEPENDENCY_LOGGERS = ["daft_io.stats", "tracing.span", "httpx"]
+# (DEPENDENCY_LOGGERS is declared above ``_derive_log_source`` — see there.)
 
 # Configure external dependency loggers to reduce noise
 # Set httpx to WARNING to reduce verbose HTTP request logs (200 OK messages)
@@ -633,6 +678,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         cls._initialized = False
         cls._flush_task_started = False
         _logger_instances.clear()
+        _otlp_shutdown_done.clear()
 
     def __init__(self, logger_name: str) -> None:
         """Initialize the AtlanLoggerAdapter with enhanced configuration.
@@ -656,6 +702,11 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             file_name=LOG_FILE_NAME,
         )
         self.logger_name = logger_name
+        # Provenance bucket is a pure function of the (immutable) logger name,
+        # so derive it once here rather than on every process() call. The
+        # InterceptHandler path must stay per-record — there, ``record.name``
+        # varies per log line.
+        self._source_label = _derive_log_source(logger_name)
         # Bind the logger name when creating the logger instance
         self.logger = logger
         # Declared here so _log_sink can use ``is not None`` instead of hasattr —
@@ -718,18 +769,26 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 f" correlation_id={correlation_id}" if correlation_id else ""
             )
 
+            # Provenance prefix (CNCT-106): render the origin bucket so a
+            # console reader can tell SDK / app / dapr / dependency lines
+            # apart without parsing module paths.
+            source = record["extra"].get("source", "")
+            record["extra"]["_source_str"] = f" [{source}]" if source else ""
+
             if colorize:
                 return (
                     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> "
                     "<blue>[{level}]</blue>"
                     "<magenta>{extra[_trace_id_str]}</magenta>"
-                    "<yellow>{extra[_correlation_id_str]}</yellow> "
+                    "<yellow>{extra[_correlation_id_str]}</yellow>"
+                    "<blue>{extra[_source_str]}</blue> "
                     "<cyan>{extra[logger_name]}</cyan>"
                     " - <level>{message}</level>\n{exception}"
                 )
             return (
                 "{time:YYYY-MM-DD HH:mm:ss} [{level}]"
-                "{extra[_trace_id_str]}{extra[_correlation_id_str]} {extra[logger_name]}"
+                "{extra[_trace_id_str]}{extra[_correlation_id_str]}"
+                "{extra[_source_str]} {extra[logger_name]}"
                 " - {message}\n{exception}"
             )
 
@@ -799,6 +858,15 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 )
                 for processor in otlp_processors:
                     self.logger_provider.add_log_record_processor(processor)
+                # Shutdown flush (CNCT-107): before this, nothing ever called
+                # force_flush()/shutdown() on the provider, so up to
+                # OTEL_BATCH_DELAY_MS of buffered records were dropped on
+                # every graceful pod termination (logger.error's sync-flush
+                # drains only the object-store buffer, not the OTLP batch).
+                # atexit runs after the SIGTERM handler's graceful drain ends
+                # the process, inside the termination grace period — the last
+                # reliable point to empty the exporter queue.
+                atexit.register(shutdown_otlp_logs)
 
         except Exception:
             logging.error("Failed to setup OTLP logging", exc_info=True)
@@ -893,12 +961,30 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 else:
                     attributes[key] = str(value)
 
+        # OTel-native log↔trace correlation (CNCT-106): populate the record's
+        # trace context from the active span instead of hard-coding zeros.
+        # The loguru sinks run synchronously in the emitting thread, so the
+        # current span here is the emitter's span. When no span is active
+        # (tracing disabled — the production default today), fall back to
+        # zeros exactly as before. ``correlation_id`` stays the business key;
+        # trace context is not a substitute for it.
+        otel_trace_id, otel_span_id, otel_trace_flags = 0, 0, TraceFlags(0)
+        try:
+            span_context = otel_trace.get_current_span().get_span_context()
+            if span_context.is_valid:
+                otel_trace_id = span_context.trace_id
+                otel_span_id = span_context.span_id
+                otel_trace_flags = TraceFlags(span_context.trace_flags)
+        # conformance: ignore[E004] best-effort trace enrichment; a broken span context must never block log emission
+        except Exception:  # noqa: S110 — degrade to untraced record, never drop the log
+            pass
+
         return LogRecord(
             timestamp=int(record["timestamp"] * 1e9),
             observed_timestamp=int(record["timestamp"] * 1e9),
-            trace_id=0,
-            span_id=0,
-            trace_flags=TraceFlags(0),
+            trace_id=otel_trace_id,
+            span_id=otel_span_id,
+            trace_flags=otel_trace_flags,
             severity_text=record["level"],
             severity_number=severity_number,
             body=record["message"],
@@ -946,6 +1032,11 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         kwargs["logger_name"] = self.logger_name
         kwargs["app_name"] = APPLICATION_NAME
         kwargs["deployment_name"] = DEPLOYMENT_NAME
+        # Provenance (CNCT-106): stamp the record's origin automatically so
+        # every line answers "who emitted this" (sdk / <app name> / ae /
+        # dependency). setdefault so a caller-supplied ``source=...`` kwarg
+        # wins. Derived once in __init__ — see ``self._source_label``.
+        kwargs.setdefault("source", self._source_label)
         # Enrichment is shared with :class:`InterceptHandler` so stdlib-bridged
         # records carry the same Atlan context; see :func:`_apply_atlan_context`.
         # ``prefer_caller=False`` preserves the historic SDK-adapter behaviour
@@ -1356,6 +1447,50 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
 # Create a singleton instance of the logger
 _logger_instances: dict[str, AtlanLoggerAdapter] = {}
+
+# Guards shutdown_otlp_logs idempotence: atexit fires it once at interpreter
+# exit, but callers (tests, explicit shutdown paths) may also invoke it.
+_otlp_shutdown_done = threading.Event()
+
+
+def flush_otlp_logs(timeout_millis: int = 5000) -> None:
+    """Force-flush any buffered OTLP log records (CNCT-107).
+
+    Drains the BatchLogRecordProcessor queue so records emitted in the last
+    ``OTEL_BATCH_DELAY_MS`` window reach the collector. Safe to call from
+    shutdown paths; a no-op when OTLP export is disabled.
+    """
+    for adapter in list(_logger_instances.values()):
+        provider = adapter.logger_provider
+        if provider is None:
+            continue
+        try:
+            provider.force_flush(timeout_millis=timeout_millis)
+        # conformance: ignore[E004] best-effort shutdown drain; a failed flush must never break shutdown
+        except Exception:  # noqa: S110 — teardown-only; losing the tail beats crashing shutdown
+            pass
+
+
+def shutdown_otlp_logs() -> None:
+    """Flush and shut down the OTLP log provider(s). Idempotent (CNCT-107).
+
+    Registered with ``atexit`` when the provider is created, so a graceful
+    SIGTERM (handler → worker drain → process exit) always drains the OTLP
+    batch inside the termination grace period. ``LoggerProvider.shutdown()``
+    includes the effect of ``force_flush`` per the OTel Logs SDK spec.
+    """
+    if _otlp_shutdown_done.is_set():
+        return
+    _otlp_shutdown_done.set()
+    for adapter in list(_logger_instances.values()):
+        provider = adapter.logger_provider
+        if provider is None:
+            continue
+        try:
+            provider.shutdown()
+        # conformance: ignore[E004] best-effort shutdown drain; a failed flush must never break shutdown
+        except Exception:  # noqa: S110 — teardown-only; losing the tail beats crashing shutdown
+            pass
 
 
 def get_logger(name: str | None = None) -> AtlanLoggerAdapter:

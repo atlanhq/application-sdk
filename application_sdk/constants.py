@@ -519,6 +519,15 @@ ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true
 ENABLE_WORKFLOW_REPLAY_LOGS: bool = (
     os.getenv("ENABLE_WORKFLOW_REPLAY_LOGS", "false").lower() == "true"
 )
+#: Provenance label stamped as the ``source`` attribute on log lines emitted
+#: by non-SDK, non-dependency code in this process. Defaults to the
+#: application's own name (e.g. ``mysql``) so a reader immediately sees WHICH
+#: app emitted the line; services built on the SDK that are not connectors
+#: override it — e.g. the Automation Engine deploys with
+#: ``ATLAN_LOG_SOURCE=ae`` so its orchestration lines are attributable in the
+#: unified per-run log view. SDK / dependency lines are classified
+#: automatically and ignore this label.
+LOG_SOURCE_APP_LABEL: str = os.getenv("ATLAN_LOG_SOURCE") or APPLICATION_NAME
 #: Whether to enable a secondary OpenTelemetry log exporter for workflow-log
 #: archival (e.g. S3 sink). When true, logs are emitted to both the primary
 #: OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_WORKFLOW_LOGS_ENDPOINT.
