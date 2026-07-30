@@ -502,10 +502,11 @@ jobs:
       matrix: ${{ steps.discover.outputs.matrix }}
       count: ${{ steps.discover.outputs.count }}
     steps:
-      # codex-/return-dispatch on the apps-sdk side scans step *names* for
-      # "distinct-id <value>". Emitting it here (the first job in the e2e path)
-      # lets the SDK PR's dispatched run be located quickly via the GH API,
-      # regardless of how the downstream matrix fans out.
+      # Human breadcrumb correlating this dispatched run back to the SDK PR that
+      # fired it. Emitted here (the first job in the e2e path) so it is visible
+      # regardless of how the downstream matrix fans out. Nothing reads the step
+      # name: codex-/return-dispatch v3 used to trawl step names to locate the
+      # run, but v4 gets the run id from the dispatch response instead.
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         shell: bash

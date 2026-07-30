@@ -122,7 +122,11 @@ A single always-on job (`connector-tests`) on apps-sdk PRs fans out to the conne
 
 The `tests.yaml` job in each connector runs unit + integration tests unconditionally. The full-DAG `e2e` job inside `tests.yaml` runs only when the SDK PR carries the `e2e` label — controlled via the `run_e2e` workflow input (`"true"` / `"false"`) passed by the dispatcher.
 
-Mechanism: `codex-/return-dispatch@v3` in `e2e-apps/action.yaml` fires `workflow_dispatch` on the target repo, passing `application_sdk_ref` (the SDK PR's head SHA, used by the connector to re-pin the SDK before running tests) and `run_e2e` (derived from whether the SDK PR has the `e2e` label).
+Mechanism: `codex-/return-dispatch@v4` in `e2e-apps/action.yaml` fires `workflow_dispatch` on the target repo, passing `application_sdk_ref` (the SDK PR's head SHA, used by the connector to re-pin the SDK before running tests), `run_e2e` (derived from whether the SDK PR has the `e2e` label), and `distinct_id` (the dispatching SHA — see below).
+
+Since v4 the action reads the dispatched run's id straight out of the `workflow_dispatch` API response, so the run is identified in seconds. v3 had to trawl the dispatched run's step *names* for a `distinct-id <sha>` marker, which is why the dispatcher used to pass `workflow_timeout_seconds` / `workflow_job_steps_retry_seconds` — both are gone. Receivers still carry the `distinct-id <sha>` echo step, but it is now a human breadcrumb only: nothing reads the step name.
+
+> **`distinct_id` is still required from the caller.** v3 injected it into the dispatch payload automatically; v4 dropped the input and injects nothing, so every `e2e-apps` caller must include a `"distinct_id"` key in `workflow-inputs`. It is not just a breadcrumb: `atlan-local-marketplace-app`'s `sdr-k8s-e2e.yaml` keys its concurrency group on `sdr-k8s-e2e-${{ inputs.distinct_id || github.ref }}` with `cancel-in-progress: true`. Cross-repo dispatches all land on `refs/heads/main`, so an omitted `distinct_id` collapses every dispatch into a single group where each new one cancels the previous — the dispatched run returns `cancelled` and poll mode reds the SDK job. This is what broke `SDR K8s E2E (LM)` when the v4 bump first landed (#2923, reverted in #2939) and is the reason both call sites in `pull_request.yaml` now pass it explicitly.
 
 ### Sticky-comment behaviour
 
