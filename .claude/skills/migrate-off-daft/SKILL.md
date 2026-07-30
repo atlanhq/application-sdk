@@ -11,9 +11,10 @@ description: >
   known breakage classes: empty [daft] extra (and override-dependencies
   pins that silently stop protecting), changed transform_metadata
   input/output contracts (direct or via SDK internals like
-  prepare_template_and_attributes), DuckDB engine without its extra,
-  literal-vs-column precedence flip, first-record schema inference, test
-  coupling — plus the heavy-user classes: python-object UDF columns with no
+  prepare_template_and_attributes), DuckDB engine without its extra, the
+  SDK's own arrow-conversion call that only works on duckdb >=1.5.0 (broken
+  on every release 3.20.0-3.25.0), literal-vs-column precedence flip,
+  first-record schema inference, test coupling — plus the heavy-user classes: python-object UDF columns with no
   DuckDB equivalent, daft.sql caller-frame binding vs explicit register,
   daft-planner-specific type coercions, daft-safety concurrency
   architecture to retire deliberately, and live-daft golden oracles that
@@ -40,7 +41,7 @@ optional_triggers:
   - "duckdb pyarrow migration"
   - "SDK bump broke transformers"
 owner: connector-platform-team
-last_updated: "2026-07-29"
+last_updated: "2026-07-30"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
@@ -129,6 +130,12 @@ grep -rn "DAFT_EXECUTOR\|DaftCoreException\|daft_executor\|_classify_daft" app/ 
 
 # (m) parity/golden tests that compute their reference BY RUNNING daft live
 grep -rln "daft" tests/ | xargs grep -ln "golden\|parity\|_golden_records" 2>/dev/null
+
+# (n) class 3b — the SDK's own arrow conversion needs duckdb >=1.5.0. Read both
+#     resolved versions from the lock: SDK 3.20.0-3.25.0 + duckdb <1.5.0 = the
+#     transform cannot execute at all, whatever the app does.
+grep -A1 '^name = "atlan-application-sdk"$' uv.lock
+grep -A1 '^name = "duckdb"$' uv.lock
 ```
 
 For (h), extract each literal column *name* (e.g. `status: source_query:
@@ -156,7 +163,7 @@ those sites (declared directly — see step 3's boundary policy) or replace
 them per step 2c; either way each site needs a decision with parity
 evidence, and no daft object may cross an SDK boundary afterwards.
 
-## Step 2 — The core breakage classes (1–7, plus 1b/2b; heavy-user classes 8–12 are in step 2c)
+## Step 2 — The core breakage classes (1–7, plus 1b/2b/3b; heavy-user classes 8–12 are in step 2c)
 
 ### 1. `[daft]` extra is declared but empty — daft silently leaves the lock
 
@@ -204,12 +211,49 @@ nothing fails at boot or import — the first real transform call raises
 `ModuleNotFoundError: duckdb`. Ships only in the SDK's `[sql]` and
 `[incremental]` extras.
 
+### 3b. The SDK's own arrow conversion only works on duckdb >=1.5.0 — an SDK bug
+
+With classes 2 and 3 fixed, the transform can still die *inside the SDK*:
+
+```
+AttributeError: '_duckdb.DuckDBPyConnection' object has no attribute
+'to_arrow_table'. Did you mean: 'fetch_arrow_table'?
+```
+
+`transform_metadata` called `db.connection.execute(sql).to_arrow_table()`.
+`conn.execute()` returns the **connection**, not a relation, and
+`to_arrow_table` was added to `DuckDBPyConnection` only in **duckdb 1.5.0** —
+while the SDK's `[sql]` / `[incremental]` extras allow
+`duckdb>=1.1.3,<1.6.0`. Measured across the window: absent on 1.1.3, 1.3.2,
+1.4.4; present on 1.5.0+. So the YAML transform path is unusable on **every
+SDK release 3.20.0 through 3.25.0** for any app whose lock resolves duckdb
+below 1.5.0, and works only by luck above it. Fixed by PR #2940
+(`db.connection.sql(sql).to_arrow_table()` — a relation, where the method
+predates the whole range); unreleased as of 2026-07-30, so check the app's
+pinned SDK rather than assuming.
+
+Route around it, in order of preference:
+
+- **Pin duckdb up** — declare `duckdb>=1.5.0,<1.6.0` as a direct app
+  dependency. uv intersects it with the SDK's range, the method exists, and no
+  SDK code is touched. Delete the pin once the app is on the release carrying
+  #2940.
+- **Override `transform_metadata`** app-side with the one-line fix and a TODO
+  pointing at #2940. Heavier, and it re-exposes the app to class 2b.
+
+Do not chase this as an app-side dataframe problem: the input coercion has
+already succeeded by the time it fires, and the last app frame in the
+traceback is just the `transform_metadata` call. Note also that
+`execute(...).fetch_arrow_table()` — the other obvious repair — works at the
+floor but is **deprecated as of duckdb 1.5.0**, so it trades the crash for a
+`DeprecationWarning` on the versions most locks resolve.
+
 ### 4. `transform_metadata` return contract: daft DataFrame → `list[dict] | None`
 
 Any `.to_pylist()` / `.to_pydict()` / `.iter_rows()` on the result raises
 `AttributeError: 'list' object has no attribute ...`. Items are dicts shaped
 `{"typeName": ..., "status": ..., "attributes": {...}}` — iterate them
-directly. Note the classes mask each other in order 2 → 3 → 4: fixing one
+directly. Note the classes mask each other in order 2 → 3 → 3b → 4: fixing one
 surfaces the next; budget for the sequence, not one crash.
 
 ### 5. Literal-vs-source-column precedence flipped — SILENT corruption
@@ -396,7 +440,9 @@ rows = transformer.transform_metadata(dataframe=records, ...) or []
    `grep -c 'name = "duckdb"' uv.lock` ≥1, `grep -c 'name = "daft"' uv.lock`
    = 0.
 3. Apply the class-6 guard if the pinned SDK predates the key-union fix, or
-   if the app builds pyarrow tables itself.
+   if the app builds pyarrow tables itself. Same check for class 3b: if the
+   pinned SDK predates PR #2940, add the `duckdb>=1.5.0,<1.6.0` direct pin —
+   and verify the lock actually moved (`grep -A1 '^name = "duckdb"$' uv.lock`).
 4. Fix every class-5 collision found in step 1(h), at the extractor.
 5. Update tests (class 7), and add the heterogeneous-records regression test
    for any `list[dict]` handoff.
@@ -438,7 +484,9 @@ right by accident — state those in the PR).
   branch (or the app's existing parity suite). Diff per typename; every
   difference must be explained.
 - Full test suite; collection errors are class 1, `AttributeError`s are
-  classes 2/4, `ModuleNotFoundError: duckdb` is class 3.
+  classes 2/4, `ModuleNotFoundError: duckdb` is class 3, and
+  `DuckDBPyConnection has no attribute 'to_arrow_table'` is class 3b (an SDK
+  bug — check the pinned SDK before suspecting the app).
 - Boot the worker (`uv run main.py`) — class 3 hides from boot, so also run
   one real transform (or the parity suite) end-to-end.
 - Parity tests against golden output are the only net that catches class 5 —
@@ -458,6 +506,13 @@ the old SDK and the exact old daft pin. When a bump breaks an app, hold the
 app's other deps fixed at what main resolves and vary only the SDK — the
 lockfile diff between main and the branch is the complete list of what
 actually changed.
+
+Corollary from class 3b: **a declared version range is not a tested range.**
+The SDK shipped that call in six releases because its own lock resolved the
+newest duckdb in the window, where the method happens to exist — CI only ever
+exercises the ceiling. When a dependency's declared floor sits far below what
+the lock resolves, treat the gap as untested rather than supported — on the
+app's own dependencies too.
 
 ## Agent protocol
 
