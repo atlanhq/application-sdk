@@ -434,7 +434,7 @@ class QueryBasedTransformer(TransformerInterface):
         )
         with DuckDBConnectionManager() as db:
             db.connection.register("dataframe", dataframe)
-            result_table = db.connection.execute(entity_sql_template).to_arrow_table()
+            result_table = db.connection.sql(entity_sql_template).to_arrow_table()
 
         # Convert flat dot-notation columns into nested dicts
         return self.get_grouped_dataframe_by_prefix(result_table)
