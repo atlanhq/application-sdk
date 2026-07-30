@@ -209,6 +209,31 @@ on:
           otherwise fails (or wastes minutes) during `uv sync`.  Leave false
           for connectors that genuinely need their LFS content at test time
           (the same reason build-and-publish takes an explicit `lfs` input).
+      e2e-extra-env:
+        required: false
+        type: string
+        default: ""
+        description: |
+          JSON object of extra environment variables exported to the e2e job
+          before the sdr-e2e action runs. This is the hook for the connector's
+          SOURCE credentials — the ones the app's secrets-script and test class
+          read, which the sdr-e2e action documents as the caller's
+          responsibility. The tenant-side secrets (SDR_TEST_TENANT,
+          SDR_CLIENT_ID/SECRET, ATLAN_API_KEY) are already set by this workflow;
+          these are the per-connector ones it cannot know the names of
+          (SNOWFLAKE_E2E_ACCOUNT, E2E_SAPHANA_HOST, AWS keys, …).
+
+          Build each value with `toJSON(secrets.NAME)` so GitHub does the
+          escaping — a key-pair or service-account secret is multi-line and
+          cannot survive a KEY=VALUE input:
+
+              e2e-extra-env: |
+                {"E2E_DB_HOST": ${{ toJSON(secrets.E2E_DB_HOST) }},
+                 "E2E_DB_KEY":  ${{ toJSON(secrets.E2E_DB_KEY) }}}
+
+          The values are registered secrets in this job via the caller's
+          `secrets: inherit`, so runner log masking still applies. Connectors
+          with a hermetic container source (the mysql shape) need none of this.
       container-health-timeout-seconds:
         required: false
         type: string
@@ -541,6 +566,10 @@ jobs:
           base-image-ref: ${{ inputs.base-image-ref }}
           enable-two-store: ${{ inputs.two-store }}
           source-available: ${{ inputs.source-available }}
+          # Connector SOURCE credentials the secrets-script + test class read.
+          # This job's env can only carry the tenant-side secrets; the
+          # per-connector names are the caller's to supply.
+          extra-env: ${{ inputs.e2e-extra-env }}
           # Push the test image with the org PAT (same identity build-and-publish
           # uses) so it can write PAT-published connector packages — a plain
           # GITHUB_TOKEN 403s on those (e.g. atlan-redshift-app). Available here
