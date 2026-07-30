@@ -209,31 +209,6 @@ on:
           otherwise fails (or wastes minutes) during `uv sync`.  Leave false
           for connectors that genuinely need their LFS content at test time
           (the same reason build-and-publish takes an explicit `lfs` input).
-      e2e-extra-env:
-        required: false
-        type: string
-        default: ""
-        description: |
-          JSON object of extra environment variables exported to the e2e job
-          before the sdr-e2e action runs. This is the hook for the connector's
-          SOURCE credentials — the ones the app's secrets-script and test class
-          read, which the sdr-e2e action documents as the caller's
-          responsibility. The tenant-side secrets (SDR_TEST_TENANT,
-          SDR_CLIENT_ID/SECRET, ATLAN_API_KEY) are already set by this workflow;
-          these are the per-connector ones it cannot know the names of
-          (SNOWFLAKE_E2E_ACCOUNT, E2E_SAPHANA_HOST, AWS keys, …).
-
-          Build each value with `toJSON(secrets.NAME)` so GitHub does the
-          escaping — a key-pair or service-account secret is multi-line and
-          cannot survive a KEY=VALUE input:
-
-              e2e-extra-env: |
-                {"E2E_DB_HOST": ${{ toJSON(secrets.E2E_DB_HOST) }},
-                 "E2E_DB_KEY":  ${{ toJSON(secrets.E2E_DB_KEY) }}}
-
-          The values are registered secrets in this job via the caller's
-          `secrets: inherit`, so runner log masking still applies. Connectors
-          with a hermetic container source (the mysql shape) need none of this.
       container-health-timeout-seconds:
         required: false
         type: string
@@ -262,6 +237,53 @@ on:
           Forwarded to the connector-integration-tests action: how long to wait
           for the app server to become healthy in the INTEGRATION tier.  Raise
           for connectors with slow imports (heavy native/analytics deps).
+
+    secrets:
+      # Declared so a caller that maps secrets EXPLICITLY (instead of
+      # `secrets: inherit`) gets parse-time validation. Everything here is
+      # optional, so `secrets: inherit` callers are unaffected — inherited
+      # secrets arrive under their own names either way.
+      E2E_SOURCE_ENV_JSON:
+        required: false
+        description: |
+          JSON object of the connector's SOURCE credentials, exported as
+          environment variables in the e2e job before the secrets bundle is
+          written — so both the app's secrets-script and the test class see
+          them. This exists because the source credential NAMES are
+          per-connector and unknowable here (SNOWFLAKE_E2E_ACCOUNT,
+          E2E_SAPHANA_HOST, AWS keys, …) while the tenant-side secrets below
+          are fixed; and because a reusable-workflow `with:` input cannot carry
+          a secret at all (the `secrets` context is not available in that
+          block).
+
+          Build it in the caller's `secrets:` mapping with toJSON() per value,
+          which is where the `secrets` context IS available:
+
+              secrets:
+                E2E_SOURCE_ENV_JSON: |
+                  {"E2E_DB_HOST": ${{ toJSON(secrets.E2E_DB_HOST) }},
+                   "E2E_DB_KEY":  ${{ toJSON(secrets.E2E_DB_KEY) }}}
+
+          JSON rather than KEY=VALUE lines because a key-pair PEM or
+          service-account key is multi-line. Connectors with a hermetic
+          container source (the mysql shape) need none of this.
+      SDR_TEST_TENANT:
+        required: false
+        description: CI test tenant host for the e2e job (also derives ATLAN_BASE_URL).
+      SDR_CLIENT_ID:
+        required: false
+        description: OAuth client id the e2e worker authenticates to the tenant with.
+      SDR_CLIENT_SECRET:
+        required: false
+        description: OAuth client secret paired with SDR_CLIENT_ID.
+      ATLAN_API_KEY:
+        required: false
+        description: Tenant API key the e2e harness drives Automation Engine + Atlas with.
+      ORG_PAT_GITHUB:
+        required: false
+        description: |
+          Org PAT used for the GHCR push, the connector image build's private
+          git dependency, and the private-git-deps token rewrite.
 
 jobs:
 
@@ -567,9 +589,10 @@ jobs:
           enable-two-store: ${{ inputs.two-store }}
           source-available: ${{ inputs.source-available }}
           # Connector SOURCE credentials the secrets-script + test class read.
-          # This job's env can only carry the tenant-side secrets; the
-          # per-connector names are the caller's to supply.
-          extra-env: ${{ inputs.e2e-extra-env }}
+          # A `with:` input cannot carry these — the `secrets` context is not
+          # available in a reusable-call `with:` block — so they arrive as a
+          # declared secret and are exported to the job env inside the action.
+          extra-env: ${{ secrets.E2E_SOURCE_ENV_JSON }}
           # Push the test image with the org PAT (same identity build-and-publish
           # uses) so it can write PAT-published connector packages — a plain
           # GITHUB_TOKEN 403s on those (e.g. atlan-redshift-app). Available here
