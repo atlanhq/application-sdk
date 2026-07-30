@@ -189,6 +189,20 @@ inputs:
       inside a reusable/composite workflow: they resolve against the
       reusable's repo, not the caller's.
     default: ""
+  extra-env:
+    description: |
+      JSON object of extra environment variables to export before the
+      services-script hook, the app server and pytest run.  The hook for a
+      connector's SOURCE credentials when the calling job cannot set them as
+      job-level ``env:`` — notably tests-reusable.yaml, where the job is owned
+      by the SDK and the credential names are per-connector.
+
+      Values must be JSON-encoded by the caller (``toJSON(secrets.NAME)``):
+      a key-pair PEM or service-account key is multi-line, and ``$GITHUB_ENV``
+      needs the heredoc form for those.  Empty (the default) is a no-op, so
+      callers that already set job-level env are unaffected.
+    required: false
+    default: ""
 
 runs:
   using: "composite"
@@ -335,6 +349,19 @@ runs:
           curl -sf http://localhost:3500/v1.0/metadata >/dev/null 2>&1 && break
           sleep 1
         done
+
+    # Caller-supplied source credentials, exported before the services-script
+    # hook (which may compose config from them), the app server and pytest.
+    # Straight-line call into a tested script per docs/standards/ci.md; the
+    # heredoc form it emits is what makes multi-line values survive $GITHUB_ENV.
+    - name: Export caller-supplied env
+      if: inputs.extra-env != ''
+      shell: bash
+      env:
+        EXTRA_ENV: ${{ inputs.extra-env }}
+      run: |
+        python3 "${{ github.action_path }}/../../scripts/export_extra_env.py" \
+          --json "$EXTRA_ENV" >> "$GITHUB_ENV"
 
     - name: Start runtime services (services-script hook)
       if: inputs.services-script != ''

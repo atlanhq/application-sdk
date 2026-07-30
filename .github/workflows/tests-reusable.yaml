@@ -420,6 +420,11 @@ jobs:
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
           force-external-runtime: ${{ inputs.force-external-runtime }}
           health-check-timeout-seconds: ${{ inputs.health-check-timeout-seconds }}
+          # Source credentials for a connector whose integration tier talks to a
+          # real source. Same declared secret the e2e job uses — without it that
+          # tier silently degrades to dummy credentials when a repo moves off a
+          # bespoke workflow that set them as job-level env.
+          extra-env: ${{ secrets.E2E_SOURCE_ENV_JSON }}
 
   # ── Discover e2e suites → matrix ─────────────────────────────────────────
   # Globs the connector's tests/e2e/test_*.py into a strategy.matrix so the
