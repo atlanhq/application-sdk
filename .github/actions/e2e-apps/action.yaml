@@ -43,13 +43,19 @@ inputs:
       the dispatching SHA. codex-/return-dispatch v3 injected distinct_id into
       the dispatch payload itself; v4 dropped the input and injects nothing, so
       it is now the caller's job. This is not cosmetic: receivers key their
-      concurrency group on it (atlan-local-marketplace-app's sdr-k8s-e2e.yaml
-      uses `sdr-k8s-e2e-${{ inputs.distinct_id || github.ref }}` with
-      cancel-in-progress). Cross-repo dispatches all land on refs/heads/main,
-      so an omitted distinct_id collapses every dispatch into one group and each
-      new one cancels the previous — the dispatched run returns `cancelled` and
-      poll mode reds the job. That is exactly what broke when the v4 bump first
-      landed (#2923, reverted in #2939).
+      concurrency group on it — atlan-local-marketplace-app's sdr-k8s-e2e.yaml
+      groups on "sdr-k8s-e2e-<distinct_id, else github.ref>" with
+      cancel-in-progress: true. Cross-repo dispatches all land on
+      refs/heads/main, so an omitted distinct_id collapses every dispatch into
+      one group and each new one cancels the previous — the dispatched run
+      returns "cancelled" and poll mode reds the job. That is exactly what broke
+      when the v4 bump first landed (#2923, reverted in #2939).
+
+      NOTE — do not write a literal GitHub expression (dollar-brace-brace) in
+      this file's description text. Composite-action manifests template those
+      strings at load time, where the inputs context does not exist, so the
+      whole manifest fails with "Unrecognized named-value: 'inputs'" and every
+      job that uses this action dies before its first step.
   wait-mode:
     required: false
     default: poll
