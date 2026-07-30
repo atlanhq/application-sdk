@@ -43,13 +43,17 @@ inputs:
       the dispatching SHA. codex-/return-dispatch v3 injected distinct_id into
       the dispatch payload itself; v4 dropped the input and injects nothing, so
       it is now the caller's job. This is not cosmetic: receivers key their
-      concurrency group on it — atlan-local-marketplace-app's sdr-k8s-e2e.yaml
-      groups on "sdr-k8s-e2e-<distinct_id, else github.ref>" with
-      cancel-in-progress: true. Cross-repo dispatches all land on
-      refs/heads/main, so an omitted distinct_id collapses every dispatch into
-      one group and each new one cancels the previous — the dispatched run
-      returns "cancelled" and poll mode reds the job. That is exactly what broke
-      when the v4 bump first landed (#2923, reverted in #2939).
+      concurrency group on it, and cross-repo dispatches all land on
+      refs/heads/main, so an omitted distinct_id coarsens that group — overlapping
+      dispatches cancel each other, the dispatched run returns "cancelled" and
+      poll mode reds the job. That is exactly what broke when the v4 bump first
+      landed (#2923, reverted in #2939). The "Require a distinct_id" step below
+      fails the job rather than letting a caller rediscover this.
+
+      The receiver's exact grouping expression is NOT restated here — it lives in
+      another repo and moves independently, so a copy in this file goes stale
+      silently (it already did once). docs/standards/connector-ci-e2e.md is the
+      single source of truth for it; read that before changing either side.
 
       NOTE — do not write a literal GitHub expression (dollar-brace-brace) in
       this file's description text. Composite-action manifests template those
@@ -95,9 +99,20 @@ inputs:
 runs:
   using: "composite"
   steps:
-    # Only callback mode needs the repo on disk (it runs .github/scripts/*.py
-    # directly). Poll mode's steps (codex-/return-dispatch, curl, gh api,
-    # github-script) never touch local files, and the calling job has
+    # Guards both modes, so it runs before the callback-mode checkout below and
+    # uses the caller's working tree instead — a job cannot reference this local
+    # composite action at all without having checked the repo out first.
+    - name: Require a distinct_id in workflow-inputs
+      shell: bash
+      env:
+        WORKFLOW_INPUTS: ${{ inputs.workflow-inputs }}
+      run: |
+        python3 .github/scripts/validate_dispatch_inputs.py \
+          --workflow-inputs "$WORKFLOW_INPUTS"
+
+    # Only callback mode needs its own checkout: it runs .github/scripts/*.py at
+    # a pinned ref. Poll mode's remaining steps (codex-/return-dispatch, curl,
+    # gh api, github-script) never touch local files, and the calling job has
     # already checked out the repo before invoking this local composite
     # action anyway — so this would be a pure no-op there.
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
