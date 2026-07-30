@@ -140,10 +140,12 @@ on:
       distinct-id:
         description: |
           Identifier passed through from the caller's
-          ``workflow_dispatch.inputs.distinct_id`` so
-          ``codex-/return-dispatch`` on the apps-sdk side can locate
-          this run from the calling workflow. Echoed in the
-          "distinct-id" step name; never read by test code.
+          ``workflow_dispatch.inputs.distinct_id`` — the SHA of the apps-sdk
+          commit that dispatched this run. Echoed in the "distinct-id" step
+          name as a correlation breadcrumb; never read by test code, and no
+          longer used to locate the run (``codex-/return-dispatch`` v4 gets
+          the run id from the dispatch response instead of trawling step
+          names). The apps-sdk side must pass it explicitly since v4.
         required: false
         type: string
         default: ""
@@ -220,9 +222,10 @@ jobs:
       # Derived so ATLAN_BASE_URL is always the same tenant as SDR_TEST_TENANT.
       ATLAN_BASE_URL: https://${{ secrets.SDR_TEST_TENANT }}
     steps:
-      # codex-/return-dispatch on the apps-sdk side scans step *names*
-      # for "distinct-id <value>". Always-run, no-op; lets the SDK PR's
-      # e2e-full-mysql job locate this run via the GH Actions API.
+      # No-op step whose name correlates this dispatched run back to the SDK PR
+      # that fired it. Nothing reads the step name: codex-/return-dispatch v3
+      # used to trawl step names to locate the run, but v4 gets the run id from
+      # the dispatch response instead.
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         shell: bash

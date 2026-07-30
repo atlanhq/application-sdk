@@ -374,7 +374,13 @@ jobs:
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
           workflow: tests.yaml
-          workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}","run_e2e":"true","base_image_ref":"{1}"}}', github.event.pull_request.head.sha, needs.build-sdk-base-image.outputs.image) }}
+          # distinct_id is passed explicitly: return-dispatch v4 no longer
+          # injects it (see the e2e-apps workflow-inputs description). Here it
+          # is only a human breadcrumb correlating the connector run back to
+          # this SDK PR — tests-reusable keys its concurrency on github.ref and
+          # its e2e legs are cancel-in-progress:false, so nothing depends on it.
+          # Set to the same SHA as check-sha below so the two line up.
+          workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}","distinct_id":"{1}"}}', github.sha, github.sha) || format('{{"application_sdk_ref":"{0}","run_e2e":"true","base_image_ref":"{1}","distinct_id":"{2}"}}', github.event.pull_request.head.sha, needs.build-sdk-base-image.outputs.image, github.event.pull_request.head.sha) }}
           wait-mode: callback
           check-run-name: "Connector E2E run / ${{ matrix.repo_name }}"
           check-sha: ${{ github.event_name == 'merge_group' && github.sha || github.event.pull_request.head.sha }}
@@ -424,7 +430,22 @@ jobs:
           repo-name: atlan-local-marketplace-app
           target-branch: "refs/heads/main"
           workflow: sdr-k8s-e2e.yaml
-          workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}"}}', github.event.pull_request.head.sha) }}
+          # distinct_id is LOAD-BEARING here and must stay. sdr-k8s-e2e.yaml
+          # keys its concurrency group on it with cancel-in-progress:true, and
+          # target-branch is always refs/heads/main — so an omitted distinct_id
+          # coarsens that group, overlapping dispatches cancel each other, and
+          # poll mode reports the dispatched run as `cancelled` and reds this
+          # job. return-dispatch v4 stopped injecting it, which is what broke
+          # this check when the v4 bump first landed (#2923, reverted in
+          # #2939); it is now passed explicitly, and e2e-apps's `Require a
+          # distinct_id in workflow-inputs` step fails the job if a caller ever
+          # drops it again. The receiver's exact grouping expression is NOT
+          # restated here — it lives in another repo and moves independently, so
+          # an in-repo copy goes stale silently (it already did once).
+          # docs/standards/connector-ci-e2e.md is the single source of truth for
+          # it. Same SHA the deleted `Get the application-sdk commit SHA` step
+          # used to compute.
+          workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}","distinct_id":"{1}"}}', github.sha, github.sha) || format('{{"application_sdk_ref":"{0}","distinct_id":"{1}"}}', github.event.pull_request.head.sha, github.event.pull_request.head.sha) }}
           # sdr-k8s-e2e.yaml (atlan-local-marketplace-app) doesn't yet report
           # back via the Checks API callback — stays on the legacy busy-poll
           # until that's added there too. Explicit so it doesn't silently
