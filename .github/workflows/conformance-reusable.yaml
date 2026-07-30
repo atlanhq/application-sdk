@@ -193,6 +193,18 @@ on:
         required: false
         default: false
         type: boolean
+      private-git-deps:
+        description: >
+          Set true when the app's lockfile pins a PRIVATE atlanhq git dependency
+          (e.g. query-redaction).  The D-series leg is the only one that
+          materialises the environment (`uv sync`, via the detect action's
+          needs-env step), and an unauthenticated clone of a private atlanhq repo
+          fails there — so with this flag the suite job rewrites atlanhq remotes
+          to a token URL (ORG_PAT_GITHUB) first.  Requires the caller to pass
+          `secrets: inherit`.  Leave false for apps with only public deps.
+        required: false
+        default: false
+        type: boolean
       exit-zero:
         description: >
           When true, the detect command exits 0 even when blocking violations are
@@ -203,6 +215,15 @@ on:
         required: false
         default: false
         type: boolean
+    secrets:
+      ORG_PAT_GITHUB:
+        required: false
+        description: >
+          Token used to reach PRIVATE atlanhq git dependencies when
+          `private-git-deps` is true.  Optional: a caller with only public deps
+          passes nothing.  Declared so a caller that maps secrets EXPLICITLY
+          (rather than `secrets: inherit`) is validated at parse time instead of
+          silently supplying an empty token.
 
 permissions:
   contents: read
@@ -218,6 +239,11 @@ jobs:
   suite:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    env:
+      # Surfaced as env because a step-level `if:` cannot read the secrets
+      # context, and the rewrite step must gate on the credential being
+      # present rather than on the flag alone.
+      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     strategy:
       fail-fast: false
       matrix:
@@ -340,6 +366,29 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.12.0"
+
+      # The flag promises a token; with ORG_PAT_GITHUB absent the rewrite below
+      # would redirect every atlanhq URL — including the caller checkout above —
+      # to an unauthenticated token URL, failing far from the cause. Condition
+      # stays in `if:`, never in the shell (docs/standards/ci.md).
+      - name: "Require ORG_PAT_GITHUB when private-git-deps is set"
+        if: inputs.private-git-deps && env.GIT_TOKEN == ''
+        shell: bash
+        run: |
+          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
+          exit 1
+
+      # Only the D-series leg materialises the environment (the detect action's
+      # needs-env `uv sync`), but gating on the input and the token — rather
+      # than also duplicating the series condition — keeps this a one-second
+      # no-op on the other legs. --global writes ~/.gitconfig, so it applies to
+      # the clone uv performs inside the action.
+      - name: "Authenticate private atlanhq git dependencies"
+        if: inputs.private-git-deps && env.GIT_TOKEN != ''
+        shell: bash
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
 
       - name: "Run ${{ matrix.series }}-series checks"
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all

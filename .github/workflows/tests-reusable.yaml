@@ -22,6 +22,8 @@ name: tests-reusable
 #   - connector-integration-tests composite with services-script hook (no-op
 #     by default; used when source systems need CI-level startup rather than
 #     pytest fixtures — see openapi's .github/test/setup-services.sh)
+#   - Optional pre-sync token rewrite for private atlanhq git dependencies
+#     (`private-git-deps`), plus `git-token` forwarded to the e2e image build
 #   - Label/dispatch-gated full-DAG e2e job (inlined here — see the `e2e` job;
 #     it was previously delegated to e2e-full-reusable.yaml, now folded in so
 #     the whole suite is one reusable + one Tests Gate)
@@ -182,6 +184,112 @@ on:
           worker-up-only check (assert the worker deploys + serves
           /server/health) and skips extraction/publish/Atlas assertions,
           until the owner provisions a source.
+      private-git-deps:
+        required: false
+        type: boolean
+        default: false
+        description: |
+          Set true when the connector's lockfile pins a PRIVATE atlanhq git
+          dependency (e.g. query-redaction, pinned via `ssh://` or `https://`
+          in [tool.uv.sources]).  Every tier of this reusable runs `uv sync` on
+          the runner, and an unauthenticated clone of a private atlanhq repo
+          fails there — so with this flag each job rewrites atlanhq remotes to
+          a token URL (ORG_PAT_GITHUB, available via the caller's
+          `secrets: inherit`) BEFORE the deps action syncs.  The Docker build
+          is covered separately: `git-token` is always forwarded to sdr-e2e.
+          Leave false for connectors with only public dependencies.
+      git-lfs-skip-smudge:
+        required: false
+        type: boolean
+        default: false
+        description: |
+          Set true to export GIT_LFS_SKIP_SMUDGE=1 in every job, so clones do
+          not download LFS objects.  Use when a private git dependency
+          LFS-tracks large artifacts the tests never need — the smudge filter
+          otherwise fails (or wastes minutes) during `uv sync`.  Leave false
+          for connectors that genuinely need their LFS content at test time
+          (the same reason build-and-publish takes an explicit `lfs` input).
+      container-health-timeout-seconds:
+        required: false
+        type: string
+        default: "120"
+        description: |
+          Forwarded to the sdr-e2e action: how long to wait for the e2e worker
+          container's /server/health before failing. Raise for connectors whose
+          image boots slowly (heavy native / analytics deps). Must stay strictly
+          greater than the SDK's ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT, or the gate is
+          a coin-flip — see the action's own note (CNCT-66).
+      force-external-runtime:
+        required: false
+        type: boolean
+        default: false
+        description: |
+          Forwarded to the connector-integration-tests action: force the
+          external daprd + Temporal steps even when the installed SDK reports
+          embedded-runtime support.  Set only while the connector's main.py
+          still expects external daprd at :3500 / Temporal at :7233; the
+          embedded runtime is the preferred end state.
+      health-check-timeout-seconds:
+        required: false
+        type: string
+        default: "60"
+        description: |
+          Forwarded to the connector-integration-tests action: how long to wait
+          for the app server to become healthy in the INTEGRATION tier.  Raise
+          for connectors with slow imports (heavy native/analytics deps).
+
+    secrets:
+      # Declared so a caller that maps secrets EXPLICITLY (instead of
+      # `secrets: inherit`) gets parse-time validation. Everything here is
+      # optional, so `secrets: inherit` callers are unaffected — inherited
+      # secrets arrive under their own names either way.
+      E2E_SOURCE_ENV_JSON:
+        required: false
+        description: |
+          JSON object of the connector's SOURCE credentials, exported as
+          environment variables in the e2e job before the secrets bundle is
+          written — so both the app's secrets-script and the test class see
+          them. This exists because the source credential NAMES are
+          per-connector and unknowable here (SNOWFLAKE_E2E_ACCOUNT,
+          E2E_SAPHANA_HOST, AWS keys, …) while the tenant-side secrets below
+          are fixed; and because a reusable-workflow `with:` input cannot carry
+          a secret at all (the `secrets` context is not available in that
+          block).
+
+          Build it in the caller's `secrets:` mapping, wrapping each value in
+          toJSON(...) — that mapping is where the `secrets` context IS available.
+          One JSON object, one line per credential, values written as
+          toJSON(secrets.NAME) expressions.
+
+          JSON rather than KEY=VALUE lines because a key-pair PEM or
+          service-account key is multi-line. Connectors with a hermetic
+          container source (the mysql shape) need none of this.
+      SDR_TEST_TENANT:
+        required: false
+        description: CI test tenant host for the e2e job (also derives ATLAN_BASE_URL).
+      SDR_CLIENT_ID:
+        required: false
+        description: OAuth client id the e2e worker authenticates to the tenant with.
+      SDR_CLIENT_SECRET:
+        required: false
+        description: OAuth client secret paired with SDR_CLIENT_ID.
+      ATLAN_API_KEY:
+        required: false
+        description: Tenant API key the e2e harness drives Automation Engine + Atlas with.
+      ORG_PAT_GITHUB:
+        required: false
+        description: |
+          Org PAT used for the GHCR push, the connector image build's private
+          git dependency, and the private-git-deps token rewrite.
+      FLEET_APP_ID:
+        required: false
+        description: |
+          GitHub App id used by the cross-repo callback job to mint a token for
+          the dispatching application-sdk repo. Only the SDK-dispatch path uses
+          it; connector-triggered runs leave it unset.
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: Private key paired with FLEET_APP_ID.
 
 jobs:
 
@@ -201,10 +309,39 @@ jobs:
       contents: read
     outputs:
       summary: ${{ steps.unit.outputs.summary }}
+    env:
+      # Empty (the default) leaves the smudge filter enabled, exactly as
+      # before; git-lfs only skips on an explicit "1".
+      GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
+      # Surfaced as env, like E2E_SOURCE_ENV_JSON below, because a step-level
+      # `if:` cannot read the secrets context — and the rewrite step must gate
+      # on the credential actually being present, not just on the flag.
+      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
+
+      # The flag promises a token. With ORG_PAT_GITHUB absent, GIT_TOKEN expands
+      # empty and the rewrite below would still install a global redirect of
+      # every atlanhq URL to an unauthenticated token URL — which then also
+      # applies to the connector's own repo checkout, so the job fails far from
+      # the cause. Fail here instead, naming the missing secret. The condition
+      # stays in `if:`, never in the shell (docs/standards/ci.md).
+      - name: Require ORG_PAT_GITHUB when private-git-deps is set
+        if: inputs.private-git-deps && env.GIT_TOKEN == ''
+        run: |
+          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
+          exit 1
+
+      # Private atlanhq git deps must be reachable before the deps action's
+      # `uv sync`. --global writes ~/.gitconfig, so it applies to the clone uv
+      # performs later in this job and needs no checkout of its own.
+      - name: Authenticate private atlanhq git dependencies
+        if: inputs.private-git-deps && env.GIT_TOKEN != ''
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
 
       - name: Run unit tests
         id: unit
@@ -267,10 +404,61 @@ jobs:
       contents: read
     outputs:
       summary: ${{ steps.integration.outputs.summary }}
+    env:
+      GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
+      # Surfaced as env because a step-level `if:` cannot read the secrets
+      # context, and the export steps below are gated on it being set.
+      E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
+      # Same reason: the rewrite step gates on the credential, not the flag.
+      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
+
+      # See the unit job for why this gates on the token, not just the flag.
+      - name: Require ORG_PAT_GITHUB when private-git-deps is set
+        if: inputs.private-git-deps && env.GIT_TOKEN == ''
+        run: |
+          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
+          exit 1
+
+      - name: Authenticate private atlanhq git dependencies
+        if: inputs.private-git-deps && env.GIT_TOKEN != ''
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+
+      # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON). Exported here rather
+      # than passed to the composite action below, because every action this
+      # workflow calls is pinned @main: an input added on a feature branch is
+      # silently ignored until it lands. Sparse-checks-out only .github/scripts.
+      - name: Fetch SDK CI scripts (source-credential export)
+        if: env.E2E_SOURCE_ENV_JSON != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          # `job.workflow_sha` is "the commit SHA of the workflow file that
+          # defines the current job" — i.e. THIS reusable, at whatever ref the
+          # caller pinned — so the script always matches the workflow running
+          # it, and no caller-supplied ref reaches a checkout whose payload is
+          # then executed. `repository:` stays hardcoded rather than paired with
+          # `job.workflow_repository` to keep that payload provenance-pinned.
+          # Caveat: the `job.workflow_*` properties do not exist on GitHub
+          # Enterprise Server (no effect on github.com callers), and actionlint
+          # <=1.7.7 predates them, so it reports a false "property not defined".
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+          persist-credentials: false
+
+      - name: Export connector source credentials
+        if: env.E2E_SOURCE_ENV_JSON != ''
+        run: |
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$E2E_SOURCE_ENV_JSON" >> "$GITHUB_ENV"
 
       # Unit runs in its own job; integration defaults to tests/integration/.
       # A caller test-paths override scopes THIS job only. The ternary is a
@@ -285,6 +473,8 @@ jobs:
           pytest-args: ${{ inputs.pytest-args }}
           services-script: ${{ inputs.services-script }}
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
+          force-external-runtime: ${{ inputs.force-external-runtime }}
+          health-check-timeout-seconds: ${{ inputs.health-check-timeout-seconds }}
 
   # ── Discover e2e suites → matrix ─────────────────────────────────────────
   # Globs the connector's tests/e2e/test_*.py into a strategy.matrix so the
@@ -381,6 +571,10 @@ jobs:
       ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
       # Derived so ATLAN_BASE_URL is always the same tenant as SDR_TEST_TENANT.
       ATLAN_BASE_URL: https://${{ secrets.SDR_TEST_TENANT }}
+      GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
+      # See the integration job: needed as env for the step-level `if:` gates.
+      E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
+      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -390,6 +584,45 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON). Exported here rather
+      # than passed to the composite action below, because every action this
+      # workflow calls is pinned @main: an input added on a feature branch is
+      # silently ignored until it lands. Sparse-checks-out only .github/scripts.
+      - name: Fetch SDK CI scripts (source-credential export)
+        if: env.E2E_SOURCE_ENV_JSON != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          # See the integration job above for why this is job.workflow_sha.
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+          persist-credentials: false
+
+      - name: Export connector source credentials
+        if: env.E2E_SOURCE_ENV_JSON != ''
+        run: |
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$E2E_SOURCE_ENV_JSON" >> "$GITHUB_ENV"
+
+      # See the unit job for why this gates on the token, not just the flag.
+      - name: Require ORG_PAT_GITHUB when private-git-deps is set
+        if: inputs.private-git-deps && env.GIT_TOKEN == ''
+        run: |
+          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
+          exit 1
+
+      # The sdr-e2e action runs `uv sync` on the RUNNER as well as in the image
+      # build, so the token rewrite is needed here too — `git-token` below only
+      # reaches the Docker build.
+      - name: Authenticate private atlanhq git dependencies
+        if: inputs.private-git-deps && env.GIT_TOKEN != ''
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
 
       # uv on the host for the sdr-e2e action's `uv run pytest` + summary steps.
       # The action self-installs uv only when application-sdk-ref is set
@@ -420,7 +653,18 @@ jobs:
           config-dir: .github/e2e
           # Bump the container-health wait because the worker has to establish
           # the Temporal connection with TLS + auth before /server/health greens.
-          container-health-timeout-seconds: "120"
+          container-health-timeout-seconds: ${{ inputs.container-health-timeout-seconds }}
+          # This job IS the full-DAG pipeline, so layer the SDK-owned
+          # queue-alignment overlay (docker-compose.full-dag.yml): it passes the
+          # per-leg ATLAN_DEPLOYMENT_NAME through to the worker so it registers
+          # on the queue the harness dispatches the extract node to. Without it,
+          # alignment depends entirely on the app carrying a byte-identical
+          # per-app overlay — and a connector with no `.github/e2e/
+          # e2e-full-docker-compose.yaml` (the chain builder skips a missing
+          # overlay silently) gets no alignment at all, surfacing 90 minutes
+          # later as "No Workers Running". App overlays layer ABOVE this one, so
+          # connectors that already carry theirs are unaffected.
+          full-dag: "true"
           # `-s` streams the harness poll-loop output in real time — each leg is
           # a single sequential pytest process, so this is live per-job again.
           pytest-extra-args: "-s"
@@ -441,6 +685,11 @@ jobs:
           # GITHUB_TOKEN 403s on those (e.g. atlan-redshift-app). Available here
           # because callers invoke this reusable with `secrets: inherit`.
           ghcr-token: ${{ secrets.ORG_PAT_GITHUB }}
+          # Forwarded to the image build as the `git_token` build secret so a
+          # Dockerfile whose `uv sync` clones a private atlanhq dependency can
+          # authenticate. Same identity/availability rationale as ghcr-token; a
+          # Dockerfile that declares no such secret mount simply ignores it.
+          git-token: ${{ secrets.ORG_PAT_GITHUB }}
 
   # ── Callback: report the result back to the application-sdk PR/commit ────
   # that dispatched this run. application-sdk's e2e-apps composite
