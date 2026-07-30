@@ -22,6 +22,8 @@ name: tests-reusable
 #   - connector-integration-tests composite with services-script hook (no-op
 #     by default; used when source systems need CI-level startup rather than
 #     pytest fixtures — see openapi's .github/test/setup-services.sh)
+#   - Optional pre-sync token rewrite for private atlanhq git dependencies
+#     (`private-git-deps`), plus `git-token` forwarded to the e2e image build
 #   - Label/dispatch-gated full-DAG e2e job (inlined here — see the `e2e` job;
 #     it was previously delegated to e2e-full-reusable.yaml, now folded in so
 #     the whole suite is one reusable + one Tests Gate)
@@ -182,6 +184,49 @@ on:
           worker-up-only check (assert the worker deploys + serves
           /server/health) and skips extraction/publish/Atlas assertions,
           until the owner provisions a source.
+      private-git-deps:
+        required: false
+        type: boolean
+        default: false
+        description: |
+          Set true when the connector's lockfile pins a PRIVATE atlanhq git
+          dependency (e.g. query-redaction, pinned via `ssh://` or `https://`
+          in [tool.uv.sources]).  Every tier of this reusable runs `uv sync` on
+          the runner, and an unauthenticated clone of a private atlanhq repo
+          fails there — so with this flag each job rewrites atlanhq remotes to
+          a token URL (ORG_PAT_GITHUB, available via the caller's
+          `secrets: inherit`) BEFORE the deps action syncs.  The Docker build
+          is covered separately: `git-token` is always forwarded to sdr-e2e.
+          Leave false for connectors with only public dependencies.
+      git-lfs-skip-smudge:
+        required: false
+        type: boolean
+        default: false
+        description: |
+          Set true to export GIT_LFS_SKIP_SMUDGE=1 in every job, so clones do
+          not download LFS objects.  Use when a private git dependency
+          LFS-tracks large artifacts the tests never need — the smudge filter
+          otherwise fails (or wastes minutes) during `uv sync`.  Leave false
+          for connectors that genuinely need their LFS content at test time
+          (the same reason build-and-publish takes an explicit `lfs` input).
+      force-external-runtime:
+        required: false
+        type: boolean
+        default: false
+        description: |
+          Forwarded to the connector-integration-tests action: force the
+          external daprd + Temporal steps even when the installed SDK reports
+          embedded-runtime support.  Set only while the connector's main.py
+          still expects external daprd at :3500 / Temporal at :7233; the
+          embedded runtime is the preferred end state.
+      health-check-timeout-seconds:
+        required: false
+        type: string
+        default: "60"
+        description: |
+          Forwarded to the connector-integration-tests action: how long to wait
+          for the app server to become healthy in the INTEGRATION tier.  Raise
+          for connectors with slow imports (heavy native/analytics deps).
 
 jobs:
 
@@ -201,10 +246,25 @@ jobs:
       contents: read
     outputs:
       summary: ${{ steps.unit.outputs.summary }}
+    env:
+      # Empty (the default) leaves the smudge filter enabled, exactly as
+      # before; git-lfs only skips on an explicit "1".
+      GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
+
+      # Private atlanhq git deps must be reachable before the deps action's
+      # `uv sync`. --global writes ~/.gitconfig, so it applies to the clone uv
+      # performs later in this job and needs no checkout of its own.
+      - name: Authenticate private atlanhq git dependencies
+        if: inputs.private-git-deps
+        env:
+          GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
 
       - name: Run unit tests
         id: unit
@@ -267,10 +327,20 @@ jobs:
       contents: read
     outputs:
       summary: ${{ steps.integration.outputs.summary }}
+    env:
+      GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
+
+      - name: Authenticate private atlanhq git dependencies
+        if: inputs.private-git-deps
+        env:
+          GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
 
       # Unit runs in its own job; integration defaults to tests/integration/.
       # A caller test-paths override scopes THIS job only. The ternary is a
@@ -285,6 +355,8 @@ jobs:
           pytest-args: ${{ inputs.pytest-args }}
           services-script: ${{ inputs.services-script }}
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
+          force-external-runtime: ${{ inputs.force-external-runtime }}
+          health-check-timeout-seconds: ${{ inputs.health-check-timeout-seconds }}
 
   # ── Discover e2e suites → matrix ─────────────────────────────────────────
   # Globs the connector's tests/e2e/test_*.py into a strategy.matrix so the
@@ -381,6 +453,7 @@ jobs:
       ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
       # Derived so ATLAN_BASE_URL is always the same tenant as SDR_TEST_TENANT.
       ATLAN_BASE_URL: https://${{ secrets.SDR_TEST_TENANT }}
+      GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
     steps:
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -390,6 +463,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The sdr-e2e action runs `uv sync` on the RUNNER as well as in the image
+      # build, so the token rewrite is needed here too — `git-token` below only
+      # reaches the Docker build.
+      - name: Authenticate private atlanhq git dependencies
+        if: inputs.private-git-deps
+        env:
+          GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
 
       # uv on the host for the sdr-e2e action's `uv run pytest` + summary steps.
       # The action self-installs uv only when application-sdk-ref is set
@@ -441,6 +525,11 @@ jobs:
           # GITHUB_TOKEN 403s on those (e.g. atlan-redshift-app). Available here
           # because callers invoke this reusable with `secrets: inherit`.
           ghcr-token: ${{ secrets.ORG_PAT_GITHUB }}
+          # Forwarded to the image build as the `git_token` build secret so a
+          # Dockerfile whose `uv sync` clones a private atlanhq dependency can
+          # authenticate. Same identity/availability rationale as ghcr-token; a
+          # Dockerfile that declares no such secret mount simply ignores it.
+          git-token: ${{ secrets.ORG_PAT_GITHUB }}
 
   # ── Callback: report the result back to the application-sdk PR/commit ────
   # that dispatched this run. application-sdk's e2e-apps composite
