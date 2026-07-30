@@ -367,11 +367,6 @@ jobs:
         with:
           version: "0.12.0"
 
-      # Only the D-series leg materialises the environment (the detect action's
-      # needs-env `uv sync`), but gating on the input alone keeps this a
-      # one-second no-op on the other legs rather than duplicating the series
-      # condition. --global writes ~/.gitconfig, so it applies to the clone uv
-      # performs inside the action.
       # The flag promises a token; with ORG_PAT_GITHUB absent the rewrite below
       # would redirect every atlanhq URL — including the caller checkout above —
       # to an unauthenticated token URL, failing far from the cause. Condition
@@ -383,6 +378,11 @@ jobs:
           echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
           exit 1
 
+      # Only the D-series leg materialises the environment (the detect action's
+      # needs-env `uv sync`), but gating on the input and the token — rather
+      # than also duplicating the series condition — keeps this a one-second
+      # no-op on the other legs. --global writes ~/.gitconfig, so it applies to
+      # the clone uv performs inside the action.
       - name: "Authenticate private atlanhq git dependencies"
         if: inputs.private-git-deps && env.GIT_TOKEN != ''
         shell: bash
