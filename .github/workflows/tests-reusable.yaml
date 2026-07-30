@@ -392,6 +392,9 @@ jobs:
       summary: ${{ steps.integration.outputs.summary }}
     env:
       GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
+      # Surfaced as env because a step-level `if:` cannot read the secrets
+      # context, and the export steps below are gated on it being set.
+      E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -404,6 +407,27 @@ jobs:
         run: |
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+
+      # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON). Exported here rather
+      # than passed to the composite action below, because every action this
+      # workflow calls is pinned @main: an input added on a feature branch is
+      # silently ignored until it lands. Sparse-checks-out only .github/scripts.
+      - name: Fetch SDK CI scripts (source-credential export)
+        if: env.E2E_SOURCE_ENV_JSON != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+          persist-credentials: false
+
+      - name: Export connector source credentials
+        if: env.E2E_SOURCE_ENV_JSON != ''
+        run: |
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$E2E_SOURCE_ENV_JSON" >> "$GITHUB_ENV"
 
       # Unit runs in its own job; integration defaults to tests/integration/.
       # A caller test-paths override scopes THIS job only. The ternary is a
@@ -420,11 +444,6 @@ jobs:
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
           force-external-runtime: ${{ inputs.force-external-runtime }}
           health-check-timeout-seconds: ${{ inputs.health-check-timeout-seconds }}
-          # Source credentials for a connector whose integration tier talks to a
-          # real source. Same declared secret the e2e job uses — without it that
-          # tier silently degrades to dummy credentials when a repo moves off a
-          # bespoke workflow that set them as job-level env.
-          extra-env: ${{ secrets.E2E_SOURCE_ENV_JSON }}
 
   # ── Discover e2e suites → matrix ─────────────────────────────────────────
   # Globs the connector's tests/e2e/test_*.py into a strategy.matrix so the
@@ -522,6 +541,8 @@ jobs:
       # Derived so ATLAN_BASE_URL is always the same tenant as SDR_TEST_TENANT.
       ATLAN_BASE_URL: https://${{ secrets.SDR_TEST_TENANT }}
       GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
+      # See the integration job: needed as env for the step-level `if:` gates.
+      E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
     steps:
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -531,6 +552,27 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON). Exported here rather
+      # than passed to the composite action below, because every action this
+      # workflow calls is pinned @main: an input added on a feature branch is
+      # silently ignored until it lands. Sparse-checks-out only .github/scripts.
+      - name: Fetch SDK CI scripts (source-credential export)
+        if: env.E2E_SOURCE_ENV_JSON != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+          persist-credentials: false
+
+      - name: Export connector source credentials
+        if: env.E2E_SOURCE_ENV_JSON != ''
+        run: |
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$E2E_SOURCE_ENV_JSON" >> "$GITHUB_ENV"
 
       # The sdr-e2e action runs `uv sync` on the RUNNER as well as in the image
       # build, so the token rewrite is needed here too — `git-token` below only
@@ -599,11 +641,6 @@ jobs:
           base-image-ref: ${{ inputs.base-image-ref }}
           enable-two-store: ${{ inputs.two-store }}
           source-available: ${{ inputs.source-available }}
-          # Connector SOURCE credentials the secrets-script + test class read.
-          # A `with:` input cannot carry these — the `secrets` context is not
-          # available in a reusable-call `with:` block — so they arrive as a
-          # declared secret and are exported to the job env inside the action.
-          extra-env: ${{ secrets.E2E_SOURCE_ENV_JSON }}
           # Push the test image with the org PAT (same identity build-and-publish
           # uses) so it can write PAT-published connector packages — a plain
           # GITHUB_TOKEN 403s on those (e.g. atlan-redshift-app). Available here
