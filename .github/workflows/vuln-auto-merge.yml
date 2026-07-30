@@ -11,8 +11,18 @@
 # docs/standards/ci.md. This workflow only wires the trigger and runs it.
 #
 # Why atlan-ci: atlan-ci is a CODEOWNER (via the `*` rule in .github/CODEOWNERS,
-# which already covers .security/) and a bypass actor on the main ruleset, so its
-# approval satisfies require_code_owner_review and `--auto` merges once checks pass.
+# which already covers .security/) AND is listed in .security/approvers.json, so a
+# single atlan-ci approval satisfies both require_code_owner_review and the
+# Authorized Approver Check. `--auto` then queues the PR once checks pass.
+#
+# Why the PRs it approves are NOT authored by atlan-ci: GitHub forbids approving
+# your own PR. The reconcile removal PR used to be opened as atlan-ci on the theory
+# that its `main`-ruleset bypass made an approval unnecessary — untrue. Bypass lets
+# atlan-ci merge directly; it does not satisfy required_approving_review_count for
+# auto-merge or merge-queue entry, so those PRs stalled at REVIEW_REQUIRED until a
+# human clicked approve. vuln-reconcile-on-release.yml now authors them as
+# atlan-app-fleet[bot], which keeps atlan-ci free to be the approver.
+#
 # GitHub auto-merge enforces "merge only when required checks pass", so a red
 # PR is never merged here.
 
@@ -59,8 +69,9 @@ jobs:
 
       - name: Evaluate + approve + auto-merge
         env:
-          # atlan-ci identity: its approval satisfies code-owner review and it
-          # is a main-ruleset bypass actor (see check-dapr-version.yaml).
+          # atlan-ci identity: its approval satisfies code-owner review — it is a
+          # CODEOWNER and is listed in .security/approvers.json (see the header).
+          # It does not rely on any main-ruleset bypass.
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
           REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
