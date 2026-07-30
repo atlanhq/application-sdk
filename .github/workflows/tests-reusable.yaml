@@ -209,6 +209,16 @@ on:
           otherwise fails (or wastes minutes) during `uv sync`.  Leave false
           for connectors that genuinely need their LFS content at test time
           (the same reason build-and-publish takes an explicit `lfs` input).
+      container-health-timeout-seconds:
+        required: false
+        type: string
+        default: "120"
+        description: |
+          Forwarded to the sdr-e2e action: how long to wait for the e2e worker
+          container's /server/health before failing. Raise for connectors whose
+          image boots slowly (heavy native / analytics deps). Must stay strictly
+          greater than the SDK's ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT, or the gate is
+          a coin-flip — see the action's own note (CNCT-66).
       force-external-runtime:
         required: false
         type: boolean
@@ -504,7 +514,18 @@ jobs:
           config-dir: .github/e2e
           # Bump the container-health wait because the worker has to establish
           # the Temporal connection with TLS + auth before /server/health greens.
-          container-health-timeout-seconds: "120"
+          container-health-timeout-seconds: ${{ inputs.container-health-timeout-seconds }}
+          # This job IS the full-DAG pipeline, so layer the SDK-owned
+          # queue-alignment overlay (docker-compose.full-dag.yml): it passes the
+          # per-leg ATLAN_DEPLOYMENT_NAME through to the worker so it registers
+          # on the queue the harness dispatches the extract node to. Without it,
+          # alignment depends entirely on the app carrying a byte-identical
+          # per-app overlay — and a connector with no `.github/e2e/
+          # e2e-full-docker-compose.yaml` (the chain builder skips a missing
+          # overlay silently) gets no alignment at all, surfacing 90 minutes
+          # later as "No Workers Running". App overlays layer ABOVE this one, so
+          # connectors that already carry theirs are unaffected.
+          full-dag: "true"
           # `-s` streams the harness poll-loop output in real time — each leg is
           # a single sequential pytest process, so this is live per-job again.
           pytest-extra-args: "-s"
