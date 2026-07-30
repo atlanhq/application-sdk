@@ -209,6 +209,21 @@ on:
           otherwise fails (or wastes minutes) during `uv sync`.  Leave false
           for connectors that genuinely need their LFS content at test time
           (the same reason build-and-publish takes an explicit `lfs` input).
+      sdk-scripts-ref:
+        required: false
+        type: string
+        default: "main"
+        description: |
+          Ref of atlanhq/application-sdk to take .github/scripts from for the
+          source-credential export. Defaults to main, which is correct for every
+          caller on `@main`.
+
+          Set it ONLY while validating a change to this workflow from a branch:
+          there is no expression for "the ref of the reusable workflow I am"
+          (github.job_workflow_sha is an OIDC claim, not a context property), so
+          a caller pinned at `...tests-reusable.yaml@my-branch` must name that
+          same branch here or the export step would run main's scripts. Drop it
+          in the same edit that flips the `uses:` back to `@main`.
       container-health-timeout-seconds:
         required: false
         type: string
@@ -417,11 +432,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          # The commit of THIS reusable workflow file, so the script is always
-          # the one this logic was written against. Without it checkout defaults
-          # to the SDK's default branch, and a branch under review would run
-          # main's scripts — or, for a newly added script, none at all.
-          ref: ${{ github.job_workflow_sha }}
+          ref: ${{ inputs.sdk-scripts-ref }}
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
@@ -567,11 +578,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          # The commit of THIS reusable workflow file, so the script is always
-          # the one this logic was written against. Without it checkout defaults
-          # to the SDK's default branch, and a branch under review would run
-          # main's scripts — or, for a newly added script, none at all.
-          ref: ${{ github.job_workflow_sha }}
+          ref: ${{ inputs.sdk-scripts-ref }}
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
