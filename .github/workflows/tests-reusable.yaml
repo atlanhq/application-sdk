@@ -209,21 +209,6 @@ on:
           otherwise fails (or wastes minutes) during `uv sync`.  Leave false
           for connectors that genuinely need their LFS content at test time
           (the same reason build-and-publish takes an explicit `lfs` input).
-      sdk-scripts-ref:
-        required: false
-        type: string
-        default: "main"
-        description: |
-          Ref of atlanhq/application-sdk to take .github/scripts from for the
-          source-credential export. Defaults to main, which is correct for every
-          caller on `@main`.
-
-          Set it ONLY while validating a change to this workflow from a branch:
-          there is no expression for "the ref of the reusable workflow I am"
-          (github.job_workflow_sha is an OIDC claim, not a context property), so
-          a caller pinned at `...tests-reusable.yaml@my-branch` must name that
-          same branch here or the export step would run main's scripts. Drop it
-          in the same edit that flips the `uses:` back to `@main`.
       container-health-timeout-seconds:
         required: false
         type: string
@@ -328,18 +313,32 @@ jobs:
       # Empty (the default) leaves the smudge filter enabled, exactly as
       # before; git-lfs only skips on an explicit "1".
       GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
+      # Surfaced as env, like E2E_SOURCE_ENV_JSON below, because a step-level
+      # `if:` cannot read the secrets context — and the rewrite step must gate
+      # on the credential actually being present, not just on the flag.
+      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
 
+      # The flag promises a token. With ORG_PAT_GITHUB absent, GIT_TOKEN expands
+      # empty and the rewrite below would still install a global redirect of
+      # every atlanhq URL to an unauthenticated token URL — which then also
+      # applies to the connector's own repo checkout, so the job fails far from
+      # the cause. Fail here instead, naming the missing secret. The condition
+      # stays in `if:`, never in the shell (docs/standards/ci.md).
+      - name: Require ORG_PAT_GITHUB when private-git-deps is set
+        if: inputs.private-git-deps && env.GIT_TOKEN == ''
+        run: |
+          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
+          exit 1
+
       # Private atlanhq git deps must be reachable before the deps action's
       # `uv sync`. --global writes ~/.gitconfig, so it applies to the clone uv
       # performs later in this job and needs no checkout of its own.
       - name: Authenticate private atlanhq git dependencies
-        if: inputs.private-git-deps
-        env:
-          GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        if: inputs.private-git-deps && env.GIT_TOKEN != ''
         run: |
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
@@ -410,15 +409,22 @@ jobs:
       # Surfaced as env because a step-level `if:` cannot read the secrets
       # context, and the export steps below are gated on it being set.
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
+      # Same reason: the rewrite step gates on the credential, not the flag.
+      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
 
+      # See the unit job for why this gates on the token, not just the flag.
+      - name: Require ORG_PAT_GITHUB when private-git-deps is set
+        if: inputs.private-git-deps && env.GIT_TOKEN == ''
+        run: |
+          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
+          exit 1
+
       - name: Authenticate private atlanhq git dependencies
-        if: inputs.private-git-deps
-        env:
-          GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        if: inputs.private-git-deps && env.GIT_TOKEN != ''
         run: |
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
@@ -432,7 +438,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: ${{ inputs.sdk-scripts-ref }}
+          # `job.workflow_sha` is "the commit SHA of the workflow file that
+          # defines the current job" — i.e. THIS reusable, at whatever ref the
+          # caller pinned — so the script always matches the workflow running
+          # it, and no caller-supplied ref reaches a checkout whose payload is
+          # then executed. `repository:` stays hardcoded rather than paired with
+          # `job.workflow_repository` to keep that payload provenance-pinned.
+          # Caveat: the `job.workflow_*` properties do not exist on GitHub
+          # Enterprise Server (no effect on github.com callers), and actionlint
+          # <=1.7.7 predates them, so it reports a false "property not defined".
+          ref: ${{ job.workflow_sha }}
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
@@ -559,6 +574,7 @@ jobs:
       GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
       # See the integration job: needed as env for the step-level `if:` gates.
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
+      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -578,7 +594,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: ${{ inputs.sdk-scripts-ref }}
+          # See the integration job above for why this is job.workflow_sha.
+          ref: ${{ job.workflow_sha }}
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
@@ -591,13 +608,18 @@ jobs:
           python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
             --json "$E2E_SOURCE_ENV_JSON" >> "$GITHUB_ENV"
 
+      # See the unit job for why this gates on the token, not just the flag.
+      - name: Require ORG_PAT_GITHUB when private-git-deps is set
+        if: inputs.private-git-deps && env.GIT_TOKEN == ''
+        run: |
+          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
+          exit 1
+
       # The sdr-e2e action runs `uv sync` on the RUNNER as well as in the image
       # build, so the token rewrite is needed here too — `git-token` below only
       # reaches the Docker build.
       - name: Authenticate private atlanhq git dependencies
-        if: inputs.private-git-deps
-        env:
-          GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        if: inputs.private-git-deps && env.GIT_TOKEN != ''
         run: |
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
