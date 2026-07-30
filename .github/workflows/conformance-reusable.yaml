@@ -193,6 +193,18 @@ on:
         required: false
         default: false
         type: boolean
+      private-git-deps:
+        description: >
+          Set true when the app's lockfile pins a PRIVATE atlanhq git dependency
+          (e.g. query-redaction).  The D-series leg is the only one that
+          materialises the environment (`uv sync`, via the detect action's
+          needs-env step), and an unauthenticated clone of a private atlanhq repo
+          fails there — so with this flag the suite job rewrites atlanhq remotes
+          to a token URL (ORG_PAT_GITHUB) first.  Requires the caller to pass
+          `secrets: inherit`.  Leave false for apps with only public deps.
+        required: false
+        default: false
+        type: boolean
       exit-zero:
         description: >
           When true, the detect command exits 0 even when blocking violations are
@@ -340,6 +352,20 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.12.0"
+
+      # Only the D-series leg materialises the environment (the detect action's
+      # needs-env `uv sync`), but gating on the input alone keeps this a
+      # one-second no-op on the other legs rather than duplicating the series
+      # condition. --global writes ~/.gitconfig, so it applies to the clone uv
+      # performs inside the action.
+      - name: "Authenticate private atlanhq git dependencies"
+        if: inputs.private-git-deps
+        shell: bash
+        env:
+          GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
 
       - name: "Run ${{ matrix.series }}-series checks"
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
