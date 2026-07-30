@@ -216,6 +216,71 @@ def test_removal_branch_falls_back_to_run_date(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# open_removal_pr — PR authorship identity
+#
+# The removal PR must be AUTHORED by atlan-app-fleet[bot], not by atlan-ci:
+# atlan-ci's approval is what satisfies both the `main` ruleset's code-owner
+# review and the Authorized Approver Check on `.security/`, and GitHub forbids
+# approving your own PR. But only `gh pr create` may use the App token — the
+# Actions reads that feed the debounce window stay on the atlan-ci PAT, since the
+# App installation may not carry actions: read and those calls degrade silently.
+# ---------------------------------------------------------------------------
+
+
+def _run_open_removal_pr(monkeypatch, tmp_path, **env):
+    """Drive open_removal_pr with a recording runner; return the recorded calls."""
+    monkeypatch.chdir(tmp_path)
+    allowlist = tmp_path / rec.ALLOWLIST_PATH
+    allowlist.parent.mkdir(parents=True, exist_ok=True)
+    allowlist.write_text('{"CVE-1": "x", "CVE-2": "y"}')
+    for key in ("PR_AUTHOR_TOKEN", "GH_TOKEN"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    calls = []
+
+    def runner(cmd, check=False, capture_output=False, text=False, env=None):
+        calls.append((cmd, env))
+        return None
+
+    rec.open_removal_pr("o/r", ["CVE-1"], "2026-07-16", 1, runner)
+    return calls
+
+
+def _pr_create_call(calls):
+    return next(c for c in calls if c[0][:3] == ["gh", "pr", "create"])
+
+
+def test_open_removal_pr_creates_pr_as_fleet_app(monkeypatch, tmp_path):
+    calls = _run_open_removal_pr(
+        monkeypatch, tmp_path, GH_TOKEN="ci-pat", PR_AUTHOR_TOKEN="fleet-token"
+    )
+    _cmd, env = _pr_create_call(calls)
+    assert env["GH_TOKEN"] == "fleet-token"
+    # GITHUB_TOKEN must not linger and out-rank GH_TOKEN for gh.
+    assert "GITHUB_TOKEN" not in env
+
+
+def test_open_removal_pr_leaves_git_push_on_the_ci_pat(monkeypatch, tmp_path):
+    # Only `gh pr create` gets the App token; everything else inherits the
+    # process environment (env=None), keeping actions: read on the atlan-ci PAT.
+    calls = _run_open_removal_pr(
+        monkeypatch, tmp_path, GH_TOKEN="ci-pat", PR_AUTHOR_TOKEN="fleet-token"
+    )
+    for cmd, env in calls:
+        if cmd[:3] != ["gh", "pr", "create"]:
+            assert env is None, f"{cmd} should not be re-scoped to the App token"
+
+
+def test_open_removal_pr_falls_back_to_gh_token_when_unset(monkeypatch, tmp_path):
+    # Local runs / older callers with no PR_AUTHOR_TOKEN still work.
+    calls = _run_open_removal_pr(monkeypatch, tmp_path, GH_TOKEN="ci-pat")
+    _cmd, env = _pr_create_call(calls)
+    assert env["GH_TOKEN"] == "ci-pat"
+
+
+# ---------------------------------------------------------------------------
 # scan_files_present + main() fail-safe — never reconcile against a phantom
 # empty scan. On `release: released` the release workflow scans fresh into the
 # CWD; if that scan produced nothing (failed/absent results), reconciling would

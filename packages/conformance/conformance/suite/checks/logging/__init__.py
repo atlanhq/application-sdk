@@ -56,7 +56,7 @@ from conformance.suite.schema.findings import Finding
 from ._checker import build_checker
 from ._constants import SERIES
 from ._crossfile import _collect_basicconfig_calls, _detect_factory
-from ._helpers import is_adapter_file
+from ._helpers import is_adapter_file, is_dev_harness
 from ._performance import WarnThenRaiseVisitor
 from ._toml import check_ruff_config
 
@@ -116,7 +116,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
     Pass 2a — L002: flag every file that obtains a logger via a non-SDK factory
     (``logging.getLogger``, ``structlog.get_logger``, direct loguru import)
-    instead of the canonical SDK adapter.
+    instead of the canonical SDK adapter.  Block-tier (CNCT-108); dev harnesses
+    (``scripts/``, ``run_dev*.py``) are exempt — they never run inside a
+    workflow, so the correlation-ID/provenance argument does not apply.
 
     Pass 2b — L016: flag 2nd+ non-main basicConfig() calls.
 
@@ -173,9 +175,10 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         # L016 — collect basicConfig calls from this file
         basicconfig_calls.extend(_collect_basicconfig_calls(tree, rel_str, directives))
 
-    # Pass 2a — L002 NonCanonicalLoggerFactory
+    # Pass 2a — L002 NonCanonicalLoggerFactory (block tier, CNCT-108)
     # Emit a finding for every file that uses a non-SDK logger factory.
-    # Adapter/definition files are exempt (they implement the factory itself).
+    # Adapter/definition files are exempt (they implement the factory itself);
+    # dev harnesses (scripts/, run_dev*.py) are exempt — never workflow code.
     _FACTORY_LABEL = {
         "stdlib": "stdlib logging.getLogger()",
         "structlog": "structlog.get_logger()",
@@ -185,6 +188,8 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         if factory == "sdk_adapter":
             continue
         if adapter_by_file.get(rel_str, False):
+            continue
+        if is_dev_harness(rel_str):
             continue
         label = _FACTORY_LABEL.get(factory, factory)
         fake_node = ast.Module(body=[], type_ignores=[])

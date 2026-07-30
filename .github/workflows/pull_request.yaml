@@ -252,13 +252,13 @@ jobs:
         run: |
           echo "image=registry.atlan.com/public/app-runtime-base:pr-${PR_NUMBER}-sha-${HEAD_SHA::7}" >> "$GITHUB_OUTPUT"
       - name: Log in to Atlan Harbor Registry
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: registry.atlan.com
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_PASSWORD }}
       - name: Log in to Chainguard Container Registry
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: cgr.dev
           username: ${{ secrets.CHAINGUARD_USERNAME }}

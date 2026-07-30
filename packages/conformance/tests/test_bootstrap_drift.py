@@ -253,6 +253,55 @@ def test_build_and_publish_custom_unit_tests_workflow_not_flagged(
     assert findings == []
 
 
+def test_checks_custom_system_deps_not_flagged(tmp_path: pathlib.Path) -> None:
+    """A repo that used --system-deps must not be flagged: the only
+    "fix" for a C002 finding here is re-running bootstrap, which would delete
+    the build-header step its pre-commit job needs."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "checks.yml"
+    wf.write_text(render("checks.yml", system_deps="libkrb5-dev gcc python3-dev"))
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_checks_system_deps_structural_drift_flagged(tmp_path: pathlib.Path) -> None:
+    """Only the package list is per-repo — other edits to the step are drift."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "checks.yml"
+    canonical = render("checks.yml", system_deps="libkrb5-dev")
+    wf.write_text(
+        canonical.replace("    timeout-minutes: 10", "    timeout-minutes: 5")
+    )
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert "drifted" in findings[0].message
+
+
+def test_checks_hand_written_system_deps_step_flagged_then_fixed_by_bootstrap(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A pre-flag hand-added step is drift (its shape isn't canonical), and the
+    prescribed fix — re-run bootstrap — now preserves the packages instead of
+    deleting them, so the finding clears without breaking the job."""
+    _bootstrap(tmp_path)
+    wf = tmp_path / ".github" / "workflows" / "checks.yml"
+    wf.write_text(
+        wf.read_text().replace(
+            "      - uses: atlanhq/application-sdk",
+            "      - name: Install system dependencies for pykerberos\n"
+            "        run: |\n"
+            "          sudo apt-get update\n"
+            "          sudo apt-get install -y libkrb5-dev gcc python3-dev\n"
+            "      - uses: atlanhq/application-sdk",
+        )
+    )
+    assert len(scan_path(wf, tmp_path)) == 1
+    _bootstrap(tmp_path)
+    assert scan_path(wf, tmp_path) == []
+    assert "libkrb5-dev gcc python3-dev" in wf.read_text()
+
+
 # ---------------------------------------------------------------------------
 # Parameterised files: structural drift beyond the value → finding
 # ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import vuln_auto_merge_gate as gate
 
-TRUSTED = {"atlan-ci", "mothership-ai[bot]"}
+TRUSTED = {"atlan-ci", "atlan-app-fleet[bot]", "mothership-ai[bot]"}
 LABEL = "vuln-auto-merge"
 
 
@@ -183,13 +183,49 @@ def test_process_pr_approves_and_merges_rover_pr():
 
 
 def test_process_pr_self_authored_skips_approval():
-    # Reconcile removal PR authored by atlan-ci (the approver) → NO self-approval
-    # (would 422); bypass-merge only.
+    # Legacy shape: removal PR authored by atlan-ci (the approver) → NO
+    # self-approval (would 422). Auto-merge is still armed, but without an
+    # approval the PR cannot enter the merge queue — a human must approve.
     r = _FakeRunner(_meta(author="atlan-ci"), [".security/base-allowlist.json"])
     acted = gate.process_pr("o/r", "5", "abc", LABEL, TRUSTED, APPROVER, r)
     assert acted is False
     assert r.reviews == []  # never self-approve
-    assert len(r.merges) == 1  # but still auto-merge (bypass actor)
+    assert len(r.merges) == 1
+
+
+def test_process_pr_approves_fleet_app_authored_removal_pr():
+    # Regression: the reconcile removal PR is authored by atlan-app-fleet[bot]
+    # precisely so atlan-ci CAN approve it. Author != approver, so the normal
+    # approve + queue path must run — this is what stops these PRs stalling at
+    # REVIEW_REQUIRED and needing a human click.
+    r = _FakeRunner(
+        _meta(author="atlan-app-fleet[bot]"), [".security/base-allowlist.json"]
+    )
+    acted = gate.process_pr("o/r", "5", "abc", LABEL, TRUSTED, APPROVER, r)
+    assert acted is True
+    assert len(r.reviews) == 1
+    assert len(r.merges) == 1
+
+
+def test_fleet_app_bot_is_a_default_trusted_author():
+    # The workflow relies on the shipped default, not on the test's TRUSTED set.
+    assert "atlan-app-fleet[bot]" in gate.DEFAULT_AUTHORS.split(",")
+
+
+def test_enable_automerge_passes_no_merge_method_flag():
+    # Regression: `main` has a merge queue, which owns the merge strategy. Passing
+    # --squash makes gh refuse ("The merge strategy for main is set by the merge
+    # queue") and auto-merge is silently never enabled, so nothing ever queues.
+    calls = []
+
+    def runner(cmd, check=False, capture_output=False, text=False):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    gate.enable_automerge("o/r", "5", runner)
+    assert calls == [["gh", "pr", "merge", "5", "--repo", "o/r", "--auto"]]
+    for flag in ("--squash", "--merge", "--rebase"):
+        assert flag not in calls[0]
 
 
 def test_process_pr_skips_when_files_unsafe():
