@@ -417,6 +417,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
+          # The commit of THIS reusable workflow file, so the script is always
+          # the one this logic was written against. Without it checkout defaults
+          # to the SDK's default branch, and a branch under review would run
+          # main's scripts — or, for a newly added script, none at all.
+          ref: ${{ github.job_workflow_sha }}
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
@@ -562,6 +567,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
+          # The commit of THIS reusable workflow file, so the script is always
+          # the one this logic was written against. Without it checkout defaults
+          # to the SDK's default branch, and a branch under review would run
+          # main's scripts — or, for a newly added script, none at all.
+          ref: ${{ github.job_workflow_sha }}
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
