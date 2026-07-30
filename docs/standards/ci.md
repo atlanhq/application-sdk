@@ -51,6 +51,45 @@ it up automatically. To make this gate *blocking*, add it to branch protection
 behind an always-concluding gate (see `sdk-gate.yaml`), since a path-filtered
 required check otherwise sits pending forever when its paths are untouched.
 
+## Mask secrets before writing them to `$GITHUB_ENV`
+
+**Rule:** if a step derives secret values from something else — unpacking a
+composed blob, decoding a bundle, reading a credentials file — it must register
+each derived value with `::add-mask::` *before* the value reaches `$GITHUB_ENV`,
+`$GITHUB_OUTPUT`, or a file a later step prints.
+
+**Why:** the runner's log masker replaces occurrences of each *registered
+string*. It does not match substrings of one. Registering a composed blob
+(`toJSON(...)` of several secrets, say) therefore redacts the blob and nothing
+inside it, so the first later step that renders its `env:` group prints each
+extracted value in cleartext. `secrets: inherit` does not help: inheritance
+controls which secrets a job can read, not which strings the masker knows.
+
+**The stdout constraint:** `::add-mask::` is a workflow command the runner reads
+from the step's **stdout**. A script whose stdout is redirected into
+`$GITHUB_ENV` cannot emit mask commands on that stream — they would be written
+into the env file as garbage. Do not fall back to stderr; workflow commands on
+stderr are not a documented guarantee. Split the two outputs into two modes and
+call the masking one first, so a failure aborts the step under `bash -e` before
+anything is written:
+
+```yaml
+- name: Export caller-supplied credentials
+  run: |
+    python3 .github/scripts/<driver>.py --json "$PAYLOAD" --mask-only
+    python3 .github/scripts/<driver>.py --json "$PAYLOAD" >> "$GITHUB_ENV"
+```
+
+Mask every scalar, not the ones that look sensitive — the caller decides what
+goes into the payload, so a driver that guesses will guess wrong. Skip empty and
+whitespace-only values (the runner refuses those with a warning). Multi-line
+values need each line registered as well as the whole value: the masker is
+handed log output a line at a time, so a registration spanning newlines matches
+nothing. Never put a value in an error message.
+
+`export_extra_env.py` and `test_export_extra_env.py` are the worked example,
+including a static check that every call site masks before it writes.
+
 ## Reusing scripts from a reusable workflow
 
 A `uses:` reusable workflow does **not** bring its own repo's files into the
