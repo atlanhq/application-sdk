@@ -354,6 +354,12 @@ runs:
     # hook (which may compose config from them), the app server and pytest.
     # Straight-line call into a tested script per docs/standards/ci.md; the
     # heredoc form it emits is what makes multi-line values survive $GITHUB_ENV.
+    #
+    # No live caller yet: tests-reusable.yaml exports the same payload inline
+    # because it pins this action @main, so `extra-env` is invisible to it until
+    # this merges. The relative script path below is asserted by
+    # test_composite_action_invokes_this_script_at_a_real_path; collapsing the
+    # duplication is tracked in that test's TODO(follow-up).
     - name: Export caller-supplied env
       if: inputs.extra-env != ''
       shell: bash

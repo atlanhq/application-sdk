@@ -28,8 +28,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import uuid
+
+# A whitelist, not a blacklist of hostile characters. The runner splits a
+# ``$GITHUB_ENV`` heredoc header on the FIRST ``<<``, so a name containing
+# ``<<`` would leave it hunting for a delimiter the closing line never matches
+# ("Invalid value. Matching delimiter not found"). Enumerating characters to
+# reject keeps missing cases like that one, so only POSIX-shaped names pass.
+# Matched with ``fullmatch``: an anchored ``$`` would still admit a trailing
+# newline.
+_VALID_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class ExtraEnvError(ValueError):
@@ -65,10 +75,10 @@ def render(payload: str) -> str:
     for name, value in parsed.items():
         if not name or not isinstance(name, str):
             raise ExtraEnvError(f"extra-env keys must be non-empty strings: {name!r}")
-        if any(ch in name for ch in "\r\n= "):
+        if not _VALID_NAME.fullmatch(name):
             raise ExtraEnvError(
-                f"extra-env key {name!r} contains whitespace or '=' — not a "
-                "valid environment variable name."
+                f"extra-env key {name!r} is not a valid environment variable "
+                "name (expected ^[A-Za-z_][A-Za-z0-9_]*$)."
             )
         if value is None:
             # A caller referencing an unset secret gets an empty string from

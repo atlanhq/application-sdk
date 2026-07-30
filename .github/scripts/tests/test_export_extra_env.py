@@ -92,12 +92,76 @@ def test_non_object_json_is_rejected():
         render('["E2E_HOST"]')
 
 
-@pytest.mark.parametrize("bad", ["", "A B", "A=B", "A\nB"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "A B",
+        "A=B",
+        "A\nB",
+        # The runner splits the heredoc header on the FIRST `<<`, so a name
+        # carrying its own `<<` makes it look for the wrong delimiter and the
+        # step dies with "Matching delimiter not found".
+        "A<<X",
+        "A<B",
+        # `$` in an anchored regex still matches before a trailing newline, so
+        # this shape is the one a `.match()` whitelist would wrongly admit.
+        "A\n",
+        "A\r",
+        # Not POSIX-shaped: a leading digit or a hyphen is not a valid name.
+        "1ABC",
+        "A-B",
+    ],
+)
 def test_invalid_names_are_rejected(bad: str):
     with pytest.raises(ExtraEnvError):
         render('{%s: "v"}' % __import__("json").dumps(bad))
 
 
+@pytest.mark.parametrize(
+    "good", ["A", "_A", "E2E_HOST", "_", "A1", "SNOWFLAKE_E2E_USER"]
+)
+def test_posix_shaped_names_are_accepted(good: str):
+    assert _parse(render('{%s: "v"}' % __import__("json").dumps(good))) == {good: "v"}
+
+
 def test_structured_values_are_rejected():
     with pytest.raises(ExtraEnvError, match="must be a scalar"):
         render('{"A": {"nested": 1}}')
+
+
+# ── Composite-action wiring ──────────────────────────────────────────────────
+# Both composites invoke this script through a path relative to
+# `github.action_path`. tests-reusable.yaml currently exports the same payload
+# inline instead of passing `extra-env` (every action it calls is pinned @main,
+# so a new input is invisible until this merges), which leaves the composites'
+# own wiring with no live CI caller. Assert it here so the relative path and the
+# input declaration are covered by *something*, and so moving either the script
+# or an action directory fails loudly.
+#
+# TODO(follow-up): once these actions can be pinned past this merge, collapse
+# the duplication — drop the inline sparse-checkout + export steps from
+# tests-reusable.yaml and pass `extra-env: ${{ secrets.E2E_SOURCE_ENV_JSON }}`
+# to each composite instead.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@pytest.mark.parametrize("action", ["connector-integration-tests", "sdr-e2e"])
+def test_composite_action_invokes_this_script_at_a_real_path(action: str):
+    action_dir = _REPO_ROOT / ".github" / "actions" / action
+    action_yaml = (action_dir / "action.yaml").read_text()
+
+    assert re.search(
+        r"^  extra-env:", action_yaml, re.M
+    ), f"{action}/action.yaml no longer declares the extra-env input"
+
+    match = re.search(
+        r"\$\{\{ github\.action_path \}\}/(\S+?export_extra_env\.py)", action_yaml
+    )
+    assert match, f"{action}/action.yaml no longer invokes export_extra_env.py"
+
+    resolved = (action_dir / match.group(1)).resolve()
+    assert (
+        resolved == _MODULE_PATH
+    ), f"{action} resolves export_extra_env.py to {resolved}, not {_MODULE_PATH}"
+    assert resolved.is_file()
