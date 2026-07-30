@@ -1392,6 +1392,12 @@ for entity in rows or []:
 If upgrading an app whose lock resolved SDK <3.20.0, run `/migrate-off-daft`
 first — it owns the daft-removal breakage taxonomy.
 
+On SDK 3.20.0-3.25.0 the DuckDB transform also cannot execute at all when the
+lock resolves `duckdb<1.5.0` (`AttributeError: DuckDBPyConnection ... has no
+attribute 'to_arrow_table'`, fixed by application-sdk#2940). Pin
+`duckdb>=1.5.0,<1.6.0` directly until the app is on a release carrying the
+fix — see `/migrate-off-daft` class 3b.
+
 ### Output paths computed internally
 
 Do not pass `output_path` or `output_prefix` via the run() Input contract. Compute them inside `run()` and pass to tasks:
