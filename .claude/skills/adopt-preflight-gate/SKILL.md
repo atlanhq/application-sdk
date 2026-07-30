@@ -32,7 +32,7 @@ optional_triggers:
   - "will this app break on SDK bump"
   - "size the preflight budget"
 owner: connector-platform-team
-last_updated: "2026-07-27"
+last_updated: "2026-07-30"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"

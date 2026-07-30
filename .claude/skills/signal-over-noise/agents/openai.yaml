@@ -1,0 +1,7 @@
+interface:
+  display_name: "Signal Over Noise"
+  short_description: "Audit Python errors and logging quality"
+  default_prompt: "Use $signal-over-noise to audit this Python codebase for swallowed failures and noisy logging."
+
+policy:
+  allow_implicit_invocation: true

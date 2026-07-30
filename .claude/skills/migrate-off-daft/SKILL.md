@@ -14,7 +14,8 @@ description: >
   prepare_template_and_attributes), DuckDB engine without its extra, the
   SDK's own arrow-conversion call that only works on duckdb >=1.5.0 (broken
   on every release 3.20.0-3.25.0), literal-vs-column precedence flip,
-  first-record schema inference, test coupling — plus the heavy-user classes: python-object UDF columns with no
+  first-record schema inference, test coupling — plus the heavy-user
+  classes: python-object UDF columns with no
   DuckDB equivalent, daft.sql caller-frame binding vs explicit register,
   daft-planner-specific type coercions, daft-safety concurrency
   architecture to retire deliberately, and live-daft golden oracles that

@@ -62,6 +62,8 @@ def duckdb_within_declared_range(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_transform_metadata_uses_only_range_safe_duckdb_api(
     duckdb_within_declared_range: None,
+    postgres_transformer: QueryBasedTransformer,
+    transform_args: dict[str, Any],
 ) -> None:
     resource = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "resources/raw/database.json"
@@ -69,15 +71,8 @@ def test_transform_metadata_uses_only_range_safe_duckdb_api(
     with open(resource, "r") as raw:
         records = [json.loads(line) for line in raw if line.strip()]
 
-    result = QueryBasedTransformer(
-        connector_name="postgres", tenant_id="default"
-    ).transform_metadata(
-        "DATABASE",
-        pa.Table.from_pylist(records),
-        "79a40801-07c2-4852-86c4-9703bda3a840",
-        "019667f9-31e9-77b0-b7c0-b901bd30d140",
-        connection_qualified_name="default/postgres/1745501106",
-        connection_name="dev",
+    result = postgres_transformer.transform_metadata(
+        "DATABASE", pa.Table.from_pylist(records), **transform_args
     )
 
     assert result is not None
