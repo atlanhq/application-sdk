@@ -256,13 +256,10 @@ on:
           a secret at all (the `secrets` context is not available in that
           block).
 
-          Build it in the caller's `secrets:` mapping with toJSON() per value,
-          which is where the `secrets` context IS available:
-
-              secrets:
-                E2E_SOURCE_ENV_JSON: |
-                  {"E2E_DB_HOST": ${{ toJSON(secrets.E2E_DB_HOST) }},
-                   "E2E_DB_KEY":  ${{ toJSON(secrets.E2E_DB_KEY) }}}
+          Build it in the caller's `secrets:` mapping, wrapping each value in
+          toJSON(...) — that mapping is where the `secrets` context IS available.
+          One JSON object, one line per credential, values written as
+          toJSON(secrets.NAME) expressions.
 
           JSON rather than KEY=VALUE lines because a key-pair PEM or
           service-account key is multi-line. Connectors with a hermetic
@@ -284,6 +281,15 @@ on:
         description: |
           Org PAT used for the GHCR push, the connector image build's private
           git dependency, and the private-git-deps token rewrite.
+      FLEET_APP_ID:
+        required: false
+        description: |
+          GitHub App id used by the cross-repo callback job to mint a token for
+          the dispatching application-sdk repo. Only the SDK-dispatch path uses
+          it; connector-triggered runs leave it unset.
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: Private key paired with FLEET_APP_ID.
 
 jobs:
 
