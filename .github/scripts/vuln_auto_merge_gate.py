@@ -10,7 +10,8 @@ labelled ``vuln-auto-merge``:
                        ``uv.lock``, ``requirements.txt``
 
 A PR is approved (as ``atlan-ci``, satisfying code-owner review) and put on
-GitHub auto-merge (``gh pr merge --auto --squash``) iff ALL hold:
+GitHub auto-merge (``gh pr merge --auto`` — no method flag; the merge queue on
+``main`` owns the merge strategy) iff ALL hold:
 
   1. author is one of the trusted rover identities,
   2. PR is open and not a draft,
@@ -57,16 +58,23 @@ BUMP_FILES = {"pyproject.toml", "uv.lock", "requirements.txt"}
 
 APPROVAL_SIGNATURE = "**Vuln auto-merge:**"
 DEFAULT_LABEL = "vuln-auto-merge"
-# Trusted PR authors:
-#   - mothership-ai[bot] — the rover's allowlist + bump PRs. NOT a code owner, so
-#     these need an atlan-ci approval to satisfy require_code_owner_review.
-#   - atlan-ci — the reconcile removal PR (opened via ORG_PAT_GITHUB). atlan-ci is
-#     a main-ruleset BYPASS actor, so it needs NO approval — and GitHub forbids a
-#     PR author approving their own PR, so we must NOT try to self-approve it.
-DEFAULT_AUTHORS = "atlan-ci,mothership-ai[bot]"
-# The login the gate's GH_TOKEN (ORG_PAT_GITHUB) acts as. A PR authored by this
-# identity is bypass-merged without an approval (self-approval is rejected by
-# GitHub).
+# Trusted PR authors. None of them is a code owner, so each needs an atlan-ci
+# approval to satisfy require_code_owner_review (and, for `.security/` PRs, the
+# Authorized Approver Check — atlan-ci is listed in .security/approvers.json):
+#   - mothership-ai[bot]    — the rover's allowlist + bump PRs.
+#   - atlan-app-fleet[bot]  — the reconcile removal PR (vuln-reconcile-on-release.yml).
+#   - atlan-ci              — LEGACY. The reconcile PR used to be opened via
+#     ORG_PAT_GITHUB on the theory that atlan-ci, being a `main`-ruleset bypass
+#     actor, needed no approval at all. That theory is wrong: bypass lets atlan-ci
+#     merge directly, but it does NOT satisfy required_approving_review_count for
+#     GitHub auto-merge or for merge-queue entry — so those PRs stalled at
+#     REVIEW_REQUIRED until a human clicked approve. Reconcile now authors as the
+#     fleet App instead. Kept trusted only so any in-flight atlan-ci branch is
+#     still handled; such a PR cannot be self-approved and so cannot be queued
+#     hands-off — it needs a human approval. New PRs should never use it.
+DEFAULT_AUTHORS = "atlan-ci,atlan-app-fleet[bot],mothership-ai[bot]"
+# The login the gate's GH_TOKEN (ORG_PAT_GITHUB) acts as. GitHub rejects
+# self-approval, so a PR authored by this identity is skipped for approval.
 DEFAULT_APPROVER = "atlan-ci"
 
 Runner = Callable[..., subprocess.CompletedProcess]
@@ -195,7 +203,8 @@ def approve(repo: str, pr: str, shape: str, runner: Runner) -> None:
     body = (
         f"{APPROVAL_SIGNATURE} {shape} PR from the vuln-triage rover.\n\n"
         "Automated code-owner approval by `atlan-ci`. The PR is on GitHub "
-        "auto-merge and will squash-merge only once all required checks pass. "
+        "auto-merge and enters the `main` merge queue only once all required "
+        "checks pass; the queue sets the merge strategy. "
         "Dismissed on any new push (`dismiss_stale_reviews_on_push`)."
     )
     runner(
@@ -205,8 +214,16 @@ def approve(repo: str, pr: str, shape: str, runner: Runner) -> None:
 
 
 def enable_automerge(repo: str, pr: str, runner: Runner, *, check: bool = True) -> None:
+    """Enable GitHub auto-merge, which queues the PR once its gates are satisfied.
+
+    Deliberately passes NO merge-method flag. `main` has a merge queue, and the
+    queue owns the merge strategy — passing `--squash` makes gh refuse with
+    "The merge strategy for main is set by the merge queue", which is exactly how
+    this silently stopped queueing anything (the PR got approved, then sat with
+    autoMergeRequest: null and never merged).
+    """
     runner(
-        ["gh", "pr", "merge", pr, "--repo", repo, "--auto", "--squash"],
+        ["gh", "pr", "merge", pr, "--repo", repo, "--auto"],
         check=check,
     )
 
@@ -266,10 +283,15 @@ def process_pr(
         return False
 
     # A PR authored by the approver identity (atlan-ci) cannot be self-approved
-    # (GitHub 422). atlan-ci is a main-ruleset bypass actor, so just enable
-    # auto-merge — no approval needed.
+    # (GitHub 422), so the best we can do is arm auto-merge and let a human supply
+    # the approval. Bypass-actor status does NOT substitute for that approval —
+    # auto-merge and merge-queue entry still require it. New reconcile PRs are
+    # authored by atlan-app-fleet[bot] precisely so this branch is not taken.
     if author == approver_login:
-        print(f"PR #{pr}: authored by {author} (bypass actor) — enabling auto-merge.")
+        print(
+            f"PR #{pr}: authored by the approver identity {author} — cannot "
+            "self-approve; auto-merge armed but a human approval is still needed."
+        )
         enable_automerge(repo, pr, runner, check=False)
         return False
 
