@@ -32,10 +32,10 @@ azure-core==1.41.0
     # via azure-identity
 azure-identity==1.25.3
     # via atlan-application-sdk
-boto3==1.43.59
+boto3==1.43.60
     # via atlan-application-sdk
 boto3-stubs==1.43.59
-botocore==1.43.59
+botocore==1.43.60
     # via
     #   boto3
     #   s3transfer
@@ -431,7 +431,7 @@ uvloop==0.22.1 ; sys_platform != 'win32'
     # via
     #   atlan-application-sdk
     #   uvicorn
-virtualenv==21.7.0
+virtualenv==21.7.1
     # via pre-commit
 watchfiles==1.2.0
     # via uvicorn
