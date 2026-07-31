@@ -92,6 +92,21 @@ def get_metric_labels() -> dict[str, str]:
         # attribute to the right app (e.g. powerbi-crawler), matching the log
         # app_name. Falls back to the process-wide env default when the workflow
         # input carried none (older apps) — backward compatible.
+        #
+        # Deliberate app_name split across telemetry surfaces (documented here the
+        # way build_otel_resource() documents its own):
+        #   - PER-ENTRYPOINT (read ExecutionContext.app_name, this function):
+        #     logs and custom metrics emitted via record_metric() — the only
+        #     caller of get_metric_labels(). These match each other.
+        #   - CONNECTOR-LEVEL (stay APPLICATION_NAME, intentionally NOT routed
+        #     through here): the SDK's Temporal lifecycle metrics (workflow /
+        #     activity duration & errors in interceptors/metrics.py, enriched at
+        #     the resource level), lifecycle events (contracts/events.py), and the
+        #     OTel Resource app.name (build_otel_resource — a per-process resource
+        #     that cannot vary per execution). Lifecycle metrics stay
+        #     connector-level for continuity of existing dashboards/alerts keyed
+        #     on the connector name; per-entrypoint breakdown is available on the
+        #     log app_name and on custom metrics.
         "app_name": ctx.app_name or APPLICATION_NAME,
         "workflow_type": ctx.workflow_type,
         "activity_type": ctx.activity_type,

@@ -2500,6 +2500,12 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
       // CNCT-93: stamp the node's own app_name into args so the SDK reads it
       // per-entrypoint and logs it (instead of the connector-level
       // ATLAN_APPLICATION_NAME env). Each bundle node -> its own value.
+      // Deliberately UNGUARDED (unlike the containsKey-guarded feature-flag
+      // siblings below): app_name is identity — it MUST equal the node's own
+      // app_name, which the UI / heracles query logs by and which drives the
+      // task_queue — so node.appName is authoritative and intentionally
+      // overrides any author-set args["app_name"], preventing telemetry
+      // misattribution from a stale value. See contract-toolkit/docs/reference.md.
       ["app_name"] = node.appName
       when (!nodeArgs.toMap().containsKey("tag_pipeline_enabled") && tagPipelineValue != null) {
         ["tag_pipeline_enabled"] = tagPipelineValue
@@ -2510,7 +2516,9 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
     }
   else new Mapping {
     ...node.args
-    // CNCT-93: per-entrypoint app_name into args (see above).
+    // CNCT-93: per-entrypoint app_name into args (see above). node.appName is
+    // authoritative and intentionally overrides any author-set args["app_name"];
+    // deliberately unguarded — app_name is identity, not a feature flag.
     ["app_name"] = node.appName
   }
 

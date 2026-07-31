@@ -11,6 +11,7 @@ from temporalio.exceptions import ApplicationError
 
 from application_sdk.errors.leaves import AuthError, InvalidInputError
 from application_sdk.execution._temporal.interceptors.log import (
+    _APP_NAME_MAX_CHARS,
     _HEADER_APP_NAME,
     LogInterceptor,
     _correlation_id_or_empty,
@@ -989,6 +990,62 @@ class TestAppNameResolution:
         injected = outbound._inject({})
         assert _HEADER_APP_NAME not in injected
 
+    async def test_sets_app_name_on_replay(self, interceptor):
+        # app_name resolution sits in the must-run-on-every-replay block (like
+        # correlation_id / parent identity); a worker picking up an in-flight
+        # workflow must still stamp the per-entrypoint app_name, not revert to
+        # the connector-level env default.
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = True
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(
+                MockExecuteWorkflowInput(
+                    headers={}, args=[{"app_name": "powerbi-crawler"}]
+                )
+            )
+        assert interceptor._app_name == "powerbi-crawler"
+        assert get_execution_context().app_name == "powerbi-crawler"
+
+    async def test_resolve_app_name_swallows_exception(self, interceptor):
+        # A non-AttributeError raised while probing args[0] must be swallowed
+        # (returns "" → env fallback), never propagated — mirrors the sibling
+        # _resolve_correlation_id forced-failure guarantee.
+        class RaisingInput:
+            @property
+            def app_name(self):
+                raise RuntimeError("boom")
+
+        await self._run(
+            interceptor,
+            MockExecuteWorkflowInput(headers={}, args=[RaisingInput()]),
+        )
+        assert interceptor._app_name == ""
+        assert get_execution_context().app_name == ""
+
+    async def test_non_str_app_name_rejected(self, interceptor):
+        # A non-string args["app_name"] (e.g. a run id / int / dict) must NOT be
+        # str()-coerced into a Prometheus label — it is rejected → "" → env
+        # fallback, keeping app_name inside its low-cardinality contract.
+        await self._run(
+            interceptor,
+            MockExecuteWorkflowInput(headers={}, args=[{"app_name": 12345}]),
+        )
+        assert interceptor._app_name == ""
+        assert get_execution_context().app_name == ""
+
+    async def test_oversized_app_name_truncated(self, interceptor):
+        # An over-long value is capped at the SDK boundary (_APP_NAME_MAX_CHARS)
+        # before it can reach a metric label.
+        await self._run(
+            interceptor,
+            MockExecuteWorkflowInput(headers={}, args=[{"app_name": "x" * 200}]),
+        )
+        assert interceptor._app_name == "x" * _APP_NAME_MAX_CHARS
+        assert len(interceptor._app_name) == 64
+
 
 # ---------------------------------------------------------------------------
 # TestLogActivityInboundInterceptor
@@ -1036,6 +1093,18 @@ class TestLogActivityInboundInterceptor:
                 MockExecuteActivityInput(headers={"x-correlation-id": payload})
             )
         assert get_correlation_context().correlation_id == "corr-1"
+        assert get_execution_context().app_name == ""
+
+    async def test_app_name_header_decode_swallows_exception(self, interceptor):
+        # A malformed x-app-name header payload must not blow up the activity;
+        # the decode failure is swallowed and app_name stays "" (env fallback).
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.activity"
+        ) as mock_act:
+            mock_act.info.return_value = MockActivityInfo()
+            await interceptor.execute_activity(
+                MockExecuteActivityInput(headers={_HEADER_APP_NAME: object()})
+            )
         assert get_execution_context().app_name == ""
 
     async def test_emits_activity_started_log(self, interceptor):

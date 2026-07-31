@@ -1,0 +1,51 @@
+/// NativeApp contract with a generic (non-publish, non-extract) node and
+/// `flatManifestArgs = false`, so `native_app_appname_test.pkl` can assert that
+/// the CNCT-93 `app_name` stamp rides in `inputs.args` on the renderNodeArgs
+/// GENERIC branch too (not only the extract path), and in the NESTED manifest
+/// shape (not only the default flat one). A QueryIntelligenceNode is a DAGNode
+/// (not a PublishNode), so it renders through renderNodeArgs' else branch.
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Connectors.pkl"
+import "../../src/Config.pkl"
+
+name = "native-nested-generic"
+connector = Connectors.POSTGRES
+icon = "https://assets.atlan.com/assets/postgres.svg"
+workflowType = "PostgresWorkflow"
+
+// Nested manifest shape — exercises the flatManifestArgs=false path.
+flatManifestArgs = false
+
+extraNodes {
+  ["qi"] = new QueryIntelligenceNode {
+    vendorName = "athena"
+    sqlKey = "QUERY_TEXT"
+  }
+}
+
+credentialCommonFields {
+  new FieldSpec { name = "host"; displayName = "Host"; width = 6 }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec { name = "username"; displayName = "Username"; width = 4 }
+      new FieldSpec { name = "password"; sensitive = true; displayName = "Password"; width = 4 }
+    }
+  }
+}
+
+uiConfig = new Config.UIConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["credential-guid"] = new Config.CredentialInput {
+          credType = "atlan-connectors-native-nested-generic"
+        }
+      }
+    }
+  }
+}

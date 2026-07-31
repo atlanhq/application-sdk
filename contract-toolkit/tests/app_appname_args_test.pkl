@@ -1,0 +1,45 @@
+// CNCT-93 regression guards for the App.pkl (v0.10.0+) template: every DAG node
+// must carry its own `app_name` inside `inputs.args`, where the SDK log
+// interceptor reads it per-entrypoint (over the connector-level
+// ATLAN_APPLICATION_NAME env) so a multi-entrypoint bundle's logs attribute to
+// the right app. Covers all three renderNodeArgs paths through a single
+// generated manifest: the extract node (generateExtractNode), a PublishNode
+// (the `if` branch), and generic nodes — QueryIntelligenceNode / PopularityNode
+// (the `else` branch). Without these the App.pkl suite would stay green if any
+// branch silently stopped stamping app_name.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "fixtures/popularity_default.pkl" as appFixture
+
+local dag =
+  let (text = appFixture.output.files["app/generated/manifest.json"].text)
+    new json.Parser { useMapping = true }.parse(text)["dag"]
+
+facts {
+  // Extract node (generateExtractNode) — baked from the contract `name`.
+  ["extract node args carry app_name"] {
+    dag["extract"]["inputs"]["args"]["app_name"] == dag["extract"]["app_name"]
+    dag["extract"]["inputs"]["args"]["app_name"] == "popularity-node"
+  }
+
+  // PublishNode → renderNodeArgs `if` (publish) branch.
+  ["publish node args carry app_name (publish branch)"] {
+    dag["publish"]["inputs"]["args"]["app_name"] == "publish"
+    dag["publish"]["inputs"]["args"]["app_name"] == dag["publish"]["app_name"]
+  }
+
+  // QueryIntelligenceNode → renderNodeArgs `else` (generic) branch.
+  ["query-intelligence node args carry app_name (generic branch)"] {
+    dag["qi"]["inputs"]["args"]["app_name"] == "query-intelligence"
+    dag["qi"]["inputs"]["args"]["app_name"] == dag["qi"]["app_name"]
+  }
+
+  // PopularityNode → renderNodeArgs `else` (generic) branch — a second generic
+  // node type, so the guard is not tied to one class.
+  ["popularity node args carry app_name (generic branch)"] {
+    dag["popularity"]["inputs"]["args"]["app_name"] == "popularity"
+    dag["popularity"]["inputs"]["args"]["app_name"] == dag["popularity"]["app_name"]
+  }
+}

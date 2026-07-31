@@ -509,6 +509,24 @@ To enable, set `notifications = true`. To retarget the alert (different
 `appName`/`taskQueue`/args), define `extraNodes["notifications"]`. See
 `tests/notifications_test.pkl` and `examples/full/app.pkl`.
 
+### Per-node `app_name` in `inputs.args` (CNCT-93)
+
+Every generated DAG node carries its own `app_name` inside `inputs.args`, equal
+to that node's `app_name` (`node.appName`, or the contract `name` for the extract
+node). The SDK reads it from the workflow input at runtime and stamps it on every
+log line, so a multi-entrypoint bundle attributes telemetry to the right
+entrypoint (e.g. `powerbi-crawler` / `powerbi-miner`) instead of the connector-level
+`ATLAN_APPLICATION_NAME`. This is the value the UI / heracles query a node's logs
+by, and it also drives the node's `task_queue`.
+
+Because `app_name` is **identity**, `node.appName` is **authoritative**: the stamp
+is deliberately *unguarded* and overrides any author-set `args["app_name"]`. This
+differs on purpose from the `containsKey`-guarded feature-flag keys
+(`tag_pipeline_enabled`, `tag_attachments_prefix`), where an author's own value
+wins — a stale author-set `app_name` would misattribute a node's logs and point
+its log query at the wrong identity, so the node-derived value is enforced. Apps
+should not set `app_name` in `args`; it is derived from the node.
+
 ---
 
 ## Legacy: NativeApp.pkl — Base Module (pre-v0.10.0)

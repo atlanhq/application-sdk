@@ -40,6 +40,7 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.context import (
     correlation_context,
+    get_execution_context,
     is_replaying,
     request_context,
 )
@@ -246,14 +247,9 @@ def _context_app_name() -> str:
     ``powerbi-crawler`` vs the connector-level ``powerbi``). Returns ``""`` when
     unset (no workflow context, or an older app whose input carries no
     ``app_name``), so callers fall back to the env value and prior behaviour is
-    preserved. Lazy import mirrors the existing ``get_execution_context`` use in
-    ``observability.utils`` (avoids an import cycle).
+    preserved.
     """
     try:
-        from application_sdk.observability.context import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
-            get_execution_context,
-        )
-
         ctx = get_execution_context()
         return ctx.app_name if ctx and ctx.app_name else ""
     except Exception:

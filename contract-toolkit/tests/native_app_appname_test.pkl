@@ -17,15 +17,24 @@ amends "pkl:test"
 import "pkl:json"
 import "../src/NativeApp.pkl" as NativeApp
 import "fixtures/native_app_pipeline.pkl" as nativeApp
+import "fixtures/native_app_nested_generic.pkl" as nativeAppNested
 
 // The generated AE-manifest extract node for a NativeApp contract. `app_name`
 // must be baked from the contract `name` — the SDK stopped substituting a
 // runtime `{app_name}` placeholder (#2271), so a literal placeholder here
 // freezes into the DAG and strips failure attribution in Pulse (HYP-1954).
-local extractNode =
+local dag =
   let (text = nativeApp.output.files["manifest.json"].text)
-  let (manifest = new json.Parser { useMapping = true }.parse(text))
-    manifest["dag"]["extract"]
+    new json.Parser { useMapping = true }.parse(text)["dag"]
+local extractNode = dag["extract"]
+// Publish node from the same manifest — renderNodeArgs' PublishNode (if) branch.
+local publishManifestNode = dag["publish"]
+
+// A second contract with flatManifestArgs=false and a generic (QI) node, so we
+// exercise renderNodeArgs' GENERIC (else) branch AND the nested manifest shape.
+local nestedDag =
+  let (text = nativeAppNested.output.files["manifest.json"].text)
+    new json.Parser { useMapping = true }.parse(text)["dag"]
 
 local qiNode = new NativeApp.QueryIntelligenceNode {
   vendorName = "athena"
@@ -87,5 +96,27 @@ facts {
   // both the flat and nested manifest shapes carry it.
   ["extract node args carry app_name for the SDK log interceptor"] {
     extractNode["inputs"]["args"]["app_name"] == "native-app-pipeline"
+  }
+
+  // CNCT-93: renderNodeArgs stamps app_name for every non-extract node too, on
+  // BOTH branches. Without these facts the suite would stay green if publish /
+  // generic nodes silently stopped emitting app_name (the exact silent-drift
+  // this PR closes). PublishNode → the `if` (publish) branch:
+  ["publish node args carry app_name (renderNodeArgs publish branch)"] {
+    publishManifestNode["inputs"]["args"]["app_name"] == "publish"
+    publishManifestNode["inputs"]["args"]["app_name"] == publishManifestNode["app_name"]
+  }
+
+  // A generic (QueryIntelligenceNode) node → the `else` branch. Sourced from a
+  // flatManifestArgs=false contract, so this also proves the NESTED manifest
+  // shape carries app_name (closing the prose-only "both shapes" claim above).
+  ["generic node args carry app_name (renderNodeArgs generic branch, nested shape)"] {
+    nestedDag["qi"]["inputs"]["args"]["app_name"] == "query-intelligence"
+    nestedDag["qi"]["inputs"]["args"]["app_name"] == nestedDag["qi"]["app_name"]
+  }
+
+  // Nested shape (flatManifestArgs=false) extract node still carries app_name.
+  ["extract node args carry app_name in the nested manifest shape"] {
+    nestedDag["extract"]["inputs"]["args"]["app_name"] == "native-nested-generic"
   }
 }

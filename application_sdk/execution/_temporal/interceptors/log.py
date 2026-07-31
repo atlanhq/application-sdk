@@ -72,6 +72,12 @@ _MAX_CHAIN_WALK = 50
 # text still ships in exception.message / the traceback in exception.stacktrace.
 _FAILURE_MSG_MAX_CHARS = 200
 
+# Cap on the resolved app_name (CNCT-93). app_name reaches a Prometheus label
+# whose low-cardinality guarantee used to be structural (a per-process env
+# constant); now it is per-run data read from args[0], so bound it at the SDK
+# boundary — reject non-strings, cap length — rather than trusting every caller.
+_APP_NAME_MAX_CHARS = 64
+
 
 def _lifecycle_message(event: str, subject: str) -> str:
     """Build a lifecycle log message body (CNCT-105).
@@ -417,6 +423,11 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         Mirrors the args branch of :meth:`_resolve_correlation_id` — handles a
         dict first arg, a typed object with an ``app_name`` attribute, and a
         Pydantic v2 ``extra='allow'`` model where it lands in ``__pydantic_extra__``.
+
+        The value is bounded at this boundary — only a non-empty ``str`` is
+        accepted and it is capped at ``_APP_NAME_MAX_CHARS`` — because it flows
+        into a low-cardinality Prometheus label; a non-string or oversized value
+        is rejected (returns ``""`` → env fallback) rather than coerced.
         """
         try:
             if input.args:
@@ -429,8 +440,8 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                         extras = getattr(first, "__pydantic_extra__", None)
                         if isinstance(extras, dict):
                             val = extras.get("app_name")
-                if val:
-                    return str(val)
+                if isinstance(val, str) and val:
+                    return val[:_APP_NAME_MAX_CHARS]
         except Exception:
             logger.warning("Failed to read app_name from workflow args", exc_info=True)
         return ""
@@ -596,7 +607,12 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
             payload = input.headers.get(_HEADER_APP_NAME)
             if payload is not None:
                 converter = default_converter().payload_converter
-                app_name = converter.from_payload(payload, type_hint=str) or ""
+                decoded = converter.from_payload(payload, type_hint=str)
+                # Bound the header value the same way the workflow bounds it
+                # before it reaches a Prometheus label — reject non-strings,
+                # cap length — rather than trusting the wire payload.
+                if isinstance(decoded, str) and decoded:
+                    app_name = decoded[:_APP_NAME_MAX_CHARS]
         except Exception:
             logger.warning("Failed to read app_name header in activity", exc_info=True)
 
