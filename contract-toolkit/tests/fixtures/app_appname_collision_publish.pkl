@@ -1,0 +1,63 @@
+/// App.pkl (v0.10.0+) contract whose `extraNodes` collide with the CNCT-93
+/// `app_name` stamp on the **publish** `renderNodeArgs` branch only.
+///
+/// `app_appname_args_test.pkl` uses this to assert the guard's actual job — that
+/// a node whose `args` already set `app_name` (a) does not crash generation with
+/// a Pkl `Duplicate definition of member` error and (b) keeps the author's value.
+/// The presence-only facts against `popularity_default.pkl` cannot see either:
+/// they stay green with the guard deleted, because no node there collides.
+///
+/// The generic-branch collision lives in a SEPARATE fixture
+/// (`app_appname_collision_generic.pkl`) on purpose. A duplicate-key error aborts
+/// the whole module eval, so if both collisions shared one fixture, removing
+/// either guard would redden the same fact and the two would be
+/// indistinguishable. Split, each guard reddens only its own fixture's facts.
+///
+/// Deliberately contains NO generic (non-publish) node, so removing the generic
+/// branch's guard leaves this fixture green.
+amends "../../src/App.pkl"
+
+import "../../src/Connectors.pkl"
+
+name = "appname-collision-publish"
+displayName = "App Name Collision (publish branch)"
+connector = Connectors.SNOWFLAKE
+icon = "https://assets.atlan.com/assets/snowflake.svg"
+hasCredentialConfig = false
+
+pipeline {
+  // Suppress the auto-generated publish node so the PublishNodes below are the
+  // only ones on that branch.
+  publish = null
+}
+
+extraNodes {
+  // PublishNode + author-set args.app_name → renderNodeArgs `if` branch guard.
+  ["author_publish"] = new PublishNode {
+    args {
+      ["app_name"] = "author-publish"
+      ["marker"] = "publish-branch"
+    }
+  }
+
+  // PublishNode with NO author app_name → same branch, control: the node's own
+  // appName ("publish") must still be stamped. Distinguishes "guard respected
+  // the author" from "guard stopped stamping entirely".
+  ["stamped_publish"] = new PublishNode {
+    args {
+      ["marker"] = "publish-branch-control"
+    }
+  }
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Connection"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}

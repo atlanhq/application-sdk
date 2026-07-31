@@ -154,9 +154,22 @@ with `notifications = true`.
 
 A run-level **notification node** (`notifications`) is appended when `notifications = true`. It depends on the reserved run-level `workflow_complete` tag — Automation Engine runs it once when the workflow run reaches any terminal state (success or failure) — and dispatches the `notification-app`, which fans alerts out to the tenant's enabled integrations (Teams, etc.) and decides delivery per integration (`failureOnly`: failure-only vs. all runs). By default the node is not emitted.
 
+Every DAG node also carries its own `app_name` inside `inputs.args` — the value the
+SDK stamps on that node's logs (CNCT-93; metric labels stay connector-level).
+**`app_name` is framework-owned:**
+set it at contract time via `name` or `DAGNode.appName`, never as a form field. A
+`uiConfig` property named `app_name` (or `app-name`) is a **generation error**, because
+the extract node bakes the contract `name` so failure logs stay attributable — a
+tenant-typed value would render a widget that reaches nothing. See
+[`docs/reference.md`](docs/reference.md) → *Per-node `app_name` in `inputs.args`*.
+
 ### `_input.py` (`app/generated/_input.py`)
 
 Typed Python `AppInputContract` dataclass. SDK-owned fields inherited from `ExtractionInput`; app-specific fields generated from `uiConfig.properties`. Inherited `include_filter` and `exclude_filter` fields accept APITree object selections by normalizing them to the SDK filter-map shape before validation.
+
+Framework-populated fields (`workflow_id`, `correlation_id`, `app_name`) are declared by
+the SDK's base `Input` and are never regenerated from a `uiConfig` property — redeclaring
+one would shadow the base field with the author's type and fail only at workflow dispatch.
 
 ## Modules
 

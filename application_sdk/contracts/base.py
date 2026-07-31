@@ -219,7 +219,20 @@ class Input(BaseModel):
     correlation_id: str = ""
     """Caller-supplied correlation ID for tracing across systems."""
 
-    _config_hash_exclude: ClassVar[set[str]] = {"workflow_id", "correlation_id"}
+    app_name: str = ""
+    """Per-entrypoint app name stamped into node args by the contract toolkit
+    (CNCT-93). Resolved from args at workflow start by the log interceptor and
+    kept as a typed field so it survives continue-as-new (model_dump preserves
+    it) and does not trip the unknown-key drift validator below. Empty when the
+    manifest carries none (older / not-yet-regenerated apps) → the logger falls
+    back to ATLAN_APPLICATION_NAME (metric labels are always connector-level;
+    see observability/utils.get_metric_labels)."""
+
+    _config_hash_exclude: ClassVar[set[str]] = {
+        "workflow_id",
+        "correlation_id",
+        "app_name",
+    }
     """Fields to exclude from config_hash(). Extend in subclasses to add
     volatile/per-run fields that shouldn't affect checkpoint identity.
     config_hash() unions this set across the full MRO, so subclass entries

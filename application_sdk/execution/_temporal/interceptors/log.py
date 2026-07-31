@@ -72,6 +72,14 @@ _MAX_CHAIN_WALK = 50
 # text still ships in exception.message / the traceback in exception.stacktrace.
 _FAILURE_MSG_MAX_CHARS = 200
 
+# Cap on the resolved app_name (CNCT-93). app_name used to be a per-process env
+# constant; now it is per-run data read from args[0] — an untrusted boundary
+# (anything with Temporal access can start a workflow) — and it is stamped on
+# every log line and OTLP log attribute. Bound it here — reject non-strings,
+# cap length — rather than trusting every caller. (Metric labels are NOT fed
+# from this value; get_metric_labels() stays on the env constant by design.)
+_APP_NAME_MAX_CHARS = 64
+
 
 def _lifecycle_message(event: str, subject: str) -> str:
     """Build a lifecycle log message body (CNCT-105).
@@ -208,6 +216,12 @@ _HEADER_CORRELATION_ID_LEGACY = "correlation_id"
 _HEADER_PARENT_WORKFLOW_ID = "atlan-parent-workflow-id"
 _HEADER_PARENT_RUN_ID = "atlan-parent-run-id"
 
+# Per-entrypoint app_name (CNCT-93), propagated workflow -> activity so activity
+# logs carry the same app_name the workflow resolved from its own input args.
+# Child workflows do NOT read this header (each resolves its own app_name from
+# its own input), so there is no parent -> child inheritance.
+_HEADER_APP_NAME = "x-app-name"
+
 
 def _correlation_id_or_empty() -> str:
     ctx = get_correlation_context()
@@ -239,8 +253,14 @@ class _LogWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
         correlation_id = self._inbound._correlation_id
         parent_workflow_id = self._inbound._parent_workflow_id
         parent_run_id = self._inbound._parent_run_id
+        app_name = self._inbound._app_name
 
-        if not correlation_id and not parent_workflow_id and not parent_run_id:
+        if (
+            not correlation_id
+            and not parent_workflow_id
+            and not parent_run_id
+            and not app_name
+        ):
             return dict(headers)
         try:
             converter = default_converter().payload_converter
@@ -249,6 +269,11 @@ class _LogWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
                 new_headers[_HEADER_CORRELATION_ID] = converter.to_payload(
                     correlation_id
                 )
+            # Propagate the workflow's resolved app_name so its activities'
+            # logs carry it. A child workflow will receive this header too but
+            # ignores it (it resolves app_name from its own input args).
+            if app_name:
+                new_headers[_HEADER_APP_NAME] = converter.to_payload(app_name)
             if parent_workflow_id:
                 new_headers[_HEADER_PARENT_WORKFLOW_ID] = converter.to_payload(
                     parent_workflow_id
@@ -284,6 +309,10 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         # interceptor instance per workflow run).
         self._parent_workflow_id: str = ""
         self._parent_run_id: str = ""
+        # CNCT-93: the workflow's own app_name, resolved from its input args.
+        # The outbound interceptor injects it into activity headers so activity
+        # logs inherit it. Per-workflow-execution.
+        self._app_name: str = ""
 
     def init(self, outbound: WorkflowOutboundInterceptor) -> None:
         super().init(_LogWorkflowOutboundInterceptor(outbound, self))
@@ -382,6 +411,55 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         # Defensive last resort — should be unreachable inside a workflow.
         return str(uuid4())
 
+    def _resolve_app_name(self, input: ExecuteWorkflowInput) -> str:
+        """Resolve this workflow's ``app_name`` from its own input args (CNCT-93).
+
+        The contract toolkit emits each DAG node's ``app_name`` into that node's
+        ``inputs.args``, so a multi-entrypoint bundle's crawler / miner / publish
+        each carry their own value. We read it **only from the workflow's own
+        first argument** — never from the memo or an inherited header — so there
+        is no parent -> child inheritance (each entrypoint is its own workflow
+        with its own input). Returns ``""`` when absent (older / not-yet-
+        regenerated apps); the logger then falls back to ``ATLAN_APPLICATION_NAME``.
+
+        Mirrors the args branch of :meth:`_resolve_correlation_id` — handles a
+        dict first arg, a typed object with an ``app_name`` attribute, and a
+        Pydantic v2 ``extra='allow'`` model where it lands in ``__pydantic_extra__``.
+
+        The value is bounded at this boundary because it comes from an
+        untrusted source (whatever started the workflow) and is stamped on
+        every log line and OTLP log attribute. The two cases differ:
+
+        * A non-string (or empty) value is **rejected** — returns ``""``, so the
+          logger falls back to ``ATLAN_APPLICATION_NAME``. It is never coerced
+          via ``str()``, which would stamp an arbitrary object's repr (e.g. a
+          memory address) as the attribution value.
+        * An oversized string is **truncated** to ``_APP_NAME_MAX_CHARS``, not
+          rejected: a too-long name is still the right attribution, just
+          abbreviated.
+
+        Truncation is lossy, so two entrypoints sharing a 64-character prefix
+        would collapse onto one attribution value. Harmless for today's short
+        slugs (``powerbi-crawler``, ``powerbi-miner``), and the bound is worth
+        more than the collision costs — but that is the tradeoff the cap makes.
+        """
+        try:
+            if input.args:
+                first = input.args[0]
+                if isinstance(first, dict):
+                    val = first.get("app_name")
+                else:
+                    val = getattr(first, "app_name", None)
+                    if not val:
+                        extras = getattr(first, "__pydantic_extra__", None)
+                        if isinstance(extras, dict):
+                            val = extras.get("app_name")
+                if isinstance(val, str) and val:
+                    return val[:_APP_NAME_MAX_CHARS]
+        except Exception:
+            logger.warning("Failed to read app_name from workflow args", exc_info=True)
+        return ""
+
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
         # State setup (ContextVars + interceptor-instance attrs) must run on
         # every replay, not just the first execution: the outbound interceptor
@@ -399,6 +477,14 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         self._parent_workflow_id = (parent.workflow_id if parent else "") or ""
         self._parent_run_id = (parent.run_id if parent else "") or ""
 
+        # CNCT-93: resolve the per-entrypoint app_name from this workflow's own
+        # input args (empty when absent) BEFORE building the ExecutionContext, so
+        # it rides on that single shared context read by the logger. Cached on
+        # the instance too, for the outbound interceptor to propagate to
+        # activities via the x-app-name header.
+        app_name = self._resolve_app_name(input)
+        self._app_name = app_name
+
         set_execution_context(
             ExecutionContext(
                 execution_type="workflow",
@@ -410,6 +496,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 attempt=info.attempt or 0,
                 parent_workflow_id=self._parent_workflow_id,
                 parent_run_id=self._parent_run_id,
+                app_name=app_name,
             )
         )
 
@@ -522,6 +609,29 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                 "Failed to read parent identity headers in activity", exc_info=True
             )
 
+        # CNCT-93: inherit the parent workflow's app_name (activity.Info exposes
+        # no app_name of its own) via the x-app-name header the workflow's
+        # outbound interceptor injected, so activity.started/ended and @task
+        # app-code logs stamp the same per-entrypoint app_name the workflow
+        # resolved. (All metric surfaces — get_metric_labels() and the Temporal
+        # lifecycle temporal_* families — stay connector-level by design; only
+        # logs carry the per-entrypoint value.) Read BEFORE building the
+        # ExecutionContext so it rides on that shared context. Absent -> the
+        # logger falls back to ATLAN_APPLICATION_NAME.
+        app_name = ""
+        try:
+            payload = input.headers.get(_HEADER_APP_NAME)
+            if payload is not None:
+                converter = default_converter().payload_converter
+                decoded = converter.from_payload(payload, type_hint=str)
+                # Bound the header value the same way the workflow bounds it
+                # before it reaches the log fields — reject non-strings, cap
+                # length — rather than trusting the wire payload.
+                if isinstance(decoded, str) and decoded:
+                    app_name = decoded[:_APP_NAME_MAX_CHARS]
+        except Exception:
+            logger.warning("Failed to read app_name header in activity", exc_info=True)
+
         set_execution_context(
             ExecutionContext(
                 execution_type="activity",
@@ -533,6 +643,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                 attempt=info.attempt or 0,
                 parent_workflow_id=parent_workflow_id,
                 parent_run_id=parent_run_id,
+                app_name=app_name,
             )
         )
 
