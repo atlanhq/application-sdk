@@ -119,4 +119,13 @@ facts {
   ["extract node args carry app_name in the nested manifest shape"] {
     nestedDag["extract"]["inputs"]["args"]["app_name"] == "native-nested-generic"
   }
+
+  // CNCT-93 collision guard: when a node's args ALREADY set app_name, the stamp
+  // must be guarded so (a) generation does not crash with a Pkl duplicate-key
+  // error and (b) the author's value wins over node.appName. That the entire
+  // manifest above parsed at all already proves (a); this asserts (b).
+  ["author-set args.app_name is respected, not clobbered or crashed"] {
+    nestedDag["author_app"]["inputs"]["args"]["app_name"] == "author-chosen"
+    nestedDag["author_app"]["app_name"] == "custom-worker"
+  }
 }

@@ -22,6 +22,20 @@ extraNodes {
     vendorName = "athena"
     sqlKey = "QUERY_TEXT"
   }
+  // CNCT-93 collision case: a raw node whose args ALREADY set app_name. The
+  // renderNodeArgs guard must (a) NOT crash generation with a duplicate-key
+  // error and (b) let the author's value win. If generation crashed, the whole
+  // manifest — and every fact in the suite — would fail to parse.
+  ["author_app"] = new DAGNode {
+    displayName = "Author sets app_name"
+    workflowType = "CustomWorkflow"
+    appName = "custom-worker"
+    taskQueue = "atlan-custom-worker-{deployment_name}"
+    args = new Mapping {
+      ["app_name"] = "author-chosen"
+      ["foo"] = "bar"
+    }
+  }
 }
 
 credentialCommonFields {

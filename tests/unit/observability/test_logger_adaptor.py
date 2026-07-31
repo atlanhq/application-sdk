@@ -2345,6 +2345,24 @@ class TestInterceptHandlerStdlibBridge:
 
         assert bind_kwargs["app_name"] == APPLICATION_NAME
 
+    def test_stdlib_emit_prefers_context_app_name_over_env(self) -> None:
+        """CNCT-93: when a workflow has resolved a per-entrypoint ``app_name``
+        onto the ExecutionContext, the stdlib bridge must stamp THAT (not the
+        connector-level env) — otherwise third-party/library logs (the majority
+        of volume, and the BLDX-1297 path) misattribute to the connector for a
+        bundle entrypoint. The env-fallback half is covered above."""
+        from application_sdk.observability.context import _execution_ctx
+
+        # Token-based reset restores the ContextVar to its exact prior state so
+        # this app_name never leaks into later (hypothesis-generated) tests.
+        token = _execution_ctx.set(ExecutionContext(app_name="powerbi-crawler"))
+        try:
+            bind_kwargs = self._emit()
+
+            assert bind_kwargs["app_name"] == "powerbi-crawler"
+        finally:
+            _execution_ctx.reset(token)
+
     def test_stdlib_emit_injects_deployment_name(self) -> None:
         """Stdlib bridge must inject ``deployment_name`` so SDR / multi-deploy
         logs are attributable to a specific deployment instance in central LH

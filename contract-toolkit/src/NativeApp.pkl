@@ -849,6 +849,14 @@ open class DAGNode {
 
   displayName: String
   workflowType: String
+  /// Telemetry identity for this node. Stamped into the node's `inputs.args.app_name`
+  /// (CNCT-93), which the SDK logs and the tenant UI / heracles query logs by.
+  /// IMPORTANT: `appName` and `taskQueue` must agree. If you set `taskQueue` to run
+  /// this node on a specific worker (e.g. the connector's own worker), you MUST set
+  /// `appName` to match that worker's app — leaving it at the default
+  /// `"automation-engine"` will make the node's logs/metrics misattribute to AE
+  /// even though it runs elsewhere. When `taskQueue` is unset it is derived from
+  /// `appName` (`atlan-<appName>-{deployment_name}`), so the two stay consistent.
   appName: String = "automation-engine"
   taskQueue: String?
   args: Mapping<String, Any>
@@ -2726,14 +2734,14 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
       ...nodeArgs
       // CNCT-93: stamp the node's own app_name into args so the SDK reads it
       // per-entrypoint and logs it (instead of the connector-level
-      // ATLAN_APPLICATION_NAME env). Each bundle node -> its own value.
-      // Deliberately UNGUARDED (unlike the containsKey-guarded feature-flag
-      // siblings below): app_name is identity — it MUST equal the node's own
-      // app_name, which the UI / heracles query logs by and which drives the
-      // task_queue — so node.appName is authoritative and intentionally
-      // overrides any author-set args["app_name"], preventing telemetry
-      // misattribution from a stale value. See contract-toolkit/docs/reference.md.
-      ["app_name"] = node.appName
+      // ATLAN_APPLICATION_NAME env). Each node -> its own value.
+      // Guarded like the feature-flag siblings below: if the author already set
+      // args["app_name"] on this node it is respected (wins), and the guard also
+      // prevents a hard Pkl "Duplicate definition of member" crash on that
+      // collision. See contract-toolkit/docs/reference.md.
+      when (!nodeArgs.toMap().containsKey("app_name")) {
+        ["app_name"] = node.appName
+      }
       when (!nodeArgs.toMap().containsKey("tag_pipeline_enabled") && tagPipelineValue != null) {
         ["tag_pipeline_enabled"] = tagPipelineValue
       }
@@ -2743,10 +2751,12 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
     }
   else new Mapping {
     ...node.args
-    // CNCT-93: per-entrypoint app_name into args (see above). node.appName is
-    // authoritative and intentionally overrides any author-set args["app_name"];
-    // deliberately unguarded — app_name is identity, not a feature flag.
-    ["app_name"] = node.appName
+    // CNCT-93: per-entrypoint app_name into args (see above). Guarded so an
+    // author-set args["app_name"] is respected and generation never crashes on a
+    // duplicate key; otherwise the node's own app_name is stamped.
+    when (!node.args.toMap().containsKey("app_name")) {
+      ["app_name"] = node.appName
+    }
   }
 
 local function generateExtractNode(): Mapping<String, Any> =
@@ -2768,9 +2778,10 @@ local function generateExtractNode(): Mapping<String, Any> =
       ["argo_workflow_slug"] = ""
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
       ["args"] = new Mapping {
-        // CNCT-93: per-entrypoint app_name into args so the SDK reads it and
-        // logs it (matches the node's `app_name` above; overrides the
-        // connector-level ATLAN_APPLICATION_NAME env at log time).
+        // CNCT-93: extract-node app_name is the contract identity (`name`, the
+        // same value baked at `app_name` above and into ATLAN_APPLICATION_NAME);
+        // a reserved key here, so the top-level-arg loop below skips any
+        // author arg also named `app_name` to avoid a duplicate-key crash.
         ["app_name"] = name
         ["credential"] = "{{credential}}"
         // SDR / agent-mode credential slot. Emitted whenever the app does not
@@ -2782,13 +2793,13 @@ local function generateExtractNode(): Mapping<String, Any> =
           ["agent_json"] = "{{agent-json}}"
         }
         for (argName, formField in manifestTopLevelArgs) {
-          when (uiConfig.properties.containsKey(formField) && uiConfig.properties[formField].includeInManifest) {
+          when (argName != "app_name" && uiConfig.properties.containsKey(formField) && uiConfig.properties[formField].includeInManifest) {
             [argName] = "{{" + formField + "}}"
           }
         }
         when (flatManifestArgs) {
           for (paramKey, param in uiConfig.properties) {
-            when (param.includeInManifest && !topLevelFormFields.contains(paramKey)) {
+            when (toPyName(paramKey) != "app_name" && param.includeInManifest && !topLevelFormFields.contains(paramKey)) {
               [toPyName(paramKey)] = "{{" + paramKey + "}}"
             }
           }

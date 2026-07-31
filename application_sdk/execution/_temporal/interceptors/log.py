@@ -598,10 +598,12 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
         # CNCT-93: inherit the parent workflow's app_name (activity.Info exposes
         # no app_name of its own) via the x-app-name header the workflow's
         # outbound interceptor injected, so activity.started/ended and @task
-        # app-code logs — plus metrics — stamp the same per-entrypoint app_name
-        # the workflow resolved. Read BEFORE building the ExecutionContext so it
-        # rides on that single shared context. Absent -> the logger/metrics fall
-        # back to ATLAN_APPLICATION_NAME.
+        # app-code logs — plus custom metrics via get_metric_labels() — stamp the
+        # same per-entrypoint app_name the workflow resolved. (Temporal lifecycle
+        # temporal_* metrics stay connector-level via the OTel Resource — the
+        # documented split.) Read BEFORE building the ExecutionContext so it rides
+        # on that shared context. Absent -> the logger/metrics fall back to
+        # ATLAN_APPLICATION_NAME.
         app_name = ""
         try:
             payload = input.headers.get(_HEADER_APP_NAME)

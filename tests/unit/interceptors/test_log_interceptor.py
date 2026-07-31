@@ -1008,6 +1008,11 @@ class TestAppNameResolution:
             )
         assert interceptor._app_name == "powerbi-crawler"
         assert get_execution_context().app_name == "powerbi-crawler"
+        # The resumed worker must still PROPAGATE it: a subsequent outbound inject
+        # must carry x-app-name, or activities started after replay would silently
+        # lose per-entrypoint attribution mid-run.
+        outbound = _LogWorkflowOutboundInterceptor(MagicMock(), interceptor)
+        assert _HEADER_APP_NAME in outbound._inject({})
 
     async def test_resolve_app_name_swallows_exception(self, interceptor):
         # A non-AttributeError raised while probing args[0] must be swallowed
