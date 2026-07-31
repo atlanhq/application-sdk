@@ -1,7 +1,8 @@
 # SDK Review — Orchestration Playbook
 
 Follow these phases EXACTLY. Do not skip phases. Do not reorder.
-Print `[Phase N complete]` after each phase.
+Print `[Phase N complete]` after each phase, followed by `bash /tmp/budget.sh`
+(see Time Budgets — the elapsed number is measured, never estimated).
 
 ## Time Budgets
 
@@ -26,6 +27,30 @@ If the sandbox has been running past the hard stop, finalize immediately
 with whatever findings you have. Post the review summary + commit
 status — never exit without posting to the PR.
 
+### Measuring the budget (MANDATORY — these numbers are not decorative)
+
+You cannot feel elapsed wall-clock time. Every budget rule below — the
+degradation priority in §2a, the "over 70% consumed" skip in §2b, and the
+hard stop above — is a condition you MUST measure, not estimate. Until
+this section existed there was no clock anywhere in this playbook, so
+those rules were unevaluable and never fired: a Small-tier PR (15 min
+hard stop) ran **62 minutes** because nothing told the agent it was over.
+
+Phase 0 stamps the start time and writes `/tmp/budget.sh`. Run it at
+**every phase boundary** and immediately before §2b:
+
+```bash
+bash /tmp/budget.sh
+# [budget] elapsed 8m 12s / hard stop 15m (54%) — OK
+# [budget] elapsed 11m 40s / hard stop 15m (77%) — OVER 70%: skip adversarial Wave 2
+# [budget] elapsed 16m 02s / hard stop 15m (106%) — OVER HARD STOP: finalize now
+```
+
+Act on what it prints. `OVER 70%` and `OVER HARD STOP` are instructions,
+not warnings. If `/tmp/budget.sh` is missing (a resumed session that
+skipped Phase 0), recreate it with the Phase 0 step 1b snippet before
+continuing — never proceed with an unmeasured budget.
+
 ---
 
 ## Phase 0: Orient (~30s)
@@ -46,6 +71,33 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    # Background: install deps so uv run pre-commit/pytest don't wait
    uv sync --all-extras 2>/dev/null &
    ```
+
+1b. **Start the budget clock** — do this before any other work, so the
+    elapsed number covers the whole run. Defaults to the Small hard stop;
+    step 12 raises it once the tier is known.
+
+Run this block **exactly as written, unindented**. The heredoc terminator
+must sit at column 0 or `cat` never closes it and the shell hangs waiting
+for input:
+
+```bash
+date +%s > /tmp/REVIEW_START_TS
+echo 900 > /tmp/REVIEW_HARD_STOP_S   # 15 min, Small tier default
+
+cat > /tmp/budget.sh <<'BUDGET'
+START=$(cat /tmp/REVIEW_START_TS 2>/dev/null || echo 0)
+CAP=$(cat /tmp/REVIEW_HARD_STOP_S 2>/dev/null || echo 900)
+[ "$START" -gt 0 ] || { echo "[budget] no start stamp — rerun Phase 0 step 1b"; exit 0; }
+E=$(( $(date +%s) - START ))
+PCT=$(( E * 100 / CAP ))
+if   [ "$PCT" -ge 100 ]; then VERDICT="OVER HARD STOP: finalize now"
+elif [ "$PCT" -ge 70 ];  then VERDICT="OVER 70%: skip adversarial Wave 2"
+else                          VERDICT="OK"
+fi
+printf '[budget] elapsed %dm %02ds / hard stop %dm (%d%%) — %s\n' \
+  "$((E/60))" "$((E%60))" "$((CAP/60))" "$PCT" "$VERDICT"
+BUDGET
+```
 
 2. **Auth setup** — `$GITHUB_TOKEN` is injected by mothership from its
    GitHub App installation (see snapshots/_base). Make `gh` use it:
@@ -322,12 +374,16 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
     Toolkit delta files additionally keep the Phase 1b-toolkit obligations
     (the carry-forward fast path there handles the unchanged-artifact case).
 
-12. Check diff size for tier:
-    - < 2000 lines → `review_tier = "full"`
-    - 2000-20000 → `review_tier = "partitioned"`
-    - > 20000 → `review_tier = "staged"`
+12. Check diff size for tier, and raise the budget cap to match it
+    (step 1b defaulted to the Small hard stop):
+    - < 2000 lines → `review_tier = "full"` → `echo 900 > /tmp/REVIEW_HARD_STOP_S`
+    - 2000-20000 → `review_tier = "partitioned"` → `echo 1500 > /tmp/REVIEW_HARD_STOP_S`
+    - > 20000 → `review_tier = "staged"` → `echo 2100 > /tmp/REVIEW_HARD_STOP_S`
+    On a delta-scoped re-review (step 11b), tier from `DELTA_LINES`, not the
+    full PR diff — the budget should match the work actually remaining.
 
-Print: `[Phase 0 complete] PR #<N>, scope=<scope>, tier=<tier>`
+Print: `[Phase 0 complete] PR #<N>, scope=<scope>, tier=<tier>` followed by
+`bash /tmp/budget.sh`
 
 ---
 
@@ -701,6 +757,7 @@ If despite all truncation the context STILL exceeds limits:
 **A truncated review is always better than a failed review.**
 
 Print: `[Phase 1 complete] <N> files assessed, tier=<tier>, <M> files truncated`
+then `bash /tmp/budget.sh` — act on its verdict before entering Phase 2.
 
 ---
 
@@ -757,10 +814,17 @@ For `toolkit-review.md`, also pass `contract-toolkit/AGENTS.md`,
 present. The toolkit agent must not include private consumer repo names, paths,
 or SHAs in public findings.
 
-**Degradation priority** (if running over time budget):
-1. Drop STRUCTURE agent first (holistic opinions, least urgent)
-2. Drop QUALITY agent second (code patterns, pre-commit catches most)
-3. CORRECTNESS is ALWAYS kept (catches guardrail violations G1-G5)
+**Degradation priority** — run `bash /tmp/budget.sh` BEFORE dispatching
+Wave 1 and drop agents by the measured percentage, not by feel:
+
+| Measured | Action |
+|---|---|
+| < 70% | Dispatch all agents for the scope |
+| ≥ 70% | Drop STRUCTURE (holistic opinions, least urgent) |
+| ≥ 85% | Also drop QUALITY (code patterns; pre-commit catches most) |
+| ≥ 100% | CORRECTNESS only, then go straight to Phase 3 |
+
+CORRECTNESS is ALWAYS kept — it carries guardrail coverage G1-G5.
 
 Parse JSON findings from each agent response.
 
@@ -773,7 +837,11 @@ After Wave 1, call GPT to challenge your findings.
 - `review_scope` is contract-toolkit and toolkit-review.md produced zero findings
 - `review_tier` is "staged" (massive PR — too much context for one GPT call)
 - Wave 1 produced zero findings (nothing to challenge)
-- Time budget already over 70% consumed
+- Time budget already over 70% consumed — run `bash /tmp/budget.sh` here
+  and skip whenever it prints `OVER 70%` or `OVER HARD STOP`. This is the
+  single most expensive optional step in the run (a full GPT-5.3-codex
+  call over the whole diff plus every Wave 1 finding), so it is the first
+  thing an over-budget run must give up.
 
 If not skipped:
 
@@ -976,6 +1044,7 @@ monotonicity, actionability) — they keep the write-side resolver's
 `### Findings`-empty loop terminating.
 
 Print: `[Phase 2 complete] <N> findings across <C> classes, verdict=<verdict>`
+then `bash /tmp/budget.sh`.
 
 ---
 
