@@ -218,3 +218,21 @@ categories:
         max_severity: MEDIUM
         description: "@dataclass on Input/Output subclass (should be plain Pydantic BaseModel)"
         override_allowed: true
+
+# Severity calibration + confidence floors — the single source (absorbed from
+# the deleted modes/standard.md; BLDX-1605). Do not restate these in agent
+# prompts or mode files.
+calibration:
+  severity_meanings:
+    BLOCKING: "Use pattern_id above when applicable; guardrail-class"
+    CRITICAL: "Use pattern_id above when applicable; guardrail-class"
+    HIGH: "Issues users will hit in common flows (inline comment REQUIRED)"
+    MEDIUM: "Issues users rarely hit (summary body only)"
+    LOW: "Defensive notes (summary body only)"
+    INFO: "Pattern observation (summary body only)"
+  confidence_floors:
+    BLOCKING: 0.85
+    CRITICAL: 0.85
+    HIGH: 0.80
+    MEDIUM: 0.55
+    LOW: 0.40

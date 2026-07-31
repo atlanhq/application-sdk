@@ -262,7 +262,9 @@ Flag:
 
 ### Pinned Dependencies
 
-- GitHub Actions must use SHA-pinned versions (`uses: actions/checkout@SHA`)
+- GitHub Actions SHA-pinning is CI-owned (BLOCK-tier conformance
+  `UnpinnedActionReference`; see `retro-log.md`) — do not re-flag the
+  mechanical match, only scoping/judgment residue.
 - Docker base images must use specific version tags (not `latest`)
 - Python dependencies should have upper bounds to prevent surprise upgrades
 
@@ -349,5 +351,6 @@ except Exception as e:
 
 - Dockerfile `FROM` must reference specific versions, not `latest`
 - `ghcr.io/atlanhq/application-sdk-main:3.0.0` — pinned
-- CI workflows must pin action versions to SHAs
+- Action SHA-pinning: CI-owned (see Pinned Dependencies above) — flag
+  only scoping/judgment residue
 - No `curl | bash` patterns for installing tools in Dockerfiles
