@@ -89,20 +89,23 @@ class TestSdrTimeoutsAndRetries:
 
         from application_sdk.execution._temporal import sdr
 
-        # Bumped defaults (env-tunable) — generous enough for a slow customer
-        # secret store. See the module-level comment.
-        assert sdr._AUTH_SCHEDULE_TO_CLOSE == timedelta(seconds=60)
-        assert sdr._PREFLIGHT_SCHEDULE_TO_CLOSE == timedelta(seconds=120)
-        assert sdr._METADATA_SCHEDULE_TO_CLOSE == timedelta(seconds=150)
+        # Flat 300s cap per activity (env-tunable) — generous enough for a slow
+        # customer secret store + source check. See the module-level comment.
+        assert sdr._AUTH_SCHEDULE_TO_CLOSE == timedelta(seconds=300)
+        assert sdr._PREFLIGHT_SCHEDULE_TO_CLOSE == timedelta(seconds=300)
+        assert sdr._METADATA_SCHEDULE_TO_CLOSE == timedelta(seconds=300)
+        assert sdr._AUTH_START_TO_CLOSE == timedelta(seconds=300)
+        assert sdr._PREFLIGHT_START_TO_CLOSE == timedelta(seconds=300)
+        assert sdr._METADATA_START_TO_CLOSE == timedelta(seconds=300)
 
-    def test_start_to_close_below_schedule_to_close(self) -> None:
+    def test_start_to_close_not_above_schedule_to_close(self) -> None:
         from application_sdk.execution._temporal import sdr
 
-        # Invariant: start_to_close < schedule_to_close in each pair so a retry
-        # attempt can fit inside the schedule cap.
-        assert sdr._AUTH_START_TO_CLOSE < sdr._AUTH_SCHEDULE_TO_CLOSE
-        assert sdr._PREFLIGHT_START_TO_CLOSE < sdr._PREFLIGHT_SCHEDULE_TO_CLOSE
-        assert sdr._METADATA_START_TO_CLOSE < sdr._METADATA_SCHEDULE_TO_CLOSE
+        # Invariant: start_to_close <= schedule_to_close in each pair (Temporal
+        # rejects a larger start_to_close). Equal is the deliberate flat cap.
+        assert sdr._AUTH_START_TO_CLOSE <= sdr._AUTH_SCHEDULE_TO_CLOSE
+        assert sdr._PREFLIGHT_START_TO_CLOSE <= sdr._PREFLIGHT_SCHEDULE_TO_CLOSE
+        assert sdr._METADATA_START_TO_CLOSE <= sdr._METADATA_SCHEDULE_TO_CLOSE
 
     def test_inverted_timeout_pair_warns_at_module_load(self, monkeypatch) -> None:
         import importlib
@@ -146,9 +149,10 @@ class TestSdrTimeoutsAndRetries:
 
             assert reloaded._PREFLIGHT_SCHEDULE_TO_CLOSE == timedelta(seconds=200)
             assert reloaded._PREFLIGHT_START_TO_CLOSE == timedelta(seconds=190)
-            assert reloaded._AUTH_SCHEDULE_TO_CLOSE == timedelta(seconds=60)
-            assert reloaded._METADATA_SCHEDULE_TO_CLOSE == timedelta(seconds=150)
-            assert reloaded._METADATA_START_TO_CLOSE == timedelta(seconds=140)
+            # bad/non-positive overrides fall back to the flat 300s default
+            assert reloaded._AUTH_SCHEDULE_TO_CLOSE == timedelta(seconds=300)
+            assert reloaded._METADATA_SCHEDULE_TO_CLOSE == timedelta(seconds=300)
+            assert reloaded._METADATA_START_TO_CLOSE == timedelta(seconds=300)
         finally:
             # Restore module-level defaults for the rest of the suite.
             monkeypatch.undo()

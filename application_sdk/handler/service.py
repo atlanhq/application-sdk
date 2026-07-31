@@ -924,10 +924,11 @@ def _sdr_worker_pickup_timeout() -> timedelta:
 def _sdr_job_timeout() -> timedelta:
     """Execution budget for the actual check once a worker has picked it up.
 
-    Env-tunable via ``SDR_JOB_EXECUTION_TIMEOUT_SECONDS`` (default 180s). Applies
-    only after pickup, so a slow-but-alive worker gets the full budget while an
+    Env-tunable via ``SDR_JOB_EXECUTION_TIMEOUT_SECONDS`` (default 300s, matching
+    the sdr:* activities' own start_to_close/schedule_to_close cap). Applies only
+    after pickup, so a slow-but-alive worker gets the full budget while an
     unresponsive one still fails fast at :func:`_sdr_worker_pickup_timeout`."""
-    return _env_timedelta("SDR_JOB_EXECUTION_TIMEOUT_SECONDS", 180)
+    return _env_timedelta("SDR_JOB_EXECUTION_TIMEOUT_SECONDS", 300)
 
 
 async def _sdr_workflow_started(handle: Any) -> bool:

@@ -135,9 +135,11 @@ def _env_seconds(name: str, default: int) -> int:
 # network. Each cap is env-tunable (ATLAN_SDR_{AUTH,PREFLIGHT,METADATA}_{SCHEDULE,
 # START}_TO_CLOSE_SECONDS — ATLAN_ prefixed per ADR-0009, matching the sibling
 # ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS) so a deployment fronting an especially slow
-# store can raise them without an SDK release. Invariant: start_to_close <
-# schedule_to_close in each pair, so at least one retry attempt fits inside the
-# schedule cap; an inverted override is warned about at module load (below).
+# store can raise them without an SDK release. Defaults are a flat 300s per
+# activity (schedule_to_close == start_to_close): a single generous attempt,
+# deliberately no in-schedule retry room. Invariant: start_to_close <=
+# schedule_to_close in each pair; only a truly *inverted* override
+# (start_to_close > schedule_to_close) is warned about at module load (below).
 # Computed once at module load; the LM proxy's own WorkflowExecutionTimeout
 # backstops sit just above these schedule_to_close values.
 #
@@ -147,30 +149,29 @@ def _env_seconds(name: str, default: int) -> int:
 # that interval and fail any real source check that runs longer than it —
 # start_to_close is the correct in-flight bound here.
 _AUTH_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", 60)
+    seconds=_env_seconds("ATLAN_SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", 300)
 )
 _PREFLIGHT_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_PREFLIGHT_SCHEDULE_TO_CLOSE_SECONDS", 120)
+    seconds=_env_seconds("ATLAN_SDR_PREFLIGHT_SCHEDULE_TO_CLOSE_SECONDS", 300)
 )
 _METADATA_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_METADATA_SCHEDULE_TO_CLOSE_SECONDS", 150)
+    seconds=_env_seconds("ATLAN_SDR_METADATA_SCHEDULE_TO_CLOSE_SECONDS", 300)
 )
 
 _AUTH_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_AUTH_START_TO_CLOSE_SECONDS", 55)
+    seconds=_env_seconds("ATLAN_SDR_AUTH_START_TO_CLOSE_SECONDS", 300)
 )
 _PREFLIGHT_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_PREFLIGHT_START_TO_CLOSE_SECONDS", 110)
+    seconds=_env_seconds("ATLAN_SDR_PREFLIGHT_START_TO_CLOSE_SECONDS", 300)
 )
 _METADATA_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_METADATA_START_TO_CLOSE_SECONDS", 140)
+    seconds=_env_seconds("ATLAN_SDR_METADATA_START_TO_CLOSE_SECONDS", 300)
 )
 
-# The start_to_close < schedule_to_close invariant holds for the defaults, but an
-# operator can override either half independently. Warn (don't raise) at module
-# load if any resolved pair is inverted: start_to_close >= schedule_to_close
-# leaves no room for a retry attempt inside the schedule cap, so a misconfig is
-# visible before the worker accepts work rather than surfacing as silent no-retry.
+# The default pairs are equal (flat 300s cap), but an operator can override
+# either half independently. Warn (don't raise) at module load only if a pair is
+# truly *inverted* — start_to_close > schedule_to_close — which Temporal rejects
+# at schedule time; equal pairs are a valid flat cap and stay silent.
 for _op, _env_label, _start, _schedule in (
     ("test_auth", "AUTH", _AUTH_START_TO_CLOSE, _AUTH_SCHEDULE_TO_CLOSE),
     (
@@ -186,10 +187,10 @@ for _op, _env_label, _start, _schedule in (
         _METADATA_SCHEDULE_TO_CLOSE,
     ),
 ):
-    if _start >= _schedule:
+    if _start > _schedule:
         logger.warning(
-            "SDR %s: start_to_close (%.0fs) >= schedule_to_close (%.0fs); the "
-            "schedule cap leaves no room for a retry attempt. Check the "
+            "SDR %s: start_to_close (%.0fs) > schedule_to_close (%.0fs); Temporal "
+            "rejects a start_to_close larger than schedule_to_close. Check the "
             "ATLAN_SDR_%s_{START,SCHEDULE}_TO_CLOSE_SECONDS overrides.",
             _op,
             _start.total_seconds(),
