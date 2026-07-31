@@ -2326,6 +2326,32 @@ local jdbcInvariant: Any =
       else null
   else null
 
+/// CNCT-93: `app_name` is framework-owned, and ownership is split by *when* the
+/// value is fixed. An author may set it at CONTRACT time — `DAGNode.appName`, or
+/// `args["app_name"]` on a hand-written node — and `renderNodeArgs` honors that.
+/// A TENANT-facing form field may not: `uiConfig` properties are substituted at
+/// dispatch from whatever the tenant typed, so the extract node keeps the
+/// contract `name` (log attribution depends on that match — HYP-1678).
+///
+/// Without this check the collision is silent and doubly wrong: the arg loops in
+/// `generateExtractNode` skip the property, so the rendered form widget reaches
+/// nothing; and codegen would shadow the base `Input.app_name` with the author's
+/// type, which only raises at workflow dispatch. Fail at generation instead.
+/// Mirrors App.pkl — the two modules must not drift on this rule.
+local reservedUiFieldNames: Set<String> = Set("app_name")
+
+local reservedUiFieldInvariant: Any =
+  let (offenders = uiConfig.properties.keys.toList()
+    .filter((k) -> reservedUiFieldNames.contains(toPyName(k))))
+  if (offenders.isEmpty) null
+  else throw("uiConfig property \(offenders.join(", ")) uses the reserved name "
+    + "`app_name`, which the contract toolkit owns (CNCT-93). A form field cannot "
+    + "supply it: the extract node bakes the contract `name` so failure logs stay "
+    + "attributable, so the field would render on the setup form and reach nothing. "
+    + "Rename the property (e.g. `source-app-name`). To change this app's telemetry "
+    + "identity set `name`, or `appName` on the specific node. "
+    + "See contract-toolkit/docs/reference.md → Per-node `app_name` in `inputs.args`.")
+
 /// Auto-derived: hide the auth-type radio when the connector has a single auth
 /// option, since presenting a one-item radio adds no value. Auto-calculation
 /// keeps this in sync as connectors add or remove auth options — no manual
@@ -2779,9 +2805,12 @@ local function generateExtractNode(): Mapping<String, Any> =
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
       ["args"] = new Mapping {
         // CNCT-93: extract-node app_name is the contract identity (`name`, the
-        // same value baked at `app_name` above and into ATLAN_APPLICATION_NAME);
-        // a reserved key here, so the top-level-arg loop below skips any
-        // author arg also named `app_name` to avoid a duplicate-key crash.
+        // same value baked at `app_name` above and into ATLAN_APPLICATION_NAME),
+        // and it is authoritative — a tenant-typed form value must not replace it
+        // or failure logs stop being attributable (HYP-1678). `app_name` is
+        // therefore a reserved uiConfig name: the loops below skip it to avoid a
+        // duplicate-key crash, and `reservedUiFieldInvariant` fails generation up
+        // front so the skip can never silently drop a live form field.
         ["app_name"] = name
         ["credential"] = "{{credential}}"
         // SDR / agent-mode credential slot. Emitted whenever the app does not
@@ -2973,11 +3002,22 @@ local function pyQuotedCsv(values: List<String>): String =
     if (acc == "") "\"\(value)\"" else "\(acc), \"\(value)\""
   )
 
-/// Field names already declared by application_sdk.templates.contracts.ExtractionInput.
-/// Generated UI fields with these Python names are skipped so the SDK's typed
-/// declarations and validators stay in effect.
+/// Field names already declared by application_sdk.templates.contracts.ExtractionInput
+/// (and the base `Input` it extends). Generated UI fields with these Python names
+/// are skipped so the SDK's typed declarations and validators stay in effect
+/// instead of being shadowed by a uiConfig-derived redeclaration.
+///
+/// The first three are framework-populated rather than tenant-supplied:
+/// `workflow_id` (set at dispatch), `correlation_id` (caller-supplied trace id),
+/// and `app_name` (per-node telemetry identity, CNCT-93). Redeclaring one of them
+/// from a uiConfig property is latent: codegen, `pkl test` and `test-sdk-import`
+/// all stay green, and it fails only at workflow dispatch when the framework
+/// assigns the real value and Pydantic rejects it against the author's type.
+/// Mirrors App.pkl — keep the two lists in sync.
 local extractionInputProvidedFields: Listing<String> = new Listing {
   "workflow_id"
+  "correlation_id"
+  "app_name"
   "connection"
   "credential_guid"
   "credential_ref"
@@ -3148,6 +3188,9 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
 /// fail with a clear message instead of silently skipping the credential file.
 output =
   let (_jdbcCheck = jdbcInvariant)
+  // Forced here rather than inside generateExtractNode so the check cannot be
+  // skipped by a contract whose extract node is never evaluated. Mirrors App.pkl.
+  let (_reservedUiCheck = reservedUiFieldInvariant)
   new ModuleOutput {
     files = new Mapping {
       ["\(workflowConfigName).json"] = workflowConfigOutput

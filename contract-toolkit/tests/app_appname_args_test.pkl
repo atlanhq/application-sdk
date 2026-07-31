@@ -12,9 +12,25 @@ amends "pkl:test"
 
 import "pkl:json"
 import "fixtures/popularity_default.pkl" as appFixture
+import "fixtures/app_appname_collision_publish.pkl" as collisionPublishFixture
+import "fixtures/app_appname_collision_generic.pkl" as collisionGenericFixture
 
 local dag =
   let (text = appFixture.output.files["app/generated/manifest.json"].text)
+    new json.Parser { useMapping = true }.parse(text)["dag"]
+
+// A second App.pkl contract whose extraNodes deliberately collide with the stamp
+// on BOTH renderNodeArgs branches, so the guard itself is covered — not just the
+// stamp's presence. The facts above pass with the guard deleted; the ones below
+// do not. Each branch also has a non-colliding control node, so "the author's
+// value won" is distinguished from "nothing was stamped at all".
+// One fixture per branch, because a duplicate-key error aborts the whole module
+// eval: sharing a fixture would make both guards' ablations redden the same fact.
+local collisionPublishDag =
+  let (text = collisionPublishFixture.output.files["app/generated/manifest.json"].text)
+    new json.Parser { useMapping = true }.parse(text)["dag"]
+local collisionGenericDag =
+  let (text = collisionGenericFixture.output.files["app/generated/manifest.json"].text)
     new json.Parser { useMapping = true }.parse(text)["dag"]
 
 facts {
@@ -41,5 +57,51 @@ facts {
   ["popularity node args carry app_name (generic branch)"] {
     dag["popularity"]["inputs"]["args"]["app_name"] == "popularity"
     dag["popularity"]["inputs"]["args"]["app_name"] == dag["popularity"]["app_name"]
+  }
+
+  // ── Collision guard (the reason renderNodeArgs is guarded at all) ──────────
+  // That each collision fixture parsed at all already proves (a) no `Duplicate
+  // definition of member` crash on that branch — an unguarded stamp fails the
+  // whole module eval, taking its facts with it. These assert (b): author wins.
+  //
+  // Deleting either guard makes exactly these facts fail. The presence facts
+  // above stay green, which is why they were not enough on their own.
+
+  // PublishNode with author-set args.app_name → renderNodeArgs `if` branch guard.
+  ["author-set args.app_name wins on the publish branch (no crash)"] {
+    collisionPublishDag["author_publish"]["inputs"]["args"]["app_name"] == "author-publish"
+    // ...and the node's own identity is untouched, so only args were overridden.
+    collisionPublishDag["author_publish"]["app_name"] == "publish"
+  }
+
+  // Same branch, non-colliding control: the guard must still stamp when the
+  // author set nothing. Without this, "deleted the stamp entirely" would pass.
+  ["publish branch still stamps node.appName when the author sets none"] {
+    collisionPublishDag["stamped_publish"]["inputs"]["args"]["app_name"] == "publish"
+  }
+
+  // Raw DAGNode with author-set args.app_name → renderNodeArgs `else` branch
+  // guard. Asserted separately from the publish branch because the two guards
+  // are independent expressions — deleting one leaves the other green.
+  ["author-set args.app_name wins on the generic branch (no crash)"] {
+    collisionGenericDag["author_generic"]["inputs"]["args"]["app_name"] == "author-generic"
+    collisionGenericDag["author_generic"]["app_name"] == "custom-worker"
+  }
+
+  // Generic branch, non-colliding control.
+  ["generic branch still stamps node.appName when the author sets none"] {
+    collisionGenericDag["stamped_generic"]["inputs"]["args"]["app_name"] == "stamped-worker"
+    collisionGenericDag["stamped_generic"]["inputs"]["args"]["app_name"]
+      == collisionGenericDag["stamped_generic"]["app_name"]
+  }
+
+  // Extract node: the contract `name` is authoritative and a tenant-facing form
+  // field may never supply it. The rejection itself is a generation error, which
+  // `pkl test` facts cannot express — `scripts/check-invariants.sh` asserts that
+  // a colliding uiConfig property fails to generate, on both modules. This pins
+  // the other half: what the extract node emits when there is no collision.
+  ["extract node app_name is the contract name, not an author value"] {
+    collisionPublishDag["extract"]["inputs"]["args"]["app_name"] == "appname-collision-publish"
+    collisionPublishDag["extract"]["inputs"]["args"]["app_name"] == collisionPublishDag["extract"]["app_name"]
   }
 }

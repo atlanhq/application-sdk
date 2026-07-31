@@ -519,15 +519,39 @@ entrypoint (e.g. `powerbi-crawler` / `powerbi-miner`) instead of the connector-l
 `ATLAN_APPLICATION_NAME`. This is the value the UI / heracles query a node's logs
 by, and it also drives the node's `task_queue`.
 
-**Precedence.** The stamp is **guarded** exactly like the feature-flag keys
-(`tag_pipeline_enabled`, `tag_attachments_prefix`): if a node's `args` already sets
-`app_name`, that author-supplied value is **respected** and the node-derived value
-is not emitted. The guard also prevents a hard Pkl `Duplicate definition of member`
-error that an unconditional stamp would raise on that collision. In the common case
-(no author `app_name`) the node's own `app_name` is stamped. Prefer setting
-`node.appName` over hand-writing `args["app_name"]`, so the args value and the
-node's top-level `app_name` (and its `task_queue`) stay in agreement — a mismatch
-misattributes the node's telemetry.
+**`app_name` is framework-owned — one rule, by surface.** An author may set it at
+**contract time** — via `DAGNode.appName`, or `args["app_name"]` on a hand-written
+node — and that value is honored. A **tenant-facing form field may never supply
+it**: a `uiConfig` property whose Python name is `app_name` is a **generation
+error**.
+
+The two surfaces differ because of *when* the value is fixed. A contract-time value
+is a constant the app author chose and can be reviewed in the diff. A `uiConfig`
+property is substituted at dispatch from whatever the tenant typed into the setup
+form, so it cannot be relied on to match the node's identity — and log attribution
+does depend on that match (a mismatch strips failure logs from the Workflow Center;
+HYP-1678). Rather than silently discard such a field and leave a dead widget on the
+form, the toolkit refuses to generate and tells you to rename it.
+
+*Contract-time (honored).* The stamp is **guarded** exactly like the feature-flag
+keys (`tag_pipeline_enabled`, `tag_attachments_prefix`): if a node's `args` already
+sets `app_name`, that author-supplied value is **respected** and the node-derived
+value is not emitted. The guard also prevents a hard Pkl `Duplicate definition of
+member` error that an unconditional stamp would raise on that collision. In the
+common case (no author `app_name`) the node's own `app_name` is stamped. Prefer
+setting `node.appName` over hand-writing `args["app_name"]`, so the args value and
+the node's top-level `app_name` (and its `task_queue`) stay in agreement — a
+mismatch misattributes the node's telemetry.
+
+*Form field (rejected).* The extract node's `app_name` is the contract `name`, and
+it is authoritative. A `uiConfig` property named `app-name` / `app_name` fails
+generation with an explicit error naming the offending property. Rename the field
+(e.g. `source-app-name`); if you meant to change the node's telemetry identity, set
+`name` or `node.appName` instead.
+
+`app_name` and `correlation_id` are also **framework-populated input fields**: both
+are declared on the SDK's base `Input`, so — like `workflow_id` — they are skipped
+by `_input.py` codegen and never redeclared from a `uiConfig` property.
 
 > **`appName` must match `taskQueue`.** `appName` and `taskQueue` are independent
 > properties; a raw `DAGNode` defaults `appName` to `"automation-engine"`. If you

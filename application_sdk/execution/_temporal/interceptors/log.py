@@ -424,10 +424,20 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         dict first arg, a typed object with an ``app_name`` attribute, and a
         Pydantic v2 ``extra='allow'`` model where it lands in ``__pydantic_extra__``.
 
-        The value is bounded at this boundary — only a non-empty ``str`` is
-        accepted and it is capped at ``_APP_NAME_MAX_CHARS`` — because it flows
-        into a low-cardinality Prometheus label; a non-string or oversized value
-        is rejected (returns ``""`` → env fallback) rather than coerced.
+        The value is bounded at this boundary because it flows into a
+        low-cardinality Prometheus label. The two cases differ:
+
+        * A non-string (or empty) value is **rejected** — returns ``""``, so the
+          logger falls back to ``ATLAN_APPLICATION_NAME``. It is never coerced
+          via ``str()``, which would let an arbitrary object mint a label.
+        * An oversized string is **truncated** to ``_APP_NAME_MAX_CHARS``, not
+          rejected: a too-long name is still the right attribution, just
+          abbreviated.
+
+        Truncation is lossy, so two entrypoints sharing a 64-character prefix
+        would collapse onto one label. Harmless for today's short slugs
+        (``powerbi-crawler``, ``powerbi-miner``), and the bound is worth more
+        than the collision costs — but that is the tradeoff the cap makes.
         """
         try:
             if input.args:
