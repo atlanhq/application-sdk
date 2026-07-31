@@ -849,12 +849,12 @@ open class DAGNode {
 
   displayName: String
   workflowType: String
-  /// Telemetry identity for this node. Stamped into the node's `inputs.args.app_name`
+  /// Log identity for this node. Stamped into the node's `inputs.args.app_name`
   /// (CNCT-93), which the SDK logs and the tenant UI / heracles query logs by.
   /// IMPORTANT: `appName` and `taskQueue` must agree. If you set `taskQueue` to run
   /// this node on a specific worker (e.g. the connector's own worker), you MUST set
   /// `appName` to match that worker's app — leaving it at the default
-  /// `"automation-engine"` will make the node's logs/metrics misattribute to AE
+  /// `"automation-engine"` will make the node's logs misattribute to AE
   /// even though it runs elsewhere. When `taskQueue` is unset it is derived from
   /// `appName` (`atlan-<appName>-{deployment_name}`), so the two stay consistent.
   appName: String = "automation-engine"
@@ -2348,8 +2348,8 @@ local reservedUiFieldInvariant: Any =
     + "`app_name`, which the contract toolkit owns (CNCT-93). A form field cannot "
     + "supply it: the extract node bakes the contract `name` so failure logs stay "
     + "attributable, so the field would render on the setup form and reach nothing. "
-    + "Rename the property (e.g. `source-app-name`). To change this app's telemetry "
-    + "identity set `name`, or `appName` on the specific node. "
+    + "Rename the property (e.g. `source-app-name`). To change this app's "
+    + "log identity set `name`, or `appName` on the specific node. "
     + "See contract-toolkit/docs/reference.md → Per-node `app_name` in `inputs.args`.")
 
 /// Auto-derived: hide the auth-type radio when the connector has a single auth
@@ -3009,7 +3009,7 @@ local function pyQuotedCsv(values: List<String>): String =
 ///
 /// The first three are framework-populated rather than tenant-supplied:
 /// `workflow_id` (set at dispatch), `correlation_id` (caller-supplied trace id),
-/// and `app_name` (per-node telemetry identity, CNCT-93). Redeclaring one of them
+/// and `app_name` (per-node log identity, CNCT-93). Redeclaring one of them
 /// from a uiConfig property is latent: codegen, `pkl test` and `test-sdk-import`
 /// all stay green, and it fails only at workflow dispatch when the framework
 /// assigns the real value and Pydantic rejects it against the author's type.

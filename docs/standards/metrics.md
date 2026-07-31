@@ -144,19 +144,14 @@ calls — it's added automatically:
 
 `sum by (app_name) (rate(...))` works without a `target_info` JOIN.
 
-> **Two sources of `app_name` since CNCT-93.** The Resource enrichment above is
-> **connector-level** (`app.name` = `ATLAN_APPLICATION_NAME`, one value per pod)
-> and is what the Temporal lifecycle metrics (`temporal_*` workflow/activity
-> duration & errors) and Rust-core series carry. Separately, `get_metric_labels()`
-> now stamps a **per-entrypoint** `app_name` (resolved from the workflow input,
-> e.g. `powerbi-crawler`) as a real sample label on `record_metric()` custom
-> metrics — matching the per-entrypoint log `app_name`. Sample labels win over
-> enrichment, so for a multi-entrypoint bundle a custom metric reports the
-> entrypoint while lifecycle metrics report the connector; a dashboard joining the
-> two families sees both values. This split is deliberate (lifecycle metrics stay
-> connector-level for dashboard continuity; the per-process OTel Resource cannot
-> vary per execution). You still should not pass `app_name` explicitly in
-> `record_metric()` — it is auto-attached from the entrypoint context.
+> **Metric `app_name` is connector-level; log `app_name` is per-entry-point
+> (CNCT-93).** Every metric family — Temporal lifecycle `temporal_*` series and
+> `record_metric()` custom metrics alike — carries the process-wide
+> `ATLAN_APPLICATION_NAME` (one value per pod). Only **logs** resolve the
+> per-entry-point `app_name` from the workflow input (e.g. `powerbi-crawler`),
+> so for a multi-entrypoint bundle a metric's `app_name` may differ from the
+> `app_name` on its correlated log lines. Do not pass `app_name` explicitly in
+> `record_metric()` — it is auto-attached.
 
 Everything else lives on `target_info` and is recovered at query time
 via a join. This keeps per-series cardinality minimal (only the labels

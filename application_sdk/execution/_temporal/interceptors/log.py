@@ -72,10 +72,12 @@ _MAX_CHAIN_WALK = 50
 # text still ships in exception.message / the traceback in exception.stacktrace.
 _FAILURE_MSG_MAX_CHARS = 200
 
-# Cap on the resolved app_name (CNCT-93). app_name reaches a Prometheus label
-# whose low-cardinality guarantee used to be structural (a per-process env
-# constant); now it is per-run data read from args[0], so bound it at the SDK
-# boundary — reject non-strings, cap length — rather than trusting every caller.
+# Cap on the resolved app_name (CNCT-93). app_name used to be a per-process env
+# constant; now it is per-run data read from args[0] — an untrusted boundary
+# (anything with Temporal access can start a workflow) — and it is stamped on
+# every log line and OTLP log attribute. Bound it here — reject non-strings,
+# cap length — rather than trusting every caller. (Metric labels are NOT fed
+# from this value; get_metric_labels() stays on the env constant by design.)
 _APP_NAME_MAX_CHARS = 64
 
 
@@ -424,20 +426,22 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         dict first arg, a typed object with an ``app_name`` attribute, and a
         Pydantic v2 ``extra='allow'`` model where it lands in ``__pydantic_extra__``.
 
-        The value is bounded at this boundary because it flows into a
-        low-cardinality Prometheus label. The two cases differ:
+        The value is bounded at this boundary because it comes from an
+        untrusted source (whatever started the workflow) and is stamped on
+        every log line and OTLP log attribute. The two cases differ:
 
         * A non-string (or empty) value is **rejected** — returns ``""``, so the
           logger falls back to ``ATLAN_APPLICATION_NAME``. It is never coerced
-          via ``str()``, which would let an arbitrary object mint a label.
+          via ``str()``, which would stamp an arbitrary object's repr (e.g. a
+          memory address) as the attribution value.
         * An oversized string is **truncated** to ``_APP_NAME_MAX_CHARS``, not
           rejected: a too-long name is still the right attribution, just
           abbreviated.
 
         Truncation is lossy, so two entrypoints sharing a 64-character prefix
-        would collapse onto one label. Harmless for today's short slugs
-        (``powerbi-crawler``, ``powerbi-miner``), and the bound is worth more
-        than the collision costs — but that is the tradeoff the cap makes.
+        would collapse onto one attribution value. Harmless for today's short
+        slugs (``powerbi-crawler``, ``powerbi-miner``), and the bound is worth
+        more than the collision costs — but that is the tradeoff the cap makes.
         """
         try:
             if input.args:
@@ -475,9 +479,9 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
         # CNCT-93: resolve the per-entrypoint app_name from this workflow's own
         # input args (empty when absent) BEFORE building the ExecutionContext, so
-        # it rides on that single shared context read by both the logger and
-        # metrics. Cached on the instance too, for the outbound interceptor to
-        # propagate to activities via the x-app-name header.
+        # it rides on that single shared context read by the logger. Cached on
+        # the instance too, for the outbound interceptor to propagate to
+        # activities via the x-app-name header.
         app_name = self._resolve_app_name(input)
         self._app_name = app_name
 
@@ -608,12 +612,12 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
         # CNCT-93: inherit the parent workflow's app_name (activity.Info exposes
         # no app_name of its own) via the x-app-name header the workflow's
         # outbound interceptor injected, so activity.started/ended and @task
-        # app-code logs — plus custom metrics via get_metric_labels() — stamp the
-        # same per-entrypoint app_name the workflow resolved. (Temporal lifecycle
-        # temporal_* metrics stay connector-level via the OTel Resource — the
-        # documented split.) Read BEFORE building the ExecutionContext so it rides
-        # on that shared context. Absent -> the logger/metrics fall back to
-        # ATLAN_APPLICATION_NAME.
+        # app-code logs stamp the same per-entrypoint app_name the workflow
+        # resolved. (All metric surfaces — get_metric_labels() and the Temporal
+        # lifecycle temporal_* families — stay connector-level by design; only
+        # logs carry the per-entrypoint value.) Read BEFORE building the
+        # ExecutionContext so it rides on that shared context. Absent -> the
+        # logger falls back to ATLAN_APPLICATION_NAME.
         app_name = ""
         try:
             payload = input.headers.get(_HEADER_APP_NAME)
@@ -621,8 +625,8 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                 converter = default_converter().payload_converter
                 decoded = converter.from_payload(payload, type_hint=str)
                 # Bound the header value the same way the workflow bounds it
-                # before it reaches a Prometheus label — reject non-strings,
-                # cap length — rather than trusting the wire payload.
+                # before it reaches the log fields — reject non-strings, cap
+                # length — rather than trusting the wire payload.
                 if isinstance(decoded, str) and decoded:
                     app_name = decoded[:_APP_NAME_MAX_CHARS]
         except Exception:

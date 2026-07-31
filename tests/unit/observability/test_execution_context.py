@@ -45,14 +45,19 @@ def test_execution_context_app_name_defaults_empty():
 
 
 # ---------------------------------------------------------------------------
-# get_metric_labels() — CNCT-93 per-entrypoint app_name
+# get_metric_labels() — metric app_name stays connector-level (CNCT-93 scope)
 # ---------------------------------------------------------------------------
 
 
-def test_get_metric_labels_uses_context_app_name():
-    """CNCT-93: the metric app_name label reflects the per-entrypoint app_name
-    on the ExecutionContext (same value the logger stamps), so a bundle's
-    metrics attribute to the right app."""
+def test_get_metric_labels_app_name_stays_connector_level():
+    """CNCT-93 scope pin: only LOGS carry the per-entrypoint app_name. The
+    metric label deliberately stays the process-wide ATLAN_APPLICATION_NAME —
+    even when the ExecutionContext carries a per-entrypoint value — so every
+    metric family keys on the connector name and existing dashboards are
+    unaffected. If this fails because ctx.app_name started flowing into the
+    label, that is a deliberate-decision change, not a refactor: it alters
+    live time series (see PR #2951 review discussion)."""
+    from application_sdk.constants import APPLICATION_NAME
     from application_sdk.observability.utils import get_metric_labels
 
     set_execution_context(
@@ -63,17 +68,13 @@ def test_get_metric_labels_uses_context_app_name():
         )
     )
     labels = get_metric_labels()
-    assert labels["app_name"] == "powerbi-crawler"
+    assert labels["app_name"] == APPLICATION_NAME
+    assert labels["app_name"] != "powerbi-crawler"
+    # Non-app_name context labels still flow through — the revert is surgical.
     assert labels["workflow_type"] == "PowerBIWorkflow"
 
-
-def test_get_metric_labels_falls_back_to_env_when_no_app_name():
-    """Absent app_name (older apps / no workflow context) → the metric label
-    falls back to ATLAN_APPLICATION_NAME, preserving prior behaviour."""
-    from application_sdk.constants import APPLICATION_NAME
-    from application_sdk.observability.utils import get_metric_labels
-
-    set_execution_context(ExecutionContext())  # app_name=""
+    # And without any workflow context at all, same value (prior behaviour).
+    set_execution_context(ExecutionContext())
     assert get_metric_labels()["app_name"] == APPLICATION_NAME
 
 

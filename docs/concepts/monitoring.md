@@ -199,10 +199,12 @@ These fields appear on every log entry without any manual binding — use `self.
 > name, so each entry-point's logs are queryable on their own. This is the value
 > the run UI queries a node's logs by. When the workflow input carries no
 > `app_name` (an older, not-yet-regenerated app), it falls back to the process-wide
-> `ATLAN_APPLICATION_NAME` env — i.e. prior behaviour. Note the trace-level
-> `app.name` (OTel Resource) deliberately stays **connector-level** (a per-process
-> resource cannot vary per workflow), so for a bundle a trace's `app.name` may
-> differ from its logs' `app_name` — by design.
+> `ATLAN_APPLICATION_NAME` env — i.e. prior behaviour. The per-entry-point value
+> is a **log-only** field: metrics (both the `temporal_*` lifecycle families and
+> `record_metric()` custom metrics) and the trace-level `app.name` (OTel
+> Resource) deliberately stay **connector-level**, so for a bundle a metric's or
+> trace's `app_name` may differ from the `app_name` on its correlated log lines
+> — by design. See [Metrics Standards](../standards/metrics.md).
 
 ```python
 class MyConnector(App):

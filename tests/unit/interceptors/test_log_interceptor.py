@@ -887,8 +887,9 @@ class TestLogWorkflowOutboundInject:
 class TestAppNameResolution:
     """The workflow resolves its own ``app_name`` from its input args (never
     from memo or an inherited header), stores it on the shared ExecutionContext
-    (read by both logger and metrics), and propagates it to activities. Guards
-    per-entrypoint telemetry attribution and backward compatibility."""
+    (read by the logger; metric labels stay connector-level by design), and
+    propagates it to activities. Guards per-entrypoint log attribution and
+    backward compatibility."""
 
     @pytest.fixture
     def mock_next(self):
@@ -924,7 +925,7 @@ class TestAppNameResolution:
 
     async def test_app_name_absent_falls_back_to_empty(self, interceptor):
         # Older / not-yet-regenerated apps carry no app_name in args → context
-        # app_name stays "" so the logger/metrics fall back to
+        # app_name stays "" so the logger falls back to
         # ATLAN_APPLICATION_NAME (backward compatible).
         await self._run(
             interceptor,
@@ -1032,8 +1033,8 @@ class TestAppNameResolution:
 
     async def test_non_str_app_name_rejected(self, interceptor):
         # A non-string args["app_name"] (e.g. a run id / int / dict) must NOT be
-        # str()-coerced into a Prometheus label — it is rejected → "" → env
-        # fallback, keeping app_name inside its low-cardinality contract.
+        # str()-coerced into the log attribution field — it is rejected → "" →
+        # env fallback, so an arbitrary object's repr never becomes app_name.
         await self._run(
             interceptor,
             MockExecuteWorkflowInput(headers={}, args=[{"app_name": 12345}]),
@@ -1043,7 +1044,7 @@ class TestAppNameResolution:
 
     async def test_oversized_app_name_truncated(self, interceptor):
         # An over-long value is capped at the SDK boundary (_APP_NAME_MAX_CHARS)
-        # before it can reach a metric label.
+        # before it can reach the log fields.
         await self._run(
             interceptor,
             MockExecuteWorkflowInput(headers={}, args=[{"app_name": "x" * 200}]),
@@ -1086,7 +1087,7 @@ class TestLogActivityInboundInterceptor:
         self, interceptor
     ):
         # Older apps propagate no x-app-name header → the activity's execution
-        # context carries no app_name (logger/metrics fall back to
+        # context carries no app_name (the logger falls back to
         # ATLAN_APPLICATION_NAME), while correlation still resolves. Backward
         # compatible.
         payload = _encode_header("corr-1")

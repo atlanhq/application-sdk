@@ -514,7 +514,7 @@ To enable, set `notifications = true`. To retarget the alert (different
 Every generated DAG node carries its own `app_name` inside `inputs.args`, equal
 to that node's `app_name` (`node.appName`, or the contract `name` for the extract
 node). The SDK reads it from the workflow input at runtime and stamps it on every
-log line, so a multi-entrypoint bundle attributes telemetry to the right
+log line, so a multi-entrypoint bundle attributes its logs to the right
 entrypoint (e.g. `powerbi-crawler` / `powerbi-miner`) instead of the connector-level
 `ATLAN_APPLICATION_NAME`. This is the value the UI / heracles query a node's logs
 by, and it also drives the node's `task_queue`.
@@ -541,12 +541,12 @@ member` error that an unconditional stamp would raise on that collision. In the
 common case (no author `app_name`) the node's own `app_name` is stamped. Prefer
 setting `node.appName` over hand-writing `args["app_name"]`, so the args value and
 the node's top-level `app_name` (and its `task_queue`) stay in agreement — a
-mismatch misattributes the node's telemetry.
+mismatch misattributes the node's logs.
 
 *Form field (rejected).* The extract node's `app_name` is the contract `name`, and
 it is authoritative. A `uiConfig` property named `app-name` / `app_name` fails
 generation with an explicit error naming the offending property. Rename the field
-(e.g. `source-app-name`); if you meant to change the node's telemetry identity, set
+(e.g. `source-app-name`); if you meant to change the node's log identity, set
 `name` or `node.appName` instead.
 
 `app_name` and `correlation_id` are also **framework-populated input fields**: both
@@ -557,7 +557,7 @@ by `_input.py` codegen and never redeclared from a `uiConfig` property.
 > properties; a raw `DAGNode` defaults `appName` to `"automation-engine"`. If you
 > set `taskQueue` to run a node on a specific worker (e.g. the connector's own
 > worker) you **must** set `appName` to match — otherwise the node stamps
-> `app_name: "automation-engine"` while running elsewhere, and its logs/metrics
+> `app_name: "automation-engine"` while running elsewhere, and its logs
 > misattribute to AE. When `taskQueue` is left unset it is derived from `appName`,
 > so the two stay consistent automatically.
 
@@ -2366,7 +2366,7 @@ extraNodes {
     // Set appName to match the worker this node runs on. Because taskQueue is set
     // explicitly, appName does NOT default from it — leaving it at the DAGNode
     // default "automation-engine" would stamp app_name: "automation-engine" on a
-    // node that runs on the redshift worker, misattributing its logs/metrics.
+    // node that runs on the redshift worker, misattributing its logs.
     appName = "redshift"
     args {
       ["qi_output"] = "$.extract.outputs.qi_output_prefix"
