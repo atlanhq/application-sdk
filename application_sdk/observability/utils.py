@@ -88,7 +88,11 @@ def get_metric_labels() -> dict[str, str]:
 
     ctx = get_execution_context()
     return {
-        "app_name": APPLICATION_NAME,
+        # CNCT-93: per-entrypoint app_name so a multi-entrypoint bundle's metrics
+        # attribute to the right app (e.g. powerbi-crawler), matching the log
+        # app_name. Falls back to the process-wide env default when the workflow
+        # input carried none (older apps) — backward compatible.
+        "app_name": ctx.app_name or APPLICATION_NAME,
         "workflow_type": ctx.workflow_type,
         "activity_type": ctx.activity_type,
     }
@@ -164,6 +168,12 @@ def build_otel_resource(extra_attrs: dict[str, str] | None = None) -> Resource:
     if "service.version" not in resource_attributes:
         resource_attributes["service.version"] = SERVICE_VERSION
     if APPLICATION_NAME:
+        # CNCT-93: app.name stays connector-level (ATLAN_APPLICATION_NAME), NOT
+        # per-entrypoint — unlike the log/metric app_name. This is a per-process
+        # OTel Resource shared by the tracer, the metrics meter, and OTLP log
+        # export; it is built once at process start, before any workflow resolves
+        # its entrypoint app_name, and cannot vary per workflow execution. Bundle
+        # traces therefore attribute at the connector level by design.
         resource_attributes["app.name"] = APPLICATION_NAME
     if OTEL_WF_NODE_NAME:
         resource_attributes["k8s.workflow.node.name"] = OTEL_WF_NODE_NAME

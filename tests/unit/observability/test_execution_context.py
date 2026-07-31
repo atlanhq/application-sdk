@@ -37,6 +37,46 @@ def test_execution_context_is_frozen():
         ctx.workflow_id = "other"  # type: ignore[misc]
 
 
+def test_execution_context_app_name_defaults_empty():
+    """CNCT-93: app_name defaults to "" so consumers fall back to
+    ATLAN_APPLICATION_NAME (backward compatible)."""
+    assert ExecutionContext().app_name == ""
+    assert ExecutionContext(app_name="powerbi-crawler").app_name == "powerbi-crawler"
+
+
+# ---------------------------------------------------------------------------
+# get_metric_labels() — CNCT-93 per-entrypoint app_name
+# ---------------------------------------------------------------------------
+
+
+def test_get_metric_labels_uses_context_app_name():
+    """CNCT-93: the metric app_name label reflects the per-entrypoint app_name
+    on the ExecutionContext (same value the logger stamps), so a bundle's
+    metrics attribute to the right app."""
+    from application_sdk.observability.utils import get_metric_labels
+
+    set_execution_context(
+        ExecutionContext(
+            execution_type="workflow",
+            workflow_type="PowerBIWorkflow",
+            app_name="powerbi-crawler",
+        )
+    )
+    labels = get_metric_labels()
+    assert labels["app_name"] == "powerbi-crawler"
+    assert labels["workflow_type"] == "PowerBIWorkflow"
+
+
+def test_get_metric_labels_falls_back_to_env_when_no_app_name():
+    """Absent app_name (older apps / no workflow context) → the metric label
+    falls back to ATLAN_APPLICATION_NAME, preserving prior behaviour."""
+    from application_sdk.constants import APPLICATION_NAME
+    from application_sdk.observability.utils import get_metric_labels
+
+    set_execution_context(ExecutionContext())  # app_name=""
+    assert get_metric_labels()["app_name"] == APPLICATION_NAME
+
+
 # ---------------------------------------------------------------------------
 # ContextVar get/set
 # ---------------------------------------------------------------------------

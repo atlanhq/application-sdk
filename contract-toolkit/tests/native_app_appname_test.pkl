@@ -79,4 +79,13 @@ facts {
   ["extract node inputs bake app_name from the contract name"] {
     extractNode["inputs"]["app_name"] == "native-app-pipeline"
   }
+
+  // CNCT-93: the node's own app_name must also ride INSIDE inputs.args, where
+  // the SDK log interceptor reads it (over the connector-level
+  // ATLAN_APPLICATION_NAME env) so per-entrypoint logs attribute to the right
+  // app. Emitted unconditionally — outside the flatManifestArgs branches — so
+  // both the flat and nested manifest shapes carry it.
+  ["extract node args carry app_name for the SDK log interceptor"] {
+    extractNode["inputs"]["args"]["app_name"] == "native-app-pipeline"
+  }
 }

@@ -63,6 +63,19 @@ class ExecutionContext:
     # not carry parent info directly).
     parent_workflow_id: str = ""
     parent_run_id: str = ""
+    # Per-entrypoint application name (CNCT-93). Resolved by the log interceptor
+    # from the workflow's own input args (the contract toolkit stamps each DAG
+    # node's ``app_name`` into that node's ``inputs.args``) and propagated to
+    # activities via the ``x-app-name`` header. This is the single shared source
+    # of truth read by BOTH the logger (``app_name`` / provisional ``source``
+    # stamps) and metrics (``get_metric_labels``), so per-entrypoint telemetry of
+    # a multi-entrypoint bundle attributes to the right app (e.g.
+    # ``powerbi-crawler`` vs the connector-level ``powerbi``). Empty when the
+    # workflow input carries no ``app_name`` (older / not-yet-regenerated apps) —
+    # consumers then fall back to ``ATLAN_APPLICATION_NAME``, preserving prior
+    # behaviour. Deliberately per-workflow (not inherited parent -> child): each
+    # bundle entrypoint resolves its own from its own input.
+    app_name: str = ""
 
 
 _execution_ctx: ContextVar[ExecutionContext] = ContextVar(

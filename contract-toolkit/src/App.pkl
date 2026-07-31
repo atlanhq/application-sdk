@@ -2497,6 +2497,10 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
     let (tagAttachmentsValue = publishNode.tagAttachmentsPrefix ?? _publishTagAttachmentsPrefix)
     new Mapping {
       ...nodeArgs
+      // CNCT-93: stamp the node's own app_name into args so the SDK reads it
+      // per-entrypoint and logs it (instead of the connector-level
+      // ATLAN_APPLICATION_NAME env). Each bundle node -> its own value.
+      ["app_name"] = node.appName
       when (!nodeArgs.toMap().containsKey("tag_pipeline_enabled") && tagPipelineValue != null) {
         ["tag_pipeline_enabled"] = tagPipelineValue
       }
@@ -2504,7 +2508,11 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
         ["tag_attachments_prefix"] = tagAttachmentsValue
       }
     }
-  else node.args
+  else new Mapping {
+    ...node.args
+    // CNCT-93: per-entrypoint app_name into args (see above).
+    ["app_name"] = node.appName
+  }
 
 /// Workflow type for the extract node: verbatim `workflowType` when set,
 /// otherwise `name` kebab-cased.
@@ -2534,6 +2542,10 @@ local function generateExtractNode(): Mapping<String, Any> =
       ["argo_workflow_slug"] = ""
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
       ["args"] = new Mapping {
+        // CNCT-93: per-entrypoint app_name into args so the SDK reads it and
+        // logs it (matches the node's `app_name` above; overrides the
+        // connector-level ATLAN_APPLICATION_NAME env at log time).
+        ["app_name"] = name
         ["credential"] = "{{credential}}"
         // SDR / agent-mode credential slot. Emitted whenever the app does not
         // model `agent-json` — the gap that silently broke MSSQL's SDR rollout

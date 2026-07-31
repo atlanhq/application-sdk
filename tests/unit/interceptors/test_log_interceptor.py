@@ -11,6 +11,7 @@ from temporalio.exceptions import ApplicationError
 
 from application_sdk.errors.leaves import AuthError, InvalidInputError
 from application_sdk.execution._temporal.interceptors.log import (
+    _HEADER_APP_NAME,
     LogInterceptor,
     _correlation_id_or_empty,
     _extract_failure_attrs,
@@ -22,6 +23,7 @@ from application_sdk.observability.context import (
     ExecutionContext,
     _execution_ctx,
     _replay_predicate,
+    get_execution_context,
 )
 from application_sdk.observability.correlation import (
     CorrelationContext,
@@ -877,6 +879,118 @@ class TestLogWorkflowOutboundInject:
 
 
 # ---------------------------------------------------------------------------
+# TestAppNameResolution (CNCT-93 — per-entrypoint app_name)
+# ---------------------------------------------------------------------------
+
+
+class TestAppNameResolution:
+    """The workflow resolves its own ``app_name`` from its input args (never
+    from memo or an inherited header), stores it on the shared ExecutionContext
+    (read by both logger and metrics), and propagates it to activities. Guards
+    per-entrypoint telemetry attribution and backward compatibility."""
+
+    @pytest.fixture
+    def mock_next(self):
+        n = AsyncMock()
+        n.execute_workflow = AsyncMock(return_value="wf-result")
+        return n
+
+    @pytest.fixture
+    def interceptor(self, mock_next):
+        return _LogWorkflowInboundInterceptor(mock_next)
+
+    async def _run(self, interceptor, wf_input):
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(wf_input)
+
+    async def test_reads_app_name_from_workflow_args(self, interceptor):
+        # The toolkit stamps the node's own app_name into inputs.args; the
+        # workflow reads it and puts it on the correlation context so log lines
+        # attribute to the per-entrypoint app (e.g. powerbi-crawler).
+        await self._run(
+            interceptor,
+            MockExecuteWorkflowInput(
+                headers={}, args=[{"app_name": "powerbi-crawler"}]
+            ),
+        )
+        assert interceptor._app_name == "powerbi-crawler"
+        assert get_execution_context().app_name == "powerbi-crawler"
+
+    async def test_app_name_absent_falls_back_to_empty(self, interceptor):
+        # Older / not-yet-regenerated apps carry no app_name in args → context
+        # app_name stays "" so the logger/metrics fall back to
+        # ATLAN_APPLICATION_NAME (backward compatible).
+        await self._run(
+            interceptor,
+            MockExecuteWorkflowInput(headers={}, args=[{"workflow_id": "w1"}]),
+        )
+        assert interceptor._app_name == ""
+        assert get_execution_context().app_name == ""
+
+    async def test_reads_app_name_from_typed_object_attr(self, interceptor):
+        class TypedInput:
+            app_name = "sql-server-crawler"
+
+        await self._run(
+            interceptor, MockExecuteWorkflowInput(headers={}, args=[TypedInput()])
+        )
+        assert interceptor._app_name == "sql-server-crawler"
+
+    async def test_reads_app_name_from_pydantic_extra_bag(self, interceptor):
+        class FakeExtraBagModel:
+            # Pydantic v2 extra='allow' stows unknown fields here; no attr.
+            app_name = None
+            __pydantic_extra__ = {"app_name": "bundle-miner"}
+
+        await self._run(
+            interceptor,
+            MockExecuteWorkflowInput(headers={}, args=[FakeExtraBagModel()]),
+        )
+        assert interceptor._app_name == "bundle-miner"
+
+    async def test_child_workflow_does_not_inherit_parent_app_name(self, interceptor):
+        # A child receives the parent's x-app-name header (the outbound injects
+        # it), but the workflow inbound resolves app_name ONLY from its own args
+        # — so a header without a matching arg yields "". Each bundle entrypoint
+        # keeps its own identity; no parent -> child inheritance.
+        headers = {_HEADER_APP_NAME: _encode_header("powerbi-crawler")}
+        await self._run(
+            interceptor, MockExecuteWorkflowInput(headers=headers, args=[{}])
+        )
+        assert interceptor._app_name == ""
+        assert get_execution_context().app_name == ""
+
+    async def test_outbound_injects_app_name_header(self, interceptor):
+        # After the workflow resolves its app_name, the outbound interceptor
+        # must inject it as x-app-name so the activity inbound can inherit it.
+        await self._run(
+            interceptor,
+            MockExecuteWorkflowInput(
+                headers={}, args=[{"app_name": "powerbi-crawler"}]
+            ),
+        )
+        outbound = _LogWorkflowOutboundInterceptor(MagicMock(), interceptor)
+        injected = outbound._inject({})
+        assert _HEADER_APP_NAME in injected
+        decoded = default_converter().payload_converter.from_payload(
+            injected[_HEADER_APP_NAME], type_hint=str
+        )
+        assert decoded == "powerbi-crawler"
+
+    async def test_outbound_omits_app_name_header_when_absent(self, interceptor):
+        # No app_name resolved → no x-app-name header (nothing to propagate).
+        await self._run(interceptor, MockExecuteWorkflowInput(headers={}, args=[{}]))
+        outbound = _LogWorkflowOutboundInterceptor(MagicMock(), interceptor)
+        injected = outbound._inject({})
+        assert _HEADER_APP_NAME not in injected
+
+
+# ---------------------------------------------------------------------------
 # TestLogActivityInboundInterceptor
 # ---------------------------------------------------------------------------
 
@@ -891,6 +1005,38 @@ class TestLogActivityInboundInterceptor:
     @pytest.fixture
     def interceptor(self, mock_next):
         return _LogActivityInboundInterceptor(mock_next)
+
+    async def test_inherits_app_name_from_workflow_header(self, interceptor):
+        # activity.Info exposes no app_name; the activity inherits the parent
+        # workflow's via the x-app-name header so activity + @task logs stamp
+        # the same per-entrypoint app_name (CNCT-93).
+        headers = {_HEADER_APP_NAME: _encode_header("powerbi-crawler")}
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.activity"
+        ) as mock_act:
+            mock_act.info.return_value = MockActivityInfo()
+            await interceptor.execute_activity(
+                MockExecuteActivityInput(headers=headers)
+            )
+        assert get_execution_context().app_name == "powerbi-crawler"
+
+    async def test_no_app_name_header_leaves_context_without_app_name(
+        self, interceptor
+    ):
+        # Older apps propagate no x-app-name header → the activity's execution
+        # context carries no app_name (logger/metrics fall back to
+        # ATLAN_APPLICATION_NAME), while correlation still resolves. Backward
+        # compatible.
+        payload = _encode_header("corr-1")
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.activity"
+        ) as mock_act:
+            mock_act.info.return_value = MockActivityInfo()
+            await interceptor.execute_activity(
+                MockExecuteActivityInput(headers={"x-correlation-id": payload})
+            )
+        assert get_correlation_context().correlation_id == "corr-1"
+        assert get_execution_context().app_name == ""
 
     async def test_emits_activity_started_log(self, interceptor):
         with patch(

@@ -106,6 +106,32 @@ def test_process_injects_app_name_and_deployment_name():
         assert kwargs["deployment_name"] == DEPLOYMENT_NAME
 
 
+def test_process_prefers_context_app_name_over_env():
+    """CNCT-93: when a workflow has resolved a per-entrypoint ``app_name`` onto
+    the shared ExecutionContext, ``process`` must stamp THAT over the
+    process-wide ``ATLAN_APPLICATION_NAME`` env default; when the context carries
+    none it falls back to the env value, preserving prior behaviour."""
+    from application_sdk.observability.context import (
+        ExecutionContext,
+        _execution_ctx,
+        set_execution_context,
+    )
+
+    token = _execution_ctx.set(ExecutionContext())
+    try:
+        with create_logger_adapter() as logger_adapter:
+            # Empty context app_name → env fallback (backward compatible).
+            set_execution_context(ExecutionContext(app_name=""))
+            _, kwargs = logger_adapter.process("m", {})
+            assert kwargs["app_name"] == APPLICATION_NAME
+            # Per-entrypoint app_name present → stamped over the env default.
+            set_execution_context(ExecutionContext(app_name="powerbi-crawler"))
+            _, kwargs = logger_adapter.process("m", {})
+            assert kwargs["app_name"] == "powerbi-crawler"
+    finally:
+        _execution_ctx.reset(token)
+
+
 @given(st.text(min_size=1))
 def test_process_with_various_messages(message: str):
     """Test process() method with various message inputs."""
