@@ -224,8 +224,9 @@ class Input(BaseModel):
     (CNCT-93). Resolved from args at workflow start by the log interceptor and
     kept as a typed field so it survives continue-as-new (model_dump preserves
     it) and does not trip the unknown-key drift validator below. Empty when the
-    manifest carries none (older / not-yet-regenerated apps) → telemetry falls
-    back to ATLAN_APPLICATION_NAME."""
+    manifest carries none (older / not-yet-regenerated apps) → the logger falls
+    back to ATLAN_APPLICATION_NAME (metric labels are always connector-level;
+    see observability/utils.get_metric_labels)."""
 
     _config_hash_exclude: ClassVar[set[str]] = {
         "workflow_id",
