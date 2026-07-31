@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.25.1 (July 31, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.25.0...v3.25.1
+
+### Bug Fixes
+
+- use duckdb API valid across the declared version range (#2940) (by @fyzanshaik-atlan in [83b9da0](https://github.com/atlanhq/application-sdk/commit/83b9da0))
+- resolve log app_name per-entrypoint from workflow input (#2951) (by @vaibhavatlan in [1f2b24c](https://github.com/atlanhq/application-sdk/commit/1f2b24c))
+
+
 ## v3.25.0 (July 29, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.24.1...v3.25.0
