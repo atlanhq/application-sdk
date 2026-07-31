@@ -840,4 +840,120 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k012"
         ),
     ),
+    RuleDefinition(
+        id="K013",
+        scope=RuleScope.APP,
+        name="ManifestNodeAppNameMismatch",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="app-name-alignment",
+        autofixable=False,
+        since="0.18.0",
+        rationale=(
+            "The CNCT-129 fix makes the SDK stamp each DAG node's logs and "
+            "metrics with that node's own app_name, resolved from its "
+            "inputs.args.app_name (the value the contract toolkit now emits). The "
+            "tenant UI / Heracles query a node's logs by its app_name — an "
+            "equality filter on the lakehouse app_name column. If a node's "
+            "inputs.args.app_name (what the SDK stamps) diverges from its "
+            "top-level app_name / inputs.app_name (what the UI queries), the "
+            "node's logs are written under one identity and looked up under "
+            "another, so they never appear in the panel — the exact CNCT-129 "
+            "failure. pkl compiles the manifest before any Python runs and no "
+            "existing gate diffs these three copies of the value, so the drift is "
+            "invisible until a customer reports missing logs."
+        ),
+        short_description=(
+            "A DAG node's inputs.args.app_name disagrees with its top-level "
+            "app_name / inputs.app_name in a generated manifest.json"
+        ),
+        full_description=(
+            "Within a single generated ``manifest.json`` DAG node (under "
+            "``app/generated/`` or ``contract/generated/``), the "
+            "three places an ``app_name`` can appear must all agree:\n"
+            "\n"
+            "* the node's top-level ``app_name`` (what the tenant UI reads as "
+            "``node.app_name`` and queries logs by),\n"
+            "* ``inputs.app_name`` (Automation Engine metadata),\n"
+            "* ``inputs.args.app_name`` (the runtime input the SDK reads and "
+            "stamps onto every log line and metric for the node).\n"
+            "\n"
+            "When ``inputs.args.app_name`` differs from the node's own "
+            "``app_name``, the SDK stamps the node's logs with one value while the "
+            "UI queries them under another; Heracles applies ``app_name`` as an "
+            "equality filter, so the lookup returns nothing and the node's logs "
+            "are invisible in the run panel (CNCT-129).\n"
+            "\n"
+            "**No-op when:** a node has no ``inputs.args.app_name`` at all. Apps "
+            "not yet regenerated onto the app_name-emitting toolkit carry no such "
+            "key, and the SDK correctly falls back to the process-wide "
+            "``ATLAN_APPLICATION_NAME`` env value — so an absent key is never a "
+            "violation. The rule fires only once the key is present and "
+            "disagrees.\n"
+            "\n"
+            "**Fix:** never hand-edit the generated ``manifest.json`` (it is a "
+            "``pkl eval`` output; K004/K005 catch hand edits). Set a single "
+            "``appName`` per node in ``contract/app.pkl`` / ``NativeApp.pkl`` and "
+            "re-run ``pkl eval`` so the node's top-level ``app_name``, "
+            "``inputs.app_name`` and ``inputs.args.app_name`` are all derived from "
+            "the same value.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k013"
+        ),
+    ),
+    RuleDefinition(
+        id="K014",
+        scope=RuleScope.APP,
+        name="ManifestNodeAppNameCollision",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="app-name-alignment",
+        autofixable=False,
+        since="0.18.0",
+        rationale=(
+            "The tenant UI / Heracles query a node's logs by "
+            "(correlation_id, app_name) with no per-node discriminator in the "
+            "filter. If two different DAG nodes in the same manifest declare the "
+            "same app_name, their logs land under one identity and overlap in the "
+            "run panel — a viewer cannot tell which node a line came from. Because "
+            "DAGNode.appName defaults to a shared value (automation-engine), a DAG "
+            "with two default-appName nodes silently collides. Warned rather than "
+            "blocked: a DAG may legitimately run two nodes as the same app, so "
+            "this is a graduation-tracked advisory the author can suppress with a "
+            "reason."
+        ),
+        short_description=(
+            "Two different DAG nodes in one manifest.json share the same app_name, "
+            "so their logs overlap in the tenant UI"
+        ),
+        full_description=(
+            "The tenant UI queries a run's logs by ``(correlation_id, app_name)`` "
+            "and applies ``app_name`` as an equality filter, with no per-node key "
+            "in the query. When two distinct DAG nodes in the **same** "
+            "``manifest.json`` declare the same top-level ``app_name``, their log "
+            "lines are stamped identically and overlap in the panel — a viewer "
+            "cannot attribute a line to a specific node.\n"
+            "\n"
+            "This is scoped **per manifest**: a bundle's ``crawler`` and ``miner`` "
+            "manifests are separate entrypoint runs, so the ``publish`` node's "
+            "``app_name`` recurring across them is expected and never compared. "
+            "The rule only compares nodes within a single manifest file.\n"
+            "\n"
+            "**No-op when:** a node carries no top-level ``app_name`` (nothing to "
+            "collide), or no two nodes share one.\n"
+            "\n"
+            "**Fix:** give each node a distinct ``appName`` in "
+            "``contract/app.pkl`` / ``NativeApp.pkl`` (a node left at the default "
+            "``automation-engine`` while another node also defaults is the common "
+            "cause), then re-run ``pkl eval``. If two nodes genuinely run as the "
+            "same app and the overlap is acceptable, suppress with a documented "
+            "reason.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k014"
+        ),
+    ),
 )

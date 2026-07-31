@@ -47,6 +47,7 @@ from conformance.suite.checks import (
     integration_deselect,
     integration_marking,
     legacy_contract,
+    manifest_app_name,
     manifest_contract,
     optimizations,
     orchestration,
@@ -231,6 +232,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=manifest_contract.discover,
         scan_path=manifest_contract.scan_path,
         scan_all=manifest_contract.scan_all,
+    ),
+    CheckRegistration(
+        series=manifest_app_name.SERIES,
+        discover=manifest_app_name.discover,
+        scan_path=manifest_app_name.scan_path,
+        scan_all=manifest_app_name.scan_all,
     ),
     CheckRegistration(
         series=release_contract.SERIES,
