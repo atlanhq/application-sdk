@@ -69,14 +69,12 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
     across later phases, so never let a prior iteration in the same sandbox
     affect the current verdict or public post:
     ```bash
-    rm -f /tmp/TOOLKIT_ROVER_NOTE.md
-    : > /tmp/TOOLKIT_VALIDATION.md
-    : > /tmp/TOOLKIT_PR_ARTIFACTS.txt
-    : > /tmp/TOOLKIT_CHANGED_FILES.txt
-    : > /tmp/TOOLKIT_CONSUMERS.md
     mkdir -p /tmp/inline-comments
     find /tmp/inline-comments -type f \( -name '*.md' -o -name '*.json' \) -delete
     ```
+    The toolkit ledger files (`/tmp/TOOLKIT_*.md|txt`) are reset at the top of
+    Phase 1b-toolkit — the only place that writes them — so non-toolkit scopes
+    don't touch them at all.
 
 5. **Stale SHA guard** — bail if the PR has moved since dispatch:
    ```bash
@@ -92,8 +90,8 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
 6. **Read in-repo orchestration assets** — these are the source of truth
    for SDK review behavior. All paths are relative to the repo root:
    - `.mothership/pr-review/CLAUDE.md`
-   - `.mothership/pr-review/severity-rubric.yaml`
-   - `.mothership/pr-review/modes/standard.md`
+   - `.mothership/pr-review/severity-rubric.yaml` (includes severity
+     calibration + confidence floors — the single source for both)
    - `.mothership/pr-review/references/*.md`
    - `.mothership/pr-review/agents/*.md`
    - `.mothership/review-policy.md`
@@ -135,6 +133,37 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
     threads) the human's response, which materially changes what
     counts as a "new" finding vs a known-and-discussed one.
 
+6c. **Compute the re-review delta (scope-cutter).** Each review summary
+    stamps the HEAD it reviewed as `<!-- REVIEWED_HEAD: <sha> -->` (§3e).
+    On a re-review, use it to scope Phase 1–2 to what actually changed —
+    re-deriving conclusions about unchanged hunks is the single largest
+    waste in multi-round reviews. If step 8 updates the branch (BEHIND),
+    re-run this computation after it — the HEAD changes.
+
+    ```bash
+    PRIOR_HEAD=$(grep -oE '<!-- REVIEWED_HEAD: [0-9a-f]{40} -->' /tmp/PRIOR_REVIEW.md \
+      | grep -oE '[0-9a-f]{40}' || true)
+
+    DELTA_KNOWN=0
+    : > /tmp/DELTA.patch
+    : > /tmp/DELTA_FILES.txt
+    if [ -n "$PRIOR_HEAD" ] && git cat-file -e "$PRIOR_HEAD" 2>/dev/null; then
+      DELTA_KNOWN=1
+      # Restrict to the PR's own files so base-branch merges between rounds
+      # don't inflate the delta. A PR file also touched by a base merge shows
+      # base churn — acceptable: it errs toward MORE review, never less.
+      gh pr view "$PR_NUMBER" --repo "$REPO" --json files --jq '.files[].path' > /tmp/PR_FILES.txt
+      git diff "$PRIOR_HEAD".."$HEAD_SHA" -- $(cat /tmp/PR_FILES.txt) > /tmp/DELTA.patch || true
+      git diff --name-only "$PRIOR_HEAD".."$HEAD_SHA" -- $(cat /tmp/PR_FILES.txt) > /tmp/DELTA_FILES.txt || true
+    fi
+    DELTA_LINES=$(grep -cE '^[+-]' /tmp/DELTA.patch 2>/dev/null || echo 0)
+    ```
+
+    `DELTA_KNOWN=0` (no prior review, a pre-rollout summary without the
+    marker, or an unfetchable `PRIOR_HEAD`) means **unknown**, not "nothing
+    changed" — skip delta scoping and run the full review. Only
+    `DELTA_KNOWN=1` activates step 11b.
+
 7. **Always run a standard review.** There is a single mode. Ignore any
    free-form text after `@sdk-review` (`COMMENTER_INTENT`) — there are no
    commands to parse (no auto-fix, stop, challenge, override, or focus
@@ -147,6 +176,8 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    input. Carry forward findings that are still present, label resolved ones
    explicitly, surface new ones, and downgrade ones the author successfully
    addressed in inline-comment threads. See §2e for the labeling rules.
+   On a re-review with a known delta (step 6c), the *breadth* of Phases 1–2
+   is cut to that delta per step 11b — the continuity rules are unchanged.
 
    The review is **read-only**: it never commits or pushes to the PR branch.
 
@@ -168,35 +199,30 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/DIFF.patch
    ```
 
-   If `CONFLICTING`:
-   ```bash
-   # Tier 2: local git merge (handles non-overlapping conflicts)
-   git fetch origin "$BASE_REF"
-   git merge "origin/$BASE_REF" --no-edit 2>/dev/null
-   ```
-   If merge succeeds → `git push origin HEAD`, then re-fetch `/tmp/PR.json`
-   and `/tmp/DIFF.patch` and continue review of the merged result.
-   If merge fails:
-   ```bash
-   git merge --abort
-   ```
-   Submit minimal review: "PR has merge conflicts. Please rebase or
-   comment `@sdk-review` after resolving conflicts." Set the verdict in
-   §3e to `NEEDS_REBASE` (the structured marker is `<!-- VERDICT:
-   NEEDS_REBASE -->`); the GHA layer applies the `sdk-review-needs-rebase`
-   label from there. EXIT.
+   If `CONFLICTING`: do NOT attempt a local merge or push — the review is
+   read-only and never commits or pushes to the PR branch (a
+   conflict-resolution merge is the author's decision, not the reviewer's;
+   this also keeps ORCHESTRATION consistent with CLAUDE.md's read-only
+   guarantee). Submit minimal review: "PR has merge conflicts. Please
+   rebase or comment `@sdk-review` after resolving conflicts." Set the
+   verdict in §3e to `NEEDS_REBASE` (the structured marker is
+   `<!-- VERDICT: NEEDS_REBASE -->`); the GHA layer applies the
+   `sdk-review-needs-rebase` label from there. EXIT.
 
-9. **CI status read** (feeds the verdict — the review never fixes CI):
+9. **CI status read** (summary line ONLY — CI is not a verdict input):
    ```bash
    FAILING=$(gh pr checks "$PR_NUMBER" --repo "$REPO" \
      --json name,conclusion --jq '.[] | select(.conclusion=="failure") | .name' 2>/dev/null)
    ```
-   Record `FAILING` for the verdict (G7) and the `**CI:**` summary line. The
+   Record `FAILING` for the `**CI:**` summary line and nothing else. The
    review is **read-only**: it does NOT run pre-commit, read CI logs, fix CI,
-   commit, or push. CI reports its own failures, and
-   `sdk-review-downgrade-on-ci-failure.yml` strips the approval if a
-   non-review check fails. A real CI failure on its own → verdict
-   NEEDS_FIXES (per §2h).
+   commit, or push — and it does NOT gate the verdict on CI.
+   `sdk-review-downgrade-on-ci-failure.yml` enforces CI event-driven and
+   race-free: CI legs routinely finish AFTER the review posts, so a
+   reviewer-side CI gate is both racy (it reads a snapshot) and redundant
+   (the workflow strips any approval the moment a non-review check fails).
+   This is the only CI read in the review — there is no post-review
+   re-check.
 
 10. Read the repo's `CLAUDE.md` for project conventions.
 
@@ -271,6 +297,31 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
      to `full`.)
    - Otherwise → `review_scope=full` (correctness + quality + structure)
 
+11b. **Re-review delta scoping** (only when `DELTA_KNOWN=1` from step 6c).
+    Step 11 decides *which* specialists could run; on a re-review the delta
+    decides *how much work actually remains*:
+
+    - `DELTA_LINES == 0` (re-trigger on the same HEAD, or only base merges
+      since the prior round) → **verification-only re-review**: skip Wave 1
+      and Wave 2 discovery entirely. Phase 2 reduces to §2e labeling of the
+      prior findings against the current HEAD plus the §2h verdict — no new
+      hunks means no new findings can exist.
+    - `0 < DELTA_LINES < 2000` → **delta-scoped re-review**: re-run the
+      step 11 bucket classification over `/tmp/DELTA_FILES.txt` (not the
+      full PR file list) and dispatch only the matching specialists. Agents
+      receive `/tmp/DELTA.patch` as the diff, `/tmp/PRIOR_REVIEW.md`, and
+      full file contents for delta files only. Prior findings on unchanged
+      hunks carry forward per §2e without re-deriving them; prior findings
+      whose lines the delta touched are re-verified (that IS the delta work).
+    - `DELTA_LINES >= 2000` → full review — a delta that large is a new PR
+      in all but name, and hunk-local reasoning stops being sound.
+
+    Guardrail floor: if ANY delta file is source (per the step 11 buckets),
+    the CORRECTNESS agent is always dispatched regardless of what the delta
+    classification says — the same G1–G5 floor the `minor` fast path keeps.
+    Toolkit delta files additionally keep the Phase 1b-toolkit obligations
+    (the carry-forward fast path there handles the unchanged-artifact case).
+
 12. Check diff size for tier:
     - < 2000 lines → `review_tier = "full"`
     - 2000-20000 → `review_tier = "partitioned"`
@@ -301,6 +352,7 @@ changed symbol as temporal-workflow, temporal-activity, public-http,
 internal, test, or dead.
 
 Skip if review_scope is contract-toolkit, conformance-only, tests-only, docs-only, or config-only.
+On a delta-scoped re-review (step 11b), run it over the delta files only.
 
 ### 1b-toolkit. Private Toolkit Consumer Setup (if review_scope=contract-toolkit or mixed-sdk-toolkit)
 
@@ -315,33 +367,52 @@ reuse every mandatory consumer target from the registry. This validation setup
 is mandatory for affected surfaces; do not approve if a required check cannot
 run.
 
-Create a private validation ledger. This is the source of truth for toolkit
-compatibility status and verdict gating:
+Reset and create the private validation ledger (these files are written only
+here, so the reset lives here — not in Phase 0). It is the source of truth
+for toolkit compatibility status and verdict gating:
 
 ```bash
+rm -f /tmp/TOOLKIT_ROVER_NOTE.md
+: > /tmp/TOOLKIT_PR_ARTIFACTS.txt
+: > /tmp/TOOLKIT_CHANGED_FILES.txt
+: > /tmp/TOOLKIT_CONSUMERS.md
 : > /tmp/TOOLKIT_VALIDATION.md
 printf '## Toolkit Validation Ledger\n\n' >> /tmp/TOOLKIT_VALIDATION.md
 ```
 
-First run local PR-bound toolkit checks when toolkit source, examples, or
-generated output changed:
+**Do not re-run what CI already ran.** The `Contract Toolkit /` CI legs on
+this HEAD run the same commands the reviewer used to re-run wholesale
+(`PKL tests and invariants`, `Verify generated output`, `Generated Python
+lint and SDK imports`). Read them instead:
 
 ```bash
-contract-toolkit/scripts/regenerate-all.sh
-contract-toolkit/scripts/check-invariants.sh
-(cd contract-toolkit && pkl test tests/*.pkl)
-uv run --extra workflows python contract-toolkit/scripts/test-sdk-import.py
+gh pr checks "$PR_NUMBER" --repo "$REPO" --json name,conclusion \
+  --jq '.[] | select(.name | startswith("Contract Toolkit")) | .name + " " + (.conclusion // "pending")' \
+  > /tmp/TOOLKIT_CI_LEGS.txt
+```
+
+- Every leg `success` → record the legs as the local-check evidence in the
+  ledger. Run a local command ONLY as the substrate for probing CI cannot
+  express — guard ablations, scratch collision contracts, comparing
+  PR-generated artifacts against a consumer's expectations.
+- Any leg missing / pending / failed → run that leg's command locally and
+  treat a failure caused by PR code or stale generated output as a finding:
+
+```bash
+contract-toolkit/scripts/regenerate-all.sh     # ↔ Verify generated output
+contract-toolkit/scripts/check-invariants.sh   # ↔ PKL tests and invariants
+(cd contract-toolkit && pkl test tests/*.pkl)  # ↔ PKL tests and invariants
+uv run --extra workflows python contract-toolkit/scripts/test-sdk-import.py  # ↔ Generated Python lint and SDK imports
 git diff --check
 ```
 
-If any command fails due to PR code or stale generated output, add a finding.
-If the command cannot run due to Rover environment/tooling failure, create
-`/tmp/TOOLKIT_ROVER_NOTE.md` with the sanitized note below.
+If a required command cannot run due to Rover environment/tooling failure,
+create `/tmp/TOOLKIT_ROVER_NOTE.md` with the sanitized note below.
 
-Record successful local checks privately:
+Record the evidence privately:
 
 ```bash
-printf -- '- Generated SDK input contract: validated (local generated imports and Pkl tests passed)\n' >> /tmp/TOOLKIT_VALIDATION.md
+printf -- '- Generated SDK input contract: validated (CI toolkit legs green on this HEAD; PR-bound probing ran locally)\n' >> /tmp/TOOLKIT_VALIDATION.md
 ```
 
 Capture PR-generated artifacts as the input to downstream checks. Do not use a
@@ -351,6 +422,27 @@ consumer repository's released toolkit dependency as proof for this PR:
 find contract-toolkit/examples -path '*/generated/*' -type f | sort > /tmp/TOOLKIT_PR_ARTIFACTS.txt
 git diff --name-only -- contract-toolkit/examples contract-toolkit/src > /tmp/TOOLKIT_CHANGED_FILES.txt
 ```
+
+**Carry-forward fast path (re-reviews).** Hash the PR-generated artifacts
+and compare against the hash the prior review stamped (§3e stamps
+`<!-- TOOLKIT_ARTIFACT_HASH: ... -->` on toolkit-scope summaries):
+
+```bash
+ARTIFACT_HASH=$(cat /tmp/TOOLKIT_PR_ARTIFACTS.txt | xargs shasum -a 256 | shasum -a 256 | cut -d' ' -f1)
+PRIOR_HASH=$(grep -oE '<!-- TOOLKIT_ARTIFACT_HASH: [0-9a-f]{64} -->' /tmp/PRIOR_REVIEW.md \
+  | grep -oE '[0-9a-f]{64}' || true)
+```
+
+If `PRIOR_HASH` is non-empty and equals `ARTIFACT_HASH`, the generated
+artifacts are byte-identical to a commit whose downstream compatibility was
+already validated: mark every artifact-derived capability
+`validated (carried forward — artifacts byte-identical to previously
+validated commit)` in the ledger and **skip the consumer clone loop
+entirely**. Carry-forward covers the *consumer-side* checks only — new
+toolkit-source behavior the committed examples don't exercise (a new
+invariant, a changed codegen skip-list) still needs PR-bound local probing
+(scratch contracts, ablations), which requires no clones. Hash mismatch or
+no prior hash → full validation below.
 
 Use `/tmp/toolkit-review-consumers` for scratch clones:
 
@@ -630,6 +722,13 @@ Based on `review_scope`, dispatch agents via the Agent tool:
 | `config-only` | ci-config.md only (CI/workflow/deps/infra specialist) |
 | `docs-only` | SKIP Phase 2 entirely |
 
+**Re-review delta scoping (step 11b) modulates this table, not replaces
+it**: on a delta-scoped re-review the same routing applies but classified
+over `/tmp/DELTA_FILES.txt`, agents receive `/tmp/DELTA.patch` +
+`/tmp/PRIOR_REVIEW.md` + full contents of delta files only, and a
+verification-only re-review (empty delta) skips Wave 1 AND Wave 2
+entirely — Phase 2 reduces to §2e labeling + §2h verdict.
+
 **Mixed partitions:** when a `full` or `tests-focused` PR ALSO changes config
 or conformance files, additionally dispatch the matching specialist scoped to
 **only** that partition — never hand it to the SDK domain agents:
@@ -778,18 +877,9 @@ output**: for each finding in the new review, decide whether it's
 RESOLVED / STILL PRESENT / NEW relative to the prior review and tag
 it accordingly in the summary.
 
-If for any reason `PRIOR_REVIEW` is empty here, re-fetch using the
-same query Phase 0 uses — wrap the selection in an array and pick
-`last | .body` so the full body of the most recent matching comment
-lands as a single string (a naive `... | .body | head -1` truncates
-to the first LINE of the body, which is just the HTML marker, and
-silently breaks downstream consumers):
-
-```bash
-PRIOR_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-  --paginate \
-  --jq '[.[] | select(.body | contains("<!-- SDK_REVIEW -->"))] | last | .body // ""')
-```
+`/tmp/PRIOR_REVIEW.md` was loaded exactly once, in Phase 0 step 6b —
+do NOT re-fetch it here. If it is empty at this point, this is a first
+review and this section does not apply.
 
 Labeling rules:
 - Finding was in previous review, code at that line CHANGED → **RESOLVED**
@@ -844,9 +934,11 @@ the resolver converges — typically in 2–3 rounds — handing over a clean PR
 `MAX_ROUNDS` stays the backstop for the rare case where a fix legitimately keeps
 spawning new work.
 
-### 2f. Guardrails G1-G8
+### 2f. Guardrails G1-G7
 
 Check consolidated findings. Any G1/G2/G3/G5 → BLOCKED.
+(Guardrail IDs per the table in CLAUDE.md — CI is not a guardrail;
+see §2h.)
 
 ### 2g. Holistic Path Forward (Critical + High only)
 
@@ -866,8 +958,14 @@ MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 | BLOCKED | G1/G2/G3/G5 violation | REJECT |
 | NEEDS_HUMAN | DESIGN_CHANGE scope | REQUEST_CHANGES |
 | NEEDS_HUMAN | `review_scope` is `contract-toolkit` or `mixed-sdk-toolkit`, and non-empty `/tmp/TOOLKIT_ROVER_NOTE.md` exists or `/tmp/TOOLKIT_VALIDATION.md` has any mandatory toolkit compatibility check with status `needs rerun` | REQUEST_CHANGES |
-| NEEDS_FIXES | Critical, G4/G6, **any Important**, CI failing | REQUEST_CHANGES |
-| READY_TO_MERGE | **0 Critical AND 0 Important**, CI passing | APPROVE |
+| NEEDS_FIXES | Critical, G4/G6, **any Important** | REQUEST_CHANGES |
+| READY_TO_MERGE | **0 Critical AND 0 Important** | APPROVE |
+
+CI is deliberately NOT a verdict input. `sdk-review-downgrade-on-ci-failure.yml`
+strips an approval event-driven the moment any non-review check fails —
+the only race-free enforcement, since CI legs routinely finish after the
+review posts. The reviewer reports CI state on the `**CI:**` summary line
+(from the single Phase 0 step 9 read) and nothing more.
 
 `READY_TO_MERGE` is strict: a single Important finding forces
 `NEEDS_FIXES`. Nits do not block. If you believe an Important should
@@ -899,11 +997,13 @@ in the findings array — put those in the summary or inline comment body instea
 For BLOCKING/CRITICAL/HIGH findings, create inline comments:
 - `file` and `line` must be in DIFF.patch (added lines only)
 - Max 15 inline comments
-- Write each inline body to `/tmp/inline-comments/<n>.md` and the matching
-  path/line metadata to `/tmp/inline-comments/<n>.json` before Phase 3f. The
-  staged markdown file is the only source allowed for the posted `body`.
-  Do not post from an in-memory body string for toolkit reviews; that bypasses
-  the redaction gate.
+- For `contract-toolkit` / `mixed-sdk-toolkit` scopes ONLY: write each inline
+  body to `/tmp/inline-comments/<n>.md` and the matching path/line metadata to
+  `/tmp/inline-comments/<n>.json` before Phase 3f — the staged markdown file
+  is the only source allowed for the posted `body`, because it is what the
+  redaction gate scans. Never post a toolkit inline comment from an in-memory
+  body string. Other scopes have no redaction gate and may post directly from
+  the built body — no file staging required.
 - Format:
   ```
   **[SEVERITY]** [TAG] — description
@@ -1000,11 +1100,21 @@ runs; do NOT remove it. The second marker `<!-- VERDICT: X -->` is the
 machine-readable verdict the GHA approval workflows parse — keep it
 in sync with the human-readable `### Verdict:` line below. The token
 after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
-`BLOCKED`, `NEEDS_HUMAN`, `NEEDS_REBASE`.
+`BLOCKED`, `NEEDS_HUMAN`, `NEEDS_REBASE`. The third marker
+`<!-- REVIEWED_HEAD: <sha> -->` records the 40-char HEAD this review
+ran against — step 6c reads it on the next round to compute the
+re-review delta; omitting it forces the next round back to a full
+review. For toolkit scopes, the fourth marker
+`<!-- TOOLKIT_ARTIFACT_HASH: <sha256> -->` records the PR-generated
+artifact hash from Phase 1b-toolkit so the next round can carry
+consumer validation forward; omit the line entirely for non-toolkit
+scopes.
 
 ```
 <!-- SDK_REVIEW -->
 <!-- VERDICT: READY_TO_MERGE | NEEDS_FIXES | BLOCKED | NEEDS_HUMAN | NEEDS_REBASE -->
+<!-- REVIEWED_HEAD: <HEAD_SHA> -->
+<!-- TOOLKIT_ARTIFACT_HASH: <ARTIFACT_HASH> -->   <!-- toolkit scopes only -->
 ## SDK <Review | Re-review> (mothership): PR #<number> — <title>
 <!-- For review_scope=contract-toolkit, write this heading as:
      "Contract Toolkit <Review | Re-review> (mothership)".
@@ -1068,10 +1178,14 @@ after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
 
 ---
 **CI:** all passing | N failing
-**Models:** Claude Opus 4.6 (review) + GPT-5.3-codex (adversarial)
+**Models:** <primary review model> (review) + <adversarial model — or "adversarial skipped (<reason>)">
 **Cross-model agreement:** X/Y confirmed by both
 **Run:** [view workflow logs + cost](<GHA_RUN_URL>)
 ```
+
+Fill the model names from the models that actually ran this review —
+never hardcode them in this template; stale model names in posted
+reviews erode trust in everything else the summary claims.
 
 **Title selection — "Review" vs "Re-review":**
 - If `/tmp/PRIOR_REVIEW.md` is empty (or this is the first
@@ -1147,14 +1261,9 @@ Retry once on 5xx from the GitHub API. On 422 (malformed inline
 comment because the line is not in the diff), drop that one finding
 and continue with the rest.
 
-### 3g. CI Check — note failures (read-only)
-
-After posting the review, re-check CI via `gh pr checks "$PR_NUMBER" --repo "$REPO"`.
-The review does NOT fix CI and does NOT push. Reflect the failing checks
-in the `**CI:**` summary line and the verdict (a real CI failure →
-NEEDS_FIXES per §2h). `sdk-review-downgrade-on-ci-failure.yml` independently
-strips any approval if a non-review check fails, so the gate is covered
-without the reviewer mutating the branch.
+There is no post-review CI re-check: the `**CI:**` line comes from the
+single Phase 0 step 9 read, and `sdk-review-downgrade-on-ci-failure.yml`
+owns enforcement for anything that finishes after the review posts.
 
 Print: `[Phase 3 complete] Review submitted`
 
