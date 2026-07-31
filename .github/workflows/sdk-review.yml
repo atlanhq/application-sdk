@@ -709,9 +709,27 @@ jobs:
                     # Unhandled event name. mothership forwards `system` and
                     # `stderr` unmapped, and can add types later; the case
                     # had no fallback, so those were dropped on the floor
-                    # with no trace. Print a bounded preview and count it as
-                    # proof of life.
-                    echo "[${EVENT}]  ${DATA:0:200}"
+                    # with no trace.
+                    #
+                    # `system` dominates the log in practice (sub-agent
+                    # task_started / task_progress / task_notification), and
+                    # the raw frame is a JSON string nested inside .content.
+                    # Render "<subtype>: <description>" when we can and fall
+                    # back to a bounded raw preview otherwise.
+                    SYS=$(printf '%s' "$DATA" | jq -r '
+                      (.content // "") as $c
+                      | ($c | fromjson? // null) as $j
+                      | (if $j == null then $c
+                         else (($j.subtype // $j.type // "")
+                               + (if ($j.description // "") != ""
+                                  then ": " + ($j.description | tostring) else "" end))
+                         end)
+                      | gsub("\\s+"; " ") | .[0:140]' 2>/dev/null) || SYS=""
+                    if [ -n "$SYS" ]; then
+                      echo "[${EVENT}]     ${SYS}"
+                    else
+                      echo "[${EVENT}]     ${DATA:0:200}"
+                    fi
                     LAST_ACTION_TS=$NOW_TS
                     LAST_ACTION_NAME="$EVENT"
                     IDLE_WARNED=0
