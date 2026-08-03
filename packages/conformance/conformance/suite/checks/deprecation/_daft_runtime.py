@@ -161,6 +161,58 @@ class _ScopeMap:
         return self._parent.get(scope)
 
 
+def _yields_pyarrow(value: ast.expr | None) -> bool:
+    """Whether *value* is, or is a collection of, pyarrow Tables.
+
+    A producer call directly (``pa.table({})``), or a literal/comprehension whose
+    elements are producer calls (``[pa.table({}) for _ in range(3)]``).  The
+    collection case matters because the elements are what get iterated into a
+    later comprehension target, and ``to_pylist()`` on a real Table is the
+    *non*-deprecated API this rule must leave alone.
+    """
+    if value is None:
+        return False
+    if _is_pyarrow_producer_call(value):
+        return True
+    if isinstance(value, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+        return _is_pyarrow_producer_call(value.elt)
+    if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+        return any(_is_pyarrow_producer_call(e) for e in value.elts)
+    return False
+
+
+def _comprehension_element(
+    iterable: ast.expr,
+    by_scope: dict[ast.AST, dict[str, list[tuple[int, bool]]]],
+) -> ast.expr | None:
+    """A stand-in producer node when *iterable* yields pyarrow Tables.
+
+    ``tables = [pa.table({}) for _ in range(3)]`` then
+    ``[t.to_pylist() for t in tables]`` — ``t`` genuinely is a pyarrow Table, and
+    ``to_pylist()`` on one is the *non*-deprecated API this rule must leave
+    alone. Recognises the two reachable shapes: a comprehension whose element
+    expression is a producer call, and a name already bound to such a
+    comprehension.
+    """
+    if _yields_pyarrow(iterable):
+        return ast.Call(
+            func=ast.Attribute(value=ast.Name(id="pa"), attr="table"),
+            args=[],
+            keywords=[],
+        )
+    if isinstance(iterable, ast.Name):
+        for names in by_scope.values():
+            for lineno_flag in names.get(iterable.id, []):
+                if lineno_flag[1]:
+                    return ast.Call(
+                        func=ast.Attribute(value=ast.Name(id="pa"), attr="table"),
+                        args=[],
+                        keywords=[],
+                    )
+        return None
+    return None
+
+
 def _pyarrow_bindings_by_scope(
     tree: ast.Module, scopes: _ScopeMap
 ) -> dict[ast.AST, dict[str, list[tuple[int, bool]]]]:
@@ -177,17 +229,49 @@ def _pyarrow_bindings_by_scope(
     because ``df`` is a real SDK frame by the time it is used.
     """
     by_scope: dict[ast.AST, dict[str, list[tuple[int, bool]]]] = {}
-    for node in ast.walk(tree):
-        if not (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-        ):
-            continue
+    deferred: list[ast.expr] = []
+
+    def record(node: ast.AST, target: ast.expr, value: ast.expr | None) -> None:
+        if not isinstance(target, ast.Name):
+            return
         scope = scopes.scope_of(node)
-        name = node.targets[0].id
-        entry = by_scope.setdefault(scope, {}).setdefault(name, [])
-        entry.append((node.lineno, _is_pyarrow_producer_call(node.value)))
+        entry = by_scope.setdefault(scope, {}).setdefault(target.id, [])
+        is_pyarrow = _yields_pyarrow(value)
+        entry.append((getattr(node, "lineno", 0), is_pyarrow))
+
+    for node in ast.walk(tree):
+        # Plain assignment.
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            record(node, node.targets[0], node.value)
+        # Annotated assignment with a value.
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            record(node, node.target, node.value)
+        # Walrus: `if (df := frame):`
+        elif isinstance(node, ast.NamedExpr):
+            record(node, node.target, node.value)
+        # Loop target: `for df in pages:` — the element, never a producer call.
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            record(node, node.target, None)
+        # Context manager: `with frame as df:` — pyarrow only if the bound
+        # expression is itself a producer.
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    record(node, item.optional_vars, item.context_expr)
+        # Comprehension targets: `[t.to_pylist() for t in tables]`. The element
+        # of a pyarrow-producing iterable is itself pyarrow, which is why the
+        # iterable is inspected rather than assumed non-pyarrow.
+        elif isinstance(
+            node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+        ):
+            deferred.append(node)
+
+    # Comprehensions resolve last: their iterable may be a name bound by an
+    # assignment later in the walk order, and `ast.walk` is breadth-first.
+    for comp in deferred:
+        for gen in comp.generators:
+            record(comp, gen.target, _comprehension_element(gen.iter, by_scope))
+
     return by_scope
 
 

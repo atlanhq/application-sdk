@@ -1512,8 +1512,12 @@ ENABLE_ATLAN_UPLOAD else "soft"`   — hard exactly when upload is on, the rever
 intent; * a both-arms-hard ternary (unconditional in a conditional's   clothing); *
 `os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", "hard")` and
 `os.environ.get("ATLAN_PREFLIGHT_GATE_MODE") or "hard"` — hard on   every deployment
-that leaves the variable unset; * one hop of module-level indirection (`MODE = "hard"` /
-`preflight_gate_mode = MODE`), when `MODE` is bound exactly   once.
+that leaves the variable unset; * one hop of constant indirection (`MODE = "hard"` /
+`preflight_gate_mode = MODE`), at module level **or** in the   same class body —
+`preflight_gate_mode` is conventionally a   class attribute, so the class-body form is
+at least as common.   The name resolves when every straight-line assignment to it in
+that body is a string literal; the last one wins (so   `MODE = "soft"` followed by `MODE
+= "hard"` still fires). A   name ever assigned a computed value is not resolved at all.
 
 Known limit: a condition written with inverted polarity (`"hard" if not
 ENABLE_ATLAN_UPLOAD else "soft"`) reads as the true-arm shape and is flagged — suppress

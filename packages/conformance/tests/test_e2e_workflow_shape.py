@@ -704,3 +704,43 @@ def test_t021_fires_when_only_an_artifact_path_mentions_the_suite(
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
     assert "T021" in _ids(_scan(root))
+
+
+def test_t021_fires_when_only_run_name_mentions_the_suite(tmp_path: Path) -> None:
+    """`run-name:` is GitHub's cosmetic display field; it executes nothing."""
+    root = _repo(
+        tmp_path,
+        workflows={
+            "ci.yaml": (
+                "name: CI\n"
+                "run-name: Testing tests/e2e/test_full.py on ${{ github.ref }}\n"
+                "on:\n  pull_request:\njobs:\n"
+                "  unit:\n    runs-on: ubuntu-latest\n    steps:\n"
+                "      - run: pytest tests/unit\n"
+            )
+        },
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+    )
+    assert "T021" in _ids(_scan(root))
+
+
+def test_t021_fires_when_only_a_cache_path_mentions_the_suite(
+    tmp_path: Path,
+) -> None:
+    """`actions/cache` names a location it reads and writes, never a command."""
+    root = _repo(
+        tmp_path,
+        workflows={
+            "ci.yaml": (
+                "name: CI\non:\n  pull_request:\njobs:\n"
+                "  unit:\n    runs-on: ubuntu-latest\n    steps:\n"
+                "      - uses: actions/cache@v4\n"
+                "        with:\n"
+                "          path: tests/e2e/.cache\n"
+                "          key: e2e-cache\n"
+                "      - run: pytest tests/unit\n"
+            )
+        },
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+    )
+    assert "T021" in _ids(_scan(root))

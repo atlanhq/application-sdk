@@ -486,3 +486,32 @@ def test_t024_still_fires_when_an_ambiguous_candidate_could_be_a_harness(
         },
     )
     assert "T024" in _ids(_scan(root))
+
+
+def test_t024_silent_when_the_ambiguous_ancestor_declares_mode(
+    tmp_path: Path,
+) -> None:
+    """The floor must not grade a class and then deny it its own ancestor.
+
+    `ambiguous` answers _is_harness_class's question, not _declares_mode's.
+    """
+    root = _repo(
+        tmp_path,
+        tests={
+            "a/helpers.py": "class Shared:\n    pass\n",
+            "b/helpers.py": (
+                "from application_sdk.testing.e2e import BaseE2ETest, RunMode\n"
+                "\n"
+                "class Shared(BaseE2ETest):\n"
+                "    mode = RunMode.AGENT\n"
+            ),
+            "e2e/test_thing.py": (
+                "from tests.b.helpers import Shared\n"
+                "\n"
+                "class TestSomething(Shared):\n"
+                "    def test_foo(self):\n"
+                "        assert True\n"
+            ),
+        },
+    )
+    assert "T024" not in _ids(_scan(root))

@@ -321,7 +321,19 @@ def _declares_mode(info: _ClassInfo, index: _ClassIndex, by_name: _NameIndex) ->
         for base in current.bases:
             resolved, ambiguous = _resolve_base(base, current.file, index, by_name)
             if ambiguous:
-                continue  # an unresolvable ancestor cannot vouch for `mode`
+                # `ambiguous` answers _is_harness_class's question ("could any
+                # candidate make this a harness"), not this one. Blanket-skipping
+                # made the floor grade the class and then deny it the ancestor
+                # that would clear it. Consult the candidates instead: if EVERY
+                # harness-reaching candidate declares `mode`, that is knowable.
+                harness_candidates = [
+                    c
+                    for c in by_name.get(base, [])
+                    if _reaches_harness_base(c, index, by_name)
+                ]
+                if harness_candidates and all(walk(c) for c in harness_candidates):
+                    return True
+                continue
             if resolved is not None and walk(resolved):
                 return True
         return False

@@ -137,6 +137,7 @@ _KEY_VALUE_RE = re.compile(r"^\s*(?:-\s+)?(?P<key>[A-Za-z_][A-Za-z0-9_.\-]*)\s*:
 _NON_EXECUTING_KEYS = frozenset(
     {
         "name",
+        "run-name",
         "if",
         "description",
         "id",
@@ -148,12 +149,21 @@ _NON_EXECUTING_KEYS = frozenset(
     }
 )
 
-#: `path:`/`paths:` under an artifact step is an upload/download target, not a
-#: suite invocation. Tracked by remembering the step's `uses:` line.
-_ARTIFACT_ACTION_RE = re.compile(
-    r"^\s*(?:-\s+)?uses\s*:\s*\S*(?:upload|download)-artifact"
+#: Actions whose path-shaped inputs name a location to read or write, never a
+#: command to run. Tracked by remembering the step's `uses:` line.
+#:
+#: A deny-list can only ever be as complete as the actions someone thought to
+#: test, so this covers the common non-executing families rather than only the
+#: artifact one that motivated it — `actions/cache` with `path: tests/e2e/.cache`
+#: and `actions/checkout` with a destination `path:` are the same shape.
+_NON_EXECUTING_ACTION_RE = re.compile(
+    r"^\s*(?:-\s+)?uses\s*:\s*\S*"
+    r"(?:(?:upload|download)-artifact|actions/cache|actions/checkout"
+    r"|setup-python|setup-node|setup-uv)"
 )
-_ARTIFACT_PATH_KEYS = frozenset({"path", "paths"})
+_ARTIFACT_PATH_KEYS = frozenset(
+    {"path", "paths", "key", "restore-keys", "cache-dependency-path"}
+)
 _RUN_KEY_RE = re.compile(r"^\s*(?:-\s+)?run\s*:\s*(?P<rest>.*?)\s*$")
 # Trigger-filter blocks: text here selects *when* a workflow runs, never what
 # it executes.
@@ -324,7 +334,7 @@ def _names_e2e_path(lines: list[str]) -> bool:
                 return True
             continue
 
-        if _ARTIFACT_ACTION_RE.match(line):
+        if _NON_EXECUTING_ACTION_RE.match(line):
             artifact_step_indent = indent
             continue
 

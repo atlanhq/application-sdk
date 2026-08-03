@@ -1622,3 +1622,35 @@ def test_p041_fires_on_deterministic_reassigned_constant(tmp_path: Path) -> None
         },
     )
     assert any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+def test_p030_positional_store_argument_is_a_transfer(tmp_path: Path) -> None:
+    """The SDK's own callers pass the store positionally."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    async def upload_to_atlan(self, prefix):\n"
+                "        await transfer_directory(src, dst, upstream_store)\n"
+            ),
+        },
+    )
+    assert not any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p041_fires_on_annotated_constant_indirection(tmp_path: Path) -> None:
+    """`MODE: str = "hard"` is the annotated spelling of a resolved constant."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "MODE: str = 'hard'\n"
+                "class Connector:\n"
+                "    preflight_gate_mode = MODE\n"
+            ),
+        },
+    )
+    assert any(f.rule_id == "P041" for f in _run(tmp_path))

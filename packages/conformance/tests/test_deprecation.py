@@ -742,3 +742,52 @@ def test_b007_closure_defined_before_its_binding_is_exempt() -> None:
         + "    return inner()\n"
     )
     assert _b007(src) == []
+
+
+def test_b007_tracks_every_rebinding_form() -> None:
+    """A stale pyarrow exemption must not survive a non-`Assign` rebinding.
+
+    Tracking only `ast.Assign` reopened the round-2 false-negative class through
+    walrus, loop and context-manager targets.
+    """
+    prelude = _SDK_IMPORT + "import pyarrow as pa\n\n"
+    for label, body in (
+        ("walrus", "    if (df := frame):\n        pass\n"),
+        ("for", "    for df in pages:\n        pass\n"),
+        ("with", "    with frame as df:\n        pass\n"),
+    ):
+        src = (
+            prelude
+            + "def f(frame, pages):\n"
+            + "    df = pa.table({})\n"
+            + body
+            + "    return df.to_pylist()\n"
+        )
+        assert [f.rule_id for f in _b007(src)] == ["B007"], label
+
+
+def test_b007_comprehension_over_pyarrow_tables_is_exempt() -> None:
+    """`to_pylist()` on a real pyarrow Table is the non-deprecated API.
+
+    Untracked binding forms defaulted to "not pyarrow-bound", which over-reported
+    a genuinely-pyarrow comprehension target.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f():\n"
+        + "    tables = [pa.table({}) for _ in range(3)]\n"
+        + "    return [t.to_pylist() for t in tables]\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_comprehension_over_reader_frames_still_fires() -> None:
+    """The exemption must not swallow the ordinary case."""
+    src = (
+        _SDK_IMPORT
+        + "def f(frames):\n"
+        + "    return [t.to_pylist() for t in frames]\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]

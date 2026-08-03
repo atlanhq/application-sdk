@@ -59,6 +59,7 @@ from conformance.suite.checks._ast_common import (
     is_sdk_package_name,
     make_cli_main,
     parse_toml_suppressions,
+    safe_read_text,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -997,7 +998,9 @@ def scan_path(
     sdk_published_extras: Iterable[str] | None = None,
 ) -> list[Finding]:
     """Scan a single pyproject.toml on disk."""
-    text = path.read_text(encoding="utf-8")
+    text = safe_read_text(path)
+    if text is None:
+        return []
     try:
         rel = path.relative_to(root)
     except ValueError:

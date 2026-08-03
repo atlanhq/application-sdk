@@ -361,15 +361,22 @@ def _call_names_a_store(node: ast.Call) -> bool:
     if any(_names_a_store(part) for part in receiver_parts):
         return True
 
+    def arg_names_a_store(value: ast.expr) -> bool:
+        if isinstance(value, ast.Name):
+            return _names_a_store(value.id)
+        if isinstance(value, ast.Attribute):
+            return _names_a_store(value.attr)
+        return False
+
     for kw in node.keywords:
         if kw.arg and _names_a_store(kw.arg):
             return True
-        value = kw.value
-        if isinstance(value, ast.Name) and _names_a_store(value.id):
+        if arg_names_a_store(kw.value):
             return True
-        if isinstance(value, ast.Attribute) and _names_a_store(value.attr):
-            return True
-    return False
+    # Positional too: the SDK's own callers pass the store positionally
+    # (storage/reference.py, storage/batch.py), so a real bridge such as
+    # `transfer_directory(src, dst, store)` must not read as moving no bytes.
+    return any(arg_names_a_store(arg) for arg in node.args)
 
 
 def _is_storage_transfer_call(node: ast.Call) -> bool:
@@ -1198,13 +1205,15 @@ def _string_constants(body: list[ast.stmt]) -> dict[str, object]:
     seen: dict[str, object] = {}
     poisoned: set[str] = set()
     for stmt in body:
-        if not (
-            isinstance(stmt, ast.Assign)
-            and len(stmt.targets) == 1
-            and isinstance(stmt.targets[0], ast.Name)
-        ):
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target = stmt.targets[0]
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            target = stmt.target  # `MODE: str = "hard"`
+        else:
             continue
-        name = stmt.targets[0].id
+        if not isinstance(target, ast.Name):
+            continue
+        name = target.id
         if isinstance(stmt.value, ast.Constant):
             # Straight-line statements only, so the last write wins:
             # `MODE = "soft"` then `MODE = "hard"` is deterministically hard.

@@ -527,9 +527,14 @@ RULES: tuple[RuleDefinition, ...] = (
             '* ``os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", "hard")`` and\n'
             '  ``os.environ.get("ATLAN_PREFLIGHT_GATE_MODE") or "hard"`` — hard on\n'
             "  every deployment that leaves the variable unset;\n"
-            '* one hop of module-level indirection (``MODE = "hard"`` /\n'
-            "  ``preflight_gate_mode = MODE``), when ``MODE`` is bound exactly\n"
-            "  once.\n"
+            '* one hop of constant indirection (``MODE = "hard"`` /\n'
+            "  ``preflight_gate_mode = MODE``), at module level **or** in the\n"
+            "  same class body — ``preflight_gate_mode`` is conventionally a\n"
+            "  class attribute, so the class-body form is at least as common.\n"
+            "  The name resolves when every straight-line assignment to it in\n"
+            "  that body is a string literal; the last one wins (so\n"
+            '  ``MODE = "soft"`` followed by ``MODE = "hard"`` still fires). A\n'
+            "  name ever assigned a computed value is not resolved at all.\n"
             "\n"
             "Known limit: a condition written with inverted polarity\n"
             '(``"hard" if not ENABLE_ATLAN_UPLOAD else "soft"``) reads as the\n'

@@ -28,6 +28,10 @@ dependencies = [
     "pydantic>=2.10.6,<3.0.0",
     "jsonschema>=4.23.0,<5.0.0",
     "jinja2>=3.1.0,<4.0.0",
+    # D010 evaluates PEP 508 markers on uv.lock edges. Without this the
+    # import silently falls back to "every marker contributes", which
+    # reinstates the bug the marker check exists to fix, undetectably.
+    "packaging>=24.0,<26.0",
 ]
 
 [project.optional-dependencies]
