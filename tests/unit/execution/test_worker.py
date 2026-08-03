@@ -6,12 +6,19 @@ import asyncio
 from dataclasses import dataclass
 from unittest import mock
 
+import pydantic
 import pytest
+from temporalio.exceptions import ActivityError
 
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
+from application_sdk.errors.leaves import (
+    AppTimeoutError,
+    DependencyUnavailableError,
+    RateLimitedError,
+)
 from application_sdk.execution._temporal._activity_errors import (
     WorkerActivityNameCollisionError,
     WorkerInterceptorDuplicateError,
@@ -1096,3 +1103,60 @@ class TestResolveGateEnforcement:
                 return _WorkerOutput()
 
         assert _resolve_gate_enforcement(_Hard) is True
+
+
+class TestWorkflowFailureExceptionTypes:
+    """Pre-user-code failures must fail the run, not retry the task forever."""
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @staticmethod
+    def _declared_types() -> tuple[type[BaseException], ...]:
+        class _FailureTypesApp(App):
+            @task(timeout_seconds=60)
+            async def do_work(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured.update(kwargs)
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(_make_mock_client())
+
+        return tuple(captured["workflow_failure_exception_types"])
+
+    def test_undecodable_input_fails_the_run_terminally(self) -> None:
+        assert issubclass(pydantic.ValidationError, self._declared_types())
+
+    def test_retryable_errors_are_not_declared(self) -> None:
+        declared = self._declared_types()
+        for retryable in (
+            RateLimitedError,
+            DependencyUnavailableError,
+            AppTimeoutError,
+        ):
+            assert not issubclass(retryable, declared), (
+                f"{retryable.__name__} has default_retryable=True and must stay "
+                "retryable; workflow_failure_exception_types is matched by type "
+                "and cannot consult effective_retryable"
+            )
+
+    def test_cancellation_is_not_declared(self) -> None:
+        declared = self._declared_types()
+        assert not issubclass(asyncio.CancelledError, declared)
+        assert not issubclass(ActivityError, declared)
