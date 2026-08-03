@@ -41,6 +41,34 @@ warnings.warn(
 
 logger = get_logger(__name__)
 
+_SQL_KEYWORD_LITERALS = frozenset({"FALSE", "TRUE", "NULL"})
+
+
+def _is_never_resolvable(column: dict[str, Any]) -> bool:
+    """Whether a field the SQL gate excluded could resolve on any input at all.
+
+    Separates an authoring mistake from by-design gating. A field whose declared
+    ``source_columns`` are merely absent this run -- or whose ``source_query`` names a
+    column absent this run -- resolves on a run that supplies them, which is the
+    transformer's opt-in behaviour for optional enrichments and not a defect.
+
+    Two shapes can never resolve, whatever the input:
+
+    * a bare SQL keyword authored as a quoted string (``source_query: "FALSE"``), which
+      is read as a column reference and so only ever matches a column literally named
+      ``FALSE``. The unquoted YAML scalar ``FALSE`` is the correct authoring.
+    * a multi-token SQL expression that declares no ``source_columns``, since the gate
+      admits an undeclared ``source_query`` only by exact column-name match.
+    """
+    source_query = column["source_query"]
+    if not isinstance(source_query, str):
+        return True
+    if source_query.upper() in _SQL_KEYWORD_LITERALS:
+        return True
+    if column.get("source_columns"):
+        return False
+    return not source_query.isidentifier()
+
 
 class QueryBasedTransformer(TransformerInterface):
     """Query based transformer that uses YAML files for SQL queries and DuckDB for execution.
@@ -172,15 +200,25 @@ class QueryBasedTransformer(TransformerInterface):
                 literal_columns.append(column)
                 columns.append(self.convert_to_sql_expression(column, is_literal=True))
 
-            else:
+            elif _is_never_resolvable(column):
                 logger.warning(
-                    "Template field %r dropped from %s: source_query %r is neither an "
-                    "available column nor a recognised literal, so the attribute will "
-                    "be absent from published output. A bare SQL keyword must be "
+                    "Template field %r dropped from %s: source_query %r can never "
+                    "resolve to a column or a literal, so the attribute will be absent "
+                    "from published output on every run. A bare SQL keyword must be "
                     "authored as an unquoted YAML scalar, not a quoted string.",
                     column["name"],
                     yaml_path or "<template>",
                     column["source_query"],
+                )
+
+            else:
+                logger.debug(
+                    "Template field %r skipped from %s: declared inputs absent from "
+                    "this run (source_query %r, source_columns %r)",
+                    column["name"],
+                    yaml_path or "<template>",
+                    column["source_query"],
+                    column.get("source_columns"),
                 )
 
         return columns, literal_columns or None

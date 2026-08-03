@@ -145,9 +145,9 @@ def test_generate_sql_query(
     assert result == expected_result
 
 
-def _dropped_field_names(mock_logger):
-    """Extract the field name from each dropped-field warning the transformer emitted."""
-    return [call.args[1] for call in mock_logger.warning.call_args_list]
+def _dropped_field_names(mock_log_method):
+    """Field name from each excluded-field diagnostic logged via the given mock method."""
+    return [call.args[1] for call in mock_log_method.call_args_list]
 
 
 def test_quoted_sql_keyword_source_query_is_dropped_with_a_warning(
@@ -179,7 +179,7 @@ def test_quoted_sql_keyword_source_query_is_dropped_with_a_warning(
     assert columns == ['table_name AS "attributes.name"']
     assert literal_columns is None
 
-    assert _dropped_field_names(mock_logger) == [
+    assert _dropped_field_names(mock_logger.warning) == [
         "attributes.propagate",
         "attributes.partitionOrder",
     ]
@@ -219,10 +219,15 @@ def test_unquoted_yaml_scalars_are_published_as_literals_without_warning(
     mock_logger.warning.assert_not_called()
 
 
-def test_unresolvable_source_column_is_dropped_with_a_warning(
+def test_absent_declared_source_columns_are_debug_not_warning(
     sql_transformer, sample_dataframe
 ):
-    """The broader class: a field whose declared source columns are absent from the input."""
+    """By-design gating, not an authoring bug: declared inputs simply absent this run.
+
+    The field resolves fine on a run that supplies ``missing_column``, so warning here
+    would drown the genuine authoring errors -- these outnumber them roughly 6:1 on a
+    real connector's templates.
+    """
     template = {
         "columns": flatten_yaml_columns(
             {
@@ -243,24 +248,82 @@ def test_unresolvable_source_column_is_dropped_with_a_warning(
 
     assert columns == []
     assert literal_columns is None
-    assert _dropped_field_names(mock_logger) == ["attributes.remoteId"]
+    mock_logger.warning.assert_not_called()
+    assert _dropped_field_names(mock_logger.debug) == ["attributes.remoteId"]
 
 
-def test_no_warning_when_every_declared_field_resolves(
+def test_absent_bare_column_reference_is_debug_not_warning(
+    sql_transformer, sample_dataframe
+):
+    """Same gating, expressed without ``source_columns`` -- the common authoring style.
+
+    ``source_columns`` is redundant for a single-column reference, since the gate admits
+    it by exact column-name match, so templates routinely omit it. Keying the severity
+    off ``source_columns`` would therefore warn on ordinary optional enrichments.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {"attributes": {"tagValue": {"source_query": "missing_column"}}}
+        )
+    }
+
+    with patch.object(query_module, "logger") as mock_logger:
+        columns, _ = sql_transformer.get_sql_column_expressions(
+            template, sample_dataframe, {}
+        )
+
+    assert columns == []
+    mock_logger.warning.assert_not_called()
+    assert _dropped_field_names(mock_logger.debug) == ["attributes.tagValue"]
+
+
+def test_undeclared_sql_expression_can_never_resolve_and_warns(
+    sql_transformer, sample_dataframe
+):
+    """A multi-token expression with no ``source_columns`` is admissible on no input.
+
+    The gate only admits an undeclared ``source_query`` by exact column-name match, and
+    an expression is never a column name -- so this is an authoring bug regardless of
+    what the run supplies.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {"attributes": {"remoteId": {"source_query": "upper(table_name)"}}}
+        )
+    }
+
+    with patch.object(query_module, "logger") as mock_logger:
+        columns, _ = sql_transformer.get_sql_column_expressions(
+            template, sample_dataframe, {}
+        )
+
+    assert columns == []
+    mock_logger.debug.assert_not_called()
+    assert _dropped_field_names(mock_logger.warning) == ["attributes.remoteId"]
+
+
+def test_emitted_field_set_equals_declared_field_set_when_inputs_are_present(
     sql_transformer, sample_dataframe, sample_yaml_template
 ):
-    """Guard against false positives: a fully-resolvable template must stay quiet."""
+    """Every declared field must reach the SQL when the input supplies its columns.
+
+    The end-to-end assertion the sibling issue asked for: a template whose inputs are
+    all present must lose nothing and say nothing.
+    """
     sample_yaml_template["columns"] = flatten_yaml_columns(
         sample_yaml_template["columns"]
     )
+    declared = {column["name"] for column in sample_yaml_template["columns"]}
 
     with patch.object(query_module, "logger") as mock_logger:
         columns, _ = sql_transformer.get_sql_column_expressions(
             sample_yaml_template, sample_dataframe, {}
         )
 
-    assert len(columns) == 4
+    emitted = {expression.rsplit(" AS ", 1)[1].strip('"') for expression in columns}
+    assert emitted == declared
     mock_logger.warning.assert_not_called()
+    mock_logger.debug.assert_not_called()
 
 
 def test_generate_sql_query_threads_the_template_path_into_the_warning(
