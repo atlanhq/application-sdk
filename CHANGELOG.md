@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.26.0 (August 03, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.25.1...v3.26.0
+
+### Features
+
+- serve the manifest over POST so fe_inputs escapes the query-string cap (CSA-539) (#2903) (by @OnkarVO7 in [dc71bc4](https://github.com/atlanhq/application-sdk/commit/dc71bc4))
+
+### Bug Fixes
+
+- distinguish a malformed filter from an injection, and fail undecodable input terminally (#2928) (by @fyzanshaik-atlan in [8f10c80](https://github.com/atlanhq/application-sdk/commit/8f10c80))
+
+
 ## v3.25.1 (July 31, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.25.0...v3.25.1
