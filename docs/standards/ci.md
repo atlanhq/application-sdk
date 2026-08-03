@@ -40,16 +40,78 @@ short-circuit) has a case.
 ## Running the script tests
 
 The `CI script tests` workflow (`.github/workflows/scripts-tests.yaml`) runs
-`pytest .github/scripts/tests` on PRs that touch `.github/scripts/**`:
+`pytest .github/scripts/tests` on every PR:
 
 ```bash
 uv run --extra workflows --with pytest python -m pytest .github/scripts/tests -q
 ```
 
 If you add a new script, add its test in the same PR — the workflow will pick
-it up automatically. To make this gate *blocking*, add it to branch protection
-behind an always-concluding gate (see `sdk-gate.yaml`), since a path-filtered
-required check otherwise sits pending forever when its paths are untouched.
+it up automatically.
+
+The trigger is deliberately **not** path-filtered. Part of this suite consists of
+cross-file guards that read YAML outside `.github/scripts/` — the mask-before-write
+call-site check below is one — and any `paths:` list would have to enumerate every
+file they inspect, so it would silently stop firing on exactly the edits those
+guards exist to catch. Don't add one; a sub-minute suite is cheaper than that
+failure mode. Because it now concludes on every PR, it can be added to branch
+protection directly, without the always-concluding-gate wrapper that
+path-filtered required checks need (see `sdk-gate.yaml` for that pattern).
+
+## Mask secrets before writing them to `$GITHUB_ENV`
+
+**Rule:** if a step derives secret values from something else — unpacking a
+composed blob, decoding a bundle, reading a credentials file — it must register
+each derived value with `::add-mask::` *before* the value reaches `$GITHUB_ENV`,
+`$GITHUB_OUTPUT`, or anything a later step prints.
+
+**Why:** the runner's log masker replaces occurrences of each *registered
+string*. It does not match substrings of one. Registering a composed blob
+(`toJSON(...)` of several secrets, say) therefore redacts the blob and nothing
+inside it, so the first later step that renders its `env:` group prints each
+extracted value in cleartext. `secrets: inherit` does not help: inheritance
+controls which secrets a job can read, not which strings the masker knows.
+
+**The stdout constraint:** `::add-mask::` is a workflow command the runner reads
+from the step's **stdout**. A script whose stdout is redirected into
+`$GITHUB_ENV` cannot emit mask commands on that stream — they would be written
+into the env file as garbage. Do not fall back to stderr; workflow commands on
+stderr are not a documented guarantee. Split the two outputs into two modes and
+call the masking one first, so a failure aborts the step before anything is
+written:
+
+```yaml
+- name: Export caller-supplied credentials
+  run: |
+    set -euo pipefail
+    python3 .github/scripts/<driver>.py --json "$PAYLOAD" --mask-only
+    python3 .github/scripts/<driver>.py --json "$PAYLOAD" >> "$GITHUB_ENV"
+```
+
+Set `-e` explicitly rather than relying on the runner's default shell: a
+workflow- or job-level `defaults: run: shell:` added later drops the implicit
+`-e`, and the step would then fail *open* — the mask pass errors, the env write
+still runs, and the values land unregistered. Composite actions declaring
+`shell: bash` are immune (they ignore workflow defaults), but it costs one line
+to make the property local to the step.
+
+Mask every scalar, not the ones that look sensitive — the caller decides what
+goes into the payload, so a driver that guesses will guess wrong. Skip empty and
+whitespace-only values (the runner refuses those with a warning). Multi-line
+values need each line registered as well as the whole value: the masker is
+handed log output a line at a time, so a registration spanning newlines matches
+nothing. Never put a value in an error message.
+
+**What masking does not cover:** `::add-mask::` rewrites the **log stream** the
+runner uploads. It does not touch bytes on disk. A step that `tee`s output into a
+file — `results/`, a JUnit XML, a container log — writes the value unredacted,
+and `upload-artifact` then ships it to anyone with repo read access for the
+retention window. Masking is not a substitute for not writing the secret:
+anything destined for an artifact has to be scrubbed at the source that produces
+it, or kept out of that file in the first place.
+
+`export_extra_env.py` and `test_export_extra_env.py` are the worked example,
+including a static check that every call site masks before it writes.
 
 ## Reusing scripts from a reusable workflow
 
