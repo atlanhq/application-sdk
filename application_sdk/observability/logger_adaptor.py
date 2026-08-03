@@ -40,6 +40,7 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.context import (
     correlation_context,
+    get_execution_context,
     is_replaying,
     request_context,
 )
@@ -232,6 +233,27 @@ def _derive_log_source(logger_name: str) -> str:
         if logger_name == dep or logger_name.startswith(dep + "."):
             return "dependency"
     return LOG_SOURCE_APP_LABEL
+
+
+def _context_app_name() -> str:
+    """Per-entrypoint ``app_name`` from the active ExecutionContext (CNCT-93).
+
+    The log interceptor resolves each workflow's ``app_name`` from its own input
+    args (and propagates it to activities via the ``x-app-name`` header) and
+    stores it on the shared :class:`ExecutionContext` — the same context metrics
+    read, so log and metric attribution stay in lock-step. Returns it so the
+    stamp sites can prefer it over the process-wide ``ATLAN_APPLICATION_NAME``
+    env default — which matters for multi-entrypoint bundles (e.g.
+    ``powerbi-crawler`` vs the connector-level ``powerbi``). Returns ``""`` when
+    unset (no workflow context, or an older app whose input carries no
+    ``app_name``), so callers fall back to the env value and prior behaviour is
+    preserved.
+    """
+    try:
+        ctx = get_execution_context()
+        return ctx.app_name if ctx and ctx.app_name else ""
+    except Exception:
+        return ""
 
 
 def _build_extra_dict(
@@ -474,7 +496,7 @@ class InterceptHandler(logging.Handler):
         # carry the same Atlan context as SDK-adapter records. ``prefer_caller``
         # / ``setdefault`` preserves any field the caller explicitly set via
         # ``extra={"app_name": "X", ...}``.
-        logger_extras.setdefault("app_name", APPLICATION_NAME)
+        logger_extras.setdefault("app_name", _context_app_name() or APPLICATION_NAME)
         logger_extras.setdefault("deployment_name", DEPLOYMENT_NAME)
         # Provenance (CNCT-106): classify the record's origin from the stdlib
         # logger name. setdefault so an explicit extra={"source": ...} wins.
@@ -1030,7 +1052,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         - Adds correlation context if available
         """
         kwargs["logger_name"] = self.logger_name
-        kwargs["app_name"] = APPLICATION_NAME
+        kwargs["app_name"] = _context_app_name() or APPLICATION_NAME
         kwargs["deployment_name"] = DEPLOYMENT_NAME
         # Provenance (CNCT-106): stamp the record's origin automatically so
         # every line answers "who emitted this" (sdk / <app name> / ae /

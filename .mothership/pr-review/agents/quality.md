@@ -16,7 +16,7 @@ Tag every finding with its underlying domain:
 
 - App = Temporal Workflow + Activities
 - Contracts: one Input, one Output per method (Pydantic BaseModel)
-- `asyncio_mode="auto"` in pytest (no `@pytest.mark.asyncio` needed)
+- `asyncio_mode="auto"` in pytest — the decorator is optional style; never flag it (see retro-log)
 - SDK-provided mocks: `MockStateStore`, `MockSecretStore`, `MockPubSub`, `MockHeartbeatController`
 - `clean_app_registry` fixture required when tests define App subclasses
 - `Field(default_factory=list)` for mutable defaults, never `field: list = []`
@@ -33,7 +33,9 @@ Review the changed code for quality, tests, and DX issues.
 ### [TEST] findings — check:
 - Tests use SDK-provided mocks, not custom unittest.mock wrappers
 - Tests use `clean_app_registry` fixture when defining App subclasses
-- No `@pytest.mark.asyncio` decorator (redundant with `asyncio_mode="auto"`)
+- Check `references/retro-log.md` before raising any test-style finding —
+  e.g. `@pytest.mark.asyncio` presence/absence is a retracted rule there
+  (team style preference) and must NOT be flagged
 - Specific assertions, not `assert x` or `assert x is not None`
 - Heartbeat-enabled tasks have `MockHeartbeatController` tests
 - Edge cases covered (empty, None, boundary values)

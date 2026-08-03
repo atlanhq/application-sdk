@@ -12,6 +12,7 @@
         "argo_workflow_slug": "",
         "task_queue": "atlan-full-featured-{deployment_name}",
         "args": {
+          "app_name": "full-featured",
           "credential": "{{credential}}",
           "agent_json": "{{agent-json}}",
           "credential_guid": "{{credential-guid}}",
@@ -52,7 +53,8 @@
           "timestamp_key": "START_TIME",
           "mine_output_type": "json",
           "parsing_mode": "fallback",
-          "vendor_name": "postgres"
+          "vendor_name": "postgres",
+          "app_name": "query-intelligence"
         }
       },
       "depends_on": {
@@ -81,7 +83,8 @@
           "connection_cache_enabled": true,
           "connection_cache_via_app_enabled": true,
           "current_state_enabled": true,
-          "current_state_via_app_enabled": true
+          "current_state_via_app_enabled": true,
+          "app_name": "publish"
         }
       },
       "depends_on": {
@@ -100,7 +103,8 @@
         "app_name": "automation-engine",
         "task_queue": "atlan-automation-engine-{deployment_name}",
         "args": {
-          "webhook_url": "$.extract.outputs.notify_webhook_url"
+          "webhook_url": "$.extract.outputs.notify_webhook_url",
+          "app_name": "automation-engine"
         }
       },
       "depends_on": {
@@ -141,7 +145,8 @@
             "suggested_action": "$.failure.suggested_action",
             "failed_node_id": "$.failure.node_id",
             "failed_activity": "$.failure.activity"
-          }
+          },
+          "app_name": "notification-app"
         }
       },
       "depends_on": {

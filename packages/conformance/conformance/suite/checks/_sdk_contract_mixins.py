@@ -36,6 +36,7 @@ SDK_CONTRACT_BASE_FIELDS: dict[str, tuple[SdkField, ...]] = {
     "Input": (
         SdkField("workflow_id", "str", "active"),
         SdkField("correlation_id", "str", "active"),
+        SdkField("app_name", "str", "active"),
     ),
     "Output": (
         SdkField("status", "OutputStatus", "active"),
