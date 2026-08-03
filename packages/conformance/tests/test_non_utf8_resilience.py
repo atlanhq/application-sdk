@@ -24,6 +24,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from conformance.suite import runner
 from conformance.suite.checks import dependency_conformance, deprecation
 from conformance.suite.checks import e2e_generated_harness as harness
 from conformance.suite.checks import e2e_workflow_shape as workflow
@@ -128,3 +129,22 @@ def test_detect_scope_survives_non_utf8_input(tmp_path: Path, corrupt: str) -> N
     """detect_scope() is the first line of nearly every entry point."""
     _seed(tmp_path, corrupt)
     detect_scope(tmp_path)  # must not raise
+
+
+@pytest.mark.parametrize("corrupt", _SEEDED_FILES)
+def test_runner_main_survives_non_utf8_input(tmp_path: Path, corrupt: str) -> None:
+    """The real entry point, covering every registered series at once.
+
+    The per-module cases above are a hand-written allow-list of surfaces; this
+    one closes the axis instead of extending it. ``runner.main()`` is what CI
+    actually invokes, it wraps neither ``discover()`` nor the scan hooks, and a
+    crash on any series means every later series silently never runs.
+
+    This is the test that was missing when a decode-blind reader in a module
+    nobody had enumerated took down the whole run while the suite stayed green.
+    """
+    _seed(tmp_path, corrupt)
+    exit_code = runner.main(
+        ["--repo", str(tmp_path), "--output", str(tmp_path / "out.sarif")]
+    )
+    assert isinstance(exit_code, int)

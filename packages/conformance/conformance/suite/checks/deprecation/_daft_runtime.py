@@ -181,7 +181,7 @@ def _yields_pyarrow(value: ast.expr | None) -> bool:
     return False
 
 
-def _comprehension_element(
+def _iterable_element(
     iterable: ast.expr,
     by_scope: dict[ast.AST, dict[str, list[tuple[int, bool]]]],
 ) -> ast.expr | None:
@@ -229,10 +229,22 @@ def _pyarrow_bindings_by_scope(
     because ``df`` is a real SDK frame by the time it is used.
     """
     by_scope: dict[ast.AST, dict[str, list[tuple[int, bool]]]] = {}
-    deferred: list[ast.expr] = []
+    deferred: list[ast.AST] = []
 
     def record(node: ast.AST, target: ast.expr, value: ast.expr | None) -> None:
         if not isinstance(target, ast.Name):
+            # Unpacking: `df, other = frame, 1`. Pair element-wise with the
+            # value when it is also a sequence, else treat each binding as
+            # unknown — and therefore NOT pyarrow, so a stale exemption dies.
+            if isinstance(target, (ast.Tuple, ast.List)):
+                if isinstance(value, (ast.Tuple, ast.List)) and len(value.elts) == len(
+                    target.elts
+                ):
+                    values: list[ast.expr | None] = list(value.elts)
+                else:
+                    values = [None] * len(target.elts)
+                for element, element_value in zip(target.elts, values):
+                    record(node, element, element_value)
             return
         scope = scopes.scope_of(node)
         entry = by_scope.setdefault(scope, {}).setdefault(target.id, [])
@@ -240,18 +252,21 @@ def _pyarrow_bindings_by_scope(
         entry.append((getattr(node, "lineno", 0), is_pyarrow))
 
     for node in ast.walk(tree):
-        # Plain assignment.
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            record(node, node.targets[0], node.value)
+        # Plain assignment, including the chained form `a = df = frame`.
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                record(node, target, node.value)
         # Annotated assignment with a value.
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
             record(node, node.target, node.value)
         # Walrus: `if (df := frame):`
         elif isinstance(node, ast.NamedExpr):
             record(node, node.target, node.value)
-        # Loop target: `for df in pages:` — the element, never a producer call.
+        # Loop target: `for t in [pa.table({})]:`. The same logical shape as a
+        # comprehension generator — the element of a pyarrow-producing iterable
+        # is itself pyarrow — so it gets the same treatment and the same helper.
         elif isinstance(node, (ast.For, ast.AsyncFor)):
-            record(node, node.target, None)
+            deferred.append(node)
         # Context manager: `with frame as df:` — pyarrow only if the bound
         # expression is itself a producer.
         elif isinstance(node, (ast.With, ast.AsyncWith)):
@@ -268,9 +283,12 @@ def _pyarrow_bindings_by_scope(
 
     # Comprehensions resolve last: their iterable may be a name bound by an
     # assignment later in the walk order, and `ast.walk` is breadth-first.
-    for comp in deferred:
-        for gen in comp.generators:
-            record(comp, gen.target, _comprehension_element(gen.iter, by_scope))
+    for node in deferred:
+        if isinstance(node, (ast.For, ast.AsyncFor)):
+            record(node, node.target, _iterable_element(node.iter, by_scope))
+        else:
+            for gen in node.generators:
+                record(node, gen.target, _iterable_element(gen.iter, by_scope))
 
     return by_scope
 

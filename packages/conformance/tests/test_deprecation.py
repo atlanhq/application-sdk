@@ -791,3 +791,72 @@ def test_b007_comprehension_over_reader_frames_still_fires() -> None:
         + "    return [t.to_pylist() for t in frames]\n"
     )
     assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_loop_over_a_pyarrow_iterable_is_exempt() -> None:
+    """`for t in [pa.table({})]` binds a real Table — same shape as a comprehension.
+
+    Hardcoding the loop branch to "never a producer call" contradicted the
+    comprehension branch ten lines below, which inspects the iterable and is
+    right. One helper now serves both.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f():\n"
+        + "    for t in [pa.table({})]:\n"
+        + "        return t.to_pylist()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_loop_over_reader_frames_still_fires() -> None:
+    src = (
+        _SDK_IMPORT
+        + "def f(pages):\n"
+        + "    for t in pages:\n"
+        + "        return t.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_chained_assignment_kills_a_stale_exemption() -> None:
+    """`a = df = frame` — the `len(targets) == 1` guard dropped the rebinding."""
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f(frame):\n"
+        + "    df = pa.table({})\n"
+        + "    a = df = frame\n"
+        + "    return df.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_tuple_unpacking_kills_a_stale_exemption() -> None:
+    """`df, other = frame, 1` — `target.id` silently dropped unpacking targets."""
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f(frame):\n"
+        + "    df = pa.table({})\n"
+        + "    df, other = frame, 1\n"
+        + "    return df.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_tuple_unpacking_pairs_element_wise() -> None:
+    """`df, other = pa.table({}), 1` binds a genuine Table to `df`."""
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f():\n"
+        + "    df, other = pa.table({}), 1\n"
+        + "    return df.to_pylist()\n"
+    )
+    assert _b007(src) == []

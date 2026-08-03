@@ -76,7 +76,7 @@ def _read_atlan_yaml(root: Path) -> tuple[str | None, str | None]:
         return None, None
     try:
         text = atlan_yaml.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None, None
     m = _ATLAN_YAML_NAME_RE.search(text)
     if m:
@@ -136,7 +136,7 @@ def _app_name_from_manifest(manifest_path: Path) -> str | None:
     """
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None
     dag = data.get("dag", {})
     for activity in dag.values():
@@ -157,7 +157,7 @@ def _read_env_example(root: Path) -> tuple[str | None, int | None]:
         return None, None
     try:
         text = env_file.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None, None
     for lineno, line in enumerate(text.splitlines(), start=1):
         m = _ENV_APP_NAME_RE.match(line)

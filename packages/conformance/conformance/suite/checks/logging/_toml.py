@@ -67,7 +67,7 @@ def check_ruff_config(toml_path: Path, root: Path) -> list[Finding]:
     try:
         text = toml_path.read_text(encoding="utf-8")
         data = tomllib.loads(text)
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
         return []
 
     # Self-check exemption: skip the SDK's own pyproject.toml.

@@ -32,6 +32,7 @@ from conformance.suite.checks._ast_common import (
     make_cli_main,
     make_toml_finding,
     parse_toml_suppressions,
+    safe_read_text,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -108,7 +109,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     # app_id, and double-flagging the same regeneration gap would be noise.
     atlan = root / "atlan.yaml"
     if atlan.is_file():
-        text = atlan.read_text(encoding="utf-8")
+        text = safe_read_text(atlan) or ""
         if _app_id_missing(text):
             findings.append(
                 make_toml_finding(
@@ -132,7 +133,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     # K012 — generate poe task in pyproject.toml.
     pyproject = root / "pyproject.toml"
     if pyproject.is_file():
-        text = pyproject.read_text(encoding="utf-8")
+        text = safe_read_text(pyproject) or ""
         try:
             data = tomllib.loads(text)
         except tomllib.TOMLDecodeError:
