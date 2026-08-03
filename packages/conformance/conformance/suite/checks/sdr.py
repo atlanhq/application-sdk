@@ -111,7 +111,7 @@ def _is_sdr_app(root: Path) -> bool:
         return False
     try:
         text = atlan_yaml.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return False
     m = _SDR_FLAG_RE.search(text)
     return m is not None and m.group(1).lower() == "true"
@@ -153,7 +153,7 @@ def _app_has_publish_stage(manifests: list[Path]) -> bool:
     for manifest_path in manifests:
         try:
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return True
         if (data.get("dag") or {}).get("publish") is not None:
             return True
@@ -208,7 +208,7 @@ def _check_p029(manifests: list[Path], root: Path) -> list[Finding]:
     for manifest_path in manifests:
         try:
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             continue
         parsed_any = True
 
@@ -291,9 +291,19 @@ _UPLOAD_BRIDGE_METHOD_NAMES = frozenset({"upload_to_atlan"})
 #: substring of ``compute_summary``, ``output_stats`` and ``get_inputs``, and
 #: accepting those would let a genuine no-op stub containing any of them clear
 #: the finding — the exact silent-zero class this rule exists to catch.
-_STORAGE_TRANSFER_VERBS = frozenset(
-    {"upload", "copy", "transfer", "migrate", "put", "push", "sync"}
+#: Verbs that mean "move bytes to a store" on their own, whatever the receiver.
+_UNAMBIGUOUS_TRANSFER_VERBS = frozenset({"upload"})
+
+#: Verbs that are storage-shaped only in context.  ``put_metric_data``,
+#: ``migrate_schema``, ``copy_on_write``, ``copy_paste``, ``transfer_encoding``
+#: and ``push_job`` are all compound names carrying one of these and none moves
+#: bytes anywhere — so a compound name must NOT clear the finding on its own.
+#: These require the receiver to name a recognised store, at any token count.
+_AMBIGUOUS_TRANSFER_VERBS = frozenset(
+    {"copy", "transfer", "migrate", "put", "push", "sync", "write", "send"}
 )
+
+_STORAGE_TRANSFER_VERBS = _UNAMBIGUOUS_TRANSFER_VERBS | _AMBIGUOUS_TRANSFER_VERBS
 
 #: A *bare* verb (``put``, ``copy``, ``sync``, …) says nothing on its own —
 #: ``self._metrics.put(...)``, ``buffer.copy()`` and ``requests.put(url)`` are
@@ -308,10 +318,6 @@ _STORE_RECEIVER_MARKERS = (
     "blob",
     "container",
 )
-
-#: ``self.upload(...)`` is the SDK-standard bridge call and counts on its own,
-#: whatever the receiver.
-_SDK_STANDARD_TRANSFER_NAMES = frozenset({"upload"})
 
 
 def _receiver_names_a_store(func: ast.expr) -> bool:
@@ -351,13 +357,15 @@ def _is_storage_transfer_call(node: ast.Call) -> bool:
     else:
         return False
 
-    tokens = [t for t in name.lower().split("_") if t]
-    if not (set(tokens) & _STORAGE_TRANSFER_VERBS):
+    tokens = set(t for t in name.lower().split("_") if t)
+    if not (tokens & (_UNAMBIGUOUS_TRANSFER_VERBS | _AMBIGUOUS_TRANSFER_VERBS)):
         return False
-    if len(tokens) > 1:
-        return True  # a compound storage-ish name
-    if name.lower() in _SDK_STANDARD_TRANSFER_NAMES:
+    if tokens & _UNAMBIGUOUS_TRANSFER_VERBS:
         return True
+    # An ambiguous verb says nothing on its own at ANY token count: compound
+    # names like `put_metric_data`, `migrate_schema`, `copy_on_write`,
+    # `copy_paste`, `transfer_encoding` and `push_job` are not storage. The
+    # receiver has to name a store.
     return _receiver_names_a_store(func)
 
 
@@ -411,6 +419,51 @@ def _self_delegate_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[st
         ):
             out.add(inner.func.attr)
     return out
+
+
+#: How many ``self.x()`` hops to follow inside one class before giving up.
+#: A real bridge that fans out through a couple of private helpers is ordinary;
+#: unbounded recursion on a hostile file is not.
+_MAX_DELEGATION_DEPTH = 4
+
+
+def _delegates_to_transfer(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    table: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+) -> bool:
+    """Whether *node* reaches a storage transfer through same-class delegation.
+
+    Resolved transitively (depth-capped, cycle-safe) so a bridge that fans out
+    ``upload_to_atlan`` -> ``self._helper1()`` -> ``self._helper2()`` ->
+    ``self._object_store.upload_prefix()`` is graded on what it actually does.
+
+    An unresolvable callee — a helper inherited from a base class in another
+    file — is deliberately NOT assumed to transfer: treating every
+    ``self.x(...)`` as delegation would let ``compute_summary`` /
+    ``output_stats`` / ``get_inputs`` clear the finding, reopening the false
+    negative the token match exists to close. That limit is documented on
+    :func:`_find_upload_bridges`.
+    """
+    seen: set[str] = {node.name}
+    frontier = [(node, 0)]
+    while frontier:
+        current, depth = frontier.pop()
+        if depth >= _MAX_DELEGATION_DEPTH:
+            continue
+        for helper_name in _self_delegate_names(current):
+            if helper_name in seen:
+                continue
+            seen.add(helper_name)
+            helper = table.get(helper_name)
+            if helper is None:
+                continue
+            if any(
+                isinstance(inner, ast.Call) and _is_storage_transfer_call(inner)
+                for inner in ast.walk(helper)
+            ):
+                return True
+            frontier.append((helper, depth + 1))
+    return False
 
 
 def _find_upload_bridges(
@@ -474,22 +527,7 @@ def _find_upload_bridges(
                 for inner in ast.walk(node)
             )
             if not has_transfer:
-                table = siblings.get(id(node), {})
-                for helper_name in _self_delegate_names(node):
-                    helper = table.get(helper_name)
-                    if helper is None:
-                        # Unresolvable (inherited from a base in another file).
-                        # Deliberately NOT assumed to transfer: treating every
-                        # `self.x(...)` as delegation would let `compute_summary`
-                        # / `output_stats` / `get_inputs` clear the finding,
-                        # reopening the false negative the token match closes.
-                        continue
-                    if any(
-                        isinstance(inner, ast.Call) and _is_storage_transfer_call(inner)
-                        for inner in ast.walk(helper)
-                    ):
-                        has_transfer = True
-                        break
+                has_transfer = _delegates_to_transfer(node, siblings.get(id(node), {}))
 
             bridges.append((rel, node.lineno, node.name, not has_transfer))
     return bridges
@@ -867,7 +905,7 @@ def _manifest_carries_agent_routing(manifest_path: Path) -> bool:
     """Whether a manifest's extract args carry the ``{{agent-json}}`` placeholder."""
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
     dag = data.get("dag", {})
     args = dag.get("extract", {}).get("inputs", {}).get("args", {})
@@ -1064,7 +1102,9 @@ def _check_p039(manifests: list[Path], root: Path) -> list[Finding]:
 _PREFLIGHT_GATE_MODE_ATTR = "preflight_gate_mode"
 
 
-def _is_unconditional_hard(value: ast.AST) -> bool:
+def _is_unconditional_hard(
+    value: ast.AST, constants: dict[str, object] | None = None
+) -> bool:
     """Whether *value* yields ``"hard"`` on the always-on / default path.
 
     Semantic rather than structural: exempting every non-``Constant`` node lets
@@ -1082,15 +1122,48 @@ def _is_unconditional_hard(value: ast.AST) -> bool:
     if isinstance(value, ast.IfExp):
         # Hard in the true arm (or in both) is unconditional-in-effect; hard
         # only in the else arm is the recommended run-mode-differentiated split.
-        return _is_unconditional_hard(value.body)
+        return _is_unconditional_hard(value.body, constants)
     if isinstance(value, ast.Call):
         # An env-var override: `os.environ.get("ATLAN_PREFLIGHT_GATE_MODE",
         # "hard")` is hard on every deployment that does not set the var.
         return any(
-            _is_unconditional_hard(arg)
+            _is_unconditional_hard(arg, constants)
             for arg in [*value.args[1:], *(kw.value for kw in value.keywords)]
         )
+    if isinstance(value, ast.Name) and constants is not None:
+        # A module-level `MODE = "hard"` indirection is still always hard;
+        # only an unambiguous single binding is resolved (no flow analysis).
+        return constants.get(value.id) == "hard"
+    if isinstance(value, ast.BoolOp) and isinstance(value.op, ast.Or):
+        # `os.environ.get(VAR) or "hard"` — the or-default idiom, semantically
+        # identical to the `.get(VAR, "hard")` form above.
+        return _is_unconditional_hard(value.values[-1], constants)
     return False
+
+
+def _module_string_constants(tree: ast.Module) -> dict[str, object]:
+    """Module-level ``NAME = "literal"`` bindings that are assigned exactly once.
+
+    Only unambiguous single bindings are recorded — a name reassigned anywhere
+    at module level is dropped rather than guessed at.  This is deliberately not
+    constant propagation; it exists so the common no-literal-string-inline style
+    (``MODE = "hard"`` / ``preflight_gate_mode = MODE``) cannot hide an
+    unconditionally-hard gate behind one hop of indirection.
+    """
+    seen: dict[str, object] = {}
+    counts: dict[str, int] = {}
+    for stmt in tree.body:
+        if not (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+        ):
+            continue
+        name = stmt.targets[0].id
+        counts[name] = counts.get(name, 0) + 1
+        if isinstance(stmt.value, ast.Constant):
+            seen[name] = stmt.value.value
+    return {k: v for k, v in seen.items() if counts.get(k) == 1}
 
 
 def _gate_target_names(targets: list[ast.expr]) -> list[str]:
@@ -1117,7 +1190,9 @@ def _gate_assignments(stmts: list[ast.stmt]) -> list[tuple[ast.stmt, ast.expr]]:
     return out
 
 
-def _run_mode_split_exempt(tree: ast.Module) -> set[int]:
+def _run_mode_split_exempt(
+    tree: ast.Module, constants: dict[str, object] | None = None
+) -> set[int]:
     """ids of gate assigns that are the ``else`` arm of an if/else run-mode split.
 
     ``if ENABLE_ATLAN_UPLOAD: ... = "soft"`` / ``else: ... = "hard"`` is the
@@ -1134,10 +1209,10 @@ def _run_mode_split_exempt(tree: ast.Module) -> set[int]:
         orelse = _gate_assignments(node.orelse)
         if not body or not orelse:
             continue
-        if any(_is_unconditional_hard(value) for _n, value in body):
+        if any(_is_unconditional_hard(value, constants) for _n, value in body):
             continue  # hard on the true arm — inverted/both-hard, keep firing
         for assign, value in orelse:
-            if _is_unconditional_hard(value):
+            if _is_unconditional_hard(value, constants):
                 exempt.add(id(assign))
     return exempt
 
@@ -1162,7 +1237,8 @@ def _check_p041(paths: list[Path], root: Path) -> list[Finding]:
             rel = str(path.relative_to(root))
         except ValueError:
             rel = str(path)
-        split_exempt = _run_mode_split_exempt(tree)
+        constants = _module_string_constants(tree)
+        split_exempt = _run_mode_split_exempt(tree, constants)
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 targets = list(node.targets)
@@ -1178,7 +1254,7 @@ def _check_p041(paths: list[Path], root: Path) -> list[Finding]:
                 continue
             if id(node) in split_exempt:
                 continue
-            if _is_unconditional_hard(value):
+            if _is_unconditional_hard(value, constants):
                 findings.append(
                     Finding(
                         rule_id=RULE_P041,

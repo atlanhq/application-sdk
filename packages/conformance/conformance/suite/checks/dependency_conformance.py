@@ -1066,6 +1066,34 @@ def _first_query_transformer_import(
     return None
 
 
+def _marker_can_hold(marker: object) -> bool:
+    """Whether a PEP 508 environment marker on a lock edge can hold here.
+
+    Markers gate whether an edge is installed at all, so ignoring them lets a
+    platform-specific dependency read as universally reachable — a
+    ``marker = "sys_platform == 'win32'"`` duckdb edge would silence D010 on
+    Linux and macOS, where the ``ImportError`` it exists to catch is real.
+
+    Evaluated against the **scanning environment**, which is the environment
+    conformance can actually observe.  ``packaging`` is not a declared
+    dependency of this package (it is deliberately dependency-light), so when it
+    is unavailable — or the marker does not parse — the edge is treated as
+    contributing, matching the previous behaviour rather than inventing a
+    false positive.  Known limit: a cross-platform scan (linting a Windows-only
+    app from Linux) grades against the host, not the deployment target.
+    """
+    if marker is None:
+        return True
+    try:
+        from packaging.markers import InvalidMarker, Marker
+    except ImportError:
+        return True
+    try:
+        return bool(Marker(str(marker)).evaluate())
+    except (InvalidMarker, ValueError, KeyError):
+        return True
+
+
 def _lock_dependency_edges(
     pkg: dict[str, object], extras: frozenset[str]
 ) -> list[tuple[str, frozenset[str]]]:
@@ -1095,6 +1123,8 @@ def _lock_dependency_edges(
         name = _normalise_name(str(dep.get("name", "")))
         if not name:
             continue
+        if not _marker_can_hold(dep.get("marker")):
+            continue  # e.g. a win32-only edge, unreachable on this install
         dep_extras = dep.get("extra")
         activated = (
             frozenset(_normalise_name(str(e)) for e in dep_extras)

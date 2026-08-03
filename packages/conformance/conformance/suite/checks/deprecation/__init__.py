@@ -68,7 +68,7 @@ def _read_project_version(root: Path) -> str | None:
     """Return ``[project].version`` from ``<root>/pyproject.toml``, else ``None``."""
     try:
         data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return None
     project = data.get("project") if isinstance(data, dict) else None
     if isinstance(project, dict) and isinstance(project.get("version"), str):
@@ -93,7 +93,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     for path in paths:
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
         try:
             tree = ast.parse(text, filename=str(path))

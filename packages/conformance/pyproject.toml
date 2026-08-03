@@ -34,7 +34,11 @@ dependencies = [
 test = [
     "pytest>=8.3.3,<10.0.0",
     "pytest-asyncio>=1.4.0,<2.0.0",
-    "atlan-application-sdk",
+    # [sql] pulls duckdb, which test_p040_keyword_set_matches_pinned_duckdb
+    # needs. Without it that drift guard is permanently SKIPPED in the only job
+    # that runs this package's tests, and the P040 reserved-keyword constant
+    # could silently diverge from the DuckDB it claims to describe.
+    "atlan-application-sdk[sql]",
 ]
 
 [project.scripts]

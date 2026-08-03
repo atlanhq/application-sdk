@@ -1577,3 +1577,23 @@ def test_d010_survives_non_utf8_uv_lock(tmp_path: Path) -> None:
         dialect_drivers=set(),
     )
     assert [f.rule_id for f in findings if f.rule_id == "D010"] == ["D010"]
+
+
+def test_d010_fires_when_the_duckdb_edge_is_platform_gated(tmp_path: Path) -> None:
+    """A marker-gated edge is not reachable everywhere.
+
+    Ignoring PEP 508 markers let a win32-only duckdb read as universally
+    resolved, silencing D010 on the platforms where the ImportError is real.
+    """
+    lock = _D010_LOCK_SQL_EXTRA.replace(
+        '    { name = "duckdb" },\n',
+        '    { name = "duckdb", marker = "sys_platform == \'win32\'" },\n',
+    )
+    assert lock != _D010_LOCK_SQL_EXTRA
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_SQL_EXTRA,
+        source=_D010_TRANSFORMER_IMPORT,
+        uv_lock=lock,
+    )
+    assert len(findings) == 1

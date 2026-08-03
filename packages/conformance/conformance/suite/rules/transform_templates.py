@@ -12,9 +12,8 @@ parses the SQL (observed live on main for a document-store connector in fleet
 testing).
 
 The column *identifier* is deliberately not graded: it lands in the ``AS``
-alias slot, which DuckDB does not restrict (``SELECT 1 AS column`` parses), and
-in the nested-mapping shape every shipped template uses it is rendered dotted
-by ``flatten_yaml_columns`` and therefore quoted by ``quote_column_name``.
+alias slot, which DuckDB does not restrict (``SELECT 1 AS column`` and
+``AS qualify`` both parse on the pinned 1.5.5).
 
 Per the P-series stability policy (see ``prescriptions.py``) a P-id is a
 permanent public contract and is never renumbered or reused.
@@ -51,8 +50,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "pass — and surfaced live on main for a document-store connector in "
             "fleet testing only when the full pipeline ran. Linting the templates "
             "catches it at review time. The alias (identifier) position is not "
-            "graded: DuckDB accepts a reserved keyword after AS, and the shape "
-            "real templates use renders it dotted and therefore quoted."
+            "graded: DuckDB accepts a reserved keyword after AS, so there is no "
+            "runtime failure to report there."
         ),
         short_description=(
             "Transform SQL template references an unquoted DuckDB reserved "
@@ -85,10 +84,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "**Scope — the expression position only.**  The column identifier is\n"
             "not graded.  It reaches the ``AS`` alias slot, which DuckDB does not\n"
             "restrict (``SELECT 1 AS column`` and ``AS qualify`` both parse on the\n"
-            "pinned 1.5.5), and in the shape that ships ``flatten_yaml_columns``\n"
-            "renders it as ``attributes.<key>`` — dotted, hence quoted by\n"
-            "``quote_column_name``.  Grading it would describe a runtime failure\n"
-            "that does not occur.\n"
+            "pinned 1.5.5), so grading it would describe a runtime failure that\n"
+            "does not occur.\n"
             "\n"
             'Values containing a dot, embedded ``"`` quotes, whitespace or ``(``\n'
             "are exempt (auto-quoted, already quoted, or an expression rather than\n"

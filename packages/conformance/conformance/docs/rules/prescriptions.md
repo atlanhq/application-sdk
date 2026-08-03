@@ -1410,8 +1410,7 @@ all transforms through DuckDB). The breakage is latent — templates load, impor
 succeed, mocked tests pass — and surfaced live on main for a document-store connector in
 fleet testing only when the full pipeline ran. Linting the templates catches it at
 review time. The alias (identifier) position is not graded: DuckDB accepts a reserved
-keyword after AS, and the shape real templates use renders it dotted and therefore
-quoted.
+keyword after AS, so there is no runtime failure to report there.
 
 In an app's transform templates (YAML consumed by `application_sdk.transformers.query`),
 a `source_query:` value that is a bare DuckDB **reserved keyword** must be SQL-quoted.
@@ -1437,9 +1436,8 @@ the SQL.
 
 **Scope — the expression position only.**  The column identifier is not graded.  It
 reaches the `AS` alias slot, which DuckDB does not restrict (`SELECT 1 AS column` and
-`AS qualify` both parse on the pinned 1.5.5), and in the shape that ships
-`flatten_yaml_columns` renders it as `attributes.<key>` — dotted, hence quoted by
-`quote_column_name`.  Grading it would describe a runtime failure that does not occur.
+`AS qualify` both parse on the pinned 1.5.5), so grading it would describe a runtime
+failure that does not occur.
 
 Values containing a dot, embedded `"` quotes, whitespace or `(` are exempt (auto-quoted,
 already quoted, or an expression rather than a bare reference).  YAML scalar literals
@@ -1495,7 +1493,30 @@ preflight_gate_mode = "soft" if ENABLE_ATLAN_UPLOAD else "hard"
 
 and keep it env-overridable (the SDK's `ATLAN_PREFLIGHT_GATE_MODE` env var takes
 precedence over the class attribute, so operators can restore the hard gate per
-deployment).  A conditional assignment like the above is not flagged — only an
-unconditional `"hard"`.
+deployment).
+
+**What is and is not flagged.**  The exemption is semantic, not structural: `"hard"` is
+safe only on the *else* path.
+
+Silent on:
+
+* `preflight_gate_mode = "soft" if ENABLE_ATLAN_UPLOAD else "hard"`   and its
+`if`/`else` statement spelling (an ordinary style   choice once the branches grow past
+one line); * `os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", <that ternary>)` —   the same
+posture spelled through the override.
+
+Still flagged:
+
+* a plain `preflight_gate_mode = "hard"`; * the inverted ternary `"hard" if
+ENABLE_ATLAN_UPLOAD else "soft"`   — hard exactly when upload is on, the reverse of the
+intent; * a both-arms-hard ternary (unconditional in a conditional's   clothing); *
+`os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", "hard")` and
+`os.environ.get("ATLAN_PREFLIGHT_GATE_MODE") or "hard"` — hard on   every deployment
+that leaves the variable unset; * one hop of module-level indirection (`MODE = "hard"` /
+`preflight_gate_mode = MODE`), when `MODE` is bound exactly   once.
+
+Known limit: a condition written with inverted polarity (`"hard" if not
+ENABLE_ATLAN_UPLOAD else "soft"`) reads as the true-arm shape and is flagged — suppress
+it inline with the reason.
 
 ---

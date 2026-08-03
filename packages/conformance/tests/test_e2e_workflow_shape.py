@@ -623,3 +623,41 @@ def test_t021_suppressed_inline(tmp_path: Path) -> None:
     t021 = [f for f in _scan(root) if f.rule_id == "T021"]
     assert len(t021) == 1
     assert t021[0].suppressed is True
+
+
+def test_t021_silent_on_env_indirection_to_a_run_step(tmp_path: Path) -> None:
+    """`env: SUITE_PATH: tests/e2e/...` consumed by a later `run:` does run them.
+
+    A key-name allow-list on top of the skip-block gating was under-inclusive
+    and reported a suite that genuinely executes as unreachable.
+    """
+    root = _repo(
+        tmp_path,
+        workflows={
+            "e2e.yaml": (
+                "name: E2E\non:\n  pull_request:\njobs:\n"
+                "  e2e:\n    runs-on: ubuntu-latest\n"
+                "    env:\n      SUITE_PATH: tests/e2e/test_full.py\n"
+                '    steps:\n      - run: pytest "$SUITE_PATH"\n'
+            )
+        },
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+    )
+    assert "T021" not in _ids(_scan(root))
+
+
+def test_t021_silent_on_underscore_test_path_input(tmp_path: Path) -> None:
+    """A composite action taking `test_path:` (underscore) also runs the suites."""
+    root = _repo(
+        tmp_path,
+        workflows={
+            "e2e.yaml": (
+                "name: E2E\non:\n  pull_request:\njobs:\n"
+                "  e2e:\n    runs-on: ubuntu-latest\n    steps:\n"
+                "      - uses: ./.github/actions/custom-e2e-runner\n"
+                "        with:\n          test_path: tests/e2e/test_full.py\n"
+            )
+        },
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+    )
+    assert "T021" not in _ids(_scan(root))

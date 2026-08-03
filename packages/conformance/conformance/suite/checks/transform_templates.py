@@ -19,22 +19,19 @@ embedded (``source_query: '"order"'``) so they survive into the generated SQL.
 
 Scope: the ``source_query:`` (expression) position only
 -------------------------------------------------------
-The column **identifier** is deliberately NOT graded, for two independent
-reasons, both verified against the pinned duckdb 1.5.5:
-
-1. *It lands in the alias slot, which DuckDB does not restrict.*
-   ``SELECT 1 AS column``, ``AS order``, ``AS select`` and ``AS qualify`` all
-   parse.  Only a bare *reference* raises — ``SELECT order FROM t`` →
-   ``ParserException``.
-2. *In the shape that actually ships it is always quoted anyway.*  Every
-   template under ``application_sdk/transformers/query/templates/`` expresses
-   the identifier as a nested YAML **mapping key** (``columns:`` →
-   ``attributes:`` → ``name:`` → ``source_query: ...``), and
-   ``flatten_yaml_columns`` sets ``col_def["name"] = "attributes.<key>"`` —
-   dotted, so ``quote_column_name`` quotes it unconditionally.
+The column **identifier** is deliberately NOT graded: it lands in the ``AS``
+alias slot, which DuckDB does not restrict.  Verified against the pinned duckdb
+1.5.5 — ``SELECT 1 AS column``, ``AS order``, ``AS select``, ``AS qualify`` and
+``AS lambda`` all parse, while a bare *reference* raises
+(``SELECT order FROM t`` → ``ParserException``).  ``convert_to_sql_expression``
+puts ``column['name']`` only in that alias slot.
 
 Grading the identifier would therefore describe a runtime failure that does not
-occur, on a position that in real templates cannot reach DuckDB unquoted.
+occur.  (Note it is NOT true that shipped identifiers are always dot-quoted:
+``flatten_yaml_columns`` dots a key only when it is nested under a non-leaf
+parent, and every shipped template carries ``typeName:`` and ``status:`` as
+top-level leaf keys under ``columns:``, emitted bare.  The alias-slot argument
+is what makes dropping the check correct, and it stands on its own.)
 
 Discovery
 ---------
@@ -195,8 +192,8 @@ _EXCLUDED_DIR_NAMES: frozenset[str] = frozenset(
 
 #: The template key whose value reaches the generated SELECT's *expression*
 #: slot — the one position where a bare reserved keyword raises.  ``name:`` is
-#: deliberately excluded (see the module docstring: alias slot, and always
-#: dotted-and-quoted in the shape that ships).
+#: deliberately excluded — it reaches only the ``AS`` alias slot, which DuckDB
+#: does not restrict (see the module docstring).
 _TEMPLATE_VALUE_RE = re.compile(
     r"^\s*(?:-\s+)?(?P<key>source_query)\s*:\s*(?P<value>\S.*?)\s*$"
 )

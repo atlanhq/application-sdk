@@ -1401,3 +1401,129 @@ def test_p041_silent_on_env_override_of_the_run_mode_split(tmp_path: Path) -> No
         },
     )
     assert not any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+# ── Round-2 regressions ──────────────────────────────────────────────────────
+
+
+def test_sdr_scan_survives_non_utf8_files(tmp_path: Path) -> None:
+    """_is_sdr_app gates P030 and P041 — one bad byte must not take them out."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": "class Connector:\n    async def run(self):\n        pass\n",
+        },
+    )
+    (tmp_path / "app" / "bad.py").write_bytes(b"\xff\xfe class X: pass\n")
+    (tmp_path / "app" / "generated").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "app" / "generated" / "manifest.json").write_bytes(b"\xff\xfe{}")
+    assert any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p030_compound_non_storage_names_do_not_clear_the_stub(
+    tmp_path: Path,
+) -> None:
+    """A compound name carrying a verb token is not evidence of a transfer.
+
+    The receiver check that makes the bare-verb path sound must apply at every
+    token count, or these six clear the finding while moving no bytes.
+    """
+    for i, body in enumerate(
+        (
+            "self._metrics.put_metric_data(x)",
+            "self.migrate_schema()",
+            "self._cache.copy_on_write()",
+            "self._clipboard.copy_paste()",
+            "self._client.transfer_encoding()",
+            "self._queue.push_job(x)",
+        )
+    ):
+        root = tmp_path / f"case{i}"
+        _write(
+            root,
+            {
+                "atlan.yaml": _SDR_ATLAN_YAML,
+                "app/connector.py": (
+                    "class Connector:\n"
+                    "    async def upload_to_atlan(self, prefix):\n"
+                    f"        {body}\n"
+                ),
+            },
+        )
+        p030 = [f for f in _run(root) if f.rule_id == "P030"]
+        assert p030, f"{body} should NOT clear the no-op-stub finding"
+        assert "no-op stub" in p030[0].message
+
+
+def test_p030_write_on_a_store_receiver_is_a_transfer(tmp_path: Path) -> None:
+    """A write()-only real bridge must not be reported as a no-op stub."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    async def upload_to_atlan(self, prefix):\n"
+                "        await self._object_store.write(prefix, data)\n"
+            ),
+        },
+    )
+    assert not any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p030_two_hop_same_class_delegation_is_not_a_stub(tmp_path: Path) -> None:
+    """Delegation resolves transitively within the class, not just one hop."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    async def upload_to_atlan(self, prefix):\n"
+                "        await self._helper1(prefix)\n"
+                "\n"
+                "    async def _helper1(self, prefix):\n"
+                "        await self._helper2(prefix)\n"
+                "\n"
+                "    async def _helper2(self, prefix):\n"
+                "        await self._object_store.upload_prefix(prefix)\n"
+            ),
+        },
+    )
+    assert not any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p041_fires_on_or_default_and_name_indirection(tmp_path: Path) -> None:
+    """The or-default env idiom and one hop of module-level indirection."""
+    cases = {
+        "or_default": (
+            "import os\n"
+            "class Connector:\n"
+            "    preflight_gate_mode = os.environ.get('ATLAN_PREFLIGHT_GATE_MODE')"
+            " or 'hard'\n"
+        ),
+        "name_indirection": (
+            "MODE = 'hard'\nclass Connector:\n    preflight_gate_mode = MODE\n"
+        ),
+    }
+    for label, src in cases.items():
+        root = tmp_path / label
+        _write(root, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+        assert any(f.rule_id == "P041" for f in _run(root)), label
+
+
+def test_p041_silent_on_or_default_soft(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "import os\n"
+                "class Connector:\n"
+                "    preflight_gate_mode = os.environ.get('ATLAN_PREFLIGHT_GATE_MODE')"
+                " or 'soft'\n"
+            ),
+        },
+    )
+    assert not any(f.rule_id == "P041" for f in _run(tmp_path))

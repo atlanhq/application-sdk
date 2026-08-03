@@ -504,8 +504,36 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "and keep it env-overridable (the SDK's ``ATLAN_PREFLIGHT_GATE_MODE``\n"
             "env var takes precedence over the class attribute, so operators can\n"
-            "restore the hard gate per deployment).  A conditional assignment like\n"
-            'the above is not flagged — only an unconditional ``"hard"``.\n'
+            "restore the hard gate per deployment).\n"
+            "\n"
+            "**What is and is not flagged.**  The exemption is semantic, not\n"
+            'structural: ``"hard"`` is safe only on the *else* path.\n'
+            "\n"
+            "Silent on:\n"
+            "\n"
+            '* ``preflight_gate_mode = "soft" if ENABLE_ATLAN_UPLOAD else "hard"``\n'
+            "  and its ``if``/``else`` statement spelling (an ordinary style\n"
+            "  choice once the branches grow past one line);\n"
+            '* ``os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", <that ternary>)`` —\n'
+            "  the same posture spelled through the override.\n"
+            "\n"
+            "Still flagged:\n"
+            "\n"
+            '* a plain ``preflight_gate_mode = "hard"``;\n'
+            '* the inverted ternary ``"hard" if ENABLE_ATLAN_UPLOAD else "soft"``\n'
+            "  — hard exactly when upload is on, the reverse of the intent;\n"
+            "* a both-arms-hard ternary (unconditional in a conditional's\n"
+            "  clothing);\n"
+            '* ``os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", "hard")`` and\n'
+            '  ``os.environ.get("ATLAN_PREFLIGHT_GATE_MODE") or "hard"`` — hard on\n'
+            "  every deployment that leaves the variable unset;\n"
+            '* one hop of module-level indirection (``MODE = "hard"`` /\n'
+            "  ``preflight_gate_mode = MODE``), when ``MODE`` is bound exactly\n"
+            "  once.\n"
+            "\n"
+            "Known limit: a condition written with inverted polarity\n"
+            '(``"hard" if not ENABLE_ATLAN_UPLOAD else "soft"``) reads as the\n'
+            "true-arm shape and is flagged — suppress it inline with the reason.\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"

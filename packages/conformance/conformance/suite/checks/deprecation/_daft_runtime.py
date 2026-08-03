@@ -105,15 +105,22 @@ def _is_pyarrow_producer_call(node: ast.expr) -> bool:
 
 
 #: Node types that open a new local binding scope.
-_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef)
+_FUNCTION_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef)
+_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 
 class _ScopeMap:
     """Nearest-enclosing-scope lookup for every node in a module.
 
-    ``scope_of(node)`` returns the ``FunctionDef``/``AsyncFunctionDef`` (or the
-    module) a node sits in; ``parent_of(scope)`` walks outward, so a closure can
-    still see a binding made in an enclosing function.
+    ``scope_of(node)`` returns the ``FunctionDef``/``AsyncFunctionDef``/
+    ``ClassDef`` (or the module) a node sits in; ``parent_of(scope)`` walks
+    outward, so a closure still sees a binding made in an enclosing function.
+
+    Class bodies get their own scope and are **skipped** on the outward walk out
+    of a function, matching real Python scoping: a method never sees a
+    class-body name as a free variable.  Folding class bodies into the module
+    scope would let ``class Foo: df = pa.table({})`` exempt an unrelated ``df``
+    in every method of the file — the cross-scope hole this map exists to close.
     """
 
     __slots__ = ("_owner", "_parent", "_root")
@@ -123,11 +130,23 @@ class _ScopeMap:
         self._owner: dict[ast.AST, ast.AST] = {tree: tree}
         self._parent: dict[ast.AST, ast.AST | None] = {tree: None}
 
+        def enclosing_for_function(scope: ast.AST) -> ast.AST:
+            # Skip class scopes: a method's free variables resolve to the
+            # nearest enclosing *function* or the module, never the class body.
+            cur: ast.AST | None = scope
+            while isinstance(cur, ast.ClassDef):
+                cur = self._parent.get(cur)
+            return cur if cur is not None else tree
+
         def walk(scope: ast.AST, node: ast.AST) -> None:
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, _SCOPE_NODES):
                     self._owner[child] = scope  # the def name binds in `scope`
-                    self._parent[child] = scope
+                    self._parent[child] = (
+                        enclosing_for_function(scope)
+                        if isinstance(child, _FUNCTION_SCOPES)
+                        else scope
+                    )
                     walk(child, child)
                 else:
                     self._owner[child] = scope
@@ -142,28 +161,33 @@ class _ScopeMap:
         return self._parent.get(scope)
 
 
-def _pyarrow_names_by_scope(
+def _pyarrow_bindings_by_scope(
     tree: ast.Module, scopes: _ScopeMap
-) -> dict[ast.AST, set[str]]:
-    """Map each binding scope to names bound to a pyarrow producer *in that scope*.
+) -> dict[ast.AST, dict[str, list[tuple[int, bool]]]]:
+    """Per scope, per name, the ``(lineno, is_pyarrow)`` of each simple binding.
 
-    Collected per ``FunctionDef``/``AsyncFunctionDef`` (plus module level)
-    rather than module-wide: generic receiver names (``df``, ``table``,
-    ``data``, ``result``) recur across functions, so a whole-file set would let
-    a legitimately-pyarrow ``df`` in one function exempt a genuine SDK reader
-    frame of the same name in another — the guard erasing the very findings it
-    exists to protect.
+    Collected per scope rather than module-wide: generic receiver names
+    (``df``, ``table``, ``data``, ``result``) recur across functions, so a
+    whole-file set would let a legitimately-pyarrow ``df`` in one function
+    exempt a genuine SDK reader frame of the same name in another — the guard
+    erasing the very findings it exists to protect.
+
+    **Non-pyarrow** assignments are recorded too, so the exemption can be made
+    order-aware: ``df = pa.table({}); df = frame; df.to_pylist()`` must flag,
+    because ``df`` is a real SDK frame by the time it is used.
     """
-    by_scope: dict[ast.AST, set[str]] = {}
+    by_scope: dict[ast.AST, dict[str, list[tuple[int, bool]]]] = {}
     for node in ast.walk(tree):
-        if (
+        if not (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
-            and _is_pyarrow_producer_call(node.value)
         ):
-            scope = scopes.scope_of(node)
-            by_scope.setdefault(scope, set()).add(node.targets[0].id)
+            continue
+        scope = scopes.scope_of(node)
+        name = node.targets[0].id
+        entry = by_scope.setdefault(scope, {}).setdefault(name, [])
+        entry.append((node.lineno, _is_pyarrow_producer_call(node.value)))
     return by_scope
 
 
@@ -171,13 +195,23 @@ def _is_pyarrow_bound(
     name: str,
     node: ast.AST,
     scopes: _ScopeMap,
-    by_scope: dict[ast.AST, set[str]],
+    by_scope: dict[ast.AST, dict[str, list[tuple[int, bool]]]],
 ) -> bool:
-    """Whether *name* is pyarrow-bound in *node*'s scope or an enclosing one."""
+    """Whether *name* is pyarrow-bound at *node*, in its scope or an enclosing one.
+
+    Within a scope the **last binding before the use** decides, so rebinding a
+    pyarrow name to an SDK frame correctly voids the exemption.
+    """
+    use_line = getattr(node, "lineno", 0)
     scope: ast.AST | None = scopes.scope_of(node)
     while scope is not None:
-        if name in by_scope.get(scope, ()):
-            return True
+        bindings = by_scope.get(scope, {}).get(name)
+        if bindings:
+            prior = [b for b in bindings if b[0] <= use_line]
+            if prior:
+                return max(prior, key=lambda b: b[0])[1]
+            # Bound only after this point in the scope — not in effect here;
+            # fall through to an enclosing scope.
         scope = scopes.parent_of(scope)
     return False
 
@@ -192,7 +226,7 @@ def scan_daft_runtime(
         return []
 
     scopes = _ScopeMap(tree)
-    pyarrow_by_scope = _pyarrow_names_by_scope(tree, scopes)
+    pyarrow_by_scope = _pyarrow_bindings_by_scope(tree, scopes)
     dataframe_type_name = _dataframe_type_binding(tree)
     findings: list[Finding] = []
 

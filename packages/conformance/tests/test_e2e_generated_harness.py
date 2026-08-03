@@ -435,3 +435,54 @@ class TestFullDag(SQLAppE2ETest):
     assert t023[0].file == "tests/e2e/test_full_dag.py"
     target = (root / t023[0].file).read_text(encoding="utf-8").splitlines()
     assert "connector_short_name" in target[t023[0].line - 1]
+
+
+def test_t024_not_fired_by_ambiguity_among_non_harness_classes(
+    tmp_path: Path,
+) -> None:
+    """Report-on-ambiguity needs a floor innocent classes cannot trip.
+
+    Two unrelated files defining `class Helper` must not turn an ordinary test
+    class into a graded e2e harness.
+    """
+    root = _repo(
+        tmp_path,
+        tests={
+            "a/helpers.py": "class Helper:\n    pass\n",
+            "b/helpers.py": "class Helper:\n    pass\n",
+            "e2e/test_thing.py": (
+                "from tests.b.helpers import Helper\n"
+                "\n"
+                "class TestSomething(Helper):\n"
+                "    def test_foo(self):\n"
+                "        assert True\n"
+            ),
+        },
+    )
+    assert _ids(_scan(root)) == []
+
+
+def test_t024_still_fires_when_an_ambiguous_candidate_could_be_a_harness(
+    tmp_path: Path,
+) -> None:
+    """The floor must not disarm the bias where it matters."""
+    root = _repo(
+        tmp_path,
+        tests={
+            "a/helpers.py": "class Shared:\n    pass\n",
+            "b/helpers.py": (
+                "from application_sdk.testing.e2e import BaseE2ETest\n"
+                "\n"
+                "class Shared(BaseE2ETest):\n"
+                "    connector_short_name = 'x'\n"
+            ),
+            "e2e/test_thing.py": (
+                "from tests.b.helpers import Shared\n"
+                "\n"
+                "class TestSomething(Shared):\n"
+                "    def test_foo(self):\n"
+                "        assert True\n"
+            ),
+        },
+    )
+    assert "T024" in _ids(_scan(root))

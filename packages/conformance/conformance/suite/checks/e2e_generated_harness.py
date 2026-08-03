@@ -240,7 +240,14 @@ def _resolve_base(
     if not candidates:
         return None, False
     if len({c.file for c in candidates}) > 1:
-        return candidates[0], True
+        # Report-on-ambiguity needs a floor, or ordinary classes that merely
+        # share a base name with something elsewhere in tests/ get graded as
+        # harnesses. Only raise the flag when at least one candidate could
+        # actually BE a harness — i.e. some candidate names an SDK harness base
+        # directly. When none could, the ambiguity is irrelevant to this rule.
+        if any(c.bases & _SDK_HARNESS_BASES for c in candidates):
+            return candidates[0], True
+        return candidates[0], False
     return candidates[0], False
 
 

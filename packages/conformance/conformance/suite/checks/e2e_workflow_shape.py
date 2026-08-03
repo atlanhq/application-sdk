@@ -124,9 +124,10 @@ _USES_REUSABLE_RE = re.compile(rf"^\s*uses:\s*['\"]?{re.escape(_TESTS_REUSABLE)}
 # reachable would silence the rule fleet-wide from a stray comment.
 _E2E_PATH_RE = re.compile(r"tests/e2e(?=[/\s'\"]|$)")
 
-# Keys whose value is a pytest path handed to a runner.
-_TEST_PATH_KEY_RE = re.compile(r"^\s*(?:-\s+)?test-paths?\s*:")
-_ANY_USES_RE = re.compile(r"^\s*(?:-\s+)?uses\s*:")
+# Any `key: value` entry — a workflow input, an `env:` binding a later `run:`
+# consumes, a composite action's `test_path:`. Outside a trigger-filter block,
+# all of these are plausible execution positions.
+_KEY_VALUE_RE = re.compile(r"^\s*(?:-\s+)?[A-Za-z_][A-Za-z0-9_.\-]*\s*:\s*\S")
 _RUN_KEY_RE = re.compile(r"^\s*(?:-\s+)?run\s*:\s*(?P<rest>.*?)\s*$")
 # Trigger-filter blocks: text here selects *when* a workflow runs, never what
 # it executes.
@@ -285,9 +286,13 @@ def _names_e2e_path(lines: list[str]) -> bool:
                 return True
             continue
 
-        if (_ANY_USES_RE.match(line) or _TEST_PATH_KEY_RE.match(line)) and (
-            _E2E_PATH_RE.search(line)
-        ):
+        # Any `key: value` outside a skip block is a candidate execution
+        # position. The skip-block gating above already does the real work of
+        # separating "about the suite" from "names the suite"; an extra
+        # key-name allow-list on top is both redundant and under-inclusive —
+        # it missed `env: SUITE_PATH: tests/e2e/...` consumed by a later
+        # `run:`, and a composite action's `test_path:` (underscore) spelling.
+        if _KEY_VALUE_RE.match(line) and _E2E_PATH_RE.search(line):
             return True
     return False
 

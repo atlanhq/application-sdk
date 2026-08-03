@@ -9,9 +9,8 @@ daft-less SDK >= 3.22 runtime.  YAML-level quotes do not survive parsing — onl
 embedded SQL quotes do.
 
 The identifier (alias) position is deliberately not graded — DuckDB accepts a
-reserved keyword after ``AS``, and in the shape real templates use the
-identifier is a nested mapping key that ``flatten_yaml_columns`` renders dotted
-and ``quote_column_name`` therefore quotes.  See the checker's module docstring.
+reserved keyword after ``AS``, so there is no runtime failure to report there.
+See the checker's module docstring.
 
 Fixtures use the **nested-mapping shape every shipped template actually uses**
 (``columns:`` → ``attributes:`` → ``<identifier>:`` → ``source_query:``), not a
@@ -142,9 +141,8 @@ def test_p040_does_not_grade_the_alias_position() -> None:
     """A reserved keyword as the column *identifier* is not a runtime failure.
 
     DuckDB accepts any keyword after ``AS`` (verified on the pinned 1.5.5), and
-    ``flatten_yaml_columns`` renders a nested key as ``attributes.<key>`` —
-    dotted, hence quoted by ``quote_column_name``.  Flagging it would describe a
-    failure that does not occur.
+    ``convert_to_sql_expression`` puts the identifier only in that alias slot.
+    Flagging it would describe a failure that does not occur.
     """
     text = (
         "columns:\n"

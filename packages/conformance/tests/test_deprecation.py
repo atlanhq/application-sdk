@@ -674,3 +674,52 @@ def test_b007_rule_metadata() -> None:
     assert rule.tier == EnforcementTier.WARN
     assert rule.scope == RuleScope.APP
     assert rule.rationale.strip()
+
+
+def test_b007_class_body_binding_does_not_leak_into_methods() -> None:
+    """Real Python scoping never lets a method see a class-body name.
+
+    Folding class bodies into the module scope let one `df = pa.table({})` in a
+    class body exempt every same-named receiver in every method of the file.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "class Foo:\n"
+        + "    df = pa.table({})\n"
+        + "\n"
+        + "    def method(self, frame):\n"
+        + "        df = frame\n"
+        + "        return df.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_rebinding_a_pyarrow_name_voids_the_exemption() -> None:
+    """The last binding before the use decides, not "bound anywhere in scope"."""
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f(frame):\n"
+        + "    df = pa.table({})\n"
+        + "    df = frame\n"
+        + "    return df.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_exemption_holds_before_a_later_rebind() -> None:
+    """Order-awareness must not break the ordinary in-scope exemption."""
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f(frame):\n"
+        + "    df = pa.table({})\n"
+        + "    rows = df.to_pylist()\n"
+        + "    df = frame\n"
+        + "    return rows\n"
+    )
+    assert _b007(src) == []
