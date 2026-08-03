@@ -587,6 +587,21 @@ def test_call_sites_are_the_expected_files():
     }
 
 
+def test_prose_naming_the_script_is_not_a_call_site():
+    """A comment that names the script must not be audited as if it ran it.
+
+    scripts-tests.yaml's header explains why its trigger is unfiltered, and does
+    so by naming this script — so it matches the `.github/**/*.y*ml` glob and
+    contains the filename, but runs nothing. Discovering it as a call site makes
+    the ordering assertions below fail on a comment, which is a real failure this
+    suite hit while the guard keyed on the bare filename. Pinned here so the
+    distinction survives the next edit to that comment.
+    """
+    workflow = _REPO_ROOT / ".github" / "workflows" / "scripts-tests.yaml"
+    assert "export_extra_env.py" in workflow.read_text(), "premise of this test"
+    assert workflow not in _call_site_files()
+
+
 def test_the_suite_runs_on_every_file_these_guards_read():
     """A `paths:` filter on this suite's workflow would silently disable it.
 
