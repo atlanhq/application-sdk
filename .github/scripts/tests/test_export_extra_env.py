@@ -546,33 +546,79 @@ def test_composite_action_invokes_this_script_at_a_real_path(action: str):
 # Discovery only helps if the suite actually runs on the files it discovers, so
 # `test_the_suite_runs_on_every_file_these_guards_read` pins the trigger too.
 
-# `python3 <path>/export_extra_env.py \` + `--json "$VAR" <mode>`.
+# `<anything>/export_extra_env.py \` + `--json "$VAR" <mode>`. Deliberately says
+# nothing about the interpreter: `python3 x.py`, `python x.py` and
+# `uv run python x.py` are all the same call as far as ordering goes.
 _CALL_SITE_INVOCATION = re.compile(
     r"export_extra_env\.py\"?[ \t]*\\\n"
     r"\s*--json[ \t]+\"(?P<var>\$[A-Za-z_][A-Za-z0-9_]*)\"[ \t]*"
     r"(?P<mode>--mask-only|>>[ \t]*\"\$GITHUB_ENV\")"
 )
-_ANY_INVOCATION = re.compile(r"python3[^\n]*export_extra_env\.py")
+
+# Discovery and the parity count below both key on the module name, with no
+# interpreter and no `.py` required. Anything narrower fails in the dangerous
+# direction — see `_call_site_files`.
+_SCRIPT_MENTION = "export_extra_env"
+
+# Files under .github/ that name the script in prose without running it. Kept as
+# a named exclusion rather than encoded into the predicate, and validated below:
+# if a mention here ever appears outside a comment, the exclusion stops applying
+# and the file is audited like any other caller.
+_PROSE_ONLY_FILES = {".github/workflows/scripts-tests.yaml"}
+
+
+def _live_mentions(text: str) -> list[str]:
+    """Lines naming the script that are not YAML comments."""
+    return [
+        line
+        for line in _runner_lines(text)
+        if _SCRIPT_MENTION in line and not line.lstrip().startswith("#")
+    ]
 
 
 def _call_site_files() -> list[Path]:
-    """Every ``.github/**`` YAML that actually *runs* the script.
+    """Every ``.github/**`` YAML that could run the script.
 
-    Keyed on ``_ANY_INVOCATION`` (a ``python3 … export_extra_env.py`` command)
-    rather than on the bare filename appearing anywhere in the file: prose that
-    names the script — scripts-tests.yaml's header explains why its trigger is
-    unfiltered, docs/standards/ci.md points at it as the worked example — is not
-    a call site, and treating it as one would fail the ordering assertions below
-    on a comment. The predicate stays broader than ``_CALL_SITE_INVOCATION``, so
-    an invocation written in a shape those assertions cannot parse is still
-    discovered here and then fails loudly on the count check.
+    The predicate is deliberately the **broadest** thing that works: any
+    non-comment line naming ``export_extra_env``, with no interpreter and no
+    ``.py`` required. The two failure directions are not symmetric:
+
+    * A false positive — prose mistaken for a call site — fails **loud and
+      safe**. It trips the ordering assertion below, which is how
+      scripts-tests.yaml's own header comment surfaced.
+    * A false negative — a real caller the predicate does not see — fails
+      **green and open**. It is never audited, so a caller that writes
+      ``$GITHUB_ENV`` with no ``--mask-only`` reintroduces the credential leak
+      with every guard passing.
+
+    So this must not require ``python3`` on the same line as the filename, which
+    would miss ``uv run python …/export_extra_env.py`` (the shape
+    scripts-tests.yaml itself uses to run pytest), ``python …`` without the
+    ``3``, ``python3 -m export_extra_env`` (no ``.py`` at all), and a two-line
+    ``SCRIPT="…/export_extra_env.py"`` + ``python3 "$SCRIPT"`` indirection.
+
+    Prose is handled by the named ``_PROSE_ONLY_FILES`` exclusion instead, which
+    is one line and self-validating: an excluded file that starts naming the
+    script outside a comment stops being excluded, so the exclusion cannot
+    quietly grow to cover a real caller.
     """
     workflow_dir = _REPO_ROOT / ".github"
-    found = [
-        path
-        for path in sorted(workflow_dir.rglob("*.y*ml"))
-        if _ANY_INVOCATION.search(path.read_text())
-    ]
+    found: list[Path] = []
+    for path in sorted(workflow_dir.rglob("*.y*ml")):
+        text = path.read_text()
+        if _SCRIPT_MENTION not in text:
+            continue
+        where = path.relative_to(_REPO_ROOT).as_posix()
+        if where in _PROSE_ONLY_FILES:
+            live = _live_mentions(text)
+            assert not live, (
+                f"{where} is on the prose-only exclusion list but now names the "
+                f"script outside a comment: {live}. If it genuinely invokes the "
+                "script, drop it from _PROSE_ONLY_FILES so it is audited like "
+                "any other call site."
+            )
+            continue
+        found.append(path)
     assert found, "no call site found — did the script move or lose its callers?"
     return found
 
@@ -585,6 +631,65 @@ def test_call_sites_are_the_expected_files():
         ".github/actions/sdr-e2e/action.yaml",
         ".github/workflows/tests-reusable.yaml",
     }
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        pytest.param(
+            '        python3 "$D/export_extra_env.py" \\\n'
+            '          --json "$P" >> "$GITHUB_ENV"',
+            id="python3",
+        ),
+        pytest.param(
+            '        python "$D/export_extra_env.py" \\\n'
+            '          --json "$P" >> "$GITHUB_ENV"',
+            id="python-without-the-3",
+        ),
+        pytest.param(
+            '        uv run python "$D/export_extra_env.py" \\\n'
+            '          --json "$P" >> "$GITHUB_ENV"',
+            id="uv-run-python",
+        ),
+        pytest.param(
+            '        python3 -m export_extra_env --json "$P" >> "$GITHUB_ENV"',
+            id="dash-m-no-dot-py",
+        ),
+        pytest.param(
+            '        SCRIPT="$D/export_extra_env.py"\n'
+            '        python3 "$SCRIPT" --json "$P" >> "$GITHUB_ENV"',
+            id="indirect-via-shell-var",
+        ),
+        pytest.param(
+            '        python3 "$D/export_extra_env.py" --json "$P" ' '>> "$GITHUB_ENV"',
+            id="single-line-no-continuation",
+        ),
+    ],
+)
+def test_an_unmasked_caller_is_never_discovered_green(tmp_path, monkeypatch, shape):
+    """Every plausible spelling of a write-only caller must fail, not pass.
+
+    The discovery predicate used to require the literal `python3` on the same
+    line as `export_extra_env.py`. Each shape below writes `$GITHUB_ENV` with no
+    `--mask-only` — i.e. reintroduces the credential leak — and every one of them
+    evaded that predicate, so it was never added to `_call_site_files()` and both
+    ordering guards passed green.
+
+    The failure direction matters more than the message: a shape the assertions
+    cannot parse must fail *loudly* (unreadable-line parity), never be skipped.
+    """
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "new-caller.yaml").write_text(
+        "jobs:\n  leak:\n    steps:\n      - run: |\n" + shape + "\n"
+    )
+    monkeypatch.setitem(globals(), "_REPO_ROOT", tmp_path)
+
+    discovered = {p.name for p in _call_site_files()}
+    assert discovered == {"new-caller.yaml"}, "the caller must be discovered"
+
+    with pytest.raises(AssertionError):
+        test_every_env_write_call_site_masks_first()
 
 
 def test_prose_naming_the_script_is_not_a_call_site():
@@ -641,10 +746,20 @@ def test_every_env_write_call_site_masks_first():
         text = path.read_text()
         where = path.relative_to(_REPO_ROOT).as_posix()
 
+        # Parity, not just presence: every non-comment mention of the script has
+        # to belong to an invocation the ordering assertions below can read. Each
+        # recognised call names the script exactly once, so the two counts match
+        # only when nothing is invoked in an unparseable shape — a single-line
+        # invocation, an indirection through a shell variable, or a `-m` form.
+        # This is what keeps a file that is *discovered* from passing silently.
         calls = list(_CALL_SITE_INVOCATION.finditer(text))
-        assert len(calls) == len(
-            _ANY_INVOCATION.findall(text)
-        ), f"{where} invokes the script in a shape this test cannot check"
+        live = _live_mentions(text)
+        assert len(calls) == len(live), (
+            f"{where} names the script on {len(live)} non-comment line(s) but "
+            f"only {len(calls)} match a checkable invocation. Rewrite it in the "
+            'two-line `--json "$VAR" <mode>` shape, or teach '
+            f"_CALL_SITE_INVOCATION the new shape. Unreadable lines: {live}"
+        )
 
         modes = ["mask" if c["mode"] == "--mask-only" else "write" for c in calls]
         assert modes, f"{where} has no recognisable invocation"
