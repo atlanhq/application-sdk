@@ -29,6 +29,7 @@ from application_sdk.constants import (
     TEMPORAL_PROMETHEUS_BIND_ADDRESS,
 )
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
+from application_sdk.observability.correlation import CorrelationContext
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.utils import get_metric_enrichment_labels
 
@@ -125,6 +126,32 @@ if TYPE_CHECKING:
     from application_sdk.app.context import AppContext
 
 
+def _stamp_start_correlation(input_data: Any, context: "AppContext") -> str:
+    """Resolve and stamp the correlation ID for a workflow start (CNCT-104).
+
+    A caller-supplied ``input_data.correlation_id`` wins; otherwise the
+    AppContext's correlation_id (which AppContext defaults deterministically)
+    is used. The returned value goes into the Temporal start **memo** — the
+    reliable channel the LogInterceptor reads first. The attribute stamps
+    (public contract field + legacy private attr) are best-effort mirrors:
+    an input that rejects attribute assignment (dict/frozen shapes) still
+    gets correlated via the memo. Before this, ``execute``/``start`` set
+    only the private attribute and passed no memo, so the interceptor fell
+    through to its fallback and the run's logs were stamped with an identity
+    the run page never queries.
+    """
+    correlation_id = getattr(input_data, "correlation_id", "") or str(
+        context.correlation_id
+    )
+    try:
+        input_data.correlation_id = correlation_id
+        input_data._correlation_id = correlation_id
+    # conformance: ignore[E004] best-effort stamp; dict/frozen inputs still get the memo channel
+    except Exception:  # noqa: S110 — attribute stamps are best-effort; the memo is the reliable channel
+        pass
+    return correlation_id
+
+
 class TemporalExecutorBackend:
     """Temporal-based executor backend for running Apps as workflows."""
 
@@ -160,7 +187,7 @@ class TemporalExecutorBackend:
         """
         from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
 
-        input_data._correlation_id = context.correlation_id
+        correlation_id = _stamp_start_correlation(input_data, context)
 
         prefix = context.app_name
         config_hash = (
@@ -198,6 +225,7 @@ class TemporalExecutorBackend:
             retry_policy=_to_temporal_retry_policy(retry_policy),
             result_type=output_type,
             execution_timeout=execution_timeout,
+            memo=CorrelationContext(correlation_id=correlation_id).to_temporal_memo(),
         )
         return result
 
@@ -223,7 +251,7 @@ class TemporalExecutorBackend:
         """
         from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
 
-        input_data._correlation_id = context.correlation_id
+        correlation_id = _stamp_start_correlation(input_data, context)
 
         prefix = context.app_name
         config_hash = (
@@ -245,6 +273,7 @@ class TemporalExecutorBackend:
             id=workflow_id,
             task_queue=self._task_queue,
             retry_policy=_to_temporal_retry_policy(retry_policy),
+            memo=CorrelationContext(correlation_id=correlation_id).to_temporal_memo(),
         )
         return handle.id
 

@@ -24,7 +24,7 @@ from application_sdk.errors.leaves import (
     DependencyUnavailableError,
 )
 from application_sdk.execution._temporal.preflight_gate import (
-    GATE_START_TO_CLOSE,
+    GATE_TIMEOUT_DEFAULT_SECONDS,
     PreflightGateInput,
     _config_from_snapshot,
     build_preflight_gate_activity,
@@ -192,15 +192,19 @@ class TestPreflightGateActivity:
         assert handler.preflight_input.credentials == []
 
     async def test_gate_passes_enforced_per_attempt_timeout_budget(self) -> None:
-        # timeout_seconds must carry the real per-attempt cap (start_to_close),
-        # not the misleading 60s default — a handler sizing checks to the field
-        # value would otherwise silently overrun and degrade to no_verdict.
+        # timeout_seconds must carry the budget the gate actually enforces, not
+        # the misleading 60s contract default — a handler sizing checks to the
+        # field value would otherwise overrun and degrade to no_verdict. It is
+        # net of credential resolution, so assert the bound rather than equality
+        # (see test_preflight_gate_classification for the deduction itself).
         handler = _StubHandler()
         gate = _gate(handler)
         await gate(PreflightGateInput())
         assert handler.preflight_input is not None
-        assert handler.preflight_input.timeout_seconds == int(
-            GATE_START_TO_CLOSE.total_seconds()
+        assert (
+            0
+            < handler.preflight_input.timeout_seconds
+            <= (GATE_TIMEOUT_DEFAULT_SECONDS)
         )
         # Legacy single-credential path leaves the named-group map empty.
         assert handler.preflight_input.credentials_by_name == {}

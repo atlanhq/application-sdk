@@ -279,6 +279,32 @@ from application_sdk.storage import verify_object_store_access, ObjectStorePrefl
 Both symbols are exported from `application_sdk.storage`. The function is normally called by
 the SDK boot path — connectors do not need to call it manually.
 
+### SDR: Interactive Activity Timeouts
+
+The three interactive SDR operations (`sdr:test_auth`, `sdr:preflight_check`, `sdr:fetch_metadata`)
+run as Temporal activities. Each is bounded by a `schedule_to_close` cap (ticks even when no worker
+is polling, so a request to an offline worker fails instead of hanging) and a `start_to_close` cap
+(bounds in-flight execution once a worker picks it up). The defaults are deliberately generous —
+SDR handlers resolve credentials from a customer-side secret store and probe the customer's own
+network — and each cap is env-tunable so a deployment fronting an especially slow store can raise it
+without an SDK release. All follow the `ATLAN_` prefix convention (ADR-0009), matching
+`ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS`.
+
+| Env var | Default (s) | Who sets it | Bounds |
+|---|---|---|---|
+| `ATLAN_SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS` | 60 | Deployment / operator | `test_auth` total wall-clock |
+| `ATLAN_SDR_AUTH_START_TO_CLOSE_SECONDS` | 55 | Deployment / operator | `test_auth` in-flight run |
+| `ATLAN_SDR_PREFLIGHT_SCHEDULE_TO_CLOSE_SECONDS` | 120 | Deployment / operator | `preflight_check` total wall-clock |
+| `ATLAN_SDR_PREFLIGHT_START_TO_CLOSE_SECONDS` | 110 | Deployment / operator | `preflight_check` in-flight run |
+| `ATLAN_SDR_METADATA_SCHEDULE_TO_CLOSE_SECONDS` | 150 | Deployment / operator | `fetch_metadata` total wall-clock |
+| `ATLAN_SDR_METADATA_START_TO_CLOSE_SECONDS` | 140 | Deployment / operator | `fetch_metadata` in-flight run |
+
+Invariant: `start_to_close < schedule_to_close` in each pair, so at least one retry attempt fits
+inside the schedule cap. An inverted override is logged as a WARNING at worker start so the misconfig
+is visible before the worker accepts work. These activities set **no** `heartbeat_timeout` — they run
+a single handler call and never call `activity.heartbeat()`, so a heartbeat cap would hard-limit
+runtime; `start_to_close` is the correct in-flight bound.
+
 ### Preflight Gate Posture
 
 Distinct from the SDR object-store preflight above, a connector can run a `preflight_check`
@@ -298,6 +324,84 @@ to do with a `NOT_READY` verdict. The posture is set per app via the `preflight_
 class MyConnector(App):
     preflight_gate_mode = "hard"   # checks are trusted to block runs
 ```
+
+#### What hard mode covers
+
+Hard mode applies to every outcome the gate can attribute to the **source**, not only a
+`NOT_READY` verdict. Failures of the gate's own **plumbing** always fail open, in both postures —
+a platform blip must not fail a healthy run. The gate stamps which of the two happened as
+`gate_classification` on the outcome event, so the two are separable downstream:
+
+| Gate outcome | `gate_classification` | soft | hard |
+| -- | -- | -- | -- |
+| Verdict `READY` / `PARTIAL` | — | proceed | proceed |
+| Verdict `NOT_READY` | — | report `would_block` | **block** |
+| Probe overran the budget | `source_unverifiable` | report `would_block` | **block** |
+| Handler crashed | `source_unverifiable` | report `would_block` | **block** |
+| Credential provably absent | `source_unverifiable` | report `would_block` | **block** |
+| Credential lookup failed for another reason | `gate_broken` | fail open | fail open |
+| Rate limited (429) | `gate_broken` | fail open | fail open |
+| Secret-store / dependency outage | `gate_broken` | fail open | fail open |
+| Worker unavailable | `gate_broken` | fail open | fail open |
+| Gate skipped (replay, source-less app) | — | `skipped` | `skipped` |
+
+A handler signals "I could not determine readiness" — as opposed to "the source is not ready" — by
+raising a typed error whose category is plumbing-side (`RateLimitedError`,
+`DependencyUnavailableError`, `ResourceExhaustedError`). Returning `NOT_READY` for a transient
+makes hard mode fail *closed* on a blip, which is the mirror-image bug.
+
+Two queryable events come out of the gate. The per-run **outcome** event carries `outcome`,
+`gate_mode`, `gate_classification` and the per-check `check_matrix`. A boot-time **posture** event
+(`Preflight gate posture`) is emitted once per gate-registered app — soft ones included — carrying
+`app_name`, `gate_mode` and `gate_timeout_seconds`. The posture event is the denominator the outcome
+events cannot supply: an app that never reaches a verdict emits no outcome row at all, so "which
+apps believe they are gated" is only answerable from posture rows.
+
+**Upgrading an app that is already on hard mode:** the three `source_unverifiable` rows above
+previously fell through to fail-open, so hard mode enforced only the `NOT_READY` verdict. They now
+block. Before taking this SDK version, confirm the handler finishes inside
+`preflight_gate_timeout_seconds` — an app whose preflight has been quietly overrunning the budget
+was proceeding on every run and will now abort on every run. The worker logs the budget alongside
+the hard-mode line at boot.
+
+#### Sizing the check budget
+
+The handler gets `preflight_gate_timeout_seconds` (default 150, clamped 5-300) to run all its
+checks, and the SDK **enforces** it — the gate cancels `preflight_check` when it elapses.
+`preflight_gate_max_attempts` (default 2, clamped 1-3) sets the retries, and both Temporal
+timeouts derive from the pair:
+
+```python
+class MyConnector(App):
+    preflight_gate_mode = "hard"
+    preflight_gate_timeout_seconds = 250   # this source's catalog probe is genuinely slow
+    preflight_gate_max_attempts = 1        # a retry cannot rescue a slow check
+```
+
+The budget bounds the **whole handler call**, not each check, and it is a **deadline, not a
+reservation** — a handler returning in 3s holds its worker slot for 3s whatever the budget says.
+A generous budget therefore costs nothing on a healthy run; it only changes the run that would
+otherwise have been cut short.
+
+`PreflightInput.timeout_seconds` carries what is *left* after credential resolution, so a handler
+sizing probes to that field is sizing to the real deadline. Three rules follow:
+
+- **In hard mode an overrun blocks the run**, so the declared budget and the handler's actual cost
+  must agree. Raise the budget for a demonstrably slow source rather than letting checks overrun.
+- **Size from the p99 of successful runs**, read off the SDK-measured `gate_duration_ms` on the
+  outcome event. Sizing to the worst observed run makes the timeout decorative; sizing to p95
+  blocks 5% of runs. Per-check `duration_ms` inside `check_matrix` is handler-authored and is not
+  a substitute.
+- **Pair a large budget with one attempt.** A retry rescues a transient by trying *again*, not by
+  trying *longer*; at the 300s ceiling two attempts reserve a ~10 minute `schedule_to_close`.
+- **Keep probes awaitable.** Cancellation lands at an `await`; blocking synchronous I/O on the
+  event loop cannot be interrupted, so it escapes the budget and also stalls the worker's other
+  activities. Run blocking drivers in a thread.
+
+Note the ops override below now carries more weight than it used to: setting it to `hard`
+fleet-wide makes every app block on a handler crash or an absent credential, including apps that
+never opted in and whose checks have not been validated against real runs. Prefer the per-app
+attribute.
 
 Ops can override the posture without an app release via `ATLAN_PREFLIGHT_GATE_MODE=hard` on the
 worker deployment. The env var wins over the attribute; any set value other than the literal `hard`

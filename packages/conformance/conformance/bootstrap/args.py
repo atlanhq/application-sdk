@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import sys
 
+from conformance.bootstrap.extract import APT_PACKAGE_RE
+
 FLAGS = {
     "--package-name": "package_name",
     "--unit-tests-workflow": "unit_tests_workflow",
@@ -16,6 +18,7 @@ FLAGS = {
     "--app-image-name": "app_image_name",
     "--enable-e2e": "enable_e2e",
     "--services-script": "services_script",
+    "--system-deps": "system_deps",
     "--enforce": "enforce",
 }
 
@@ -34,6 +37,7 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         "app_image_name": "",
         "enable_e2e": "true",
         "services_script": "",
+        "system_deps": "",
         "enforce": "",  # "" = not explicitly set; "true"/"false" = explicit
     }
     i = 0
@@ -72,7 +76,35 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         )
         sys.exit(2)
 
+    result["system_deps"] = normalize_system_deps(result["system_deps"])
+
     return result
+
+
+def normalize_system_deps(value: str) -> str:
+    """Return *value* as a single space-separated apt package list.
+
+    Splits on any whitespace (so a caller may quote a multi-line value),
+    validates every token against ``APT_PACKAGE_RE`` — the same pattern the
+    extraction side drops non-matching tokens by, so the flag and the
+    read-back-off-disk path agree on what a package name is — and rejoins with single
+    spaces so the rendered workflow is byte-identical no matter how the flag
+    was spelled — which matters because C002 compares the rendered canonical
+    against the on-disk file, and a value that round-trips differently would
+    read as permanent drift.
+
+    Exits 2 on a token that isn't a plausible apt package name.
+    """
+    tokens = value.split()
+    for token in tokens:
+        if not APT_PACKAGE_RE.match(token):
+            print(
+                f"error: --system-deps got invalid package name {token!r}"
+                " (expected apt package names, e.g. 'libkrb5-dev gcc python3-dev')",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+    return " ".join(tokens)
 
 
 BOOTSTRAP_USAGE = """\
@@ -94,6 +126,18 @@ options:
   --app-image-name NAME       GHCR image name for tests.yaml (default: atlan-<app-name>-app)
   --enable-e2e true|false     enable e2e in tests.yaml (default: true, line omitted)
   --services-script PATH      services setup script (default: auto-detected from .github/test/setup-services.sh)
+  --system-deps "PKG..."
+                              apt packages CI installs before any `uv sync` — for a
+                              dependency with no manylinux wheel that needs build
+                              headers (e.g. "libkrb5-dev gcc python3-dev" for
+                              pykerberos). Rendered inline into checks.yml (pre-commit)
+                              and written to .github/ci-system-deps.txt, which the
+                              vendored run-conformance-detect action reads before the
+                              D-series resolved-env sync. Omit to auto-detect from an
+                              existing checks.yml (else that file), so a bare re-run
+                              preserves both instead of deleting the step — checks.yml
+                              is always-overwrite. To drop it, delete the step from
+                              checks.yml and the txt file, then re-run.
   --enforce true|false        enforcement mode; omit to auto-detect from an existing
                               conformance.yaml (else hard-gate). Pass explicitly (either
                               value) to also force-update renovate.json.

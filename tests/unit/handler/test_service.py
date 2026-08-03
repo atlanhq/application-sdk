@@ -5145,6 +5145,62 @@ class TestEventTriggerEndpoint:
             body = response.json()
             assert body["status"] == "SUCCESS"
             assert body["workflow_id"] == "wf-1"
+            # CNCT-104: event-triggered starts must carry a correlation memo
+            # (previously none was set → the LogInterceptor minted an identity
+            # the run page never queries → the run's logs were unfindable).
+            kwargs = mock_client.start_workflow.await_args.kwargs
+            memo = kwargs["memo"]
+            # A real UUID was minted (not merely any truthy string), matching
+            # the rigor of the event-supplied sibling test below.
+            import uuid as _uuid
+
+            assert len(memo["correlation_id"]) == 36
+            assert _uuid.UUID(memo["correlation_id"])  # raises if not a valid UUID
+            # The minted id is returned to the caller so the run's logs are
+            # addressable, and it matches what was stamped on the input.
+            assert body["correlation_id"] == memo["correlation_id"]
+            input_arg = kwargs["args"][0]
+            assert input_arg.correlation_id == memo["correlation_id"]
+        finally:
+            self._teardown()
+
+    def test_event_respects_event_supplied_correlation_id(self) -> None:
+        # An event payload that carries correlation_id keeps it (caller wins),
+        # mirroring the /workflows/v1/start contract.
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        try:
+            app_cls = self._make_event_app()
+            trigger = EventTriggerConfig(
+                event_id="t1", event_type="topic", event_name="ev"
+            )
+            app = create_app_handler_service(
+                _TestHandler(),
+                app_name="ev-test",
+                app_class=app_cls,
+                temporal_host="t:7233",
+                event_triggers=[trigger],
+            )
+            mock_handle = MagicMock()
+            mock_handle.id = "wf-1"
+            mock_handle.result_run_id = "run-1"
+            mock_client = MagicMock()
+            mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(app)
+                response = client.post(
+                    "/events/v1/event/t1",
+                    json={"data": {"name": "x", "correlation_id": "event-corr"}},
+                )
+            assert response.status_code == 200
+            assert response.json()["correlation_id"] == "event-corr"
+            kwargs = mock_client.start_workflow.await_args.kwargs
+            assert kwargs["memo"] == {"correlation_id": "event-corr"}
         finally:
             self._teardown()
 

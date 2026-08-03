@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -137,11 +138,58 @@ def _classify_access_error(exc: BaseException) -> tuple[str, str]:
     )
 
 
-async def _probe_store(store: object, label: str, binding_name: str) -> str | None:
-    """Run a write → read round-trip against *store*.
+@dataclass(frozen=True)
+class ObjectStoreCheckResult:
+    """Structured outcome of a single object-store access probe.
 
-    Each operation is unbounded in this function; the caller wraps the whole
-    coroutine in ``asyncio.wait_for`` to enforce the boot-time timeout.
+    Shared by the boot-time path (:func:`verify_object_store_access`, which
+    formats these into a raising error string) and the interactive SDR preflight
+    path (:func:`check_object_store_access`, which maps these onto UI
+    ``PreflightCheck`` rows). One instance per probed store.
+
+    Attributes:
+        label: Human-readable role label ("deployment" or "upstream").
+        binding_name: The Dapr component name backing the store.
+        passed: Whether the write → read round-trip succeeded.
+        error_class: Classifier bucket on failure (e.g. "permission denied",
+            "invalid credentials", "connectivity / unknown"); ``None`` on success.
+        cause: Concise failure cause (exception text or timeout note); ``None`` on
+            success.
+        hint: Remediation hint on failure; ``None`` on success.
+        failed_operation: Which phase failed ("write", "read/head",
+            "connectivity") — used only to reproduce the boot message format;
+            ``None`` on success.
+    """
+
+    label: str
+    binding_name: str
+    passed: bool
+    error_class: str | None = None
+    cause: str | None = None
+    hint: str | None = None
+    failed_operation: str | None = None
+
+    @property
+    def message(self) -> str:
+        """A single-line, UI-friendly summary of this result."""
+        role = f"{self.label} object store (binding '{self.binding_name}')"
+        if self.passed:
+            return f"{role} is reachable; read/write access confirmed."
+        stage = f"{self.failed_operation} " if self.failed_operation else ""
+        detail = f" [{self.error_class}]" if self.error_class else ""
+        cause = f": {self.cause}" if self.cause else ""
+        return f"{role} {stage}access check failed{detail}{cause}"
+
+
+async def _probe_store_structured(
+    store: object, label: str, binding_name: str
+) -> ObjectStoreCheckResult:
+    """Run a write → read round-trip against *store*, returning a structured result.
+
+    This is the single shared probe implementation behind both the boot-time
+    raising path and the interactive SDR preflight path.  Each obstore operation
+    is unbounded here; callers wrap the whole coroutine in ``asyncio.wait_for`` to
+    enforce a timeout.
 
     The probe key is fixed and overwritten on every call — no delete is needed
     or performed.  Environments that prohibit deletes (e.g. an S3 reverse-proxy
@@ -153,7 +201,8 @@ async def _probe_store(store: object, label: str, binding_name: str) -> str | No
         binding_name: The Dapr component name (used in error messages).
 
     Returns:
-        ``None`` on success; a human-readable failure description on error.
+        An :class:`ObjectStoreCheckResult`.  Never raises for obstore-level
+        failures — they are captured into the result.
     """
     import obstore  # noqa: PLC0415 — lazy: obstore is a heavy Rust extension; defer until actually needed
 
@@ -177,10 +226,14 @@ async def _probe_store(store: object, label: str, binding_name: str) -> str | No
             exc_info=True,
         )
         error_class, hint = _classify_access_error(exc)
-        return (
-            f"  * {label} store (binding: '{binding_name}'): write failed [{error_class}]\n"
-            f"    Cause: {exc}\n"
-            f"    Hint:  {hint}"
+        return ObjectStoreCheckResult(
+            label=label,
+            binding_name=binding_name,
+            passed=False,
+            error_class=error_class,
+            cause=str(exc),
+            hint=hint,
+            failed_operation="write",
         )
 
     # Read (HEAD) — confirms read permission and that the write was committed.
@@ -197,13 +250,43 @@ async def _probe_store(store: object, label: str, binding_name: str) -> str | No
             exc_info=True,
         )
         error_class, hint = _classify_access_error(exc)
-        return (
-            f"  * {label} store (binding: '{binding_name}'): read/head failed [{error_class}]\n"
-            f"    Cause: {exc}\n"
-            f"    Hint:  {hint}"
+        return ObjectStoreCheckResult(
+            label=label,
+            binding_name=binding_name,
+            passed=False,
+            error_class=error_class,
+            cause=str(exc),
+            hint=hint,
+            failed_operation="read/head",
         )
 
-    return None
+    return ObjectStoreCheckResult(label=label, binding_name=binding_name, passed=True)
+
+
+def _format_boot_failure(result: ObjectStoreCheckResult) -> str:
+    """Render a failed probe result into the boot-time error block format."""
+    return (
+        f"  * {result.label} store (binding: '{result.binding_name}'): "
+        f"{result.failed_operation} failed [{result.error_class}]\n"
+        f"    Cause: {result.cause}\n"
+        f"    Hint:  {result.hint}"
+    )
+
+
+async def _probe_store(store: object, label: str, binding_name: str) -> str | None:
+    """Boot-time write → read probe returning the preformatted failure string.
+
+    Thin wrapper over :func:`_probe_store_structured` that preserves the boot
+    path's historical message format.  The caller wraps this in
+    ``asyncio.wait_for`` to enforce the boot-time timeout.
+
+    Returns:
+        ``None`` on success; a human-readable failure description on error.
+    """
+    result = await _probe_store_structured(store, label, binding_name)
+    if result.passed:
+        return None
+    return _format_boot_failure(result)
 
 
 async def verify_object_store_access(infra: InfrastructureContext) -> None:
@@ -311,3 +394,95 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
         )
 
     logger.info("SDR preflight: all object-store access checks passed")
+
+
+async def check_object_store_access(
+    infra: InfrastructureContext | None,
+) -> list[ObjectStoreCheckResult]:
+    """Non-raising object-store access probe for the interactive SDR preflight.
+
+    Companion to the boot-time :func:`verify_object_store_access`: both run the
+    same write → read round-trip via :func:`_probe_store_structured`, but this
+    variant returns structured results instead of raising, so the SDR
+    ``preflight_check`` activity can fold them into the handler's
+    ``PreflightOutput.checks`` and surface them as UI check rows.
+
+    Probes the deployment store (the customer's own store) and, when present, the
+    upstream Atlan upload-proxy store.  Each probe is bounded by
+    ``ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS`` (default: 30 s); a timeout is reported as
+    a connectivity failure result.
+
+    This function **never raises** and returns ``[]`` immediately when
+    ``ENABLE_ATLAN_UPLOAD`` is falsy or *infra* is ``None`` — it is only
+    meaningful in Self-Deployed Runtime deployments.
+
+    Args:
+        infra: The current ``InfrastructureContext`` (or ``None``).
+
+    Returns:
+        One :class:`ObjectStoreCheckResult` per probed store; ``[]`` when SDR
+        mode is off or infra is unavailable.
+    """
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: SDR-gated; constants only loaded when needed
+        DEPLOYMENT_OBJECT_STORE_NAME,
+        ENABLE_ATLAN_UPLOAD,
+        UPSTREAM_OBJECT_STORE_NAME,
+    )
+
+    if not ENABLE_ATLAN_UPLOAD or infra is None:
+        return []
+
+    stores_to_probe: list[tuple[str, str, object]] = [
+        ("deployment", DEPLOYMENT_OBJECT_STORE_NAME, infra.storage),
+    ]
+    if infra.upstream_storage is not None:
+        stores_to_probe.append(
+            ("upstream", UPSTREAM_OBJECT_STORE_NAME, infra.upstream_storage)
+        )
+
+    results: list[ObjectStoreCheckResult] = []
+    for label, binding_name, store in stores_to_probe:
+        if store is None:
+            results.append(
+                ObjectStoreCheckResult(
+                    label=label,
+                    binding_name=binding_name,
+                    passed=False,
+                    error_class="not configured",
+                    cause=(
+                        f"the '{binding_name}' binding is absent or could not be "
+                        "parsed, so the store is unavailable"
+                    ),
+                    hint=(
+                        f"Add a Dapr component named '{binding_name}' and ensure its "
+                        "credentials are resolvable."
+                    ),
+                    failed_operation="connectivity",
+                )
+            )
+            continue
+        try:
+            result = await asyncio.wait_for(
+                _probe_store_structured(store, label, binding_name),
+                timeout=_PROBE_TIMEOUT_SECS,
+            )
+        except TimeoutError:
+            logger.warning(
+                "SDR preflight: probe for %s store (binding: %s) timed out after %.0fs",
+                label,
+                binding_name,
+                _PROBE_TIMEOUT_SECS,
+                exc_info=True,
+            )
+            result = ObjectStoreCheckResult(
+                label=label,
+                binding_name=binding_name,
+                passed=False,
+                error_class="connectivity / unknown",
+                cause=f"probe timed out after {_PROBE_TIMEOUT_SECS:.0f}s",
+                hint=_CONNECTIVITY_HINT,
+                failed_operation="connectivity",
+            )
+        results.append(result)
+
+    return results

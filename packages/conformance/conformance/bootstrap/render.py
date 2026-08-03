@@ -103,6 +103,7 @@ def render(
     app_image_name: str = "",
     enable_e2e: str = "true",
     services_script: str = "",
+    system_deps: str = "",
     exit_zero: str = "false",
     automerge: str = "true",
 ) -> str:
@@ -115,6 +116,15 @@ def render(
     - ``conformance.yaml``: ``exit_zero`` (default ``"false"``; set to ``"true"``
       for soft-enforcement rollouts where violations are tracked but do not block
       merges — flip to ``"false"`` when the app is ready for hard gating).
+    - ``checks.yml``: ``system_deps`` (default ``""`` — no
+      system-dependency step; supply a space-separated apt package list to
+      render an ``apt-get install`` step before ``setup-deps``, for a repo whose
+      dependencies build from sdist and need C headers on the runner). Its
+      ``<% if %>``/``<% endif %>`` tags deliberately hug the content on the same
+      line: on their own lines an un-taken block would still leave its trailing
+      newline, and that one blank line would read as C002 drift in every
+      already-bootstrapped repo. ``test_bootstrap`` locks the empty render
+      byte-for-byte.
     - ``docstring-coverage.yaml``: ``package_name`` (default ``"app"``)
     - ``renovate.json``: ``automerge`` (default ``"true"``; set to ``"false"``
       to disable Renovate auto-merge during initial rollouts — the preset's
@@ -145,6 +155,7 @@ def render(
         app_image_name=app_image_name,
         enable_e2e=enable_e2e,
         services_script=services_script,
+        system_deps=system_deps,
         exit_zero=exit_zero,
         automerge=automerge,
     )
