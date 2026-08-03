@@ -59,15 +59,16 @@ from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.errors import AppError
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.execution.heartbeat import run_in_thread
-from application_sdk.handler.base import Handler, HandlerError
+from application_sdk.handler.base import Handler, HandlerError, implements_test_auth
 from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
     AuthInput,
+    AuthOutput,
+    AuthStatus,
     EventTriggerConfig,
     FileUploadResponse,
     HandlerCredential,
     MetadataInput,
-    PreflightCheck,
     PreflightInput,
     PreflightOutput,
     SubscriptionConfig,
@@ -209,27 +210,91 @@ def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
-    dumped = check.model_dump(mode="json", exclude_none=True)
-    dumped["message"] = check.resolved_message
-    if check.resolved_suggested_action:
-        dumped["suggested_action"] = check.resolved_suggested_action
-    return dumped
-
-
 def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
     """Runtime metadata kept outside the SageV2 ``data`` map.
 
-    ``status`` is the gate verdict (``ready`` / ``not_ready`` / ``partial``);
-    ``not_ready`` means blocked. Per-check ``message``/``suggested_action`` follow
-    the precedence rule (typed ``error`` wins). Consumed for display/diagnostics.
+    Alias for :func:`application_sdk.checks.projections.to_runtime_summary`, which
+    holds this projection alongside the widget payload it sits next to.
     """
-    return {
-        "status": result.status.value,
-        "message": result.message,
-        "total_duration_ms": result.total_duration_ms,
-        "checks": [_summarize_check(check) for check in result.checks],
-    }
+    from application_sdk.checks.projections import (  # noqa: PLC0415 — cycle: application_sdk.handler.__init__ eagerly imports this module, so a check-core import at module scope closes the loop through handler.contracts
+        to_runtime_summary,
+    )
+
+    return to_runtime_summary(result)
+
+
+async def _run_auth_via_core(
+    handler: Handler,
+    auth_input: AuthInput,
+    *,
+    app_name: str,
+    context: HandlerContext,
+) -> AuthOutput:
+    """Answer an auth request as an ``AUTH``-depth run through the check core.
+
+    Used only for handlers that do not implement ``test_auth`` themselves (see
+    ``implements_test_auth``). A source we could not verify surfaces as
+    ``FAILED`` rather than ``INVALID_CREDENTIALS``: we never got far enough to
+    judge the credential, and telling the user their password is wrong when the
+    host was unreachable sends them to the wrong screen.
+    """
+    from application_sdk.checks.outcome import (  # noqa: PLC0415 — cycle: see _preflight_runtime_summary
+        emit as emit_check_outcome,
+    )
+    from application_sdk.checks.outcome import (  # noqa: PLC0415 — cycle: see _preflight_runtime_summary
+        outcome_for as check_outcome_for,
+    )
+    from application_sdk.checks.request import (  # noqa: PLC0415 — cycle: see _preflight_runtime_summary
+        CheckRequest,
+        CheckTrigger,
+    )
+    from application_sdk.checks.runner import (  # noqa: PLC0415 — cycle: see _preflight_runtime_summary
+        run_checks,
+    )
+    from application_sdk.checks.verdict import (  # noqa: PLC0415 — cycle: see _preflight_runtime_summary
+        CheckClassification,
+    )
+
+    request = CheckRequest.from_preflight_input(
+        auth_input.to_preflight_input(),
+        app_name=app_name,
+        trigger=CheckTrigger.UI_AUTH,
+    )
+    verdict = await run_checks(
+        handler,
+        request,
+        context=context,
+        # Nothing about the object store bears on whether a credential works, and
+        # the auth button should stay the cheapest thing the UI can ask for.
+        augment_object_store=False,
+    )
+    emit_check_outcome(
+        verdict,
+        outcome=check_outcome_for(blocked=not verdict.is_ready, enforce=False),
+        reason=verdict.status.value,
+    )
+    if verdict.classification is CheckClassification.SOURCE_UNVERIFIABLE:
+        return AuthOutput(status=AuthStatus.FAILED, message=verdict.output.message)
+    return AuthOutput.from_preflight_output(verdict.output)
+
+
+class _EntrypointHandler:
+    """Adapts a per-entrypoint ``preflight_check`` hook to the ``Handler`` shape.
+
+    Multi-entrypoint apps may ship ``app.<segment>.handler.preflight_check`` as a
+    plain function taking ``(input, context)``, which is not a
+    :class:`~application_sdk.handler.base.Handler`. The check core only needs the one
+    method, so this wraps the hook rather than making the core aware of two calling
+    conventions — the per-entrypoint path then gets the same credential resolution,
+    budget, classification and outcome row as everything else.
+    """
+
+    def __init__(self, fn: Any, context: HandlerContext) -> None:
+        self._fn = fn
+        self._context = context
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return await self._fn(input, self._context)
 
 
 if TYPE_CHECKING:
@@ -2337,10 +2402,24 @@ def create_app_handler_service(
                     if entrypoint
                     else None
                 )
-                if ep_fn is not None:
-                    result = await ep_fn(auth_input, context)
+                if ep_fn is not None or implements_test_auth(handler):
+                    # Legacy: this app answers auth with its own implementation, so
+                    # that is what its users see today. Called directly, unchanged.
+                    # The Handler subclass warned about the override at definition.
+                    result = (
+                        await ep_fn(auth_input, context)
+                        if ep_fn is not None
+                        else await handler.test_auth(auth_input)
+                    )
                 else:
-                    result = await handler.test_auth(auth_input)
+                    # Consolidated: an AUTH-depth run through the shared core, so
+                    # "Test authentication" gains the credential resolution, enforced
+                    # budget, classification and outcome row that only the pre-run
+                    # gate used to have — and answers from the same handler method
+                    # the run itself will call.
+                    result = await _run_auth_via_core(
+                        handler, auth_input, app_name=app_name, context=context
+                    )
                 logger.info(
                     "Auth test completed: app=%s request=%s status=%s",
                     app_name,
@@ -2430,10 +2509,73 @@ def create_app_handler_service(
                     if entrypoint
                     else None
                 )
-                if ep_fn is not None:
-                    result = await ep_fn(preflight_input, context)
-                else:
-                    result = await handler.preflight_check(preflight_input)
+                # Run through the shared check core, so the config UI resolves
+                # credentials, enforces a budget, classifies failures and emits the
+                # queryable outcome row exactly as the pre-run gate does. Before
+                # this, none of those happened here — which is how a check could
+                # pass in the UI and behave differently on the run it predicted.
+                from application_sdk.checks.outcome import (  # noqa: PLC0415 — cycle: see _preflight_runtime_summary
+                    emit as emit_check_outcome,
+                )
+                from application_sdk.checks.outcome import (  # noqa: PLC0415 — cycle: see _preflight_runtime_summary
+                    outcome_for as check_outcome_for,
+                )
+                from application_sdk.checks.request import (  # noqa: PLC0415 — cycle: see _preflight_runtime_summary
+                    CheckRequest,
+                    CheckTrigger,
+                )
+                from application_sdk.checks.runner import (  # noqa: PLC0415 — cycle: see _preflight_runtime_summary
+                    run_checks,
+                )
+                from application_sdk.checks.verdict import (  # noqa: PLC0415 — cycle: see _preflight_runtime_summary
+                    CheckClassification,
+                )
+
+                check_request = CheckRequest.from_preflight_input(
+                    preflight_input,
+                    app_name=app_name,
+                    trigger=CheckTrigger.UI_PREFLIGHT,
+                )
+                verdict = await run_checks(
+                    _EntrypointHandler(ep_fn, context)
+                    if ep_fn is not None
+                    else handler,
+                    check_request,
+                    # The request context, not a fresh one: this route's log lines
+                    # quote its request_id and a handler must see the same value.
+                    context=context,
+                )
+                result = verdict.output
+                emit_check_outcome(
+                    verdict,
+                    outcome=check_outcome_for(
+                        blocked=not verdict.is_ready, enforce=False
+                    ),
+                    reason=verdict.status.value,
+                )
+                if verdict.classification is CheckClassification.SOURCE_UNVERIFIABLE:
+                    # A source we could not even ask about is not a verdict, and this
+                    # endpoint has always answered it with an error status rather
+                    # than a 200 carrying a red row. Preserved deliberately: Heracles
+                    # branches on the status code. The status still comes from the
+                    # failure's own category, so a handler raising AuthError keeps
+                    # its 401 and a crash keeps its 500 — the core classified the
+                    # failure, it did not flatten it.
+                    details = result.checks[0].error if result.checks else None
+                    status = (
+                        _CATEGORY_TO_HTTP.get(details.category, 500)
+                        if details is not None
+                        else 500
+                    )
+                    # conformance: ignore[L009] boundary handler: the HTTPException raised next carries only a sanitized message, so this log is the only server-side record of which app/request could not be verified.
+                    logger.error(
+                        "Preflight could not verify the source for app %s "
+                        "(request %s): %s",
+                        app_name,
+                        context.request_id_str,
+                        result.message,
+                    )
+                    raise HTTPException(status_code=status, detail=result.message)
                 logger.info(
                     "Preflight check completed: app=%s request=%s status=%s checks=%d",
                     app_name,
@@ -2441,49 +2583,20 @@ def create_app_handler_service(
                     result.status.value,
                     len(result.checks),
                 )
-                # Build v2-compatible response: each check becomes a top-level
-                # key in data so the frontend can iterate check names directly.
-                # v2 format: {"authenticationCheck": {"success": true,
-                # "successMessage": "...", "failureMessage": "..."}, ...}.
-                #
-                # The SageV2 widget at
-                # atlan-frontend/src/workflowsv2/components/dynamicForm2/widget/SageV2.vue:271-273
-                # renders ``checkResult.success ? successMessage :
-                # failureMessage`` with no fallback to ``message``, so omitting
-                # those fields leaves the detail panel blank on a failed check
-                # (DBBI-665, WARE-1250). ``message`` is retained so any
-                # consumer already reading the v3 field keeps working.
-                #
-                # This finishes the third sub-mismatch from BLDX-901; PR #1228
-                # converted ``checks`` → camelCase keys and ``passed`` →
-                # ``success`` but left the message-field rename.
-                v2_data: dict[str, Any] = {}
-                for check in result.checks:
-                    # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
-                    key = check.name[0].lower() + check.name[1:]
-                    msg = check.resolved_message or ""
-                    v2_data[key] = {
-                        "success": check.passed,
-                        "message": msg,
-                        "successMessage": msg if check.passed else "",
-                        "failureMessage": "" if check.passed else msg,
-                    }
-                # Envelope ``success`` reports whether preflight executed at
-                # all, not whether every check passed — per-check pass/fail
-                # belongs in ``data.<check>.success``. The SageV2 widget at
-                # SageV2.vue:249 short-circuits on ``!response.success`` and
-                # skips the per-check render loop entirely, so collapsing
-                # envelope success to ``status == READY`` (the previous
-                # behaviour) made every PARTIAL/NOT_READY response surface
-                # as "Check failed" with a blank "Hide details" panel
-                # (DBBI-665). Tying envelope success to "any check ran"
-                # keeps it false when a handler produced no checks and lets
-                # the widget render per-check rows otherwise. The canonical
-                # status is exposed separately under ``preflight``.
+                # The SageV2 widget payload is a frozen output contract (see
+                # to_v2_widget_payload / envelope_success in checks.projections for
+                # the DBBI-665 and WARE-1250 regressions that pinned each field).
+                # Shared with every other consumer of a verdict rather than rebuilt
+                # inline here.
+                from application_sdk.checks.projections import (  # noqa: PLC0415 — cycle: see _preflight_runtime_summary
+                    envelope_success,
+                    to_v2_widget_payload,
+                )
+
                 response = _wrap_response(
-                    v2_data,
+                    to_v2_widget_payload(result.checks),
                     message=result.message or f"Preflight check {result.status.value}",
-                    success=len(result.checks) > 0,
+                    success=envelope_success(result.checks),
                 )
                 response["preflight"] = _preflight_runtime_summary(result)
                 return JSONResponse(content=response)

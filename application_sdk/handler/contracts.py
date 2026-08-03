@@ -21,6 +21,7 @@ from typing import Any
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
+from application_sdk.checks.depth import CheckDepth
 from application_sdk.contracts.base import SerializableEnum
 from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.errors.base import AppError
@@ -300,6 +301,23 @@ class AuthInput(BaseModel):
     path, where :attr:`credentials` already carries resolved values.
     Backward-compatible: absent ⇒ behavior is unchanged."""
 
+    def to_preflight_input(self) -> PreflightInput:
+        """Express this auth request as an ``AUTH``-depth preflight request.
+
+        Authentication is not a separate question from preflight — it is preflight's
+        cheapest layer. Converting here lets one handler method answer both, so a
+        connector cannot have working credentials according to one surface and
+        broken ones according to the other.
+        """
+        return PreflightInput(
+            credentials=list(self.credentials),
+            entrypoint=self.entrypoint,
+            entrypoint_ref=self.entrypoint_ref,
+            agent_json=self.agent_json,
+            timeout_seconds=self.timeout_seconds,
+            depth=CheckDepth.AUTH,
+        )
+
 
 class AuthOutput(BaseModel):
     """Output from the test_auth handler operation."""
@@ -318,6 +336,28 @@ class AuthOutput(BaseModel):
 
     expires_at: str = ""
     """ISO-8601 expiry timestamp (empty if no expiry)."""
+
+    @classmethod
+    def from_preflight_output(cls, output: PreflightOutput) -> AuthOutput:
+        """Project an ``AUTH``-depth preflight verdict onto the auth contract.
+
+        "Test authentication" is a preflight run scoped to the credential, so the
+        two contracts have to agree on what a failure means. A ``NOT_READY`` verdict
+        becomes ``INVALID_CREDENTIALS`` rather than the vaguer ``FAILED``: the run
+        was capped at :attr:`~application_sdk.checks.depth.CheckDepth.AUTH`, so the
+        only thing that could have failed *is* the credential, and the more specific
+        status is what the UI needs to point the user at the right field.
+
+        The message prefers the verdict's own summary, falling back to the first
+        failed check — the same precedence the widget applies.
+        """
+        failed = [c for c in output.checks if not c.passed]
+        if output.status is PreflightStatus.NOT_READY:
+            status = AuthStatus.INVALID_CREDENTIALS
+        else:
+            status = AuthStatus.SUCCESS
+        message = output.message or (failed[0].resolved_message if failed else "")
+        return cls(status=status, message=message)
 
 
 class PreflightStatus(SerializableEnum):
@@ -364,6 +404,19 @@ class PreflightCheck(BaseModel):
 
     duration_ms: float = 0.0
     """How long the check took in milliseconds."""
+
+    depth: CheckDepth | None = None
+    """Which :class:`~application_sdk.checks.depth.CheckDepth` this check belongs to.
+
+    Lets a caller request a capped run — a frequent scheduled probe asking only
+    for ``AUTH``, or ``test_auth`` expressed as a preflight run capped at ``AUTH``
+    rather than a separate handler operation.
+
+    ``None`` (the default) means untagged, and an untagged check runs at **every**
+    depth. Tagging is additive on a shipped contract, so almost no connector check
+    carries a tag yet; treating untagged as "runs always" keeps a depth-aware
+    caller from silently narrowing a run it did not mean to narrow.
+    """
 
     @field_validator("error", mode="before")
     @classmethod
@@ -445,7 +498,20 @@ class PreflightInput(BaseModel):
     """
 
     checks_to_run: list[str] = []
-    """Specific checks to run (empty = run all)."""
+    """Specific checks to run by name (empty = run all).
+
+    Names are connector-specific, so a caller must already know the connector to
+    use this. Prefer :attr:`depth` when the intent is "how thorough", which is
+    portable across connectors."""
+
+    depth: CheckDepth = CheckDepth.FULL
+    """How deep this run should go — see :class:`~application_sdk.checks.depth.CheckDepth`.
+
+    ``FULL`` (the default) preserves the pre-existing behaviour on every path: a
+    handler that ignores this field, and every caller that does not set it, runs
+    exactly the checks it ran before. Capping is opt-in by the caller — the
+    ``test_auth`` path caps at ``AUTH``, and a frequent scheduled probe may cap
+    lower than the pre-run gate does."""
 
     timeout_seconds: int = 60
     """Maximum seconds the handler has to run all checks.
@@ -488,6 +554,19 @@ class PreflightOutput(BaseModel):
 
     total_duration_ms: float = 0.0
     """Total time for all checks in milliseconds."""
+
+    recheck_after_seconds: int | None = None
+    """How long the caller should wait before checking again, if it schedules.
+
+    Set by :func:`application_sdk.checks.cadence.recheck_after_seconds` on the
+    scheduled path so the *interval* is derived from check semantics the SDK
+    understands (a failed credential check earns a short interval; an all-green
+    full run earns a long one) while the timer and the history stay with the
+    caller — today the Automation Engine.
+
+    A handler may set it to override that recommendation for its own source.
+    ``None`` on every interactive path, where nothing is being scheduled.
+    """
 
 
 # ---------------------------------------------------------------------------

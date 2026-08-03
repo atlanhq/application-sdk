@@ -98,9 +98,11 @@ def _outcome_event(mock_logger) -> dict | None:
     return None
 
 
-_LOGGER = "application_sdk.execution._temporal.preflight_gate.logger"
+_OUTCOME = "application_sdk.checks.outcome"
+_RUNNER = "application_sdk.checks.runner"
 
 _GATE = "application_sdk.execution._temporal.preflight_gate"
+_CHECK_CREDS = "application_sdk.checks.credentials"
 
 
 def _resolver_by_guid(mapping: dict) -> mock.MagicMock:
@@ -133,14 +135,34 @@ def _infra_patches(resolver: mock.MagicMock | None, *, secret_store: Any = _UNSE
         mock.MagicMock(name="SecretStore") if secret_store is _UNSET else secret_store
     )
     with ExitStack() as stack:
+        # Credential resolution moved to the shared check core (the gate delegates
+        # to it), so these target where the lookup now happens rather than where
+        # the gate used to own it.
         stack.enter_context(
-            mock.patch(f"{_GATE}.get_infrastructure", return_value=fake_infra)
+            mock.patch(f"{_CHECK_CREDS}.get_infrastructure", return_value=fake_infra)
         )
         if resolver is not None:
             stack.enter_context(
-                mock.patch(f"{_GATE}.CredentialResolver", return_value=resolver)
+                mock.patch(f"{_CHECK_CREDS}.CredentialResolver", return_value=resolver)
             )
         yield
+
+
+@contextmanager
+def _patch_logger():
+    """One mock standing in for both loggers a gate run writes through.
+
+    Emission of the queryable outcome row moved to the shared check core, while the
+    gate keeps its own prose (clamp complaints, the could-not-verify error). Tests
+    assert on both, so patch both with a single mock and every existing assertion
+    reads unchanged.
+    """
+    shared = mock.MagicMock()
+    with (
+        mock.patch(f"{_GATE}.logger", shared),
+        mock.patch(f"{_OUTCOME}.logger", shared),
+    ):
+        yield shared
 
 
 class TestPreflightGateActivity:
@@ -183,9 +205,7 @@ class TestPreflightGateActivity:
     async def test_gate_without_routing_skips_resolution(self) -> None:
         handler = _StubHandler()
         gate = _gate(handler)
-        with mock.patch(
-            "application_sdk.execution._temporal.preflight_gate.CredentialResolver",
-        ) as resolver_cls:
+        with mock.patch(f"{_CHECK_CREDS}.CredentialResolver") as resolver_cls:
             await gate(PreflightGateInput())
         resolver_cls.assert_not_called()
         assert handler.preflight_input is not None
@@ -634,7 +654,7 @@ class TestPreflightGateOutcomeEvent:
             status=PreflightStatus.READY,
             checks=[PreflightCheck(name="auth", passed=True)],
         )
-        with mock.patch(_LOGGER) as ml:
+        with _patch_logger() as ml:
             await _verdict_gate(out)(PreflightGateInput(entrypoint="crawl"))
         ev = _outcome_event(ml)
         assert ev is not None
@@ -654,7 +674,7 @@ class TestPreflightGateOutcomeEvent:
                 PreflightCheck(name="tables", passed=False, message="advisory"),
             ],
         )
-        with mock.patch(_LOGGER) as ml:
+        with _patch_logger() as ml:
             await _verdict_gate(out)(PreflightGateInput())
         ev = _outcome_event(ml)
         assert ev["outcome"] == "proceeded" and ev["reason"] == "partial"
@@ -667,7 +687,7 @@ class TestPreflightGateOutcomeEvent:
                 PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with _patch_logger() as ml, pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput(entrypoint="crawl"))
         ev = _outcome_event(ml)
         assert ev["outcome"] == "blocked"
@@ -680,7 +700,7 @@ class TestPreflightGateOutcomeEvent:
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="auth", passed=False, message="bad creds")],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError) as excinfo:
+        with _patch_logger() as ml, pytest.raises(ApplicationError) as excinfo:
             await _verdict_gate(out)(PreflightGateInput())
         ev = _outcome_event(ml)
         assert ev["outcome"] == "blocked"
@@ -706,7 +726,7 @@ class TestPreflightGateOutcomeEvent:
                 )
             ],
         )
-        with mock.patch(_LOGGER) as ml:
+        with _patch_logger() as ml:
             result = await _verdict_gate(out, enforce=False)(PreflightGateInput())
         assert result is out
         assert result.status is PreflightStatus.NOT_READY  # verdict untouched
@@ -731,7 +751,7 @@ class TestPreflightGateOutcomeEvent:
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="auth", passed=False, message="bad creds")],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with _patch_logger() as ml, pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
         ev = _outcome_event(ml)
         assert ev["outcome"] == "blocked"
@@ -739,13 +759,13 @@ class TestPreflightGateOutcomeEvent:
 
     async def test_proceeded_carries_gate_mode_hard(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
-        with mock.patch(_LOGGER) as ml:
+        with _patch_logger() as ml:
             await _verdict_gate(out)(PreflightGateInput())
         assert _outcome_event(ml)[GATE_MODE_KEY] == "hard"
 
     async def test_proceeded_carries_gate_mode_soft(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
-        with mock.patch(_LOGGER) as ml:
+        with _patch_logger() as ml:
             await _verdict_gate(out, enforce=False)(PreflightGateInput())
         ev = _outcome_event(ml)
         # a soft app's healthy runs proceed normally, still tagged soft
@@ -767,7 +787,7 @@ class TestPreflightGateOutcomeEvent:
                 PreflightCheck(name="tables", passed=True, duration_ms=95.0),
             ],
         )
-        with mock.patch(_LOGGER) as ml:
+        with _patch_logger() as ml:
             await _verdict_gate(out)(PreflightGateInput())
         ev = _outcome_event(ml)
         assert isinstance(ev[CHECK_MATRIX_KEY], str)
@@ -798,7 +818,7 @@ class TestPreflightGateOutcomeEvent:
                 )
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with _patch_logger() as ml, pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
         matrix = json.loads(_outcome_event(ml)[CHECK_MATRIX_KEY])
         # Pin the full row on the block path too, so error_code/duration_ms drift
@@ -823,14 +843,14 @@ class TestPreflightGateOutcomeEvent:
                 PreflightCheck(name="tables", passed=True, duration_ms=float("inf")),
             ],
         )
-        with mock.patch(_LOGGER) as ml:
+        with _patch_logger() as ml:
             await _verdict_gate(out)(PreflightGateInput())
         matrix = json.loads(_outcome_event(ml)[CHECK_MATRIX_KEY])  # must parse
         assert [row["duration_ms"] for row in matrix] == [0.0, 0.0]
 
     async def test_check_matrix_empty_checks(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
-        with mock.patch(_LOGGER) as ml:
+        with _patch_logger() as ml:
             await _verdict_gate(out)(PreflightGateInput())
         assert _outcome_event(ml)[CHECK_MATRIX_KEY] == "[]"
 
@@ -848,14 +868,14 @@ class TestPreflightGateOutcomeEvent:
                 )
             ],
         )
-        with mock.patch(_LOGGER) as ml:
+        with _patch_logger() as ml:
             await _verdict_gate(out)(PreflightGateInput())
         (row,) = json.loads(_outcome_event(ml)[CHECK_MATRIX_KEY])
         assert set(row) == {"name", "passed", "error_code", "duration_ms"}
 
     async def test_verdict_log_replaced_by_outcome_event(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
-        with mock.patch(_LOGGER) as ml:
+        with _patch_logger() as ml:
             await _verdict_gate(out)(PreflightGateInput())
         assert not any(
             c.args and "Preflight gate verdict" in str(c.args[0])
@@ -992,7 +1012,7 @@ class TestPreflightGateMultiCredential:
         )
         with (
             _infra_patches(resolver),
-            mock.patch(f"{_GATE}.bind_invocation_context") as bind,
+            mock.patch(f"{_RUNNER}.bind_invocation_context") as bind,
         ):
             await gate(self._input())
         bound_values = {c.value for c in bind.call_args.args[1]}
@@ -1012,7 +1032,7 @@ class TestPreflightGateMultiCredential:
         # log at debug, not warning: all-absent is the benign no-credential path.
         handler = _StubHandler()
         gate = _gate(handler)
-        with _infra_patches(None), mock.patch(f"{_GATE}.logger") as mock_logger:
+        with _infra_patches(None), mock.patch(f"{_CHECK_CREDS}.logger") as mock_logger:
             await gate(
                 PreflightGateInput(
                     credential_ref_fields=self._FIELDS,
@@ -1032,7 +1052,10 @@ class TestPreflightGateMultiCredential:
         handler = _StubHandler()
         gate = _gate(handler)
         resolver = _resolver_by_guid({"guid-a": {"token": "t"}})
-        with _infra_patches(resolver), mock.patch(f"{_GATE}.logger") as mock_logger:
+        with (
+            _infra_patches(resolver),
+            mock.patch(f"{_CHECK_CREDS}.logger") as mock_logger,
+        ):
             await gate(
                 PreflightGateInput(
                     credential_ref_fields=self._FIELDS,
@@ -1045,6 +1068,10 @@ class TestPreflightGateMultiCredential:
         assert {c.key: c.value for c in pi.credentials_by_name["api"]} == {"token": "t"}
         assert pi.credentials_by_name["object_store"] == []
         mock_logger.warning.assert_called_once()
-        assert mock_logger.warning.call_args.kwargs["missing_refs"] == {
-            "object_store": "object_store_credential_guid"
-        }
+        # The missing ref names ride in the %-style message body rather than as a
+        # kwarg (conformance L018): only Temporal context kwargs are top-level
+        # indexed, so diagnostic context belongs in the message where it is
+        # searchable. Field names only — never a secret.
+        args = mock_logger.warning.call_args.args
+        assert args[-1] == {"object_store": "object_store_credential_guid"}
+        assert "%s" in args[0]

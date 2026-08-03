@@ -321,9 +321,11 @@ def create_worker(
     The worker registers:
     - One workflow per entry point per App
     - All @task methods as named activities (qualified as ``{app}:{task}``)
-    - Three SDR workflows (``sdr:test_auth`` / ``sdr:preflight_check`` /
-      ``sdr:fetch_metadata``) bound to ``handler`` when one is provided and
-      ``enable_sdr`` is true.
+    - The handler-op workflows bound to ``handler`` when a real one is provided and
+      ``enable_sdr`` is true: ``test_auth`` / ``preflight_check`` /
+      ``fetch_metadata`` under both ``sdr:*`` (LM starts these by name) and
+      ``checks:*`` (what new callers should use), plus
+      ``checks:scheduled_preflight`` for proactive drift detection.
 
     Apps must be imported/registered before creating the worker.
 
@@ -471,14 +473,21 @@ def create_worker(
         )
     task_activities = [*task_activities, *gate_activities]
 
-    # SDR (the control-plane test_auth/preflight_check/fetch_metadata workflows)
-    # requires a REAL handler — never the bare DefaultHandler sentinel. Both the
-    # worker path (passes None) and the combined path (passes DefaultHandler() to
-    # also serve HTTP) fall back for handler-less apps; binding that to SDR would
-    # expose sdr:test_auth returning unconditional SUCCESS — a fake green on the
-    # Sage "Check". Exact-type check, not isinstance: a DefaultHandler *subclass*
-    # with real overrides is a real handler and does get SDR. The gate above uses
-    # gate_handler regardless because it must always be dispatchable.
+    # The handler-op workflows (test_auth / preflight_check / fetch_metadata, under
+    # both the sdr:* and checks:* names, plus checks:scheduled_preflight) require a
+    # REAL handler — never the bare DefaultHandler sentinel. Both the worker path
+    # (passes None) and the combined path (passes DefaultHandler() to also serve HTTP)
+    # fall back for handler-less apps; binding that would expose a check returning
+    # unconditional SUCCESS — a fake green on the Sage "Check", and a scheduled probe
+    # that reports healthy access forever without asking anything. Exact-type check,
+    # not isinstance: a DefaultHandler *subclass* with real overrides is a real handler
+    # and does get them. The gate above uses gate_handler regardless because it must
+    # always be dispatchable.
+    #
+    # ``enable_sdr`` now gates more than SDR — the checks:* names serve interactive
+    # tests on any deployment and the Automation Engine's drift detection. No SDK
+    # entry point sets it to False (CI's same-named flag is about image publishing,
+    # not this), so the practical guard is has_real_handler.
     has_real_handler = handler is not None and type(handler) is not DefaultHandler
     if enable_sdr and has_real_handler:
         from application_sdk.execution._temporal.sdr import (  # noqa: PLC0415 — lazy: only load SDR workflows when SDR is enabled
