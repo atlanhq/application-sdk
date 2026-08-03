@@ -1,11 +1,12 @@
-# ADR-0018: Temporal Nexus as the Single Handler-Invocation Plane
+# ADR-0018: Temporal Nexus as the Single Handler-Invocation Plane (Workflow-Free)
 
 ## Status
 
-**Proposed** — pending: Nexus enablement verification on per-tenant Temporal
-deployments, sync-operation timeout ceiling validation, and alignment with the
-pod-connectivity "drop the app server" discussion and the Continuous Pre-flight
-initiative.
+**Proposed** — gated on the Phase 0 spike (custom async operation handlers with
+manual completion in the Python SDK; callback reachability from customer
+infra; Nexus enablement on per-tenant Temporal deployments). Intended as the
+design input for the pending sync between the SDR (#2914), Continuous
+Pre-flight, and pod-connectivity ("drop the app server") discussions.
 
 ## Context
 
@@ -74,7 +75,13 @@ what another already has:
    history, never blocks anything, must distinguish "source not ready" from
    "our plumbing hiccuped".
 
-### Why the workflow-per-call shape exists at all
+**Duration envelope:** handler checks range from sub-second (typical; a
+representative production run measured 397 ms of handler work) through a fleet
+p95 under 14 s per app, up to a hard ceiling of **~5 minutes** for slow
+federated sources (the gate's own budget ceiling is 300 s). The design must
+serve the entire envelope.
+
+### Design principle: workflows are for durability, not transport
 
 A Temporal client cannot execute an activity directly — activities exist only
 inside workflow executions. The `sdr:*` workflows are therefore a durable
@@ -91,10 +98,19 @@ a representative production test run of `sdr:preflight_check`:
 | Activity tasks | 3 |
 | Orchestration overhead | **~93 %** |
 
-Nobody wanted durability for that call; the workflow was the only way to get a
-task onto the queue. Every path that copies this shape (interactive SDR today,
-Continuous Pre-flight if built on it) inherits the same overhead plus a
-workflow execution in the tenant's visibility store per probe.
+The per-call overhead is only half the cost. Every workflow on the handler
+path is a *managed artifact*: it must be authored under replay-determinism
+constraints, versioned across deploys, registered on every worker, sized with
+timeout/retry pairs that have already churned twice in one week on #2914,
+kept out of visibility/dashboard queries that mean "real runs", and reasoned
+about during every incident. That management overhead recurs fleet-wide and
+forever. Handler checks are **idempotent, read-only probes** — they gain
+nothing from durable execution semantics and pay full price for them.
+
+This ADR therefore adopts a hard rule: **the handler-invocation plane
+schedules no workflows.** Workflows remain where durability genuinely earns
+its cost — extraction runs (which already exist; the gate rides inside them,
+scheduling nothing new).
 
 ### The deployment-topology question
 
@@ -106,12 +122,14 @@ distinct from the worker, if they're both cold-started anyway?"*). Independently
 SDR already broke the premise structurally: for SDR apps the server cannot run
 handler ops in-process (wrong network, wrong secret store) — #2914 turns it
 into a dispatch broker that starts `sdr:*` workflows anyway, adding a hop
-without adding capability.
+without adding capability. This ADR retires the app server; its
+responsibilities are relocated below.
 
 ## Decision
 
 Adopt **Temporal Nexus** as the single caller-facing invocation plane for
-handler operations, and retire the per-app FastAPI handler deployment.
+handler operations — **with no workflow anywhere on the path** — and retire
+the per-app FastAPI handler deployment.
 
 ### The shape
 
@@ -124,19 +142,35 @@ handler operations, and retire the per-app FastAPI handler deployment.
    network posture is unchanged and remains pull-only.
 2. **Fast checks run as synchronous Nexus operations**: the handler result
    returns inline. **No workflow execution is created, no event history, no
-   visibility record, no run ID.**
-3. **Slow checks escalate to asynchronous Nexus operations** backed by the
-   existing `sdr:*` workflows, demoted to this single remaining role. The
-   caller API is identical for both; the protocol carries the escalation.
+   visibility record, no run ID.** The sync window is raised from the 10 s
+   default to ~20–30 s via server dynamic config
+   (`component.nexusoperations.request.timeout`; self-hosted deployments may
+   tune it — Temporal Cloud pins it), covering the fleet p95 with headroom.
+3. **Slow checks (up to the 300 s envelope) run as asynchronous Nexus
+   operations with in-process completion — no backing workflow.** The
+   operation handler starts the check as a plain in-process task, immediately
+   returns an async operation token, and when the check finishes the worker
+   delivers the result via the **Nexus completion callback** — an HTTP POST to
+   the callback URL that arrived with the start request. This manual-completion
+   form is part of the nexus-rpc protocol (caller-specified callback URLs;
+   completion-delivery helpers such as the Go SDK's
+   `NewCompletionHTTPRequest`; a `CompletionHandler` interface on the caller
+   side); workflow backing is Temporal's *convenience* pattern, not a
+   protocol requirement. The callback is **outbound HTTPS from the worker** —
+   the same direction as its existing long-poll; customer infra still accepts
+   no inbound connections.
 4. **Callers invoke over the Temporal frontend's Nexus HTTP dispatch surface**
    — plain in-VPC HTTP, no Temporal client required — or natively from within
-   a workflow (durable Nexus operation) where the caller is itself a workflow.
+   a workflow they already own (durable Nexus operation call), where async
+   completion is wired into the caller's machinery automatically.
 5. **The pre-extraction gate keeps its activity form.** It runs inside an
-   already-running workflow on the same worker; converting it to Nexus would
-   add a brokered hop for nothing. It shares the same underlying invocation
-   core (below) so verdict semantics cannot drift.
-6. **The invocation core is implemented once**, SDK-side, and shared by the
-   Nexus service, the gate activity, and (during migration) the HTTP routes.
+   already-running extraction workflow on the same worker — it schedules no
+   new workflow, so it already satisfies the workflow-free rule. It shares the
+   same underlying invocation core (below) so verdict semantics cannot drift.
+6. **The `sdr:*` workflows are deleted at the end of migration**, not demoted:
+   with manual completion covering the slow tail, no role remains for them.
+   #2914's dispatch layer is superseded; its agent-json-lift and
+   error-classification learnings fold into the invocation core.
 
 ### Mechanics — what runs where
 
@@ -147,6 +181,7 @@ components that already exist:
 | --- | --- | --- |
 | Routing (`endpoint → namespace + task queue`) + request/response brokering | Temporal frontend (per tenant) | already deployed; gains endpoint config *records*, not processes |
 | Request handling (executing the handler) | the existing worker process, via its poll loop | one new constructor argument |
+| Slow-check state | an in-process operation registry on the worker (token → running task) | plain code, no infrastructure |
 | Public API | Nexus HTTP dispatch on the frontend | replaces the per-app FastAPI service |
 
 Worker-side registration (SDK-internal, illustrative):
@@ -166,78 +201,28 @@ worker = Worker(
 which calls the same `Handler` instance everything else uses — same process,
 same event loop, same credential-store access as when an activity triggers it.
 
-Caller-side invocation:
+The two tiers, end to end (SDR case shown; cloud apps are identical minus the
+customer boundary):
 
 ```text
-# Any in-VPC HTTP caller (Heracles, workflow-health, tooling) — no Temporal client:
-POST {temporal-frontend}/nexus/endpoints/{endpoint}/services/handler-ops/preflight_check
-body: PreflightInput (JSON)          → 200 with PreflightOutput (sync path)
-                                     → operation token (async escalation path)
+── Fast tier (fits the ~20–30 s sync window) ──────────────────────────────────
+Caller (Atlan VPC) ── HTTP POST ──► Temporal frontend
+                                        ▲ outbound long-poll (existing)
+                                        │ Nexus task delivered as poll response
+                              SDR worker ► invocation core ► Handler.preflight_check()
+Result returns inline on the same request. No workflow, no history, no run ID.
 
-# A workflow caller (e.g. workflow-health's sweep), durable form:
-nexus_client = workflow.create_nexus_client(endpoint=..., service="handler-ops")
-result = await nexus_client.execute_operation("preflight_check", input)
+── Slow tier (up to ~300 s) — async, manual completion, still no workflow ────
+Caller ── HTTP POST (carries a callback URL) ──► frontend ──► worker
+worker: starts the check as an in-process task, returns an operation token
+        immediately (the Nexus task slot is released — nothing is held open)
+… check runs up to its budget …
+worker ── outbound HTTPS POST (Nexus completion) ──► callback URL
+   • Temporal-workflow caller: callback targets the caller's own cluster;
+     its Nexus machinery wakes the waiting workflow automatically.
+   • Plain HTTP caller (Heracles): callback targets the caller-supplied
+     in-VPC endpoint (protocol-native; Atlan-side inbound is permitted).
 ```
-
-End-to-end flow for the SDR case:
-
-```text
-Heracles / caller (Atlan VPC)
-        │  HTTP POST (in-VPC, authorizer-scoped)
-        ▼
-Temporal frontend (per tenant, already deployed, already mTLS)
-        ▲  same outbound long-poll the agent already maintains
-        │  (Nexus task delivered as a poll response — pull-only, no inbound)
-SDR worker (customer infra) ──► invocation core ──► Handler.preflight_check()
-        │
-        ▼  result returns inline on the same request — no workflow anywhere
-```
-
-### The 10-second sync ceiling — why it does not defeat the design
-
-Temporal's Nexus documentation bounds synchronous operations at roughly the
-request timeout (~10 s class). This is the tier boundary the design is built
-around, not a blocker — the claim was never "sync for everything":
-
-| Tier | Share of calls | Path | Cost |
-| --- | --- | --- | --- |
-| Fast (fits the sync window) | the overwhelming majority — typical handler work is sub-second to a few seconds (measured: 397 ms); fleet preflight p95 is under 14 s per app except one federated source | sync operation | zero workflow, zero history |
-| Slow tail (exceeds the window) | minority; one known ~124 s source | async operation → backing workflow (the demoted `sdr:*` role) | **exactly what every call costs today** |
-
-The worst case is the status quo, paid only by the tail; the common case sheds
-the measured ~93 % orchestration overhead. Nexus never makes a call more
-expensive than today — it makes most calls dramatically cheaper.
-
-Callers never see two paths — the protocol carries the escalation:
-
-- A **workflow caller** (the Continuous Pre-flight sweep) awaits the operation;
-  sync-vs-async resolution is invisible to it.
-- An **HTTP caller** (Heracles) receives either the inline result or an
-  operation token and fetches the result with a wait — still one API, still no
-  Temporal client.
-
-Handler-side, two implementation shapes (Open Questions #6):
-
-- **(a) Dynamic escalation** — the operation races the check against a budget
-  inside the sync window; done in time → return inline; not done → escalate to
-  the backing workflow. Needs a spike to confirm the Python SDK permits one
-  operation to choose per request.
-- **(b) Static per-app registration** — known-slow apps register the operation
-  as async-backed from the start. Works unconditionally today; (a) is an
-  optimization over it.
-
-Additional levers, in preference order: `checks_to_run` subsetting for the
-`interactive` trigger (a >10 s wait on a UI click is already a UX defect —
-the full suite belongs to the gate and the scheduled prober); and, since the
-Temporal deployments are self-hosted, the request-timeout cap may be tunable
-via dynamic config — treated as a last resort rather than a design input,
-because escalation is the protocol's own answer.
-
-One caller-visible behavior change to state plainly: for the ~124 s federated
-source, an *interactive* check cannot return synchronously under any design.
-Today that is a 110 s+ held HTTP connection (LB-timeout roulette); under this
-ADR it is an async token + result fetch. Different, arguably better — but
-different, and Heracles' UX handling of it is part of the Phase 4 cutover.
 
 ### The endpoint model
 
@@ -260,7 +245,7 @@ timeout — which *is* the "agent down" signal, without a pre-check.
 ### The invocation core (shared, SDK-side)
 
 One implementation, consumed by the Nexus operations, the gate activity, and
-the HTTP routes during migration:
+(during migration) the HTTP routes:
 
 - **Credential resolution for all routes** — GUID → local store → vault,
   agent-spec, and named refs — via `CredentialRef.resolve_or_none`. Requires
@@ -275,7 +260,9 @@ the HTTP routes during migration:
 - **Budget enforcement** — the gate's semantics generalized: budget net of
   credential resolution, stamped on `PreflightInput.timeout_seconds`,
   cancellation at the deadline, honest attribution when resolution consumes
-  the budget.
+  the budget. The async tier reuses the app's declared gate budget
+  (`preflight_gate_timeout_seconds`, clamped 5–300 s) as its check budget, so
+  one declared number governs every invocation form.
 - **Source-vs-plumbing classification** — the gate's `FailureCategory`-routed
   split (`source_unverifiable` vs `gate_broken`), so *every* caller can
   distinguish "the source is not ready" from "our plumbing broke".
@@ -292,27 +279,68 @@ the HTTP routes during migration:
   probe or interactive check must never abort anything, and must not inherit
   a hard-mode posture.
 
+### Tier selection and the duration envelope
+
+| Tier | Covers | Mechanism | Footprint |
+| --- | --- | --- | --- |
+| Sync | the overwhelming majority — sub-second to ~20–30 s (fleet p95 < 14 s) | inline result on the dispatch request | zero |
+| Async | the tail, up to the 300 s budget ceiling | in-process task + completion callback | zero workflows; one in-memory registry entry for the task's lifetime |
+
+Tier choice is made **per app, statically at registration** from the app's
+declared budget (an app whose `preflight_gate_timeout_seconds` exceeds the
+sync window registers async-backed operations), with per-request dynamic
+escalation (return inline if the check happens to finish inside the sync
+window, else escalate to a token) as a Phase 0 spike item — an optimization,
+not a dependency.
+
+The sync window itself: raise `component.nexusoperations.request.timeout`
+from 10 s to ~20–30 s. Two facts bound how far to take it — the effective
+handler window is *less* than the configured value (the timeout is measured
+from the calling History Service and transits matching before the worker sees
+the task), and a sync overrun is retried from zero (a sync call has no
+checkpoint). Both push long work to the async tier rather than to a cranked
+sync window: a 300 s sync setting would pin a request across History Service →
+matching → worker for its full duration — the held-connection anti-pattern
+this ADR retires — and a blip at second 250 would re-run the entire probe
+against the customer's source.
+
+### The durability trade — stated plainly
+
+Rejecting workflows on this plane buys zero per-call orchestration and zero
+workflow-management overhead, and costs **mid-flight durability**: if a worker
+restarts while a slow check is running, the in-process task dies, no
+completion is ever delivered, and the caller times out at the operation's
+schedule-to-close and may retry.
+
+This trade is correct *for this plane* because handler checks are idempotent,
+read-only probes whose retry is cheap and whose loss is harmless: an
+interactive user clicks again; Continuous Pre-flight's next tick re-probes;
+nothing downstream depends on a lost probe. The one path where a lost check
+would matter — the pre-extraction gate deciding whether a run proceeds —
+**already rides inside a durable workflow** and keeps doing so. Durability is
+applied exactly where it earns its cost, and nowhere else.
+
 ### How each use case is served
 
 | # | Use case | Path | Workflow created? | History footprint |
 | --- | --- | --- | --- | --- |
 | 1 | Interactive, cloud app | Heracles → Nexus HTTP → app worker → handler | **No** | none |
-| 2 | Pre-extraction gate | unchanged: `{app}:preflight` activity inside the run | inside the existing run | in the run's own history, as today |
+| 2 | Pre-extraction gate | unchanged: `{app}:preflight` activity inside the run | **No new one** — inside the existing run | in the run's own history, as today |
 | 3 | Interactive, SDR app | Heracles → Nexus HTTP → endpoint routes to the agent's task queue → SDR worker → handler | **No** (sync) | none |
-| 3b | Interactive, slow source | same call; async operation → backing workflow (`sdr:*`) | backing workflow only | on the backing workflow |
-| 4 | Continuous Pre-flight | workflow-health's sweep → Nexus (HTTP or durable caller) with `trigger=continuous`, never enforcing | **No** | none — nothing in customer run history, nothing in visibility |
+| 3b | Interactive, slow source (up to 300 s) | same call; async token + in-process check + completion callback to the caller-supplied URL | **No** | none |
+| 4 | Continuous Pre-flight | workflow-health's own sweep (its one pre-existing cron workflow) calls Nexus operations with `trigger=continuous`, never enforcing; async completions wake the sweep natively | **No per-probe workflow** | none — nothing in customer run history, nothing in visibility |
 
 **"Is it the same across all implementations?"** Same handler, same contract,
 same resolution, same classification, same telemetry — one invocation core.
 Two invocation *forms* remain, honestly distinguished by where the caller
-stands: outside a run → Nexus operation; inside the run → the gate activity.
-Both are thin skins over the same core.
+stands: outside a run → Nexus operation (sync or async by app budget); inside
+the run → the gate activity. Both are thin skins over the same core.
 
 **"Is it invoked via an API? Does it run a workflow?"** Yes — a plain HTTP
-call against the Temporal frontend (or a native Nexus call from a workflow).
-It does **not** run a workflow on the fast path; a workflow appears only as
-the async backing for a slow source, and inside extraction where a workflow
-already exists.
+call against the Temporal frontend (or a native Nexus call from a workflow the
+caller already owns). It runs **no workflow in any tier**: fast checks return
+inline; slow checks are an in-process task plus a completion callback; the
+gate rides a workflow that exists regardless.
 
 ### Retiring the app server
 
@@ -353,10 +381,11 @@ Pros: smallest delta from today; Heracles unchanged; the in-process path is
 optimal for cloud apps (~400 ms, zero orchestration); handler pods are already
 always-on, so probes cost no marginal infrastructure.
 Cons: requires the always-on server that ADR-0009 is being challenged over;
-keeps the workflow-per-call envelope (and its ~93 % overhead) for every SDR
-invocation; keeps two transports forked inside the server; the dispatch layer
-(queue derivation from agent-json, poller pre-check, pickup/job budget split)
-is bespoke infrastructure that Nexus provides natively.
+keeps the workflow-per-call envelope (and its ~93 % overhead plus the
+workflow-management overhead) for every SDR invocation; keeps two transports
+forked inside the server; the dispatch layer (queue derivation from
+agent-json, poller pre-check, pickup/job budget split) is bespoke
+infrastructure that Nexus provides natively.
 
 ### Option 3: Workflow-per-call everywhere (extend `sdr:*`)
 
@@ -368,10 +397,10 @@ closed, and still requires a Temporal client in every caller.
 
 One always-running workflow per agent; callers send Updates as RPC.
 Workable fallback if Nexus were unavailable: no per-probe execution, warm-path
-latency comparable. Rejected while Nexus is available: re-implements RPC on
-workflow machinery, accumulates history requiring continue-as-new churn, needs
-per-agent singleton lifecycle management, and callers still need Update
-plumbing.
+latency comparable. Rejected: re-implements RPC on workflow machinery,
+accumulates history requiring continue-as-new churn, needs per-agent singleton
+lifecycle management, callers still need Update plumbing — and it is precisely
+the *managed-workflow overhead* this ADR exists to remove.
 
 ### Option 5: New channel (NATS request-reply / reverse tunnel / WebSocket broker)
 
@@ -382,69 +411,102 @@ management, HA, and monitoring on both ends to buy a capability Nexus provides
 on the existing one. Never add a second hole; change the protocol on top of
 the existing hole.
 
-### Option 6 (chosen): Temporal Nexus
+### Option 6: Nexus with workflow-backed async operations (this ADR's first draft)
+
+Sync operations for the fast path; the slow tail escalates to async
+operations backed by the existing `sdr:*` workflows.
+
+Rejected after review: it preserves workflow-per-slow-call and — the deeper
+cost — keeps the `sdr:*` workflows alive as managed artifacts (replay
+determinism, versioning, registration, timeout churn, visibility noise)
+forever, for a tail that needs none of workflow durability. The revised
+decision replaces the backing with protocol-native manual completion.
+
+### Option 7 (chosen): Nexus with manual-completion async operations
 
 RPC semantics over the machinery already deployed: service/operation
 registration on the worker (FastAPI-shaped developer experience, Temporal
 substrate), frontend-brokered routing, sync ops with zero execution footprint,
-async escalation built into the protocol, same mTLS, same task-queue
-permission model.
+and a slow tier that is an in-process task plus an outbound completion
+callback — **no workflow in any tier**, no app server, no new channel, no
+customer-side change.
 
 Per-call cost comparison:
 
-| Option | New infra | Per-call cost | Customer exposure |
-| --- | --- | --- | --- |
-| Workflow-per-call (today) | none | ~23 events, 4+ queue round trips, an execution record | none |
-| **Nexus sync op** | endpoint records only | ~1 brokered round trip, **zero** history/executions | none — same poll |
-| Actor workflow + Update | none | a few events appended + continue-as-new churn | none |
-| New broker / tunnel | broker + creds + HA on both ends | ~ms | new egress to review |
+| Option | New infra | Per-call cost | Workflows to manage | Customer exposure |
+| --- | --- | --- | --- | --- |
+| Workflow-per-call (today / Option 3) | none | ~23 events, 4+ queue round trips, an execution record | 3 per app, forever | none |
+| FastAPI facade (Option 2) | always-on server pod per app | in-process (cloud) / workflow (SDR) | 3 per app, forever | none |
+| Nexus, workflow-backed async (Option 6) | endpoint records | ~1 round trip (fast) / workflow (slow tail) | 3 per app, forever | none |
+| **Nexus, manual completion (Option 7)** | endpoint records | ~1 round trip (fast) / task + 1 callback POST (slow) | **zero** | none — same poll + outbound HTTPS |
 
 ## What Changes Where
 
 | Layer | Change | App-author impact |
 | --- | --- | --- |
-| SDK | `create_worker` registers the `handler-ops` Nexus service bound to the existing handler; the shared invocation core is extracted (resolution, dispatch, budget, classification, events); additive `credential_guid` + `extraction_method` fields on `AuthInput` / `PreflightInput` / `MetadataInput`; `sdr:*` workflows re-scoped to async backing | **zero — inherited via version bump** |
-| Platform / Temporal | enable Nexus on per-tenant deployments (dynamic config + HTTP dispatch surface); endpoint provisioning per app (cloud) and per agent (SDR), automated in tenant tooling; authorizer claim mapping for Nexus HTTP | zero |
-| Heracles | base URL swap: app-server service → Temporal frontend Nexus URL; response mapping; retire per-app HTTP service discovery | zero |
+| SDK | `create_worker` registers the `handler-ops` Nexus service bound to the existing handler; the shared invocation core is extracted (resolution, dispatch, budget, classification, events); additive `credential_guid` + `extraction_method` fields on `AuthInput` / `PreflightInput` / `MetadataInput`; async-tier operation registry + completion delivery; `sdr:*` workflows deleted at end of migration | **zero — inherited via version bump** |
+| Platform / Temporal | enable Nexus on per-tenant deployments (dynamic config + HTTP dispatch surface); raise the sync window to ~20–30 s; endpoint provisioning per app (cloud) and per agent (SDR), automated in tenant tooling; authorizer claim mapping for Nexus HTTP; callback-endpoint reachability for agents (outbound HTTPS) | zero |
+| Heracles | base URL swap: app-server service → Temporal frontend Nexus URL; a small in-VPC callback endpoint for async completions; response mapping; retire per-app HTTP service discovery | zero |
 | Helm / atlan monorepo | remove handler deployment + service from app subcharts; `minReplicas` knob on worker for interactive apps; KEDA scaler updated for Nexus task backlog | zero |
-| workflow-health | consume Nexus with `trigger=continuous` | zero |
-| Apps | none mandatory; optional per-app declarations (gate mode, budget) unchanged | **zero code** |
+| workflow-health | consume Nexus with `trigger=continuous` from its one pre-existing sweep workflow | zero |
+| Apps | none mandatory; optional per-app declarations (gate mode, budget) unchanged — the declared budget now also selects the app's Nexus tier | **zero code** |
 
 Fleet delivery: SDK release → renovate bump → conformance rule flags stragglers
 → remediation loop closes them. No per-app PRs.
 
 ### Migration sequence
 
-1. **Verify preconditions** (below). Nothing else starts until these pass.
-2. Extract the shared invocation core; rewire the gate activity and the HTTP
+0. **Spike (gates this ADR).** Prove on a staging tenant: (a) a custom async
+   operation handler in the Python SDK returning an operation token from
+   `start()` — the underlying `nexus-rpc` package (pinned `1.4.0` in
+   `uv.lock`) defines the `OperationHandler` contract; Temporal's Python docs
+   currently document only `@sync_operation` and `@workflow_run_operation`,
+   so first-class support must be demonstrated, not assumed; (b) manual
+   completion delivery from a NAT'd worker to the caller's callback URL,
+   including the Temporal-caller form (callback into the caller cluster's
+   Nexus machinery) and the HTTP-caller form (caller-supplied URL); (c) the
+   sync window raised via `component.nexusoperations.request.timeout`;
+   (d) per-request dynamic sync/async escalation (optimization — its absence
+   does not block).
+1. Extract the shared invocation core; rewire the gate activity and the HTTP
    routes onto it with behavior-preserving policies (pure refactor, lands
    independently and pays for itself even if Nexus stalls).
-3. Register the Nexus service on workers behind a flag; provision endpoints on
-   a staging tenant; prove the four use-case paths end-to-end.
-4. Cut Heracles over per tenant; #2914's dispatch layer is bypassed (its
-   agent-json lift and error-classification learnings fold into the core).
-5. Continuous Pre-flight onboards as a Nexus consumer.
-6. Remove handler deployments from subcharts; mark ADR-0009 superseded on the
-   handler side.
+2. Register the Nexus service on workers behind a flag; provision endpoints on
+   a staging tenant; prove all four use-case paths end-to-end, including a
+   forced worker restart mid-check (verify clean caller timeout + retry).
+3. Cut Heracles over per tenant; #2914's dispatch layer is bypassed.
+4. Continuous Pre-flight onboards as a Nexus consumer.
+5. Remove handler deployments from subcharts; **delete the `sdr:*` workflows**;
+   mark ADR-0009 superseded on the handler side.
 
 ## Preconditions and Risks
 
-- **Sync-operation timeout ceiling.** Nexus sync calls are bounded per attempt
-  (~10 s class per the Nexus documentation). Addressed structurally by the
-  tiered design — see "The 10-second sync ceiling" above: the fast majority
-  runs sync; the slow tail escalates to async operations backed by the
-  existing workflows, costing exactly what every call costs today. Remaining
-  verification for Phase 3: the exact cap on our server build, and the
-  escalation shape (Open Questions #1, #6).
-- **Nexus enablement + provisioning.** Server version (2.42.x) is well past
-  Nexus GA and the pinned SDK stack ships support (`temporalio 1.30.0` with
-  `nexus-rpc 1.4.0` in `uv.lock`); per-tenant dynamic config and endpoint
-  provisioning automation must be built and verified.
+- **Python SDK support for manual-completion async operations (the gating
+  risk).** The nexus-rpc protocol supports it (caller-specified callback URLs,
+  completion-delivery requests, a `CompletionHandler` on the caller side);
+  Temporal's Python feature guide documents only the sync and
+  workflow-run forms. If the spike finds the Python surface not yet usable,
+  the fallback *within this ADR's rules* is: sync tier for everything within
+  the raised window, plus per-app `checks_to_run` decomposition so no single
+  call exceeds it — and the ADR's async tier waits for SDK support rather
+  than falling back to workflow backing.
+- **Callback reachability.** The completion callback is outbound HTTPS from
+  the worker. For Temporal-workflow callers it targets the caller cluster's
+  Nexus callback endpoint — verify agents' egress allows HTTPS to the same
+  host they already reach over gRPC. For HTTP callers it targets a
+  caller-supplied in-VPC URL (Heracles). Delivery retries and their ceiling
+  must be confirmed in the spike.
+- **Schedule-to-close for async operations.** Size to the 300 s budget ceiling
+  plus headroom (~330 s) so a lost completion surfaces as a bounded, typed
+  timeout — the "worker died mid-check" signal.
+- **Sync-window ceiling.** Raised, not cranked: ~20–30 s. The effective
+  handler window is less than the configured value, and sync overruns retry
+  from zero. Long work belongs to the async tier (see "Tier selection").
 - **Authorization.** Nexus HTTP dispatch must sit behind the Temporal
-  authorizer with namespace-scoped claims, in-VPC only. Confirm claim-mapper
-  coverage; the endpoint surface must not widen who can invoke handler ops
-  relative to today's app-server network policy. Inputs carry credential
-  *references*, never values — resolution stays at the execution site.
+  authorizer with namespace-scoped claims, in-VPC only; the caller-supplied
+  callback URL must be validated against an allowlist (an attacker-controlled
+  callback URL would otherwise turn completion delivery into SSRF from
+  customer infra). Inputs carry credential *references*, never values.
 - **KEDA visibility.** Confirm the scaler sees Nexus task backlog (or pin
   `minReplicas: 1` for interactive apps). Irrelevant for SDR — agents are
   customer-run and always-on.
@@ -459,14 +521,19 @@ Fleet delivery: SDK release → renovate bump → conformance rule flags straggl
 - **Interactive latency for scale-to-zero cloud apps.** A cold worker adds
   KEDA wake-up to the first interactive check. Mitigation is the `minReplicas`
   knob per app; the trade is explicit and per-app rather than fleet-wide.
+- **Worker-restart deploy hygiene.** Rolling worker deploys kill in-flight
+  slow checks (bounded caller timeout, then retry). Acceptable for probes;
+  worth a drain-grace note in the deploy runbook so interactive users see it
+  rarely.
 - **Transitional coexistence.** HTTP endpoints remain during migration; the
   facade and Nexus answer identically because both sit on the shared core.
-  The compat window and its end date are part of Phase 4's definition of done.
+  The compat window and its end date are part of Phase 3's definition of done.
 
 ## Open Questions
 
-1. Exact Nexus request-timeout cap available on our server build, and whether
-   it can be raised per endpoint rather than cluster-wide.
+1. Exact Nexus request-timeout cap and callback-retry policy on our server
+   build, and whether either is settable per endpoint rather than
+   cluster-wide.
 2. Endpoint granularity for multi-pool apps (ADR-0016): one endpoint per pool
    queue, or one endpoint with pool routing folded into the operation input.
 3. Whether `/workflows/v1/start` consumers move to the Temporal frontend HTTP
@@ -477,18 +544,18 @@ Fleet delivery: SDK release → renovate bump → conformance rule flags straggl
    activities (`get_activity_name`) or stays a fixed `handler-ops` service
    behind per-app endpoints (current proposal: fixed service name, per-app
    endpoints — the endpoint is the namespace).
-6. Sync-to-async escalation shape: whether the Python SDK permits a single
-   operation to return inline or escalate to a backing workflow per request
-   (dynamic), or whether slow apps register async-backed operations statically
-   (works today; the dynamic form is an optimization — see "The 10-second sync
-   ceiling").
+6. Per-request dynamic sync/async escalation (finish-inline-if-fast) versus
+   static per-app tier selection from the declared budget — spike item 0(d).
+7. Whether Heracles prefers the callback endpoint or a poll-with-wait
+   retrieval for async interactive results (both are protocol-native;
+   callback is the default proposal).
 
 ## Relationship to Prior ADRs
 
 - **ADR-0001 (per-app handlers): unaffected.** The handler contract is the
   fixed point of this design.
 - **ADR-0009 (separate handler/worker deployments): superseded for the handler
-  side** once Phase 6 completes. Its cost rationale (scale-to-zero workers)
+  side** once Phase 5 completes. Its cost rationale (scale-to-zero workers)
   survives; its always-on-server rationale is met by Nexus + per-app
   `minReplicas` instead of a second deployment.
 - **ADR-0016 (multi-pool worker routing): compose.** Nexus endpoint → task
