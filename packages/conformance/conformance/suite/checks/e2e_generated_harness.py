@@ -64,9 +64,11 @@ its suites through an in-repo base is graded on that base, not on each leaf.
 The class index is keyed by ``(file, class name)`` and the visited class is
 always graded from the node in hand; a bare name resolves an ancestor only, and
 prefers a definition in the referencing file.  When a bare name maps to classes
-in several other files the resolution is ambiguous and the checker biases toward
-reporting — a suppression carrying the author's reason is auditable, silence is
-not.
+in several other files the resolution is ambiguous, and the checker biases
+toward reporting **provided some candidate transitively reaches an SDK harness
+base** — a suppression carrying the author's reason is auditable, silence is
+not, but an ordinary class that merely shares a name with an unrelated one is
+not this rule's business and must not be graded as a harness.
 
 Inline suppression
 ------------------
@@ -242,13 +244,43 @@ def _resolve_base(
     if len({c.file for c in candidates}) > 1:
         # Report-on-ambiguity needs a floor, or ordinary classes that merely
         # share a base name with something elsewhere in tests/ get graded as
-        # harnesses. Only raise the flag when at least one candidate could
-        # actually BE a harness — i.e. some candidate names an SDK harness base
-        # directly. When none could, the ambiguity is irrelevant to this rule.
-        if any(c.bases & _SDK_HARNESS_BASES for c in candidates):
+        # harnesses. Raise the flag only when some candidate could actually BE
+        # a harness — reaching an SDK harness base at ANY depth, not just
+        # directly, since routing suites through an in-repo intermediate base is
+        # the supported shape. A direct-bases-only floor both missed those and
+        # made the verdict depend on which candidate sorted first.
+        if any(_reaches_harness_base(c, index, by_name) for c in candidates):
             return candidates[0], True
         return candidates[0], False
     return candidates[0], False
+
+
+def _reaches_harness_base(
+    info: _ClassInfo, index: _ClassIndex, by_name: _NameIndex
+) -> bool:
+    """Whether *info* transitively reaches an SDK harness base.
+
+    Used only as the ambiguity floor, so it resolves conservatively (a bare name
+    with several definitions contributes every one of them) and never re-enters
+    :func:`_resolve_base`, which would recurse back into the floor.
+    """
+    seen: set[tuple[str, str]] = set()
+    stack = [info]
+    while stack:
+        current = stack.pop()
+        key = (current.file, current.node.name)
+        if key in seen:
+            continue
+        seen.add(key)
+        if current.bases & _SDK_HARNESS_BASES:
+            return True
+        for base in current.bases:
+            same = index.get((current.file, base))
+            if same is not None:
+                stack.append(same)
+            else:
+                stack.extend(by_name.get(base, []))
+    return False
 
 
 def _is_harness_class(

@@ -541,11 +541,13 @@ which scans template YAML, not Python.
   than one CI cycle at a time.
 
   **Scope note — the alias position is deliberately not graded.**  The column
-  identifier is the YAML *mapping key* in the nested shape every shipped
-  template uses (`columns:` → `attributes:` → `<identifier>:` →
-  `source_query:`), and `flatten_yaml_columns` renders it as
-  `attributes.<key>` — dotted, so `quote_column_name` quotes it.  It also
-  reaches only the `AS` alias slot, which DuckDB does not restrict (`SELECT 1
-  AS column` and `AS qualify` both parse on the pinned 1.5.5).  So do **not**
-  "fix" a reserved-word attribute name: there is no runtime failure there, and
-  renaming it changes the emitted Atlan attribute.
+  identifier reaches only the `AS` alias slot, which DuckDB does not restrict
+  (`SELECT 1 AS column` and `AS qualify` both parse on the pinned 1.5.5).  So
+  do **not** "fix" a reserved-word attribute name: there is no runtime failure
+  there, and renaming it changes the emitted Atlan attribute.
+
+  Note this does *not* rest on the identifier being dot-quoted:
+  `flatten_yaml_columns` dots a key only when it is nested under a non-leaf
+  parent, and every shipped template carries `typeName:` and `status:` as
+  top-level leaf keys under `columns:`, emitted bare.  The alias-slot argument
+  is the whole reason, and it stands on its own.

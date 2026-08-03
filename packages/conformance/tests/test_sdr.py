@@ -1527,3 +1527,98 @@ def test_p041_silent_on_or_default_soft(tmp_path: Path) -> None:
         },
     )
     assert not any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+def test_p030_compound_upload_names_still_need_a_store(tmp_path: Path) -> None:
+    """`upload` as one token of a compound name proves nothing on its own.
+
+    Only the bare `upload(...)` / `self.upload(...)` clears without a store.
+    """
+    for i, body in enumerate(
+        ("self._log.upload_metrics(x=1)", "self._telemetry.upload_stats()")
+    ):
+        root = tmp_path / f"c{i}"
+        _write(
+            root,
+            {
+                "atlan.yaml": _SDR_ATLAN_YAML,
+                "app/connector.py": (
+                    "class Connector:\n"
+                    "    async def upload_to_atlan(self, prefix):\n"
+                    f"        {body}\n"
+                ),
+            },
+        )
+        assert [f.rule_id for f in _run(root) if f.rule_id == "P030"] == ["P030"], body
+
+
+def test_p030_registry_named_store_is_not_a_store_receiver(tmp_path: Path) -> None:
+    """`_store_of_names` merely contains the word — substring matching accepted it."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    async def upload_to_atlan(self, prefix):\n"
+                "        self._store_of_names.put('x')\n"
+            ),
+        },
+    )
+    assert any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p030_bare_sdk_storage_helpers_are_transfers(tmp_path: Path) -> None:
+    """The green fleet bridges call SDK helpers as bare functions, no receiver."""
+    for i, body in enumerate(
+        (
+            "await storage_upload_file(key, tmp, store=upstream_store)",
+            "await upload_file(dest_key, tmp_path, store=upstream_store)",
+        )
+    ):
+        root = tmp_path / f"b{i}"
+        _write(
+            root,
+            {
+                "atlan.yaml": _SDR_ATLAN_YAML,
+                "app/connector.py": (
+                    "class Connector:\n"
+                    "    async def upload_to_atlan(self, prefix):\n"
+                    f"        {body}\n"
+                ),
+            },
+        )
+        assert not any(f.rule_id == "P030" for f in _run(root)), body
+
+
+def test_p041_fires_on_class_body_constant_indirection(tmp_path: Path) -> None:
+    """`preflight_gate_mode` is conventionally a class attribute."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    MODE = 'hard'\n"
+                "    preflight_gate_mode = MODE\n"
+            ),
+        },
+    )
+    assert any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+def test_p041_fires_on_deterministic_reassigned_constant(tmp_path: Path) -> None:
+    """Two straight-line module assignments have a deterministic final value."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "MODE = 'soft'\n"
+                "MODE = 'hard'\n"
+                "class Connector:\n"
+                "    preflight_gate_mode = MODE\n"
+            ),
+        },
+    )
+    assert any(f.rule_id == "P041" for f in _run(tmp_path))

@@ -59,7 +59,7 @@ def scan_contract_compat(
     for path in paths:
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
         try:
             tree = ast.parse(text, filename=str(path))

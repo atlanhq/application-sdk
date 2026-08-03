@@ -723,3 +723,22 @@ def test_b007_exemption_holds_before_a_later_rebind() -> None:
         + "    return rows\n"
     )
     assert _b007(src) == []
+
+
+def test_b007_closure_defined_before_its_binding_is_exempt() -> None:
+    """A closure body runs at call time, not where it is written.
+
+    Applying the line filter when walking OUT to an enclosing scope flagged
+    correct code.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def outer():\n"
+        + "    def inner():\n"
+        + "        return table.to_pylist()\n"
+        + "    table = pa.table({})\n"
+        + "    return inner()\n"
+    )
+    assert _b007(src) == []

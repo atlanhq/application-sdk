@@ -199,19 +199,33 @@ def _is_pyarrow_bound(
 ) -> bool:
     """Whether *name* is pyarrow-bound at *node*, in its scope or an enclosing one.
 
-    Within a scope the **last binding before the use** decides, so rebinding a
-    pyarrow name to an SDK frame correctly voids the exemption.
+    In the node's **own** scope the last binding before the use decides, so
+    rebinding a pyarrow name to an SDK frame correctly voids the exemption.
+
+    In an **enclosing** scope any binding counts, regardless of line order: a
+    closure body executes when it is called, not where it is written, so a
+    nested function defined above the ``table = pa.table({})`` it reads still
+    sees that binding at call time. Applying the line filter outward flagged
+    correct code.
+
+    Known limit: "last binding before the use" assumes straight-line flow. A
+    name assigned in both arms of an ``if``/``else`` or ``try``/``except`` is
+    decided by whichever arm is written last, which can mis-decide in either
+    direction. Full CFG modelling is out of scope for a WARN-tier detector.
     """
     use_line = getattr(node, "lineno", 0)
-    scope: ast.AST | None = scopes.scope_of(node)
+    own_scope = scopes.scope_of(node)
+    scope: ast.AST | None = own_scope
     while scope is not None:
         bindings = by_scope.get(scope, {}).get(name)
         if bindings:
-            prior = [b for b in bindings if b[0] <= use_line]
-            if prior:
-                return max(prior, key=lambda b: b[0])[1]
-            # Bound only after this point in the scope — not in effect here;
-            # fall through to an enclosing scope.
+            if scope is own_scope:
+                prior = [b for b in bindings if b[0] <= use_line]
+                if prior:
+                    return max(prior, key=lambda b: b[0])[1]
+                # Bound only after this point — not in effect; look outward.
+            else:
+                return max(bindings, key=lambda b: b[0])[1]
         scope = scopes.parent_of(scope)
     return False
 

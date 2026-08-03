@@ -298,7 +298,8 @@ _UNAMBIGUOUS_TRANSFER_VERBS = frozenset({"upload"})
 #: ``migrate_schema``, ``copy_on_write``, ``copy_paste``, ``transfer_encoding``
 #: and ``push_job`` are all compound names carrying one of these and none moves
 #: bytes anywhere — so a compound name must NOT clear the finding on its own.
-#: These require the receiver to name a recognised store, at any token count.
+#: These require the CALL to name a recognised store (receiver or a keyword
+#: argument), at any token count.
 _AMBIGUOUS_TRANSFER_VERBS = frozenset(
     {"copy", "transfer", "migrate", "put", "push", "sync", "write", "send"}
 )
@@ -320,34 +321,72 @@ _STORE_RECEIVER_MARKERS = (
 )
 
 
-def _receiver_names_a_store(func: ast.expr) -> bool:
-    """Whether the call's receiver chain mentions a recognised object store."""
-    node: ast.AST | None = func
+def _names_a_store(identifier: str) -> bool:
+    """Whether one identifier segment names a store.
+
+    Whole-segment or suffix match, never a bare substring: ``_object_store`` and
+    ``upstream_store`` are stores, ``_store_of_names`` is a registry that merely
+    starts with the word.
+    """
+    seg = identifier.strip("_").lower()
+    return any(
+        seg == marker or seg.endswith(marker) for marker in _STORE_RECEIVER_MARKERS
+    )
+
+
+def _call_names_a_store(node: ast.Call) -> bool:
+    """Whether the call references a recognised store — by receiver or argument.
+
+    The receiver chain is the usual signal (``self._object_store.upload_prefix``).
+    Keyword arguments matter too, because the SDK's storage helpers are called
+    as bare functions: every green fleet bridge does
+    ``upload_file(key, tmp, store=upstream_store)`` /
+    ``storage_upload_file(..., store=...)``, which has no receiver at all.
+    """
     parts: list[str] = []
-    while node is not None:
-        if isinstance(node, ast.Attribute):
-            parts.append(node.attr)
-            node = node.value
-        elif isinstance(node, ast.Name):
-            parts.append(node.id)
-            node = None
-        elif isinstance(node, ast.Call):
-            node = node.func
+    cur: ast.AST | None = node.func
+    while cur is not None:
+        if isinstance(cur, ast.Attribute):
+            parts.append(cur.attr)
+            cur = cur.value
+        elif isinstance(cur, ast.Name):
+            parts.append(cur.id)
+            cur = None
+        elif isinstance(cur, ast.Call):
+            cur = cur.func
         else:
-            node = None
-    lowered = "_".join(parts).lower()
-    return any(marker in lowered for marker in _STORE_RECEIVER_MARKERS)
+            cur = None
+    # Drop the callee itself — `upload_file` must not vouch for itself.
+    receiver_parts = parts[1:] if len(parts) > 1 else []
+    if any(_names_a_store(part) for part in receiver_parts):
+        return True
+
+    for kw in node.keywords:
+        if kw.arg and _names_a_store(kw.arg):
+            return True
+        value = kw.value
+        if isinstance(value, ast.Name) and _names_a_store(value.id):
+            return True
+        if isinstance(value, ast.Attribute) and _names_a_store(value.attr):
+            return True
+    return False
 
 
 def _is_storage_transfer_call(node: ast.Call) -> bool:
     """Whether *node* is a real storage/store-transfer call.
 
-    A compound name carrying a transfer verb as one of its tokens
-    (``upload_file``, ``storage_upload_file``, ``put_object``,
-    ``migrate_from_objectstore_to_atlan``) is a transfer outright — that is the
-    shape every green fleet bridge uses.  A bare verb additionally requires the
-    receiver to name a store, so ``self._object_store.sync(prefix)`` counts
-    while ``buffer.copy()`` does not.
+    Only the bare ``upload(...)`` / ``self.upload(...)`` — the SDK-standard
+    bridge call — clears on the name alone.  **Every** other name carrying a
+    transfer verb, compound or not, must additionally have the call reference a
+    store (see :func:`_call_names_a_store`).
+
+    That matters in both directions.  Clearing on any compound name containing a
+    verb let ``self._log.upload_metrics(...)``, ``self._telemetry.upload_stats()``,
+    ``put_metric_data``, ``migrate_schema``, ``copy_on_write``, ``copy_paste``,
+    ``transfer_encoding`` and ``push_job`` all pass a no-op stub.  Requiring a
+    *receiver* alone would misreport the green fleet bridges, which call the SDK
+    storage helpers as bare functions — ``upload_file(key, tmp, store=...)`` has
+    no receiver at all — which is why the keyword arguments count too.
     """
     func = node.func
     if isinstance(func, ast.Attribute):
@@ -360,13 +399,16 @@ def _is_storage_transfer_call(node: ast.Call) -> bool:
     tokens = set(t for t in name.lower().split("_") if t)
     if not (tokens & (_UNAMBIGUOUS_TRANSFER_VERBS | _AMBIGUOUS_TRANSFER_VERBS)):
         return False
-    if tokens & _UNAMBIGUOUS_TRANSFER_VERBS:
-        return True
+    if tokens == _UNAMBIGUOUS_TRANSFER_VERBS:
+        return True  # the bare `upload(...)` / `self.upload(...)` SDK call
+    # A COMPOUND name carrying `upload` proves nothing on its own either:
+    # `self._log.upload_metrics(...)` and `self._telemetry.upload_stats()` are
+    # not transfers. Everything but the bare name goes through the receiver.
     # An ambiguous verb says nothing on its own at ANY token count: compound
     # names like `put_metric_data`, `migrate_schema`, `copy_on_write`,
     # `copy_paste`, `transfer_encoding` and `push_job` are not storage. The
     # receiver has to name a store.
-    return _receiver_names_a_store(func)
+    return _call_names_a_store(node)
 
 
 def _is_abstract_body(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -1141,18 +1183,21 @@ def _is_unconditional_hard(
     return False
 
 
-def _module_string_constants(tree: ast.Module) -> dict[str, object]:
-    """Module-level ``NAME = "literal"`` bindings that are assigned exactly once.
+def _string_constants(body: list[ast.stmt]) -> dict[str, object]:
+    """``NAME = "literal"`` bindings among the straight-line statements of *body*.
 
-    Only unambiguous single bindings are recorded — a name reassigned anywhere
-    at module level is dropped rather than guessed at.  This is deliberately not
-    constant propagation; it exists so the common no-literal-string-inline style
-    (``MODE = "hard"`` / ``preflight_gate_mode = MODE``) cannot hide an
-    unconditionally-hard gate behind one hop of indirection.
+    Used for module bodies AND class bodies: ``preflight_gate_mode`` is
+    conventionally a class attribute, so ``class C: MODE = "hard"`` followed by
+    ``preflight_gate_mode = MODE`` in the same body is at least as natural as
+    the module-level form.
+
+    Deliberately not constant propagation — only direct children of *body* are
+    considered, so control flow is straight-line and the last write wins. A name
+    ever assigned a computed value is dropped rather than guessed at.
     """
     seen: dict[str, object] = {}
-    counts: dict[str, int] = {}
-    for stmt in tree.body:
+    poisoned: set[str] = set()
+    for stmt in body:
         if not (
             isinstance(stmt, ast.Assign)
             and len(stmt.targets) == 1
@@ -1160,10 +1205,13 @@ def _module_string_constants(tree: ast.Module) -> dict[str, object]:
         ):
             continue
         name = stmt.targets[0].id
-        counts[name] = counts.get(name, 0) + 1
         if isinstance(stmt.value, ast.Constant):
+            # Straight-line statements only, so the last write wins:
+            # `MODE = "soft"` then `MODE = "hard"` is deterministically hard.
             seen[name] = stmt.value.value
-    return {k: v for k, v in seen.items() if counts.get(k) == 1}
+        else:
+            poisoned.add(name)  # a computed value — do not guess at it
+    return {k: v for k, v in seen.items() if k not in poisoned}
 
 
 def _gate_target_names(targets: list[ast.expr]) -> list[str]:
@@ -1237,8 +1285,17 @@ def _check_p041(paths: list[Path], root: Path) -> list[Finding]:
             rel = str(path.relative_to(root))
         except ValueError:
             rel = str(path)
-        constants = _module_string_constants(tree)
-        split_exempt = _run_mode_split_exempt(tree, constants)
+        module_constants = _string_constants(tree.body)
+        # `preflight_gate_mode` is conventionally a class attribute, so a
+        # same-class `MODE = "hard"` shadows the module-level one.
+        class_constants: dict[int, dict[str, object]] = {}
+        for cls in ast.walk(tree):
+            if not isinstance(cls, ast.ClassDef):
+                continue
+            merged = {**module_constants, **_string_constants(cls.body)}
+            for item in ast.walk(cls):
+                class_constants[id(item)] = merged
+        split_exempt = _run_mode_split_exempt(tree, module_constants)
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 targets = list(node.targets)
@@ -1254,7 +1311,9 @@ def _check_p041(paths: list[Path], root: Path) -> list[Finding]:
                 continue
             if id(node) in split_exempt:
                 continue
-            if _is_unconditional_hard(value, constants):
+            if _is_unconditional_hard(
+                value, class_constants.get(id(node), module_constants)
+            ):
                 findings.append(
                     Finding(
                         rule_id=RULE_P041,

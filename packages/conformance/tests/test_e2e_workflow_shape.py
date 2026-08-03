@@ -661,3 +661,46 @@ def test_t021_silent_on_underscore_test_path_input(tmp_path: Path) -> None:
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
     assert "T021" not in _ids(_scan(root))
+
+
+def test_t021_fires_when_only_a_step_name_mentions_the_suite(tmp_path: Path) -> None:
+    """A step `name:` describes; it never runs anything."""
+    root = _repo(
+        tmp_path,
+        workflows={
+            "ci.yaml": (
+                "name: CI\non:\n  pull_request:\njobs:\n"
+                "  unit:\n    runs-on: ubuntu-latest\n    steps:\n"
+                "      - name: Run tests/e2e/test_full.py\n"
+                "        run: pytest tests/unit\n"
+            )
+        },
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+    )
+    assert "T021" in _ids(_scan(root))
+
+
+def test_t021_fires_when_only_an_artifact_path_mentions_the_suite(
+    tmp_path: Path,
+) -> None:
+    """An upload-artifact target must never mark the suites reachable.
+
+    This is the case the checker's own docstring names as the thing that must
+    not silence T021 — one artifact path would otherwise disarm it repo-wide.
+    """
+    root = _repo(
+        tmp_path,
+        workflows={
+            "ci.yaml": (
+                "name: CI\non:\n  pull_request:\njobs:\n"
+                "  unit:\n    runs-on: ubuntu-latest\n    steps:\n"
+                "      - run: pytest tests/unit\n"
+                "      - uses: actions/upload-artifact@v4\n"
+                "        with:\n"
+                "          name: logs\n"
+                "          path: tests/e2e/test_full.py.log\n"
+            )
+        },
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+    )
+    assert "T021" in _ids(_scan(root))

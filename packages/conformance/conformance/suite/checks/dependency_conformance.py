@@ -1066,6 +1066,17 @@ def _first_query_transformer_import(
     return None
 
 
+#: Marker axes that describe the *machine*, and are therefore decidable from the
+#: scanning host. Everything else — notably the ``python_version`` family — is
+#: treated as non-decidable, because a lock resolved for the app's own
+#: ``requires-python`` range says nothing about the interpreter running the scan.
+_PLATFORM_MARKER_AXES = frozenset(
+    {"sys_platform", "os_name", "platform_system", "platform_machine"}
+)
+
+_MARKER_VARIABLE_RE = re.compile(r"\b([a-z_]+)\s*(?:==|!=|<|>|<=|>=|~=|\bin\b)")
+
+
 def _marker_can_hold(marker: object) -> bool:
     """Whether a PEP 508 environment marker on a lock edge can hold here.
 
@@ -1074,22 +1085,31 @@ def _marker_can_hold(marker: object) -> bool:
     ``marker = "sys_platform == 'win32'"`` duckdb edge would silence D010 on
     Linux and macOS, where the ``ImportError`` it exists to catch is real.
 
-    Evaluated against the **scanning environment**, which is the environment
-    conformance can actually observe.  ``packaging`` is not a declared
-    dependency of this package (it is deliberately dependency-light), so when it
-    is unavailable — or the marker does not parse — the edge is treated as
-    contributing, matching the previous behaviour rather than inventing a
-    false positive.  Known limit: a cross-platform scan (linting a Windows-only
-    app from Linux) grades against the host, not the deployment target.
+    Only **platform** axes are evaluated, against the scanning host.  Markers
+    touching ``python_version``/``python_full_version``/``implementation_name``
+    are deliberately treated as non-decidable and left contributing: ``uv.lock``
+    partitions its resolution on exactly those axes, so evaluating them against
+    the scanning interpreter would report a fully compliant app whenever the
+    scan host's Python differs from the app's declared target — the mirror image
+    of the bug this function exists to fix.
+
+    ``packaging`` is not a declared dependency of this package (it is
+    deliberately dependency-light), so when it is unavailable — or the marker
+    does not parse — the edge is treated as contributing, matching the prior
+    behaviour rather than inventing a false positive.
     """
     if marker is None:
         return True
+    text = str(marker)
+    axes = set(_MARKER_VARIABLE_RE.findall(text))
+    if not axes or not axes <= _PLATFORM_MARKER_AXES:
+        return True  # non-decidable (or unrecognised): stay conservative
     try:
         from packaging.markers import InvalidMarker, Marker
     except ImportError:
         return True
     try:
-        return bool(Marker(str(marker)).evaluate())
+        return bool(Marker(text).evaluate())
     except (InvalidMarker, ValueError, KeyError):
         return True
 
@@ -1479,10 +1499,10 @@ def scan_all(
     root_pyproject = root / "pyproject.toml"
     if not root_pyproject.is_file():
         return findings
-    text = root_pyproject.read_text(encoding="utf-8")
     try:
+        text = root_pyproject.read_text(encoding="utf-8")
         tomllib.loads(text)
-    except tomllib.TOMLDecodeError:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return findings
 
     try:

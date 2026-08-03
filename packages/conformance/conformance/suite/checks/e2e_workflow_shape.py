@@ -125,9 +125,35 @@ _USES_REUSABLE_RE = re.compile(rf"^\s*uses:\s*['\"]?{re.escape(_TESTS_REUSABLE)}
 _E2E_PATH_RE = re.compile(r"tests/e2e(?=[/\s'\"]|$)")
 
 # Any `key: value` entry — a workflow input, an `env:` binding a later `run:`
-# consumes, a composite action's `test_path:`. Outside a trigger-filter block,
-# all of these are plausible execution positions.
-_KEY_VALUE_RE = re.compile(r"^\s*(?:-\s+)?[A-Za-z_][A-Za-z0-9_.\-]*\s*:\s*\S")
+# consumes, a composite action's `test_path:` (underscore) or `test-path:`.
+# Outside a trigger-filter block these are all plausible execution positions,
+# so the gate is a DENY-list rather than an allow-list: an allow-list of key
+# names was under-inclusive (it missed both shapes above), but no gate at all
+# is worse — it lets a step `name:` or an upload-artifact `path:` mark the
+# suites reachable, which is precisely what must never silence T021.
+_KEY_VALUE_RE = re.compile(r"^\s*(?:-\s+)?(?P<key>[A-Za-z_][A-Za-z0-9_.\-]*)\s*:\s*\S")
+
+#: Keys whose value is descriptive or control-flow, never something that runs.
+_NON_EXECUTING_KEYS = frozenset(
+    {
+        "name",
+        "if",
+        "description",
+        "id",
+        "timeout-minutes",
+        "continue-on-error",
+        "working-directory",
+        "shell",
+        "comment",
+    }
+)
+
+#: `path:`/`paths:` under an artifact step is an upload/download target, not a
+#: suite invocation. Tracked by remembering the step's `uses:` line.
+_ARTIFACT_ACTION_RE = re.compile(
+    r"^\s*(?:-\s+)?uses\s*:\s*\S*(?:upload|download)-artifact"
+)
+_ARTIFACT_PATH_KEYS = frozenset({"path", "paths"})
 _RUN_KEY_RE = re.compile(r"^\s*(?:-\s+)?run\s*:\s*(?P<rest>.*?)\s*$")
 # Trigger-filter blocks: text here selects *when* a workflow runs, never what
 # it executes.
@@ -239,16 +265,26 @@ def _yaml_bool(value: str, default: bool) -> bool:
 def _names_e2e_path(lines: list[str]) -> bool:
     """Whether a line that could actually RUN the suites names a ``tests/e2e`` path.
 
-    Scoped to plausible execution positions — a ``uses:`` reference, a
-    ``test-path:``/``test-paths:`` input, or a ``run:`` step body — with
-    comments and ``on:``/``paths:`` trigger-filter blocks excluded.  A
-    whole-file search here would let an idiomatic
-    ``on: pull_request: paths: ['tests/e2e/**']`` on any workflow, an artifact
-    path, or a single comment mark the suites reachable repo-wide and silence
-    T021 permanently.
+    Three layers, because neither extreme works.  A whole-file search lets an
+    ``on: pull_request: paths: ['tests/e2e/**']`` trigger filter, an artifact
+    path or a lone comment mark the suites reachable repo-wide and silence T021
+    permanently.  An allow-list of key names is the opposite failure: it misses
+    ``env: SUITE_PATH: tests/e2e/...`` consumed by a later ``run:``, and a
+    composite action's ``test_path:`` (underscore) spelling, reporting suites
+    that genuinely execute as unreachable.
+
+    So:
+
+    1. ``run:`` step bodies (inline or block scalar) always count.
+    2. ``on:``/``paths:``/``paths-ignore:`` blocks and comments never count.
+    3. Every other ``key: value`` counts **unless** the key is descriptive or
+       control-flow (``name:``, ``if:``, ``description:``, …) or is the
+       ``path:`` of an upload/download-artifact step — a deny-list, so a new
+       input spelling is reachable-by-default rather than silently missed.
     """
     skip_block_indent: int | None = None
     run_block_indent: int | None = None
+    artifact_step_indent: int | None = None
 
     for raw in lines:
         if not raw.strip():
@@ -259,6 +295,8 @@ def _names_e2e_path(lines: list[str]) -> bool:
             skip_block_indent = None
         if run_block_indent is not None and indent <= run_block_indent:
             run_block_indent = None
+        if artifact_step_indent is not None and indent <= artifact_step_indent:
+            artifact_step_indent = None
 
         # Inside a `run:` block scalar every line is shell that executes.
         if run_block_indent is not None:
@@ -286,14 +324,23 @@ def _names_e2e_path(lines: list[str]) -> bool:
                 return True
             continue
 
-        # Any `key: value` outside a skip block is a candidate execution
-        # position. The skip-block gating above already does the real work of
-        # separating "about the suite" from "names the suite"; an extra
-        # key-name allow-list on top is both redundant and under-inclusive —
-        # it missed `env: SUITE_PATH: tests/e2e/...` consumed by a later
-        # `run:`, and a composite action's `test_path:` (underscore) spelling.
-        if _KEY_VALUE_RE.match(line) and _E2E_PATH_RE.search(line):
-            return True
+        if _ARTIFACT_ACTION_RE.match(line):
+            artifact_step_indent = indent
+            continue
+
+        m = _KEY_VALUE_RE.match(line)
+        if m is None or not _E2E_PATH_RE.search(line):
+            continue
+        key = m.group("key").lower()
+        if key in _NON_EXECUTING_KEYS:
+            continue  # a step `name:`, an `if:` guard — describes, never runs
+        if (
+            key in _ARTIFACT_PATH_KEYS
+            and artifact_step_indent is not None
+            and indent > artifact_step_indent
+        ):
+            continue  # an upload/download-artifact target, not an invocation
+        return True
     return False
 
 
