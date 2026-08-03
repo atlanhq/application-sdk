@@ -21,3 +21,4 @@ ADRs capture the architectural decisions behind the Application SDK — what was
 | [ADR-0015](0015-directory-listing-race-fix.md) | Directory Listing Race Fix (safe_list_directory primitive) |
 | [ADR-0016](0016-multi-pool-worker-routing.md) | Multi-Pool Worker Routing (N pools per app, @task(pool=...) static affinity) |
 | [ADR-0017](0017-native-execution-isolation.md) | Native Execution Isolation (best-effort work in an isolated process; run_fault_isolated / run_best_effort, conformance rule P036) |
+| [ADR-0018](0018-nexus-handler-invocation-plane.md) | Temporal Nexus as the Single Handler-Invocation Plane (retire the app-server pod; sync RPC to workers, no workflow-per-call) |
