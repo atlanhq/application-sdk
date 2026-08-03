@@ -135,8 +135,8 @@ _SKIP_BLOCK_KEY_RE = re.compile(r"^\s*(?:on|paths|paths-ignore)\s*:")
 _BLOCK_SCALAR_HEADS = frozenset({"|", ">", "|-", ">-", "|+", ">+", ""})
 
 # `jobs:` and a top-level job key, for per-job T020 segmentation.
-_JOBS_KEY_RE = re.compile(r"^(?P<indent>\s*)jobs\s*:\s*$")
-_JOB_KEY_RE = re.compile(r"^\s*[A-Za-z0-9_.\-]+\s*:\s*$")
+_JOBS_KEY_RE = re.compile(r"^(?P<indent>\s*)jobs\s*:\s*(?:#.*)?$")
+_JOB_KEY_RE = re.compile(r"^\s*[A-Za-z0-9_.\-]+\s*:\s*(?:#.*)?$")
 
 # YAML 1.1 boolean scalars. GitHub declares `enable-e2e` and `two-store` as
 # `type: boolean` workflow_call inputs and Actions' YAML parser accepts the full

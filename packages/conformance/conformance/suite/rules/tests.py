@@ -1494,7 +1494,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "notices when it wasn't. A repo that still runs the suites some other "
             "way (a bespoke workflow naming a tests/e2e path) is deliberately NOT "
             "flagged here — the wrong mechanism is T020's finding, and reporting "
-            "both would say the same thing twice."
+            "both would say the same thing twice. That reachability test matches "
+            "only positions that could actually execute the suites — a `uses:` "
+            "reference, a `test-path:`/`test-paths:` input, or a `run:` step body. "
+            "A trigger `paths:` filter, an artifact path such as "
+            "`tests/e2e-results/`, or a comment mentioning tests/e2e is text about "
+            "the suites rather than a step that runs them, and does not mark them "
+            "reachable."
         ),
         short_description=(
             "tests/e2e/ ships collectable suites but nothing in .github/workflows/ "

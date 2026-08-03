@@ -25,8 +25,10 @@ Rules in this check module:
   bundles them at ``application_sdk/components/``.
 * **D010 QueryTransformerWithoutDuckdb** — an app that imports the SDK query
   transformer (``application_sdk.transformers.query``) must resolve
-  ``duckdb``: as a locked package when ``uv.lock`` exists, else via a direct
-  dependency or an ``atlan-application-sdk[sql]``/``[incremental]`` extra.
+  ``duckdb`` on a *default* install: reachable from the app's own production
+  dependencies in ``uv.lock`` when one exists (not merely present somewhere in
+  that universal graph), else declared in ``[project] dependencies`` directly
+  or via an ``atlan-application-sdk[sql]``/``[incremental]`` extra.
   On SDK >= 3.22 (empty ``[daft]`` extra) a missing duckdb is a guaranteed
   runtime ``ImportError`` in every transform.
 
@@ -1226,7 +1228,9 @@ def _scan_query_transformer_duckdb(
             message=(
                 f"The SDK query transformer is imported ({rel_import}:{import_line}"
                 f" — application_sdk.transformers.query) but 'duckdb' does not "
-                f"resolve: it is not locked in uv.lock and no "
+                f"resolve from the app's production dependencies (uv.lock is a "
+                f"universal graph — a dev-only or unactivated-extra duckdb does "
+                f"not install by default) and no "
                 f"'{SDK_PACKAGE}[sql]'/'[incremental]' extra or direct duckdb "
                 f"dependency is declared. On SDK >= 3.22 (the [daft] extra is "
                 f"empty) every transform_metadata call fails at runtime with "

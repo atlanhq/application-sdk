@@ -255,10 +255,16 @@ real end-to-end transform.
 
 Resolution order of the check:
 
-* with a `uv.lock` present, `duckdb` must appear as a locked   package (the lock is the
-ground truth for what installs); * without a lock, the app's `pyproject.toml` must
-either declare   `duckdb` directly or reference `atlan-application-sdk` with a   `sql`
-or `incremental` extra.
+* with a parseable `uv.lock` present, `duckdb` must be reachable   from the app's OWN
+production dependencies — the lock is walked   from the app's `[[package]]` entry along
+`dependencies` and the   `optional-dependencies` groups an incoming extra activates.
+`uv.lock` is a *universal* resolution graph covering dev groups   and every extra, so
+duckdb merely appearing somewhere in it does   NOT mean a default `uv sync --no-dev`
+installs it;   `[package.dev-dependencies]` is deliberately not traversed; * without a
+usable lock, the app's `pyproject.toml` must declare   `duckdb` directly or reference
+`atlan-application-sdk` with a   `sql` or `incremental` extra — in `[project]
+dependencies`   specifically.  Dependency groups and optional-dependency arrays do   not
+count: they are not installed by default.
 
 **Remediation:** change the SDK reference to `atlan-application-sdk[sql]` (or
 `[incremental]` for the incremental analytics stack) in `[project.dependencies]` and
