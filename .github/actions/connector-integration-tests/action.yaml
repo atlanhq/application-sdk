@@ -355,6 +355,15 @@ runs:
     # Straight-line call into a tested script per docs/standards/ci.md; the
     # heredoc form it emits is what makes multi-line values survive $GITHUB_ENV.
     #
+    # `--mask-only` first, then the env write — the ordering is the security
+    # property, not a style choice. `extra-env` arrives as one registered secret,
+    # and the runner's log masker matches registered strings rather than
+    # substrings of one, so each value pulled out of the blob is unredacted until
+    # `::add-mask::` registers it. That command is read from the step's stdout,
+    # which the second invocation redirects into $GITHUB_ENV — hence two passes,
+    # masks to the log first. Once the values are in $GITHUB_ENV, the next step
+    # to render its `env:` group has already leaked them.
+    #
     # No live caller yet: tests-reusable.yaml exports the same payload inline
     # because it pins this action @main, so `extra-env` is invisible to it until
     # this merges. The relative script path below is asserted by
@@ -366,6 +375,8 @@ runs:
       env:
         EXTRA_ENV: ${{ inputs.extra-env }}
       run: |
+        python3 "${{ github.action_path }}/../../scripts/export_extra_env.py" \
+          --json "$EXTRA_ENV" --mask-only
         python3 "${{ github.action_path }}/../../scripts/export_extra_env.py" \
           --json "$EXTRA_ENV" >> "$GITHUB_ENV"
 
