@@ -461,3 +461,165 @@ def test_commented_two_store_does_not_count(tmp_path: Path) -> None:
         atlan_yaml=_SDR_ATLAN_YAML,
     )
     assert "T022" in _ids(_scan(root))
+
+
+# ---------------------------------------------------------------------------
+# Regression: evidence must come from the scope being graded
+# (each case below returned the wrong verdict before the review fixes)
+# ---------------------------------------------------------------------------
+
+
+def test_scan_survives_non_utf8_workflow(tmp_path: Path) -> None:
+    """A non-UTF-8 byte must not abort the whole multi-series run.
+
+    ``UnicodeDecodeError`` is a ``ValueError``, not an ``OSError``, so an
+    ``OSError``-only guard let it escape ``scan_all`` — and the runner wraps
+    neither ``discover()`` nor ``scan_all()``.
+    """
+    root = _repo(
+        tmp_path,
+        workflows={"tests.yaml": _CANONICAL_CALLER},
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+    )
+    (root / ".github" / "workflows" / "broken.yaml").write_bytes(
+        b"\xff\xfename: broken\n"
+    )
+    assert _scan(root) == [] or isinstance(_scan(root), list)
+
+
+def test_t021_not_silenced_by_a_comment_mentioning_tests_e2e(tmp_path: Path) -> None:
+    """A stray comment must not disable the rule for the whole repo."""
+    root = _repo(
+        tmp_path,
+        workflows={
+            "lint.yaml": (
+                "name: Lint\non:\n  pull_request:\njobs:\n"
+                "  lint:\n    runs-on: ubuntu-latest\n    steps:\n"
+                "      # TODO: we should eventually wire up tests/e2e in CI\n"
+                "      - run: ruff check .\n"
+            )
+        },
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+    )
+    assert "T021" in _ids(_scan(root))
+
+
+def test_t021_not_silenced_by_a_trigger_paths_filter(tmp_path: Path) -> None:
+    """`on: pull_request: paths: ['tests/e2e/**']` selects *when* a workflow
+    runs, never what it executes."""
+    root = _repo(
+        tmp_path,
+        workflows={
+            "lint.yaml": (
+                "name: Lint\non:\n  pull_request:\n    paths:\n"
+                "      - 'tests/e2e/**'\njobs:\n"
+                "  lint:\n    runs-on: ubuntu-latest\n    steps:\n"
+                "      - run: ruff check .\n"
+            )
+        },
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+    )
+    assert "T021" in _ids(_scan(root))
+
+
+def test_t021_not_silenced_by_an_artifact_path(tmp_path: Path) -> None:
+    """`tests/e2e-results/...` must not count — a bare \\b accepts the hyphen."""
+    root = _repo(
+        tmp_path,
+        workflows={
+            "lint.yaml": (
+                "name: Lint\non:\n  pull_request:\njobs:\n"
+                "  lint:\n    runs-on: ubuntu-latest\n    steps:\n"
+                "      - run: cat tests/e2e-results/artifact.json\n"
+            )
+        },
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+    )
+    assert "T021" in _ids(_scan(root))
+
+
+def test_t021_silent_when_a_run_step_actually_invokes_the_suites(
+    tmp_path: Path,
+) -> None:
+    """A `run:` body that really executes them is reachable (T020's business)."""
+    root = _repo(
+        tmp_path,
+        workflows={
+            "bespoke.yaml": (
+                "name: Bespoke\non:\n  pull_request:\njobs:\n"
+                "  e2e:\n    runs-on: ubuntu-latest\n    steps:\n"
+                "      - run: |\n"
+                "          uv run pytest tests/e2e\n"
+            )
+        },
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+    )
+    assert "T021" not in _ids(_scan(root))
+
+
+def test_t021_fires_when_enable_e2e_is_yaml_no(tmp_path: Path) -> None:
+    """`enable-e2e: no` is YAML 1.1 false — a literal "false" test misses it."""
+    caller = _CANONICAL_CALLER.replace(
+        '      app-name: "mysql"', '      app-name: "mysql"\n      enable-e2e: no'
+    )
+    root = _repo(
+        tmp_path,
+        workflows={"tests.yaml": caller},
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+    )
+    assert "T021" in _ids(_scan(root))
+
+
+def test_t022_silent_when_two_store_is_yaml_yes(tmp_path: Path) -> None:
+    """`two-store: yes` is YAML 1.1 true — flagging it is a false positive."""
+    caller = _CANONICAL_CALLER.replace("two-store: true", "two-store: yes")
+    root = _repo(
+        tmp_path,
+        workflows={"tests.yaml": caller},
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+        atlan_yaml="self_deployed_runtime: true\n",
+    )
+    assert "T022" not in _ids(_scan(root))
+
+
+def test_t020_fires_on_a_legacy_job_beside_a_correct_caller(tmp_path: Path) -> None:
+    """A repo mid-migration — caller added, legacy `sdr:` job not yet removed —
+    is the likeliest real state, and the case the rule's own message promises to
+    handle. Deciding per file exempted the whole workflow."""
+    mixed = (
+        _CANONICAL_CALLER
+        + """\
+  legacy-sdr-full-dag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
+        with:
+          app-name: hive
+          test-path: tests/e2e/test_hive_full_dag.py
+"""
+    )
+    root = _repo(
+        tmp_path,
+        workflows={"tests.yaml": mixed},
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+    )
+    t020 = [f for f in _scan(root) if f.rule_id == "T020"]
+    assert len(t020) == 1
+    assert t020[0].file == ".github/workflows/tests.yaml"
+
+
+def test_t021_suppressed_inline(tmp_path: Path) -> None:
+    """T021 honours the documented directive, like T020/T022/T023/T024."""
+    caller = _CANONICAL_CALLER.replace(
+        "    uses: atlanhq",
+        "    # conformance: ignore[T021] native ODBC deps: e2e runs out-of-band\n"
+        "    uses: atlanhq",
+    ).replace('      app-image-name: "atlan-mysql-app"', '      app-image-name: ""')
+    root = _repo(
+        tmp_path,
+        workflows={"tests.yaml": caller},
+        e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
+    )
+    t021 = [f for f in _scan(root) if f.rule_id == "T021"]
+    assert len(t021) == 1
+    assert t021[0].suppressed is True

@@ -346,3 +346,92 @@ class TestThingFullDAG(SQLAppE2ETest):
     findings = [f for f in scan_all(discover(root), root) if f.rule_id == "T024"]
     assert len(findings) == 1
     assert findings[0].suppressed is True
+
+
+# ---------------------------------------------------------------------------
+# Regression: evidence must come from the scope being graded
+# ---------------------------------------------------------------------------
+
+
+def test_scan_survives_non_utf8_test_file(tmp_path: Path) -> None:
+    """One non-UTF-8 file under tests/ must not abort the whole run."""
+    root = _repo(
+        tmp_path,
+        generated={"_e2e_base.py": _GENERATED_BASE},
+        tests={"e2e/test_full_dag.py": _CANONICAL_TEST},
+    )
+    (root / "tests" / "e2e" / "test_bin.py").write_bytes(b"\xff\xfe class X: pass\n")
+    assert _ids(_scan(root)) == []
+
+
+def test_t024_not_silenced_by_an_unrelated_same_named_class(tmp_path: Path) -> None:
+    """A bare-name index let an unrelated class shadow the real harness.
+
+    ``discover()`` returns sorted paths, so ``aaa_unrelated`` indexed first and
+    won the key; the genuine violation was then never evaluated. Recurring
+    ``TestFullDag``/``TestExtraction`` names across a test tree are ordinary.
+    """
+    genuine = """\
+from app.generated._e2e_base import MysqlGeneratedE2EBase
+
+
+class TestFullDag(MysqlGeneratedE2EBase):
+    include_filter = r"^def\\.e2e_main$"
+"""
+    root = _repo(
+        tmp_path,
+        generated={"_e2e_base.py": _GENERATED_BASE},
+        tests={
+            "aaa_unrelated/test_full_dag.py": "class TestFullDag:\n    pass\n",
+            "e2e/test_full_dag.py": genuine,
+        },
+    )
+    assert "T024" in _ids(_scan(root))
+
+
+def test_t024_not_flagged_in_a_file_pytest_never_collects(tmp_path: Path) -> None:
+    """A shared harness base in tests/e2e/helpers.py is not collected.
+
+    It only matters through a leaf subclass that *is* collected, and grading it
+    there is a false positive.
+    """
+    helper = """\
+from app.generated._e2e_base import MysqlGeneratedE2EBase
+
+
+class TestSharedBase(MysqlGeneratedE2EBase):
+    include_filter = r"^def\\.e2e_main$"
+"""
+    root = _repo(
+        tmp_path,
+        generated={"_e2e_base.py": _GENERATED_BASE},
+        tests={"e2e/helpers.py": helper},
+    )
+    assert "T024" not in _ids(_scan(root))
+
+
+def test_t023_anchors_in_the_file_it_reports(tmp_path: Path) -> None:
+    """The finding's line must belong to the file it names.
+
+    Routing the visited class through a shared bare-name index could anchor a
+    T023 at another file's AST node while reporting this file's path.
+    """
+    handwritten = """\
+from application_sdk.testing.e2e import SQLAppE2ETest
+
+
+class TestFullDag(SQLAppE2ETest):
+    connector_short_name = "mysql"
+"""
+    root = _repo(
+        tmp_path,
+        tests={
+            "aaa_unrelated/test_full_dag.py": "class TestFullDag:\n    pass\n",
+            "e2e/test_full_dag.py": handwritten,
+        },
+    )
+    t023 = [f for f in _scan(root) if f.rule_id == "T023"]
+    assert len(t023) == 1
+    assert t023[0].file == "tests/e2e/test_full_dag.py"
+    target = (root / t023[0].file).read_text(encoding="utf-8").splitlines()
+    assert "connector_short_name" in target[t023[0].line - 1]

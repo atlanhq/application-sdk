@@ -115,7 +115,35 @@ _USES_REUSABLE_RE = re.compile(rf"^\s*uses:\s*['\"]?{re.escape(_TESTS_REUSABLE)}
 # `test-paths: "tests/unit tests/integration tests/e2e"` input, an sdr-e2e
 # `test-path:`. The mechanism is wrong (T020's finding) but the suite does run,
 # so T021 (which claims nothing runs it) must stay silent.
-_E2E_PATH_RE = re.compile(r"tests/e2e\b")
+#
+# The lookahead keeps `tests/e2e-results/artifact.json` from counting — a plain
+# `\b` is satisfied by the hyphen. The match is applied only on lines that could
+# actually execute the suites (see `_names_e2e_path`), never over the raw file:
+# a trigger `paths:` filter, an artifact path or a `# TODO: wire up tests/e2e`
+# comment is text *about* the suites, and letting any of them mark the repo
+# reachable would silence the rule fleet-wide from a stray comment.
+_E2E_PATH_RE = re.compile(r"tests/e2e(?=[/\s'\"]|$)")
+
+# Keys whose value is a pytest path handed to a runner.
+_TEST_PATH_KEY_RE = re.compile(r"^\s*(?:-\s+)?test-paths?\s*:")
+_ANY_USES_RE = re.compile(r"^\s*(?:-\s+)?uses\s*:")
+_RUN_KEY_RE = re.compile(r"^\s*(?:-\s+)?run\s*:\s*(?P<rest>.*?)\s*$")
+# Trigger-filter blocks: text here selects *when* a workflow runs, never what
+# it executes.
+_SKIP_BLOCK_KEY_RE = re.compile(r"^\s*(?:on|paths|paths-ignore)\s*:")
+# YAML block-scalar introducers for a `run:` step body.
+_BLOCK_SCALAR_HEADS = frozenset({"|", ">", "|-", ">-", "|+", ">+", ""})
+
+# `jobs:` and a top-level job key, for per-job T020 segmentation.
+_JOBS_KEY_RE = re.compile(r"^(?P<indent>\s*)jobs\s*:\s*$")
+_JOB_KEY_RE = re.compile(r"^\s*[A-Za-z0-9_.\-]+\s*:\s*$")
+
+# YAML 1.1 boolean scalars. GitHub declares `enable-e2e` and `two-store` as
+# `type: boolean` workflow_call inputs and Actions' YAML parser accepts the full
+# set in any case, so comparing against the literal "true"/"false" alone both
+# false-positives on `two-store: yes` and false-negatives on `enable-e2e: no`.
+_YAML_TRUE = frozenset({"true", "yes", "on", "y"})
+_YAML_FALSE = frozenset({"false", "no", "off", "n"})
 
 # A `uses:` of some *other* reusable workflow whose filename names e2e — the
 # legacy marketplace-releases path (`.../workflows/e2e-app-test.yaml@main`) that
@@ -172,7 +200,7 @@ def _is_sdr_app(root: Path) -> bool:
         return False
     try:
         text = atlan_yaml.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return False
     m = _SDR_FLAG_RE.search(text)
     return m is not None and m.group(1).lower() == "true"
@@ -184,6 +212,134 @@ def _strip_comment(value: str) -> str:
     if idx != -1:
         value = value[:idx]
     return value.strip().strip("'\"").strip()
+
+
+def _without_comment(line: str) -> str:
+    """Drop a trailing `` # ...`` comment (leaves a leading-``#`` line intact)."""
+    idx = line.find(" #")
+    return line[:idx] if idx != -1 else line
+
+
+def _yaml_bool(value: str, default: bool) -> bool:
+    """Parse a YAML 1.1 boolean scalar, falling back to *default*.
+
+    *default* is the posture for an absent or unparseable value (a
+    ``${{ ... }}`` expression, say) and is chosen per call site so the
+    unparseable case biases the way that rule's claim should fail.
+    """
+    v = value.strip().strip("'\"").lower()
+    if v in _YAML_TRUE:
+        return True
+    if v in _YAML_FALSE:
+        return False
+    return default
+
+
+def _names_e2e_path(lines: list[str]) -> bool:
+    """Whether a line that could actually RUN the suites names a ``tests/e2e`` path.
+
+    Scoped to plausible execution positions — a ``uses:`` reference, a
+    ``test-path:``/``test-paths:`` input, or a ``run:`` step body — with
+    comments and ``on:``/``paths:`` trigger-filter blocks excluded.  A
+    whole-file search here would let an idiomatic
+    ``on: pull_request: paths: ['tests/e2e/**']`` on any workflow, an artifact
+    path, or a single comment mark the suites reachable repo-wide and silence
+    T021 permanently.
+    """
+    skip_block_indent: int | None = None
+    run_block_indent: int | None = None
+
+    for raw in lines:
+        if not raw.strip():
+            continue
+        indent = len(raw) - len(raw.lstrip())
+
+        if skip_block_indent is not None and indent <= skip_block_indent:
+            skip_block_indent = None
+        if run_block_indent is not None and indent <= run_block_indent:
+            run_block_indent = None
+
+        # Inside a `run:` block scalar every line is shell that executes.
+        if run_block_indent is not None:
+            if _E2E_PATH_RE.search(raw):
+                return True
+            continue
+
+        if raw.lstrip().startswith("#"):
+            continue
+        line = _without_comment(raw)
+
+        if skip_block_indent is not None:
+            continue
+        if _SKIP_BLOCK_KEY_RE.match(line):
+            skip_block_indent = indent
+            continue
+
+        run = _RUN_KEY_RE.match(line)
+        if run is not None:
+            rest = run.group("rest")
+            if rest in _BLOCK_SCALAR_HEADS:
+                run_block_indent = indent
+                continue
+            if _E2E_PATH_RE.search(rest):
+                return True
+            continue
+
+        if (_ANY_USES_RE.match(line) or _TEST_PATH_KEY_RE.match(line)) and (
+            _E2E_PATH_RE.search(line)
+        ):
+            return True
+    return False
+
+
+def _job_blocks(lines: list[str]) -> list[tuple[int, int]]:
+    """``(start, end)`` line-index ranges of each top-level job block.
+
+    T020 grades a *job*: a workflow file that contains a correct caller must
+    still be flagged for a second, legacy job invoking the ``sdr-e2e`` action
+    directly — a repo mid-migration is the single most likely real state, and
+    it is exactly the in-place case the rule's own message promises to handle.
+
+    Falls back to one whole-file block when there is no ``jobs:`` mapping, so a
+    fragment or malformed workflow is still graded rather than skipped.
+    """
+    jobs_idx: int | None = None
+    jobs_indent = 0
+    for idx, line in enumerate(lines):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        m = _JOBS_KEY_RE.match(line)
+        if m is not None:
+            jobs_idx = idx
+            jobs_indent = len(m.group("indent"))
+            break
+    if jobs_idx is None:
+        return [(0, len(lines))]
+
+    job_indent: int | None = None
+    starts: list[int] = []
+    end = len(lines)
+    for idx in range(jobs_idx + 1, len(lines)):
+        line = lines[idx]
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= jobs_indent:
+            end = idx  # dedented back out of `jobs:`
+            break
+        if job_indent is None:
+            job_indent = indent
+        if indent == job_indent and _JOB_KEY_RE.match(line):
+            starts.append(idx)
+
+    if not starts:
+        return [(jobs_idx, len(lines))]
+    # Anything before `jobs:` (and after it) belongs to no job; a `uses:` there
+    # is not a job's, so grade only the job blocks themselves.
+    return [
+        (start, starts[i + 1] if i + 1 < len(starts) else end)
+        for i, start in enumerate(starts)
+    ]
 
 
 def _reusable_inputs(lines: list[str], uses_idx: int) -> dict[str, str]:
@@ -306,7 +462,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     for path in paths:
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
         try:
             rel = str(path.relative_to(root))
@@ -316,7 +472,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         lines = text.splitlines()
         suppressions = parse_toml_suppressions(text)
 
-        if _E2E_PATH_RE.search(text) or any(
+        if _names_e2e_path(lines) or any(
             _USES_E2E_REUSABLE_RE.match(line) for line in lines
         ):
             names_e2e_path = True
@@ -329,16 +485,21 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         if reusable_idx is not None:
             callers.append((rel, text, suppressions, reusable_idx))
 
-        # T020 — a direct sdr-e2e invocation outside the reusable.
-        if reusable_idx is None:
-            for idx, line in enumerate(lines):
+        # T020 — a direct sdr-e2e invocation outside the reusable, decided per
+        # JOB: a legacy `sdr:` job sitting beside a correct caller in the same
+        # tests.yaml must still be flagged.
+        for start, stop in _job_blocks(lines):
+            block = lines[start:stop]
+            if any(_USES_REUSABLE_RE.match(line) for line in block):
+                continue  # this job IS the caller
+            for offset, line in enumerate(block):
                 if not _USES_SDR_E2E_RE.match(line):
                     continue
                 findings.append(
                     make_toml_finding(
                         rule_id=RULE_T020,
                         file=rel,
-                        line=idx + 1,
+                        line=start + offset + 1,
                         column=1,
                         message=_t020_message(rel),
                         suppressions=suppressions,
@@ -355,9 +516,12 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     if not runnable:
         for rel, _text, suppressions, uses_idx in callers:
             inputs = _reusable_inputs(_read_lines(root, rel), uses_idx)
-            enable = inputs.get("enable-e2e", "true").lower()
+            # An unparseable value (a `${{ }}` expression) may well enable the
+            # job, and T021's claim is absolute — "nothing can run them" — so it
+            # reads as enabled rather than producing a false positive.
+            enabled = _yaml_bool(inputs.get("enable-e2e", "true"), default=True)
             image = inputs.get("app-image-name", "")
-            if enable == "false":
+            if not enabled:
                 reason = f"{rel} sets enable-e2e: false"
                 continue
             if not image:
@@ -383,7 +547,10 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     if _is_sdr_app(root):
         for rel, _text, suppressions, uses_idx in callers:
             inputs = _reusable_inputs(_read_lines(root, rel), uses_idx)
-            if inputs.get("two-store", "").lower() == "true":
+            # Absent or unparseable is not "unconditionally true", so it reports
+            # — the module's documented bias toward a suppressible finding over
+            # a silent miss.
+            if _yaml_bool(inputs.get("two-store", ""), default=False):
                 continue
             findings.append(
                 make_toml_finding(
@@ -402,7 +569,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 def _read_lines(root: Path, rel: str) -> list[str]:
     try:
         return (root / rel).read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
 
 
@@ -429,7 +596,7 @@ def _t021_anchor(
                 1,
                 parse_toml_suppressions(tests_yaml.read_text(encoding="utf-8")),
             )
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             pass
 
     e2e_dir = root / "tests" / "e2e"
@@ -448,7 +615,7 @@ def _t021_anchor(
                 1,
                 parse_toml_suppressions(suites[0].read_text(encoding="utf-8")),
             )
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             return rel_suite, 1, {}
     return "tests/e2e", 1, {}
 

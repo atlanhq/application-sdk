@@ -1,21 +1,40 @@
 """P040 — unquoted DuckDB reserved keywords in transform SQL templates.
 
 The SDK query transformer (``application_sdk.transformers.query``) compiles an
-app's YAML transform templates into a DuckDB ``SELECT``: each entry of the
-template's ``columns:`` list renders as ``{source_query} AS {name}``, and the
-SDK quotes an identifier only when it contains a dot
-(``QueryBasedTransformer.quote_column_name``).  A bare DuckDB **reserved
-keyword** used as a template identifier — ``column``, ``order``, ``group``,
-``select``, ``table``, ``default``, … — therefore reaches DuckDB unquoted, and
-every transform of that entity type fails at runtime with a
-``ParserException``.  On SDK >= 3.22 the daft-less runtime routes ALL
-transforms through DuckDB, so there is no fallback path: the template is dead
-on arrival, yet template loading, imports, and mocked unit tests all pass
-(observed live on main for a document-store connector in fleet testing).
+app's YAML transform templates into a DuckDB ``SELECT``: each flattened column
+renders as ``{source_query} AS {name}``
+(``QueryBasedTransformer.convert_to_sql_expression``).  A bare DuckDB
+**reserved keyword** in the ``source_query:`` value — ``column``, ``order``,
+``group``, ``select``, ``qualify``, … — is a *reference* to a source column and
+reaches DuckDB unquoted, so every transform of that entity type fails at
+runtime with a ``ParserException``.  On SDK >= 3.22 the daft-less runtime
+routes ALL transforms through DuckDB, so there is no fallback path: the
+template is dead on arrival, yet template loading, imports and mocked unit
+tests all pass (observed live on main for a document-store connector in fleet
+testing).
 
-YAML-level quoting does not protect the identifier — ``name: "column"`` and
-``name: column`` parse to the same Python string.  The quotes must be embedded
-in the value (``name: '"column"'``) so they survive into the generated SQL.
+YAML-level quoting does not protect the value — ``source_query: "order"`` and
+``source_query: order`` parse to the same Python string.  The quotes must be
+embedded (``source_query: '"order"'``) so they survive into the generated SQL.
+
+Scope: the ``source_query:`` (expression) position only
+-------------------------------------------------------
+The column **identifier** is deliberately NOT graded, for two independent
+reasons, both verified against the pinned duckdb 1.5.5:
+
+1. *It lands in the alias slot, which DuckDB does not restrict.*
+   ``SELECT 1 AS column``, ``AS order``, ``AS select`` and ``AS qualify`` all
+   parse.  Only a bare *reference* raises — ``SELECT order FROM t`` →
+   ``ParserException``.
+2. *In the shape that actually ships it is always quoted anyway.*  Every
+   template under ``application_sdk/transformers/query/templates/`` expresses
+   the identifier as a nested YAML **mapping key** (``columns:`` →
+   ``attributes:`` → ``name:`` → ``source_query: ...``), and
+   ``flatten_yaml_columns`` sets ``col_def["name"] = "attributes.<key>"`` —
+   dotted, so ``quote_column_name`` quotes it unconditionally.
+
+Grading the identifier would therefore describe a runtime failure that does not
+occur, on a position that in real templates cannot reach DuckDB unquoted.
 
 Discovery
 ---------
@@ -35,12 +54,19 @@ directive grammar (see ``_ast_common.parse_toml_suppressions``).
 
 Known limits (intentional — biased toward zero false positives):
 
-* Only simple scalar values of ``name`` / ``source_query`` keys are inspected;
-  block scalars and flow collections are not.
+* Only simple scalar ``source_query:`` values are inspected; block scalars
+  (``|``/``>``) and flow collections are not.  A reserved word inside a
+  multi-line CASE expression is not graded.
 * Values containing a dot are exempt (the SDK auto-quotes them); embedded
-  ``"``-quoted values are exempt (already SQL-quoted).
+  ``"``-quoted values are exempt (already SQL-quoted); values containing
+  whitespace or ``(`` are SQL expressions, not bare column references, and are
+  exempt.
 * YAML boolean/null scalars (``true``/``false``/``null``/``~``) are literals,
   not identifiers, and are never flagged.
+* The ``columns:`` block is tracked by indentation and closes on any line at or
+  left of the ``columns:`` key.  A flush-left list (``columns:`` with its
+  ``- name:`` items at the same indent) therefore grades nothing; the nested
+  mapping form every shipped template uses is tracked correctly.
 """
 
 from __future__ import annotations
@@ -61,11 +87,22 @@ RULE_P040 = "P040"
 
 __all__ = ["SERIES", "discover", "main", "scan_path", "scan_text"]
 
-#: DuckDB reserved keywords (the ``reserved`` category of
-#: ``duckdb_keywords()``) that can plausibly appear as metadata field names.
-#: Deliberately excludes the YAML scalar literals ``true``/``false``/``null``,
-#: which parse to non-string values and take the transformer's literal path,
-#: not the identifier path.
+#: DuckDB reserved keywords — the exact ``reserved`` category of
+#: ``duckdb_keywords()`` on the pinned duckdb (1.5.5), minus the YAML scalar
+#: literals ``true``/``false``/``null``, which parse to non-string values and
+#: take the transformer's literal path rather than the identifier path.
+#:
+#: Generated, not hand-curated:
+#:
+#:     select keyword_name from duckdb_keywords()
+#:     where keyword_category = 'reserved'
+#:
+#: ``tests/test_transform_templates.py`` asserts this constant still matches the
+#: installed DuckDB's reserved set, so the list cannot silently drift when
+#: duckdb is bumped.  (A hand-maintained set had drifted already: ``grant`` is
+#: *unreserved* — ``SELECT 1 AS grant`` parses fine, a plausible column name on
+#: a governance connector — while ``lambda``, ``pivot``, ``pivot_longer``,
+#: ``pivot_wider``, ``qualify``, ``summarize`` and ``unpivot`` were missing.)
 _DUCKDB_RESERVED_KEYWORDS: frozenset[str] = frozenset(
     {
         "all",
@@ -98,13 +135,13 @@ _DUCKDB_RESERVED_KEYWORDS: frozenset[str] = frozenset(
         "for",
         "foreign",
         "from",
-        "grant",
         "group",
         "having",
         "in",
         "initially",
         "intersect",
         "into",
+        "lambda",
         "lateral",
         "leading",
         "limit",
@@ -114,13 +151,18 @@ _DUCKDB_RESERVED_KEYWORDS: frozenset[str] = frozenset(
         "only",
         "or",
         "order",
+        "pivot",
+        "pivot_longer",
+        "pivot_wider",
         "placing",
         "primary",
+        "qualify",
         "references",
         "returning",
         "select",
         "show",
         "some",
+        "summarize",
         "symmetric",
         "table",
         "then",
@@ -128,6 +170,7 @@ _DUCKDB_RESERVED_KEYWORDS: frozenset[str] = frozenset(
         "trailing",
         "union",
         "unique",
+        "unpivot",
         "using",
         "variadic",
         "when",
@@ -150,9 +193,12 @@ _EXCLUDED_DIR_NAMES: frozenset[str] = frozenset(
     }
 )
 
-#: The two template keys that render into the generated SELECT.
+#: The template key whose value reaches the generated SELECT's *expression*
+#: slot — the one position where a bare reserved keyword raises.  ``name:`` is
+#: deliberately excluded (see the module docstring: alias slot, and always
+#: dotted-and-quoted in the shape that ships).
 _TEMPLATE_VALUE_RE = re.compile(
-    r"^\s*(?:-\s+)?(?P<key>name|source_query)\s*:\s*(?P<value>\S.*?)\s*$"
+    r"^\s*(?:-\s+)?(?P<key>source_query)\s*:\s*(?P<value>\S.*?)\s*$"
 )
 
 _COLUMNS_KEY_RE = re.compile(r"^\s*columns\s*:", re.MULTILINE)
@@ -198,7 +244,8 @@ def _flagged_identifier(raw_value: str) -> str | None:
     keyword after YAML unquoting, else ``None``.
 
     Safe shapes: SQL-quoted (embedded double quotes), dotted (SDK auto-quotes),
-    non-identifier scalars, and anything not in the reserved set.
+    SQL expressions rather than bare column references, non-identifier scalars,
+    and anything not in the reserved set.
     """
     value = _unquote_yaml_scalar(_strip_inline_comment(raw_value).strip())
     if not value:
@@ -207,6 +254,8 @@ def _flagged_identifier(raw_value: str) -> str | None:
         return None  # SQL-quoted — survives into the SELECT quoted
     if "." in value:
         return None  # SDK's quote_column_name quotes dotted identifiers
+    if any(ch.isspace() for ch in value) or "(" in value:
+        return None  # an expression (concat(...), CASE ...), not a bare column
     if value.lower() in _DUCKDB_RESERVED_KEYWORDS:
         return value
     return None
@@ -219,9 +268,9 @@ def _indent(line: str) -> int:
 def scan_text(text: str, file: str) -> list[Finding]:
     """Scan one transform-template *text* for P040 findings.
 
-    Only ``name`` / ``source_query`` entries **inside a ``columns:`` block**
-    are inspected (tracked by indentation), so a template's top-level ``name:``
-    key — which never renders into the SELECT — is not graded.
+    Only ``source_query`` entries **inside a ``columns:`` block** are inspected
+    (tracked by indentation), so a ``source_query`` under some unrelated
+    top-level key is not graded.
     """
     if not _is_transform_template(text):
         return []
@@ -254,13 +303,14 @@ def scan_text(text: str, file: str) -> list[Finding]:
                 column=1,
                 message=(
                     f"{file}:{lineno}: transform template {key} '{identifier}' is a "
-                    "DuckDB reserved keyword and reaches the generated SELECT "
-                    "unquoted (the SDK query transformer renders '{source_query} "
-                    "AS {name}' and only auto-quotes dotted identifiers). On SDK "
-                    ">= 3.22 every transform of this entity type fails at runtime "
-                    "with a DuckDB ParserException — latent until the first real "
-                    "pipeline run. Embed SQL quotes in the value so they survive "
-                    f"YAML parsing: {key}: '\"{identifier}\"'."
+                    "DuckDB reserved keyword used as a bare column reference, and "
+                    "reaches the generated SELECT unquoted (the SDK query "
+                    "transformer renders '{source_query} AS {name}' and only "
+                    "auto-quotes dotted identifiers). On SDK >= 3.22 every "
+                    "transform of this entity type fails at runtime with a DuckDB "
+                    "ParserException — latent until the first real pipeline run. "
+                    "Embed SQL quotes in the value so they survive YAML parsing: "
+                    f"{key}: '\"{identifier}\"'."
                 ),
                 suppressions=suppressions,
             )
@@ -286,7 +336,7 @@ def discover(root: Path) -> list[Path]:
                 continue
             try:
                 text = path.read_text(encoding="utf-8")
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 continue
             if _is_transform_template(text):
                 paths.append(path)
@@ -297,7 +347,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
     """Scan a single transform-template file for P040 findings."""
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
     try:
         rel = path.relative_to(root)

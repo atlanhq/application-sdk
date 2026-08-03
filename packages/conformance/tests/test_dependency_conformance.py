@@ -1268,6 +1268,77 @@ _D010_TRANSFORMER_IMPORT = (
     "from application_sdk.transformers.query import QueryBasedTransformer\n"
 )
 
+# Realistic uv.lock shapes: a root [[package]] for the app itself plus the
+# edges uv actually serialises. D010 walks this graph from the app's own entry,
+# so the fixtures must carry it — a bare SDK/duckdb block says nothing about
+# what a default install resolves.
+_D010_LOCK_SQL_EXTRA = """\
+[[package]]
+name = "my-connector"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "atlan-application-sdk", extra = ["sql"] },
+]
+
+[[package]]
+name = "atlan-application-sdk"
+version = "3.24.0"
+source = { registry = "https://pypi.org/simple" }
+
+[package.optional-dependencies]
+sql = [
+    { name = "duckdb" },
+]
+
+[[package]]
+name = "duckdb"
+version = "1.3.0"
+source = { registry = "https://pypi.org/simple" }
+"""
+
+# duckdb is in the graph, but only as a dev-group dependency of the app.
+_D010_LOCK_DUCKDB_DEV_ONLY = """\
+[[package]]
+name = "my-connector"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "atlan-application-sdk" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "duckdb" },
+]
+
+[[package]]
+name = "atlan-application-sdk"
+version = "3.24.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "duckdb"
+version = "1.3.0"
+source = { registry = "https://pypi.org/simple" }
+"""
+
+# A stale lock: pyproject declares [sql] but the lock was never regenerated.
+_D010_LOCK_NO_EXTRA = """\
+[[package]]
+name = "my-connector"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "atlan-application-sdk" },
+]
+
+[[package]]
+name = "atlan-application-sdk"
+version = "3.24.0"
+source = { registry = "https://pypi.org/simple" }
+"""
+
 
 def _d010_scan(
     tmp_path: Path,
@@ -1309,17 +1380,61 @@ def test_d010_fires_when_lock_lacks_duckdb(tmp_path: Path) -> None:
     assert findings[0].line == 5
 
 
-def test_d010_silent_when_lock_has_duckdb(tmp_path: Path) -> None:
+def test_d010_silent_when_lock_resolves_duckdb_for_the_app(tmp_path: Path) -> None:
+    """duckdb reachable from the app's own production deps via the [sql] extra."""
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_SQL_EXTRA,
+        source=_D010_TRANSFORMER_IMPORT,
+        uv_lock=_D010_LOCK_SQL_EXTRA,
+    )
+    assert findings == []
+
+
+def test_d010_fires_when_duckdb_is_only_a_dev_dependency(tmp_path: Path) -> None:
+    """uv.lock is a universal graph — duckdb present is not duckdb installed.
+
+    Reachable only through ``[package.dev-dependencies]``, so a production
+    ``uv sync --no-dev`` omits it and every transform_metadata call raises the
+    ImportError D010 exists to catch.  A flat ``name = "duckdb"`` search over
+    the lock text reads this as resolved and stays silent.
+    """
     findings = _d010_scan(
         tmp_path,
         pyproject=_D010_PYPROJECT_NO_EXTRA,
         source=_D010_TRANSFORMER_IMPORT,
-        uv_lock=(
-            '[[package]]\nname = "atlan-application-sdk"\nversion = "3.24.0"\n\n'
-            '[[package]]\nname = "duckdb"\nversion = "1.3.0"\n'
-        ),
+        uv_lock=_D010_LOCK_DUCKDB_DEV_ONLY,
     )
-    assert findings == []
+    assert len(findings) == 1
+    assert "duckdb" in findings[0].message
+
+
+def test_d010_fires_when_duckdb_declared_only_in_a_dev_group(tmp_path: Path) -> None:
+    """No lock; ``[dependency-groups] dev`` is not installed by default."""
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=(
+            _D010_PYPROJECT_NO_EXTRA
+            + '\n[dependency-groups]\ndev = [\n    "duckdb>=1.0",\n]\n'
+        ),
+        source=_D010_TRANSFORMER_IMPORT,
+    )
+    assert len(findings) == 1
+
+
+def test_d010_fires_when_sql_extra_is_only_in_an_optional_dev_extra(
+    tmp_path: Path,
+) -> None:
+    """No lock; the [sql] extra referenced only from an optional-dependency array."""
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=(
+            _D010_PYPROJECT_NO_EXTRA + "\n[project.optional-dependencies]\ndev = [\n"
+            '    "atlan-application-sdk[sql]>=3.22.0,<4.0.0",\n]\n'
+        ),
+        source=_D010_TRANSFORMER_IMPORT,
+    )
+    assert len(findings) == 1
 
 
 def test_d010_silent_without_transformer_import(tmp_path: Path) -> None:
@@ -1396,7 +1511,7 @@ def test_d010_lock_wins_over_extra_declaration(tmp_path: Path) -> None:
         tmp_path,
         pyproject=_D010_PYPROJECT_SQL_EXTRA,
         source=_D010_TRANSFORMER_IMPORT,
-        uv_lock='[[package]]\nname = "atlan-application-sdk"\nversion = "3.24.0"\n',
+        uv_lock=_D010_LOCK_NO_EXTRA,
     )
     assert len(findings) == 1
 
@@ -1432,3 +1547,33 @@ def test_d010_suppressed_inline_directive(tmp_path: Path) -> None:
     )
     assert len(findings) == 1
     assert findings[0].suppressed
+
+
+def test_d010_rule_metadata() -> None:
+    """WARN is what keeps a new rule off the dogfooded gate — assert it per rule."""
+    from conformance.suite.rules import get_rule
+    from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+
+    rule = get_rule("D010")
+    assert rule.name == "QueryTransformerWithoutDuckdb"
+    assert rule.tier == EnforcementTier.WARN
+    assert rule.scope == RuleScope.APP
+    assert rule.rationale.strip()
+
+
+def test_d010_survives_non_utf8_uv_lock(tmp_path: Path) -> None:
+    """A non-UTF-8 lock must fall back to pyproject intent, not raise."""
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(_D010_PYPROJECT_NO_EXTRA, encoding="utf-8")
+    src = tmp_path / "app" / "transformer.py"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(_D010_TRANSFORMER_IMPORT, encoding="utf-8")
+    (tmp_path / "uv.lock").write_bytes(b"\xff\xfe[[package]]\n")
+    findings = scan_all(
+        [pp, src],
+        tmp_path,
+        imported_modules=set(),
+        dist_import_map={},
+        dialect_drivers=set(),
+    )
+    assert [f.rule_id for f in findings if f.rule_id == "D010"] == ["D010"]

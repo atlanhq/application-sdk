@@ -104,9 +104,57 @@ def _is_pyarrow_producer_call(node: ast.expr) -> bool:
     )
 
 
-def _collect_pyarrow_names(tree: ast.Module) -> set[str]:
-    """Names bound (anywhere in the module) to a pyarrow-producing call."""
-    names: set[str] = set()
+#: Node types that open a new local binding scope.
+_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef)
+
+
+class _ScopeMap:
+    """Nearest-enclosing-scope lookup for every node in a module.
+
+    ``scope_of(node)`` returns the ``FunctionDef``/``AsyncFunctionDef`` (or the
+    module) a node sits in; ``parent_of(scope)`` walks outward, so a closure can
+    still see a binding made in an enclosing function.
+    """
+
+    __slots__ = ("_owner", "_parent", "_root")
+
+    def __init__(self, tree: ast.Module) -> None:
+        self._root = tree
+        self._owner: dict[ast.AST, ast.AST] = {tree: tree}
+        self._parent: dict[ast.AST, ast.AST | None] = {tree: None}
+
+        def walk(scope: ast.AST, node: ast.AST) -> None:
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, _SCOPE_NODES):
+                    self._owner[child] = scope  # the def name binds in `scope`
+                    self._parent[child] = scope
+                    walk(child, child)
+                else:
+                    self._owner[child] = scope
+                    walk(scope, child)
+
+        walk(tree, tree)
+
+    def scope_of(self, node: ast.AST) -> ast.AST:
+        return self._owner.get(node, self._root)
+
+    def parent_of(self, scope: ast.AST) -> ast.AST | None:
+        return self._parent.get(scope)
+
+
+def _pyarrow_names_by_scope(
+    tree: ast.Module, scopes: _ScopeMap
+) -> dict[ast.AST, set[str]]:
+    """Map each binding scope to names bound to a pyarrow producer *in that scope*.
+
+    Collected per ``FunctionDef``/``AsyncFunctionDef`` (plus module level)
+    rather than module-wide: generic receiver names (``df``, ``table``,
+    ``data``, ``result``) recur across functions, so a whole-file set would let
+    a legitimately-pyarrow ``df`` in one function exempt a genuine SDK reader
+    frame of the same name in another — the guard erasing the very findings it
+    exists to protect.
+    """
+    by_scope: dict[ast.AST, set[str]] = {}
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Assign)
@@ -114,8 +162,24 @@ def _collect_pyarrow_names(tree: ast.Module) -> set[str]:
             and isinstance(node.targets[0], ast.Name)
             and _is_pyarrow_producer_call(node.value)
         ):
-            names.add(node.targets[0].id)
-    return names
+            scope = scopes.scope_of(node)
+            by_scope.setdefault(scope, set()).add(node.targets[0].id)
+    return by_scope
+
+
+def _is_pyarrow_bound(
+    name: str,
+    node: ast.AST,
+    scopes: _ScopeMap,
+    by_scope: dict[ast.AST, set[str]],
+) -> bool:
+    """Whether *name* is pyarrow-bound in *node*'s scope or an enclosing one."""
+    scope: ast.AST | None = scopes.scope_of(node)
+    while scope is not None:
+        if name in by_scope.get(scope, ()):
+            return True
+        scope = scopes.parent_of(scope)
+    return False
 
 
 def scan_daft_runtime(
@@ -127,7 +191,8 @@ def scan_daft_runtime(
     if not _imports_sdk(tree):
         return []
 
-    pyarrow_names = _collect_pyarrow_names(tree)
+    scopes = _ScopeMap(tree)
+    pyarrow_by_scope = _pyarrow_names_by_scope(tree, scopes)
     dataframe_type_name = _dataframe_type_binding(tree)
     findings: list[Finding] = []
 
@@ -154,8 +219,11 @@ def scan_daft_runtime(
             receiver = node.func.value
             if attr == "to_pylist":
                 # pyarrow.Table.to_pylist() is a real API: exempt receivers
-                # demonstrably bound to / produced by a pyarrow call.
-                if isinstance(receiver, ast.Name) and receiver.id in pyarrow_names:
+                # demonstrably bound to / produced by a pyarrow call — but only
+                # within the scope that binding was made in.
+                if isinstance(receiver, ast.Name) and _is_pyarrow_bound(
+                    receiver.id, node, scopes, pyarrow_by_scope
+                ):
                     continue
                 if _is_pyarrow_producer_call(receiver):
                     continue
@@ -168,7 +236,7 @@ def scan_daft_runtime(
             if (
                 isinstance(receiver, ast.Name)
                 and receiver.id not in ("self", "cls")
-                and receiver.id not in pyarrow_names
+                and not _is_pyarrow_bound(receiver.id, node, scopes, pyarrow_by_scope)
             ):
                 _flag(node, ".names", "use frame.columns on the pandas frame")
         elif (

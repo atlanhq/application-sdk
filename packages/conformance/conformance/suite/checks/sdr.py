@@ -283,16 +283,66 @@ def _check_p029(manifests: list[Path], root: Path) -> list[Finding]:
 #: transfer bridge in place of the SDK-standard ``self.upload()``.
 _UPLOAD_BRIDGE_METHOD_NAMES = frozenset({"upload_to_atlan"})
 
-#: Callee-name substrings that indicate a *real* storage/store transfer inside
-#: an ``upload_to_atlan`` bridge body (ObjectStore/StorageClient uploads, file
-#: copies, put-object calls, store-to-store migrations).  A bridge body with
-#: none of these is a no-op stub: it satisfies a code-reviewer glance but moves
-#: no bytes.
-_STORAGE_TRANSFER_CALL_MARKERS = ("upload", "copy", "put", "transfer", "migrate")
+#: Verbs that, as a whole ``_``-separated token of the callee name, indicate a
+#: real storage/store transfer (ObjectStore/StorageClient uploads, file copies,
+#: put-object calls, store-to-store migrations).
+#:
+#: Matched on token boundaries, never as a bare substring: ``put`` is a
+#: substring of ``compute_summary``, ``output_stats`` and ``get_inputs``, and
+#: accepting those would let a genuine no-op stub containing any of them clear
+#: the finding — the exact silent-zero class this rule exists to catch.
+_STORAGE_TRANSFER_VERBS = frozenset(
+    {"upload", "copy", "transfer", "migrate", "put", "push", "sync"}
+)
+
+#: A *bare* verb (``put``, ``copy``, ``sync``, …) says nothing on its own —
+#: ``self._metrics.put(...)``, ``buffer.copy()`` and ``requests.put(url)`` are
+#: not transfers.  For those the receiver has to name a recognised store.
+_STORE_RECEIVER_MARKERS = (
+    "store",
+    "storage",
+    "bucket",
+    "objectstore",
+    "s3",
+    "gcs",
+    "blob",
+    "container",
+)
+
+#: ``self.upload(...)`` is the SDK-standard bridge call and counts on its own,
+#: whatever the receiver.
+_SDK_STANDARD_TRANSFER_NAMES = frozenset({"upload"})
+
+
+def _receiver_names_a_store(func: ast.expr) -> bool:
+    """Whether the call's receiver chain mentions a recognised object store."""
+    node: ast.AST | None = func
+    parts: list[str] = []
+    while node is not None:
+        if isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        elif isinstance(node, ast.Name):
+            parts.append(node.id)
+            node = None
+        elif isinstance(node, ast.Call):
+            node = node.func
+        else:
+            node = None
+    lowered = "_".join(parts).lower()
+    return any(marker in lowered for marker in _STORE_RECEIVER_MARKERS)
 
 
 def _is_storage_transfer_call(node: ast.Call) -> bool:
-    """Whether *node* looks like a storage/store-transfer call by callee name."""
+    """Whether *node* is a real storage/store-transfer call.
+
+    A compound name carrying a transfer verb as one of its tokens
+    (``upload_file``, ``storage_upload_file``, ``put_object``,
+    ``migrate_from_objectstore_to_atlan``) is a transfer outright — that is the
+    shape every green fleet bridge uses.  A bare verb additionally requires the
+    receiver to name a store, so ``self._object_store.sync(prefix)`` counts
+    while ``buffer.copy()`` does not.
+    """
     func = node.func
     if isinstance(func, ast.Attribute):
         name = func.attr
@@ -300,8 +350,67 @@ def _is_storage_transfer_call(node: ast.Call) -> bool:
         name = func.id
     else:
         return False
-    lowered = name.lower()
-    return any(marker in lowered for marker in _STORAGE_TRANSFER_CALL_MARKERS)
+
+    tokens = [t for t in name.lower().split("_") if t]
+    if not (set(tokens) & _STORAGE_TRANSFER_VERBS):
+        return False
+    if len(tokens) > 1:
+        return True  # a compound storage-ish name
+    if name.lower() in _SDK_STANDARD_TRANSFER_NAMES:
+        return True
+    return _receiver_names_a_store(func)
+
+
+def _is_abstract_body(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether the body is a pure declaration (abstract / placeholder).
+
+    ``raise NotImplementedError``, ``pass`` and ``...`` (with an optional
+    docstring) declare the contract for a subclass to implement; grading them as
+    no-op stubs puts a permanent spurious finding on every connector using the
+    declare-abstract/implement-in-subclass idiom.  They are excluded from the
+    bridge list entirely and fall through to the generic absence check, which
+    still fires correctly on an app carrying *only* the abstract stub.
+    """
+    body = list(node.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+    ):
+        if isinstance(body[0].value.value, str):
+            body = body[1:]  # drop the docstring
+    if not body:
+        return True
+    for stmt in body:
+        if isinstance(stmt, ast.Pass):
+            continue
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+            if stmt.value.value is Ellipsis:
+                continue
+        if isinstance(stmt, ast.Raise):
+            exc = stmt.exc
+            if isinstance(exc, ast.Call):
+                exc = exc.func
+            if isinstance(exc, ast.Name) and exc.id == "NotImplementedError":
+                continue
+            if isinstance(exc, ast.Attribute) and exc.attr == "NotImplementedError":
+                continue
+        return False
+    return True
+
+
+def _self_delegate_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Names of ``self.x(...)`` / ``cls.x(...)`` calls made in *node*'s body."""
+    out: set[str] = set()
+    for inner in ast.walk(node):
+        if (
+            isinstance(inner, ast.Call)
+            and isinstance(inner.func, ast.Attribute)
+            and isinstance(inner.func.value, ast.Name)
+            and inner.func.value.id in ("self", "cls")
+        ):
+            out.add(inner.func.attr)
+    return out
 
 
 def _find_upload_bridges(
@@ -310,8 +419,22 @@ def _find_upload_bridges(
     """Locate custom upload-bridge method definitions across the app source.
 
     Returns ``(rel_file, lineno, name, is_noop)`` per defined bridge method,
-    where ``is_noop`` is True when the method body contains no
-    storage/store-transfer call (by callee name) — the no-op stub shape.
+    where ``is_noop`` is True when neither the method body nor a same-class
+    method it delegates to performs a storage/store-transfer call — the no-op
+    stub shape.
+
+    Abstract declarations (``raise NotImplementedError`` / ``pass`` / ``...``)
+    are not bridges and are skipped entirely.  Delegation is resolved one level
+    into the same class, so a bridge whose body is
+    ``await self._relay_to_tenant_bucket(prefix)`` is graded on what the helper
+    actually does rather than on whether its *name* happens to contain a verb.
+
+    Known limit: a helper inherited from a base class in another file cannot be
+    resolved, and the bridge then reads as a no-op stub.  Assuming the opposite
+    would let any ``self.x(...)`` clear the finding — including
+    ``self.compute_summary()`` and ``self.get_inputs()`` — which is the false
+    negative this rule exists to prevent, and the standard inline directive
+    carries the author's justification.
     """
     bridges: list[tuple[str, int, str, bool]] = []
     for path in paths:
@@ -323,17 +446,79 @@ def _find_upload_bridges(
             rel = str(path.relative_to(root))
         except ValueError:
             rel = str(path)
+
+        # Method tables per class, for the one-level delegation lookback.
+        siblings: dict[int, dict[str, ast.FunctionDef | ast.AsyncFunctionDef]] = {}
+        for cls in ast.walk(tree):
+            if not isinstance(cls, ast.ClassDef):
+                continue
+            table: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+            for item in cls.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    table[item.name] = item
+            for item in cls.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    siblings[id(item)] = table
+
         for node in ast.walk(tree):
-            if (
+            if not (
                 isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                 and node.name in _UPLOAD_BRIDGE_METHOD_NAMES
             ):
-                has_transfer = any(
-                    isinstance(inner, ast.Call) and _is_storage_transfer_call(inner)
-                    for inner in ast.walk(node)
-                )
-                bridges.append((rel, node.lineno, node.name, not has_transfer))
+                continue
+            if _is_abstract_body(node):
+                continue
+
+            has_transfer = any(
+                isinstance(inner, ast.Call) and _is_storage_transfer_call(inner)
+                for inner in ast.walk(node)
+            )
+            if not has_transfer:
+                table = siblings.get(id(node), {})
+                for helper_name in _self_delegate_names(node):
+                    helper = table.get(helper_name)
+                    if helper is None:
+                        # Unresolvable (inherited from a base in another file).
+                        # Deliberately NOT assumed to transfer: treating every
+                        # `self.x(...)` as delegation would let `compute_summary`
+                        # / `output_stats` / `get_inputs` clear the finding,
+                        # reopening the false negative the token match closes.
+                        continue
+                    if any(
+                        isinstance(inner, ast.Call) and _is_storage_transfer_call(inner)
+                        for inner in ast.walk(helper)
+                    ):
+                        has_transfer = True
+                        break
+
+            bridges.append((rel, node.lineno, node.name, not has_transfer))
     return bridges
+
+
+def _has_self_upload_call(paths: list[Path]) -> bool:
+    """Whether any app source file makes a real ``self.upload(...)`` call.
+
+    Detected on the AST, not as text: a raw ``"self.upload(" in text`` search
+    cannot tell a call from a *mention*, so a comment or docstring naming
+    ``self.upload(`` would clear the absence finding.  The population this rule
+    targets is precisely where such a comment is likely — fleet remediation
+    found a stub whose comment claimed the publish stage owned the transfer.
+    """
+    for path in paths:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "upload"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "self"
+            ):
+                return True
+    return False
 
 
 def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
@@ -341,15 +526,19 @@ def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
 
     Two shapes are checked:
 
-    * **No upload at all** — no source file contains ``self.upload(`` and no
-      custom upload-bridge method (``upload_to_atlan``) is defined.  The
-      ENABLE_ATLAN_UPLOAD path is unreachable; delegating to SDK
+    * **No upload at all** — no source file makes a real ``self.upload(...)``
+      call (matched on the AST, so a comment or docstring mentioning it does
+      not count) and no custom upload-bridge method (``upload_to_atlan``) is
+      defined.  The ENABLE_ATLAN_UPLOAD path is unreachable; delegating to SDK
       ``SqlApp.run()`` does NOT count (it persists to the deployment store
       only — publish reads the tenant bucket).
-    * **No-op bridge stub** — an ``upload_to_atlan`` method IS defined but its
-      body performs no storage/store-transfer call (by callee name).  The stub
-      looks like a bridge at review time but moves no bytes; fleet remediation
-      found one whose comment claimed the publish stage owned the transfer.
+    * **No-op bridge stub** — an ``upload_to_atlan`` method IS defined but
+      neither its body nor a same-class method it delegates to performs a
+      storage/store-transfer call.  The stub looks like a bridge at review time
+      but moves no bytes; fleet remediation found one whose comment claimed the
+      publish stage owned the transfer.  Abstract declarations
+      (``raise NotImplementedError``/``pass``/``...``) are not stubs and are
+      excluded — a subclass may well implement the real thing.
 
     An app with ``self.upload(`` somewhere is not flagged for absence, but a
     no-op stub alongside it is still flagged (the stub is dead weight that
@@ -358,16 +547,7 @@ def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
     also missing — the message directs the reviewer to prove it with a green
     full-DAG e2e before treating the finding as a false positive.
     """
-    has_self_upload = False
-    for path in paths:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        if "self.upload(" in text:
-            has_self_upload = True
-            break
-
+    has_self_upload = _has_self_upload_call(paths)
     bridges = _find_upload_bridges(paths, root)
     findings: list[Finding] = []
 
@@ -884,14 +1064,93 @@ def _check_p039(manifests: list[Path], root: Path) -> list[Finding]:
 _PREFLIGHT_GATE_MODE_ATTR = "preflight_gate_mode"
 
 
+def _is_unconditional_hard(value: ast.AST) -> bool:
+    """Whether *value* yields ``"hard"`` on the always-on / default path.
+
+    Semantic rather than structural: exempting every non-``Constant`` node lets
+    an *inverted* ternary (``"hard" if ENABLE_ATLAN_UPLOAD else "soft"`` — hard
+    exactly when upload is on), a both-arms-hard ternary, and an env default of
+    ``"hard"`` all escape, which are the very postures the rule audits.
+
+    Safe is ``"hard"`` in the *else* arm only — the documented run-mode split
+    ``"soft" if ENABLE_ATLAN_UPLOAD else "hard"``.  A nested conditional in an
+    env-var default (``os.environ.get(VAR, "soft" if ... else "hard")``) is the
+    same posture spelled through the override and stays silent too.
+    """
+    if isinstance(value, ast.Constant):
+        return value.value == "hard"
+    if isinstance(value, ast.IfExp):
+        # Hard in the true arm (or in both) is unconditional-in-effect; hard
+        # only in the else arm is the recommended run-mode-differentiated split.
+        return _is_unconditional_hard(value.body)
+    if isinstance(value, ast.Call):
+        # An env-var override: `os.environ.get("ATLAN_PREFLIGHT_GATE_MODE",
+        # "hard")` is hard on every deployment that does not set the var.
+        return any(
+            _is_unconditional_hard(arg)
+            for arg in [*value.args[1:], *(kw.value for kw in value.keywords)]
+        )
+    return False
+
+
+def _gate_target_names(targets: list[ast.expr]) -> list[str]:
+    return [t.id for t in targets if isinstance(t, ast.Name)] + [
+        t.attr for t in targets if isinstance(t, ast.Attribute)
+    ]
+
+
+def _gate_assignments(stmts: list[ast.stmt]) -> list[tuple[ast.stmt, ast.expr]]:
+    """``(node, value)`` for each ``preflight_gate_mode`` assignment in *stmts*."""
+    out: list[tuple[ast.stmt, ast.expr]] = []
+    for stmt in stmts:
+        for node in ast.walk(stmt):
+            if isinstance(node, ast.Assign):
+                targets, value = list(node.targets), node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets, value = [node.target], node.value
+            else:
+                continue
+            if value is None:
+                continue
+            if _PREFLIGHT_GATE_MODE_ATTR in _gate_target_names(targets):
+                out.append((node, value))
+    return out
+
+
+def _run_mode_split_exempt(tree: ast.Module) -> set[int]:
+    """ids of gate assigns that are the ``else`` arm of an if/else run-mode split.
+
+    ``if ENABLE_ATLAN_UPLOAD: ... = "soft"`` / ``else: ... = "hard"`` is the
+    documented posture spelled across two statements instead of as a ternary —
+    an ordinary style choice once the branches grow past one line — and must not
+    be flagged.  The polarity check mirrors the ternary's: ``"hard"`` on the
+    *true* arm is the inverted posture and still fires, as does both-arms-hard.
+    """
+    exempt: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If) or not node.orelse:
+            continue
+        body = _gate_assignments(node.body)
+        orelse = _gate_assignments(node.orelse)
+        if not body or not orelse:
+            continue
+        if any(_is_unconditional_hard(value) for _n, value in body):
+            continue  # hard on the true arm — inverted/both-hard, keep firing
+        for assign, value in orelse:
+            if _is_unconditional_hard(value):
+                exempt.add(id(assign))
+    return exempt
+
+
 def _check_p041(paths: list[Path], root: Path) -> list[Finding]:
     """P041: an SDR app must not hard-code ``preflight_gate_mode = "hard"``.
 
-    Flags an *unconditional* assignment of the string constant ``"hard"`` to
-    ``preflight_gate_mode`` (plain or annotated assignment).  A conditional
-    expression (``"soft" if ENABLE_ATLAN_UPLOAD else "hard"``) is a
-    run-mode-differentiated posture and is not flagged — the conditional's
-    value node is an ``ast.IfExp``, not a ``"hard"`` constant.
+    Flags an assignment to ``preflight_gate_mode`` (plain or annotated) whose
+    value is ``"hard"`` on the always-on or default path — see
+    :func:`_is_unconditional_hard`.  The documented run-mode-differentiated
+    posture (``"soft" if ENABLE_ATLAN_UPLOAD else "hard"``, env-overridable via
+    ``ATLAN_PREFLIGHT_GATE_MODE``) is never flagged, in either its ternary or
+    its ``if``/``else`` spelling.
     """
     findings: list[Finding] = []
     for path in paths:
@@ -903,9 +1162,10 @@ def _check_p041(paths: list[Path], root: Path) -> list[Finding]:
             rel = str(path.relative_to(root))
         except ValueError:
             rel = str(path)
+        split_exempt = _run_mode_split_exempt(tree)
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
-                targets = node.targets
+                targets = list(node.targets)
                 value = node.value
             elif isinstance(node, ast.AnnAssign):
                 targets = [node.target]
@@ -914,12 +1174,11 @@ def _check_p041(paths: list[Path], root: Path) -> list[Finding]:
                 continue
             if value is None:
                 continue
-            names = [t.id for t in targets if isinstance(t, ast.Name)] + [
-                t.attr for t in targets if isinstance(t, ast.Attribute)
-            ]
-            if _PREFLIGHT_GATE_MODE_ATTR not in names:
+            if _PREFLIGHT_GATE_MODE_ATTR not in _gate_target_names(targets):
                 continue
-            if isinstance(value, ast.Constant) and value.value == "hard":
+            if id(node) in split_exempt:
+                continue
+            if _is_unconditional_hard(value):
                 findings.append(
                     Finding(
                         rule_id=RULE_P041,

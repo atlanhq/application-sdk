@@ -1046,8 +1046,14 @@ silent-zero-asset publishes):
 **A no-op `upload_to_atlan` stub** — a method defined with no   storage-transfer call in
 its body (e.g. a body that only logs or   returns, with a comment claiming another stage
 owns the transfer).   The checker flags these definitions specifically (observed for a
-document-store connector in fleet testing). * **A deprecated SDK upload shim** that
-re-roots artifacts under the   code-derived app name and drops the `transformed/`
+document-store connector in fleet testing).  A transfer is matched   on whole
+`_`-separated tokens of the callee name, never a bare   substring, so `compute_summary`
+/ `output_stats` /   `get_inputs` do not read as transfers while `upload_file` /
+`storage_upload_file` / `migrate_from_objectstore_to_atlan` do;   a bare verb (`sync`,
+`push`, `put`, `copy`) additionally   requires a store-naming receiver.  Delegation is
+resolved one level   into the same class, and an abstract declaration   (`raise
+NotImplementedError` / `pass` / `...`) is not a stub. * **A deprecated SDK upload shim**
+that re-roots artifacts under the   code-derived app name and drops the `transformed/`
 segment — the   transfer runs but publish finds nothing at the expected prefix
 (observed for a managed-Postgres connector in fleet testing; see   also P038 for the
 mis-rooting class). * **Inline writers that target the deployment store only** — output
@@ -1394,39 +1400,50 @@ counterexample connectors in fleet testing do.
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `transform-templates` · **Autofixable:** — · **Since:** 0.18.0
 
-> Transform SQL template uses an unquoted DuckDB reserved keyword as an identifier
+> Transform SQL template references an unquoted DuckDB reserved keyword in source_query
 
-**Rationale:** The SDK query transformer renders each template column as '{source_query} AS {name}' and
-quotes identifiers only when they contain a dot, so a bare DuckDB reserved keyword
-('column', 'order', 'group', ...) used as a template identifier reaches DuckDB unquoted
-and every transform of that type fails at runtime with a ParserException on SDK >= 3.22
-(the daft-less runtime executes all transforms through DuckDB). The breakage is latent —
-templates load, imports succeed, mocked tests pass — and surfaced live on main for a
-document-store connector in fleet testing only when the full pipeline ran. Linting the
-templates catches it at review time.
+**Rationale:** The SDK query transformer renders each flattened column as '{source_query} AS {name}',
+so a bare DuckDB reserved keyword ('column', 'order', 'group', 'qualify', ...) used as a
+source_query column reference reaches DuckDB unquoted and every transform of that type
+fails at runtime with a ParserException on SDK >= 3.22 (the daft-less runtime executes
+all transforms through DuckDB). The breakage is latent — templates load, imports
+succeed, mocked tests pass — and surfaced live on main for a document-store connector in
+fleet testing only when the full pipeline ran. Linting the templates catches it at
+review time. The alias (identifier) position is not graded: DuckDB accepts a reserved
+keyword after AS, and the shape real templates use renders it dotted and therefore
+quoted.
 
-In an app's transform templates (YAML files with a `columns:` list of `name` /
-`source_query` entries, consumed by `application_sdk.transformers.query`), every
-identifier that is a DuckDB **reserved keyword** must be SQL-quoted.
+In an app's transform templates (YAML consumed by `application_sdk.transformers.query`),
+a `source_query:` value that is a bare DuckDB **reserved keyword** must be SQL-quoted.
 
-The transformer compiles each column to `{source_query} AS {name}` and only auto-quotes
-identifiers containing a dot.  A bare reserved keyword — `column`, `order`, `group`,
-`select`, `table`, `default`, … — therefore lands in the generated `SELECT` unquoted,
-and DuckDB raises `ParserException` at runtime for every row batch of that entity type.
-On SDK >= 3.22 there is no daft fallback: the DuckDB path is the only transform path.
+The transformer compiles each flattened column to `{source_query} AS {name}`.  The
+`source_query` lands in the expression slot, where a bare reserved keyword — `column`,
+`order`, `group`, `select`, `qualify`, `pivot`, … — is a column *reference* and DuckDB
+raises `ParserException` at runtime for every row batch of that entity type.  On SDK >=
+3.22 there is no daft fallback: the DuckDB path is the only transform path.
 
-Note that YAML-level quoting does not help: `name: "column"` and `name: column` parse to
-the same string.  The quotes must be part of the *value* so they survive into the SQL:
+Real templates express the identifier as a nested YAML mapping key:
 
 ```python
 columns:
-  - name: '"column"'
-    source_query: '"column"'
+  attributes:
+    someAttr:
+      source_query: '"order"'
 ```
 
-Identifiers containing a dot (`attributes.order`) are exempt — the SDK quotes those
-itself.  YAML scalar literals (`true` / `false` / `null`) are not identifiers and are
-not flagged.
+YAML-level quoting does not help: `source_query: "order"` and `source_query: order`
+parse to the same string.  The quotes must be part of the *value* so they survive into
+the SQL.
+
+**Scope — the expression position only.**  The column identifier is not graded.  It
+reaches the `AS` alias slot, which DuckDB does not restrict (`SELECT 1 AS column` and
+`AS qualify` both parse on the pinned 1.5.5), and in the shape that ships
+`flatten_yaml_columns` renders it as `attributes.<key>` — dotted, hence quoted by
+`quote_column_name`.  Grading it would describe a runtime failure that does not occur.
+
+Values containing a dot, embedded `"` quotes, whitespace or `(` are exempt (auto-quoted,
+already quoted, or an expression rather than a bare reference).  YAML scalar literals
+(`true` / `false` / `null`) take the transformer's literal path and are not flagged.
 
 This is a WARN (new-rule tier policy) and the scan is text-based (dependency-free),
 keyed on files that carry both a `columns:` key and a `source_query:` key — ordinary

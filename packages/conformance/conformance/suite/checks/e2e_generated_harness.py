@@ -58,9 +58,15 @@ Discovery
 Walks the whole ``tests/`` tree (a shared harness base may live outside
 ``tests/e2e/``) and additionally indexes ``**/generated/**/_e2e_base.py`` so a
 subclass of a generated base is recognised as an e2e harness class.  Inheritance
-is resolved transitively across repo-local classes by name, so a connector that
-funnels its suites through an in-repo base is graded on that base, not on each
-leaf.
+is resolved transitively across repo-local classes, so a connector that funnels
+its suites through an in-repo base is graded on that base, not on each leaf.
+
+The class index is keyed by ``(file, class name)`` and the visited class is
+always graded from the node in hand; a bare name resolves an ancestor only, and
+prefers a definition in the referencing file.  When a bare name maps to classes
+in several other files the resolution is ambiguous and the checker biases toward
+reporting — a suppression carrying the author's reason is auditable, silence is
+not.
 
 Inline suppression
 ------------------
@@ -76,6 +82,7 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     _parse_directives,
+    is_collectable_test_file,
     is_test_class,
     make_cli_main,
     make_finding,
@@ -192,50 +199,95 @@ def _generated_base_files(root: Path) -> list[Path]:
     return sorted(out)
 
 
-def _index_file(path: Path, rel: str, index: dict[str, _ClassInfo]) -> None:
+#: Class index keyed by ``(file, class name)``.  A bare-name key would let an
+#: unrelated same-named class in another file (``TestBase``, ``TestFullDag`` and
+#: friends recur across a connector's test tree) shadow the real one and
+#: silently void both rules — evidence must come from the same scope as the
+#: unit being graded.
+_ClassIndex = dict[tuple[str, str], _ClassInfo]
+#: Secondary bare-name map, used ONLY to resolve an ancestor defined in another
+#: file (the intentional transitive-base case, e.g. a generated ``_e2e_base``).
+_NameIndex = dict[str, list[_ClassInfo]]
+
+
+def _index_file(path: Path, rel: str, index: _ClassIndex, by_name: _NameIndex) -> None:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except (OSError, SyntaxError):
+    except (OSError, SyntaxError, UnicodeDecodeError):
         return
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
-            index.setdefault(node.name, _ClassInfo(rel, node))
+            info = _ClassInfo(rel, node)
+            index.setdefault((rel, node.name), info)
+            by_name.setdefault(node.name, []).append(info)
 
 
-def _is_harness_class(name: str, index: dict[str, _ClassInfo]) -> bool:
-    """True when *name* transitively inherits an SDK e2e harness base."""
-    seen: set[str] = set()
+def _resolve_base(
+    name: str, from_file: str, index: _ClassIndex, by_name: _NameIndex
+) -> tuple[_ClassInfo | None, bool]:
+    """Resolve base class *name* as referenced from *from_file*.
 
-    def walk(cls_name: str) -> bool:
-        if cls_name in seen:
+    Returns ``(info, ambiguous)``.  A definition in the referencing file always
+    wins; otherwise the bare name is resolved cross-file.  When the name maps to
+    definitions in more than one other file, static reach has run out and
+    ``ambiguous`` is True — callers then bias toward reporting (a suppression
+    carrying the author's reason is auditable; silence is not).
+    """
+    same_file = index.get((from_file, name))
+    if same_file is not None:
+        return same_file, False
+    candidates = by_name.get(name, [])
+    if not candidates:
+        return None, False
+    if len({c.file for c in candidates}) > 1:
+        return candidates[0], True
+    return candidates[0], False
+
+
+def _is_harness_class(
+    info: _ClassInfo, index: _ClassIndex, by_name: _NameIndex
+) -> bool:
+    """True when *info*'s class transitively inherits an SDK e2e harness base."""
+    seen: set[tuple[str, str]] = set()
+
+    def walk(current: _ClassInfo) -> bool:
+        key = (current.file, current.node.name)
+        if key in seen:
             return False
-        seen.add(cls_name)
-        info = index.get(cls_name)
-        if info is None:
-            return False
-        if info.bases & _SDK_HARNESS_BASES:
+        seen.add(key)
+        if current.bases & _SDK_HARNESS_BASES:
             return True
-        return any(walk(b) for b in info.bases)
+        for base in current.bases:
+            resolved, ambiguous = _resolve_base(base, current.file, index, by_name)
+            if ambiguous:
+                return True  # cannot rule the harness out — grade it
+            if resolved is not None and walk(resolved):
+                return True
+        return False
 
-    return walk(name)
+    return walk(info)
 
 
-def _declares_mode(name: str, index: dict[str, _ClassInfo]) -> bool:
-    """True when *name* or any repo-visible ancestor sets a class-level ``mode``."""
-    seen: set[str] = set()
+def _declares_mode(info: _ClassInfo, index: _ClassIndex, by_name: _NameIndex) -> bool:
+    """True when the class or a repo-visible ancestor sets a class-level ``mode``."""
+    seen: set[tuple[str, str]] = set()
 
-    def walk(cls_name: str) -> bool:
-        if cls_name in seen:
+    def walk(current: _ClassInfo) -> bool:
+        key = (current.file, current.node.name)
+        if key in seen:
             return False
-        seen.add(cls_name)
-        info = index.get(cls_name)
-        if info is None:
-            return False
-        if _MODE_ATTR in info.assignments:
+        seen.add(key)
+        if _MODE_ATTR in current.assignments:
             return True
-        return any(walk(b) for b in info.bases)
+        for base in current.bases:
+            resolved, ambiguous = _resolve_base(base, current.file, index, by_name)
+            if ambiguous:
+                continue  # an unresolvable ancestor cannot vouch for `mode`
+            if resolved is not None and walk(resolved):
+                return True
+        return False
 
-    return walk(name)
+    return walk(info)
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +358,8 @@ def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     """Grade the repo's e2e harness classes (T023, T024)."""
-    index: dict[str, _ClassInfo] = {}
+    index: _ClassIndex = {}
+    by_name: _NameIndex = {}
 
     # Generated bases first: a test subclassing one must resolve to a harness
     # class even though the module lives outside tests/.
@@ -315,20 +368,20 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             rel_gen = str(gen.relative_to(root))
         except ValueError:
             rel_gen = str(gen)
-        _index_file(gen, rel_gen, index)
+        _index_file(gen, rel_gen, index, by_name)
 
     test_files: list[tuple[Path, str, str]] = []
     for path in paths:
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
         try:
             rel = str(path.relative_to(root))
         except ValueError:
             rel = str(path)
         test_files.append((path, rel, text))
-        _index_file(path, rel, index)
+        _index_file(path, rel, index, by_name)
 
     findings: list[Finding] = []
     for _path, rel, text in test_files:
@@ -341,9 +394,11 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
-            info = index.get(node.name)
-            assignments = info.assignments if info is not None else {}
-            bases = _base_names(node)
+            # Grade the node in hand — never route the visited class through a
+            # bare-name lookup that could resolve to a different file's class.
+            info = _ClassInfo(rel, node)
+            assignments = info.assignments
+            bases = info.bases
 
             # T023(b/c) — a hand-written generated-model subclass.
             for base in sorted(bases & _GENERATED_MODEL_BASES.keys()):
@@ -357,7 +412,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                     )
                 )
 
-            if not _is_harness_class(node.name, index):
+            if not _is_harness_class(info, index, by_name):
                 continue
 
             # T023(a) — identity attrs re-declared on a harness subclass.
@@ -374,7 +429,14 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                 )
 
             # T024 — a collectable e2e test class with no declared run mode.
-            if is_test_class(node) and not _declares_mode(node.name, index):
+            # The file must be one pytest actually collects: a shared harness
+            # base in tests/e2e/helpers.py only matters through a leaf subclass
+            # that IS collected, and grading it there is a false positive.
+            if (
+                is_collectable_test_file(Path(rel).name)
+                and is_test_class(node)
+                and not _declares_mode(info, index, by_name)
+            ):
                 findings.append(
                     make_finding(
                         filename=rel,

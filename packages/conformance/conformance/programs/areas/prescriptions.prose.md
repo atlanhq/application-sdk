@@ -411,11 +411,15 @@ scope=app; `classification` is always `"judgment"`.  All gate on
   manifest.  Draft the required `app.pkl` addition and route to residue for the
   developer to apply.
 
-- **P030 SdrUploadNotCalled** (WARN) — no `self.upload(` call exists in any app
-  source file outside `tests/`, making the `ENABLE_ATLAN_UPLOAD` gate structurally
-  unreachable — OR a custom `upload_to_atlan` bridge is defined whose body
-  performs no storage-transfer call (a **no-op stub**, anchored at the
-  definition).  The absence finding is anchored at line 1 of `atlan.yaml` — the
+- **P030 SdrUploadNotCalled** (WARN) — no real `self.upload(...)` **call**
+  exists in any app source file outside `tests/` (matched on the AST, so a
+  comment or docstring merely *mentioning* it does not clear the finding),
+  making the `ENABLE_ATLAN_UPLOAD` gate structurally unreachable — OR a custom
+  `upload_to_atlan` bridge is defined whose body performs no storage-transfer
+  call (a **no-op stub**, anchored at the definition).  A bridge that delegates
+  to a same-class helper is graded on what the helper does, and an abstract
+  declaration (`raise NotImplementedError` / `pass` / `...`) is not a stub —
+  a subclass may implement the real transfer.  The absence finding is anchored at line 1 of `atlan.yaml` — the
   check builds its `Finding` directly and does not call `_parse_directives`, so
   inline YAML suppression is not honoured.  Fleet remediation found this
   finding REAL far more often than assumed (4 of 15 swept connectors had a
@@ -507,19 +511,41 @@ scope=app; `classification` is always `"judgment"`.  All gate on
   is SDK-side (gate enforcement differentiated by run mode), so route to
   residue for confirmation rather than auto-applying.
 
+  The exemption is **semantic, not structural**: `"hard"` is safe only in the
+  *else* arm.  Silent on `"soft" if ENABLE_ATLAN_UPLOAD else "hard"` and on its
+  `if`/`else` statement spelling (an ordinary style choice once the branches
+  grow), and on `os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", <that ternary>)`.
+  Still fires on the inverted ternary (`"hard" if ENABLE_ATLAN_UPLOAD else
+  "soft"` — hard exactly when upload is on), on a both-arms-hard ternary, and
+  on `os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", "hard")`, which is hard on
+  every deployment that does not set the variable.  Known limit: a condition
+  written with inverted polarity (`"hard" if not ENABLE_ATLAN_UPLOAD else
+  "soft"`) reads as the true-arm shape and is flagged — suppress it inline with
+  the reason.
+
 **Transform-template rule (P040)** — suggest-only, scope=app,
 `classification = "judgment"`; backed by `suite.checks.transform_templates`,
 which scans template YAML, not Python.
 
 - **P040 TransformTemplateReservedKeyword** (WARN) — a transform SQL template
-  (`columns:` list consumed by `application_sdk.transformers.query`) uses a
-  bare DuckDB reserved keyword (`column`, `order`, `group`, ...) as a `name:`
-  or `source_query:` identifier.  The transformer renders `{source_query} AS
-  {name}` and only auto-quotes dotted identifiers, so the keyword reaches
-  DuckDB unquoted → `ParserException` at runtime for every transform of that
-  entity type on the daft-less SDK >= 3.22 runtime — latent until the first
-  real pipeline run.  YAML-level quotes do not survive parsing; the fix embeds
-  SQL quotes in the value (`name: '"column"'`).  Draft that quoting edit and
-  route to residue; verify locally with a template harness (synthetic raw
-  parquet through the real `DuckDBConnectionManager`) rather than one CI cycle
-  at a time.
+  (consumed by `application_sdk.transformers.query`) uses a bare DuckDB
+  reserved keyword (`column`, `order`, `group`, `qualify`, ...) as a
+  `source_query:` value.  The transformer renders `{source_query} AS {name}`,
+  so the keyword lands in the *expression* slot as a column reference and
+  reaches DuckDB unquoted → `ParserException` at runtime for every transform of
+  that entity type on the daft-less SDK >= 3.22 runtime — latent until the
+  first real pipeline run.  YAML-level quotes do not survive parsing; the fix
+  embeds SQL quotes in the value (`source_query: '"order"'`).  Draft that
+  quoting edit and route to residue; verify locally with a template harness
+  (synthetic raw parquet through the real `DuckDBConnectionManager`) rather
+  than one CI cycle at a time.
+
+  **Scope note — the alias position is deliberately not graded.**  The column
+  identifier is the YAML *mapping key* in the nested shape every shipped
+  template uses (`columns:` → `attributes:` → `<identifier>:` →
+  `source_query:`), and `flatten_yaml_columns` renders it as
+  `attributes.<key>` — dotted, so `quote_column_name` quotes it.  It also
+  reaches only the `AS` alias slot, which DuckDB does not restrict (`SELECT 1
+  AS column` and `AS qualify` both parse on the pinned 1.5.5).  So do **not**
+  "fix" a reserved-word attribute name: there is no runtime failure there, and
+  renaming it changes the emitted Atlan attribute.

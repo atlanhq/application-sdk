@@ -1025,10 +1025,6 @@ _TRANSFORMERS_PACKAGE = "application_sdk.transformers"
 #: ``[daft]`` extra is empty on SDK >= 3.22 and provides nothing).
 _DUCKDB_PROVIDING_EXTRAS = frozenset({"sql", "incremental"})
 
-#: Matches a locked duckdb package block in uv.lock (``[[package]]`` entries
-#: serialise as ``name = "duckdb"`` on its own line).
-_UV_LOCK_DUCKDB_RE = re.compile(r'^name = "duckdb"$', re.MULTILINE)
-
 
 def _first_query_transformer_import(
     py_files: Iterable[Path], root: Path
@@ -1068,30 +1064,127 @@ def _first_query_transformer_import(
     return None
 
 
-def _duckdb_resolved(root: Path, pyproject_text: str) -> bool:
-    """Whether ``duckdb`` resolves for the repo at *root*.
+def _lock_dependency_edges(
+    pkg: dict[str, object], extras: frozenset[str]
+) -> list[tuple[str, frozenset[str]]]:
+    """Production dependency edges out of a locked package.
 
-    With a ``uv.lock`` present the lock is the ground truth: duckdb must
-    appear as a locked package.  Without a lock, fall back to declaration
-    intent in ``pyproject.toml``: a direct ``duckdb`` dependency anywhere
-    (core, extras, or dependency groups) or an ``atlan-application-sdk``
-    reference carrying a duckdb-providing extra (``sql``/``incremental``).
+    Only ``dependencies`` plus the ``optional-dependencies`` groups actually
+    activated by an incoming extra.  ``dev-dependencies`` and
+    ``[package.metadata]`` are deliberately not traversed — they are not part of
+    a default (``uv sync --no-dev``) install, which is the environment D010
+    grades.
+    """
+    raw: list[object] = []
+    deps = pkg.get("dependencies")
+    if isinstance(deps, list):
+        raw.extend(deps)
+    optional = pkg.get("optional-dependencies")
+    if isinstance(optional, dict):
+        for extra in extras:
+            group = optional.get(extra)
+            if isinstance(group, list):
+                raw.extend(group)
+
+    out: list[tuple[str, frozenset[str]]] = []
+    for dep in raw:
+        if not isinstance(dep, dict):
+            continue
+        name = _normalise_name(str(dep.get("name", "")))
+        if not name:
+            continue
+        dep_extras = dep.get("extra")
+        activated = (
+            frozenset(_normalise_name(str(e)) for e in dep_extras)
+            if isinstance(dep_extras, list)
+            else frozenset()
+        )
+        out.append((name, activated))
+    return out
+
+
+def _duckdb_in_lock(lock_text: str, pyproject_text: str) -> bool | None:
+    """Whether duckdb is reachable from the app's own production dependencies.
+
+    ``uv.lock`` is a *universal* resolution graph: it carries dev groups and
+    every extra of every package, so the mere presence of a ``duckdb`` package
+    block says nothing about whether a default install gets it.  This walks the
+    graph from the app's own ``[[package]]`` entry along production edges only.
+
+    Returns ``None`` when the lock cannot be parsed or the app's root entry
+    cannot be identified — the caller then falls back to declaration intent.
+    """
+    try:
+        lock = tomllib.loads(lock_text)
+    except tomllib.TOMLDecodeError:
+        return None
+    packages = lock.get("package")
+    if not isinstance(packages, list):
+        return None
+
+    by_name: dict[str, dict[str, object]] = {}
+    for pkg in packages:
+        if not isinstance(pkg, dict):
+            continue
+        name = _normalise_name(str(pkg.get("name", "")))
+        if name:
+            by_name.setdefault(name, pkg)
+
+    raw_app_name = _project_name(pyproject_text)
+    if raw_app_name is None:
+        return None
+    app_name = _normalise_name(raw_app_name)
+    if app_name not in by_name:
+        return None
+
+    seen: set[tuple[str, frozenset[str]]] = set()
+    queue: list[tuple[str, frozenset[str]]] = [(app_name, frozenset())]
+    while queue:
+        name, extras = queue.pop()
+        key = (name, extras)
+        if key in seen:
+            continue
+        seen.add(key)
+        if name == "duckdb":
+            return True
+        pkg = by_name.get(name)
+        if pkg is None:
+            continue
+        queue.extend(_lock_dependency_edges(pkg, extras))
+    return False
+
+
+def _duckdb_resolved(root: Path, pyproject_text: str) -> bool:
+    """Whether ``duckdb`` resolves for the repo at *root* on a default install.
+
+    With a parseable ``uv.lock`` the lock is the ground truth, walked from the
+    app's own package entry along production edges (see :func:`_duckdb_in_lock`)
+    rather than searched flat — duckdb sitting in the graph because a dev-only
+    tool pulls it in does NOT save a production ``uv sync --no-dev``.
+
+    Without a usable lock, fall back to declaration intent in
+    ``pyproject.toml``, restricted to ``[project] dependencies``: a direct
+    ``duckdb`` dependency, or an ``atlan-application-sdk`` reference carrying a
+    duckdb-providing extra (``sql``/``incremental``).  Dependency groups and
+    optional-dependency arrays are excluded — they are not installed by default.
     """
     uv_lock = root / "uv.lock"
     if uv_lock.is_file():
         try:
-            return (
-                _UV_LOCK_DUCKDB_RE.search(uv_lock.read_text(encoding="utf-8"))
-                is not None
-            )
-        except OSError:
-            pass  # unreadable lock — fall back to pyproject intent
+            lock_text = uv_lock.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            lock_text = None
+        if lock_text is not None:
+            resolved = _duckdb_in_lock(lock_text, pyproject_text)
+            if resolved is not None:
+                return resolved
+        # unreadable/unparseable lock, or an unidentifiable root package —
+        # fall back to pyproject intent below.
 
     sdk_norm = _normalise_name(SDK_PACKAGE)
-    for entry in [
-        *_iter_dep_entries(pyproject_text),
-        *_iter_dependency_group_entries(pyproject_text),
-    ]:
+    for entry in _iter_dep_entries(pyproject_text):
+        if entry.array_path != "project.dependencies":
+            continue
         if entry.name == "duckdb":
             return True
         if entry.name == sdk_norm and _DUCKDB_PROVIDING_EXTRAS & {

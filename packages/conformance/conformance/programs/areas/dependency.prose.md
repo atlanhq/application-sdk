@@ -210,7 +210,8 @@ When `mode == "strict"` and `finding.disposition == "warning"`, the model may
 propose an inline suppression instead of a fix if the deviation is a deliberate,
 justified exception for this app.  Applicable rules and notes:
 
-- **D002 / D004 / D005 / D006 / D007 / D008** — standard inline suppression.
+- **D002 / D004 / D005 / D006 / D007 / D008 / D010** — standard inline
+  suppression.
   TOML uses `#` for comments, so the directive trails the entry or sits on the
   line above it:
 

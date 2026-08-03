@@ -23,6 +23,8 @@ from conformance.suite.checks.deprecation._manifest import (
     Manifest,
     load_manifest,
 )
+from conformance.suite.rules import get_rule
+from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
 
 def _tree_and_directives(src: str) -> tuple[ast.Module, dict]:
@@ -606,3 +608,69 @@ def test_b007_suppressed_inline() -> None:
     findings = _b007(src)
     assert len(findings) == 1
     assert findings[0].suppressed
+
+
+# ── Regression: the pyarrow exemption must not cross function scopes ─────────
+
+
+def test_b007_pyarrow_exemption_is_scoped_per_function() -> None:
+    """A pyarrow-bound `df` in one function must not exempt a real SDK reader
+    frame of the same name in another.
+
+    Collected module-wide, the guard erased the very findings it exists to
+    protect: `df`, `table`, `data`, `result` are exactly the names that recur
+    across functions in real connector modules.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def unrelated():\n"
+        + "    df = pa.table({})\n"
+        + "    return df.to_pylist()\n"
+        + "\n"
+        + "def process_reader_output(frame):\n"
+        + "    df = frame\n"
+        + "    return df.to_pylist()\n"
+    )
+    findings = _b007(src)
+    assert [f.rule_id for f in findings] == ["B007"]
+    assert findings[0].line == 10
+
+
+def test_b007_pyarrow_exemption_still_applies_within_its_own_scope() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def helper():\n"
+        + "    df = pa.table({})\n"
+        + "    return df.to_pylist()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_pyarrow_exemption_reaches_a_closure() -> None:
+    """A nested function can legitimately see an enclosing binding."""
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def outer():\n"
+        + "    table = pa.table({})\n"
+        + "\n"
+        + "    def inner():\n"
+        + "        return table.to_pylist()\n"
+        + "\n"
+        + "    return inner\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_rule_metadata() -> None:
+    """WARN is what keeps a new rule off the dogfooded gate — assert it per rule."""
+    rule = get_rule("B007")
+    assert rule.name == "DaftOnlyDataframeApiUsage"
+    assert rule.tier == EnforcementTier.WARN
+    assert rule.scope == RuleScope.APP
+    assert rule.rationale.strip()
