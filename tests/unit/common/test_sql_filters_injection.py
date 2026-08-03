@@ -90,7 +90,7 @@ class TestValidateFilterNoSqlInjection:
         with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
             validate_filter_no_sql_injection('{"^prod$": ["sch\'; DROP TABLE x"]}')
 
-    def test_malformed_json_falls_through_to_string_check(self) -> None:
+    def test_brace_wrapped_non_json_falls_through_to_string_check(self) -> None:
         # Not valid JSON despite the braces — treated as raw regex; the
         # single quote in the value still trips the deny-list.
         with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):

@@ -12,6 +12,7 @@ import os
 from datetime import timedelta
 from typing import TYPE_CHECKING, Callable
 
+from pydantic import ValidationError
 from temporalio.client import Client
 from temporalio.worker import Interceptor as TemporalInterceptor
 from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
@@ -44,6 +45,10 @@ if TYPE_CHECKING:
     from application_sdk.observability.pushgateway import PushGatewayClient
 
 logger = get_logger(__name__)
+
+# Fails the workflow RUN rather than the retryable workflow TASK. Matched by
+# type, so only never-retryable types belong here.
+_WORKFLOW_FAILURE_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (ValidationError,)
 
 
 def _resolve_gate_enforcement(app_cls: type | None) -> bool:
@@ -665,6 +670,7 @@ def create_worker(
         # at the configured interval (~10s) rather than at 80% of timeout.
         max_heartbeat_throttle_interval=timedelta(seconds=10),
         graceful_shutdown_timeout=timedelta(seconds=graceful_shutdown_timeout_seconds),
+        workflow_failure_exception_types=_WORKFLOW_FAILURE_EXCEPTION_TYPES,
     )
     # Only forward max_concurrent_workflow_tasks when explicitly set; passing
     # None would override Temporal's default with None and crash the worker.
