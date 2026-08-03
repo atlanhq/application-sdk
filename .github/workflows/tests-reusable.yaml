@@ -461,11 +461,15 @@ jobs:
       # writes `::add-mask::` to stdout (the log), which is where the runner
       # reads workflow commands from; it must run BEFORE the second invocation
       # redirects stdout into $GITHUB_ENV, because from that point on every step
-      # that renders its `env:` group would print them in cleartext. `bash -e`
-      # makes a failure in the mask pass abort before anything is written.
+      # that renders its `env:` group would print them in cleartext. `set -e`
+      # makes a failure in the mask pass abort before anything is written — it is
+      # set explicitly rather than inherited from the default shell, so that the
+      # security property survives a `defaults: run: shell:` added to this
+      # workflow later (which would silently drop the runner's implicit `-e`).
       - name: Export connector source credentials
         if: env.E2E_SOURCE_ENV_JSON != ''
         run: |
+          set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
             --json "$E2E_SOURCE_ENV_JSON" --mask-only
           python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
@@ -613,11 +617,12 @@ jobs:
           token: ${{ secrets.ORG_PAT_GITHUB }}
           persist-credentials: false
 
-      # See the integration job above for why this is two invocations and why
-      # the `--mask-only` pass has to come first.
+      # See the integration job above for why this is two invocations, why the
+      # `--mask-only` pass has to come first, and why `set -e` is explicit.
       - name: Export connector source credentials
         if: env.E2E_SOURCE_ENV_JSON != ''
         run: |
+          set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
             --json "$E2E_SOURCE_ENV_JSON" --mask-only
           python3 application-sdk-scripts/.github/scripts/export_extra_env.py \

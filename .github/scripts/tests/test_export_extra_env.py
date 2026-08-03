@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "export_extra_env.py"
 _spec = importlib.util.spec_from_file_location("export_extra_env", _MODULE_PATH)
@@ -144,6 +145,24 @@ def test_structured_values_are_rejected():
 # Synthetic fixtures only. No shape below is a real credential.
 
 
+def _runner_lines(text: str) -> list[str]:
+    """Split *text* into lines the way the runner reads a stream: CR/LF only.
+
+    Not `str.splitlines()`, which also breaks on \\v, \\f, \\x1c-\\x1e, \\x85,
+    U+2028 and U+2029. The runner does not treat those as line boundaries, so a
+    helper that split there would model a stricter runner than the real one and
+    would fail on a secret that happens to contain one — the same distinction
+    `mask_values` makes when choosing its candidates.
+
+    A single trailing empty element (every emitter here ends with a newline) is
+    dropped, matching `splitlines()`.
+    """
+    lines = re.split(r"\r\n|\r|\n", text)
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def _registered_secrets(mask_output: str) -> list[str]:
     """Decode ``--mask-only`` output the way the runner reads workflow commands.
 
@@ -162,7 +181,7 @@ def _registered_secrets(mask_output: str) -> list[str]:
     for empty string"), so this asserts none is ever emitted.
     """
     secrets: list[str] = []
-    for line in mask_output.splitlines():
+    for line in _runner_lines(mask_output):
         assert line.startswith("::add-mask::"), f"not a mask command: {line!r}"
         data = line[len("::add-mask::") :]
         assert data.strip(), "runner refuses ::add-mask:: with blank data"
@@ -180,7 +199,7 @@ def _redact(log: str, secrets: list[str]) -> str:
     newlines can never match anything it sees.
     """
     out = []
-    for line in log.splitlines():
+    for line in _runner_lines(log):
         for secret in secrets:
             line = line.replace(secret, "***")
         out.append(line)
@@ -279,12 +298,14 @@ def test_multiline_value_is_masked_whole_and_per_line():
         assert line not in redacted
 
 
-def test_whole_value_masking_alone_would_not_redact_a_multiline_value():
+def test_whole_value_masking_alone_would_not_redact_a_multiline_value(monkeypatch):
     """Negative control: proves the per-line commands are what does the work.
 
-    Registering only the whole multi-line value — the intuitive single
-    `::add-mask::` — leaves every line of the PEM intact, because the masker
-    never sees a line containing the whole thing.
+    Reverts `mask_values` to the intuitive single-`::add-mask::` implementation
+    and drives the real `render_masks` with it, so this fails if the per-line
+    candidates ever stop being emitted — which a hand-built `_redact` call could
+    not detect. Every line of the PEM survives, because the masker never sees a
+    line containing the whole value.
 
     Current runners paper over this by splitting `add-mask` data on CR/LF
     themselves, so shipping only the whole-value command would pass on
@@ -292,8 +313,15 @@ def test_whole_value_masking_alone_would_not_redact_a_multiline_value():
     contract and older self-hosted/GHES runners predate it, which is why the
     lines are emitted here instead of assumed.
     """
-    leaked = _redact(f"KEY: {_FAKE_PEM}", [_FAKE_PEM])
-    assert leaked == f"KEY: {_FAKE_PEM}"
+    monkeypatch.setattr(export_extra_env, "mask_values", lambda text: [text])
+    secrets = _registered_secrets(render_masks('{"KEY": %s}' % json.dumps(_FAKE_PEM)))
+
+    assert secrets == [_FAKE_PEM], "whole-value-only is the scenario under test"
+    for line in _FAKE_PEM.splitlines():
+        assert line not in secrets, "per-line registration must be what is missing"
+
+    leaked = _redact(f"KEY: {_FAKE_PEM}", secrets)
+    assert leaked == f"KEY: {_FAKE_PEM}", "nothing is redacted"
     for line in _FAKE_PEM.splitlines():
         assert line in leaked
 
@@ -332,6 +360,45 @@ def test_value_containing_literal_percent_0a_is_not_turned_into_a_newline():
     newline, the real value would never match, and it would leak.
     """
     assert _registered_secrets(render_masks('{"K": "a%0Ab"}')) == ["a%0Ab"]
+
+
+def test_padded_single_line_value_is_masked_padded_and_stripped():
+    """A single-line value gets its stripped form too, not just multi-line lines.
+
+    A secret pasted with surrounding whitespace is a different string to the
+    masker in each form, so both are registered. Current runners would trim it
+    themselves via their own `add-mask` split — relying on that would put the
+    single-line path back on the runner version the multi-line path deliberately
+    does not depend on.
+    """
+    secrets = _registered_secrets(render_masks('{"TOKEN": "  tok3n-not-real  "}'))
+
+    assert secrets == ["  tok3n-not-real  ", "tok3n-not-real"]
+    assert _redact("TOKEN=tok3n-not-real", secrets) == "TOKEN=***"
+
+
+def test_separators_python_splits_but_the_runner_does_not_are_left_alone():
+    """Lines are split on CR/LF only, matching what the runner calls a line.
+
+    `str.splitlines()` also breaks on \\v, \\f, \\x1c-\\x1e, \\x85, U+2028 and
+    U+2029. Splitting there would register fragments the runner never treats as
+    lines, and those short fragments would redact unrelated log text.
+    """
+    value = "alpha\x0bbeta gamma"
+    secrets = _registered_secrets(render_masks('{"K": %s}' % json.dumps(value)))
+
+    assert secrets == [value], "no CR/LF present, so there is nothing to split"
+    for fragment in ("alpha", "beta", "gamma"):
+        assert fragment not in secrets
+
+
+def test_mixed_separators_split_only_at_real_line_breaks():
+    """A \\v inside a line travels with that line rather than starting a new one."""
+    value = "one\ntwo\x0cthree"
+    secrets = _registered_secrets(render_masks('{"K": %s}' % json.dumps(value)))
+
+    assert "two\x0cthree" in secrets
+    assert "three" not in secrets
 
 
 def test_duplicate_mask_candidates_are_emitted_once():
@@ -475,6 +542,9 @@ def test_composite_action_invokes_this_script_at_a_real_path(action: str):
 # to copy-paste into a new caller — would put unregistered credentials into the
 # environment of every later step. Call sites are discovered rather than listed,
 # so a new one is covered the day it is added.
+#
+# Discovery only helps if the suite actually runs on the files it discovers, so
+# `test_the_suite_runs_on_every_file_these_guards_read` pins the trigger too.
 
 # `python3 <path>/export_extra_env.py \` + `--json "$VAR" <mode>`.
 _CALL_SITE_INVOCATION = re.compile(
@@ -486,11 +556,22 @@ _ANY_INVOCATION = re.compile(r"python3[^\n]*export_extra_env\.py")
 
 
 def _call_site_files() -> list[Path]:
+    """Every ``.github/**`` YAML that actually *runs* the script.
+
+    Keyed on ``_ANY_INVOCATION`` (a ``python3 … export_extra_env.py`` command)
+    rather than on the bare filename appearing anywhere in the file: prose that
+    names the script — scripts-tests.yaml's header explains why its trigger is
+    unfiltered, docs/standards/ci.md points at it as the worked example — is not
+    a call site, and treating it as one would fail the ordering assertions below
+    on a comment. The predicate stays broader than ``_CALL_SITE_INVOCATION``, so
+    an invocation written in a shape those assertions cannot parse is still
+    discovered here and then fails loudly on the count check.
+    """
     workflow_dir = _REPO_ROOT / ".github"
     found = [
         path
         for path in sorted(workflow_dir.rglob("*.y*ml"))
-        if "export_extra_env.py" in path.read_text()
+        if _ANY_INVOCATION.search(path.read_text())
     ]
     assert found, "no call site found — did the script move or lose its callers?"
     return found
@@ -504,6 +585,40 @@ def test_call_sites_are_the_expected_files():
         ".github/actions/sdr-e2e/action.yaml",
         ".github/workflows/tests-reusable.yaml",
     }
+
+
+def test_the_suite_runs_on_every_file_these_guards_read():
+    """A `paths:` filter on this suite's workflow would silently disable it.
+
+    The guards above read YAML outside `.github/scripts/`, but the workflow that
+    runs them originally filtered on `paths: [.github/scripts/**, ...]` — which
+    matches none of the call-site files. A PR dropping `--mask-only` from a call
+    site therefore triggered no run, the guard never executed, and CI went green
+    on a reintroduced credential leak. Enumerating the call sites in `paths:`
+    would only move the hole one file along, since the point of discovery is that
+    the list is not maintained by hand.
+
+    So: assert the trigger has no path filter at all. Cheap for a sub-minute
+    suite, and it fails on the change that would blind it.
+    """
+    workflow = _REPO_ROOT / ".github" / "workflows" / "scripts-tests.yaml"
+    parsed = yaml.safe_load(workflow.read_text())
+    # YAML 1.1 resolves a bare `on` key to the boolean True, so it is not
+    # reachable under the string "on" that the file appears to spell.
+    on_block = parsed["on"] if "on" in parsed else parsed[True]
+
+    assert "pull_request" in on_block, "the suite must run on pull_request"
+    triggers = on_block["pull_request"] or {}
+    for key in ("paths", "paths-ignore"):
+        assert key not in triggers, (
+            f"scripts-tests.yaml declares `{key}`, so this suite no longer runs "
+            "on every PR. The call-site guards read YAML outside "
+            ".github/scripts/ and would stop firing on the very edits they "
+            "exist to catch. See the header comment in that workflow."
+        )
+
+    # And the suite it runs is the one this file lives in.
+    assert "pytest .github/scripts/tests" in workflow.read_text()
 
 
 def test_every_env_write_call_site_masks_first():

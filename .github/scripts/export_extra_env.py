@@ -166,18 +166,32 @@ def mask_values(text: str) -> list[str]:
     part of the documented ``add-mask`` contract, and older self-hosted and GHES
     runners predate it (and predate ``TrimEntries``). Emitting the lines
     explicitly costs one command each and makes the outcome independent of the
-    runner version. The stripped form of a line is included for the same reason:
-    it is what ``TrimEntries`` would have registered, and it is the form that
-    matches when an indented line (pretty-printed JSON) is re-emitted unindented.
+    runner version. The stripped form is included for the same reason: it is what
+    ``TrimEntries`` would have registered, and it is the form that matches when a
+    padded value (an indented line of pretty-printed JSON, or a secret pasted
+    with trailing whitespace) is re-emitted unpadded. It is registered for
+    single-line values too, not just for the lines of a multi-line one — the
+    padded and unpadded forms of ``" tok3n "`` are as distinct to the masker as
+    any other two strings, and relying on the runner to trim it would reintroduce
+    exactly the version dependence the per-line commands remove.
+
+    Lines are split on ``\\r\\n``/``\\r``/``\\n`` only, matching what the runner
+    treats as a line boundary. ``str.splitlines()`` is deliberately not used: it
+    also breaks on ``\\v``, ``\\f``, ``\\x1c``-``\\x1e``, ``\\x85``, U+2028 and
+    U+2029, so a value containing one of those would be registered as short
+    fragments that redact unrelated log text.
 
     Blank and whitespace-only entries are dropped. The runner answers
     ``::add-mask::`` with no usable data by warning and registering nothing
     ("Can't add secret mask for empty string in ##[add-mask] command"), and a
     mask of `` `` would in any case match every space in the log.
+
+    The whole value is always the first candidate: callers rely on the
+    whole-value command being emitted first.
     """
-    candidates = [text]
+    candidates = [text, text.strip()]
     if "\n" in text or "\r" in text:
-        for line in text.splitlines():
+        for line in re.split(r"\r\n|\r|\n", text):
             candidates.append(line)
             candidates.append(line.strip())
 
