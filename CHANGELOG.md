@@ -1,5 +1,31 @@
 # Changelog
 
+## v3.25.1 (July 31, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.25.0...v3.25.1
+
+### Bug Fixes
+
+- use duckdb API valid across the declared version range (#2940) (by @fyzanshaik-atlan in [83b9da0](https://github.com/atlanhq/application-sdk/commit/83b9da0))
+- resolve log app_name per-entrypoint from workflow input (#2951) (by @vaibhavatlan in [1f2b24c](https://github.com/atlanhq/application-sdk/commit/1f2b24c))
+
+
+## v3.25.0 (July 29, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.24.1...v3.25.0
+
+### Features
+
+- resolve agent-json credential references in SDR handler activities (#2877) (by @Lalit3716-atlan in [cf77d97](https://github.com/atlanhq/application-sdk/commit/cf77d97))
+- add dapr.sidecar.wait.duration boot-time metric (#2891) (by @SanilK2108 in [d9010a3](https://github.com/atlanhq/application-sdk/commit/d9010a3))
+- bulletproof correlation_id + readable lifecycle logs, provenance, trace ids, shutdown flush (#2900) (by @vaibhavatlan in [5d58c42](https://github.com/atlanhq/application-sdk/commit/5d58c42))
+
+### Bug Fixes
+
+- unify list[dict] keys; add migrate-off-daft skill (#2922) (by @fyzanshaik-atlan in [f234dd6](https://github.com/atlanhq/application-sdk/commit/f234dd6))
+- raise the prime_sql_auth timeout from 60s to 120s (#2917) (by @Lalit3716-atlan in [aa36a01](https://github.com/atlanhq/application-sdk/commit/aa36a01))
+
+
 ## v3.24.1 (July 27, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.24.0...v3.24.1

@@ -41,7 +41,16 @@ GitHub/Linear I/O is wired in main(), per docs/standards/ci.md.
 
 Environment:
     REPO                 owner/name (default atlanhq/application-sdk)
-    GH_TOKEN             atlan-ci PAT (push branch + open the removal PR)
+    GH_TOKEN             atlan-ci PAT: Actions reads for the debounce window +
+                         `gh pr create` fallback (the branch itself is pushed
+                         with the checkout token — the fleet App in CI)
+    PR_AUTHOR_TOKEN      atlan-app-fleet App token, used ONLY for `gh pr create`
+                         so the removal PR is AUTHORED by the fleet App rather
+                         than by atlan-ci. atlan-ci must stay free to approve it
+                         (GitHub forbids self-approval, and that approval is what
+                         satisfies both the `main` ruleset's code-owner review and
+                         the Authorized Approver Check on `.security/`). Falls
+                         back to GH_TOKEN when unset (local runs).
     LINEAR_API_KEY       to close / update tickets (optional; skipped if unset)
     SCAN_WORKFLOW        default 'daily-security-scan.yml'
     RUN_DATE             ISO date, for branch/commit naming
@@ -306,6 +315,15 @@ def open_removal_pr(
         check=True,
     )
     runner(["git", "push", "origin", branch], check=True)
+    # Author the PR as the fleet App, not as atlan-ci — see PR_AUTHOR_TOKEN in the
+    # module docstring. Scoped to this one call so the Actions reads above keep
+    # using the atlan-ci PAT (the App installation may not carry actions: read,
+    # and a silent failure there would weaken the debounce window).
+    pr_env = {**os.environ}
+    pr_token = os.environ.get("PR_AUTHOR_TOKEN", "")
+    if pr_token:
+        pr_env["GH_TOKEN"] = pr_token
+        pr_env.pop("GITHUB_TOKEN", None)
     runner(
         [
             "gh",
@@ -326,6 +344,7 @@ def open_removal_pr(
             + "\n".join(f"- `{c}`" for c in removed),
         ],
         check=True,
+        env=pr_env,
     )
 
 

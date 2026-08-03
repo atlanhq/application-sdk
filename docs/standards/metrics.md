@@ -6,7 +6,7 @@
 deployment-time-known set. Anything that scales with users, tenants, requests,
 queries, exceptions, or runtime state belongs in **logs**, not in metric labels.
 
-**Diagnostic detail belongs in logs.** The activity.ended log records emitted
+**Diagnostic detail belongs in logs.** The `activity.ended` log records emitted
 by `LogInterceptor` already carry `exception.type`, `exception.message`,
 `atlan.exception.cause_chain`, and `atlan.exception.fingerprint` — do not
 duplicate that detail as metric labels.
@@ -143,6 +143,15 @@ calls — it's added automatically:
 | `app_name` | `app.name` | Number of connectors |
 
 `sum by (app_name) (rate(...))` works without a `target_info` JOIN.
+
+> **Metric `app_name` is connector-level; log `app_name` is per-entry-point
+> (CNCT-93).** Every metric family — Temporal lifecycle `temporal_*` series and
+> `record_metric()` custom metrics alike — carries the process-wide
+> `ATLAN_APPLICATION_NAME` (one value per pod). Only **logs** resolve the
+> per-entry-point `app_name` from the workflow input (e.g. `powerbi-crawler`),
+> so for a multi-entrypoint bundle a metric's `app_name` may differ from the
+> `app_name` on its correlated log lines. Do not pass `app_name` explicitly in
+> `record_metric()` — it is auto-attached.
 
 Everything else lives on `target_info` and is recovered at query time
 via a join. This keeps per-series cardinality minimal (only the labels

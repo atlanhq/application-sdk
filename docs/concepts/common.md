@@ -33,6 +33,7 @@ Logging is configured via environment variables:
 | `ATLAN_LOG_LEVEL` | `INFO` | Minimum log level (fallback: `LOG_LEVEL`) |
 | `ENABLE_OTLP_LOGS` | `false` | Export logs via OpenTelemetry Protocol |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP endpoint |
+| `ATLAN_LOG_SOURCE` | `APPLICATION_NAME` | Overrides the app label in the `source` field stamped on every record. Records from `application_sdk` are labelled `sdk` and known third-party loggers `dependency` regardless of this setting — it only renames the *app* bucket. Apps should leave it unset so their own name appears; the Automation Engine sets `ae` so its orchestration lines are attributed to the engine rather than to the app it is running. See [Monitoring → Log provenance](monitoring.md#log-provenance-the-source-field). |
 
 ## Error Handling
 

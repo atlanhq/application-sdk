@@ -13,8 +13,10 @@ import pathlib
 
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
+    extract_apt_packages,
     extract_field,
     resolve_renovate_fallback_exit_zero,
+    sanitize_package_list,
 )
 
 
@@ -33,6 +35,37 @@ def _read_workflow_field(path: pathlib.Path, field: str) -> str:
         return extract_field(path.read_text(encoding="utf-8"), field)
     except (OSError, UnicodeDecodeError):
         return ""
+
+
+def _read_apt_packages(path: pathlib.Path) -> str:
+    """Return the apt packages *path* (a ``checks.yml``) already installs, or ``""``.
+
+    Delegates to ``conformance.bootstrap.extract``'s ``extract_apt_packages``
+    — the same extractor the C002 drift checker uses — so a detected step is
+    re-rendered byte-identically and can't read as drift.
+    """
+    if not path.exists():
+        return ""
+    try:
+        return extract_apt_packages(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _read_ci_system_deps(path: pathlib.Path) -> str:
+    """Return the packages declared in *path* (``ci-system-deps.txt``), or ``""``.
+
+    The file is a plain whitespace-separated package list. Re-normalised through
+    the same package-name filter as the checks.yml extraction so a hand-edited
+    file can't inject anything into the rendered workflow step.
+    """
+    if not path.exists():
+        return ""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    return " ".join(sanitize_package_list(raw))
 
 
 def _read_atlan_yaml_name(root: pathlib.Path) -> str:
@@ -151,6 +184,18 @@ def apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) ->
         kwargs["app_name"] = _read_atlan_yaml_name(root) or derive_app_name_from_dir(
             root
         )
+    # system-deps: the apt packages an existing checks.yml already
+    # installs, else unset. checks.yml is always-overwrite, so without this a
+    # bare re-run silently deletes a repo's build-header step (pykerberos et al
+    # have no manylinux wheel) and its pre-commit job then fails on a cold
+    # cache -- which is exactly what happened to the repos that hand-added the
+    # step back after every bootstrap.
+    # Falls back to .github/ci-system-deps.txt (the declaration the D-series
+    # leg reads) so the value survives even if checks.yml was hand-stripped.
+    if not kwargs["system_deps"]:
+        kwargs["system_deps"] = _read_apt_packages(
+            root / ".github" / "workflows" / "checks.yml"
+        ) or _read_ci_system_deps(root / ".github" / "ci-system-deps.txt")
     # services-script: existing .github/test/setup-services.sh, else unset.
     if not kwargs["services_script"]:
         candidate = root / ".github" / "test" / "setup-services.sh"

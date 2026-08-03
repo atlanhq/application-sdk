@@ -34,11 +34,32 @@ inputs:
     required: false
     default: "{}"
     description: |
-      Optional JSON object of inputs to pass to the dispatched workflow
-      (in addition to distinct_id, which is always passed). Used by the
+      JSON object of inputs to pass to the dispatched workflow. Used by the
       SDR path to forward application_sdk_ref so the connector can pin
       atlan-application-sdk to the apps-sdk PR's head SHA. Defaults to
       an empty object so codex-/return-dispatch always sees valid JSON.
+
+      IMPORTANT — every caller must include a "distinct_id" key here, set to
+      the dispatching SHA. codex-/return-dispatch v3 injected distinct_id into
+      the dispatch payload itself; v4 dropped the input and injects nothing, so
+      it is now the caller's job. This is not cosmetic: receivers key their
+      concurrency group on it, and cross-repo dispatches all land on
+      refs/heads/main, so an omitted distinct_id coarsens that group — overlapping
+      dispatches cancel each other, the dispatched run returns "cancelled" and
+      poll mode reds the job. That is exactly what broke when the v4 bump first
+      landed (#2923, reverted in #2939). The "Require a distinct_id" step below
+      fails the job rather than letting a caller rediscover this.
+
+      The receiver's exact grouping expression is NOT restated here — it lives in
+      another repo and moves independently, so a copy in this file goes stale
+      silently (it already did once). docs/standards/connector-ci-e2e.md is the
+      single source of truth for it; read that before changing either side.
+
+      NOTE — do not write a literal GitHub expression (dollar-brace-brace) in
+      this file's description text. Composite-action manifests template those
+      strings at load time, where the inputs context does not exist, so the
+      whole manifest fails with "Unrecognized named-value: 'inputs'" and every
+      job that uses this action dies before its first step.
   wait-mode:
     required: false
     default: poll
@@ -78,31 +99,26 @@ inputs:
 runs:
   using: "composite"
   steps:
-    # Only callback mode needs the repo on disk (it runs .github/scripts/*.py
-    # directly). Poll mode's steps (codex-/return-dispatch, curl, gh api,
-    # github-script) never touch local files, and the calling job has
+    # Guards both modes, so it runs before the callback-mode checkout below and
+    # uses the caller's working tree instead — a job cannot reference this local
+    # composite action at all without having checked the repo out first.
+    - name: Require a distinct_id in workflow-inputs
+      shell: bash
+      env:
+        WORKFLOW_INPUTS: ${{ inputs.workflow-inputs }}
+      run: |
+        python3 .github/scripts/validate_dispatch_inputs.py \
+          --workflow-inputs "$WORKFLOW_INPUTS"
+
+    # Only callback mode needs its own checkout: it runs .github/scripts/*.py at
+    # a pinned ref. Poll mode's remaining steps (codex-/return-dispatch, curl,
+    # gh api, github-script) never touch local files, and the calling job has
     # already checked out the repo before invoking this local composite
     # action anyway — so this would be a pure no-op there.
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       if: inputs.wait-mode == 'callback'
       with:
         ref: ${{ github.ref }}
-
-    - name: Get the application-sdk commit SHA
-      if: inputs.wait-mode != 'callback'
-      shell: bash
-      run: |
-        if [ "${{ github.event.pull_request.head.sha }}" ]; then
-          echo "distinct_id=${{ github.event.pull_request.head.sha }}" >> $GITHUB_ENV
-        else
-          echo "distinct_id=${{ github.sha }}" >> $GITHUB_ENV
-        fi
-
-        if [ "${{ github.base_ref }}" ]; then
-          echo "base_branch=refs/heads/${{ github.base_ref }}" >> $GITHUB_ENV
-        else
-          echo "base_branch=${{ github.ref }}" >> $GITHUB_ENV
-        fi
 
     # ── callback mode: create the check, dispatch, exit — no polling ──────
     - name: Validate callback-mode inputs
@@ -139,35 +155,30 @@ runs:
           --details-url "https://github.com/atlanhq/${REPO_NAME}/actions" \
           --summary "Dispatched to ${REPO_NAME}; awaiting results — this check completes when that run finishes."
 
-    # Dispatches AND locates the resulting run (bounded: up to 600s, usually
-    # resolves in 1-3min) so the check above can get a real, clickable link
-    # instead of the connector's generic Actions tab. This is NOT the old
-    # busy-poll this callback pattern replaced — that polled run *status*
-    # for up to 2h; this only confirms the run exists and grabs its URL.
+    # Dispatches and returns the resulting run id/url so the check above can get
+    # a real, clickable link instead of the connector's generic Actions tab.
+    # Since v4 the run details come straight back from the dispatch response
+    # (github.blog/changelog/2026-02-19-workflow-dispatch-api-now-returns-run-ids),
+    # so this resolves in seconds — there is no locate, no polling, and no
+    # workflow_timeout_seconds to tune past a backlogged runner queue.
     #
-    # continue-on-error: unlike poll mode, a failure here (e.g. locate
-    # timing out under a backlogged runner queue) must not fail this job —
-    # the check-run already exists and the connector's own callback will
-    # still complete it correctly regardless of whether we found a pretty
-    # link for it. Worst case the check keeps its generic fallback URL, or
-    # (rare: the dispatch call itself failed) the check surfaces that later
-    # via the gate/watchdog timeout rather than an immediate job failure —
-    # an acceptable trade for not duplicating return-dispatch's own
-    # well-tested dispatch+locate logic.
-    - name: Dispatch connector workflow + locate the run
+    # continue-on-error: unlike poll mode, a failed dispatch here must not fail
+    # this job — the check-run already exists and the connector's own callback
+    # will still complete it correctly regardless of whether we captured a
+    # pretty link for it. Worst case the check keeps its generic fallback URL,
+    # or (the dispatch call itself failed) the check surfaces that later via
+    # the gate/watchdog timeout rather than an immediate job failure.
+    - name: Dispatch connector workflow
       id: return_dispatch_callback
       if: inputs.wait-mode == 'callback'
       continue-on-error: true
-      uses: codex-/return-dispatch@2e404d40b641ba1deb44be941660bb34828e4f6d # v4
+      uses: codex-/return-dispatch@2e404d40b641ba1deb44be941660bb34828e4f6d # v4.0.0
       with:
         token: "${{ inputs.github-token }}"
         ref: ${{ inputs.target-branch }}
         repo: ${{ inputs.repo-name }}
         owner: "atlanhq"
         workflow: "${{ inputs.workflow }}"
-        workflow_timeout_seconds: 600
-        workflow_job_steps_retry_seconds: 60
-        distinct_id: "${{ inputs.check-sha }}"
         workflow_inputs: ${{ inputs.workflow-inputs }}
 
     - name: Update check run with dispatched run link
@@ -189,7 +200,7 @@ runs:
     # ── poll mode (legacy): dispatch, busy-poll, fetch artifact, comment ──
     - name: Trigger E2E Integrations Tests
       if: inputs.wait-mode != 'callback'
-      uses: codex-/return-dispatch@2e404d40b641ba1deb44be941660bb34828e4f6d # v4
+      uses: codex-/return-dispatch@2e404d40b641ba1deb44be941660bb34828e4f6d # v4.0.0
       id: return_dispatch
       with:
         token: "${{ inputs.github-token }}"
@@ -197,13 +208,11 @@ runs:
         repo: ${{ inputs.repo-name }}
         owner: "atlanhq"
         workflow: "${{ inputs.workflow }}"
-        # 300s wasn't enough for the e2e-full path: the dispatched run
-        # spends 1–3 min in the GH-hosted runner queue before its
-        # `distinct-id <sha>` step (step #2) is even visible. Bump to
-        # 600s so return-dispatch can poll past the queue delay.
-        workflow_timeout_seconds: 600
-        workflow_job_steps_retry_seconds: 60
-        distinct_id: "${{ env.distinct_id }}"
+        # v4 returns run_id from the dispatch response itself, so the run is
+        # identified immediately — no step-name trawl to wait out, which is why
+        # the old workflow_timeout_seconds / workflow_job_steps_retry_seconds
+        # tuning (600s, to see past the dispatched run's 1–3 min queue delay)
+        # is gone. The busy-poll of run *status* below is unrelated and stays.
         workflow_inputs: ${{ inputs.workflow-inputs }}
 
     - name: Check the test logs using the below run URL

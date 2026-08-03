@@ -63,6 +63,22 @@ class ExecutionContext:
     # not carry parent info directly).
     parent_workflow_id: str = ""
     parent_run_id: str = ""
+    # Per-entrypoint application name (CNCT-93). Resolved by the log interceptor
+    # from the workflow's own input args (the contract toolkit stamps each DAG
+    # node's ``app_name`` into that node's ``inputs.args``) and propagated to
+    # activities via the ``x-app-name`` header. Read ONLY by the logger
+    # (``app_name`` stamp), so a multi-entrypoint bundle's logs attribute to the
+    # right app (e.g. ``powerbi-crawler`` vs the connector-level ``powerbi``).
+    # NOT read by any metric surface: ``get_metric_labels`` (record_metric) and
+    # the Temporal lifecycle (``temporal_*``) metrics both stay connector-level
+    # (``ATLAN_APPLICATION_NAME`` / the per-process OTel Resource ``app.name``)
+    # — a deliberate split documented in ``observability/utils.get_metric_labels``
+    # and ``build_otel_resource``. Empty when the workflow input carries no
+    # ``app_name`` (older / not-yet-regenerated apps) — the logger then falls
+    # back to ``ATLAN_APPLICATION_NAME``, preserving prior behaviour.
+    # Deliberately per-workflow (not inherited parent -> child): each bundle
+    # entrypoint resolves its own from its own input.
+    app_name: str = ""
 
 
 _execution_ctx: ContextVar[ExecutionContext] = ContextVar(

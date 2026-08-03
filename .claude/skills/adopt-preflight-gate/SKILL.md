@@ -32,7 +32,7 @@ optional_triggers:
   - "will this app break on SDK bump"
   - "size the preflight budget"
 owner: connector-platform-team
-last_updated: "2026-07-27"
+last_updated: "2026-07-30"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
@@ -386,6 +386,14 @@ Run these detections and report the bucket(s) before changing anything:
    attribute lost. Only when its step-4 evidence is green does phase 1
    continue; the daft migration and the gate adoption land as separable
    changes, in that order.
+
+   Applies to apps *already* past the cliff too: on every SDK release
+   3.20.0-3.25.0 the DuckDB transform raises `AttributeError:
+   DuckDBPyConnection ... has no attribute 'to_arrow_table'` when the lock
+   resolves `duckdb<1.5.0` (application-sdk#2940). The bump below cannot
+   escape it — the target version is inside that range. Pin
+   `duckdb>=1.5.0,<1.6.0` as a direct dependency, or wait for the release
+   carrying #2940; see `/migrate-off-daft` class 3b.
 1. **Always resolve the current latest SDK first.** `.info.version` alone
    may still be inside the release cooldown, so list versions with upload
    dates and pick the newest one older than 7 days:

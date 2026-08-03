@@ -11,9 +11,9 @@ COMMENTER_INTENT, etc.). Follow
 ## Critical Files to Read First
 
 1. `.mothership/pr-review/ORCHESTRATION.md` — your playbook (MANDATORY)
-2. `.mothership/pr-review/severity-rubric.yaml` — pattern → severity map
-3. `.mothership/pr-review/references/retro-log.md` — **MANDATORY: do-not-flag list.** Every candidate finding MUST be checked against the patterns here; matches are withdrawn silently with no inline comment or auto-fix.
-4. `.mothership/pr-review/references/*.md` + `modes/*.md` + `agents/*.md`
+2. `.mothership/pr-review/severity-rubric.yaml` — pattern → severity map + severity calibration and confidence floors (single source for both)
+3. `.mothership/pr-review/references/retro-log.md` — **MANDATORY: do-not-flag list.** Every candidate finding MUST be checked against the patterns here; matches are withdrawn silently with no inline comment or auto-fix. This is the ONLY do-not-flag list — no other file may carry one.
+4. `.mothership/pr-review/references/*.md` + `agents/*.md`
 5. For `contract-toolkit/**` PRs: `contract-toolkit/AGENTS.md`, `.mothership/pr-review/agents/toolkit-review.md`, and `.mothership/pr-review/references/toolkit-consumer-registry.md`
 
 PR metadata and the authoritative diff are fetched in Phase 0 via
@@ -70,8 +70,11 @@ Guardrail violations are ALWAYS reported regardless of confidence score.
 | G4 | Test Coverage | New public API without tests | NEEDS_FIXES (Critical) |
 | G5 | Secret Safety | Hardcoded secret, credential in logs | BLOCKED |
 | G6 | Breaking API | Public export removed without deprecation shim | NEEDS_FIXES (Critical) |
-| G7 | CI Must Pass | Required CI checks failing | Noted in review |
-| G8 | Branch Mergeable | Unresolvable conflicts | Status = failure |
+| G7 | Branch Mergeable | Unresolvable conflicts | Status = failure |
+
+CI is not a guardrail and not a verdict input: enforcement is owned by
+`sdk-review-downgrade-on-ci-failure.yml` (event-driven, race-free). The
+review only reports CI state on the summary's `**CI:**` line.
 
 ## Cross-Model Review Strategy
 
@@ -95,7 +98,11 @@ is read-only and never commits or pushes to the PR branch.
 Rover Direct's deterministic `session_id` (derived from the PR head SHA)
 means a re-trigger on the same HEAD resumes context; a new commit produces
 a new HEAD_SHA and a fresh sandbox. If a prior `<!-- SDK_REVIEW -->` summary
-exists, the run is a re-review (deltas tracked — see ORCHESTRATION.md §2e).
+exists, the run is a re-review (deltas tracked — see ORCHESTRATION.md §2e),
+and the prior summary's `<!-- REVIEWED_HEAD -->` marker scopes the review
+to the hunks that changed since that round (ORCHESTRATION.md steps 6c/11b) —
+a re-review re-verifies prior findings and reviews the delta; it does not
+re-run discovery over unchanged code.
 
 On a re-review, apply the **nit-convergence rules** (ORCHESTRATION.md §2e′)
 so the write-side `@sdk-resolve` loop can terminate: `Nit`-tier findings are
