@@ -17,9 +17,10 @@ review_guidelines: |
   - CredentialRef in contracts, CredentialResolver in @task only
 
   Ignore:
-  - Don't flag import ordering (isort with custom config)
-  - Don't flag missing docstrings on private methods (prefixed with _)
-  - Don't flag @pytest.mark.asyncio (asyncio_mode="auto" is correct)
+  - The single do-not-flag source is
+    .mothership/pr-review/references/retro-log.md, plus the by-design
+    patterns in .mothership/review-policy.md. Consult those; this file
+    does not maintain its own list.
 
 ignore_patterns:
   - "*.md"

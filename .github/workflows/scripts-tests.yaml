@@ -6,23 +6,30 @@ name: CI script tests
 # that logic must live in tested external scripts rather than inlined shell.
 # Until this workflow existed, .github/scripts/tests/ ran nowhere in CI.
 #
-# Not a path-gated *required* check (a path-filtered required check sits
-# pending forever when the paths are untouched). To make it blocking, add it
-# to branch protection AND gate it behind an always-concluding job — see
-# sdk-gate.yaml for that pattern.
+# Deliberately NOT path-filtered, even though most of the suite only covers
+# .github/scripts/. Some of these tests are cross-file guards that read YAML
+# living outside that directory and assert a property of it:
+#
+#   * test_every_env_write_call_site_masks_first / test_call_sites_are_the_expected_files
+#     read every .github/**/*.y*ml that invokes export_extra_env.py and fail if
+#     one writes $GITHUB_ENV without masking the values first (a credential leak
+#     — see docs/standards/ci.md).
+#   * test_composite_action_invokes_this_script_at_a_real_path resolves the
+#     script paths inside .github/actions/*/action.yaml.
+#
+# A filter would have to enumerate every file those guards inspect and stay in
+# sync with every call site added later — which is precisely the bookkeeping the
+# guards exist to remove. Any list we could write would silently stop firing on
+# the change it was written to catch. The suite is a sub-minute pytest run, so
+# running it unconditionally is cheaper than getting that list wrong.
+#
+# Not a *required* check yet. Now that it is unfiltered it can safely become one:
+# add it to branch protection (it concludes on every PR, so it will not sit
+# pending). The always-concluding-gate pattern in sdk-gate.yaml is no longer
+# needed for this workflow, but is still the right shape for path-filtered ones.
 
 on:
   pull_request:
-    paths:
-      - ".github/scripts/**"
-      # select_dapr_components.py / build_compose_chain.py live here (not
-      # under .github/scripts/) so the sdr-e2e composite can resolve them
-      # via github.action_path in every invocation context — see
-      # test_select_dapr_components.py's module docstring. Their tests
-      # still live under .github/scripts/tests/, so this path is only
-      # needed to make edits to the modules themselves trigger this gate.
-      - ".github/actions/sdr-e2e/*.py"
-      - ".github/workflows/scripts-tests.yaml"
 
 permissions:
   contents: read
@@ -40,7 +47,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
 
       - name: Run script tests
         run: uv run --extra workflows --with pytest python -m pytest .github/scripts/tests -q

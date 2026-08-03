@@ -1325,7 +1325,7 @@ All blocking DB calls inside the loop must be wrapped in `self.run_in_thread()` 
 
 `orjson`, `temporalio`, and `dapr` are in the `[workflows]` optional extra, not core dependencies. Without it the container fails with `ModuleNotFoundError: No module named 'orjson'`.
 ```toml
-"atlan-application-sdk[daft,iam-auth,pandas,workflows]"
+"atlan-application-sdk[sql,iam-auth,pandas,workflows]"
 ```
 
 ### Seeding credentials for local dev
@@ -1380,17 +1380,23 @@ transform_kwargs = {
 
 ### Transformer output format
 
-`QueryBasedTransformer.transform_metadata()` returns a Daft DataFrame with columns `typeName`, `status`, `attributes` — NOT `entity`. Write JSONL by iterating these:
+`QueryBasedTransformer.transform_metadata()` returns `list[dict] | None`
+(since SDK 3.20.0 — it executes on DuckDB, not daft). Each item carries
+`typeName`, `status`, `attributes` keys — NOT `entity`. Write JSONL by
+iterating directly:
 ```python
-result_dict = transformed.to_pydict()
-for i in range(len(result_dict["typeName"])):
-    entity = {
-        "typeName": result_dict["typeName"][i],
-        "status": result_dict["status"][i],
-        "attributes": result_dict["attributes"][i],
-    }
-    f.write(json.dumps(entity).encode() + b"\n")
+rows = transformer.transform_metadata(...)
+for entity in rows or []:
+    f.write(orjson.dumps(entity) + b"\n")
 ```
+If upgrading an app whose lock resolved SDK <3.20.0, run `/migrate-off-daft`
+first — it owns the daft-removal breakage taxonomy.
+
+On SDK 3.20.0-3.25.0 the DuckDB transform also cannot execute at all when the
+lock resolves `duckdb<1.5.0` (`AttributeError: DuckDBPyConnection ... has no
+attribute 'to_arrow_table'`, fixed by application-sdk#2940). Pin
+`duckdb>=1.5.0,<1.6.0` directly until the app is on a release carrying the
+fix — see `/migrate-off-daft` class 3b.
 
 ### Output paths computed internally
 

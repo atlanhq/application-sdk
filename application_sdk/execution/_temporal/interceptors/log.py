@@ -20,7 +20,9 @@ Folds the work of four legacy interceptors into one:
 from __future__ import annotations
 
 import dataclasses
+import posixpath
 import time
+import traceback as tb_module
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -65,6 +67,70 @@ logger = get_logger(__name__)
 # Must match _MAX_CHAIN_DEPTH in activities.py: an AppError sitting between the
 # walk cap and the sever cap would be silently invisible to OTel attributes.
 _MAX_CHAIN_WALK = 50
+
+# Cap the exception message folded into a lifecycle message body — the full
+# text still ships in exception.message / the traceback in exception.stacktrace.
+_FAILURE_MSG_MAX_CHARS = 200
+
+# Cap on the resolved app_name (CNCT-93). app_name used to be a per-process env
+# constant; now it is per-run data read from args[0] — an untrusted boundary
+# (anything with Temporal access can start a workflow) — and it is stamped on
+# every log line and OTLP log attribute. Bound it here — reject non-strings,
+# cap length — rather than trusting every caller. (Metric labels are NOT fed
+# from this value; get_metric_labels() stays on the env constant by design.)
+_APP_NAME_MAX_CHARS = 64
+
+
+def _lifecycle_message(event: str, subject: str) -> str:
+    """Build a lifecycle log message body (CNCT-105).
+
+    The event token (``activity.ended`` …) is the **exact message prefix** —
+    the stable, greppable contract for downstream consumers — and the
+    subject makes the line self-describing: before this, every lifecycle
+    line rendered as a bare token and a reader could not tell *which* task
+    started or *why* one failed without the (dropped) structured attributes.
+
+    The task-level tokens are ``activity.started``/``activity.ended`` (Temporal's
+    activity vocabulary — the unit an app author writes as a ``@task`` runs as a
+    Temporal activity); the workflow-level tokens are ``workflow.started``/
+    ``workflow.ended``. These literals are the stable contract operators match on;
+    see ``docs/concepts/monitoring.md`` (Lifecycle log lines).
+    """
+    return f"{event} {subject}".rstrip() if subject else event
+
+
+def _failure_suffix(exc: BaseException | None, attrs: dict[str, Any]) -> str:
+    """One-line failure summary for a lifecycle ERROR message body.
+
+    Shape: ``FAILED (<failure.code|exception type>): <message> — at
+    <file>:<line> in <fn>``. The root-cause frame is the innermost traceback
+    frame; the full stacktrace still rides ``exc_info=True`` → OTel
+    ``exception.stacktrace``. Deterministic (string handling only) — safe in
+    the Temporal workflow sandbox.
+    """
+    code = str(attrs.get("failure.code") or "") or (
+        type(exc).__name__ if exc is not None else "unknown"
+    )
+    msg = ""
+    if exc is not None:
+        # ``or [""]`` guards a whitespace-only message ("\n"), where strip()
+        # empties the string and splitlines() yields [] — an IndexError here
+        # would be swallowed by the caller's best-effort guard and take the
+        # whole ended log with it.
+        first_line = (str(exc).strip().splitlines() or [""])[0]
+        msg = first_line[:_FAILURE_MSG_MAX_CHARS]
+    frame = ""
+    try:
+        if exc is not None and exc.__traceback__ is not None:
+            last = tb_module.extract_tb(exc.__traceback__)[-1]
+            frame = (
+                f" — at {posixpath.basename(str(last.filename))}"
+                f":{last.lineno} in {last.name}"
+            )
+    # conformance: ignore[E004] best-effort message enrichment; a broken traceback must never block the ended log
+    except Exception:  # noqa: S110 — degrade to code+message, never drop the log
+        pass
+    return f"FAILED ({code}): {msg}{frame}" if msg else f"FAILED ({code}){frame}"
 
 
 def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
@@ -150,6 +216,12 @@ _HEADER_CORRELATION_ID_LEGACY = "correlation_id"
 _HEADER_PARENT_WORKFLOW_ID = "atlan-parent-workflow-id"
 _HEADER_PARENT_RUN_ID = "atlan-parent-run-id"
 
+# Per-entrypoint app_name (CNCT-93), propagated workflow -> activity so activity
+# logs carry the same app_name the workflow resolved from its own input args.
+# Child workflows do NOT read this header (each resolves its own app_name from
+# its own input), so there is no parent -> child inheritance.
+_HEADER_APP_NAME = "x-app-name"
+
 
 def _correlation_id_or_empty() -> str:
     ctx = get_correlation_context()
@@ -181,8 +253,14 @@ class _LogWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
         correlation_id = self._inbound._correlation_id
         parent_workflow_id = self._inbound._parent_workflow_id
         parent_run_id = self._inbound._parent_run_id
+        app_name = self._inbound._app_name
 
-        if not correlation_id and not parent_workflow_id and not parent_run_id:
+        if (
+            not correlation_id
+            and not parent_workflow_id
+            and not parent_run_id
+            and not app_name
+        ):
             return dict(headers)
         try:
             converter = default_converter().payload_converter
@@ -191,6 +269,11 @@ class _LogWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
                 new_headers[_HEADER_CORRELATION_ID] = converter.to_payload(
                     correlation_id
                 )
+            # Propagate the workflow's resolved app_name so its activities'
+            # logs carry it. A child workflow will receive this header too but
+            # ignores it (it resolves app_name from its own input args).
+            if app_name:
+                new_headers[_HEADER_APP_NAME] = converter.to_payload(app_name)
             if parent_workflow_id:
                 new_headers[_HEADER_PARENT_WORKFLOW_ID] = converter.to_payload(
                     parent_workflow_id
@@ -226,6 +309,10 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         # interceptor instance per workflow run).
         self._parent_workflow_id: str = ""
         self._parent_run_id: str = ""
+        # CNCT-93: the workflow's own app_name, resolved from its input args.
+        # The outbound interceptor injects it into activity headers so activity
+        # logs inherit it. Per-workflow-execution.
+        self._app_name: str = ""
 
     def init(self, outbound: WorkflowOutboundInterceptor) -> None:
         super().init(_LogWorkflowOutboundInterceptor(outbound, self))
@@ -303,8 +390,75 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 "Failed to read correlation_id from workflow args", exc_info=True
             )
 
-        # Priority 4: top-level workflow — generate a fresh correlation ID.
+        # Priority 4: top-level workflow with no caller-supplied correlation —
+        # default to this run's Temporal run_id. A random uuid4 here (the
+        # pre-CNCT-104 behavior) produced an identity that existed nowhere
+        # else in the platform: the run page queries logs by the caller's
+        # correlation_id, so uuid4-stamped runs rendered as "no logs". The
+        # run_id is at least discoverable from run metadata, and it matches
+        # the documented invariant ("correlation_id defaults to the Temporal
+        # run_id") that app/base.py and AppContext already implement — every
+        # layer now agrees on the same fallback.
+        try:
+            run_id = workflow.info().run_id
+            if run_id:
+                return str(run_id)
+        except Exception:
+            logger.warning(
+                "Failed to read workflow run_id for correlation fallback",
+                exc_info=True,
+            )
+        # Defensive last resort — should be unreachable inside a workflow.
         return str(uuid4())
+
+    def _resolve_app_name(self, input: ExecuteWorkflowInput) -> str:
+        """Resolve this workflow's ``app_name`` from its own input args (CNCT-93).
+
+        The contract toolkit emits each DAG node's ``app_name`` into that node's
+        ``inputs.args``, so a multi-entrypoint bundle's crawler / miner / publish
+        each carry their own value. We read it **only from the workflow's own
+        first argument** — never from the memo or an inherited header — so there
+        is no parent -> child inheritance (each entrypoint is its own workflow
+        with its own input). Returns ``""`` when absent (older / not-yet-
+        regenerated apps); the logger then falls back to ``ATLAN_APPLICATION_NAME``.
+
+        Mirrors the args branch of :meth:`_resolve_correlation_id` — handles a
+        dict first arg, a typed object with an ``app_name`` attribute, and a
+        Pydantic v2 ``extra='allow'`` model where it lands in ``__pydantic_extra__``.
+
+        The value is bounded at this boundary because it comes from an
+        untrusted source (whatever started the workflow) and is stamped on
+        every log line and OTLP log attribute. The two cases differ:
+
+        * A non-string (or empty) value is **rejected** — returns ``""``, so the
+          logger falls back to ``ATLAN_APPLICATION_NAME``. It is never coerced
+          via ``str()``, which would stamp an arbitrary object's repr (e.g. a
+          memory address) as the attribution value.
+        * An oversized string is **truncated** to ``_APP_NAME_MAX_CHARS``, not
+          rejected: a too-long name is still the right attribution, just
+          abbreviated.
+
+        Truncation is lossy, so two entrypoints sharing a 64-character prefix
+        would collapse onto one attribution value. Harmless for today's short
+        slugs (``powerbi-crawler``, ``powerbi-miner``), and the bound is worth
+        more than the collision costs — but that is the tradeoff the cap makes.
+        """
+        try:
+            if input.args:
+                first = input.args[0]
+                if isinstance(first, dict):
+                    val = first.get("app_name")
+                else:
+                    val = getattr(first, "app_name", None)
+                    if not val:
+                        extras = getattr(first, "__pydantic_extra__", None)
+                        if isinstance(extras, dict):
+                            val = extras.get("app_name")
+                if isinstance(val, str) and val:
+                    return val[:_APP_NAME_MAX_CHARS]
+        except Exception:
+            logger.warning("Failed to read app_name from workflow args", exc_info=True)
+        return ""
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
         # State setup (ContextVars + interceptor-instance attrs) must run on
@@ -323,6 +477,14 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         self._parent_workflow_id = (parent.workflow_id if parent else "") or ""
         self._parent_run_id = (parent.run_id if parent else "") or ""
 
+        # CNCT-93: resolve the per-entrypoint app_name from this workflow's own
+        # input args (empty when absent) BEFORE building the ExecutionContext, so
+        # it rides on that single shared context read by the logger. Cached on
+        # the instance too, for the outbound interceptor to propagate to
+        # activities via the x-app-name header.
+        app_name = self._resolve_app_name(input)
+        self._app_name = app_name
+
         set_execution_context(
             ExecutionContext(
                 execution_type="workflow",
@@ -334,6 +496,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 attempt=info.attempt or 0,
                 parent_workflow_id=self._parent_workflow_id,
                 parent_run_id=self._parent_run_id,
+                app_name=app_name,
             )
         )
 
@@ -362,7 +525,10 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         }
 
         try:
-            logger.info("workflow.started", **identity)
+            started_msg = _lifecycle_message(
+                "workflow.started", str(identity["temporal.workflow.type"])
+            )
+            logger.info(started_msg, **identity)
         # conformance: ignore[E004] best-effort observability guard; logging failure must never block workflow execution
         except Exception:  # noqa: S110 — best-effort observability; never block the workflow on logging
             pass
@@ -385,6 +551,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 "temporal.workflow.duration_ms": duration_ms,
             }
             try:
+                wf_type = str(identity["temporal.workflow.type"])
                 if status == "ERROR":
                     ended_attrs.update(_extract_failure_attrs(exc_caught))
                     # A deliberate preflight-gate block is an expected, typed
@@ -392,11 +559,21 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     # classification is already in ended_attrs via the failure
                     # details. Real failures keep the ERROR traceback.
                     if is_preflight_block(exc_caught):
-                        logger.warning("workflow.ended", **ended_attrs)
+                        blocked_msg = _lifecycle_message(
+                            "workflow.ended", f"{wf_type} BLOCKED (preflight gate)"
+                        )
+                        logger.warning(blocked_msg, **ended_attrs)
                     else:
-                        logger.error("workflow.ended", exc_info=True, **ended_attrs)
+                        failed_msg = _lifecycle_message(
+                            "workflow.ended",
+                            f"{wf_type} {_failure_suffix(exc_caught, ended_attrs)}",
+                        )
+                        logger.error(failed_msg, exc_info=True, **ended_attrs)
                 else:
-                    logger.info("workflow.ended", **ended_attrs)
+                    ok_msg = _lifecycle_message(
+                        "workflow.ended", f"{wf_type} OK ({duration_ms}ms)"
+                    )
+                    logger.info(ok_msg, **ended_attrs)
             # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block workflow completion
             except Exception:  # noqa: S110 — best-effort observability; never block the workflow on logging
                 pass
@@ -432,6 +609,29 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                 "Failed to read parent identity headers in activity", exc_info=True
             )
 
+        # CNCT-93: inherit the parent workflow's app_name (activity.Info exposes
+        # no app_name of its own) via the x-app-name header the workflow's
+        # outbound interceptor injected, so activity.started/ended and @task
+        # app-code logs stamp the same per-entrypoint app_name the workflow
+        # resolved. (All metric surfaces — get_metric_labels() and the Temporal
+        # lifecycle temporal_* families — stay connector-level by design; only
+        # logs carry the per-entrypoint value.) Read BEFORE building the
+        # ExecutionContext so it rides on that shared context. Absent -> the
+        # logger falls back to ATLAN_APPLICATION_NAME.
+        app_name = ""
+        try:
+            payload = input.headers.get(_HEADER_APP_NAME)
+            if payload is not None:
+                converter = default_converter().payload_converter
+                decoded = converter.from_payload(payload, type_hint=str)
+                # Bound the header value the same way the workflow bounds it
+                # before it reaches the log fields — reject non-strings, cap
+                # length — rather than trusting the wire payload.
+                if isinstance(decoded, str) and decoded:
+                    app_name = decoded[:_APP_NAME_MAX_CHARS]
+        except Exception:
+            logger.warning("Failed to read app_name header in activity", exc_info=True)
+
         set_execution_context(
             ExecutionContext(
                 execution_type="activity",
@@ -443,6 +643,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                 attempt=info.attempt or 0,
                 parent_workflow_id=parent_workflow_id,
                 parent_run_id=parent_run_id,
+                app_name=app_name,
             )
         )
 
@@ -479,7 +680,10 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
         }
 
         try:
-            logger.info("activity.started", **identity)
+            started_msg = _lifecycle_message(
+                "activity.started", str(identity["temporal.activity.type"])
+            )
+            logger.info(started_msg, **identity)
         # conformance: ignore[E004] best-effort observability guard; logging failure must never block activity execution
         except Exception:  # noqa: S110 — best-effort observability; never block the activity on logging
             pass
@@ -502,17 +706,28 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                 "temporal.activity.duration_ms": duration_ms,
             }
             try:
+                act_type = str(identity["temporal.activity.type"])
                 if status == "ERROR":
                     ended_attrs.update(_extract_failure_attrs(exc_caught))
                     # A deliberate preflight-gate block logs terse (no stack);
                     # the activity's Temporal redness comes from the raise, not
                     # the log. Every other failure keeps the ERROR traceback.
                     if is_preflight_block(exc_caught):
-                        logger.warning("activity.ended", **ended_attrs)
+                        blocked_msg = _lifecycle_message(
+                            "activity.ended", f"{act_type} BLOCKED (preflight gate)"
+                        )
+                        logger.warning(blocked_msg, **ended_attrs)
                     else:
-                        logger.error("activity.ended", exc_info=True, **ended_attrs)
+                        failed_msg = _lifecycle_message(
+                            "activity.ended",
+                            f"{act_type} {_failure_suffix(exc_caught, ended_attrs)}",
+                        )
+                        logger.error(failed_msg, exc_info=True, **ended_attrs)
                 else:
-                    logger.info("activity.ended", **ended_attrs)
+                    ok_msg = _lifecycle_message(
+                        "activity.ended", f"{act_type} OK ({duration_ms}ms)"
+                    )
+                    logger.info(ok_msg, **ended_attrs)
             # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block activity completion
             except Exception:  # noqa: S110 — best-effort observability; never block the activity on logging
                 pass

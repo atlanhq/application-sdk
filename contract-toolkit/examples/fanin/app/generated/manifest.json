@@ -12,6 +12,7 @@
         "argo_workflow_slug": "",
         "task_queue": "atlan-fanin-{deployment_name}",
         "args": {
+          "app_name": "fanin",
           "credential": "{{credential}}",
           "agent_json": "{{agent-json}}",
           "credential_guid": "{{credential-guid}}"
@@ -40,7 +41,8 @@
           "connection_cache_enabled": true,
           "connection_cache_via_app_enabled": true,
           "current_state_enabled": true,
-          "current_state_via_app_enabled": true
+          "current_state_via_app_enabled": true,
+          "app_name": "publish"
         }
       },
       "depends_on": {
@@ -58,7 +60,9 @@
         "workflow_type": "LeftWorkflow",
         "app_name": "automation-engine",
         "task_queue": "atlan-automation-engine-{deployment_name}",
-        "args": {}
+        "args": {
+          "app_name": "automation-engine"
+        }
       },
       "depends_on": {
         "node_id": "extract"
@@ -75,7 +79,9 @@
         "workflow_type": "RightWorkflow",
         "app_name": "automation-engine",
         "task_queue": "atlan-automation-engine-{deployment_name}",
-        "args": {}
+        "args": {
+          "app_name": "automation-engine"
+        }
       },
       "depends_on": {
         "node_id": "extract"
@@ -92,7 +98,9 @@
         "workflow_type": "JoinWorkflow",
         "app_name": "automation-engine",
         "task_queue": "atlan-automation-engine-{deployment_name}",
-        "args": {}
+        "args": {
+          "app_name": "automation-engine"
+        }
       },
       "depends_on": {
         "and_conditions": [
@@ -118,7 +126,9 @@
         "workflow_type": "RecoverWorkflow",
         "app_name": "automation-engine",
         "task_queue": "atlan-automation-engine-{deployment_name}",
-        "args": {}
+        "args": {
+          "app_name": "automation-engine"
+        }
       },
       "depends_on": {
         "or_conditions": [

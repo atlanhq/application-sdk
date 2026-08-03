@@ -12,6 +12,7 @@
         "argo_workflow_slug": "",
         "task_queue": "atlan-behind-the-scenes-{deployment_name}",
         "args": {
+          "app_name": "behind-the-scenes",
           "credential": "{{credential}}",
           "agent_json": "{{agent-json}}",
           "target": "{{target}}"

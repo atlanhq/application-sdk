@@ -43,6 +43,20 @@ inputs:
 runs:
   using: "composite"
   steps:
+    # Some repos have a dependency with no manylinux wheel (e.g. pykerberos),
+    # which uv builds from sdist and which needs its C headers on the runner —
+    # so the resolved-env sync below fails without them. Those repos declare the
+    # apt packages in .github/ci-system-deps.txt (written by
+    # `atlan-application-sdk-conformance bootstrap --system-deps "..."`); the
+    # hashFiles guard makes this a no-op everywhere else.
+    - name: "Install caller system dependencies"
+      if: inputs.needs-env == 'true' && hashFiles('.github/ci-system-deps.txt') != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        xargs -r sudo apt-get install -y < .github/ci-system-deps.txt
+
     - name: "Sync resolved env"
       if: inputs.needs-env == 'true'
       shell: bash

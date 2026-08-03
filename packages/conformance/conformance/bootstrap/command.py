@@ -154,6 +154,28 @@ def _sync_renovate_json(
     return [(renovate_dest, "exists")]
 
 
+def _sync_ci_system_deps(
+    root: pathlib.Path, system_deps: str
+) -> list[tuple[pathlib.Path, str]]:
+    """.github/ci-system-deps.txt — the apt packages CI installs before ``uv sync``.
+
+    checks.yml renders the packages inline, but the conformance suite's D-series
+    leg syncs the caller's resolved environment inside the *vendored*
+    ``run-conformance-detect`` action, where no rendered per-repo value can
+    reach it. That step reads this file instead, guarded by ``hashFiles`` so it
+    no-ops in every repo that doesn't need it. Same value, two surfaces, one
+    flag (``--system-deps``).
+
+    Only written when there are packages to declare: an empty file would make
+    ``hashFiles`` non-empty and turn the guarded step into a pointless
+    ``apt-get update`` on every D-leg run.
+    """
+    dest = root / ".github" / "ci-system-deps.txt"
+    if not system_deps:
+        return []
+    return [(dest, _bootstrap_file(dest, f"{system_deps}\n"))]
+
+
 def _sync_gitignore(root: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
     """.gitignore — write-if-absent scaffold. C003 warns about missing entries."""
     gitignore_dest = root / ".gitignore"
@@ -282,6 +304,8 @@ def main(argv: list[str]) -> int:
     for path, status in _sync_tests_yaml(root, kwargs):
         _record(path, status)
     for path, status in _sync_renovate_json(root, kwargs, force_renovate):
+        _record(path, status)
+    for path, status in _sync_ci_system_deps(root, kwargs["system_deps"]):
         _record(path, status)
     for path, status in _sync_gitignore(root):
         _record(path, status)

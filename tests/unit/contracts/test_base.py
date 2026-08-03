@@ -657,6 +657,36 @@ class TestUnknownKeyWarning:
 
         mock_logger.warning.assert_not_called()
 
+    def test_app_name_is_declared_and_survives_continue_as_new(
+        self, _reset_unknown_keys_seen: Any
+    ) -> None:
+        # CNCT-93: app_name is a declared field, so the toolkit-stamped
+        # inputs.args.app_name (1) does NOT trip the unknown-key drift warning
+        # that points authors back at the manifest, and (2) survives
+        # continue-as-new (model_dump preserves it) instead of being silently
+        # dropped mid-run.
+        class MyInput(Input):
+            name: str = ""
+
+        with patch("application_sdk.contracts.base._logger") as mock_logger:
+            obj = MyInput.model_validate({"name": "ok", "app_name": "powerbi-crawler"})
+
+        mock_logger.warning.assert_not_called()
+        assert obj.app_name == "powerbi-crawler"
+        # continue_with() re-serializes via model_dump — app_name must persist.
+        assert obj.model_dump()["app_name"] == "powerbi-crawler"
+
+    def test_app_name_excluded_from_config_hash(
+        self, _reset_unknown_keys_seen: Any
+    ) -> None:
+        # A telemetry-only label must not change an app's checkpoint identity.
+        class MyInput(Input):
+            name: str = ""
+
+        a = MyInput(name="x", app_name="powerbi-crawler")
+        b = MyInput(name="x", app_name="powerbi-miner")
+        assert a.config_hash() == b.config_hash()
+
     def test_no_warning_when_extra_allow(self, _reset_unknown_keys_seen: Any) -> None:
         class PermissiveInput(Input):
             model_config = ConfigDict(extra="allow")

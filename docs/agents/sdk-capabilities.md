@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.24.1
-source-sha:    b7db0fe6c87c5b883187e215e5ecc11a438d5514
-source-date:   2026-07-27T23:07:04+05:30
+sdk-version:   3.25.0
+source-sha:    5eb4071168018c34fe35ab3af23cdecfff09c40c
+source-date:   2026-07-31T12:34:50+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2525,6 +2525,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `workflow_id: str` `= ''` — Temporal workflow ID for the current run.
   - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
 - **Defined in:** `application_sdk/contracts/base.py`
 
 #### `Output`
