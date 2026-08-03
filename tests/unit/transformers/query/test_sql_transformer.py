@@ -4,6 +4,7 @@ from unittest.mock import mock_open, patch
 import pyarrow as pa
 import pytest
 
+from application_sdk.transformers import query as query_module
 from application_sdk.transformers.common.utils import flatten_yaml_columns
 from application_sdk.transformers.query import QueryBasedTransformer
 from application_sdk.transformers.query.errors import (
@@ -142,6 +143,145 @@ def test_generate_sql_query(
         """\n            SELECT\n                table_name AS "attributes.name",concat(connection_qualified_name, \'/\', table_catalog, \'/\', table_schema, \'/\', table_name) AS "attributes.qualifiedName",case when table_type = \'TABLE\' then \'table\' when table_type = \'VIEW\' then \'view\' else table_type end AS "attributes.type","attributes.literal" AS "attributes.literal"\n            FROM dataframe\n            """
     )
     assert result == expected_result
+
+
+def _dropped_field_names(mock_logger):
+    """Extract the field name from each dropped-field warning the transformer emitted."""
+    return [call.args[1] for call in mock_logger.warning.call_args_list]
+
+
+def test_quoted_sql_keyword_source_query_is_dropped_with_a_warning(
+    sql_transformer, sample_dataframe
+):
+    """A SQL keyword authored as a quoted YAML string is dropped -- but no longer silently.
+
+    ``source_query: "FALSE"`` parses to the Python string ``'FALSE'``, which is neither an
+    available column nor a recognised literal (it is not SQL-quoted), so the field never
+    reaches the generated SQL. Correct authoring is the unquoted YAML scalar ``FALSE``.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {
+                "attributes": {
+                    "name": {"source_query": "table_name"},
+                    "propagate": {"source_query": "FALSE"},
+                    "partitionOrder": {"source_query": "NULL"},
+                }
+            }
+        )
+    }
+
+    with patch.object(query_module, "logger") as mock_logger:
+        columns, literal_columns = sql_transformer.get_sql_column_expressions(
+            template, sample_dataframe, {}, yaml_path="tag_attachment.yaml"
+        )
+
+    assert columns == ['table_name AS "attributes.name"']
+    assert literal_columns is None
+
+    assert _dropped_field_names(mock_logger) == [
+        "attributes.propagate",
+        "attributes.partitionOrder",
+    ]
+    warning_text = mock_logger.warning.call_args_list[0].args[0] % tuple(
+        mock_logger.warning.call_args_list[0].args[1:]
+    )
+    assert "attributes.propagate" in warning_text
+    assert "tag_attachment.yaml" in warning_text
+    assert "FALSE" in warning_text
+
+
+def test_unquoted_yaml_scalars_are_published_as_literals_without_warning(
+    sql_transformer, sample_dataframe
+):
+    """The correct authoring of the fields above: YAML scalars hit the literal branch."""
+    template = {
+        "columns": flatten_yaml_columns(
+            {
+                "attributes": {
+                    "propagate": {"source_query": False},
+                    "partitionOrder": {"source_query": None},
+                }
+            }
+        )
+    }
+
+    with patch.object(query_module, "logger") as mock_logger:
+        columns, literal_columns = sql_transformer.get_sql_column_expressions(
+            template, sample_dataframe, {}
+        )
+
+    assert columns == [
+        '"attributes.propagate" AS "attributes.propagate"',
+        '"attributes.partitionOrder" AS "attributes.partitionOrder"',
+    ]
+    assert len(literal_columns) == 2
+    mock_logger.warning.assert_not_called()
+
+
+def test_unresolvable_source_column_is_dropped_with_a_warning(
+    sql_transformer, sample_dataframe
+):
+    """The broader class: a field whose declared source columns are absent from the input."""
+    template = {
+        "columns": flatten_yaml_columns(
+            {
+                "attributes": {
+                    "remoteId": {
+                        "source_query": "upper(missing_column)",
+                        "source_columns": ["missing_column"],
+                    },
+                }
+            }
+        )
+    }
+
+    with patch.object(query_module, "logger") as mock_logger:
+        columns, literal_columns = sql_transformer.get_sql_column_expressions(
+            template, sample_dataframe, {}
+        )
+
+    assert columns == []
+    assert literal_columns is None
+    assert _dropped_field_names(mock_logger) == ["attributes.remoteId"]
+
+
+def test_no_warning_when_every_declared_field_resolves(
+    sql_transformer, sample_dataframe, sample_yaml_template
+):
+    """Guard against false positives: a fully-resolvable template must stay quiet."""
+    sample_yaml_template["columns"] = flatten_yaml_columns(
+        sample_yaml_template["columns"]
+    )
+
+    with patch.object(query_module, "logger") as mock_logger:
+        columns, _ = sql_transformer.get_sql_column_expressions(
+            sample_yaml_template, sample_dataframe, {}
+        )
+
+    assert len(columns) == 4
+    mock_logger.warning.assert_not_called()
+
+
+def test_generate_sql_query_threads_the_template_path_into_the_warning(
+    sql_transformer, sample_dataframe
+):
+    """The warning must name the template file, which only generate_sql_query knows."""
+    template = {"columns": {"attributes": {"propagate": {"source_query": "FALSE"}}}}
+
+    with (
+        patch("builtins.open", new_callable=mock_open),
+        patch("yaml.safe_load", return_value=template),
+        patch.object(query_module, "logger") as mock_logger,
+    ):
+        sql_transformer.generate_sql_query(
+            "app/transform/templates/tag_attachment.yaml", sample_dataframe, {}
+        )
+
+    assert (
+        "app/transform/templates/tag_attachment.yaml"
+        in mock_logger.warning.call_args.args
+    )
 
 
 def test_build_struct_with_none_level(sql_transformer):

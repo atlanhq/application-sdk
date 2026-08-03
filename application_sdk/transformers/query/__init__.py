@@ -128,13 +128,20 @@ class QueryBasedTransformer(TransformerInterface):
         sql_template: dict[str, Any],
         dataframe: pa.Table,
         default_attributes: dict[str, Any],
+        yaml_path: str | None = None,
     ) -> tuple[list[str], list[dict[str, str]] | None]:
         """Get the columns and literal columns for the SQL query.
+
+        A declared field that resolves to neither an available column nor a recognised
+        literal cannot be emitted, and is reported at WARNING rather than dropped
+        silently -- the resulting symptom is an attribute missing from published
+        output, which nothing downstream can detect.
 
         Args:
             sql_template (Dict[str, Any]): The SQL template
             dataframe (pa.Table): The Table to get columns from
             default_attributes (Dict[str, Any]): The default attributes to add to the SQL query
+            yaml_path (str | None): Template path, used to identify the template in warnings
 
         Returns:
             A list of column expressions for the SQL query
@@ -165,6 +172,17 @@ class QueryBasedTransformer(TransformerInterface):
                 literal_columns.append(column)
                 columns.append(self.convert_to_sql_expression(column, is_literal=True))
 
+            else:
+                logger.warning(
+                    "Template field %r dropped from %s: source_query %r is neither an "
+                    "available column nor a recognised literal, so the attribute will "
+                    "be absent from published output. A bare SQL keyword must be "
+                    "authored as an unquoted YAML scalar, not a quoted string.",
+                    column["name"],
+                    yaml_path or "<template>",
+                    column["source_query"],
+                )
+
         return columns, literal_columns or None
 
     def generate_sql_query(
@@ -190,7 +208,7 @@ class QueryBasedTransformer(TransformerInterface):
         sql_template["columns"] = flatten_yaml_columns(sql_template["columns"])
 
         columns, literal_columns = self.get_sql_column_expressions(
-            sql_template, dataframe, default_attributes
+            sql_template, dataframe, default_attributes, yaml_path=yaml_path
         )
 
         sql_query = textwrap.dedent(f"""
