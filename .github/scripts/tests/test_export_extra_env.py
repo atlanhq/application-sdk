@@ -560,28 +560,54 @@ _CALL_SITE_INVOCATION = re.compile(
 # direction — see `_call_site_files`.
 _SCRIPT_MENTION = "export_extra_env"
 
+# File types under .github/ that can carry a `run:` payload. Not YAML only: both
+# composites already delegate `run:` logic to sibling shell scripts
+# (`repin-application-sdk.sh`, `with-retry.sh`), and the CI standard in
+# docs/standards/ci.md actively pushes new logic out of workflow YAML and into
+# .github/scripts/. A caller that lands in a .sh or .py helper has to be
+# discovered there or the guarantee is YAML-only. `*.py` does not match `.pyc`,
+# so __pycache__ stays out.
+_CALL_SITE_SUFFIXES = ("*.y*ml", "*.sh", "*.py")
+
 # Files under .github/ that name the script in prose without running it. Kept as
 # a named exclusion rather than encoded into the predicate, and validated below:
 # if a mention here ever appears outside a comment, the exclusion stops applying
 # and the file is audited like any other caller.
 _PROSE_ONLY_FILES = {".github/workflows/scripts-tests.yaml"}
 
+# The script and its own tests are the implementation, not callers of it. Both
+# contain literal `>> "$GITHUB_ENV"` invocations — in the module docstring's usage
+# example and in this file's parametrized fixtures — which are not comments and so
+# would be audited as unmasked call sites once the glob reaches .py files.
+# Computed rather than spelled out: the paths cannot drift, and the exclusion
+# cannot quietly widen to cover some third file.
+_NOT_A_CALLER = frozenset({_MODULE_PATH.resolve(), Path(__file__).resolve()})
+
 
 def _live_mentions(text: str) -> list[str]:
-    """Lines naming the script that are not YAML comments."""
+    """Lines naming the script that are not comments.
+
+    Splits on ``\\n`` directly rather than via ``_runner_lines()``. The two agree
+    today — ``Path.read_text()`` has already normalised line endings — but
+    ``_runner_lines`` exists to model the runner's *log-stream* semantics, and a
+    future edit to it made for a masking reason should not silently change which
+    files count as call sites. ``#`` is the comment marker in all three of the
+    file types scanned (YAML, shell, Python).
+    """
     return [
         line
-        for line in _runner_lines(text)
+        for line in text.split("\n")
         if _SCRIPT_MENTION in line and not line.lstrip().startswith("#")
     ]
 
 
 def _call_site_files() -> list[Path]:
-    """Every ``.github/**`` YAML that could run the script.
+    """Every file under ``.github/`` that could run the script.
 
     The predicate is deliberately the **broadest** thing that works: any
     non-comment line naming ``export_extra_env``, with no interpreter and no
-    ``.py`` required. The two failure directions are not symmetric:
+    ``.py`` required, in any file type that can carry a ``run:`` payload. The two
+    failure directions are not symmetric:
 
     * A false positive — prose mistaken for a call site — fails **loud and
       safe**. It trips the ordering assertion below, which is how
@@ -591,36 +617,47 @@ def _call_site_files() -> list[Path]:
       ``$GITHUB_ENV`` with no ``--mask-only`` reintroduces the credential leak
       with every guard passing.
 
-    So this must not require ``python3`` on the same line as the filename, which
-    would miss ``uv run python …/export_extra_env.py`` (the shape
-    scripts-tests.yaml itself uses to run pytest), ``python …`` without the
-    ``3``, ``python3 -m export_extra_env`` (no ``.py`` at all), and a two-line
-    ``SCRIPT="…/export_extra_env.py"`` + ``python3 "$SCRIPT"`` indirection.
+    Two things follow. It must not require ``python3`` on the same line as the
+    filename, which would miss ``uv run python …/export_extra_env.py`` (the shape
+    scripts-tests.yaml itself uses to run pytest), ``python …`` without the ``3``,
+    ``python3 -m export_extra_env`` (no ``.py`` at all), and a two-line
+    ``SCRIPT="…/export_extra_env.py"`` + ``python3 "$SCRIPT"`` indirection. And it
+    must not scan YAML only: a composite whose ``action.yaml`` says
+    ``run: ${{ github.action_path }}/leak.sh`` puts the invocation in a file no
+    YAML glob opens, which is the direction this repo's own CI standard pushes new
+    shell logic.
 
-    Prose is handled by the named ``_PROSE_ONLY_FILES`` exclusion instead, which
-    is one line and self-validating: an excluded file that starts naming the
-    script outside a comment stops being excluded, so the exclusion cannot
-    quietly grow to cover a real caller.
+    Two exclusions, both narrower than the predicate and both validated so they
+    cannot rot into holes:
+
+    * ``_PROSE_ONLY_FILES`` — names the script in a comment only. Asserted to have
+      no live mention, so an excluded file that starts invoking it stops being
+      excluded.
+    * ``_NOT_A_CALLER`` — the script itself and this test file. Computed from
+      ``_MODULE_PATH`` and ``__file__``, so it cannot drift or widen.
     """
-    workflow_dir = _REPO_ROOT / ".github"
+    github_dir = _REPO_ROOT / ".github"
     found: list[Path] = []
-    for path in sorted(workflow_dir.rglob("*.y*ml")):
-        text = path.read_text()
-        if _SCRIPT_MENTION not in text:
-            continue
-        where = path.relative_to(_REPO_ROOT).as_posix()
-        if where in _PROSE_ONLY_FILES:
-            live = _live_mentions(text)
-            assert not live, (
-                f"{where} is on the prose-only exclusion list but now names the "
-                f"script outside a comment: {live}. If it genuinely invokes the "
-                "script, drop it from _PROSE_ONLY_FILES so it is audited like "
-                "any other call site."
-            )
-            continue
-        found.append(path)
+    for pattern in _CALL_SITE_SUFFIXES:
+        for path in github_dir.rglob(pattern):
+            text = path.read_text()
+            if _SCRIPT_MENTION not in text:
+                continue
+            if path.resolve() in _NOT_A_CALLER:
+                continue
+            where = path.relative_to(_REPO_ROOT).as_posix()
+            if where in _PROSE_ONLY_FILES:
+                live = _live_mentions(text)
+                assert not live, (
+                    f"{where} is on the prose-only exclusion list but now names "
+                    f"the script outside a comment: {live}. If it genuinely "
+                    "invokes the script, drop it from _PROSE_ONLY_FILES so it is "
+                    "audited like any other call site."
+                )
+                continue
+            found.append(path)
     assert found, "no call site found — did the script move or lose its callers?"
-    return found
+    return sorted(set(found))
 
 
 def test_call_sites_are_the_expected_files():
@@ -669,11 +706,16 @@ def test_call_sites_are_the_expected_files():
 def test_an_unmasked_caller_is_never_discovered_green(tmp_path, monkeypatch, shape):
     """Every plausible spelling of a write-only caller must fail, not pass.
 
-    The discovery predicate used to require the literal `python3` on the same
-    line as `export_extra_env.py`. Each shape below writes `$GITHUB_ENV` with no
-    `--mask-only` — i.e. reintroduces the credential leak — and every one of them
-    evaded that predicate, so it was never added to `_call_site_files()` and both
-    ordering guards passed green.
+    Each shape writes `$GITHUB_ENV` with no `--mask-only` — i.e. reintroduces the
+    credential leak — and must be both discovered and rejected.
+
+    Four of the six (`python-without-the-3`, `uv-run-python`, `dash-m-no-dot-py`,
+    `indirect-via-shell-var`) evaded the earlier predicate, which required the
+    literal `python3` on the same line as `export_extra_env.py`; they are the
+    evidence for keeping discovery interpreter-agnostic. The other two
+    (`python3`, `single-line-no-continuation`) matched it too and are baseline
+    coverage, not evidence of the widening — they are here so the happy path and
+    the unparseable-single-line path stay pinned alongside the rest.
 
     The failure direction matters more than the message: a shape the assertions
     cannot parse must fail *loudly* (unreadable-line parity), never be skipped.
@@ -689,7 +731,63 @@ def test_an_unmasked_caller_is_never_discovered_green(tmp_path, monkeypatch, sha
     assert discovered == {"new-caller.yaml"}, "the caller must be discovered"
 
     with pytest.raises(AssertionError):
-        test_every_env_write_call_site_masks_first()
+        _assert_call_sites_mask_first()
+
+
+@pytest.mark.parametrize("helper", ["leak.sh", "leak.py"])
+def test_a_caller_hiding_in_a_non_yaml_helper_is_discovered(
+    tmp_path, monkeypatch, helper
+):
+    """Discovery must not be YAML-only.
+
+    Both composites already delegate `run:` logic to sibling shell scripts, and
+    the CI standard pushes new logic into `.github/scripts/`. A composite whose
+    `action.yaml` only says `run: <path>/leak.sh`, with the unmasked invocation
+    inside that script, was never opened by a `*.y*ml` glob — so it was never
+    audited and both guards passed green on a reintroduced leak.
+    """
+    action_dir = tmp_path / ".github" / "actions" / "sneaky"
+    action_dir.mkdir(parents=True)
+    (action_dir / "action.yaml").write_text(
+        "runs:\n  using: composite\n  steps:\n"
+        "    - shell: bash\n"
+        f"      run: ${{{{ github.action_path }}}}/{helper}\n"
+    )
+    (action_dir / helper).write_text(
+        '#!/usr/bin/env bash\npython3 "$D/export_extra_env.py" \\\n'
+        '  --json "$P" >> "$GITHUB_ENV"\n'
+    )
+    monkeypatch.setitem(globals(), "_REPO_ROOT", tmp_path)
+
+    assert {p.name for p in _call_site_files()} == {helper}, (
+        f"{helper} carries the invocation and must be discovered; the action.yaml "
+        "that merely launches it never names the script"
+    )
+    # A lone write is an odd number of invocations, so it trips the unpaired
+    # assertion before the ordering one — either way the step is rejected.
+    with pytest.raises(AssertionError, match="unpaired invocation"):
+        _assert_call_sites_mask_first()
+
+
+def test_the_script_and_its_own_tests_are_not_treated_as_callers(monkeypatch):
+    """`_NOT_A_CALLER` keeps the glob widening from auditing the implementation.
+
+    Both files name the script on non-comment lines — the module docstring's usage
+    example and this file's parametrized fixtures both contain a literal
+    `>> "$GITHUB_ENV"` — so once discovery reaches `.py` they would be audited as
+    unmasked call sites. Asserted here because the exclusion is what makes the
+    widened glob usable at all.
+    """
+    assert _MODULE_PATH.resolve() in _NOT_A_CALLER
+    assert Path(__file__).resolve() in _NOT_A_CALLER
+
+    # Both really do carry live mentions — so the exclusion is load-bearing, not
+    # a no-op that happens to look necessary.
+    for path in (_MODULE_PATH, Path(__file__)):
+        assert _live_mentions(path.read_text()), f"{path.name} premise changed"
+
+    discovered = {p.resolve() for p in _call_site_files()}
+    assert not (discovered & _NOT_A_CALLER)
 
 
 def test_prose_naming_the_script_is_not_a_call_site():
@@ -705,6 +803,39 @@ def test_prose_naming_the_script_is_not_a_call_site():
     workflow = _REPO_ROOT / ".github" / "workflows" / "scripts-tests.yaml"
     assert "export_extra_env.py" in workflow.read_text(), "premise of this test"
     assert workflow not in _call_site_files()
+
+
+def test_a_prose_excluded_file_that_starts_invoking_stops_being_excluded(
+    tmp_path, monkeypatch
+):
+    """The trip-wire that stops `_PROSE_ONLY_FILES` rotting into a hole.
+
+    An exclusion list is itself a place a real caller can hide: add a file for a
+    good reason, and every later invocation added to it is skipped silently. So
+    membership is conditional on the mention staying inside a comment — the moment
+    it does not, the file is audited like any other caller, which for an unmasked
+    invocation means the ordering assertion fires.
+    """
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    excluded = workflows / "scripts-tests.yaml"
+    assert (
+        excluded.relative_to(tmp_path).as_posix() in _PROSE_ONLY_FILES
+    ), "premise: this path is the excluded one"
+    monkeypatch.setitem(globals(), "_REPO_ROOT", tmp_path)
+
+    # A comment-only mention: excluded, and discovery finds no call site at all.
+    excluded.write_text("# runs export_extra_env.py in a comment\njobs: {}\n")
+    with pytest.raises(AssertionError, match="no call site found"):
+        _call_site_files()
+
+    # The same file with a live invocation: the exclusion no longer applies.
+    excluded.write_text(
+        "jobs:\n  x:\n    steps:\n      - run: |\n          python3 \\\n"
+        '            "$D/export_extra_env.py" --json "$P" >> "$GITHUB_ENV"\n'
+    )
+    with pytest.raises(AssertionError, match="prose-only exclusion list"):
+        _call_site_files()
 
 
 def test_the_suite_runs_on_every_file_these_guards_read():
@@ -741,7 +872,14 @@ def test_the_suite_runs_on_every_file_these_guards_read():
     assert "pytest .github/scripts/tests" in workflow.read_text()
 
 
-def test_every_env_write_call_site_masks_first():
+def _assert_call_sites_mask_first() -> None:
+    """The ordering audit, as a plain helper.
+
+    Extracted so `test_an_unmasked_caller_is_never_discovered_green` can assert it
+    raises without calling a test function directly — that coupling would turn a
+    fixture added to the test into a `TypeError` where an `AssertionError` was
+    expected.
+    """
     for path in _call_site_files():
         text = path.read_text()
         where = path.relative_to(_REPO_ROOT).as_posix()
@@ -774,3 +912,7 @@ def test_every_env_write_call_site_masks_first():
                 f"{where} masks {mask['var']} but writes {write['var']} — the "
                 "masked payload must be the one written."
             )
+
+
+def test_every_env_write_call_site_masks_first():
+    _assert_call_sites_mask_first()
