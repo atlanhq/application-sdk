@@ -1,54 +1,28 @@
 # v3 Code Quality Review Rules
 
-Enforced by pre-commit hooks (ruff, isort, pyright) and v3 coding conventions.
+Reviewer-owned judgment rules. Mechanical matches that ruff / isort /
+pyright / the conformance gate already block are deliberately NOT
+restated here — `retro-log.md` "CI-enforced patterns" is the single
+list of those; only their judgment residue appears below.
 
 ---
 
-## Import Rules
+## Import Rules — judgment residue only
 
-### Top-Level Imports (Critical)
+The mechanical matches are CI-owned and must NOT be re-flagged (ruff
+PLC0415 / F401 / F403 + isort; see `retro-log.md` "CI-enforced
+patterns"): inline imports, import ordering, star imports, unused
+imports.
 
-All imports MUST be at the module top level. Inline imports inside functions are a violation.
+What the reviewer still owns is the justification:
 
-**Exceptions (must be documented with a comment):**
-- Heavy optional dependencies that are slow to import (e.g., `duckdb`, `pandas`, `daft`) — comment: `# lazy import: heavy dependency`
-- Circular import avoidance — comment: `# deferred import: circular dependency`
-- Optional feature imports guarded by `try/except ImportError`
-
-**Flag these patterns:**
-```python
-# BAD — import inside function
-def process_data(self):
-    from application_sdk.storage import upload_file  # violation
-    ...
-
-# BAD — import inside method
-async def run(self, input: MyInput) -> MyOutput:
-    import json  # violation — stdlib imports always at top
-    ...
-
-# OK — lazy import with justification
-def analyze(self):
-    import duckdb  # lazy import: heavy dependency, only needed in this code path
-    ...
-```
-
-### Import Ordering (isort, black profile)
-
-Order: stdlib → third-party → local. Separated by blank lines. Enforced by isort with `profile = "black"`.
-
-**Flag:**
-- Mixed stdlib and third-party imports in same block
-- Local imports before third-party
-- Missing blank line between import groups
-
-### Star Imports
-
-`from module import *` is forbidden everywhere except `__init__.py` re-exports.
-
-### Unused Imports
-
-Flag any imported name not used in the file. Exception: re-exports in `__init__.py` with `__all__`.
+- A lazy import without a same-line reason (`# lazy import: heavy
+  dependency`, `# deferred import: circular dependency`). CI accepts any
+  inline import a `# noqa: PLC0415` suppresses; only the reviewer can
+  judge whether the stated reason is real — verify the claimed circular
+  dependency actually exists, don't trust the comment.
+- A `try/except ImportError` optional-feature guard whose fallback
+  silently degrades behavior without logging.
 
 ---
 
@@ -116,51 +90,12 @@ use site.
 
 ---
 
-## Logging Rules (Ruff G001, G003, G004, T201)
+## Logging Rules — judgment residue only
 
-### No f-strings in Log Calls (Critical — G004)
-
-```python
-# BAD
-logger.info(f"Processing {count} records")
-logger.error(f"Failed: {error}")
-
-# GOOD
-logger.info("Processing %d records", count)
-logger.error("Failed: %s", error)
-```
-
-### No String Concatenation in Log Calls (G003)
-
-```python
-# BAD
-logger.info("Processing " + str(count) + " records")
-
-# GOOD
-logger.info("Processing %d records", count)
-```
-
-### No % Formatting Inline in Log Calls (G001)
-
-```python
-# BAD
-logger.info("Processing %d records" % count)
-
-# GOOD — let the logger handle it
-logger.info("Processing %d records", count)
-```
-
-### No print() Statements (T201)
-
-```python
-# BAD
-print("Debug output")
-print(f"Result: {result}")
-
-# GOOD
-logger.debug("Debug output")
-logger.debug("Result: %s", result)
-```
+f-string / concatenation / %-interpolation in log calls (G001/G003/G004)
+and `print()` in production code (T201) are CI-owned (ruff +
+conformance L-series; see `retro-log.md`). Do NOT re-flag the
+mechanical match. The two judgment rules below are the reviewer's.
 
 ### Log exceptions with `exc_info`, never via formatted strings (Important)
 
@@ -275,27 +210,12 @@ explicit default is a finding.
 
 ## Error Handling
 
-### No Bare Except
+### Bare / typed except-pass — CI-owned
 
-```python
-# BAD
-try:
-    ...
-except:
-    pass
-
-# BAD
-try:
-    ...
-except Exception:
-    pass  # swallowed
-
-# GOOD
-try:
-    ...
-except SpecificError as e:
-    logger.warning("Recoverable: %s", e, exc_info=True)
-```
+`except: pass` and typed except-pass are blocked by ruff S110/S112 and
+the BLOCK-tier conformance E-series (`BareExceptPass` /
+`TypedExceptPass`; see `retro-log.md`). Do NOT re-flag the mechanical
+match. The rules below are the reviewer's.
 
 ### No Silent Swallowing
 
@@ -411,22 +331,6 @@ Inside `@task` methods, use `self.task_context` for:
 - `run_in_thread()` for blocking ops
 - `heartbeat()` for progress
 - `get_heartbeat_details()` for resume
-
----
-
-## Pre-Commit Compliance
-
-The following must pass before merge:
-1. **ruff** — lint + format
-2. **ruff-format** — code formatting
-3. **isort** — import sorting (profile: black)
-4. **pyright** — type checking (standard mode)
-5. **check-merge-conflict** — no conflict markers
-6. **debug-statements** — no `breakpoint()`, `pdb` imports
-7. **trailing-whitespace** — no trailing whitespace
-8. **conventional-pre-commit** — commit messages follow conventional format
-
-Flag any code that would clearly fail these checks.
 
 ---
 

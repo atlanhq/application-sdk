@@ -180,6 +180,27 @@ jobs:
             core.setOutput('base_ref', pr.base.ref);
             core.setOutput('html_url', pr.html_url);
 
+      # Single source of truth for the mothership session id.
+      #
+      # Two steps need it: the dispatch below, and the `if: cancelled()`
+      # terminator at the end of the job. Deriving it in both places would
+      # let the two copies drift — and a terminator that computes a *stale*
+      # session id silently fails to stop anything, which is exactly the
+      # bug it exists to prevent. Compute once, read twice.
+      #
+      # Deterministic on the PR head: a new commit produces a new HEAD_SHA
+      # → fresh sandbox; a re-trigger on the same HEAD resumes the same
+      # session (mothership serialises those on a per-session lock).
+      - name: Compute mothership session id
+        id: session
+        env:
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          HEAD_SHA_SHORT: ${{ steps.pr.outputs.head_sha_short }}
+          REPO_FULL_NAME: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "session_id=sdk-review-${REPO_FULL_NAME//\//-}-${PR_NUMBER}-${HEAD_SHA_SHORT}" >> "$GITHUB_OUTPUT"
+
       - name: Post 'review starting' notice to PR
         id: starter
         env:
@@ -390,6 +411,7 @@ jobs:
           BASE_REF: ${{ steps.pr.outputs.base_ref }}
           PR_URL: ${{ steps.pr.outputs.html_url }}
           REPO_FULL_NAME: ${{ github.repository }}
+          SESSION_ID: ${{ steps.session.outputs.session_id }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -450,10 +472,9 @@ jobs:
           PROMPT_END
           )
 
-          # Deterministic session_id ties this dispatch to the PR head.
-          # A new commit produces a new HEAD_SHA → fresh sandbox.
-          # A re-trigger on the same HEAD resumes the same sandbox session.
-          SESSION_ID="sdk-review-${REPO_FULL_NAME//\//-}-${PR_NUMBER}-${HEAD_SHA_SHORT}"
+          # Computed once by the `session` step so the `if: cancelled()`
+          # terminator addresses the exact same session (see that step).
+          SESSION_ID="${SESSION_ID:?session id not set by the session step}"
 
           # Build the dispatch payload.
           PAYLOAD=$(jq -n \
@@ -521,12 +542,20 @@ jobs:
           SESSION_FROM_STREAM=""
           SANDBOX_FROM_STREAM=""
 
-          # Heartbeat: track time since last `action` event. Mothership
-          # emits a `:` SSE comment every ~15s of silence which causes
-          # `read` to return — so we get a chance to check the idle
-          # threshold without spawning a watchdog. If we go > 5 min
-          # without an action, emit a single `::warning::` annotation
-          # so a stalled sandbox is visible on the workflow run page.
+          # Heartbeat: track time since the last content-bearing event.
+          # Mothership emits a `:` SSE comment every ~15s of silence which
+          # causes `read` to return — so we get a chance to check the idle
+          # threshold without spawning a watchdog. If we go > 5 min without
+          # progress, emit a `::warning::` annotation so a stalled sandbox
+          # is visible on the workflow run page.
+          #
+          # This used to key off `action` events only. In `mode: "direct"`
+          # an `action` event does not exist (see the `response` handler
+          # below), so the watchdog fired a guaranteed false positive at
+          # t+5min in EVERY run — including healthy ones — latched
+          # IDLE_WARNED=1, and was then disarmed for the rest of the run.
+          # The one signal meant to catch a real stall could never report
+          # one. Every content-bearing event now re-arms it.
           LOOP_START_TS=$(date +%s)
           LAST_ACTION_TS=$LOOP_START_TS
           LAST_ACTION_NAME="(none yet)"
@@ -590,7 +619,54 @@ jobs:
                     :
                     ;;
                   response)
-                    echo "[response]  (agent posted a response)"
+                    # `response` is the ONLY progress event this path ever
+                    # sees. In mode="direct" mothership's sandbox provider
+                    # hands the raw Claude CLI stream-json line to its
+                    # `on_event` with the raw type (system|assistant|result|
+                    # done|stderr), and the API layer remaps
+                    # {assistant,result,done} -> "response" verbatim. Tool
+                    # calls therefore never surface as `action` events —
+                    # they are buried in .content.message.content[] as
+                    # blocks with type "tool_use", and `action_name` is
+                    # always null on this path.
+                    #
+                    # So we unwrap it ourselves. This turns an hour of
+                    # byte-identical "(agent posted a response)" lines into
+                    # an actual trace of what the sandbox is doing, with no
+                    # mothership-side change required.
+                    #
+                    # `fromjson?` swallows payloads that are not JSON (e.g.
+                    # a stderr passthrough) and yields empty rather than
+                    # failing the pipeline under `set -e`.
+                    TOOLS=$(printf '%s' "$DATA" | jq -r '
+                      (.content // "") | (fromjson? // {})
+                      | [ (.message.content // [])[]
+                          | select(.type == "tool_use") | .name ]
+                      | join(", ")' 2>/dev/null) || TOOLS=""
+                    if [ -n "$TOOLS" ]; then
+                      echo "[action]    ${TOOLS}"
+                      LAST_ACTION_NAME="$TOOLS"
+                    else
+                      # Assistant text blocks, falling back to `.result`
+                      # (the terminal `result` message carries the final
+                      # output there rather than under .message.content).
+                      TEXT=$(printf '%s' "$DATA" | jq -r '
+                        (.content // "") | (fromjson? // {})
+                        | ([ (.message.content // [])[]
+                             | select(.type == "text") | .text ] | join(" ")) as $t
+                        | (if ($t | length) > 0 then $t else (.result // "") end)
+                        | tostring | gsub("\\s+"; " ") | .[0:160]' 2>/dev/null) || TEXT=""
+                      if [ -n "$TEXT" ]; then
+                        echo "[response]  ${TEXT}"
+                      else
+                        echo "[response]  (agent posted a response)"
+                      fi
+                      LAST_ACTION_NAME="response"
+                    fi
+                    # Any response is proof of life — re-arm the watchdog so
+                    # a LATER genuine stall is still reportable.
+                    LAST_ACTION_TS=$NOW_TS
+                    IDLE_WARNED=0
                     ;;
                   elicitation)
                     echo "[elicit]    sandbox requested user input — treating as error"
@@ -628,6 +704,35 @@ jobs:
                     # body from nginx. Print first 200 chars and move on; the
                     # post-loop check will fail if we never get a real event.
                     echo "[raw]       ${DATA:0:200}"
+                    ;;
+                  *)
+                    # Unhandled event name. mothership forwards `system` and
+                    # `stderr` unmapped, and can add types later; the case
+                    # had no fallback, so those were dropped on the floor
+                    # with no trace.
+                    #
+                    # `system` dominates the log in practice (sub-agent
+                    # task_started / task_progress / task_notification), and
+                    # the raw frame is a JSON string nested inside .content.
+                    # Render "<subtype>: <description>" when we can and fall
+                    # back to a bounded raw preview otherwise.
+                    SYS=$(printf '%s' "$DATA" | jq -r '
+                      (.content // "") as $c
+                      | ($c | fromjson? // null) as $j
+                      | (if $j == null then $c
+                         else (($j.subtype // $j.type // "")
+                               + (if ($j.description // "") != ""
+                                  then ": " + ($j.description | tostring) else "" end))
+                         end)
+                      | gsub("\\s+"; " ") | .[0:140]' 2>/dev/null) || SYS=""
+                    if [ -n "$SYS" ]; then
+                      echo "[${EVENT}]     ${SYS}"
+                    else
+                      echo "[${EVENT}]     ${DATA:0:200}"
+                    fi
+                    LAST_ACTION_TS=$NOW_TS
+                    LAST_ACTION_NAME="$EVENT"
+                    IDLE_WARNED=0
                     ;;
                 esac
                 ;;
@@ -749,6 +854,34 @@ jobs:
 
           echo "SDK Review (mothership) completed successfully (cost=${FINAL_COST})."
 
+      # Cancelling this job does NOT stop the sandbox.
+      #
+      # mothership runs the sandbox on a thread-pool executor with a
+      # DETACHED asyncio finalize task (harness/api/routers/sandbox_api.py
+      # `_sse_execution_wrapper`), and its SSE queue drops on overflow
+      # rather than applying backpressure. Killing `curl` therefore only
+      # closes our end of the stream: the run keeps going, keeps billing
+      # against max_timeout_seconds (7200), and still posts its review and
+      # commit status to the PR using the sandbox's own `gh` token —
+      # minutes after the workflow says "cancelled". That is why a cancel
+      # looked like it "triggered" a review: it never stopped anything.
+      #
+      # The documented way to actually stop it is the explicit cancel
+      # endpoint, so call it on the way out.
+      #
+      # `if: cancelled()` only — a failed dispatch has already lost the
+      # stream and mothership finalises it on its own; on success there is
+      # nothing left to stop. Never fail the job from here: this is
+      # best-effort cleanup running inside the cancellation grace period,
+      # and masking the real outcome with a teardown error helps nobody.
+      - name: Terminate mothership sandbox on cancel
+        if: cancelled() && steps.session.outputs.session_id != ''
+        env:
+          MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
+          HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
+          SESSION_ID: ${{ steps.session.outputs.session_id }}
+        run: python3 .github/scripts/mothership_terminate_session.py
+
       # Stamp the run cost + duration + verdict status onto the starter
       # comment we posted at the start of this job. The PR scroll then
       # shows a single comment that opens with "🔍 triggered" and ends
@@ -789,9 +922,22 @@ jobs:
               }
             }
 
+            // A cancel is not a failure, and rendering it as 🟥 "ended
+            // without a clean completion" was actively misleading: this
+            // step is `always()`, so it rewrote the comment ~2s after the
+            // cancel while the sandbox was still running — and the real
+            // review then landed a minute later, making the 🟥 look like a
+            // lie. Give cancels their own verb and say what we did about
+            // the sandbox.
+            const cancelled = process.env.DISPATCH_OUTCOME === 'cancelled';
             const verb = finalStatus === 'completed' ? '✅ **Completed**' :
-                         (process.env.DISPATCH_OUTCOME === 'success' ? '✅ **Completed**' : '🟥 **Run ended without a clean completion**');
+                         process.env.DISPATCH_OUTCOME === 'success' ? '✅ **Completed**' :
+                         cancelled ? '🟡 **Cancelled**' :
+                         '🟥 **Run ended without a clean completion**';
             let footer = `\n\n---\n${verb} — status \`${finalStatus}\`, cost \`$${finalCost}\`, duration ${durationTxt}.`;
+            if (cancelled) {
+              footer += `\nThe sandbox was asked to stop (\`DELETE /api/sandbox/session\`). If that request did not land, a review comment may still arrive from the in-flight run — check the workflow log for a termination warning.`;
+            }
 
             // Surface the mothership-side error on the PR comment whenever
             // we have either a code or a message. This is the field most

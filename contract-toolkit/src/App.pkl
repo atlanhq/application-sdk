@@ -677,6 +677,14 @@ open class DAGNode {
 
   displayName: String
   workflowType: String
+  /// Log identity for this node. Stamped into the node's `inputs.args.app_name`
+  /// (CNCT-93), which the SDK logs and the tenant UI / heracles query logs by.
+  /// IMPORTANT: `appName` and `taskQueue` must agree. If you set `taskQueue` to run
+  /// this node on a specific worker (e.g. the connector's own worker), you MUST set
+  /// `appName` to match that worker's app — leaving it at the default
+  /// `"automation-engine"` will make the node's logs misattribute to AE
+  /// even though it runs elsewhere. When `taskQueue` is unset it is derived from
+  /// `appName` (`atlan-<appName>-{deployment_name}`), so the two stay consistent.
   appName: String = "automation-engine"
   taskQueue: String?
   args: Mapping<String, Any>
@@ -2065,6 +2073,31 @@ local connectorInvariant =
     throw("connector must be set when hasCredentialConfig = true.")
   else true
 
+/// CNCT-93: `app_name` is framework-owned, and ownership is split by *when* the
+/// value is fixed. An author may set it at CONTRACT time — `DAGNode.appName`, or
+/// `args["app_name"]` on a hand-written node — and `renderNodeArgs` honors that.
+/// A TENANT-facing form field may not: `uiConfig` properties are substituted at
+/// dispatch from whatever the tenant typed, so the extract node keeps the
+/// contract `name` (log attribution depends on that match — HYP-1678).
+///
+/// Without this check the collision is silent and doubly wrong: the arg loops in
+/// `generateExtractNode` skip the property, so the rendered form widget reaches
+/// nothing; and codegen would shadow the base `Input.app_name` with the author's
+/// type, which only raises at workflow dispatch. Fail at generation instead.
+local reservedUiFieldNames: Set<String> = Set("app_name")
+
+local reservedUiFieldInvariant: Any =
+  let (offenders = (uiConfig?.properties ?? Map()).keys.toList()
+    .filter((k) -> reservedUiFieldNames.contains(toPyName(k))))
+  if (offenders.isEmpty) null
+  else throw("uiConfig property \(offenders.join(", ")) uses the reserved name "
+    + "`app_name`, which the contract toolkit owns (CNCT-93). A form field cannot "
+    + "supply it: the extract node bakes the contract `name` so failure logs stay "
+    + "attributable, so the field would render on the setup form and reach nothing. "
+    + "Rename the property (e.g. `source-app-name`). To change this app's "
+    + "log identity set `name`, or `appName` on the specific node. "
+    + "See contract-toolkit/docs/reference.md → Per-node `app_name` in `inputs.args`.")
+
 /// Auto-derived: hide the auth-type radio when the connector has a single auth
 /// option, since presenting a one-item radio adds no value. Auto-calculation
 /// keeps this in sync as connectors add or remove auth options — no manual
@@ -2497,6 +2530,16 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
     let (tagAttachmentsValue = publishNode.tagAttachmentsPrefix ?? _publishTagAttachmentsPrefix)
     new Mapping {
       ...nodeArgs
+      // CNCT-93: stamp the node's own app_name into args so the SDK reads it
+      // per-entrypoint and logs it (instead of the connector-level
+      // ATLAN_APPLICATION_NAME env). Each node -> its own value.
+      // Guarded like the feature-flag siblings below: if the author already set
+      // args["app_name"] on this node it is respected (wins), and the guard also
+      // prevents a hard Pkl "Duplicate definition of member" crash on that
+      // collision. See contract-toolkit/docs/reference.md.
+      when (!nodeArgs.toMap().containsKey("app_name")) {
+        ["app_name"] = node.appName
+      }
       when (!nodeArgs.toMap().containsKey("tag_pipeline_enabled") && tagPipelineValue != null) {
         ["tag_pipeline_enabled"] = tagPipelineValue
       }
@@ -2504,7 +2547,15 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
         ["tag_attachments_prefix"] = tagAttachmentsValue
       }
     }
-  else node.args
+  else new Mapping {
+    ...node.args
+    // CNCT-93: per-entrypoint app_name into args (see above). Guarded so an
+    // author-set args["app_name"] is respected and generation never crashes on a
+    // duplicate key; otherwise the node's own app_name is stamped.
+    when (!node.args.toMap().containsKey("app_name")) {
+      ["app_name"] = node.appName
+    }
+  }
 
 /// Workflow type for the extract node: verbatim `workflowType` when set,
 /// otherwise `name` kebab-cased.
@@ -2534,6 +2585,14 @@ local function generateExtractNode(): Mapping<String, Any> =
       ["argo_workflow_slug"] = ""
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
       ["args"] = new Mapping {
+        // CNCT-93: extract-node app_name is the contract identity (`name`, the
+        // same value baked at `app_name` above and into ATLAN_APPLICATION_NAME),
+        // and it is authoritative — a tenant-typed form value must not replace it
+        // or failure logs stop being attributable (HYP-1678). `app_name` is
+        // therefore a reserved uiConfig name: the loops below skip it to avoid a
+        // duplicate-key crash, and `reservedUiFieldInvariant` fails generation up
+        // front so the skip can never silently drop a live form field.
+        ["app_name"] = name
         ["credential"] = "{{credential}}"
         // SDR / agent-mode credential slot. Emitted whenever the app does not
         // model `agent-json` — the gap that silently broke MSSQL's SDR rollout
@@ -2544,12 +2603,12 @@ local function generateExtractNode(): Mapping<String, Any> =
           ["agent_json"] = "{{agent-json}}"
         }
         for (argName, formField in manifestTopLevelArgs) {
-          when (uiConfig != null && uiConfig!!.properties.containsKey(formField) && uiConfig!!.properties[formField].includeInManifest) {
+          when (argName != "app_name" && uiConfig != null && uiConfig!!.properties.containsKey(formField) && uiConfig!!.properties[formField].includeInManifest) {
             [argName] = "{{" + formField + "}}"
           }
         }
         for (paramKey, param in (uiConfig?.properties ?? Map())) {
-          when (param.includeInManifest && !topLevelFormFields.contains(paramKey)) {
+          when (toPyName(paramKey) != "app_name" && param.includeInManifest && !topLevelFormFields.contains(paramKey)) {
             [toPyName(paramKey)] = "{{" + paramKey + "}}"
           }
         }
@@ -2729,8 +2788,26 @@ local function pyQuotedCsv(values: List<String>): String =
     if (acc == "") "\"\(value)\"" else "\(acc), \"\(value)\""
   )
 
+/// Field names already declared by the SDK's base input contract. A generated UI
+/// field with one of these Python names is skipped so the SDK's typed declaration
+/// and validators stay in effect instead of being shadowed by a uiConfig-derived
+/// redeclaration (which would also change the field's type).
+///
+/// The first three are framework-populated rather than tenant-supplied:
+/// `workflow_id` (set at dispatch), `correlation_id` (caller-supplied trace id),
+/// and `app_name` (per-node log identity, CNCT-93). Redeclaring one of them
+/// from a uiConfig property is latent: codegen, `pkl test` and `test-sdk-import`
+/// all stay green, and it fails only at workflow dispatch when the framework
+/// assigns the real value and Pydantic rejects it against the author's type.
+///
+/// `app_name` is additionally rejected outright by `reservedUiFieldInvariant`, so
+/// its entry here is defence in depth; `correlation_id` is load-bearing on its own
+/// (a property with that name generates, and without this entry it shadows the
+/// base field).
 local extractionInputProvidedFields: Listing<String> = new Listing {
   "workflow_id"
+  "correlation_id"
+  "app_name"
   "connection"
   "credential_guid"
   "credential_ref"
@@ -3531,6 +3608,10 @@ output =
   let (_jdbcCheck = jdbcInvariant)
   let (_connectorCheck = connectorInvariant)
   let (_credCheck = _credentialConflictCheck)
+  // Forced here rather than inside generateExtractNode: `pipeline { extract = null }`
+  // is a supported opt-out, and a lazily-evaluated check inside that node would
+  // let a reserved-name collision through for exactly those contracts.
+  let (_reservedUiCheck = reservedUiFieldInvariant)
   let (_e2eCredOutput = generateE2ECredentialPy())
   let (_e2eSubsOutput = generateE2ESubstitutionsPy())
   new ModuleOutput {

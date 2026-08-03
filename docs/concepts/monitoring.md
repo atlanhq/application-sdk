@@ -184,12 +184,27 @@ env:
 
 | Field | Value |
 |-------|-------|
-| `app_name` | The app's kebab-case name |
+| `app_name` | The running entry-point's app name (see note below) |
 | `workflow_run_id` | Temporal workflow run ID (canonical name; `run_id` is a backwards-compat alias) |
 | `correlation_id` | Platform-level correlation identifier |
 | `source` | Which layer emitted the line — `sdk`, `dependency`, or the app's own name (see [Log provenance](#log-provenance-the-source-field)) |
 
 These fields appear on every log entry without any manual binding — use `self.logger` directly.
+
+> **`app_name` is per-entry-point (CNCT-93).** It is resolved from the workflow's
+> own input args, which the contract toolkit stamps with each DAG node's own
+> `app_name`. For a single-entry-point connector this is just its kebab-case name
+> (e.g. `mysql`). For a **multi-entry-point bundle** it is the *entry-point's*
+> name — `powerbi-crawler`, `powerbi-miner` — **not** the connector-level bundle
+> name, so each entry-point's logs are queryable on their own. This is the value
+> the run UI queries a node's logs by. When the workflow input carries no
+> `app_name` (an older, not-yet-regenerated app), it falls back to the process-wide
+> `ATLAN_APPLICATION_NAME` env — i.e. prior behaviour. The per-entry-point value
+> is a **log-only** field: metrics (both the `temporal_*` lifecycle families and
+> `record_metric()` custom metrics) and the trace-level `app.name` (OTel
+> Resource) deliberately stay **connector-level**, so for a bundle a metric's or
+> trace's `app_name` may differ from the `app_name` on its correlated log lines
+> — by design. See [Metrics Standards](../standards/metrics.md).
 
 ```python
 class MyConnector(App):
@@ -223,9 +238,10 @@ cannot get it wrong, and it is allowlisted for OTLP, so it is queryable alongsid
 | `dependency` | Known third-party loggers (`httpx`, `daft_io`, `temporalio`, …) and the forwarded `daprd` sidecar lines |
 | *the app label* | Everything else — by default the app's own `APPLICATION_NAME` (e.g. `mysql`), so a reader sees *which* app spoke |
 
-`source` answers a different question from `app_name`: `app_name` says *which connector* the record
-came from, `source` says *which layer within it*. That makes `source = sdk` the filter for "is this
-the framework or the connector's own code" during triage.
+`source` answers a different question from `app_name`: `app_name` says *which app / entry-point* the
+record came from (per-entry-point for a bundle — see the note above), `source` says *which layer
+within it*. That makes `source = sdk` the filter for "is this the framework or the connector's own
+code" during triage.
 
 The app label is overridable with the `ATLAN_LOG_SOURCE` environment variable — the Automation
 Engine sets `ATLAN_LOG_SOURCE=ae` so its orchestration lines are attributable to the engine rather
