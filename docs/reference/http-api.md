@@ -232,6 +232,41 @@ Return the Automation Engine DAG manifest (from `app/generated/manifest.json`).
 - `400 {"detail": "Invalid entrypoint name"}` — `?entrypoint=` value fails the `^[a-zA-Z][a-zA-Z0-9_-]*$` validation regex.
 - `404 {"detail": "No manifest found for entrypoint '<name>'"}` — no `app/generated/<name>/manifest.json` exists.
 - `404 {"detail": "No manifest available"}` — no `?entrypoint=` provided and `app/generated/manifest.json` does not exist.
+- `413 {"detail": "fe_inputs exceeds the 8192-byte limit"}` — decoded `?fe_inputs=` is over the query-string cap. Use `POST` (below) instead of trimming the payload.
+
+---
+
+### `POST /workflows/v1/manifest`
+
+Same manifest, with the inputs in the request body instead of the query string. Prefer this whenever you send `fe_inputs`.
+
+> **Legacy alias:** An unversioned `POST /manifest` is also registered (`include_in_schema=false`), so a caller can migrate method and path independently.
+
+**Body** (all fields optional; `{}`, `null` and an absent body are all equivalent to a bare `GET`):
+
+```json
+{
+  "entrypoint": "asset-export-advanced",
+  "fe_inputs": { "attribute-selector": "table:rowCount,column:dataType" },
+  "user_id": "<keycloak-guid>"
+}
+```
+
+`user_id` is accepted and ignored, so callers that already send it (as a GET query param, where it is likewise ignored) keep working.
+
+`fe_inputs` must be a JSON **object**, not a JSON string — a caller porting the GET query parameter must pass the decoded object rather than the encoded string that rode in the URL.
+
+**Why this exists:** on `GET`, `fe_inputs` is bounded by the HTTP request line. Over 8 KB decoded the SDK returns `413` before `compute_manifest` runs, and past ~64 KB on the wire the URL is silently truncated by the parser — the app then answers `200` on a corrupt payload. A near-"select-all" asset-export-advanced submission decodes to ~11 KB and hit exactly this (CSA-539). The body has neither limit, so **no size cap applies to `POST`**.
+
+**Response:** identical to `GET` — the two share one code path.
+
+**Error responses:**
+
+- `400 {"detail": "Request body is not valid JSON: ..."}`
+- `400 {"detail": "Request body must be a JSON object"}` — body was a list, string, or number.
+- `400 {"detail": "entrypoint must be a string"}`
+- `400 {"detail": "fe_inputs must be a JSON object"}`
+- `400` / `404` — as for `GET` above.
 
 ---
 
