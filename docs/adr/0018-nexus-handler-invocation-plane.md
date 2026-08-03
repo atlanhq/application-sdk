@@ -193,6 +193,52 @@ SDR worker (customer infra) ──► invocation core ──► Handler.prefligh
         ▼  result returns inline on the same request — no workflow anywhere
 ```
 
+### The 10-second sync ceiling — why it does not defeat the design
+
+Temporal's Nexus documentation bounds synchronous operations at roughly the
+request timeout (~10 s class). This is the tier boundary the design is built
+around, not a blocker — the claim was never "sync for everything":
+
+| Tier | Share of calls | Path | Cost |
+| --- | --- | --- | --- |
+| Fast (fits the sync window) | the overwhelming majority — typical handler work is sub-second to a few seconds (measured: 397 ms); fleet preflight p95 is under 14 s per app except one federated source | sync operation | zero workflow, zero history |
+| Slow tail (exceeds the window) | minority; one known ~124 s source | async operation → backing workflow (the demoted `sdr:*` role) | **exactly what every call costs today** |
+
+The worst case is the status quo, paid only by the tail; the common case sheds
+the measured ~93 % orchestration overhead. Nexus never makes a call more
+expensive than today — it makes most calls dramatically cheaper.
+
+Callers never see two paths — the protocol carries the escalation:
+
+- A **workflow caller** (the Continuous Pre-flight sweep) awaits the operation;
+  sync-vs-async resolution is invisible to it.
+- An **HTTP caller** (Heracles) receives either the inline result or an
+  operation token and fetches the result with a wait — still one API, still no
+  Temporal client.
+
+Handler-side, two implementation shapes (Open Questions #6):
+
+- **(a) Dynamic escalation** — the operation races the check against a budget
+  inside the sync window; done in time → return inline; not done → escalate to
+  the backing workflow. Needs a spike to confirm the Python SDK permits one
+  operation to choose per request.
+- **(b) Static per-app registration** — known-slow apps register the operation
+  as async-backed from the start. Works unconditionally today; (a) is an
+  optimization over it.
+
+Additional levers, in preference order: `checks_to_run` subsetting for the
+`interactive` trigger (a >10 s wait on a UI click is already a UX defect —
+the full suite belongs to the gate and the scheduled prober); and, since the
+Temporal deployments are self-hosted, the request-timeout cap may be tunable
+via dynamic config — treated as a last resort rather than a design input,
+because escalation is the protocol's own answer.
+
+One caller-visible behavior change to state plainly: for the ~124 s federated
+source, an *interactive* check cannot return synchronously under any design.
+Today that is a 110 s+ held HTTP connection (LB-timeout roulette); under this
+ADR it is an async token + result fetch. Different, arguably better — but
+different, and Heracles' UX handling of it is part of the Phase 4 cutover.
+
 ### The endpoint model
 
 A Nexus *endpoint* is a cluster-scoped routing record mapping a name to a
@@ -384,11 +430,12 @@ Fleet delivery: SDK release → renovate bump → conformance rule flags straggl
 ## Preconditions and Risks
 
 - **Sync-operation timeout ceiling.** Nexus sync calls are bounded per attempt
-  (~10 s class by default; server dynamic config governs the cap). Fleet
-  preflight p95 is under 14 s for every app except one federated source
-  (~124 s). Mitigation: tune the cap for headroom on the common case; async
-  escalation covers the tail by design. **Validate the cap on our server
-  version before Phase 3.**
+  (~10 s class per the Nexus documentation). Addressed structurally by the
+  tiered design — see "The 10-second sync ceiling" above: the fast majority
+  runs sync; the slow tail escalates to async operations backed by the
+  existing workflows, costing exactly what every call costs today. Remaining
+  verification for Phase 3: the exact cap on our server build, and the
+  escalation shape (Open Questions #1, #6).
 - **Nexus enablement + provisioning.** Server version (2.42.x) is well past
   Nexus GA and the pinned SDK stack ships support (`temporalio 1.30.0` with
   `nexus-rpc 1.4.0` in `uv.lock`); per-tenant dynamic config and endpoint
@@ -430,6 +477,11 @@ Fleet delivery: SDK release → renovate bump → conformance rule flags straggl
    activities (`get_activity_name`) or stays a fixed `handler-ops` service
    behind per-app endpoints (current proposal: fixed service name, per-app
    endpoints — the endpoint is the namespace).
+6. Sync-to-async escalation shape: whether the Python SDK permits a single
+   operation to return inline or escalate to a backing workflow per request
+   (dynamic), or whether slow apps register async-backed operations statically
+   (works today; the dynamic form is an optimization — see "The 10-second sync
+   ceiling").
 
 ## Relationship to Prior ADRs
 
