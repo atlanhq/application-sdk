@@ -104,6 +104,27 @@ It **must** be a `ClassVar`, not a pydantic field: declared as a field the gate
 reads `{}` and silently falls back to the single-credential path. Apps that
 declare nothing keep the unchanged single-credential path via `input.credentials`.
 
+#### Single-key secret resolution
+
+When a credential arrives as a flat dict of fields rather than a named ref, the
+SDK probes each string value to see whether it is a key in the secret store
+(`application_sdk/credentials/agent.py`). These probes are independent point
+lookups, so they run **concurrently**, bounded by a small fan-out cap
+(`_MAX_CONCURRENT_SINGLE_KEY_PROBES = 8`) so a wide credential does not pay one
+full store retry ladder per field. Results are merged in candidate order, so
+resolution is byte-identical to the previous serial behavior.
+
+Two failure modes are worth knowing when reading logs:
+
+- **Every probe errored at the store level** (more than one candidate, none
+  resolved) now raises `SecretStoreError` instead of silently proceeding — the
+  old behavior would have authenticated with the ref-keys as literal values and
+  stacked `failed_login_attempts` on the source.
+- **Nothing resolved and no probe errored** logs a WARNING ("resolved 0 of N
+  probed fields"). This is the only record distinguishing a genuinely
+  secret-free credential from a throttled vault, which Dapr reports as the same
+  "absent" response.
+
 ### MetadataInput / MetadataOutput
 
 ```python
