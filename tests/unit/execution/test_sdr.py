@@ -516,6 +516,53 @@ class TestSdrAgentJsonResolution:
         secret_check = next(c for c in result.checks if c.name == "Secret store")
         assert secret_check.passed is False
 
+    async def test_preflight_reachable_but_nothing_resolved_still_runs_checks(
+        self,
+    ) -> None:
+        # A reachable store that resolved nothing is NOT fatal: every field falls
+        # back to its literal value, so a customer who put raw secrets directly in
+        # the config can still connect. Preflight keeps the failed secret-store row
+        # but still runs the handler's connectivity/schema/tables checks (unlike an
+        # unreachable store, which short-circuits).
+        handler = _StubHandler()
+        preflight = self._by_name(handler)[SDR_PREFLIGHT_ACTIVITY]
+
+        resolver = mock.MagicMock()
+        resolver.resolve_raw = mock.AsyncMock(return_value={"username": "literal-user"})
+        fake_infra = mock.MagicMock()
+        fake_infra.secret_store = mock.MagicMock(name="SecretStore")
+        zero_resolved = SecretStoreCheckResult(
+            passed=False,
+            reachable=True,
+            substituted=0,
+            message="Secret store is reachable, but no secret was resolved.",
+        )
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.get_infrastructure",
+                return_value=fake_infra,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.CredentialResolver",
+                return_value=resolver,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.check_secret_store_access",
+                new=mock.AsyncMock(return_value=zero_resolved),
+            ),
+        ):
+            result = await preflight(
+                PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
+            )
+
+        # Handler ran (connectivity attempted with literal values) — NOT short-circuited.
+        assert handler.preflight_input is not None
+        # The failed secret-store row is still surfaced for visibility...
+        secret_check = next(c for c in result.checks if c.name == "Secret store")
+        assert secret_check.passed is False
+        # ...but it does not force the gate: the handler's verdict stands.
+        assert result.status == PreflightStatus.READY
+
     async def test_auth_raises_when_secret_store_unavailable(self) -> None:
         from application_sdk.errors.leaves import DependencyUnavailableError
 

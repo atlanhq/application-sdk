@@ -474,17 +474,25 @@ def build_sdr_activities(
         secret_row: PreflightCheck | None = None
         if input.agent_json is not None and input.agent_json.is_populated():
             # SDR-only: verify the customer secret store first. It fails in two
-            # ways — unreachable/down, or reachable but nothing resolved (every
-            # field would be sent as its literal placeholder). Either way the
-            # source check can't succeed, so short-circuit to NOT_READY with a
-            # clear reason instead of a confusing downstream connectivity error.
+            # ways — unreachable/down, or reachable but nothing resolved.
+            #
+            # Only an UNREACHABLE store is fatal: credential resolution itself
+            # would raise (_fetch_bundle errors), so short-circuit to NOT_READY
+            # with a clear reason instead of a confusing downstream error.
+            #
+            # A reachable store that resolved nothing is NOT fatal: every field
+            # falls back to its literal value (see _substitute), so a customer who
+            # put raw secrets directly in the workflow config can still connect.
+            # Keep the (failed) secret-store row for visibility, but still run the
+            # connectivity / schema / tables checks below and let the real
+            # connection result stand.
             infra = get_infrastructure()
             secret_store = infra.secret_store if infra is not None else None
             secret_result = await check_secret_store_access(
                 input.agent_json, secret_store
             )
             secret_row = _secret_store_check_row(secret_result)
-            if not secret_result.passed:
+            if not secret_result.reachable:
                 output = PreflightOutput(
                     status=PreflightStatus.NOT_READY,
                     message=secret_result.message,

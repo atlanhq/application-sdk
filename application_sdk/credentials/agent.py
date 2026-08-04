@@ -440,8 +440,10 @@ async def check_secret_store_access(
     1. **Unreachable / down** — no secret store configured, the store errors, or
        the configured ``secret-path`` doesn't exist.
     2. **Nothing resolved** — the store is reachable but not a single ref-key was
-       substituted, so every credential field would be sent as its literal
-       placeholder (the connection is guaranteed to auth-fail).
+       substituted, so every credential field falls back to its literal value.
+       This is a likely misconfiguration (surfaced as a failed row), but NOT
+       fatal: a customer who put raw secrets directly in the config can still
+       connect, so the preflight keeps running the connectivity checks.
 
     Inline-literal specs (no ``secret-path`` / not single-key) need no store, so
     they pass trivially.
