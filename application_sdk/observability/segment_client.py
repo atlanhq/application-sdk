@@ -225,7 +225,8 @@ class SegmentClient:
         sent when close() cancels the worker task — call close() after flush()
         for a complete drain.
         Bridges to the worker's dedicated event loop via asyncio.wrap_future.
-        No-op if the client is disabled or the worker loop is not running.
+        No-op if the client is disabled, the worker loop is not running, or the
+        caller is inside a Temporal workflow (see below).
         Times out after 10 s to keep shutdown bounded (matches the
         Pushgateway per-call budget; two 10 s calls fit within K8s'
         default 30 s terminationGracePeriodSeconds).
@@ -234,6 +235,27 @@ class SegmentClient:
             return
         if not self._loop.is_running():
             return
+
+        # The wrap_future bridge below cannot work from inside a Temporal
+        # workflow. temporalio's workflow event loop implements only the
+        # AbstractEventLoop subset it needs, so asyncio.wrap_future's
+        # done-callback raises NotImplementedError on ``dest_loop.is_closed()``
+        # in the Segment worker thread; the awaited future is then never
+        # resolved and wait_for burns its full 10 s as a *durable workflow
+        # timer*. Skipping loses no events: send_metric() already queued them
+        # on the worker loop, and they are delivered by the worker's own batch
+        # timer and by close() at process exit. Mirrors the sandbox guard in
+        # observability.py::_flush_records.
+        try:
+            from temporalio.workflow import (  # noqa: PLC0415 — defensive: try/except detects temporal workflow / non-temporal context
+                in_workflow,
+            )
+
+            if in_workflow():
+                return
+        except ImportError:  # conformance: ignore[E002,E008] Temporal unavailable outside a worker; normal flush
+            pass
+
         future = asyncio.run_coroutine_threadsafe(self._flush_queue(), self._loop)
         try:
             await asyncio.wait_for(asyncio.wrap_future(future), timeout=10.0)

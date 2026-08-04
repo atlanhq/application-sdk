@@ -718,6 +718,29 @@ class TestFlush:
         mrun.assert_not_called()
 
     @pytest.mark.timeout(2)
+    async def test_flush_inside_temporal_workflow_is_noop(self):
+        """flush() must not bridge to the worker loop from workflow context.
+
+        Regression: temporalio's workflow event loop does not implement
+        ``is_closed()``, so ``asyncio.wrap_future``'s done-callback raised
+        NotImplementedError in the Segment worker thread and the awaited future
+        never resolved — burning a 10 s durable workflow timer on every run.
+        """
+        client = _enabled_client_no_thread()
+        fake_loop = mock.MagicMock()
+        fake_loop.is_running.return_value = True
+        client._loop = fake_loop
+        client._queue = asyncio.Queue()
+
+        with (
+            mock.patch("temporalio.workflow.in_workflow", return_value=True),
+            mock.patch.object(sc_module.asyncio, "run_coroutine_threadsafe") as mrun,
+        ):
+            await client.flush()
+
+        mrun.assert_not_called()
+
+    @pytest.mark.timeout(2)
     async def test_flush_schedules_flush_queue_on_worker_loop(self):
         """flush() must schedule _flush_queue on the worker loop and await it."""
         import concurrent.futures
