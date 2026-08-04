@@ -318,6 +318,42 @@ entire probe against the customer's source.
 A side benefit of polling: the poll traffic itself registers as task-queue
 activity, keeping KEDA from scaling a cloud worker down mid-check.
 
+### Large results — the token is the cursor
+
+Nexus payloads live in the ~2 MB class. `test_auth` and `preflight_check`
+return tiny verdicts; `fetch_metadata` returns the UI browse tree
+(`MetadataOutput.objects`, unbounded — a SQL row is a ~60–120 byte
+catalog/schema pair, so ~2 MB ≈ 15–25 k rows; BI/API trees are the realistic
+overflow case). Rather than making handlers paginate against their sources
+(fleet-wide app changes, and many sources cannot resume a listing cheaply),
+the invocation core paginates the **transport**, reusing the start/poll
+registry:
+
+- `fetch_metadata_start` runs the handler **once**, unchanged. If the
+  serialized result fits one payload (the overwhelming majority), it returns
+  inline exactly as today. If it exceeds the chunk threshold (~1 MB — half
+  the bound, structural headroom), the core parks the result and returns the
+  token.
+- `fetch_metadata_result(token, offset)` returns fixed-size slices
+  (`{page, next_offset, total}`), **addressed by offset** so a retried poll
+  re-reads the same slice idempotently — no state advances on read. Slices
+  are compressed (metadata rows are highly repetitive; 5–10× before chunking
+  engages).
+- Parking follows the same deployment-shape rule as slow checks: in-process
+  for single-instance SDR agents (the full list already lives in that process
+  the moment the handler returns), state/object store for multi-replica cloud
+  apps; same TTL hygiene.
+- Reassembly happens in Heracles, which hands the frontend the same complete
+  tree it receives today. **Frontend, handler, and app changes: zero.**
+- Documented escalation for pathological results (tens of MB): claim-check —
+  the worker uploads the full result via the existing upstream Atlan
+  object-store proxy and returns a reference the Atlan-side caller downloads.
+  Named fallback, not the default. Handler-native pagination remains available
+  per app as a *memory* optimization, never a requirement.
+
+The Phase 0 spike measures the largest known fleet metadata response to set
+the initial chunk threshold.
+
 ### The durability trade — stated plainly
 
 Rejecting workflows on this plane buys zero per-call orchestration and zero
@@ -549,8 +585,9 @@ Fleet delivery: SDK release → renovate bump → conformance rule flags straggl
   `minReplicas: 1` for interactive apps). Poll traffic keeps workers alive
   mid-check; irrelevant for SDR — agents are customer-run and always-on.
 - **Payload limits.** Nexus payloads are bounded (~2 MB class); handler inputs
-  and outputs are far below. `fetch_metadata` outputs are the one surface to
-  spot-check.
+  and check verdicts are far below. `fetch_metadata` is handled structurally by
+  chunked retrieval ("Large results — the token is the cursor"); the spike
+  measures the largest known fleet response to set the chunk threshold.
 - **Fake green.** A `DefaultHandler` app answers `READY` ("no preflight handler
   registered"). Callers that aggregate (Continuous Pre-flight) must key off the
   capability manifest / a typed `handler_present` field, not verdict alone —
