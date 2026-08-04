@@ -401,8 +401,23 @@ class TestRetryConfiguration:
         assert retry.is_retryable_exception(httpx.WriteError("x")) is True
         assert retry.is_retryable_exception(httpx.WriteTimeout("x")) is True
         assert retry.is_retryable_exception(httpx.CloseError("x")) is True
-        assert _DEFAULT_RETRY_TOTAL >= 5
         assert retry.backoff_factor >= 1.0
+
+        # Assert the resulting *budget*, not the raw retry count. The count is
+        # a proxy that hid a 4x overshoot: total=5 was chosen believing the
+        # ladder was 1+2+4+8 (~15s), but httpx-retries increments before
+        # sleeping, so it is backoff_factor * 2**n for n in 1..total — 62s
+        # nominal, with a 32s final sleep. Bounding both ends means neither a
+        # regression to a tiny budget nor another silent widening can pass.
+        nominal_budget = sum(
+            retry.backoff_factor * 2**n for n in range(1, _DEFAULT_RETRY_TOTAL + 1)
+        )
+        assert 10.0 <= nominal_budget <= 20.0, (
+            f"nominal retry ladder is {nominal_budget}s across "
+            f"{_DEFAULT_RETRY_TOTAL + 1} requests — too short to bridge a "
+            "daprd cold start, or wide enough that a single tail sleep "
+            "dominates a caller's activity budget"
+        )
 
 
 class TestSidecarWaitTimeout:
