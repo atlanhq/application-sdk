@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -276,12 +275,19 @@ def test_mask_and_write_passes_agree_on_the_value_set(capsys) -> None:
 # credentials into the environment of every later step. The guard there
 # discovers its callers rather than listing them; this one does the same for
 # this script, so a new caller is covered the day it is added.
+#
+# Where the two differ: export_extra_env's invocation is a fixed two-line shape,
+# so a regex reads it safely. This script takes a variable number of
+# backslash-continued flag lines, and the regex for that needs a repeated group
+# whose leading whitespace class overlaps the previous iteration's trailing one
+# — exponential backtracking (CodeQL py/redos, which flagged exactly that on the
+# first version of this guard). So the continuation is walked line by line
+# instead, which is linear and closer to what the shell does anyway.
 
-_CALL_SITE_INVOCATION = re.compile(
-    r"resolve_e2e_tenant\.py\"?[ \t]*\\\n"
-    r"(?:\s*--[a-z-]+[ \t]+\"?\$?\{?[^\n\"]*\"?[ \t]*\\\n)*"
-    r"\s*(?P<mode>--mask-only|>>[ \t]*\"\$GITHUB_ENV\")"
-)
+# How an invocation ends, and what that means. The write form is matched on the
+# exact redirect so a `>> "$SOMETHING_ELSE"` cannot pass as a masked write.
+_MASK_TOKEN = "--mask-only"
+_WRITE_TOKEN = '>> "$GITHUB_ENV"'
 
 _SCRIPT_MENTION = "resolve_e2e_tenant"
 _CALL_SITE_SUFFIXES = ("*.y*ml", "*.sh", "*.py")
@@ -304,6 +310,43 @@ def _live_mentions(text: str) -> list[str]:
         for line in text.split("\n")
         if _SCRIPT_MENTION in line and not line.lstrip().startswith("#")
     ]
+
+
+def _invocation_modes(text: str) -> list[tuple[str, str | None]]:
+    """Return ``(invoking line, "mask" | "write" | None)`` per invocation.
+
+    Line-oriented rather than a single regex. The invocation spans a variable
+    number of backslash-continued flag lines, and a regex for that shape needs a
+    repeated group whose leading whitespace class overlaps the previous
+    iteration's trailing one — ambiguity that backtracks exponentially on a
+    crafted input, which is what CodeQL's py/redos flagged on the first version
+    of this guard. Walking the continuation explicitly is linear, and it is a
+    closer description of what the shell actually does with a trailing ``\\``.
+
+    ``None`` means the invocation was found but its terminator was not
+    recognised; the caller fails on that rather than skipping it, so an
+    unparseable call site can never be silently treated as absent.
+    """
+    lines = text.split("\n")
+    out: list[tuple[str, str | None]] = []
+    for index, line in enumerate(lines):
+        if f"{_SCRIPT_MENTION}.py" not in line or line.lstrip().startswith("#"):
+            continue
+
+        # Consume the backslash continuation to find the line that terminates
+        # this command. Bounded by the file, so no unbounded scan.
+        cursor = index
+        while cursor < len(lines) - 1 and lines[cursor].rstrip().endswith("\\"):
+            cursor += 1
+        terminator = lines[cursor]
+
+        if _MASK_TOKEN in terminator:
+            out.append((line, "mask"))
+        elif _WRITE_TOKEN in terminator:
+            out.append((line, "write"))
+        else:
+            out.append((line, None))
+    return out
 
 
 def _call_site_files() -> list[Path]:
@@ -329,21 +372,37 @@ def test_call_sites_are_the_expected_files() -> None:
     }
 
 
-def test_every_env_write_call_site_masks_first() -> None:
+def _assert_call_sites_mask_first() -> None:
+    """The ordering audit, as a plain helper.
+
+    Extracted for the same reason as its twin in test_export_extra_env.py: the
+    negative test below asserts it raises, and calling a test function directly
+    would turn a fixture added later into a TypeError where an AssertionError
+    was expected.
+    """
     for path in _call_site_files():
         text = path.read_text()
         where = path.relative_to(_REPO_ROOT).as_posix()
 
-        calls = list(_CALL_SITE_INVOCATION.finditer(text))
-        live = [ln for ln in _live_mentions(text) if "resolve_e2e_tenant.py" in ln]
-        assert len(calls) == len(live), (
+        found = _invocation_modes(text)
+
+        # Parity, not just presence: every non-comment mention of the script has
+        # to belong to an invocation this guard could classify. Anything else
+        # would be *discovered* but silently unaudited.
+        unreadable = [line for line, mode in found if mode is None]
+        assert not unreadable, (
+            f"{where} invokes the script on {len(unreadable)} line(s) whose "
+            'terminator is neither --mask-only nor >> "$GITHUB_ENV". Rewrite '
+            "them in the backslash-continued flag shape, or teach "
+            f"_invocation_modes the new shape. Unreadable lines: {unreadable}"
+        )
+        live = [ln for ln in _live_mentions(text) if f"{_SCRIPT_MENTION}.py" in ln]
+        assert len(found) == len(live), (
             f"{where} names the script on {len(live)} non-comment line(s) but "
-            f"only {len(calls)} match a checkable invocation. Rewrite it in the "
-            "backslash-continued flag shape, or teach _CALL_SITE_INVOCATION the "
-            f"new shape. Unreadable lines: {live}"
+            f"only {len(found)} were parsed as invocations."
         )
 
-        modes = ["mask" if c["mode"] == "--mask-only" else "write" for c in calls]
+        modes = [mode for _line, mode in found]
         assert modes, f"{where} has no recognisable invocation"
         assert len(modes) % 2 == 0, f"{where} has an unpaired invocation: {modes}"
         assert modes == ["mask", "write"] * (len(modes) // 2), (
@@ -351,3 +410,65 @@ def test_every_env_write_call_site_masks_first() -> None:
             "written to $GITHUB_ENV before ::add-mask:: registers them leak in "
             "cleartext from the next step that renders its env: group."
         )
+
+
+def test_every_env_write_call_site_masks_first() -> None:
+    _assert_call_sites_mask_first()
+
+
+def _invocation(*flags: str, mode: str) -> str:
+    """A backslash-continued invocation, as it appears in a workflow `run:`."""
+    lines = ["          python3 scripts/resolve_e2e_tenant.py \\"]
+    lines += [f"            {flag} \\" for flag in flags]
+    lines.append(f"            {mode}")
+    return "\n".join(lines) + "\n"
+
+
+_WRITE_ONLY = _invocation('--matrix-json "$M"', '--cloud "$C"', mode=_WRITE_TOKEN)
+_INVERTED = _invocation('--matrix-json "$M"', mode=_WRITE_TOKEN) + _invocation(
+    '--matrix-json "$M"', mode=_MASK_TOKEN
+)
+_UNPARSEABLE = '          python3 resolve_e2e_tenant.py --matrix-json "$M" | tee out\n'
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        pytest.param(_WRITE_ONLY, "unpaired invocation", id="write-with-no-mask"),
+        pytest.param(_INVERTED, "does not mask before writing", id="wrong-order"),
+        pytest.param(_UNPARSEABLE, "terminator is neither", id="unreadable-shape"),
+    ],
+)
+def test_a_leaky_caller_is_never_discovered_green(
+    payload: str, expected: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard must actually fail on the shapes it exists to catch.
+
+    Without this, a discovery predicate that quietly matched nothing would let
+    every real call site through with the suite still green — the failure mode
+    a discovery-based guard is most prone to.
+    """
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "leaky.yaml").write_text(
+        f"jobs:\n  x:\n    steps:\n      - run: |\n{payload}"
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_REPO_ROOT", tmp_path)
+    with pytest.raises(AssertionError, match=expected):
+        _assert_call_sites_mask_first()
+
+
+def test_the_real_call_sites_are_what_the_negative_tests_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The correct shape passes — otherwise the tests above prove nothing."""
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    good = _invocation(
+        '--matrix-json "$M"', '--cloud "$C"', mode=_MASK_TOKEN
+    ) + _invocation('--matrix-json "$M"', '--cloud "$C"', mode=_WRITE_TOKEN)
+    (workflows / "good.yaml").write_text(
+        f"jobs:\n  x:\n    steps:\n      - run: |\n{good}"
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_REPO_ROOT", tmp_path)
+    _assert_call_sites_mask_first()
