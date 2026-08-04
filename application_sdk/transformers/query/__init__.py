@@ -60,10 +60,14 @@ _REMEDY_UNDECLARED_EXPRESSION = (
 # input batch -- callers stream parquet in batches of a few thousand rows -- so a
 # per-call report repeats every line hundreds of times for a single typename on a large
 # tenant, which ADR-0011 rules out for both WARNING ("very low -- per-anomaly") and INFO
-# ("do NOT log at INFO inside a loop that runs per-record"). The set of already-reported
-# shapes is capped so it cannot grow with the number of batches even for a caller whose
-# input schema varies between them; real callers hold one shape per template.
-_MAX_REPORTED_EXCLUSION_SHAPES = 64
+# ("do NOT log at INFO inside a loop that runs per-record").
+#
+# This caps only the input-dependent tier, whose key includes the fields gated on columns
+# absent from a given batch: that is the one set a caller with a schema that varies per
+# batch could grow without limit. Real callers hold one shape per template. The
+# authoring-mistake tier is deduplicated on the template's static text alone and needs no
+# cap -- see ``_report_excluded_fields``.
+_MAX_REPORTED_GATING_SHAPES = 64
 
 
 def _is_sql_expression(source_query: str) -> bool:
@@ -153,10 +157,12 @@ class QueryBasedTransformer(TransformerInterface):
         )
         self.connector_name = connector_name
         self.tenant_id = tenant_id
-        # (template, excluded field set) shapes already reported, so the diagnostics in
+        # Exclusion shapes already reported, so the diagnostics in
         # get_sql_column_expressions are emitted once instead of once per input batch.
-        self._reported_exclusion_shapes: set[tuple[Any, ...]] = set()
-        self._exclusion_reporting_capped = False
+        # Split by tier because only the input-dependent one needs bounding.
+        self._reported_authoring_mistakes: set[tuple[Any, ...]] = set()
+        self._reported_gating_shapes: set[tuple[Any, ...]] = set()
+        self._gating_reporting_capped = False
         self.entity_class_definitions: dict[str, str] = (
             get_yaml_query_template_path_mappings(
                 assets=[
@@ -301,72 +307,92 @@ class QueryBasedTransformer(TransformerInterface):
         * one DEBUG per field gated on inputs absent this run, carrying its declared
           inputs for diagnosis.
 
-        A shape is ``(template, never-resolvable names, gated names)``. Both sets are a
-        function of the template and the input schema alone, and callers stream batches
-        of one typename through an unchanging schema, so this collapses the hundreds of
-        identical reports a large tenant would otherwise produce into one -- while a
-        schema that genuinely changes mid-run reports again, because a newly gated field
-        is new information. Nothing is emitted at all when every declared field is
-        emitted, so a healthy run stays silent at every level.
+        Callers stream batches of one typename through an unchanging schema, so a report
+        per call repeats identical lines hundreds of times on a large tenant. Reports are
+        deduplicated instead, on two separate keys because the two tiers have different
+        bounds:
 
-        Reporting stops after ``_MAX_REPORTED_EXCLUSION_SHAPES`` distinct shapes, with a
-        single WARNING first: once diagnostics are incomplete, the absence of a line no
+        * authoring mistakes on ``(template, never-resolvable names)``, kept uncapped.
+          That set is a pure function of the template's static ``source_query`` and
+          ``source_columns`` text, so it cannot grow with the number of batches at all --
+          it is bounded by the connector's template count. Capping it would mean a genuine
+          authoring mistake in a template first seen late in a run goes unnamed.
+        * everything input-dependent -- the summary and the gated-field DEBUG lines -- on
+          ``(template, never-resolvable names, gated names)``, capped, since the gated set
+          varies with each batch's schema and so is the only tier a pathological caller
+          could grow without limit. A schema that genuinely changes mid-run reports again,
+          because a newly gated field is new information.
+
+        Nothing is emitted at all when every declared field is emitted, so a healthy run
+        stays silent at every level.
+
+        Passing ``_MAX_REPORTED_GATING_SHAPES`` distinct gated shapes stops that tier with
+        a single WARNING: once its diagnostics are incomplete, the absence of a line no
         longer means the field was published, and that is worth a human's attention.
         """
-        shape = (
-            template,
-            tuple(name for name, _, _ in never_resolvable),
+        authoring_shape = (template, tuple(name for name, _, _ in never_resolvable))
+        gating_shape = authoring_shape + (
             tuple(column["name"] for column in inputs_absent),
         )
-        if shape in self._reported_exclusion_shapes:
-            return
 
-        if len(self._reported_exclusion_shapes) >= _MAX_REPORTED_EXCLUSION_SHAPES:
-            if not self._exclusion_reporting_capped:
-                self._exclusion_reporting_capped = True
-                logger.warning(
-                    "Excluded-field diagnostics suppressed after %d distinct template "
-                    "and field-set combinations; further dropped template fields will "
-                    "not be reported by this transformer",
-                    _MAX_REPORTED_EXCLUSION_SHAPES,
-                )
-            return
-
-        self._reported_exclusion_shapes.add(shape)
-
-        logger.info(
-            "Template %s excluded %d of %d declared fields from the generated SQL, so "
-            "those attributes will be missing from published output: %d authoring "
-            "mistake(s) %s, %d gated on inputs absent from this run %s",
-            template,
-            declared - emitted,
-            declared,
-            len(never_resolvable),
-            [name for name, _, _ in never_resolvable],
-            len(inputs_absent),
-            [column["name"] for column in inputs_absent],
+        new_authoring = (
+            bool(never_resolvable)
+            and authoring_shape not in self._reported_authoring_mistakes
         )
+        new_gating = gating_shape not in self._reported_gating_shapes
+        capped = new_gating and (
+            len(self._reported_gating_shapes) >= _MAX_REPORTED_GATING_SHAPES
+        )
+        if capped:
+            new_gating = False
 
-        for name, source_query, remedy in never_resolvable:
-            logger.warning(
-                "Template field %r dropped from %s: source_query %r matched no "
-                "available column and is not a recognised literal, and its shape "
-                "indicates an authoring mistake, so the attribute will be missing "
-                "from published output. %s",
-                name,
+        if new_gating:
+            self._reported_gating_shapes.add(gating_shape)
+            logger.info(
+                "Template %s excluded %d of %d declared fields from the generated SQL, "
+                "so those attributes will be missing from published output: %d authoring "
+                "mistake(s) %s, %d gated on inputs absent from this run %s",
                 template,
-                source_query,
-                remedy,
+                declared - emitted,
+                declared,
+                len(never_resolvable),
+                [name for name, _, _ in never_resolvable],
+                len(inputs_absent),
+                [column["name"] for column in inputs_absent],
             )
 
-        for column in inputs_absent:
-            logger.debug(
-                "Template field %r skipped from %s: declared inputs absent from "
-                "this run (source_query %r, source_columns %r)",
-                column["name"],
-                template,
-                column["source_query"],
-                column.get("source_columns"),
+        if new_authoring:
+            self._reported_authoring_mistakes.add(authoring_shape)
+            for name, source_query, remedy in never_resolvable:
+                logger.warning(
+                    "Template field %r dropped from %s: source_query %r matched no "
+                    "available column and is not a recognised literal, and its shape "
+                    "indicates an authoring mistake, so the attribute will be missing "
+                    "from published output. %s",
+                    name,
+                    template,
+                    source_query,
+                    remedy,
+                )
+
+        if new_gating:
+            for column in inputs_absent:
+                logger.debug(
+                    "Template field %r skipped from %s: declared inputs absent from "
+                    "this run (source_query %r, source_columns %r)",
+                    column["name"],
+                    template,
+                    column["source_query"],
+                    column.get("source_columns"),
+                )
+
+        if capped and not self._gating_reporting_capped:
+            self._gating_reporting_capped = True
+            logger.warning(
+                "Excluded-field summaries and input-gated field diagnostics suppressed "
+                "after %d distinct template and gated field-set combinations; "
+                "authoring-mistake warnings continue to be reported",
+                _MAX_REPORTED_GATING_SHAPES,
             )
 
     def generate_sql_query(

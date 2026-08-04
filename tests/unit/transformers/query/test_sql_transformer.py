@@ -653,21 +653,28 @@ def test_a_changed_exclusion_set_is_reported_again(sql_transformer, sample_dataf
     ]
 
 
-def test_reporting_stops_at_the_shape_cap_with_one_notice(
+def test_gating_reports_stop_at_the_shape_cap_with_one_notice(
     sql_transformer, sample_dataframe
 ):
-    """The dedupe set is bounded, and running out is announced rather than silent.
+    """The input-dependent dedupe set is bounded, and running out is announced.
 
-    Once diagnostics are incomplete the absence of a line no longer means the field was
-    published, which is exactly the false reassurance this PR set out to remove — so the
-    cap warns once on the way out.
+    Once those diagnostics are incomplete the absence of a summary no longer means the
+    field was published, which is exactly the false reassurance this PR set out to remove
+    — so the cap warns once on the way out.
     """
     template = {
         "columns": flatten_yaml_columns(
-            {"attributes": {"propagate": {"source_query": "FALSE"}}}
+            {
+                "attributes": {
+                    "remoteId": {
+                        "source_query": "upper(missing_column)",
+                        "source_columns": ["missing_column"],
+                    }
+                }
+            }
         )
     }
-    cap = query_module._MAX_REPORTED_EXCLUSION_SHAPES
+    cap = query_module._MAX_REPORTED_GATING_SHAPES
 
     with patch.object(query_module, "logger") as mock_logger:
         for index in range(cap + 5):
@@ -676,9 +683,108 @@ def test_reporting_stops_at_the_shape_cap_with_one_notice(
             )
 
     assert mock_logger.info.call_count == cap
-    # One warning per reported shape, plus exactly one suppression notice.
-    assert mock_logger.warning.call_count == cap + 1
+    assert len(_dropped_field_names(mock_logger.debug)) == cap
+    # Exactly one suppression notice, and nothing else at WARNING.
+    assert mock_logger.warning.call_count == 1
     assert "diagnostics suppressed" in _rendered(mock_logger.warning.call_args)
+    assert "authoring-mistake warnings continue" in _rendered(
+        mock_logger.warning.call_args
+    )
+
+
+def test_authoring_mistakes_are_still_warned_past_the_gating_cap(
+    sql_transformer, sample_dataframe
+):
+    """The cap must not silence the tier it does not need to bound.
+
+    A never-resolvable field is a pure function of the template's static text, so the
+    number of distinct sets is bounded by the connector's template count and cannot grow
+    with batches at all. Capping that tier too would mean a genuine authoring mistake in a
+    template first seen after the cap gets no line naming it — only a generic suppression
+    notice — which is the failure mode this PR exists to remove.
+    """
+    gated_only = {
+        "columns": flatten_yaml_columns(
+            {
+                "attributes": {
+                    "remoteId": {
+                        "source_query": "upper(missing_column)",
+                        "source_columns": ["missing_column"],
+                    }
+                }
+            }
+        )
+    }
+    cap = query_module._MAX_REPORTED_GATING_SHAPES
+
+    with patch.object(query_module, "logger") as mock_logger:
+        # Exhaust the gated tier on templates that carry no authoring mistake.
+        for index in range(cap + 1):
+            sql_transformer.get_sql_column_expressions(
+                gated_only, sample_dataframe, {}, yaml_path=f"template_{index}.yaml"
+            )
+        mock_logger.reset_mock()
+
+        # A template seen for the first time past the cap, carrying a real mistake.
+        sql_transformer.get_sql_column_expressions(
+            {
+                "columns": flatten_yaml_columns(
+                    {"attributes": {"propagate": {"source_query": "FALSE"}}}
+                )
+            },
+            sample_dataframe,
+            {},
+            yaml_path="tag_attachment.yaml",
+        )
+
+    assert _dropped_field_names(mock_logger.warning) == ["attributes.propagate"]
+    warning = _rendered(mock_logger.warning.call_args)
+    assert "tag_attachment.yaml" in warning
+    assert "unquoted YAML scalar" in warning
+    # The summary is the capped tier, so it is gone — the naming WARNING is not.
+    mock_logger.info.assert_not_called()
+
+
+def test_a_changed_gated_set_does_not_re_warn_the_same_authoring_mistake(
+    sql_transformer, sample_dataframe
+):
+    """The two tiers are keyed separately, so input churn cannot amplify the WARNING.
+
+    A schema that changes between batches gates a different field set and is reported
+    again — but the authoring mistake in the same template has not changed and must not be
+    warned twice, or the input-independence the severity split bought is lost.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {
+                "attributes": {
+                    "propagate": {"source_query": "FALSE"},
+                    "remoteId": {
+                        "source_query": "upper(missing_column)",
+                        "source_columns": ["missing_column"],
+                    },
+                    "sourceId": {
+                        "source_query": "upper(other_missing_column)",
+                        "source_columns": ["other_missing_column"],
+                    },
+                }
+            }
+        )
+    }
+    wider_dataframe = pa.Table.from_pydict(
+        {"table_name": ["table1"], "missing_column": ["value1"]}
+    )
+
+    with patch.object(query_module, "logger") as mock_logger:
+        sql_transformer.get_sql_column_expressions(
+            template, sample_dataframe, {}, yaml_path="column.yaml"
+        )
+        sql_transformer.get_sql_column_expressions(
+            template, wider_dataframe, {}, yaml_path="column.yaml"
+        )
+
+    assert _dropped_field_names(mock_logger.warning) == ["attributes.propagate"]
+    assert mock_logger.info.call_count == 2
 
 
 def test_build_struct_with_none_level(sql_transformer):
