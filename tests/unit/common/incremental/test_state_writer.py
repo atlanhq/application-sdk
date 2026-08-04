@@ -413,11 +413,19 @@ class TestCreateCurrentStateSnapshot:
         scope_qns: list[str] | None,
         previous_state_present: bool,
         get_backfill_tables_fn=None,
+        stale_diff_dir_present: bool = False,
     ) -> CurrentStateResult | None:
         with tempfile.TemporaryDirectory() as temp_dir:
             transformed = Path(temp_dir) / "transformed"
             current_state = Path(temp_dir) / "current-state"
             previous_state = Path(temp_dir) / "previous-state"
+            diff_dir = Path(temp_dir) / "diff"
+
+            if stale_diff_dir_present:
+                # A prior run's incremental-diff, so the clear-and-recreate
+                # branch (and its rmtree) actually executes.
+                diff_dir.mkdir(parents=True)
+                (diff_dir / "leftover.json").write_text("{}")
 
             # Build minimal entity dirs
             for entity in ("table", "column"):
@@ -461,7 +469,7 @@ class TestCreateCurrentStateSnapshot:
                 patch(
                     "application_sdk.common.incremental.state.state_writer."
                     "get_persistent_artifacts_path",
-                    return_value=Path(temp_dir) / "diff",
+                    return_value=diff_dir,
                 ),
                 patch(
                     "application_sdk.common.incremental.state.state_writer."
@@ -554,19 +562,30 @@ class TestCreateCurrentStateSnapshot:
         offloaded inline. Either one running on the loop would stall the
         enclosing @task's auto-heartbeat for the tree's removal time.
         """
-        offloaded: list[object] = []
+        offloaded: list[tuple[object, tuple]] = []
 
         async def _record(func, *args, **kwargs):
-            offloaded.append(func)
+            offloaded.append((func, args))
             return func(*args, **kwargs)
 
         with patch(
             "application_sdk.common.incremental.state.state_writer.run_in_thread",
             side_effect=_record,
         ):
-            result = await self._run(scope_qns=["db/s/t1"], previous_state_present=True)
+            result = await self._run(
+                scope_qns=["db/s/t1"],
+                previous_state_present=True,
+                stale_diff_dir_present=True,
+            )
 
         assert result is not None
+        called = [func for func, _ in offloaded]
         assert (
-            prepare_current_state_directory in offloaded
+            prepare_current_state_directory in called
         ), "current-state directory prep was not offloaded"
+        diff_clears = [
+            args
+            for func, args in offloaded
+            if func is shutil.rmtree and args and Path(args[0]).name == "diff"
+        ]
+        assert diff_clears, "stale incremental-diff clear was not offloaded"

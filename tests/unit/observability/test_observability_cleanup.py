@@ -13,6 +13,10 @@ Two properties are guarded here:
 
 No object store is touched: ``delete`` is mocked and ``ENABLE_ATLAN_UPLOAD`` is
 left at its default so the upstream branch never runs.
+
+The pruner reads wall-clock time to compute its retention cutoff, so these tests
+pin the module's ``datetime`` to a fixed instant. Without that, which pruning
+branch a given partition takes depends on the calendar day the suite runs.
 """
 
 from __future__ import annotations
@@ -29,6 +33,29 @@ from application_sdk.observability.observability import (
     LOCAL_OBS_SUBDIR_MAP,
     AtlanObservability,
 )
+
+# Mid-month, mid-year, so every partition below is unambiguously in the current
+# year and month — the branch each test targets is fixed rather than dependent on
+# the day the suite happens to run.
+_FROZEN_NOW = datetime(2026, 6, 15, 12, 0, 0)
+
+
+class _FrozenDatetime(datetime):
+    """``datetime`` whose ``now()`` is pinned to :data:`_FROZEN_NOW`.
+
+    Patched over the *module's* ``datetime`` name only — a module-local clock
+    seam, not a global clock patch, so the asyncio loop's own clock is untouched.
+    """
+
+    @classmethod
+    def now(cls, tz=None) -> datetime:  # type: ignore[override]
+        return _FROZEN_NOW.replace(tzinfo=tz) if tz else _FROZEN_NOW
+
+
+def _frozen_clock():
+    return mock.patch(
+        "application_sdk.observability.observability.datetime", _FrozenDatetime
+    )
 
 
 class _StubObservability(AtlanObservability[dict[str, Any]]):
@@ -80,9 +107,10 @@ class TestCleanupOldRecordsOffload:
     @pytest.mark.asyncio
     async def test_partition_removal_offloaded_to_thread(self, tmp_path) -> None:
         obs = _make_observability(tmp_path, retention_days=7)
-        stale_day = _partition_dir(obs, datetime.now() - timedelta(days=30))
+        stale_day = _partition_dir(obs, _FROZEN_NOW - timedelta(days=30))
 
         with (
+            _frozen_clock(),
             mock.patch("application_sdk.storage.delete", new_callable=mock.AsyncMock),
             mock.patch.object(
                 AtlanObservability,
@@ -109,19 +137,18 @@ class TestCleanupOldRecordsOffload:
 
         Regression guard: with ``shutil`` imported inside the year-level branch,
         this path raised ``UnboundLocalError`` and silently pruned nothing.
-        """
-        now = datetime.now()
-        if now.day < 3:
-            # Early in the month there is no same-month stale day to prune, and a
-            # previous-month partition would take the month branch instead.
-            pytest.skip("no same-month stale partition available today")
 
+        The clock is frozen so both partitions land in the frozen year and month
+        — only the day branch can prune them — and the guard therefore runs
+        identically on every calendar day.
+        """
         obs = _make_observability(tmp_path, retention_days=1)
-        # Same year and month as `now`, so only the day branch can prune it.
-        stale_day = _partition_dir(obs, now.replace(day=1))
-        fresh_day = _partition_dir(obs, now)
+        # Same year and month as the frozen now, so only the day branch applies.
+        stale_day = _partition_dir(obs, _FROZEN_NOW.replace(day=1))
+        fresh_day = _partition_dir(obs, _FROZEN_NOW)
 
         with (
+            _frozen_clock(),
             mock.patch(
                 "application_sdk.storage.delete", new_callable=mock.AsyncMock
             ) as mock_delete,

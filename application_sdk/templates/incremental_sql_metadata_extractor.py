@@ -50,6 +50,7 @@ Example subclass::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import warnings
 from abc import abstractmethod
@@ -802,7 +803,22 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             # callers): its rmtree spans the whole downloaded previous state,
             # and this runs inside a @task whose auto-heartbeat must keep
             # flowing while the tree is removed.
-            await run_in_thread(cleanup_previous_state, previous_state_dir)
+            #
+            # Shielded because the thread cannot be cancelled: abandoning the
+            # await on cancellation leaves the executor thread still deleting
+            # `previous_state_dir`, which is deterministic per connection — a
+            # concurrent retry's prepare_previous_state() would clear and
+            # recreate that exact path underneath the still-running removal.
+            # Wait for it to finish before propagating the cancellation.
+            cleanup = asyncio.ensure_future(
+                run_in_thread(cleanup_previous_state, previous_state_dir)
+            )
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                with contextlib.suppress(Exception):
+                    await cleanup
+                raise
 
     @task(timeout_seconds=120)
     async def update_incremental_marker(

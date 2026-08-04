@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import threading
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -939,6 +941,80 @@ class TestWriteCurrentStateInlineImports:
         assert mock_offload.await_args.args[0] is mock_cleanup
         assert mock_offload.await_args.args[1] == tmp_path / "prev"
         mock_cleanup.assert_called_once()
+
+    async def test_cleanup_completes_when_task_cancelled(self, tmp_path) -> None:
+        """Cancellation must not abandon the offloaded removal mid-flight.
+
+        The executor thread cannot be cancelled, so an abandoned await returns
+        control while the thread is still deleting ``previous_state_dir`` — a
+        path that is deterministic per connection, so a concurrent retry's
+        ``prepare_previous_state`` would clear and recreate it underneath the
+        running removal. The removal must therefore finish before
+        ``CancelledError`` propagates.
+
+        Cancellation is delivered **twice**: one ``cancel()`` throws once and is
+        then consumed, so even an unshielded await in the ``finally`` would run
+        to completion. It is the repeated cancellation (worker shutdown, a
+        ``wait_for`` timeout) that abandons the removal mid-flight, and that is
+        what ``asyncio.shield`` here defends against.
+        """
+        finished = threading.Event()
+
+        def _slow_cleanup(_previous_state_dir) -> None:
+            # Runs on the offload thread, so this sleep never blocks the loop.
+            # Long enough that an abandoned await would observe it unfinished.
+            time.sleep(0.2)
+            finished.set()
+
+        snapshot_started = asyncio.Event()
+
+        async def _hang(*_args, **_kwargs):
+            snapshot_started.set()
+            await asyncio.sleep(3600)
+
+        extractor = _make_extractor()
+
+        with (
+            patch(
+                "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
+                return_value=tmp_path / "current",
+            ),
+            patch(
+                "application_sdk.common.incremental.helpers.get_persistent_s3_prefix",
+                return_value="s3://persist",
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.cleanup_previous_state",
+                new=_slow_cleanup,
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.create_current_state_snapshot",
+                new=AsyncMock(side_effect=_hang),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.download_transformed_data",
+                new=AsyncMock(return_value=tmp_path / "transformed"),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.prepare_previous_state",
+                new=AsyncMock(return_value=tmp_path / "prev"),
+            ),
+        ):
+            task = asyncio.ensure_future(
+                extractor.write_current_state(self._make_input())
+            )
+            await snapshot_started.wait()
+            task.cancel()
+            # One loop turn: the throw lands in `_hang`, the finally runs and
+            # suspends on the offloaded removal (already submitted to a thread).
+            await asyncio.sleep(0)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert (
+            finished.is_set()
+        ), "cancellation propagated before the offloaded removal finished"
 
 
 class TestResolveDatabasePlaceholdersDefault:
