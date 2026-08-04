@@ -1459,7 +1459,8 @@ class TestSubstituteCountAndLog:
 
 
 class TestCheckSecretStoreAccess:
-    """SDR secret-store preflight probe: pass, unreachable, and nothing-resolved."""
+    """SDR secret-store preflight probe: pass, unreachable, unresolvable-config,
+    and nothing-resolved."""
 
     @staticmethod
     def _spec(**over: Any) -> AgentCredentialSpec:
@@ -1501,6 +1502,20 @@ class TestCheckSecretStoreAccess:
         r = await check_secret_store_access(self._spec(), None)
         assert r.passed is False
         assert r.reachable is False
+
+    async def test_fails_when_multi_key_has_no_secret_path(self) -> None:
+        # Multi-key (non single-key) with no secret-path: the ref-keys have
+        # nowhere to resolve from, so the credentials can't be used.
+        class Store:
+            async def get(self, name: str) -> str:
+                return json.dumps({})
+
+        spec = self._spec(**{"secret-path": ""})
+        assert spec.secret_path == "" and spec.key_type != "single-key"
+        r = await check_secret_store_access(spec, Store())  # type: ignore[arg-type]
+        assert r.passed is False
+        assert r.reachable is False
+        assert "secret-path" in r.message
 
 
 class TestSingleKeyProbeConcurrency:

@@ -542,19 +542,19 @@ async def check_secret_store_access(
 ) -> SecretStoreCheckResult:
     """Probe the customer secret store for the SDR interactive preflight.
 
-    Fails in exactly two cases (never raises — returns a structured result the
-    preflight renders as a check row):
+    Fails (never raises — returns a structured result the preflight renders as a
+    check row):
 
     1. **Unreachable / down** — no secret store configured, the store errors, or
        the configured ``secret-path`` doesn't exist.
-    2. **Nothing resolved** — the store is reachable but not a single ref-key was
+    2. **Unresolvable config** — a multi-key (non single-key) spec with no
+       ``secret-path``: the ref-keys have nowhere to resolve from, so the
+       credentials can't be used.
+    3. **Nothing resolved** — the store is reachable but not a single ref-key was
        substituted, so every credential field falls back to its literal value.
        This is a likely misconfiguration (surfaced as a failed row), but NOT
        fatal: a customer who put raw secrets directly in the config can still
        connect, so the preflight keeps running the connectivity checks.
-
-    Inline-literal specs (no ``secret-path`` / not single-key) need no store, so
-    they pass trivially.
     """
     if secret_store is None:
         return SecretStoreCheckResult(
@@ -566,11 +566,18 @@ async def check_secret_store_access(
 
     raw = spec.to_raw_dict()
     if spec.key_type != "single-key" and not spec.secret_path:
+        # Multi-key (non single-key) resolution fetches the bundle from a
+        # secret-path. With neither single-key probing nor a secret-path, the
+        # ref-keys can never be resolved, so the credentials can't be used — fail
+        # the check (and short-circuit; there is nothing for connectivity to try).
         return SecretStoreCheckResult(
-            passed=True,
-            reachable=True,
+            passed=False,
+            reachable=False,
             substituted=0,
-            message="Credentials are inline; no secret store lookup required.",
+            message=(
+                "Multi-key credentials require a secret-path, but none is "
+                "configured — the secret keys cannot be resolved."
+            ),
         )
 
     try:
