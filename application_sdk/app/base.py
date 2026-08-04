@@ -1332,7 +1332,7 @@ class App(ABC):
             store=store,
         )
 
-    @task(timeout_seconds=300, retry_max_attempts=3)
+    @task(timeout_seconds=300, retry_max_attempts=3, heartbeat_timeout_seconds=60)
     async def cleanup_files(self, input: CleanupInput) -> CleanupOutput:
         """Framework task: clean up local files after a workflow run.
 
@@ -1358,8 +1358,23 @@ class App(ABC):
         from application_sdk.execution import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
             build_output_path,
         )
+        from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            run_in_thread,
+        )
 
         path_results: dict[str, bool] = {}
+
+        async def _remove_path(path: str) -> None:
+            """Delete ``path`` (file or directory) off the event loop.
+
+            Offloaded because ``rmtree``/``remove`` over a large tracked
+            directory is syscall-bound and can run long enough to starve the
+            auto-heartbeat if it ran directly on the event loop.
+            """
+            if os.path.isdir(path):
+                await run_in_thread(shutil.rmtree, path)
+            else:
+                await run_in_thread(os.remove, path)
 
         # 1. Delete tracked FileReference local paths (+ .sha256 sidecars).
         tracked_refs = TaskStateAccessor().get(TRACKED_FILE_REFS_KEY)
@@ -1369,10 +1384,7 @@ class App(ABC):
                     for p in (ref.local_path, ref.local_path + ".sha256"):
                         try:
                             if os.path.exists(p):
-                                if os.path.isdir(p):
-                                    shutil.rmtree(p)
-                                else:
-                                    os.remove(p)
+                                await _remove_path(p)
                             path_results[p] = True
                         except Exception:
                             _task_logger.warning(
@@ -1392,10 +1404,7 @@ class App(ABC):
         for base_path in dir_paths:
             try:
                 if os.path.exists(base_path):
-                    if os.path.isdir(base_path):
-                        shutil.rmtree(base_path)
-                    else:
-                        os.remove(base_path)
+                    await _remove_path(base_path)
                 path_results[base_path] = True
             except Exception:
                 _task_logger.warning(
