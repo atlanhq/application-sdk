@@ -43,31 +43,63 @@ logger = get_logger(__name__)
 
 _SQL_KEYWORD_LITERALS = frozenset({"FALSE", "TRUE", "NULL"})
 
+_REMEDY_NON_STRING = (
+    "A source_query must be a string; a YAML list or mapping is neither a column "
+    "reference nor a literal."
+)
+_REMEDY_QUOTED_KEYWORD = (
+    "A bare SQL keyword must be authored as an unquoted YAML scalar, not a quoted "
+    "string."
+)
+_REMEDY_UNDECLARED_EXPRESSION = (
+    "A multi-token SQL expression must declare the columns it reads in source_columns."
+)
 
-def _is_never_resolvable(column: dict[str, Any]) -> bool:
-    """Whether a field the SQL gate excluded could resolve on any input at all.
+
+def _is_sql_expression(source_query: str) -> bool:
+    """Whether a ``source_query`` is a multi-token SQL construct rather than a name.
+
+    A call or a whitespace-separated construct is an expression, and the gate admits an
+    undeclared ``source_query`` only by exact column-name match. A single token that
+    merely needs SQL quoting -- ``my-col``, ``2024_total`` -- is deliberately not judged
+    here: it can name a real column, so it belongs to the by-design-gating branch rather
+    than to the authoring-mistake branch.
+    """
+    return "(" in source_query or any(character.isspace() for character in source_query)
+
+
+def _unresolvable_remedy(column: dict[str, Any]) -> str | None:
+    """How to fix a field the SQL gate excluded, or ``None`` if it may resolve as authored.
 
     Separates an authoring mistake from by-design gating. A field whose declared
     ``source_columns`` are merely absent this run -- or whose ``source_query`` names a
     column absent this run -- resolves on a run that supplies them, which is the
     transformer's opt-in behaviour for optional enrichments and not a defect.
 
-    Two shapes can never resolve, whatever the input:
+    Three shapes indicate an authoring mistake instead, and each needs a different edit,
+    so the caller reports the remedy returned here rather than one hard-coded hint:
 
+    * a ``source_query`` that is not a string at all (a YAML list or mapping), which is
+      never valid SQL text.
     * a bare SQL keyword authored as a quoted string (``source_query: "FALSE"``), which
       is read as a column reference and so only ever matches a column literally named
       ``FALSE``. The unquoted YAML scalar ``FALSE`` is the correct authoring.
     * a multi-token SQL expression that declares no ``source_columns``, since the gate
       admits an undeclared ``source_query`` only by exact column-name match.
+
+    Declared ``source_columns`` are checked before the shape rules, so a field that
+    would resolve on a run supplying them is never reported as an authoring mistake.
     """
     source_query = column["source_query"]
     if not isinstance(source_query, str):
-        return True
-    if source_query.upper() in _SQL_KEYWORD_LITERALS:
-        return True
+        return _REMEDY_NON_STRING
     if column.get("source_columns"):
-        return False
-    return not source_query.isidentifier()
+        return None
+    if source_query.upper() in _SQL_KEYWORD_LITERALS:
+        return _REMEDY_QUOTED_KEYWORD
+    if _is_sql_expression(source_query):
+        return _REMEDY_UNDECLARED_EXPRESSION
+    return None
 
 
 class QueryBasedTransformer(TransformerInterface):
@@ -161,9 +193,11 @@ class QueryBasedTransformer(TransformerInterface):
         """Get the columns and literal columns for the SQL query.
 
         A declared field that resolves to neither an available column nor a recognised
-        literal cannot be emitted, and is reported at WARNING rather than dropped
-        silently -- the resulting symptom is an attribute missing from published
-        output, which nothing downstream can detect.
+        literal cannot be emitted, and is reported rather than dropped silently -- the
+        resulting symptom is an attribute missing from published output, which nothing
+        downstream can detect. An excluded field whose shape indicates an authoring
+        mistake is reported at WARNING with the edit that fixes it; one whose declared
+        inputs are merely absent from this run is by-design gating and stays at DEBUG.
 
         Args:
             sql_template (Dict[str, Any]): The SQL template
@@ -200,15 +234,17 @@ class QueryBasedTransformer(TransformerInterface):
                 literal_columns.append(column)
                 columns.append(self.convert_to_sql_expression(column, is_literal=True))
 
-            elif _is_never_resolvable(column):
+            elif (remedy := _unresolvable_remedy(column)) is not None:
                 logger.warning(
-                    "Template field %r dropped from %s: source_query %r can never "
-                    "resolve to a column or a literal, so the attribute will be absent "
-                    "from published output on every run. A bare SQL keyword must be "
-                    "authored as an unquoted YAML scalar, not a quoted string.",
+                    "Template field %r dropped from %s: source_query %r matched no "
+                    "available column and is not a recognised literal, and its shape "
+                    "indicates an authoring mistake rather than an input absent from "
+                    "this run, so the attribute will be missing from published output. "
+                    "%s",
                     column["name"],
                     yaml_path or "<template>",
                     column["source_query"],
+                    remedy,
                 )
 
             else:

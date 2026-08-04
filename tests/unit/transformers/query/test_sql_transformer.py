@@ -302,6 +302,146 @@ def test_undeclared_sql_expression_can_never_resolve_and_warns(
     assert _dropped_field_names(mock_logger.warning) == ["attributes.remoteId"]
 
 
+def test_quoted_keyword_with_declared_source_columns_is_debug_not_warning(
+    sql_transformer, sample_dataframe
+):
+    """Declared ``source_columns`` outrank the keyword shape, because the gate admits them.
+
+    ``{"source_query": "FALSE", "source_columns": ["missing_column"]}`` emits the valid
+    SQL literal ``FALSE`` on a run supplying ``missing_column``, so reporting it as an
+    authoring mistake when that column is absent would be a false warning.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {
+                "attributes": {
+                    "propagate": {
+                        "source_query": "FALSE",
+                        "source_columns": ["missing_column"],
+                    },
+                }
+            }
+        )
+    }
+
+    with patch.object(query_module, "logger") as mock_logger:
+        columns, _ = sql_transformer.get_sql_column_expressions(
+            template, sample_dataframe, {}
+        )
+
+    assert columns == []
+    mock_logger.warning.assert_not_called()
+    assert _dropped_field_names(mock_logger.debug) == ["attributes.propagate"]
+
+
+def test_absent_quoting_required_column_name_is_debug_not_warning(
+    sql_transformer, sample_dataframe
+):
+    """A column name SQL would need to quote is still a column name, not an expression.
+
+    ``my-col`` is not a Python identifier, but a run whose table carries that column
+    resolves the field through the gate's column-name match -- so it is ordinary optional
+    gating, and judging the shape by Python identifier rules would warn on it wrongly.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {"attributes": {"tagValue": {"source_query": "my-col"}}}
+        )
+    }
+
+    with patch.object(query_module, "logger") as mock_logger:
+        columns, _ = sql_transformer.get_sql_column_expressions(
+            template, sample_dataframe, {}
+        )
+
+    assert columns == []
+    mock_logger.warning.assert_not_called()
+    assert _dropped_field_names(mock_logger.debug) == ["attributes.tagValue"]
+
+
+def test_quoting_required_column_name_resolves_when_the_run_supplies_it(
+    sql_transformer,
+):
+    """The other half of that claim: such a name really does resolve when present."""
+    template = {
+        "columns": flatten_yaml_columns(
+            {"attributes": {"tagValue": {"source_query": "my-col"}}}
+        )
+    }
+
+    with patch.object(query_module, "logger") as mock_logger:
+        columns, _ = sql_transformer.get_sql_column_expressions(
+            template, pa.Table.from_pydict({"my-col": ["v1"]}), {}
+        )
+
+    assert columns == ['my-col AS "attributes.tagValue"']
+    mock_logger.warning.assert_not_called()
+    mock_logger.debug.assert_not_called()
+
+
+def test_non_string_source_query_is_dropped_with_a_warning(
+    sql_transformer, sample_dataframe
+):
+    """A YAML list or mapping ``source_query`` is never valid SQL text.
+
+    It matches no column name and is none of the literal types, so it reaches the type
+    guard -- the one warned shape that no amount of input can resolve.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {
+                "attributes": {
+                    "remoteId": {"source_query": ["table_name", "table_schema"]}
+                }
+            }
+        )
+    }
+
+    with patch.object(query_module, "logger") as mock_logger:
+        columns, literal_columns = sql_transformer.get_sql_column_expressions(
+            template, sample_dataframe, {}
+        )
+
+    assert columns == []
+    assert literal_columns is None
+    mock_logger.debug.assert_not_called()
+    assert _dropped_field_names(mock_logger.warning) == ["attributes.remoteId"]
+
+
+def test_warning_remediation_matches_the_shape_that_tripped_it(
+    sql_transformer, sample_dataframe
+):
+    """Each warned shape needs a different edit, so one hard-coded hint misdirects.
+
+    Unquoting a YAML scalar fixes ``source_query: "FALSE"``; it would do nothing for
+    ``upper(table_name)``, whose fix is declaring ``source_columns``.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {
+                "attributes": {
+                    "propagate": {"source_query": "FALSE"},
+                    "remoteId": {"source_query": "upper(table_name)"},
+                    "tags": {"source_query": ["a", "b"]},
+                }
+            }
+        )
+    }
+
+    with patch.object(query_module, "logger") as mock_logger:
+        sql_transformer.get_sql_column_expressions(template, sample_dataframe, {})
+
+    messages = {
+        call.args[1]: call.args[0] % tuple(call.args[1:])
+        for call in mock_logger.warning.call_args_list
+    }
+
+    assert "unquoted YAML scalar" in messages["attributes.propagate"]
+    assert "source_columns" in messages["attributes.remoteId"]
+    assert "must be a string" in messages["attributes.tags"]
+    assert "unquoted YAML scalar" not in messages["attributes.remoteId"]
+
+
 def test_emitted_field_set_equals_declared_field_set_when_inputs_are_present(
     sql_transformer, sample_dataframe, sample_yaml_template
 ):
