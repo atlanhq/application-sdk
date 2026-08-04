@@ -103,7 +103,12 @@ def _is_text_mode_open(node: ast.Call) -> bool:
             mode = kw.value
     if mode is None:
         return True
-    return isinstance(mode, ast.Constant) and "b" not in str(mode.value)
+    if not isinstance(mode, ast.Constant):
+        # A dynamic mode (`open(path, mode)`) cannot be proven binary, so treat
+        # it as potentially text — the decode-blind class this gate exists to
+        # end must not slip through a non-constant mode expression.
+        return True
+    return "b" not in str(mode.value)
 
 
 def _exempt_lines(path: Path) -> set[int]:
@@ -115,6 +120,23 @@ def _exempt_lines(path: Path) -> set[int]:
         )
         if _EXEMPT in line
     }
+
+
+def _is_exemptable_lookalike(node: ast.AST) -> bool:
+    """Whether *node* is the decode-free lookalike the exemption exists for.
+
+    ``importlib.metadata.Distribution.read_text(filename)`` takes a filename
+    positionally and returns ``None`` when absent — no decode step.  A
+    ``Path.read_text`` decodes and must never be exempted, so the marker only
+    honours a ``.read_text(<positional>)`` call with no ``encoding`` keyword —
+    the lookalike's signature — and refuses a keyword/decode-shaped call.
+    """
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "read_text"
+        and not any(kw.arg == "encoding" for kw in node.keywords)
+    )
 
 
 def _decode_blind_sites(path: Path) -> list[int]:
@@ -133,7 +155,11 @@ def _decode_blind_sites(path: Path) -> list[int]:
             for child in [*node.orelse, *node.finalbody]:
                 walk(child, enclosing)
             return
-        if _is_text_read(node) and node.lineno not in exempt:
+        if _is_text_read(node):
+            # The exemption only clears the decode-free lookalike, never a real
+            # decode-risky read that happens to share the marker's line.
+            if node.lineno in exempt and _is_exemptable_lookalike(node):
+                return
             names = [
                 name
                 for try_node in enclosing
@@ -232,3 +258,44 @@ def test_the_invariant_check_actually_detects_a_violation(tmp_path: Path) -> Non
         encoding="utf-8",
     )
     assert _decode_blind_sites(good) == []
+
+
+def test_dynamic_mode_open_is_treated_as_text(tmp_path: Path) -> None:
+    """`open(path, mode)` with a non-constant mode is potentially text.
+
+    A mode the walker cannot statically prove binary must not let a decode-blind
+    read through — treating it as text is the conservative direction for a gate
+    whose whole purpose is that silence reads as coverage.
+    """
+    src = tmp_path / "dyn.py"
+    src.write_text(
+        "def read(p, mode) -> str:\n"
+        "    try:\n"
+        "        with open(p, mode) as fh:\n"
+        "            return fh.read()\n"
+        "    except OSError:\n"
+        '        return ""\n',
+        encoding="utf-8",
+    )
+    assert _decode_blind_sites(src) == [3]
+
+
+def test_exemption_refuses_a_decode_risky_read(tmp_path: Path) -> None:
+    """`# read-guard: exempt` must not clear a real `Path.read_text`.
+
+    The marker exists only for the decode-free `Distribution.read_text`
+    lookalike. A keyword/decode-shaped `read_text` sharing the marker's line is
+    a genuine decode risk and must still be reported.
+    """
+    src = tmp_path / "abuse.py"
+    src.write_text(
+        "from pathlib import Path\n"
+        "\n"
+        "def read(p: Path) -> str:\n"
+        "    try:\n"
+        '        return p.read_text(encoding="utf-8")  # read-guard: exempt\n'
+        "    except OSError:\n"
+        '        return ""\n',
+        encoding="utf-8",
+    )
+    assert _decode_blind_sites(src) == [5]

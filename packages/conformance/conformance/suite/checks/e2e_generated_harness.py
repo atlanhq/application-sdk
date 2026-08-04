@@ -74,6 +74,14 @@ a suppression carrying the author's reason is auditable, silence is not, but an
 ordinary class that merely shares a name with an unrelated one is not this
 rule's business and must not be graded as a harness.
 
+Known limit: alias bindings record only ``{spelled: imported}``, not the module
+the import came from, so a name that is defined in several indexed files cannot
+be disambiguated to the module-qualified one, and re-export chains (an
+intermediate module that does ``from generated import Foo as Bar``) are not
+followed.  Neither shape occurs in the real consumer layout (a direct aliased
+import of a generated base, which IS resolved); if one ever appears, record the
+``ImportFrom`` module and resolve module-qualified candidates first.
+
 Inline suppression
 ------------------
 ``# conformance: ignore[T023] <reason>`` / ``ignore[T024]`` on the flagged line
