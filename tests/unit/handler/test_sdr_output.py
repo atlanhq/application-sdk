@@ -52,10 +52,11 @@ def test_auth_output_to_response_envelope() -> None:
 
 
 def test_metadata_output_to_response_is_bare_list() -> None:
-    from application_sdk.handler.contracts import SqlMetadataOutput
+    from application_sdk.handler.contracts import MetadataOutput
     from application_sdk.handler.sdr_output import metadata_output_to_response
 
-    out = SqlMetadataOutput(objects=[{"TABLE_CAT": "db1"}, {"TABLE_CAT": "db2"}])
+    # SDR path deserialises as base MetadataOutput (objects: list[Any]).
+    out = MetadataOutput(objects=[{"TABLE_CAT": "db1"}, {"TABLE_CAT": "db2"}])
     resp = metadata_output_to_response(out)
     assert isinstance(resp, list)
     assert resp == [{"TABLE_CAT": "db1"}, {"TABLE_CAT": "db2"}]
