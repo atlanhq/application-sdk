@@ -55,6 +55,16 @@ _REMEDY_UNDECLARED_EXPRESSION = (
     "A multi-token SQL expression must declare the columns it reads in source_columns."
 )
 
+# Excluded-field diagnostics are reported once per distinct (template, excluded field
+# set) shape rather than once per call. ``get_sql_column_expressions`` runs once per
+# input batch -- callers stream parquet in batches of a few thousand rows -- so a
+# per-call report repeats every line hundreds of times for a single typename on a large
+# tenant, which ADR-0011 rules out for both WARNING ("very low -- per-anomaly") and INFO
+# ("do NOT log at INFO inside a loop that runs per-record"). The set of already-reported
+# shapes is capped so it cannot grow with the number of batches even for a caller whose
+# input schema varies between them; real callers hold one shape per template.
+_MAX_REPORTED_EXCLUSION_SHAPES = 64
+
 
 def _is_sql_expression(source_query: str) -> bool:
     """Whether a ``source_query`` is a multi-token SQL construct rather than a name.
@@ -143,6 +153,10 @@ class QueryBasedTransformer(TransformerInterface):
         )
         self.connector_name = connector_name
         self.tenant_id = tenant_id
+        # (template, excluded field set) shapes already reported, so the diagnostics in
+        # get_sql_column_expressions are emitted once instead of once per input batch.
+        self._reported_exclusion_shapes: set[tuple[Any, ...]] = set()
+        self._exclusion_reporting_capped = False
         self.entity_class_definitions: dict[str, str] = (
             get_yaml_query_template_path_mappings(
                 assets=[
@@ -202,6 +216,15 @@ class QueryBasedTransformer(TransformerInterface):
         resolve on a run supplying its declared inputs is by-design gating and stays at
         DEBUG.
 
+        Because DEBUG is off in production, the gated class would otherwise stay as
+        invisible as the silent drop this replaces -- and a typo that happens to look
+        like a plausible column name is statically indistinguishable from an optional
+        enrichment, so it lands there. Any exclusion therefore also emits a per-template
+        INFO summary of declared-vs-emitted counts naming the excluded fields, which is
+        recorded in production and makes "this attribute was declared but never
+        published" queryable without a line per field. See
+        :meth:`_report_excluded_fields` for the reporting cadence.
+
         Args:
             sql_template (Dict[str, Any]): The SQL template
             dataframe (pa.Table): The Table to get columns from
@@ -213,6 +236,8 @@ class QueryBasedTransformer(TransformerInterface):
         """
         columns: list[str] = []
         literal_columns: list[dict[str, str]] = []
+        never_resolvable: list[tuple[str, Any, str]] = []
+        inputs_absent: list[dict[str, Any]] = []
         column_names = list(dataframe.schema.names) + list(default_attributes.keys())
 
         for column in sql_template["columns"]:
@@ -238,28 +263,111 @@ class QueryBasedTransformer(TransformerInterface):
                 columns.append(self.convert_to_sql_expression(column, is_literal=True))
 
             elif (remedy := _unresolvable_remedy(column)) is not None:
-                logger.warning(
-                    "Template field %r dropped from %s: source_query %r matched no "
-                    "available column and is not a recognised literal, and its shape "
-                    "indicates an authoring mistake, so the attribute will be missing "
-                    "from published output. %s",
-                    column["name"],
-                    yaml_path or "<template>",
-                    column["source_query"],
-                    remedy,
+                never_resolvable.append(
+                    (column["name"], column["source_query"], remedy)
                 )
 
             else:
-                logger.debug(
-                    "Template field %r skipped from %s: declared inputs absent from "
-                    "this run (source_query %r, source_columns %r)",
-                    column["name"],
-                    yaml_path or "<template>",
-                    column["source_query"],
-                    column.get("source_columns"),
-                )
+                inputs_absent.append(column)
+
+        if never_resolvable or inputs_absent:
+            self._report_excluded_fields(
+                yaml_path or "<template>",
+                declared=len(sql_template["columns"]),
+                emitted=len(columns),
+                never_resolvable=never_resolvable,
+                inputs_absent=inputs_absent,
+            )
 
         return columns, literal_columns or None
+
+    def _report_excluded_fields(
+        self,
+        template: str,
+        *,
+        declared: int,
+        emitted: int,
+        never_resolvable: list[tuple[str, Any, str]],
+        inputs_absent: list[dict[str, Any]],
+    ) -> None:
+        """Report the fields the SQL gate excluded, once per distinct exclusion shape.
+
+        Emits, for a shape not yet reported by this transformer:
+
+        * one INFO summary of declared-vs-emitted counts naming both excluded sets, which
+          is the production-visible record that a declared attribute never reached
+          published output.
+        * one WARNING per never-resolvable field, carrying the edit that fixes it.
+        * one DEBUG per field gated on inputs absent this run, carrying its declared
+          inputs for diagnosis.
+
+        A shape is ``(template, never-resolvable names, gated names)``. Both sets are a
+        function of the template and the input schema alone, and callers stream batches
+        of one typename through an unchanging schema, so this collapses the hundreds of
+        identical reports a large tenant would otherwise produce into one -- while a
+        schema that genuinely changes mid-run reports again, because a newly gated field
+        is new information. Nothing is emitted at all when every declared field is
+        emitted, so a healthy run stays silent at every level.
+
+        Reporting stops after ``_MAX_REPORTED_EXCLUSION_SHAPES`` distinct shapes, with a
+        single WARNING first: once diagnostics are incomplete, the absence of a line no
+        longer means the field was published, and that is worth a human's attention.
+        """
+        shape = (
+            template,
+            tuple(name for name, _, _ in never_resolvable),
+            tuple(column["name"] for column in inputs_absent),
+        )
+        if shape in self._reported_exclusion_shapes:
+            return
+
+        if len(self._reported_exclusion_shapes) >= _MAX_REPORTED_EXCLUSION_SHAPES:
+            if not self._exclusion_reporting_capped:
+                self._exclusion_reporting_capped = True
+                logger.warning(
+                    "Excluded-field diagnostics suppressed after %d distinct template "
+                    "and field-set combinations; further dropped template fields will "
+                    "not be reported by this transformer",
+                    _MAX_REPORTED_EXCLUSION_SHAPES,
+                )
+            return
+
+        self._reported_exclusion_shapes.add(shape)
+
+        logger.info(
+            "Template %s excluded %d of %d declared fields from the generated SQL, so "
+            "those attributes will be missing from published output: %d authoring "
+            "mistake(s) %s, %d gated on inputs absent from this run %s",
+            template,
+            declared - emitted,
+            declared,
+            len(never_resolvable),
+            [name for name, _, _ in never_resolvable],
+            len(inputs_absent),
+            [column["name"] for column in inputs_absent],
+        )
+
+        for name, source_query, remedy in never_resolvable:
+            logger.warning(
+                "Template field %r dropped from %s: source_query %r matched no "
+                "available column and is not a recognised literal, and its shape "
+                "indicates an authoring mistake, so the attribute will be missing "
+                "from published output. %s",
+                name,
+                template,
+                source_query,
+                remedy,
+            )
+
+        for column in inputs_absent:
+            logger.debug(
+                "Template field %r skipped from %s: declared inputs absent from "
+                "this run (source_query %r, source_columns %r)",
+                column["name"],
+                template,
+                column["source_query"],
+                column.get("source_columns"),
+            )
 
     def generate_sql_query(
         self,

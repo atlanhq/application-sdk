@@ -150,6 +150,11 @@ def _dropped_field_names(mock_log_method):
     return [call.args[1] for call in mock_log_method.call_args_list]
 
 
+def _rendered(call):
+    """A logger call rendered the way the log pipeline renders its %-style message."""
+    return call.args[0] % tuple(call.args[1:])
+
+
 def test_quoted_sql_keyword_source_query_is_dropped_with_a_warning(
     sql_transformer, sample_dataframe
 ):
@@ -494,6 +499,7 @@ def test_emitted_field_set_equals_declared_field_set_when_inputs_are_present(
     assert emitted == declared
     mock_logger.warning.assert_not_called()
     mock_logger.debug.assert_not_called()
+    mock_logger.info.assert_not_called()
 
 
 def test_generate_sql_query_threads_the_template_path_into_the_warning(
@@ -515,6 +521,164 @@ def test_generate_sql_query_threads_the_template_path_into_the_warning(
         "app/transform/templates/tag_attachment.yaml"
         in mock_logger.warning.call_args.args
     )
+
+
+def test_exclusion_summary_is_logged_at_info_with_declared_and_emitted_counts(
+    sql_transformer, sample_dataframe
+):
+    """The production-visible record, since DEBUG is off in production.
+
+    A dropped attribute is only detectable if something recorded in production says a
+    declared field did not reach the SQL. The per-field WARNING covers the statically
+    unresolvable shapes; this summary covers the class as a whole, including the gated
+    fields whose per-field line is DEBUG.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {
+                "attributes": {
+                    "name": {"source_query": "table_name"},
+                    "propagate": {"source_query": "FALSE"},
+                    "remoteId": {
+                        "source_query": "upper(missing_column)",
+                        "source_columns": ["missing_column"],
+                    },
+                }
+            }
+        )
+    }
+
+    with patch.object(query_module, "logger") as mock_logger:
+        sql_transformer.get_sql_column_expressions(
+            template, sample_dataframe, {}, yaml_path="tag_attachment.yaml"
+        )
+
+    summary = _rendered(mock_logger.info.call_args)
+    assert "tag_attachment.yaml" in summary
+    assert "excluded 2 of 3 declared fields" in summary
+    assert "1 authoring mistake(s) ['attributes.propagate']" in summary
+    assert "1 gated on inputs absent from this run ['attributes.remoteId']" in summary
+
+
+def test_diagnostics_are_reported_once_not_once_per_batch(
+    sql_transformer, sample_dataframe
+):
+    """The transformer runs once per input batch, so a per-call report is a flood.
+
+    ``get_sql_column_expressions`` is reached once per parquet batch of a few thousand
+    rows, which is hundreds of calls for one typename on a large tenant. The exclusion
+    set is a function of the template and the input schema alone, so every call after the
+    first carries no new information and must stay silent -- otherwise the WARNING that
+    names a genuine authoring bug is repeated hundreds of times and the INFO summary
+    lands inside a per-record loop, both of which ADR-0011 rules out.
+    """
+
+    def template():
+        """A freshly parsed template, as every batch gets from ``generate_sql_query``.
+
+        Built per iteration rather than hoisted, because ``convert_to_sql_expression``
+        quotes ``column["name"]`` in place and ``generate_sql_query`` re-reads the YAML on
+        every call. Reusing one parsed dict across calls is therefore not the production
+        shape, and would accumulate quotes on each pass.
+        """
+        return {
+            "columns": flatten_yaml_columns(
+                {
+                    "attributes": {
+                        "name": {"source_query": "table_name"},
+                        "propagate": {"source_query": "FALSE"},
+                        "remoteId": {
+                            "source_query": "upper(missing_column)",
+                            "source_columns": ["missing_column"],
+                        },
+                    }
+                }
+            )
+        }
+
+    with patch.object(query_module, "logger") as mock_logger:
+        for _ in range(200):
+            columns, _literals = sql_transformer.get_sql_column_expressions(
+                template(), sample_dataframe, {}, yaml_path="tag_attachment.yaml"
+            )
+
+    # Every batch still gets the same SQL — only the reporting is deduplicated.
+    assert columns == ['table_name AS "attributes.name"']
+
+    assert mock_logger.info.call_count == 1
+    assert _dropped_field_names(mock_logger.warning) == ["attributes.propagate"]
+    assert _dropped_field_names(mock_logger.debug) == ["attributes.remoteId"]
+
+
+def test_a_changed_exclusion_set_is_reported_again(sql_transformer, sample_dataframe):
+    """Deduplication must not swallow new information.
+
+    A run whose input schema changes between batches gates a different field set, and a
+    newly excluded field has never been reported. Keying on the field sets rather than on
+    the template alone keeps that case visible.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {
+                "attributes": {
+                    "remoteId": {
+                        "source_query": "upper(missing_column)",
+                        "source_columns": ["missing_column"],
+                    },
+                    "sourceId": {
+                        "source_query": "upper(other_missing_column)",
+                        "source_columns": ["other_missing_column"],
+                    },
+                }
+            }
+        )
+    }
+    wider_dataframe = pa.Table.from_pydict(
+        {"table_name": ["table1"], "missing_column": ["value1"]}
+    )
+
+    with patch.object(query_module, "logger") as mock_logger:
+        sql_transformer.get_sql_column_expressions(
+            template, sample_dataframe, {}, yaml_path="column.yaml"
+        )
+        sql_transformer.get_sql_column_expressions(
+            template, wider_dataframe, {}, yaml_path="column.yaml"
+        )
+
+    assert mock_logger.info.call_count == 2
+    assert _dropped_field_names(mock_logger.debug) == [
+        "attributes.remoteId",
+        "attributes.sourceId",
+        "attributes.sourceId",
+    ]
+
+
+def test_reporting_stops_at_the_shape_cap_with_one_notice(
+    sql_transformer, sample_dataframe
+):
+    """The dedupe set is bounded, and running out is announced rather than silent.
+
+    Once diagnostics are incomplete the absence of a line no longer means the field was
+    published, which is exactly the false reassurance this PR set out to remove — so the
+    cap warns once on the way out.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {"attributes": {"propagate": {"source_query": "FALSE"}}}
+        )
+    }
+    cap = query_module._MAX_REPORTED_EXCLUSION_SHAPES
+
+    with patch.object(query_module, "logger") as mock_logger:
+        for index in range(cap + 5):
+            sql_transformer.get_sql_column_expressions(
+                template, sample_dataframe, {}, yaml_path=f"template_{index}.yaml"
+            )
+
+    assert mock_logger.info.call_count == cap
+    # One warning per reported shape, plus exactly one suppression notice.
+    assert mock_logger.warning.call_count == cap + 1
+    assert "diagnostics suppressed" in _rendered(mock_logger.warning.call_args)
 
 
 def test_build_struct_with_none_level(sql_transformer):
