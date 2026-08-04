@@ -448,7 +448,7 @@ def test_whitespace_expression_without_a_call_is_recognised_as_an_expression(
     """An expression is recognised by its whitespace, not only by a ``(``.
 
     ``table_name is not null`` carries no parenthesis, so it reaches the expression rule
-    through the whitespace operand alone -- the half a call-shaped case like
+    through the whitespace operand alone -- the operand a call-shaped case like
     ``upper(table_name)`` short-circuits away. It declares no ``source_columns`` and names
     no column, so the remedy is to declare the columns it reads.
     """
