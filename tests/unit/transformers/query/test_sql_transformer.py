@@ -442,6 +442,36 @@ def test_warning_remediation_matches_the_shape_that_tripped_it(
     assert "unquoted YAML scalar" not in messages["attributes.remoteId"]
 
 
+def test_whitespace_expression_without_a_call_is_recognised_as_an_expression(
+    sql_transformer, sample_dataframe
+):
+    """An expression is recognised by its whitespace, not only by a ``(``.
+
+    ``table_name is not null`` carries no parenthesis, so it reaches the expression rule
+    through the whitespace operand alone -- the half a call-shaped case like
+    ``upper(table_name)`` short-circuits away. It declares no ``source_columns`` and names
+    no column, so the remedy is to declare the columns it reads.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {"attributes": {"isActive": {"source_query": "table_name is not null"}}}
+        )
+    }
+
+    with patch.object(query_module, "logger") as mock_logger:
+        columns, _ = sql_transformer.get_sql_column_expressions(
+            template, sample_dataframe, {}
+        )
+
+    assert columns == []
+    mock_logger.debug.assert_not_called()
+    assert _dropped_field_names(mock_logger.warning) == ["attributes.isActive"]
+    message = mock_logger.warning.call_args.args[0] % tuple(
+        mock_logger.warning.call_args.args[1:]
+    )
+    assert "source_columns" in message
+
+
 def test_emitted_field_set_equals_declared_field_set_when_inputs_are_present(
     sql_transformer, sample_dataframe, sample_yaml_template
 ):

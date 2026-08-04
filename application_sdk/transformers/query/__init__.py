@@ -87,8 +87,10 @@ def _unresolvable_remedy(column: dict[str, Any]) -> str | None:
     * a multi-token SQL expression that declares no ``source_columns``, since the gate
       admits an undeclared ``source_query`` only by exact column-name match.
 
-    Declared ``source_columns`` are checked before the shape rules, so a field that
-    would resolve on a run supplying them is never reported as an authoring mistake.
+    The type guard is checked first, because a non-string ``source_query`` is never valid
+    SQL text whatever the declared inputs. Declared ``source_columns`` are then checked
+    before the remaining shape rules, so a field that would resolve on a run supplying
+    them is never reported as an authoring mistake.
     """
     source_query = column["source_query"]
     if not isinstance(source_query, str):
@@ -196,8 +198,9 @@ class QueryBasedTransformer(TransformerInterface):
         literal cannot be emitted, and is reported rather than dropped silently -- the
         resulting symptom is an attribute missing from published output, which nothing
         downstream can detect. An excluded field whose shape indicates an authoring
-        mistake is reported at WARNING with the edit that fixes it; one whose declared
-        inputs are merely absent from this run is by-design gating and stays at DEBUG.
+        mistake is reported at WARNING with the edit that fixes it; one that could still
+        resolve on a run supplying its declared inputs is by-design gating and stays at
+        DEBUG.
 
         Args:
             sql_template (Dict[str, Any]): The SQL template
@@ -238,9 +241,8 @@ class QueryBasedTransformer(TransformerInterface):
                 logger.warning(
                     "Template field %r dropped from %s: source_query %r matched no "
                     "available column and is not a recognised literal, and its shape "
-                    "indicates an authoring mistake rather than an input absent from "
-                    "this run, so the attribute will be missing from published output. "
-                    "%s",
+                    "indicates an authoring mistake, so the attribute will be missing "
+                    "from published output. %s",
                     column["name"],
                     yaml_path or "<template>",
                     column["source_query"],
