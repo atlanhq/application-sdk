@@ -23,6 +23,7 @@ from application_sdk.common.transforms import expand_dotted_keys
 from application_sdk.credentials.agent import (
     _fetch_per_key_bundle,
     _substitute,
+    check_secret_store_access,
     resolve_agent_credential,
     resolve_agent_json,
 )
@@ -425,7 +426,9 @@ class TestResolveAgentJsonErrorPaths:
         agent_json = json.dumps(
             {"agent-name": "test", "secret-path": "p", "basic.username": "u"}
         )
-        with pytest.raises(CredentialError, match="dapr outage"):
+        # The clean, customer-facing message is raised; the raw backend detail
+        # ("dapr outage") is logged (scrubbed), not embedded in the message.
+        with pytest.raises(CredentialError, match="Secret store is not reachable"):
             await resolve_agent_json(agent_json, FlakyStore())  # type: ignore[arg-type]
 
     async def test_bundle_not_valid_json_raises_parse_error(self) -> None:
@@ -1078,7 +1081,7 @@ class TestSubstitute:
     def test_root_level_ref_keys_are_replaced(self) -> None:
         agent = {"username": "user_ref", "password": "pass_ref"}
         bundle = {"user_ref": "real_user", "pass_ref": "real_pw"}
-        assert _substitute(agent, bundle) == {
+        assert _substitute(agent, bundle)[0] == {
             "username": "real_user",
             "password": "real_pw",
         }
@@ -1086,7 +1089,7 @@ class TestSubstitute:
     def test_literal_keys_are_skipped(self) -> None:
         agent = {"host": "h.example.com", "port": 5432, "username": "user_ref"}
         bundle = {"h.example.com": "SHOULD_NOT_WIN", "user_ref": "real_user"}
-        assert _substitute(agent, bundle) == {
+        assert _substitute(agent, bundle)[0] == {
             "host": "h.example.com",
             "port": 5432,
             "username": "real_user",
@@ -1095,7 +1098,7 @@ class TestSubstitute:
     def test_non_string_values_pass_through(self) -> None:
         agent = {"port": 5432, "enabled": True, "username": "user_ref"}
         bundle = {"user_ref": "real_user"}
-        assert _substitute(agent, bundle) == {
+        assert _substitute(agent, bundle)[0] == {
             "port": 5432,
             "enabled": True,
             "username": "real_user",
@@ -1104,14 +1107,14 @@ class TestSubstitute:
     def test_nested_extra_dict_is_walked_one_level(self) -> None:
         agent = {"extra": {"database": "db_ref", "pool_size": 10}}
         bundle = {"db_ref": "real_db"}
-        assert _substitute(agent, bundle) == {
+        assert _substitute(agent, bundle)[0] == {
             "extra": {"database": "real_db", "pool_size": 10}
         }
 
     def test_unreferenced_values_remain(self) -> None:
         agent = {"username": "user_ref"}
         bundle = {"other_ref": "other"}
-        assert _substitute(agent, bundle) == {"username": "user_ref"}
+        assert _substitute(agent, bundle)[0] == {"username": "user_ref"}
 
 
 # ---------------------------------------------------------------------------
@@ -1428,3 +1431,73 @@ class TestCredentialResolverAgentBranch:
         assert isinstance(cred, BasicCredential)
         assert cred.username == "real_user"
         assert cred.password == "real_pw"
+
+
+class TestSubstituteCountAndLog:
+    """`_substitute` now reports how many fields resolved and logs literal fallbacks."""
+
+    def test_counts_substituted_fields(self) -> None:
+        out, n = _substitute(
+            {"basic.username": "USER_REF", "host": "db.example"},
+            {"USER_REF": "realuser"},
+        )
+        assert out["basic.username"] == "realuser"
+        assert out["host"] == "db.example"  # not a ref-key, unchanged
+        assert n == 1
+
+    def test_zero_when_nothing_resolved(self) -> None:
+        import unittest.mock as m
+
+        with m.patch("application_sdk.credentials.agent.logger") as lg:
+            out, n = _substitute({"basic.username": "MISSING_REF"}, {})
+        assert out["basic.username"] == "MISSING_REF"  # literal kept
+        assert n == 0
+        # Info log fired for the not-found field, naming the field (not the value).
+        joined = " ".join(str(c) for c in lg.info.call_args_list)
+        assert "not found in secret store" in joined
+        assert "basic.username" in joined
+
+
+class TestCheckSecretStoreAccess:
+    """SDR secret-store preflight probe: pass, unreachable, and nothing-resolved."""
+
+    @staticmethod
+    def _spec(**over: Any) -> AgentCredentialSpec:
+        base = {"agent-name": "t", "secret-path": "p", "basic.username": "USER_REF"}
+        base.update(over)
+        return AgentCredentialSpec.model_validate(json.dumps(base))
+
+    async def test_passes_when_a_secret_resolves(self) -> None:
+        class Store:
+            async def get(self, name: str) -> str:
+                return json.dumps({"USER_REF": "realuser"})
+
+        r = await check_secret_store_access(self._spec(), Store())  # type: ignore[arg-type]
+        assert r.passed is True
+        assert r.reachable is True
+        assert r.substituted >= 1
+
+    async def test_fails_when_store_is_unreachable(self) -> None:
+        class DownStore:
+            async def get(self, name: str) -> str:
+                raise SecretStoreError("upstream dapr outage")
+
+        r = await check_secret_store_access(self._spec(), DownStore())  # type: ignore[arg-type]
+        assert r.passed is False
+        assert r.reachable is False
+        assert "not reachable" in r.message
+
+    async def test_fails_when_nothing_resolves(self) -> None:
+        class EmptyStore:
+            async def get(self, name: str) -> str:
+                return json.dumps({})  # reachable, but no matching keys
+
+        r = await check_secret_store_access(self._spec(), EmptyStore())  # type: ignore[arg-type]
+        assert r.passed is False
+        assert r.reachable is True
+        assert r.substituted == 0
+
+    async def test_fails_when_no_store_configured(self) -> None:
+        r = await check_secret_store_access(self._spec(), None)
+        assert r.passed is False
+        assert r.reachable is False

@@ -26,6 +26,10 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from application_sdk.credentials.agent import (
+        SecretStoreCheckResult,
+        check_secret_store_access,
+    )
     from application_sdk.credentials.ref import CredentialRef
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.spec import AgentCredentialSpec
@@ -72,6 +76,14 @@ _OBJECT_STORE_SUCCESS_MESSAGES: dict[str, str] = {
     "upstream": (
         "Metadata/Egress connectivity from SDR to Atlan SaaS tenant successful"
     ),
+}
+
+# Deliberately simple failure copy — the preflight row just states the store is
+# down, without the technical probe error (endpoint/permission internals stay in
+# the worker log, not the UI).
+_OBJECT_STORE_FAILURE_MESSAGES: dict[str, str] = {
+    "deployment": "Object store for the SDR deployment is not reachable.",
+    "upstream": "Metadata/Egress object store (SDR → Atlan) is not reachable.",
 }
 
 # Leading row asserting the SDR deployment itself is reachable: if this activity
@@ -348,13 +360,21 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
                 )
             else:
                 any_failed = True
-                message = result.message  # technical diagnostic on failure
+                # Simple, non-technical failure copy for the UI; the detailed
+                # probe error/hint is logged worker-side, not surfaced here.
+                message = _OBJECT_STORE_FAILURE_MESSAGES.get(
+                    result.label, f"{result.label} object store is not reachable."
+                )
+                logger.info(
+                    "SDR object-store check failed (%s): %s",
+                    result.label,
+                    result.message,
+                )
                 error = FailureDetails(
                     category=FailureCategory.DEPENDENCY_UNAVAILABLE,
                     code="OBJECT_STORE_ACCESS",
                     retryable=False,
-                    message=result.message,
-                    suggested_action=result.hint,
+                    message=message,
                 )
             output.checks.append(
                 PreflightCheck(
@@ -375,6 +395,32 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
             "leaving handler result unchanged",
             exc_info=True,
         )
+
+
+def _secret_store_check_row(result: SecretStoreCheckResult) -> PreflightCheck:
+    """Build the secret-store preflight check row from a probe result.
+
+    Name avoids the "SDR" acronym (the frontend spaces out capitals). Failure
+    category distinguishes an unreachable store (DEPENDENCY_UNAVAILABLE) from a
+    reachable-but-nothing-resolved config gap (PRECONDITION)."""
+    error: FailureDetails | None = None
+    if not result.passed:
+        error = FailureDetails(
+            category=(
+                FailureCategory.DEPENDENCY_UNAVAILABLE
+                if not result.reachable
+                else FailureCategory.PRECONDITION
+            ),
+            code="SECRET_STORE_ACCESS",
+            retryable=False,
+            message=result.message,
+        )
+    return PreflightCheck(
+        name="Secret store",
+        passed=result.passed,
+        message=result.message,
+        error=error,
+    )
 
 
 def build_sdr_activities(
@@ -412,12 +458,34 @@ def build_sdr_activities(
 
     @activity.defn(name=SDR_PREFLIGHT_ACTIVITY)
     async def preflight_check(input: PreflightInput) -> PreflightOutput:
+        secret_row: PreflightCheck | None = None
         if input.agent_json is not None and input.agent_json.is_populated():
+            # SDR-only: verify the customer secret store first. It fails in two
+            # ways — unreachable/down, or reachable but nothing resolved (every
+            # field would be sent as its literal placeholder). Either way the
+            # source check can't succeed, so short-circuit to NOT_READY with a
+            # clear reason instead of a confusing downstream connectivity error.
+            infra = get_infrastructure()
+            secret_store = infra.secret_store if infra is not None else None
+            secret_result = await check_secret_store_access(
+                input.agent_json, secret_store
+            )
+            secret_row = _secret_store_check_row(secret_result)
+            if not secret_result.passed:
+                output = PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    message=secret_result.message,
+                    checks=[secret_row],
+                )
+                await _append_object_store_checks(output)
+                return output
             input.credentials = await _resolve_agent_credentials(input.agent_json)
         with bind_invocation_context(binding.app_name, input.credentials):
             output = await binding.handler.preflight_check(input)
-        # SDR-only: fold the customer object-store access check into the
-        # interactive preflight so it shows up as a UI check row. Non-raising.
+        # SDR-only: fold the secret-store + object-store access checks into the
+        # interactive preflight so they show up as UI check rows. Non-raising.
+        if secret_row is not None:
+            output.checks.insert(0, secret_row)
         await _append_object_store_checks(output)
         return output
 

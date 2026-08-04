@@ -8,6 +8,7 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import AppContextError
+from application_sdk.credentials.agent import SecretStoreCheckResult
 from application_sdk.execution._temporal.sdr import (
     SDR_FETCH_METADATA_ACTIVITY,
     SDR_PREFLIGHT_ACTIVITY,
@@ -55,6 +56,11 @@ class _StubHandler(Handler):
         self.metadata_input = input
         self.context_during_call = self.context
         return SqlMetadataOutput(objects=[])
+
+
+_PASS_SECRET_STORE = SecretStoreCheckResult(
+    passed=True, reachable=True, substituted=1, message="Secret store reachable"
+)
 
 
 class TestSdrWorkflows:
@@ -397,6 +403,10 @@ class TestSdrAgentJsonResolution:
                 "application_sdk.execution._temporal.sdr.CredentialResolver",
                 return_value=resolver,
             ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.check_secret_store_access",
+                new=mock.AsyncMock(return_value=_PASS_SECRET_STORE),
+            ),
         ):
             result = await preflight(
                 PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
@@ -435,6 +445,10 @@ class TestSdrAgentJsonResolution:
                 mock.patch(
                     "application_sdk.execution._temporal.sdr.CredentialResolver",
                     return_value=resolver,
+                ),
+                mock.patch(
+                    "application_sdk.execution._temporal.sdr.check_secret_store_access",
+                    new=mock.AsyncMock(return_value=_PASS_SECRET_STORE),
                 ),
             ):
                 await activity(input_obj)
@@ -482,9 +496,9 @@ class TestSdrAgentJsonResolution:
         assert handler.preflight_input is not None
         assert handler.preflight_input.credentials == creds
 
-    async def test_raises_when_secret_store_unavailable(self) -> None:
-        from application_sdk.errors.leaves import DependencyUnavailableError
-
+    async def test_preflight_no_secret_store_yields_not_ready(self) -> None:
+        # Preflight surfaces "no secret store" as a failed check row (NOT_READY),
+        # not a raised error — the interactive UI shows the reason cleanly.
         handler = _StubHandler()
         preflight = self._by_name(handler)[SDR_PREFLIGHT_ACTIVITY]
 
@@ -494,14 +508,33 @@ class TestSdrAgentJsonResolution:
             "application_sdk.execution._temporal.sdr.get_infrastructure",
             return_value=fake_infra,
         ):
+            result = await preflight(
+                PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
+            )
+        assert result.status == PreflightStatus.NOT_READY
+        assert handler.preflight_input is None  # handler never ran
+        secret_check = next(c for c in result.checks if c.name == "Secret store")
+        assert secret_check.passed is False
+
+    async def test_auth_raises_when_secret_store_unavailable(self) -> None:
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        # test_auth (unlike preflight) has no check-row path, so a missing secret
+        # store still raises — surfaced as a classified error by the dispatcher.
+        handler = _StubHandler()
+        auth = self._by_name(handler)[SDR_TEST_AUTH_ACTIVITY]
+
+        fake_infra = mock.MagicMock()
+        fake_infra.secret_store = None
+        with mock.patch(
+            "application_sdk.execution._temporal.sdr.get_infrastructure",
+            return_value=fake_infra,
+        ):
             with pytest.raises(DependencyUnavailableError):
-                await preflight(
-                    PreflightInput(
-                        agent_json={"agent-name": "acme", "secret-path": "p"}
-                    )
+                await auth(
+                    AuthInput(agent_json={"agent-name": "acme", "secret-path": "p"})
                 )
-        # Bailed before ever calling the handler.
-        assert handler.preflight_input is None
+        assert handler.auth_input is None
 
     async def test_resolver_returning_none_yields_empty_credentials(self) -> None:
         """``resolve_raw`` → ``None`` (nothing at the secret path) resolves to an
@@ -523,6 +556,10 @@ class TestSdrAgentJsonResolution:
             mock.patch(
                 "application_sdk.execution._temporal.sdr.CredentialResolver",
                 return_value=resolver,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.check_secret_store_access",
+                new=mock.AsyncMock(return_value=_PASS_SECRET_STORE),
             ),
         ):
             result = await preflight(
@@ -641,8 +678,9 @@ class TestSdrPreflightObjectStoreChecks:
         assert check.error.category == FailureCategory.DEPENDENCY_UNAVAILABLE
         assert check.error.code == "OBJECT_STORE_ACCESS"
         assert check.error.retryable is False
-        assert check.resolved_suggested_action == "grant get/put"
-        assert "access check failed" in check.resolved_message
+        # Simple, non-technical failure copy (no probe internals in the UI).
+        assert "not reachable" in check.resolved_message
+        assert "403" not in check.resolved_message
 
     async def test_failed_check_does_not_upgrade_partial(self) -> None:
         """A handler PARTIAL/NOT_READY verdict is left untouched on failure."""
