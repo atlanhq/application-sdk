@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.26.1 (August 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.26.0...v3.26.1
+
+### Bug Fixes
+
+- warn on silently dropped template fields (#2977) (by @fyzanshaik-atlan in [76d5b2c](https://github.com/atlanhq/application-sdk/commit/76d5b2c))
+- offload cleanup_files fs I/O to a thread and cap its heartbeat timeout (#2986) (by @zaman-atlan in [b2b405a](https://github.com/atlanhq/application-sdk/commit/b2b405a))
+- offload tree-scale filesystem removals off the event loop (#2987) (by @cmgrote in [4a85397](https://github.com/atlanhq/application-sdk/commit/4a85397))
+- stop single-key secret probing from exhausting activity budgets (#2989) (by @vaibhavatlan in [df22e2d](https://github.com/atlanhq/application-sdk/commit/df22e2d))
+
+
 ## v3.26.0 (August 03, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.25.1...v3.26.0
