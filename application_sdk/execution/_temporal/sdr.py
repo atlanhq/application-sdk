@@ -50,6 +50,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from application_sdk.handler.sdr_output import (
         auth_output_to_response,
+        metadata_output_to_response,
         preflight_output_to_response,
     )
     from application_sdk.infrastructure.context import get_infrastructure
@@ -261,14 +262,15 @@ class SdrFetchMetadataWorkflow:
     """Durable wrapper around ``Handler.fetch_metadata``."""
 
     @workflow.run
-    async def run(self, input: MetadataInput) -> MetadataOutput:
-        return await workflow.execute_activity(
+    async def run(self, input: MetadataInput) -> list[Any]:
+        output = await workflow.execute_activity(
             SDR_FETCH_METADATA_ACTIVITY,
             input,
             retry_policy=_DEFAULT_RETRY,
             schedule_to_close_timeout=_METADATA_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_METADATA_START_TO_CLOSE,
         )
+        return metadata_output_to_response(output)
 
 
 SDR_WORKFLOWS: tuple[type, ...] = (

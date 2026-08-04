@@ -18,6 +18,7 @@ from typing import Any
 
 from application_sdk.handler.contracts import (
     AuthOutput,
+    MetadataOutput,
     PreflightCheck,
     PreflightOutput,
 )
@@ -74,3 +75,15 @@ def auth_output_to_response(result: AuthOutput) -> dict[str, Any]:
         "message": result.message or f"Authentication {result.status.value}",
         "data": result.model_dump(mode="json"),
     }
+
+
+def metadata_output_to_response(result: MetadataOutput) -> list[Any]:
+    """MetadataOutput → the bare object list the frontend filter widgets expect.
+
+    heracles wraps a list workflow result as ``{success, results:[...]}`` (the
+    same ``results`` shape the direct ``/credentials/query`` path produces), so
+    the sqltree/apitree widgets render the include/exclude tree unchanged."""
+    return [
+        obj.model_dump() if hasattr(obj, "model_dump") else obj
+        for obj in result.objects
+    ]
