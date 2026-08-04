@@ -2,6 +2,7 @@ import asyncio
 import gzip
 import logging
 import os
+import shutil
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -529,6 +530,9 @@ class AtlanObservability(Generic[T], ABC):
         - Syncs changes with object store
         """
         try:
+            from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — circular: heartbeat imports observability.logger_adaptor, which imports this module
+                run_in_thread,
+            )
             from application_sdk.storage import delete  # noqa: PLC0415
 
             # Use local subdir (same as _get_partition_path)
@@ -548,10 +552,10 @@ class AtlanObservability(Generic[T], ABC):
 
                 year = int(year_dir.split("=")[1])
                 if year < cutoff_date.year:
-                    # Delete entire year directory
-                    import shutil  # noqa: PLC0415 — stdlib shutil; lazy use only when computing disk usage
-
-                    shutil.rmtree(year_path)
+                    # Delete entire year directory. Offloaded: a year of
+                    # partitions is an unbounded tree, and rmtree on the event
+                    # loop stalls every other coroutine for its full duration.
+                    await run_in_thread(shutil.rmtree, year_path)
                     continue
 
                 for month_dir in os.listdir(year_path):
@@ -563,7 +567,7 @@ class AtlanObservability(Generic[T], ABC):
 
                     month = int(month_dir.split("=")[1])
                     if year == cutoff_date.year and month < cutoff_date.month:
-                        shutil.rmtree(month_path)
+                        await run_in_thread(shutil.rmtree, month_path)
                         continue
 
                     for day_dir in os.listdir(month_path):
@@ -578,7 +582,7 @@ class AtlanObservability(Generic[T], ABC):
 
                         if partition_date.date() < cutoff_date.date():
                             # Delete entire partition directory
-                            shutil.rmtree(day_path)
+                            await run_in_thread(shutil.rmtree, day_path)
 
                             # Delete from object store
                             partition_key = os.path.relpath(day_path, self.data_dir)
