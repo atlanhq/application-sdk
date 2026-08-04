@@ -16,6 +16,20 @@ code — the second half of the user's async-correctness ask.  Two patterns:
   the same calls are already owned by P020 (sleep) and P021 (network), so they are
   skipped here to avoid double-reporting.
 
+* **Tree-scale filesystem work** — ``shutil.rmtree`` / ``copytree`` / ``move``,
+  and the SDK's own ``SafeFileOps`` wrappers over them.  These walk an unbounded
+  directory tree, so their duration scales with the data, not with a fixed
+  syscall cost: on the loop they stall every other coroutine — including a
+  ``@task``'s auto-heartbeat, which makes Temporal retry an activity that is
+  still making progress.  ``App.cleanup_files`` shipped with exactly this bug and
+  nothing caught it, because this rule's inventory was network/sleep-only.
+
+  Deliberately **not** flagged: single-syscall operations (``os.remove``,
+  ``os.unlink``, ``os.rmdir``, ``os.path.*``).  One inode operation does not
+  earn a thread hop, and flagging them would bury the tree-scale findings that
+  matter.  Tree *traversal* (``os.walk``, ``os.scandir``) is also out of scope
+  for now — real, but a separate sweep.
+
 Remediation is a restructure (await / run_in_thread), so findings route to residue.
 """
 
@@ -38,6 +52,15 @@ _BRIDGE_ATTR = "run_until_complete"
 _BLOCKING_EXACT = frozenset({"time.sleep"})
 _BLOCKING_PREFIXES = ("requests.", "urllib.request.")
 
+# Tree-scale filesystem work: duration scales with the tree, not with a fixed
+# syscall cost. Single-inode ops (os.remove / os.unlink / os.rmdir) are
+# intentionally absent — see the module docstring.
+_TREE_FS_OPS = frozenset({"rmtree", "copytree", "move"})
+_TREE_FS_EXACT = frozenset(f"shutil.{op}" for op in _TREE_FS_OPS)
+# The SDK's own wrappers over the same calls, so routing through SafeFileOps is
+# not a way around this rule.
+_TREE_FS_SUFFIXES = tuple(f"SafeFileOps.{op}" for op in _TREE_FS_OPS)
+
 _BRIDGE_HINT = (
     "Running an event loop from inside an async function re-enters the loop and "
     "deadlocks/raises. Await the coroutine directly instead."
@@ -45,6 +68,13 @@ _BRIDGE_HINT = (
 _BLOCKING_HINT = (
     "This blocks the event loop. Await an async equivalent, or offload it with "
     "App.run_in_thread() inside a @task."
+)
+_TREE_FS_HINT = (
+    "This walks an unbounded directory tree, so it blocks the event loop for as "
+    "long as the tree takes to process — starving a @task's auto-heartbeat and "
+    "making Temporal retry an activity that is still making progress. Offload it: "
+    "await run_in_thread(shutil.rmtree, path) (application_sdk.execution.heartbeat) "
+    "or self.task_context.run_in_thread(...) inside a @task."
 )
 
 
@@ -105,6 +135,13 @@ class _Visitor(ast.NodeVisitor):
             or any(target.startswith(p) for p in _BLOCKING_PREFIXES)
         ):
             self._add(node, f"{target}()", _BLOCKING_HINT)
+            return
+        # Tree-scale filesystem work — also P021's territory inside workflow
+        # context (file I/O belongs in a @task at all), so skip it there.
+        if self._wf_depth == 0 and (
+            target in _TREE_FS_EXACT or target.endswith(_TREE_FS_SUFFIXES)
+        ):
+            self._add(node, f"{target}()", _TREE_FS_HINT)
 
     def _add(self, node: ast.Call, label: str, hint: str) -> None:
         self.findings.append(

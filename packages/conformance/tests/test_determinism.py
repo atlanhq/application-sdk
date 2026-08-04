@@ -6,6 +6,13 @@ get dedicated tests: ``@task`` activity bodies are never flagged, the sanctioned
 SDK seam (``self.now()`` / ``self.uuid()`` / ``now`` / ``sleep``) is left untouched
 (receiver-anchored matching), decorator classification is alias-aware, and the
 P020/P023 dedup holds (a workflow-context blocking call is P020, not also P023).
+
+P023's tree-scale filesystem coverage is guarded on both sides: ``shutil.rmtree``
+/ ``copytree`` / ``move`` (and the ``SafeFileOps`` wrappers) fire inside an
+``async def``, the offloaded ``run_in_thread(shutil.rmtree, path)`` form does not,
+single-syscall ops (``os.remove`` / ``unlink`` / ``rmdir``) are deliberately
+silent, and workflow-context tree ops belong to P021 rather than being
+double-reported here.
 """
 
 from __future__ import annotations
@@ -161,6 +168,18 @@ def test_p021_flags_thread_spawn() -> None:
     assert len(_rule(src, "P021")) >= 1
 
 
+def test_p021_flags_shutil_filesystem_mutation() -> None:
+    """Every shutil entry point touches the filesystem — it belongs in a @task.
+
+    This is also what keeps P023's workflow-context skip a dedup rather than a
+    hole: without it, a tree op in workflow context was reported by nobody.
+    """
+    src = "import shutil\n" + _wrap_run(
+        "shutil.rmtree('/tmp/out')\nshutil.copytree('/a', '/b')"
+    )
+    assert len(_rule(src, "P021")) == 2
+
+
 def test_p021_silent_in_task_activity() -> None:
     body = (
         "import requests\n"
@@ -263,6 +282,92 @@ def test_p023_silent_in_sync_def() -> None:
 def test_p023_dedup_workflow_sleep_is_p020_not_p023() -> None:
     src = "import time\n" + _wrap_run("time.sleep(1)")
     assert len(_rule(src, "P020")) == 1
+    assert _rule(src, "P023") == []
+
+
+def test_p023_flags_rmtree_in_async_activity() -> None:
+    """The App.cleanup_files bug class: a tree-scale rmtree on the event loop."""
+    body = (
+        "import shutil\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def cleanup(self, input):\n"
+        "        shutil.rmtree('/tmp/out')\n"
+    )
+    assert len(_rule(body, "P023")) == 1
+
+
+def test_p023_flags_rmtree_via_from_import() -> None:
+    """Receiver-anchored resolution: ``from shutil import rmtree`` still matches."""
+    body = (
+        "from shutil import rmtree\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def cleanup(self, input):\n"
+        "        rmtree('/tmp/out')\n"
+    )
+    assert len(_rule(body, "P023")) == 1
+
+
+def test_p023_flags_copytree_and_move() -> None:
+    body = (
+        "import shutil\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def stage(self, input):\n"
+        "        shutil.copytree('/a', '/b')\n"
+        "        shutil.move('/b', '/c')\n"
+    )
+    assert len(_rule(body, "P023")) == 2
+
+
+def test_p023_flags_safefileops_wrapper() -> None:
+    """Routing through the SDK's own wrapper is not a way around the rule."""
+    body = (
+        "from application_sdk.common.file_ops import SafeFileOps\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def cleanup(self, input):\n"
+        "        SafeFileOps.rmtree('/tmp/out', ignore_errors=True)\n"
+    )
+    assert len(_rule(body, "P023")) == 1
+
+
+def test_p023_silent_when_rmtree_is_offloaded() -> None:
+    """``run_in_thread(shutil.rmtree, path)`` passes the callable, never calls it."""
+    body = (
+        "import shutil\n"
+        "from application_sdk.execution.heartbeat import run_in_thread\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def cleanup(self, input):\n"
+        "        await run_in_thread(shutil.rmtree, '/tmp/out')\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_silent_for_single_syscall_fs_ops() -> None:
+    """One inode operation does not earn a thread hop — deliberately not flagged."""
+    body = (
+        "import os\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def cleanup(self, input):\n"
+        "        os.remove('/tmp/f')\n"
+        "        os.unlink('/tmp/g')\n"
+        "        os.rmdir('/tmp/d')\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_silent_for_rmtree_in_sync_def() -> None:
+    body = "import shutil\n" "def cleanup(path):\n" "    shutil.rmtree(path)\n"
+    assert _rule(body, "P023") == []
+
+
+def test_p023_dedup_workflow_rmtree_is_p021_not_p023() -> None:
+    """File I/O in workflow context is P021's; P023 must not double-report."""
+    src = "import shutil\n" + _wrap_run("shutil.rmtree('/tmp/out')")
     assert _rule(src, "P023") == []
 
 
