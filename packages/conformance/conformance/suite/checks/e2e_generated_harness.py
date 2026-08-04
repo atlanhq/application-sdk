@@ -63,12 +63,16 @@ its suites through an in-repo base is graded on that base, not on each leaf.
 
 The class index is keyed by ``(file, class name)`` and the visited class is
 always graded from the node in hand; a bare name resolves an ancestor only, and
-prefers a definition in the referencing file.  When a bare name maps to classes
-in several other files the resolution is ambiguous, and the checker biases
-toward reporting **provided some candidate transitively reaches an SDK harness
-base** — a suppression carrying the author's reason is auditable, silence is
-not, but an ordinary class that merely shares a name with an unrelated one is
-not this rule's business and must not be graded as a harness.
+prefers a definition in the referencing file.  ``from X import Y as Z`` bindings
+are recorded per file and resolved first, so an aliased import of a generated
+base (``from app.generated._e2e_base import FooGeneratedE2EBase as Base``)
+reaches the real class rather than falling through to the bare-name lookup and
+grading the subclass as a non-harness.  When a bare name maps to classes in
+several other files the resolution is ambiguous, and the checker biases toward
+reporting **provided some candidate transitively reaches an SDK harness base** —
+a suppression carrying the author's reason is auditable, silence is not, but an
+ordinary class that merely shares a name with an unrelated one is not this
+rule's business and must not be graded as a harness.
 
 Inline suppression
 ------------------
@@ -210,13 +214,39 @@ _ClassIndex = dict[tuple[str, str], _ClassInfo]
 #: Secondary bare-name map, used ONLY to resolve an ancestor defined in another
 #: file (the intentional transitive-base case, e.g. a generated ``_e2e_base``).
 _NameIndex = dict[str, list[_ClassInfo]]
+#: Per-file ``from X import Y as Z`` bindings, ``{file: {spelled: imported}}``.
+#: Recorded at index time so ``class T(Base):`` where ``Base`` is an aliased
+#: import of a generated base resolves to the real class — matching the
+#: referent, not the spelling.  Plain (non-aliased) imports are excluded: their
+#: binding name IS the imported name, which the bare-name fallback already
+#: resolves.
+_AliasIndex = dict[str, dict[str, str]]
 
 
-def _index_file(path: Path, rel: str, index: _ClassIndex, by_name: _NameIndex) -> None:
+def _import_aliases(tree: ast.Module) -> dict[str, str]:
+    """``from X import Y as Z`` bindings of a module, ``{spelled: imported}``."""
+    out: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.asname is not None:
+                    out[alias.asname] = alias.name
+    return out
+
+
+def _index_file(
+    path: Path,
+    rel: str,
+    index: _ClassIndex,
+    by_name: _NameIndex,
+    aliases: _AliasIndex | None = None,
+) -> None:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     except (OSError, SyntaxError, UnicodeDecodeError):
         return
+    if aliases is not None:
+        aliases[rel] = _import_aliases(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             info = _ClassInfo(rel, node)
@@ -225,19 +255,31 @@ def _index_file(path: Path, rel: str, index: _ClassIndex, by_name: _NameIndex) -
 
 
 def _resolve_base(
-    name: str, from_file: str, index: _ClassIndex, by_name: _NameIndex
+    name: str,
+    from_file: str,
+    index: _ClassIndex,
+    by_name: _NameIndex,
+    aliases: _AliasIndex | None = None,
 ) -> tuple[_ClassInfo | None, bool]:
     """Resolve base class *name* as referenced from *from_file*.
 
     Returns ``(info, ambiguous)``.  A definition in the referencing file always
-    wins; otherwise the bare name is resolved cross-file.  When the name maps to
-    definitions in more than one other file, static reach has run out and
-    ``ambiguous`` is True — callers then bias toward reporting (a suppression
-    carrying the author's reason is auditable; silence is not).
+    wins; then a ``from X import Y as name`` binding resolves *name* to the
+    imported ``Y`` (the referent, not the spelling); otherwise the bare name is
+    resolved cross-file.  When the name maps to definitions in more than one
+    other file, static reach has run out and ``ambiguous`` is True — callers
+    then bias toward reporting (a suppression carrying the author's reason is
+    auditable; silence is not).
     """
     same_file = index.get((from_file, name))
     if same_file is not None:
         return same_file, False
+    if aliases is not None:
+        imported = aliases.get(from_file, {}).get(name)
+        if imported is not None and imported != name:
+            candidates = by_name.get(imported, [])
+            if len(candidates) == 1:
+                return candidates[0], False
     candidates = by_name.get(name, [])
     if not candidates:
         return None, False
@@ -249,14 +291,17 @@ def _resolve_base(
         # directly, since routing suites through an in-repo intermediate base is
         # the supported shape. A direct-bases-only floor both missed those and
         # made the verdict depend on which candidate sorted first.
-        if any(_reaches_harness_base(c, index, by_name) for c in candidates):
+        if any(_reaches_harness_base(c, index, by_name, aliases) for c in candidates):
             return candidates[0], True
         return candidates[0], False
     return candidates[0], False
 
 
 def _reaches_harness_base(
-    info: _ClassInfo, index: _ClassIndex, by_name: _NameIndex
+    info: _ClassInfo,
+    index: _ClassIndex,
+    by_name: _NameIndex,
+    aliases: _AliasIndex | None = None,
 ) -> bool:
     """Whether *info* transitively reaches an SDK harness base.
 
@@ -278,13 +323,21 @@ def _reaches_harness_base(
             same = index.get((current.file, base))
             if same is not None:
                 stack.append(same)
-            else:
-                stack.extend(by_name.get(base, []))
+                continue
+            if aliases is not None:
+                imported = aliases.get(current.file, {}).get(base)
+                if imported is not None and imported != base:
+                    stack.extend(by_name.get(imported, []))
+                    continue
+            stack.extend(by_name.get(base, []))
     return False
 
 
 def _is_harness_class(
-    info: _ClassInfo, index: _ClassIndex, by_name: _NameIndex
+    info: _ClassInfo,
+    index: _ClassIndex,
+    by_name: _NameIndex,
+    aliases: _AliasIndex | None = None,
 ) -> bool:
     """True when *info*'s class transitively inherits an SDK e2e harness base."""
     seen: set[tuple[str, str]] = set()
@@ -297,7 +350,9 @@ def _is_harness_class(
         if current.bases & _SDK_HARNESS_BASES:
             return True
         for base in current.bases:
-            resolved, ambiguous = _resolve_base(base, current.file, index, by_name)
+            resolved, ambiguous = _resolve_base(
+                base, current.file, index, by_name, aliases
+            )
             if ambiguous:
                 return True  # cannot rule the harness out — grade it
             if resolved is not None and walk(resolved):
@@ -307,7 +362,12 @@ def _is_harness_class(
     return walk(info)
 
 
-def _declares_mode(info: _ClassInfo, index: _ClassIndex, by_name: _NameIndex) -> bool:
+def _declares_mode(
+    info: _ClassInfo,
+    index: _ClassIndex,
+    by_name: _NameIndex,
+    aliases: _AliasIndex | None = None,
+) -> bool:
     """True when the class or a repo-visible ancestor sets a class-level ``mode``."""
     seen: set[tuple[str, str]] = set()
 
@@ -319,7 +379,9 @@ def _declares_mode(info: _ClassInfo, index: _ClassIndex, by_name: _NameIndex) ->
         if _MODE_ATTR in current.assignments:
             return True
         for base in current.bases:
-            resolved, ambiguous = _resolve_base(base, current.file, index, by_name)
+            resolved, ambiguous = _resolve_base(
+                base, current.file, index, by_name, aliases
+            )
             if ambiguous:
                 # `ambiguous` answers _is_harness_class's question ("could any
                 # candidate make this a harness"), not this one. Blanket-skipping
@@ -329,7 +391,7 @@ def _declares_mode(info: _ClassInfo, index: _ClassIndex, by_name: _NameIndex) ->
                 harness_candidates = [
                     c
                     for c in by_name.get(base, [])
-                    if _reaches_harness_base(c, index, by_name)
+                    if _reaches_harness_base(c, index, by_name, aliases)
                 ]
                 if harness_candidates and all(walk(c) for c in harness_candidates):
                     return True
@@ -411,6 +473,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     """Grade the repo's e2e harness classes (T023, T024)."""
     index: _ClassIndex = {}
     by_name: _NameIndex = {}
+    aliases: _AliasIndex = {}
 
     # Generated bases first: a test subclassing one must resolve to a harness
     # class even though the module lives outside tests/.
@@ -419,7 +482,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             rel_gen = str(gen.relative_to(root))
         except ValueError:
             rel_gen = str(gen)
-        _index_file(gen, rel_gen, index, by_name)
+        _index_file(gen, rel_gen, index, by_name, aliases)
 
     test_files: list[tuple[Path, str, str]] = []
     for path in paths:
@@ -432,7 +495,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         except ValueError:
             rel = str(path)
         test_files.append((path, rel, text))
-        _index_file(path, rel, index, by_name)
+        _index_file(path, rel, index, by_name, aliases)
 
     findings: list[Finding] = []
     for _path, rel, text in test_files:
@@ -463,7 +526,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                     )
                 )
 
-            if not _is_harness_class(info, index, by_name):
+            if not _is_harness_class(info, index, by_name, aliases):
                 continue
 
             # T023(a) — identity attrs re-declared on a harness subclass.
@@ -486,7 +549,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             if (
                 is_collectable_test_file(Path(rel).name)
                 and is_test_class(node)
-                and not _declares_mode(info, index, by_name)
+                and not _declares_mode(info, index, by_name, aliases)
             ):
                 findings.append(
                     make_finding(

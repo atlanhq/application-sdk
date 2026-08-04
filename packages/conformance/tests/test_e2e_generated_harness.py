@@ -265,6 +265,32 @@ class TestThingFullDAG(SQLAppE2ETest):
     assert "TestThingFullDAG" in findings[0].message
 
 
+def test_t024_fires_through_an_aliased_generated_base_import(tmp_path: Path) -> None:
+    """`from ... import FooGeneratedE2EBase as Base` must still reach the harness.
+
+    Resolving a base purely by the bare identifier in `class T(Base):` matched
+    the *spelling*, not the referent: an aliased import of a generated base
+    resolved to nothing, the subclass was graded as a plain non-harness class,
+    and T024 reported green on a class with no `mode` anywhere. Alias bindings
+    are now resolved before the bare-name fallback.
+    """
+    test_src = """\
+from app.generated._e2e_base import MysqlGeneratedE2EBase as Base
+
+
+class TestMySQLFullDAG(Base):
+    include_filter = "x"
+"""
+    root = _repo(
+        tmp_path,
+        tests={"e2e/test_mysql_full_dag.py": test_src},
+        generated={"_e2e_base.py": _GENERATED_BASE},
+    )
+    findings = [f for f in _scan(root) if f.rule_id == "T024"]
+    assert len(findings) == 1
+    assert "TestMySQLFullDAG" in findings[0].message
+
+
 def test_t024_clean_when_mode_declared_agent(tmp_path: Path) -> None:
     root = _repo(
         tmp_path,

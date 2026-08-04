@@ -431,6 +431,30 @@ def test_p030_silent_when_upload_call_present(tmp_path: Path) -> None:
     assert not any(f.rule_id == "P030" for f in findings)
 
 
+def test_p030_silent_when_super_upload_call_present(tmp_path: Path) -> None:
+    """`await super().upload(...)` is a real transfer path, not an absence.
+
+    An app that overrides ``upload`` to add connector-specific logic and then
+    defers to the SDK's ``App.upload()`` has a structurally reachable upload.
+    Matching only ``self.upload`` false-positived P030 on exactly that shape —
+    the same ``super()`` call T017 (``e2e_agent_spec``) already honours.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "from application_sdk.app import App\n\n"
+                "class Connector(App):\n"
+                "    async def run(self, workflow_args):\n"
+                "        await super().upload(workflow_args)\n"
+            ),
+        },
+    )
+    findings = _run(tmp_path)
+    assert not any(f.rule_id == "P030" for f in findings)
+
+
 def test_p030_silent_on_non_sdr_app(tmp_path: Path) -> None:
     _write(
         tmp_path,

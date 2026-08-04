@@ -259,6 +259,12 @@ def _pyarrow_bindings_by_scope(
         # Annotated assignment with a value.
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
             record(node, node.target, node.value)
+        # Augmented assignment: `df += frame`. The result depends on the prior
+        # value, which static reach cannot recover — record it as
+        # unknown-and-therefore-non-pyarrow so a stale pyarrow exemption dies
+        # instead of silently exempting the rebound name.
+        elif isinstance(node, ast.AugAssign):
+            record(node, node.target, None)
         # Walrus: `if (df := frame):`
         elif isinstance(node, ast.NamedExpr):
             record(node, node.target, node.value)

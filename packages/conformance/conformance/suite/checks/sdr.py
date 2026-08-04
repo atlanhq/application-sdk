@@ -590,6 +590,11 @@ def _has_self_upload_call(paths: list[Path]) -> bool:
     ``self.upload(`` would clear the absence finding.  The population this rule
     targets is precisely where such a comment is likely — fleet remediation
     found a stub whose comment claimed the publish stage owned the transfer.
+
+    ``super().upload(...)`` counts too: an app that overrides ``upload`` to add
+    connector-specific logic and then defers to the SDK's real ``App.upload()``
+    has a structurally reachable transfer path — the same ``super()`` shape
+    T017 (``e2e_agent_spec``) already treats as first-class.
     """
     for path in paths:
         try:
@@ -597,12 +602,20 @@ def _has_self_upload_call(paths: list[Path]) -> bool:
         except (OSError, SyntaxError, ValueError):
             continue
         for node in ast.walk(tree):
-            if (
+            if not (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "upload"
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "self"
+            ):
+                continue
+            receiver = node.func.value
+            if isinstance(receiver, ast.Name) and receiver.id == "self":
+                return True
+            # super().upload(...) — deferring to the SDK's App.upload().
+            if (
+                isinstance(receiver, ast.Call)
+                and isinstance(receiver.func, ast.Name)
+                and receiver.func.id == "super"
             ):
                 return True
     return False

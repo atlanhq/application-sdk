@@ -849,6 +849,25 @@ def test_b007_tuple_unpacking_kills_a_stale_exemption() -> None:
     assert [f.rule_id for f in _b007(src)] == ["B007"]
 
 
+def test_b007_augmented_assignment_kills_a_stale_exemption() -> None:
+    """`df += frame` rebinds `df` to an unknown value — the exemption must die.
+
+    `ast.AugAssign` was the one binding form the walk never recorded, so a
+    pyarrow-bound `df` kept its exemption past the `+=` and the genuine SDK
+    reader frame on the next line went unreported.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f(frame):\n"
+        + "    df = pa.table({})\n"
+        + "    df += frame\n"
+        + "    return df.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
 def test_b007_tuple_unpacking_pairs_element_wise() -> None:
     """`df, other = pa.table({}), 1` binds a genuine Table to `df`."""
     src = (

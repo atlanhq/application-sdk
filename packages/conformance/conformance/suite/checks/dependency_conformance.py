@@ -1383,7 +1383,10 @@ def _dist_import_names(dist_name: str) -> set[str] | None:
         return None
 
     names: set[str] = set()
-    top_level = dist.read_text("top_level.txt")
+    # Distribution.read_text takes a filename positionally and returns None when
+    # absent — a metadata lookup with no decode step, so the read-guard
+    # invariant (tests/test_read_guard_invariant.py) exempts it explicitly.
+    top_level = dist.read_text("top_level.txt")  # read-guard: exempt
     if top_level:
         names.update(line.strip() for line in top_level.splitlines() if line.strip())
 
