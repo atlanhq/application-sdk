@@ -403,11 +403,12 @@ loses its remaining purpose. Each of its current responsibilities has a home:
 | --- | --- |
 | `/workflows/v1/{auth,check,metadata}` | Nexus operations on the worker |
 | SDR dispatch broker (#2914) | superseded — endpoint routing replaces agent-json sniffing, queue derivation, and the poller pre-check |
-| `/workflows/v1/start` (run triggering) | Temporal frontend HTTP API / existing orchestrator path (already Temporal-native) |
+| `/workflows/v1/start` (run triggering) | Temporal frontend HTTP API directly, or a `start_run` Nexus operation served by the worker's own authenticated client (Open Questions) — both serverless |
 | Per-entrypoint dispatch (`_discover_handler_fn`) | the shared invocation core |
 | Request normalization / compat shims (`_normalize_preflight_request`) | the invocation core's input boundary |
 | Health endpoints | worker health server (`:8081`), as today |
-| Handler auth manager, temporal-core metrics proxy | audit each: move to worker bootstrap or retire with the server (tracked as migration work, not silently dropped) |
+| Handler auth manager (`TemporalAuthManager`) | **evaporates with the server** — it keeps the *server's own* Temporal client authenticated; the worker path already runs its own copy (`main.py` worker bootstrap: acquire + `start_background_refresh`). New direct callers of the Temporal surface bring their own credentials (the authorizer precondition) |
+| Temporal-core metrics proxy | the duty was "be the pod with a scrapeable port" — the worker's Temporal client already binds the same Rust-core Prometheus endpoint (`enable_temporal_core_metrics` / `prometheus_bind_address` in worker mode), and worker-only deployments already have the Pushgateway pusher. Migration is a Helm scrape-target change landing in the same PR that removes the server chart |
 
 Pod-budget note: deleting the always-on handler pod does **not** require
 accepting cold-start latency for interactive checks. Apps with meaningful
@@ -612,8 +613,10 @@ Fleet delivery: SDK release → renovate bump → conformance rule flags straggl
    queue, or one endpoint with pool routing folded into the operation input.
 3. Whether `/workflows/v1/start` consumers move to the Temporal frontend HTTP
    API directly or want a `start_run` Nexus operation for symmetry.
-4. Where the handler auth manager's background credential refresh lands once
-   the server process is gone.
+4. ~~Where the handler auth manager's background credential refresh lands once
+   the server process is gone.~~ **Resolved**: it kept the server's own
+   Temporal client authenticated and evaporates with it; the worker already
+   runs its own copy (see "Retiring the app server").
 5. Naming: whether the Nexus service adopts `{app}` namespacing like
    activities (`get_activity_name`) or stays a fixed `handler-ops` service
    behind per-app endpoints (current proposal: fixed service name, per-app
