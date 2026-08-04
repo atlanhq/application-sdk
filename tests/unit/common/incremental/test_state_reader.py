@@ -1,12 +1,14 @@
 """Tests for current state reader utilities.
 
 Tests cover public functions with real business logic:
-- download_current_state: First-run handling, S3 download, JSON counting
+- download_current_state: First-run handling, S3 download, JSON counting,
+  and offloading the stale-state rmtree off the event loop.
 """
 
+import shutil
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from application_sdk.common.incremental.state.state_reader import download_current_state
 
@@ -121,3 +123,42 @@ class TestDownloadCurrentState:
 
         # Stale file should be removed (directory was cleared)
         assert json_count == 0
+
+    async def test_stale_directory_removal_offloaded_to_thread(self):
+        """The stale-state rmtree must not run inline on the event loop.
+
+        A prior run's current-state is one JSON file per asset, so the tree
+        scales with the connection; removing it inline stalls every other
+        coroutine — including a @task's auto-heartbeat — for the full duration.
+        """
+        with (
+            patch(
+                "application_sdk.common.incremental.state.state_reader.download_prefix"
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_reader."
+                "get_persistent_artifacts_path"
+            ) as mock_path,
+            patch(
+                "application_sdk.common.incremental.state.state_reader.run_in_thread",
+                new_callable=AsyncMock,
+                side_effect=lambda func, *a, **kw: func(*a, **kw),
+            ) as mock_offload,
+        ):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                state_dir = Path(temp_dir) / "current-state"
+                state_dir.mkdir(parents=True)
+                (state_dir / "stale.json").write_text("{}")
+                mock_path.return_value = state_dir
+
+                await download_current_state(
+                    connection_qualified_name="t/c/123",
+                    application_name="oracle",
+                )
+
+                assert (
+                    mock_offload.await_args_list
+                ), "stale-state removal was not offloaded"
+                offloaded = mock_offload.await_args_list[0].args
+                assert offloaded[0] is shutil.rmtree
+                assert offloaded[1] == state_dir

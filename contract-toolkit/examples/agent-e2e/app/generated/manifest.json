@@ -12,6 +12,7 @@
         "argo_workflow_slug": "",
         "task_queue": "atlan-agent-e2e-{deployment_name}",
         "args": {
+          "app_name": "agent-e2e",
           "credential": "{{credential}}",
           "credential_guid": "{{credential-guid}}",
           "connection": "{{connection}}",

@@ -88,6 +88,12 @@ def get_metric_labels() -> dict[str, str]:
 
     ctx = get_execution_context()
     return {
+        # Deliberately CONNECTOR-LEVEL (the process-wide env value), NOT the
+        # per-entrypoint ExecutionContext.app_name that logs carry (CNCT-93).
+        # All metric families stay keyed on the connector name so existing
+        # dashboards/alerts are unaffected; per-entrypoint breakdown is
+        # available on the log app_name. Routing ctx.app_name through here is a
+        # deliberate non-goal of the log fix — revisit only as its own change.
         "app_name": APPLICATION_NAME,
         "workflow_type": ctx.workflow_type,
         "activity_type": ctx.activity_type,
@@ -164,6 +170,12 @@ def build_otel_resource(extra_attrs: dict[str, str] | None = None) -> Resource:
     if "service.version" not in resource_attributes:
         resource_attributes["service.version"] = SERVICE_VERSION
     if APPLICATION_NAME:
+        # CNCT-93: app.name stays connector-level (ATLAN_APPLICATION_NAME), NOT
+        # per-entrypoint — unlike the log app_name. This is a per-process OTel
+        # Resource shared by the tracer, the metrics meter, and OTLP log export;
+        # it is built once at process start, before any workflow resolves its
+        # entrypoint app_name, and cannot vary per workflow execution. Bundle
+        # traces therefore attribute at the connector level by design.
         resource_attributes["app.name"] = APPLICATION_NAME
     if OTEL_WF_NODE_NAME:
         resource_attributes["k8s.workflow.node.name"] = OTEL_WF_NODE_NAME

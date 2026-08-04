@@ -12,6 +12,7 @@
         "argo_workflow_slug": "",
         "task_queue": "atlan-scheduled-{deployment_name}",
         "args": {
+          "app_name": "scheduled",
           "credential": "{{credential}}",
           "agent_json": "{{agent-json}}",
           "target": "{{target}}"

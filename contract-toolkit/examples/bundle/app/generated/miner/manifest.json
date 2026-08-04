@@ -12,6 +12,7 @@
         "argo_workflow_slug": "",
         "task_queue": "atlan-miner-{deployment_name}",
         "args": {
+          "app_name": "miner",
           "credential": "{{credential}}",
           "agent_json": "{{agent-json}}",
           "credential_guid": "{{credential-guid}}",

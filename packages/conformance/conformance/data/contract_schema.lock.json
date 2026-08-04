@@ -8,6 +8,12 @@
     },
     {
       "contract": "ExtractionInput",
+      "field": "app_name",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionInput",
       "field": "connection",
       "status": "active",
       "type": "ConnectionRef"
@@ -209,6 +215,12 @@
       "field": "agent_json",
       "status": "active",
       "type": "AgentCredentialSpec | None"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "app_name",
+      "status": "active",
+      "type": "str"
     },
     {
       "contract": "IncrementalExtractionInput",
@@ -477,6 +489,12 @@
     {
       "contract": "IncrementalExtractionOutput",
       "field": "workflow_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "QueryExtractionInput",
+      "field": "app_name",
       "status": "active",
       "type": "str"
     },

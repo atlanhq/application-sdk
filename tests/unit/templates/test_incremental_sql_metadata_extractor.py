@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import threading
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -883,6 +885,145 @@ class TestWriteCurrentStateInlineImports:
             assert excinfo.value.code == "INTERNAL_INCREMENTAL_STATE_WRITE"
         # cleanup_previous_state runs in finally
         mock_cleanup.assert_called_once()
+
+    async def test_cleanup_offloaded_to_thread(self, tmp_path) -> None:
+        """The finally-block cleanup must not rmtree on the event loop.
+
+        ``cleanup_previous_state`` removes the whole downloaded previous state,
+        and this runs inside a ``@task`` whose auto-heartbeat must keep flowing
+        for the duration — so the helper is offloaded at this call site rather
+        than made async (its sync callers keep the sync entry point).
+        """
+        snap_result = MagicMock()
+        snap_result.current_state_dir = tmp_path / "current"
+        snap_result.current_state_s3_prefix = "s3://current"
+        snap_result.total_files = 1
+        snap_result.incremental_diff_dir = None
+        snap_result.incremental_diff_s3_prefix = None
+        snap_result.incremental_diff_files = 0
+
+        extractor = _make_extractor()
+
+        with (
+            patch(
+                "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
+                return_value=tmp_path / "current",
+            ),
+            patch(
+                "application_sdk.common.incremental.helpers.get_persistent_s3_prefix",
+                return_value="s3://persist",
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.cleanup_previous_state",
+            ) as mock_cleanup,
+            patch(
+                "application_sdk.common.incremental.state.state_writer.create_current_state_snapshot",
+                new=AsyncMock(return_value=snap_result),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.download_transformed_data",
+                new=AsyncMock(return_value=tmp_path / "transformed"),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.prepare_previous_state",
+                new=AsyncMock(return_value=tmp_path / "prev"),
+            ),
+            patch(
+                "application_sdk.templates.incremental_sql_metadata_extractor.run_in_thread",
+                new_callable=AsyncMock,
+                side_effect=lambda func, *a, **kw: func(*a, **kw),
+            ) as mock_offload,
+        ):
+            await extractor.write_current_state(self._make_input())
+
+        mock_offload.assert_awaited_once()
+        assert mock_offload.await_args is not None
+        assert mock_offload.await_args.args[0] is mock_cleanup
+        assert mock_offload.await_args.args[1] == tmp_path / "prev"
+        mock_cleanup.assert_called_once()
+
+    async def test_cleanup_completes_when_task_cancelled(self, tmp_path) -> None:
+        """Cancellation must not abandon the offloaded removal mid-flight.
+
+        The executor thread cannot be cancelled, so an abandoned await returns
+        control while the thread is still deleting ``previous_state_dir`` — a
+        path that is deterministic per connection, so a concurrent retry's
+        ``prepare_previous_state`` would clear and recreate it underneath the
+        running removal. The removal must therefore finish before
+        ``CancelledError`` propagates.
+
+        Cancellation is delivered **three times**: one ``cancel()`` throws once
+        and is then consumed, so even an unshielded await in the ``finally``
+        would run to completion. Repeated cancellation (worker shutdown, a
+        ``wait_for`` timeout, a retry-cancel) is what abandons the removal
+        mid-flight: a second throw lands on the shield, and a third lands on
+        whatever the handler re-awaits. The finally therefore loops a shielded
+        await until the offload is actually done, however many times the throw
+        is re-delivered.
+        """
+        finished = threading.Event()
+
+        def _slow_cleanup(_previous_state_dir) -> None:
+            # Runs on the offload thread, so this sleep never blocks the loop.
+            # Long enough that an abandoned await would observe it unfinished.
+            time.sleep(0.2)
+            finished.set()
+
+        snapshot_started = asyncio.Event()
+
+        async def _hang(*_args, **_kwargs):
+            snapshot_started.set()
+            await asyncio.sleep(3600)
+
+        extractor = _make_extractor()
+
+        with (
+            patch(
+                "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
+                return_value=tmp_path / "current",
+            ),
+            patch(
+                "application_sdk.common.incremental.helpers.get_persistent_s3_prefix",
+                return_value="s3://persist",
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.cleanup_previous_state",
+                new=_slow_cleanup,
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.create_current_state_snapshot",
+                new=AsyncMock(side_effect=_hang),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.download_transformed_data",
+                new=AsyncMock(return_value=tmp_path / "transformed"),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.prepare_previous_state",
+                new=AsyncMock(return_value=tmp_path / "prev"),
+            ),
+        ):
+            task = asyncio.ensure_future(
+                extractor.write_current_state(self._make_input())
+            )
+            await snapshot_started.wait()
+            task.cancel()
+            # One loop turn: the throw lands in `_hang`, the finally runs and
+            # suspends on the shielded offloaded removal (already submitted to
+            # a thread).
+            await asyncio.sleep(0)
+            task.cancel()
+            # Another loop turn: the second throw lands on the shield and the
+            # handler re-awaits the shielded removal — exactly where a third
+            # cancel would abandon an unshielded re-await.
+            await asyncio.sleep(0)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert (
+            finished.is_set()
+        ), "cancellation propagated before the offloaded removal finished"
 
 
 class TestResolveDatabasePlaceholdersDefault:

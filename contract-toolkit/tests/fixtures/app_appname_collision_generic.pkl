@@ -1,0 +1,61 @@
+/// App.pkl (v0.10.0+) contract whose `extraNodes` collide with the CNCT-93
+/// `app_name` stamp on the **generic** (`else`) `renderNodeArgs` branch only.
+///
+/// Companion to `app_appname_collision_publish.pkl` — see that file for why the
+/// two collisions live in separate fixtures (a duplicate-key error aborts the
+/// whole module eval, so sharing one fixture would make the two guards'
+/// ablations indistinguishable).
+///
+/// Deliberately contains NO PublishNode (`pipeline.publish = null` and only raw
+/// DAGNodes in `extraNodes`), so removing the publish branch's guard leaves this
+/// fixture green.
+amends "../../src/App.pkl"
+
+import "../../src/Connectors.pkl"
+
+name = "appname-collision-generic"
+displayName = "App Name Collision (generic branch)"
+connector = Connectors.SNOWFLAKE
+icon = "https://assets.atlan.com/assets/snowflake.svg"
+hasCredentialConfig = false
+
+pipeline {
+  publish = null
+}
+
+extraNodes {
+  // Raw DAGNode + author-set args.app_name → renderNodeArgs `else` branch guard.
+  ["author_generic"] = new DAGNode {
+    displayName = "Author sets app_name (generic)"
+    workflowType = "CustomWorkflow"
+    appName = "custom-worker"
+    taskQueue = "atlan-custom-worker-{deployment_name}"
+    args = new Mapping {
+      ["app_name"] = "author-generic"
+      ["marker"] = "generic-branch"
+    }
+  }
+
+  // Raw DAGNode with NO author app_name → same branch, control.
+  ["stamped_generic"] = new DAGNode {
+    displayName = "Toolkit stamps app_name (generic)"
+    workflowType = "CustomWorkflow"
+    appName = "stamped-worker"
+    taskQueue = "atlan-stamped-worker-{deployment_name}"
+    args = new Mapping {
+      ["marker"] = "generic-branch-control"
+    }
+  }
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Connection"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}

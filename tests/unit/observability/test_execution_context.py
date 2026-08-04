@@ -37,6 +37,56 @@ def test_execution_context_is_frozen():
         ctx.workflow_id = "other"  # type: ignore[misc]
 
 
+def test_execution_context_app_name_defaults_empty():
+    """CNCT-93: app_name defaults to "" so consumers fall back to
+    ATLAN_APPLICATION_NAME (backward compatible)."""
+    assert ExecutionContext().app_name == ""
+    assert ExecutionContext(app_name="powerbi-crawler").app_name == "powerbi-crawler"
+
+
+# ---------------------------------------------------------------------------
+# get_metric_labels() — metric app_name stays connector-level (CNCT-93 scope)
+# ---------------------------------------------------------------------------
+
+
+def test_get_metric_labels_app_name_stays_connector_level(monkeypatch):
+    """CNCT-93 scope pin: only LOGS carry the per-entrypoint app_name. The
+    metric label deliberately stays the process-wide ATLAN_APPLICATION_NAME —
+    even when the ExecutionContext carries a per-entrypoint value — so every
+    metric family keys on the connector name and existing dashboards are
+    unaffected. If this fails because ctx.app_name started flowing into the
+    label, that is a deliberate-decision change, not a refactor: it alters
+    live time series (see PR #2951 review discussion).
+
+    The env constant is pinned via monkeypatch so both assertions are
+    deterministic and non-vacuous in every environment: comparing against the
+    imported APPLICATION_NAME would test the constant against itself, and the
+    != guard would misfire for a developer whose shell exports
+    ATLAN_APPLICATION_NAME=powerbi-crawler."""
+    from application_sdk.observability.utils import get_metric_labels
+
+    monkeypatch.setattr(
+        "application_sdk.observability.utils.APPLICATION_NAME", "connector-env"
+    )
+
+    set_execution_context(
+        ExecutionContext(
+            execution_type="workflow",
+            workflow_type="PowerBIWorkflow",
+            app_name="powerbi-crawler",
+        )
+    )
+    labels = get_metric_labels()
+    assert labels["app_name"] == "connector-env"
+    assert labels["app_name"] != "powerbi-crawler"
+    # Non-app_name context labels still flow through — the revert is surgical.
+    assert labels["workflow_type"] == "PowerBIWorkflow"
+
+    # And without any workflow context at all, same value (prior behaviour).
+    set_execution_context(ExecutionContext())
+    assert get_metric_labels()["app_name"] == "connector-env"
+
+
 # ---------------------------------------------------------------------------
 # ContextVar get/set
 # ---------------------------------------------------------------------------

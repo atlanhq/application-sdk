@@ -1,5 +1,56 @@
 # Changelog
 
+## v3.26.1 (August 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.26.0...v3.26.1
+
+### Bug Fixes
+
+- warn on silently dropped template fields (#2977) (by @fyzanshaik-atlan in [76d5b2c](https://github.com/atlanhq/application-sdk/commit/76d5b2c))
+- offload cleanup_files fs I/O to a thread and cap its heartbeat timeout (#2986) (by @zaman-atlan in [b2b405a](https://github.com/atlanhq/application-sdk/commit/b2b405a))
+- offload tree-scale filesystem removals off the event loop (#2987) (by @cmgrote in [4a85397](https://github.com/atlanhq/application-sdk/commit/4a85397))
+- stop single-key secret probing from exhausting activity budgets (#2989) (by @vaibhavatlan in [df22e2d](https://github.com/atlanhq/application-sdk/commit/df22e2d))
+
+
+## v3.26.0 (August 03, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.25.1...v3.26.0
+
+### Features
+
+- serve the manifest over POST so fe_inputs escapes the query-string cap (CSA-539) (#2903) (by @OnkarVO7 in [dc71bc4](https://github.com/atlanhq/application-sdk/commit/dc71bc4))
+
+### Bug Fixes
+
+- distinguish a malformed filter from an injection, and fail undecodable input terminally (#2928) (by @fyzanshaik-atlan in [8f10c80](https://github.com/atlanhq/application-sdk/commit/8f10c80))
+
+
+## v3.25.1 (July 31, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.25.0...v3.25.1
+
+### Bug Fixes
+
+- use duckdb API valid across the declared version range (#2940) (by @fyzanshaik-atlan in [83b9da0](https://github.com/atlanhq/application-sdk/commit/83b9da0))
+- resolve log app_name per-entrypoint from workflow input (#2951) (by @vaibhavatlan in [1f2b24c](https://github.com/atlanhq/application-sdk/commit/1f2b24c))
+
+
+## v3.25.0 (July 29, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.24.1...v3.25.0
+
+### Features
+
+- resolve agent-json credential references in SDR handler activities (#2877) (by @Lalit3716-atlan in [cf77d97](https://github.com/atlanhq/application-sdk/commit/cf77d97))
+- add dapr.sidecar.wait.duration boot-time metric (#2891) (by @SanilK2108 in [d9010a3](https://github.com/atlanhq/application-sdk/commit/d9010a3))
+- bulletproof correlation_id + readable lifecycle logs, provenance, trace ids, shutdown flush (#2900) (by @vaibhavatlan in [5d58c42](https://github.com/atlanhq/application-sdk/commit/5d58c42))
+
+### Bug Fixes
+
+- unify list[dict] keys; add migrate-off-daft skill (#2922) (by @fyzanshaik-atlan in [f234dd6](https://github.com/atlanhq/application-sdk/commit/f234dd6))
+- raise the prime_sql_auth timeout from 60s to 120s (#2917) (by @Lalit3716-atlan in [aa36a01](https://github.com/atlanhq/application-sdk/commit/aa36a01))
+
+
 ## v3.24.1 (July 27, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.24.0...v3.24.1

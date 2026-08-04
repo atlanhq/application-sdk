@@ -5147,6 +5147,62 @@ class TestEventTriggerEndpoint:
             body = response.json()
             assert body["status"] == "SUCCESS"
             assert body["workflow_id"] == "wf-1"
+            # CNCT-104: event-triggered starts must carry a correlation memo
+            # (previously none was set → the LogInterceptor minted an identity
+            # the run page never queries → the run's logs were unfindable).
+            kwargs = mock_client.start_workflow.await_args.kwargs
+            memo = kwargs["memo"]
+            # A real UUID was minted (not merely any truthy string), matching
+            # the rigor of the event-supplied sibling test below.
+            import uuid as _uuid
+
+            assert len(memo["correlation_id"]) == 36
+            assert _uuid.UUID(memo["correlation_id"])  # raises if not a valid UUID
+            # The minted id is returned to the caller so the run's logs are
+            # addressable, and it matches what was stamped on the input.
+            assert body["correlation_id"] == memo["correlation_id"]
+            input_arg = kwargs["args"][0]
+            assert input_arg.correlation_id == memo["correlation_id"]
+        finally:
+            self._teardown()
+
+    def test_event_respects_event_supplied_correlation_id(self) -> None:
+        # An event payload that carries correlation_id keeps it (caller wins),
+        # mirroring the /workflows/v1/start contract.
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        try:
+            app_cls = self._make_event_app()
+            trigger = EventTriggerConfig(
+                event_id="t1", event_type="topic", event_name="ev"
+            )
+            app = create_app_handler_service(
+                _TestHandler(),
+                app_name="ev-test",
+                app_class=app_cls,
+                temporal_host="t:7233",
+                event_triggers=[trigger],
+            )
+            mock_handle = MagicMock()
+            mock_handle.id = "wf-1"
+            mock_handle.result_run_id = "run-1"
+            mock_client = MagicMock()
+            mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(app)
+                response = client.post(
+                    "/events/v1/event/t1",
+                    json={"data": {"name": "x", "correlation_id": "event-corr"}},
+                )
+            assert response.status_code == 200
+            assert response.json()["correlation_id"] == "event-corr"
+            kwargs = mock_client.start_workflow.await_args.kwargs
+            assert kwargs["memo"] == {"correlation_id": "event-corr"}
         finally:
             self._teardown()
 
@@ -7118,3 +7174,328 @@ class TestAgentJsonLift:
 
     def test_unparseable_string_ignored(self) -> None:
         assert "agent_json" not in _lift_agent_json({"metadata": {"agent_json": "{"}})
+
+
+class TestManifestPostTransport:
+    """``POST /manifest`` — the body transport for ``fe_inputs`` (CSA-539).
+
+    GET keeps its existing behaviour, cap included; these pin that too, since
+    the playground, connector tests and AE/marketplace probes still use it.
+    """
+
+    @staticmethod
+    def _install_fake_core(
+        monkeypatch: pytest.MonkeyPatch, entrypoint: str, fn: object
+    ) -> None:
+        _install_fake_app_module(monkeypatch, entrypoint, "core", compute_manifest=fn)
+
+    @staticmethod
+    def _make_ep(tmp_path: Path, entrypoint: str, manifest: dict | None = None) -> Path:
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / entrypoint
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps(manifest or {}))
+        return contract_dir
+
+    def test_post_passes_fe_inputs_body_to_hook(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.handler import service as svc_module
+
+        captured: dict = {}
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            captured["fe_inputs"] = fe_inputs
+            return {"dag": {"extract": {"echo": fe_inputs}}}
+
+        contract_dir = self._make_ep(tmp_path, "hook-ep")
+        self._install_fake_core(monkeypatch, "hook-ep", compute_manifest)
+
+        payload = {"attribute-selector": "table:a,column:b", "zip-flag": "false"}
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().post(
+                "/workflows/v1/manifest",
+                json={"entrypoint": "hook-ep", "fe_inputs": payload},
+            )
+            assert response.status_code == 200
+            assert captured["fe_inputs"] == payload
+            assert response.json()["dag"]["extract"]["echo"] == payload
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_post_accepts_payload_that_get_rejects_with_413(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The actual CSA-539 fix: same payload, 413 on GET, 200 on POST."""
+        from application_sdk.handler import service as svc_module
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {"dag": {"n": len(fe_inputs["attribute-selector"])}}
+
+        contract_dir = self._make_ep(tmp_path, "big-form")
+        self._install_fake_core(monkeypatch, "big-form", compute_manifest)
+
+        # Comfortably over the query-string cap.
+        oversized = {
+            "attribute-selector": ",".join(f"table:attr{i:04d}" for i in range(900))
+        }
+        raw = json.dumps(oversized)
+        assert len(raw.encode("utf-8")) > svc_module._MAX_FE_INPUTS_BYTES
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+
+            get_resp = client.get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "big-form", "fe_inputs": raw},
+            )
+            assert get_resp.status_code == 413
+
+            post_resp = client.post(
+                "/workflows/v1/manifest",
+                json={"entrypoint": "big-form", "fe_inputs": oversized},
+            )
+            assert post_resp.status_code == 200
+            assert post_resp.json()["dag"]["n"] == len(oversized["attribute-selector"])
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_get_and_post_agree_for_the_same_inputs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Transport must not change the answer."""
+        from application_sdk.handler import service as svc_module
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {"dag": {"echo": fe_inputs}, "execution_mode": "native"}
+
+        contract_dir = self._make_ep(tmp_path, "parity-ep")
+        self._install_fake_core(monkeypatch, "parity-ep", compute_manifest)
+
+        payload = {"a": "1", "b": ["x", "y"], "c": {"nested": True}}
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            got = client.get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "parity-ep", "fe_inputs": json.dumps(payload)},
+            )
+            posted = client.post(
+                "/workflows/v1/manifest",
+                json={"entrypoint": "parity-ep", "fe_inputs": payload},
+            )
+            assert got.status_code == posted.status_code == 200
+            assert got.json() == posted.json()
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_post_empty_body_serves_static_manifest(self, tmp_path: Path) -> None:
+        """``{}`` is equivalent to a bare GET — no entrypoint, no fe_inputs."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+        (contract_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "native", "app_name": "flat-app"})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().post("/workflows/v1/manifest", json={})
+            assert response.status_code == 200
+            assert response.json()["app_name"] == "flat-app"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_post_resolves_entrypoint(self, tmp_path: Path) -> None:
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = self._make_ep(
+            tmp_path, "snowflake", {"execution_mode": "dag", "app_name": "sf"}
+        )
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().post(
+                "/workflows/v1/manifest", json={"entrypoint": "snowflake"}
+            )
+            assert response.status_code == 200
+            assert response.json()["app_name"] == "sf"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_post_substitutes_deployment_name(self, tmp_path: Path) -> None:
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = self._make_ep(
+            tmp_path, "ep1", {"task_queue": "{deployment_name}-queue"}
+        )
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        original_dep = svc_module.DEPLOYMENT_NAME
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        svc_module.DEPLOYMENT_NAME = "tenant-x"
+        try:
+            response = _make_client().post(
+                "/workflows/v1/manifest", json={"entrypoint": "ep1"}
+            )
+            assert response.status_code == 200
+            assert response.json()["task_queue"] == "tenant-x-queue"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+            svc_module.DEPLOYMENT_NAME = original_dep
+
+    def test_post_legacy_unversioned_alias(self, tmp_path: Path) -> None:
+        """Callers migrate method and path independently."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = self._make_ep(tmp_path, "legacy-ep", {"app_name": "legacy"})
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().post(
+                "/manifest", json={"entrypoint": "legacy-ep"}
+            )
+            assert response.status_code == 200
+            assert response.json()["app_name"] == "legacy"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_post_user_id_is_accepted_and_ignored(self, tmp_path: Path) -> None:
+        """Wire parity with the GET param, which the SDK also ignores."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = self._make_ep(tmp_path, "ep-u", {"app_name": "u"})
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().post(
+                "/workflows/v1/manifest",
+                json={"entrypoint": "ep-u", "user_id": "kc-user-guid"},
+            )
+            assert response.status_code == 200
+            assert response.json()["app_name"] == "u"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            pytest.param({"json": {}}, id="empty-object"),
+            pytest.param({"json": {"fe_inputs": None}}, id="fe_inputs-null"),
+            pytest.param({"json": {"entrypoint": None}}, id="entrypoint-null"),
+            pytest.param({"content": b"null"}, id="literal-null-body"),
+            pytest.param({"content": b""}, id="empty-body"),
+            pytest.param({}, id="no-body-at-all"),
+        ],
+    )
+    def test_post_empty_ish_bodies_behave_like_a_bare_get(
+        self, tmp_path: Path, kwargs: dict
+    ) -> None:
+        """All of these mean "no inputs". Callers fall back only on 405, so a 400
+        here would hard-fail them instead of degrading."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+        (contract_dir / "manifest.json").write_text(
+            json.dumps({"app_name": "flat-app"})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().post("/workflows/v1/manifest", **kwargs)
+            assert response.status_code == 200
+            assert response.json()["app_name"] == "flat-app"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_post_fe_inputs_must_be_an_object_not_a_json_string(self) -> None:
+        """A caller porting a GET query param must pass the decoded object, not
+        the JSON string the query string carried."""
+        response = _make_client().post(
+            "/workflows/v1/manifest",
+            json={"fe_inputs": json.dumps({"a": "b"})},
+        )
+        assert response.status_code == 400
+        assert "fe_inputs must be a JSON object" in response.json()["detail"]
+
+    def test_post_malformed_json_returns_400(self) -> None:
+        response = _make_client().post(
+            "/workflows/v1/manifest",
+            content=b"{not json",
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 400
+        assert "not valid JSON" in response.json()["detail"]
+
+    def test_post_non_object_body_returns_400(self) -> None:
+        response = _make_client().post("/workflows/v1/manifest", json=["a", "b"])
+        assert response.status_code == 400
+        assert "must be a JSON object" in response.json()["detail"]
+
+    def test_post_non_object_fe_inputs_returns_400(self) -> None:
+        """Same contract as the GET path's 'fe_inputs must be a JSON object'."""
+        response = _make_client().post(
+            "/workflows/v1/manifest", json={"fe_inputs": "a,b,c"}
+        )
+        assert response.status_code == 400
+        assert "fe_inputs must be a JSON object" in response.json()["detail"]
+
+    def test_post_non_string_entrypoint_returns_400(self) -> None:
+        response = _make_client().post(
+            "/workflows/v1/manifest", json={"entrypoint": 42}
+        )
+        assert response.status_code == 400
+        assert "entrypoint must be a string" in response.json()["detail"]
+
+    def test_get_still_enforces_the_query_cap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression guard: adding POST must not relax the GET path."""
+        from application_sdk.handler import service as svc_module
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            raise AssertionError("hook must not run for oversize fe_inputs on GET")
+
+        contract_dir = self._make_ep(tmp_path, "capped")
+        self._install_fake_core(monkeypatch, "capped", compute_manifest)
+
+        huge = json.dumps({"x": "a" * (svc_module._MAX_FE_INPUTS_BYTES + 100)})
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "capped", "fe_inputs": huge},
+            )
+            assert response.status_code == 413
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_get_with_oversize_fe_inputs_still_ok_without_a_hook(
+        self, tmp_path: Path
+    ) -> None:
+        """Decoding must stay lazy — at the route it would 413 static apps."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = self._make_ep(tmp_path, "static-ep", {"app_name": "static"})
+        huge = json.dumps({"x": "a" * (svc_module._MAX_FE_INPUTS_BYTES + 100)})
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "static-ep", "fe_inputs": huge},
+            )
+            assert response.status_code == 200
+            assert response.json()["app_name"] == "static"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original

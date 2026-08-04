@@ -101,15 +101,30 @@ jobs:
           # idiom actionlint/CI standards expect.
           DELAY_MINUTES: ${{ matrix.delay-minutes }}
         run: sleep $(( DELAY_MINUTES * 60 ))
+      # Author the removal PR as the atlan-app-fleet App, NOT as atlan-ci. The PR
+      # touches `.security/`, so it needs BOTH an approving code-owner review (the
+      # `main` ruleset) and an approval from a name in `.security/approvers.json`
+      # (the Authorized Approver Check). atlan-ci satisfies both — but only if it
+      # is not the author, because GitHub forbids approving your own PR. Opening
+      # as atlan-ci is why these PRs stalled at REVIEW_REQUIRED and needed a human
+      # click; vuln-auto-merge.yml now approves them as atlan-ci instead.
+      - name: Mint atlan-app-fleet App token (PR author identity)
+        id: fleet-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+
       # ref: main (not the release tag) so the fresh scan reflects main and the
       # allowlist-removal PR bases cleanly on main. Releases are cut from main,
-      # so main HEAD ≈ the released state. Checked out as atlan-ci so the removal
-      # PR auto-merges.
-      - name: Checkout main (as atlan-ci so the removal PR auto-merges)
+      # so main HEAD ≈ the released state. Checked out with the App token so the
+      # pushed removal branch triggers CI (App installation tokens do; the default
+      # GITHUB_TOKEN would not).
+      - name: Checkout main (as the fleet App so the removal branch triggers CI)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.fleet-token.outputs.token }}
 
       # Fresh scan via the shared composite — same recipe as the hourly scan, so
       # the two can't drift. Leaves trivy-*.json in the working dir for
@@ -121,7 +136,12 @@ jobs:
 
       - name: Reconcile resolved CVEs (on release)
         env:
+          # atlan-ci PAT: the actions: read the debounce window needs. (The branch
+          # is pushed with the checkout token — the fleet App.)
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          # Used ONLY for `gh pr create`, so the removal PR is authored by the
+          # fleet App and stays approvable by atlan-ci (see the token step above).
+          PR_AUTHOR_TOKEN: ${{ steps.fleet-token.outputs.token }}
           REPO: ${{ github.repository }}
           SCAN_WORKFLOW: daily-security-scan.yml
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
@@ -131,6 +151,6 @@ jobs:
           RECONCILE_PASS: ${{ matrix.delay-minutes }}
         run: |
           export RUN_DATE=$(date -u +%Y-%m-%d)
-          git config user.name "atlan-ci"
-          git config user.email "atlan-ci@users.noreply.github.com"
+          git config user.name "atlan-app-fleet[bot]"
+          git config user.email "atlan-app-fleet[bot]@users.noreply.github.com"
           python3 .github/scripts/reconcile_allowlist.py

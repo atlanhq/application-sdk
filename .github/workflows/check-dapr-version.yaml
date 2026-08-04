@@ -57,11 +57,26 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      # Author the sync PR as the atlan-app-fleet App, NOT as atlan-ci. The PR
+      # needs an approving code-owner review to satisfy the `main` ruleset
+      # (required_approving_review_count: 1 + require_code_owner_review), and
+      # GitHub forbids a PR author approving their own PR — so if atlan-ci opens
+      # it, atlan-ci can never approve it and the PR sits at REVIEW_REQUIRED
+      # forever. Splitting the identities (fleet App authors, atlan-ci approves
+      # below) is the same pattern that already works for Renovate PRs.
+      - name: Mint atlan-app-fleet App token (PR author identity)
+        id: fleet-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Check out with the org PAT so the bump branch we push triggers CI on
-          # the opened PR (a push made with the default GITHUB_TOKEN would not).
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          # Check out with the App token so the bump branch we push triggers CI on
+          # the opened PR (a push made with the default GITHUB_TOKEN would not;
+          # App installation tokens DO trigger workflows).
+          token: ${{ steps.fleet-token.outputs.token }}
 
       - name: Read pinned daprd version
         id: pinned
@@ -136,13 +151,14 @@ jobs:
           fi
 
       - name: Open PR if drift detected
+        id: open-pr
         if: steps.compare.outputs.match == 'false'
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
         run: |
           set -euo pipefail
-          git config --global user.name 'atlan-ci'
-          git config --global user.email 'it@atlan.com'
+          git config --global user.name 'atlan-app-fleet[bot]'
+          git config --global user.email 'atlan-app-fleet[bot]@users.noreply.github.com'
 
           baked="${{ steps.compare.outputs.baked }}"
           pinned="${{ steps.compare.outputs.pinned }}"
@@ -172,17 +188,15 @@ jobs:
           git add application_sdk/version.py
           if git diff --cached --quiet; then
             echo "::notice::No actual change to commit; PR may already be up to date."
-            # Nothing new to push, but still ensure auto-merge is enabled on any
-            # open PR for this branch — one opened by an earlier run (before
-            # auto-merge was wired up, or with it since cleared) would otherwise
-            # never get it, because the commit + create paths below are skipped.
+            # Nothing new to push, but still surface any open PR for this branch so
+            # the approve + queue step below can (re-)act on it — one opened by an
+            # earlier run (before that step existed, or with its approval since
+            # dismissed by a push) would otherwise never get it, because the
+            # commit + create paths below are skipped.
             existing=$(gh pr list \
               --head "$branch" --base "$base" --state open \
               --json number --jq '.[0].number')
-            if [[ -n "$existing" ]]; then
-              gh pr merge "$existing" --repo "${{ github.repository }}" --auto --squash || \
-                echo "::warning::Could not enable auto-merge on PR #${existing}; merge it manually."
-            fi
+            echo "pr_number=${existing}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -198,10 +212,7 @@ jobs:
 
           if [[ -n "$existing" ]]; then
             echo "::notice::PR #${existing} already open for ${branch}; commit pushed."
-            # Idempotent: (re-)enable auto-merge in case an earlier run opened the
-            # PR before this step existed, or the new push cleared a prior state.
-            gh pr merge "$existing" --repo "${{ github.repository }}" --auto --squash || \
-              echo "::warning::Could not enable auto-merge on PR #${existing}; merge it manually."
+            echo "pr_number=${existing}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -226,11 +237,33 @@ jobs:
 
           Opened automatically by [\`.github/workflows/check-dapr-version.yaml\`](.github/workflows/check-dapr-version.yaml).")
 
-          # Hands-off merge: enable GitHub native auto-merge so the PR merges
-          # itself once required checks go green — no human click. atlan-ci (the
-          # ORG_PAT_GITHUB identity that opened this PR) is a bypass actor on the
-          # `main` ruleset, so it clears the required code-owner review without a
-          # separate approval. Scoped by construction: this only ever acts on the
-          # chore/sync-daprd-* PR just created here, never any other PR.
-          gh pr merge "$pr_url" --repo "${{ github.repository }}" --auto --squash || \
-            echo "::warning::Could not enable auto-merge on ${pr_url}; merge it manually."
+          echo "pr_number=${pr_url##*/}" >> "$GITHUB_OUTPUT"
+
+      # Hands-off merge, in two parts that must use DIFFERENT identities:
+      #
+      #   1. Approve as atlan-ci. atlan-ci is a CODEOWNER via the `*` rule in
+      #      .github/CODEOWNERS, so its review satisfies the `main` ruleset's
+      #      required_approving_review_count: 1 + require_code_owner_review.
+      #      This is why the PR above is authored by the fleet App and not by
+      #      atlan-ci — GitHub rejects self-approval, so same-identity author +
+      #      approver leaves the PR permanently at REVIEW_REQUIRED.
+      #   2. Enable GitHub native auto-merge, which — because `main` has a merge
+      #      queue — adds the PR to the queue once the review + required checks
+      #      are satisfied. NOTE: no `--squash`/method flag. The merge queue owns
+      #      the merge strategy, and passing one makes gh refuse with
+      #      "The merge strategy for main is set by the merge queue", which is
+      #      exactly how this silently stopped queueing before (BLDX-1595).
+      #
+      # Nothing is merged early: the queue still enforces every required check.
+      # Scoped by construction to the chore/sync-daprd-* PR this run produced.
+      - name: Approve as atlan-ci and add to merge queue
+        if: steps.open-pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          PR_NUMBER: ${{ steps.open-pr.outputs.pr_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh pr review "$PR_NUMBER" --repo "$REPO" --approve \
+            --body "**Dapr sync:** approved automatically as \`atlan-ci\`. This PR is a single-line \`__dapr_version\` bump generated and verified by [\`check-dapr-version.yaml\`](.github/workflows/check-dapr-version.yaml) against the daprd shipped in the runtime base image. Required checks and the merge queue still gate the merge."
+          gh pr merge "$PR_NUMBER" --repo "$REPO" --auto

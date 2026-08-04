@@ -761,6 +761,25 @@ async def _flush_observability() -> None:
             "Failed to flush observability buffers on shutdown", exc_info=True
         )
 
+    # CNCT-107: drain the OTLP batch here — while the loop is alive, the network
+    # path is still up, and there is grace-period budget left. ``flush_all`` only
+    # drains the object-store buffer; the OTLP BatchLogRecordProcessor queue is
+    # separate. ``atexit.register(shutdown_otlp_logs)`` remains the last-resort
+    # backstop (interpreter exit), not the primary channel. ``force_flush`` is
+    # synchronous and blocking (up to timeout_millis), so offload it to a thread:
+    # this coroutine is also reached via ``loop.create_task`` from
+    # ``_loop_exception_handler`` with the loop still live, where a bare blocking
+    # call would stall it. Do NOT call ``shutdown_otlp_logs`` here — its one-shot
+    # guard would permanently disable every later graceful flush.
+    from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — cold path: shutdown-only OTLP drain
+        flush_otlp_logs,
+    )
+
+    try:
+        await asyncio.to_thread(flush_otlp_logs)
+    except Exception:
+        logger.warning("Failed to drain OTLP logs on shutdown", exc_info=True)
+
 
 def _loop_exception_handler(
     loop: asyncio.AbstractEventLoop, context: dict[str, Any]

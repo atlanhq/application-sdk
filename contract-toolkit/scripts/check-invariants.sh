@@ -160,6 +160,106 @@ if ! echo "$ERR_MSG" | grep -q "isDistinct"; then
 fi
 
 # --------------------------------------------------------------------------
+# 8. CNCT-93: `app_name` is a reserved uiConfig property name. A tenant-facing
+#    form field cannot supply it — the extract node bakes the contract `name` so
+#    failure logs stay attributable (HYP-1678) — so the arg loops skip it and
+#    codegen skips it. Silently dropping the field would leave a live widget on
+#    the setup form wired to nothing, and (before the codegen skip) shadow the
+#    base Input.app_name with the author's type, failing only at dispatch.
+#    Generation must therefore refuse. Asserted here rather than in pkl test
+#    because facts cannot express "eval fails".
+#
+#    Three cases: App.pkl, the kebab-case spelling (toPyName normalises
+#    `app-name` → `app_name`), and a contract with `pipeline { extract = null }`
+#    — the check is forced from `output`, not from the extract node, so opting
+#    out of extract must not smuggle a collision through. Plus NativeApp.pkl,
+#    which must not drift from App.pkl on this rule.
+# --------------------------------------------------------------------------
+echo ":: Checking reserved uiConfig property name invariant (app_name)..."
+check_reserved_app_name() {
+  local label="$1" body="$2"
+  local contract out_dir err
+  contract="$(mktemp "$REPO_ROOT/test-reserved-appname-XXXXXX.pkl")"
+  out_dir="$(mktemp -d "$REPO_ROOT/test-reserved-appname-out-XXXXXX")"
+  printf '%s\n' "$body" > "$contract"
+  err="$(pkl eval -m "$out_dir" "$contract" 2>&1 || true)"
+  rm -f "$contract"
+  rm -rf "$out_dir"
+  if ! echo "$err" | grep -q "uses the reserved name"; then
+    echo "FAIL: reserved app_name invariant did not fire for $label"
+    echo "  Got: $err"
+    fail=1
+  fi
+}
+
+# $1 = uiConfig property key, $2 = pipeline block
+app_reserved_body() {
+  cat <<PKLEOF
+amends "src/App.pkl"
+
+name = "reserved-appname-app"
+displayName = "Reserved App Name"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline $2
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["$1"] = new TextInput { title = "App Name"; placeholderText = "x" } }
+    }
+  }
+}
+PKLEOF
+}
+
+check_reserved_app_name "App.pkl (app_name)" \
+  "$(app_reserved_body app_name '{ publish = null }')"
+
+# Kebab-case spelling normalises to the same Python name and must also be caught.
+check_reserved_app_name "App.pkl (app-name)" \
+  "$(app_reserved_body app-name '{ publish = null }')"
+
+# `extract = null` must not let a collision through: the invariant is forced from
+# `output`, so it fires even when the extract node is never evaluated.
+check_reserved_app_name "App.pkl (extract = null)" \
+  "$(app_reserved_body app_name '{ publish = null; extract = null }')"
+
+# Control: the identical contract with a NON-reserved property name must generate
+# cleanly. Without this, a check that always errors (for any reason) would pass
+# the three assertions above and prove nothing about the reserved name.
+echo ":: Checking a non-reserved property name still generates (control)..."
+CTRL_CONTRACT="$(mktemp "$REPO_ROOT/test-reserved-ctrl-XXXXXX.pkl")"
+CTRL_OUT="$(mktemp -d "$REPO_ROOT/test-reserved-ctrl-out-XXXXXX")"
+app_reserved_body source-app-name '{ publish = null }' > "$CTRL_CONTRACT"
+CTRL_ERR="$(pkl eval -m "$CTRL_OUT" "$CTRL_CONTRACT" 2>&1 || true)"
+rm -f "$CTRL_CONTRACT"
+rm -rf "$CTRL_OUT"
+if echo "$CTRL_ERR" | grep -q "Pkl Error"; then
+  echo "FAIL: control contract with a non-reserved property name failed to generate"
+  echo "  Got: $CTRL_ERR"
+  fail=1
+fi
+
+check_reserved_app_name "NativeApp.pkl" 'amends "src/NativeApp.pkl"
+
+import "src/Connectors.pkl"
+import "src/Config.pkl"
+
+name = "reserved-appname-native"
+connector = Connectors.POSTGRES
+icon = "https://example.com/icon.svg"
+workflowType = "PostgresWorkflow"
+
+uiConfig = new Config.UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["app-name"] = new Config.TextInput { title = "App Name"; placeholderText = "x" } }
+    }
+  }
+}'
+
+# --------------------------------------------------------------------------
 # Done
 # --------------------------------------------------------------------------
 if [ "$fail" -ne 0 ]; then

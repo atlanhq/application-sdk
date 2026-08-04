@@ -25,6 +25,9 @@ from application_sdk.transformers.query.errors import (
     BuildStructPrefixRequiredError as BuildStructPrefixRequiredError,
 )
 from application_sdk.transformers.query.errors import (
+    IncompatibleDefaultTypeError as IncompatibleDefaultTypeError,
+)
+from application_sdk.transformers.query.errors import (
     SqlTransformNotRegisteredError as SqlTransformNotRegisteredError,
 )
 
@@ -37,6 +40,82 @@ warnings.warn(
 )
 
 logger = get_logger(__name__)
+
+_SQL_KEYWORD_LITERALS = frozenset({"FALSE", "TRUE", "NULL"})
+
+_REMEDY_NON_STRING = (
+    "A source_query must be a string; a YAML list or mapping is neither a column "
+    "reference nor a literal."
+)
+_REMEDY_QUOTED_KEYWORD = (
+    "A bare SQL keyword must be authored as an unquoted YAML scalar, not a quoted "
+    "string."
+)
+_REMEDY_UNDECLARED_EXPRESSION = (
+    "A multi-token SQL expression must declare the columns it reads in source_columns."
+)
+
+# Excluded-field diagnostics are reported once per distinct (template, excluded field
+# set) shape rather than once per call. ``get_sql_column_expressions`` runs once per
+# input batch -- callers stream parquet in batches of a few thousand rows -- so a
+# per-call report repeats every line hundreds of times for a single typename on a large
+# tenant, which ADR-0011 rules out for both WARNING ("very low -- per-anomaly") and INFO
+# ("do NOT log at INFO inside a loop that runs per-record").
+#
+# This caps only the input-dependent tier, whose key includes the fields gated on columns
+# absent from a given batch: that is the one set a caller with a schema that varies per
+# batch could grow without limit. Real callers hold one shape per template. The
+# authoring-mistake tier is deduplicated on the template's static text alone and needs no
+# cap -- see ``_report_excluded_fields``.
+_MAX_REPORTED_GATING_SHAPES = 64
+
+
+def _is_sql_expression(source_query: str) -> bool:
+    """Whether a ``source_query`` is a multi-token SQL construct rather than a name.
+
+    A call or a whitespace-separated construct is an expression, and the gate admits an
+    undeclared ``source_query`` only by exact column-name match. A single token that
+    merely needs SQL quoting -- ``my-col``, ``2024_total`` -- is deliberately not judged
+    here: it can name a real column, so it belongs to the by-design-gating branch rather
+    than to the authoring-mistake branch.
+    """
+    return "(" in source_query or any(character.isspace() for character in source_query)
+
+
+def _unresolvable_remedy(column: dict[str, Any]) -> str | None:
+    """How to fix a field the SQL gate excluded, or ``None`` if it may resolve as authored.
+
+    Separates an authoring mistake from by-design gating. A field whose declared
+    ``source_columns`` are merely absent this run -- or whose ``source_query`` names a
+    column absent this run -- resolves on a run that supplies them, which is the
+    transformer's opt-in behaviour for optional enrichments and not a defect.
+
+    Three shapes indicate an authoring mistake instead, and each needs a different edit,
+    so the caller reports the remedy returned here rather than one hard-coded hint:
+
+    * a ``source_query`` that is not a string at all (a YAML list or mapping), which is
+      never valid SQL text.
+    * a bare SQL keyword authored as a quoted string (``source_query: "FALSE"``), which
+      is read as a column reference and so only ever matches a column literally named
+      ``FALSE``. The unquoted YAML scalar ``FALSE`` is the correct authoring.
+    * a multi-token SQL expression that declares no ``source_columns``, since the gate
+      admits an undeclared ``source_query`` only by exact column-name match.
+
+    The type guard is checked first, because a non-string ``source_query`` is never valid
+    SQL text whatever the declared inputs. Declared ``source_columns`` are then checked
+    before the remaining shape rules, so a field that would resolve on a run supplying
+    them is never reported as an authoring mistake.
+    """
+    source_query = column["source_query"]
+    if not isinstance(source_query, str):
+        return _REMEDY_NON_STRING
+    if column.get("source_columns"):
+        return None
+    if source_query.upper() in _SQL_KEYWORD_LITERALS:
+        return _REMEDY_QUOTED_KEYWORD
+    if _is_sql_expression(source_query):
+        return _REMEDY_UNDECLARED_EXPRESSION
+    return None
 
 
 class QueryBasedTransformer(TransformerInterface):
@@ -78,6 +157,12 @@ class QueryBasedTransformer(TransformerInterface):
         )
         self.connector_name = connector_name
         self.tenant_id = tenant_id
+        # Exclusion shapes already reported, so the diagnostics in
+        # get_sql_column_expressions are emitted once instead of once per input batch.
+        # Split by tier because only the input-dependent one needs bounding.
+        self._reported_authoring_mistakes: set[tuple[Any, ...]] = set()
+        self._reported_gating_shapes: set[tuple[Any, ...]] = set()
+        self._gating_reporting_capped = False
         self.entity_class_definitions: dict[str, str] = (
             get_yaml_query_template_path_mappings(
                 assets=[
@@ -125,19 +210,40 @@ class QueryBasedTransformer(TransformerInterface):
         sql_template: dict[str, Any],
         dataframe: pa.Table,
         default_attributes: dict[str, Any],
+        yaml_path: str | None = None,
     ) -> tuple[list[str], list[dict[str, str]] | None]:
         """Get the columns and literal columns for the SQL query.
+
+        A declared field that resolves to neither an available column nor a recognised
+        literal cannot be emitted, and is reported rather than dropped silently -- the
+        resulting symptom is an attribute missing from published output, which nothing
+        downstream can detect. An excluded field whose shape indicates an authoring
+        mistake is reported at WARNING with the edit that fixes it; one that could still
+        resolve on a run supplying its declared inputs is by-design gating and stays at
+        DEBUG.
+
+        Because DEBUG is off in production, the gated class would otherwise stay as
+        invisible as the silent drop this replaces -- and a typo that happens to look
+        like a plausible column name is statically indistinguishable from an optional
+        enrichment, so it lands there. Any exclusion therefore also emits a per-template
+        INFO summary of declared-vs-emitted counts naming the excluded fields, which is
+        recorded in production and makes "this attribute was declared but never
+        published" queryable without a line per field. See
+        :meth:`_report_excluded_fields` for the reporting cadence.
 
         Args:
             sql_template (Dict[str, Any]): The SQL template
             dataframe (pa.Table): The Table to get columns from
             default_attributes (Dict[str, Any]): The default attributes to add to the SQL query
+            yaml_path (str | None): Template path, used to identify the template in warnings
 
         Returns:
             A list of column expressions for the SQL query
         """
         columns: list[str] = []
         literal_columns: list[dict[str, str]] = []
+        never_resolvable: list[tuple[str, Any, str]] = []
+        inputs_absent: list[dict[str, Any]] = []
         column_names = list(dataframe.schema.names) + list(default_attributes.keys())
 
         for column in sql_template["columns"]:
@@ -162,7 +268,132 @@ class QueryBasedTransformer(TransformerInterface):
                 literal_columns.append(column)
                 columns.append(self.convert_to_sql_expression(column, is_literal=True))
 
+            elif (remedy := _unresolvable_remedy(column)) is not None:
+                never_resolvable.append(
+                    (column["name"], column["source_query"], remedy)
+                )
+
+            else:
+                inputs_absent.append(column)
+
+        if never_resolvable or inputs_absent:
+            self._report_excluded_fields(
+                yaml_path or "<template>",
+                declared=len(sql_template["columns"]),
+                emitted=len(columns),
+                never_resolvable=never_resolvable,
+                inputs_absent=inputs_absent,
+            )
+
         return columns, literal_columns or None
+
+    def _report_excluded_fields(
+        self,
+        template: str,
+        *,
+        declared: int,
+        emitted: int,
+        never_resolvable: list[tuple[str, Any, str]],
+        inputs_absent: list[dict[str, Any]],
+    ) -> None:
+        """Report the fields the SQL gate excluded, once per distinct exclusion shape.
+
+        Emits, for a shape not yet reported by this transformer:
+
+        * one INFO summary of declared-vs-emitted counts naming both excluded sets, which
+          is the production-visible record that a declared attribute never reached
+          published output.
+        * one WARNING per never-resolvable field, carrying the edit that fixes it.
+        * one DEBUG per field gated on inputs absent this run, carrying its declared
+          inputs for diagnosis.
+
+        Callers stream batches of one typename through an unchanging schema, so a report
+        per call repeats identical lines hundreds of times on a large tenant. Reports are
+        deduplicated instead, on two separate keys because the two tiers have different
+        bounds:
+
+        * authoring mistakes on ``(template, never-resolvable names)``, kept uncapped.
+          That set is a pure function of the template's static ``source_query`` and
+          ``source_columns`` text, so it cannot grow with the number of batches at all --
+          it is bounded by the connector's template count. Capping it would mean a genuine
+          authoring mistake in a template first seen late in a run goes unnamed.
+        * everything input-dependent -- the summary and the gated-field DEBUG lines -- on
+          ``(template, never-resolvable names, gated names)``, capped, since the gated set
+          varies with each batch's schema and so is the only tier a pathological caller
+          could grow without limit. A schema that genuinely changes mid-run reports again,
+          because a newly gated field is new information.
+
+        Nothing is emitted at all when every declared field is emitted, so a healthy run
+        stays silent at every level.
+
+        Passing ``_MAX_REPORTED_GATING_SHAPES`` distinct gated shapes stops that tier with
+        a single WARNING: once its diagnostics are incomplete, the absence of a line no
+        longer means the field was published, and that is worth a human's attention.
+        """
+        authoring_shape = (template, tuple(name for name, _, _ in never_resolvable))
+        gating_shape = authoring_shape + (
+            tuple(column["name"] for column in inputs_absent),
+        )
+
+        new_authoring = (
+            bool(never_resolvable)
+            and authoring_shape not in self._reported_authoring_mistakes
+        )
+        new_gating = gating_shape not in self._reported_gating_shapes
+        capped = new_gating and (
+            len(self._reported_gating_shapes) >= _MAX_REPORTED_GATING_SHAPES
+        )
+        if capped:
+            new_gating = False
+
+        if new_gating:
+            self._reported_gating_shapes.add(gating_shape)
+            logger.info(
+                "Template %s excluded %d of %d declared fields from the generated SQL, "
+                "so those attributes will be missing from published output: %d authoring "
+                "mistake(s) %s, %d gated on inputs absent from this run %s",
+                template,
+                declared - emitted,
+                declared,
+                len(never_resolvable),
+                [name for name, _, _ in never_resolvable],
+                len(inputs_absent),
+                [column["name"] for column in inputs_absent],
+            )
+
+        if new_authoring:
+            self._reported_authoring_mistakes.add(authoring_shape)
+            for name, source_query, remedy in never_resolvable:
+                logger.warning(
+                    "Template field %r dropped from %s: source_query %r matched no "
+                    "available column and is not a recognised literal, and its shape "
+                    "indicates an authoring mistake, so the attribute will be missing "
+                    "from published output. %s",
+                    name,
+                    template,
+                    source_query,
+                    remedy,
+                )
+
+        if new_gating:
+            for column in inputs_absent:
+                logger.debug(
+                    "Template field %r skipped from %s: declared inputs absent from "
+                    "this run (source_query %r, source_columns %r)",
+                    column["name"],
+                    template,
+                    column["source_query"],
+                    column.get("source_columns"),
+                )
+
+        if capped and not self._gating_reporting_capped:
+            self._gating_reporting_capped = True
+            logger.warning(
+                "Excluded-field summaries and input-gated field diagnostics suppressed "
+                "after %d distinct template and gated field-set combinations; "
+                "authoring-mistake warnings continue to be reported",
+                _MAX_REPORTED_GATING_SHAPES,
+            )
 
     def generate_sql_query(
         self,
@@ -187,7 +418,7 @@ class QueryBasedTransformer(TransformerInterface):
         sql_template["columns"] = flatten_yaml_columns(sql_template["columns"])
 
         columns, literal_columns = self.get_sql_column_expressions(
-            sql_template, dataframe, default_attributes
+            sql_template, dataframe, default_attributes, yaml_path=yaml_path
         )
 
         sql_query = textwrap.dedent(f"""
@@ -305,11 +536,58 @@ class QueryBasedTransformer(TransformerInterface):
             }
         )
 
-        # Append default attribute columns as constant arrays to the table
+        # Append default attribute columns to the table. The decision is
+        # row-local: a genuine source value always wins for its row, and the
+        # default/literal fills the rows that have none — so the output does
+        # not depend on batch membership or record order.
+        import pyarrow.compute as pc  # noqa: PLC0415 — optional dep: pyarrow
+
         n = len(dataframe)
         for col_name, value in default_attributes.items():
-            if col_name not in dataframe.schema.names:
+            names = dataframe.schema.names
+            if col_name not in names:
                 dataframe = dataframe.append_column(col_name, pa.array([value] * n))
+                continue
+            column = dataframe.column(col_name)
+            if column.null_count == 0 or value is None:
+                continue
+            if pa.types.is_null(column.type):
+                # untyped all-null column: there is no source type to
+                # preserve, so the default legitimately defines the column
+                # (fill_null cannot cast a null-typed column)
+                replacement = pa.array([value] * n)
+            else:
+                # fill_null does not type-check: a str default against a list
+                # column silently explodes into single characters. Cast first
+                # so representable defaults coerce and unrepresentable ones
+                # fail loudly, naming the collision — the same answer whatever
+                # the batch's null shape.
+                try:
+                    fill = pa.scalar(value).cast(column.type)
+                except (
+                    pa.ArrowInvalid,
+                    pa.ArrowNotImplementedError,
+                    pa.ArrowTypeError,
+                ) as exc:
+                    raise IncompatibleDefaultTypeError(
+                        message=(
+                            f"default {col_name!r} ({type(value).__name__}) is "
+                            f"incompatible with source column type {column.type}; "
+                            "rename the colliding extractor key"
+                        ),
+                        expectation=f"default castable to {column.type}",
+                        observed=type(value).__name__,
+                        location=col_name,
+                    ) from exc
+                if column.null_count == n:
+                    # keep the column's type; a bare rebuild would re-infer
+                    # the default's own
+                    replacement = pa.array([fill.as_py()] * n, type=column.type)
+                else:
+                    replacement = pc.fill_null(column, fill)
+            dataframe = dataframe.set_column(
+                names.index(col_name), col_name, replacement
+            )
 
         return dataframe, entity_sql_template
 
@@ -336,7 +614,16 @@ class QueryBasedTransformer(TransformerInterface):
         pd = sys.modules.get("pandas")
 
         if isinstance(dataframe, list):
-            dataframe = pa.Table.from_pylist(dataframe) if dataframe else None
+            if dataframe:
+                # pa.Table.from_pylist infers the schema from the first record
+                # only, silently dropping any key it lacks; build the table
+                # column-wise over the union of keys instead.
+                all_keys = dict.fromkeys(key for record in dataframe for key in record)
+                dataframe = pa.Table.from_pydict(
+                    {key: [record.get(key) for record in dataframe] for key in all_keys}
+                )
+            else:
+                dataframe = None
         elif pd is not None and isinstance(dataframe, pd.DataFrame):
             dataframe = pa.Table.from_pandas(dataframe, preserve_index=False)
         if dataframe is None or len(dataframe) == 0:
@@ -375,7 +662,7 @@ class QueryBasedTransformer(TransformerInterface):
         )
         with DuckDBConnectionManager() as db:
             db.connection.register("dataframe", dataframe)
-            result_table = db.connection.execute(entity_sql_template).to_arrow_table()
+            result_table = db.connection.sql(entity_sql_template).to_arrow_table()
 
         # Convert flat dot-notation columns into nested dicts
         return self.get_grouped_dataframe_by_prefix(result_table)

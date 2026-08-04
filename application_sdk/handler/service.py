@@ -2187,11 +2187,35 @@ def _register_workflow_routes(
             # Inject workflow_id so run() can access it via input.workflow_id
             input_data.workflow_id = workflow_id
 
+            # Correlation memo (CNCT-104): event-triggered starts previously
+            # passed no memo, so the LogInterceptor fell back to a value the
+            # run page never queries and the run's logs were unfindable.
+            # Respect an event-supplied correlation_id; otherwise mint one —
+            # the same contract as the /workflows/v1/start path above — and
+            # return it to the caller so the run's logs are addressable.
+            correlation_id = getattr(input_data, "correlation_id", "") or str(uuid4())
+            input_data.correlation_id = correlation_id
+            input_data._correlation_id = correlation_id
+
+            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
+                CorrelationContext,
+                set_correlation_context,
+            )
+
+            # Mirror the /workflows/v1/start path: bind the ContextVar so every
+            # handler-side line for this request — including the except branch on
+            # a failed dispatch — carries the correlation_id we just returned to
+            # the caller, keeping the run addressable even when the start fails.
+            set_correlation_context(CorrelationContext(correlation_id=correlation_id))
+
             handle = await client.start_workflow(
                 _workflow_config.app_name,
                 args=[input_data],
                 id=workflow_id,
                 task_queue=_workflow_config.task_queue,
+                memo=CorrelationContext(
+                    correlation_id=correlation_id
+                ).to_temporal_memo(),
                 execution_timeout=(
                     timedelta(hours=_workflow_config.workflow_max_timeout_hours)
                     if _workflow_config.workflow_max_timeout_hours
@@ -2203,6 +2227,7 @@ def _register_workflow_routes(
                     "status": "SUCCESS",
                     "workflow_id": handle.id,
                     "run_id": handle.result_run_id,
+                    "correlation_id": correlation_id,
                 }
             )
         except Exception as e:
@@ -2357,7 +2382,7 @@ def _register_workflow_routes(
 
     async def _serve_entrypoint_manifest(
         entrypoint_name: str,
-        fe_inputs: str | None,
+        fe_inputs: str | dict[str, Any] | None,
         deployment: bytes,
     ) -> Response:
         """Read <entrypoint>/manifest.json, substitute placeholders, run the
@@ -2366,6 +2391,11 @@ def _register_workflow_routes(
         Shared by the explicit-``?entrypoint=`` branch and the default-
         entrypoint fallback below — avoids duplicating the placeholder /
         hook logic across both code paths.
+
+        ``fe_inputs`` arrives either as the raw URL-encoded JSON string (GET,
+        subject to :data:`_MAX_FE_INPUTS_BYTES`) or as an already-parsed dict
+        (POST body, unbounded). It stays undecoded until the hook actually
+        needs it — see the decode site below.
         """
         # Build a registry from the filesystem: {entrypoint_name → manifest_path}.
         # The Path objects in the dict come from glob(), not from user input, so
@@ -2406,7 +2436,15 @@ def _register_workflow_routes(
         # the hook get the static manifest unchanged (current behavior).
         compute = _discover_compute_manifest(entrypoint_name)
         if compute is not None:
-            fe_inputs_decoded = _decode_fe_inputs(fe_inputs)
+            # Decode lazily and only here: an app with no hook has always
+            # ignored fe_inputs, so decoding at the route would start 413-ing
+            # static apps that work today. A dict came from the POST body, where
+            # the query-string cap does not apply.
+            fe_inputs_decoded = (
+                fe_inputs
+                if isinstance(fe_inputs, dict)
+                else _decode_fe_inputs(fe_inputs)
+            )
             manifest_dict = orjson.loads(raw)
             try:
                 # The hook is async-only (discovery rejects sync defs), so
@@ -2442,11 +2480,16 @@ def _register_workflow_routes(
 
         return Response(content=raw, media_type="application/json")
 
-    @app.get("/workflows/v1/manifest")
-    async def get_manifest(
-        entrypoint: str | None = None,
-        fe_inputs: str | None = None,
+    async def _serve_manifest(
+        entrypoint: str | None,
+        fe_inputs: str | dict[str, Any] | None,
     ) -> Response:
+        """Resolve the entrypoint and serve its manifest.
+
+        Transport-agnostic: GET hands in the raw query string, POST the parsed
+        body dict. Everything downstream is identical and lives here once so the
+        two methods cannot drift.
+        """
         deployment = (DEPLOYMENT_NAME or "default").encode()
 
         if entrypoint:
@@ -2539,6 +2582,71 @@ def _register_workflow_routes(
 
         raise HTTPException(status_code=404, detail="No manifest available")
 
+    @app.get("/workflows/v1/manifest")
+    async def get_manifest(
+        entrypoint: str | None = None,
+        fe_inputs: str | None = None,
+    ) -> Response:
+        """Serve a manifest with ``fe_inputs`` as a query parameter.
+
+        Retained: the playground, connector integration tests and the
+        AE/marketplace probes fetch manifests this way and send no
+        ``fe_inputs``. Callers that do should use ``POST`` — the query string
+        caps the payload at :data:`_MAX_FE_INPUTS_BYTES` (CSA-539).
+        """
+        return await _serve_manifest(entrypoint, fe_inputs)
+
+    @app.post("/workflows/v1/manifest")
+    async def post_manifest(request: Request) -> Response:
+        """Serve a manifest with ``fe_inputs`` in the request body.
+
+        Body: ``{"entrypoint": str | null, "fe_inputs": {...}, "user_id": str | null}``
+        — all optional. ``{}``, ``null`` and an absent body are all equivalent to
+        a bare GET. ``fe_inputs`` must be a JSON object, not a JSON *string*: a
+        caller porting a GET query param must pass the decoded object.
+
+        Exists because ``fe_inputs`` on the query string is bounded by the
+        request line: an ~11 KB payload was rejected with 413 before
+        ``compute_manifest`` ran, and past ~64 KB the URL is silently truncated
+        (CSA-539). A body has neither limit. ``user_id`` is accepted and ignored
+        so callers that already send it (as a GET query param, where it is
+        likewise ignored) keep working.
+        """
+        raw = await request.body()
+        if not raw.strip():
+            # Absent/empty body means "no inputs", same as a bare GET. Callers
+            # fall back only on 405, so 400-ing this would hard-fail them.
+            body: Any = {}
+        else:
+            try:
+                body = await request.json()
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400, detail=f"Request body is not valid JSON: {exc}"
+                ) from exc
+        if body is None:
+            body = {}
+        if not isinstance(body, dict):
+            raise HTTPException(
+                status_code=400, detail="Request body must be a JSON object"
+            )
+
+        entrypoint = body.get("entrypoint")
+        if entrypoint is not None and not isinstance(entrypoint, str):
+            raise HTTPException(status_code=400, detail="entrypoint must be a string")
+
+        fe_inputs = body.get("fe_inputs")
+        if fe_inputs is None:
+            fe_inputs = {}
+        if not isinstance(fe_inputs, dict):
+            # Same contract as the GET path, so a mis-shaped payload gets the
+            # same answer on either transport.
+            raise HTTPException(
+                status_code=400, detail="fe_inputs must be a JSON object"
+            )
+
+        return await _serve_manifest(entrypoint, fe_inputs)
+
     # ------------------------------------------------------------------
     # Backwards-compatibility alias — TACTICAL, remove once Heracles /
     # Automation Engine is updated to call /workflows/v1/manifest instead.
@@ -2563,6 +2671,18 @@ def _register_workflow_routes(
             Do **not** add new callers of this endpoint.
         """
         return await get_manifest(entrypoint=entrypoint, fe_inputs=fe_inputs)
+
+    @app.post("/manifest", include_in_schema=False)
+    async def post_manifest_legacy(request: Request) -> Response:
+        """Unversioned alias for ``POST /workflows/v1/manifest``.
+
+        .. deprecated::
+            Same deprecation as the GET alias above. Exists so callers can
+            migrate method and path independently — they all call the
+            unversioned path today, and v2-era images serve only this path.
+            Do **not** add new callers.
+        """
+        return await post_manifest(request)
 
     # ------------------------------------------------------------------
     # Input-contract endpoint

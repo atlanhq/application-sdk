@@ -240,6 +240,20 @@ inputs:
       Leave "false" (default) for the pure-SDR / worker-up pipelines.
     required: false
     default: "false"
+  extra-env:
+    description: |
+      JSON object of extra environment variables to export before the secrets
+      bundle is generated and pytest runs. This is how a caller that cannot set
+      job-level `env:` — notably tests-reusable.yaml, where the job is owned by
+      the SDK and the connector's SOURCE credential names are unknowable — gets
+      them to the secrets-script and the test class.
+
+      Values must be JSON-encoded by the caller (`toJSON(secrets.NAME)`): a
+      key-pair PEM or service-account JSON is multi-line, and $GITHUB_ENV needs
+      the heredoc form for those. Empty (the default) is a no-op, so callers
+      that already set job-level env are unaffected.
+    required: false
+    default: ""
   ghcr-token:
     description: |
       Optional token used to authenticate the GHCR login for the test-image
@@ -283,7 +297,7 @@ runs:
   using: composite
   steps:
     - name: Log in to GHCR
-      uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
@@ -463,7 +477,7 @@ runs:
     # contracts, BaseSDRIntegrationTest — is import-compatible with the code
     # under test, and the whole E2E job runs one interpreter end to end.
     - name: Setup Python and dependencies
-      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.24.1
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.26.1
       with:
         python-version: ${{ inputs.expected-python-version }}
 
@@ -585,6 +599,37 @@ runs:
           --config test-config.yaml \
           --output ./ci-deploy \
           --overwrite
+
+    # Caller-supplied connector SOURCE credentials, exported before the secrets
+    # bundle is written (the script below reads them) and therefore visible to
+    # every later step, pytest included. Straight-line call into a tested script
+    # per docs/standards/ci.md; the heredoc form it emits is what makes
+    # multi-line values (PEM, service-account JSON) survive $GITHUB_ENV.
+    #
+    # `--mask-only` first, then the env write — the ordering is the security
+    # property, not a style choice. `extra-env` arrives as one registered secret,
+    # and the runner's log masker matches registered strings rather than
+    # substrings of one, so each value pulled out of the blob is unredacted until
+    # `::add-mask::` registers it. That command is read from the step's stdout,
+    # which the second invocation redirects into $GITHUB_ENV — hence two passes,
+    # masks to the log first. Once the values are in $GITHUB_ENV, the next step
+    # to render its `env:` group has already leaked them.
+    #
+    # No live caller yet: tests-reusable.yaml exports the same payload inline
+    # because it pins this action @main, so `extra-env` is invisible to it until
+    # this merges. The relative script path below is asserted by
+    # test_composite_action_invokes_this_script_at_a_real_path; collapsing the
+    # duplication is tracked in that test's TODO(follow-up).
+    - name: Export caller-supplied env
+      if: inputs.extra-env != ''
+      shell: bash
+      env:
+        EXTRA_ENV: ${{ inputs.extra-env }}
+      run: |
+        python3 "${{ github.action_path }}/../../scripts/export_extra_env.py" \
+          --json "$EXTRA_ENV" --mask-only
+        python3 "${{ github.action_path }}/../../scripts/export_extra_env.py" \
+          --json "$EXTRA_ENV" >> "$GITHUB_ENV"
 
     - name: Generate secrets bundle
       shell: bash

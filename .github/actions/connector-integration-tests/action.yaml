@@ -49,7 +49,7 @@ description: |
   steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - uses: ./.github/actions/mssql-native-deps   # connector-local action
-    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.24.1
+    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.26.1
       with:
         app-name: mssql
   ```
@@ -188,6 +188,20 @@ inputs:
       to the sdr-e2e composite.  Never use ``uses: ./…`` references from
       inside a reusable/composite workflow: they resolve against the
       reusable's repo, not the caller's.
+    default: ""
+  extra-env:
+    description: |
+      JSON object of extra environment variables to export before the
+      services-script hook, the app server and pytest run.  The hook for a
+      connector's SOURCE credentials when the calling job cannot set them as
+      job-level ``env:`` — notably tests-reusable.yaml, where the job is owned
+      by the SDK and the credential names are per-connector.
+
+      Values must be JSON-encoded by the caller (``toJSON(secrets.NAME)``):
+      a key-pair PEM or service-account key is multi-line, and ``$GITHUB_ENV``
+      needs the heredoc form for those.  Empty (the default) is a no-op, so
+      callers that already set job-level env are unaffected.
+    required: false
     default: ""
 
 runs:
@@ -335,6 +349,36 @@ runs:
           curl -sf http://localhost:3500/v1.0/metadata >/dev/null 2>&1 && break
           sleep 1
         done
+
+    # Caller-supplied source credentials, exported before the services-script
+    # hook (which may compose config from them), the app server and pytest.
+    # Straight-line call into a tested script per docs/standards/ci.md; the
+    # heredoc form it emits is what makes multi-line values survive $GITHUB_ENV.
+    #
+    # `--mask-only` first, then the env write — the ordering is the security
+    # property, not a style choice. `extra-env` arrives as one registered secret,
+    # and the runner's log masker matches registered strings rather than
+    # substrings of one, so each value pulled out of the blob is unredacted until
+    # `::add-mask::` registers it. That command is read from the step's stdout,
+    # which the second invocation redirects into $GITHUB_ENV — hence two passes,
+    # masks to the log first. Once the values are in $GITHUB_ENV, the next step
+    # to render its `env:` group has already leaked them.
+    #
+    # No live caller yet: tests-reusable.yaml exports the same payload inline
+    # because it pins this action @main, so `extra-env` is invisible to it until
+    # this merges. The relative script path below is asserted by
+    # test_composite_action_invokes_this_script_at_a_real_path; collapsing the
+    # duplication is tracked in that test's TODO(follow-up).
+    - name: Export caller-supplied env
+      if: inputs.extra-env != ''
+      shell: bash
+      env:
+        EXTRA_ENV: ${{ inputs.extra-env }}
+      run: |
+        python3 "${{ github.action_path }}/../../scripts/export_extra_env.py" \
+          --json "$EXTRA_ENV" --mask-only
+        python3 "${{ github.action_path }}/../../scripts/export_extra_env.py" \
+          --json "$EXTRA_ENV" >> "$GITHUB_ENV"
 
     - name: Start runtime services (services-script hook)
       if: inputs.services-script != ''

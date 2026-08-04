@@ -1,8 +1,8 @@
 """Unit tests for application_sdk.storage.formats (Reader / Writer base classes).
 
 Targets uncovered branches:
-- Reader.close() idempotency and ``_cleanup_downloaded_files`` exception swallow
-  (and the inline ``import shutil``).
+- Reader.close() idempotency, ``_cleanup_downloaded_files`` exception swallow, and
+  the directory rmtree being offloaded off the event loop.
 - Writer._convert_to_dataframe pandas / dict / list / unsupported branches.
 - Writer.write closed / unsupported ``dataframe_type`` errors, plus the
   DataframeType.daft deprecation shim routing to the pandas path.
@@ -17,6 +17,7 @@ threads or loops beyond pytest-asyncio.
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import AsyncGenerator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -133,10 +134,8 @@ class TestReaderClose:
         assert reader._downloaded_files == []  # cleared regardless of failures
 
     @pytest.mark.asyncio
-    async def test_cleanup_handles_directories_via_inline_shutil(
-        self, tmp_path
-    ) -> None:
-        """Exercises the inline ``import shutil`` for directory cleanup."""
+    async def test_cleanup_handles_directories(self, tmp_path) -> None:
+        """Directory entries are removed via ``shutil.rmtree``."""
         d = tmp_path / "downloaded_dir"
         d.mkdir()
         (d / "child.txt").write_text("c")
@@ -147,6 +146,34 @@ class TestReaderClose:
         await reader._cleanup_downloaded_files()
         assert not d.exists()
         assert reader._downloaded_files == []
+
+    @pytest.mark.asyncio
+    async def test_directory_cleanup_offloaded_to_thread(self, tmp_path) -> None:
+        """The directory rmtree must not run inline on the event loop.
+
+        A downloaded prefix is an unbounded tree, so removing it inline stalls
+        every other coroutine — including a @task's auto-heartbeat — for the
+        full duration of the call.
+        """
+        d = tmp_path / "downloaded_dir"
+        d.mkdir()
+        (d / "child.txt").write_text("c")
+
+        reader = _StubReader()
+        reader._downloaded_files = [str(d)]
+
+        with patch(
+            "application_sdk.storage.formats.run_in_thread",
+            new_callable=AsyncMock,
+            side_effect=lambda func, *a, **kw: func(*a, **kw),
+        ) as mock_offload:
+            await reader._cleanup_downloaded_files()
+
+        mock_offload.assert_awaited_once()
+        assert mock_offload.await_args is not None
+        assert mock_offload.await_args.args[0] is shutil.rmtree
+        assert mock_offload.await_args.args[1] == str(d)
+        assert not d.exists()
 
     @pytest.mark.asyncio
     async def test_close_marks_closed_and_clears_files(self, tmp_path) -> None:
