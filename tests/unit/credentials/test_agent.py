@@ -1428,3 +1428,223 @@ class TestCredentialResolverAgentBranch:
         assert isinstance(cred, BasicCredential)
         assert cred.username == "real_user"
         assert cred.password == "real_pw"
+
+
+class TestSingleKeyProbeConcurrency:
+    """Single-key probes must overlap, stay bounded, and fail loudly on a
+    store-wide fault (BLDX-1594).
+
+    A missing-key probe costs a full Dapr retry ladder, because Dapr answers
+    "no such key" with a 500 that the transport retries blind. Serial probing
+    therefore made credential resolution cost *ladder x number of
+    literal-valued fields*, which exhausted the fixed ``prime_sql_auth``
+    activity budget before the source was ever contacted.
+    """
+
+    @staticmethod
+    def _spec(**fields: Any) -> AgentCredentialSpec:
+        return AgentCredentialSpec.model_validate(
+            {"agent-name": "t", "key-type": "single-key", **fields}
+        )
+
+    async def test_probes_run_concurrently_not_serially(self) -> None:
+        """The whole point of the fix: N slow probes cost ~one probe, not N.
+
+        Asserted via observed overlap rather than wall-clock, so the test
+        can't flake on a loaded runner.
+        """
+        import asyncio
+
+        state = {"in_flight": 0, "max_in_flight": 0}
+        gate = asyncio.Event()
+
+        class SlowStore:
+            async def get_optional(self, name: str) -> str | None:
+                state["in_flight"] += 1
+                state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
+                # Hold every probe open until the last one has arrived, which
+                # is only reachable if they genuinely overlap.
+                if state["in_flight"] >= 3:
+                    gate.set()
+                await gate.wait()
+                state["in_flight"] -= 1
+                return None
+
+        spec = self._spec(
+            **{"basic.username": "u-lit", "basic.password": "p-lit", "database": "db"}
+        )
+        raw = spec.to_raw_dict()
+
+        await asyncio.wait_for(_fetch_per_key_bundle(SlowStore(), raw), timeout=5)
+
+        assert state["max_in_flight"] == 3, (
+            "probes did not overlap — they are running serially, which is the "
+            "regression this test exists to catch"
+        )
+
+    async def test_concurrency_is_bounded(self) -> None:
+        """Fan-out is capped so a wide payload can't burst a cloud vault into
+        throttling (which Dapr reports indistinguishably from 'key absent')."""
+        import asyncio
+
+        from application_sdk.credentials.agent import _MAX_CONCURRENT_SINGLE_KEY_PROBES
+
+        state = {"in_flight": 0, "max_in_flight": 0}
+
+        class CountingStore:
+            async def get_optional(self, name: str) -> str | None:
+                state["in_flight"] += 1
+                state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
+                await asyncio.sleep(0)
+                state["in_flight"] -= 1
+                return None
+
+        # Twice the cap, so exceeding it would be observable.
+        fields = {
+            f"extra.f{i}": f"lit-{i}"
+            for i in range(_MAX_CONCURRENT_SINGLE_KEY_PROBES * 2)
+        }
+        raw = self._spec(**fields).to_raw_dict()
+
+        await _fetch_per_key_bundle(CountingStore(), raw)
+
+        assert state["max_in_flight"] <= _MAX_CONCURRENT_SINGLE_KEY_PROBES
+
+    async def test_each_unique_ref_key_probed_exactly_once(self) -> None:
+        """De-duplication must survive the concurrent rewrite — the ``seen``
+        set used to be mutated inside the probe and relied on serial
+        execution, which would race."""
+        calls: list[str] = []
+
+        class TrackingStore:
+            async def get_optional(self, name: str) -> str | None:
+                calls.append(name)
+                return None
+
+        # Same ref-key referenced by three different fields.
+        raw = self._spec(
+            **{
+                "basic.username": "shared-key",
+                "basic.password": "shared-key",
+                "database": "shared-key",
+                "extra.role": "other-key",
+            }
+        ).to_raw_dict()
+
+        await _fetch_per_key_bundle(TrackingStore(), raw)
+
+        assert sorted(calls) == ["other-key", "shared-key"]
+
+    async def test_all_probes_erroring_raises_instead_of_silently_proceeding(
+        self,
+    ) -> None:
+        """A store-wide fault must fail loudly.
+
+        Silently falling through leaves ref-keys as literal values, so the
+        source sees an auth attempt with the ref-key as the password — the
+        ``failed_login_attempts`` stacking that ``prime_sql_auth``'s
+        ``retry_max_attempts=1`` exists to prevent.
+        """
+
+        class BrokenStore:
+            async def get_optional(self, name: str) -> str | None:
+                raise SecretStoreError("vault denied", secret_name=name)
+
+        raw = self._spec(
+            **{"basic.username": "u", "basic.password": "p", "database": "db"}
+        ).to_raw_dict()
+
+        with pytest.raises(SecretStoreError) as exc_info:
+            await _fetch_per_key_bundle(BrokenStore(), raw)
+
+        assert "all 3 secret-store probes" in str(exc_info.value)
+
+    async def test_single_candidate_erroring_still_falls_through(self) -> None:
+        """With one probe, 'all probes errored' is just 'the probe errored' —
+        genuinely ambiguous (the field may not be a secret), so the documented
+        swallow-and-fall-through behaviour is preserved."""
+
+        class BrokenStore:
+            async def get_optional(self, name: str) -> str | None:
+                raise SecretStoreError("vault denied", secret_name=name)
+
+        raw = self._spec(**{"basic.password": "only-field"}).to_raw_dict()
+
+        assert await _fetch_per_key_bundle(BrokenStore(), raw) == {}
+
+    async def test_partial_resolution_does_not_raise(self) -> None:
+        """One field erroring while another resolves is not a store fault."""
+
+        class FlakyStore:
+            async def get_optional(self, name: str) -> str | None:
+                if name == "real-key":
+                    return "real-value"
+                raise SecretStoreError("vault denied", secret_name=name)
+
+        raw = self._spec(
+            **{"basic.password": "real-key", "database": "db-literal"}
+        ).to_raw_dict()
+
+        assert await _fetch_per_key_bundle(FlakyStore(), raw) == {
+            "real-key": "real-value"
+        }
+
+    async def test_zero_resolved_is_logged_as_warning(self) -> None:
+        """A throttled vault answers 500/ERR_SECRET_GET, which the SDK cannot
+        tell from 'key absent'. The zero-resolution WARNING is the only record
+        that distinguishes 'nothing to resolve' from 'resolved nothing'."""
+        from unittest.mock import patch
+
+        class EmptyStore:
+            async def get_optional(self, name: str) -> str | None:
+                return None
+
+        raw = self._spec(**{"basic.password": "p", "database": "db"}).to_raw_dict()
+
+        with patch("application_sdk.credentials.agent.logger") as mock_logger:
+            assert await _fetch_per_key_bundle(EmptyStore(), raw) == {}
+
+        mock_logger.warning.assert_called_once()
+        assert "resolved 0 of" in mock_logger.warning.call_args.args[0]
+
+    async def test_successful_resolution_is_logged_at_info(self) -> None:
+        """Positive-resolution logging: resolution provenance was previously
+        only inferable from the absence of DEBUG lines."""
+        from unittest.mock import patch
+
+        class Store:
+            async def get_optional(self, name: str) -> str | None:
+                return "value" if name == "real-key" else None
+
+        raw = self._spec(
+            **{"basic.password": "real-key", "database": "db-literal"}
+        ).to_raw_dict()
+
+        with patch("application_sdk.credentials.agent.logger") as mock_logger:
+            await _fetch_per_key_bundle(Store(), raw)
+
+        mock_logger.info.assert_called_once()
+        assert mock_logger.info.call_args.args[1:] == (1, 2)
+
+    async def test_cold_start_outage_propagates_even_when_others_resolve(
+        self,
+    ) -> None:
+        """A probe that never got an answer must surface as an outage rather
+        than being masked by its siblings' success — and must carry a hashed
+        label, not the raw ref-key."""
+
+        class HalfDownStore:
+            async def get_optional(self, name: str) -> str | None:
+                if name == "unreachable-key":
+                    raise SecretStoreUnavailableError(name)
+                return "value"
+
+        raw = self._spec(
+            **{"basic.password": "unreachable-key", "database": "fine-key"}
+        ).to_raw_dict()
+
+        with pytest.raises(SecretStoreUnavailableError) as exc_info:
+            await _fetch_per_key_bundle(HalfDownStore(), raw)
+
+        assert "unreachable-key" not in str(exc_info.value)
+        assert "sha256:" in str(exc_info.value)
