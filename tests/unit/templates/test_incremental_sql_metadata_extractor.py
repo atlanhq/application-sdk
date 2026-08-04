@@ -952,11 +952,14 @@ class TestWriteCurrentStateInlineImports:
         running removal. The removal must therefore finish before
         ``CancelledError`` propagates.
 
-        Cancellation is delivered **twice**: one ``cancel()`` throws once and is
-        then consumed, so even an unshielded await in the ``finally`` would run
-        to completion. It is the repeated cancellation (worker shutdown, a
-        ``wait_for`` timeout) that abandons the removal mid-flight, and that is
-        what ``asyncio.shield`` here defends against.
+        Cancellation is delivered **three times**: one ``cancel()`` throws once
+        and is then consumed, so even an unshielded await in the ``finally``
+        would run to completion. Repeated cancellation (worker shutdown, a
+        ``wait_for`` timeout, a retry-cancel) is what abandons the removal
+        mid-flight: a second throw lands on the shield, and a third lands on
+        whatever the handler re-awaits. The finally therefore loops a shielded
+        await until the offload is actually done, however many times the throw
+        is re-delivered.
         """
         finished = threading.Event()
 
@@ -1006,7 +1009,13 @@ class TestWriteCurrentStateInlineImports:
             await snapshot_started.wait()
             task.cancel()
             # One loop turn: the throw lands in `_hang`, the finally runs and
-            # suspends on the offloaded removal (already submitted to a thread).
+            # suspends on the shielded offloaded removal (already submitted to
+            # a thread).
+            await asyncio.sleep(0)
+            task.cancel()
+            # Another loop turn: the second throw lands on the shield and the
+            # handler re-awaits the shielded removal — exactly where a third
+            # cancel would abandon an unshielded re-await.
             await asyncio.sleep(0)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
