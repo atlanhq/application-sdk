@@ -48,6 +48,10 @@ with workflow.unsafe.imports_passed_through():
         PreflightOutput,
         PreflightStatus,
     )
+    from application_sdk.handler.sdr_output import (
+        auth_output_to_response,
+        preflight_output_to_response,
+    )
     from application_sdk.infrastructure.context import get_infrastructure
     from application_sdk.observability.logger_adaptor import get_logger
     from application_sdk.storage.preflight import check_object_store_access
@@ -223,14 +227,15 @@ class SdrTestAuthWorkflow:
     """Durable wrapper around ``Handler.test_auth``."""
 
     @workflow.run
-    async def run(self, input: AuthInput) -> AuthOutput:
-        return await workflow.execute_activity(
+    async def run(self, input: AuthInput) -> dict[str, Any]:
+        output = await workflow.execute_activity(
             SDR_TEST_AUTH_ACTIVITY,
             input,
             retry_policy=_AUTH_RETRY,
             schedule_to_close_timeout=_AUTH_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_AUTH_START_TO_CLOSE,
         )
+        return auth_output_to_response(output)
 
 
 @workflow.defn(name="sdr:preflight_check")
@@ -238,14 +243,17 @@ class SdrPreflightCheckWorkflow:
     """Durable wrapper around ``Handler.preflight_check``."""
 
     @workflow.run
-    async def run(self, input: PreflightInput) -> PreflightOutput:
-        return await workflow.execute_activity(
+    async def run(self, input: PreflightInput) -> dict[str, Any]:
+        # The activity returns a typed PreflightOutput; the workflow converts it
+        # to the frontend envelope so heracles can forward the result verbatim.
+        output = await workflow.execute_activity(
             SDR_PREFLIGHT_ACTIVITY,
             input,
             retry_policy=_DEFAULT_RETRY,
             schedule_to_close_timeout=_PREFLIGHT_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_PREFLIGHT_START_TO_CLOSE,
         )
+        return preflight_output_to_response(output)
 
 
 @workflow.defn(name="sdr:fetch_metadata")
