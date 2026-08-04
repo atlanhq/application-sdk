@@ -203,8 +203,9 @@ def _lift_agent_json(body: dict[str, Any]) -> dict[str, Any]:
     for key in _AGENT_JSON_KEYS:
         if key in body:
             aj = _coerce_agent_json(body[key])
-            if aj is not None and _rank_agent_json(body[key], key) > best_rank:
-                best_rank, best_aj = _rank_agent_json(body[key], key), aj
+            rank = _rank_agent_json(body[key], key)
+            if aj is not None and rank > best_rank:
+                best_rank, best_aj = rank, aj
 
     for container in ("metadata", "connection_config", "credentials"):
         c = body.get(container)
@@ -212,8 +213,9 @@ def _lift_agent_json(body: dict[str, Any]) -> dict[str, Any]:
             for key in _AGENT_JSON_KEYS:
                 if key in c:
                     aj = _coerce_agent_json(c[key])
-                    if aj is not None and _rank_agent_json(c[key], key) > best_rank:
-                        best_rank, best_aj = _rank_agent_json(c[key], key), aj
+                    rank = _rank_agent_json(c[key], key)
+                    if aj is not None and rank > best_rank:
+                        best_rank, best_aj = rank, aj
         elif isinstance(c, list):  # v3 credentials: list[{key, value}]
             for item in c:
                 if isinstance(item, dict) and item.get("key") in _AGENT_JSON_KEYS:
