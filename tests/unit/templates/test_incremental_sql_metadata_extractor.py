@@ -884,6 +884,62 @@ class TestWriteCurrentStateInlineImports:
         # cleanup_previous_state runs in finally
         mock_cleanup.assert_called_once()
 
+    async def test_cleanup_offloaded_to_thread(self, tmp_path) -> None:
+        """The finally-block cleanup must not rmtree on the event loop.
+
+        ``cleanup_previous_state`` removes the whole downloaded previous state,
+        and this runs inside a ``@task`` whose auto-heartbeat must keep flowing
+        for the duration — so the helper is offloaded at this call site rather
+        than made async (its sync callers keep the sync entry point).
+        """
+        snap_result = MagicMock()
+        snap_result.current_state_dir = tmp_path / "current"
+        snap_result.current_state_s3_prefix = "s3://current"
+        snap_result.total_files = 1
+        snap_result.incremental_diff_dir = None
+        snap_result.incremental_diff_s3_prefix = None
+        snap_result.incremental_diff_files = 0
+
+        extractor = _make_extractor()
+
+        with (
+            patch(
+                "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
+                return_value=tmp_path / "current",
+            ),
+            patch(
+                "application_sdk.common.incremental.helpers.get_persistent_s3_prefix",
+                return_value="s3://persist",
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.cleanup_previous_state",
+            ) as mock_cleanup,
+            patch(
+                "application_sdk.common.incremental.state.state_writer.create_current_state_snapshot",
+                new=AsyncMock(return_value=snap_result),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.download_transformed_data",
+                new=AsyncMock(return_value=tmp_path / "transformed"),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.prepare_previous_state",
+                new=AsyncMock(return_value=tmp_path / "prev"),
+            ),
+            patch(
+                "application_sdk.templates.incremental_sql_metadata_extractor.run_in_thread",
+                new_callable=AsyncMock,
+                side_effect=lambda func, *a, **kw: func(*a, **kw),
+            ) as mock_offload,
+        ):
+            await extractor.write_current_state(self._make_input())
+
+        mock_offload.assert_awaited_once()
+        assert mock_offload.await_args is not None
+        assert mock_offload.await_args.args[0] is mock_cleanup
+        assert mock_offload.await_args.args[1] == tmp_path / "prev"
+        mock_cleanup.assert_called_once()
+
 
 class TestResolveDatabasePlaceholdersDefault:
     """resolve_database_placeholders is a no-op by default."""

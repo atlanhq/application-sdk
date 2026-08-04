@@ -56,6 +56,7 @@ from abc import abstractmethod
 from typing import Any, ClassVar
 
 from application_sdk.app.task import task
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates._template_errors import (
     IncrementalSqlMetadataExtractorNotImplementedError,
@@ -797,7 +798,11 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
 
             raise IncrementalStateWriteError(cause=e) from e
         finally:
-            cleanup_previous_state(previous_state_dir)
+            # Offloaded at the call site (the helper stays sync for its sync
+            # callers): its rmtree spans the whole downloaded previous state,
+            # and this runs inside a @task whose auto-heartbeat must keep
+            # flowing while the tree is removed.
+            await run_in_thread(cleanup_previous_state, previous_state_dir)
 
     @task(timeout_seconds=120)
     async def update_incremental_marker(

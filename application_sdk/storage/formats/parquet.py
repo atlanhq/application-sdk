@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.contracts.types import FileReference
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.storage.batch import delete_prefix as _delete_prefix
@@ -723,7 +724,12 @@ class ParquetFileWriter(Writer):
             for folder_index in self.temp_folders_created:
                 temp_folder = self._get_temp_folder_path(folder_index)
                 if SafeFileOps.exists(temp_folder):
-                    SafeFileOps.rmtree(temp_folder, ignore_errors=True)
+                    # Offloaded: an accumulation folder holds a run's worth of
+                    # parquet chunks, and rmtree on the event loop stalls every
+                    # other coroutine — including the auto-heartbeat.
+                    await run_in_thread(
+                        SafeFileOps.rmtree, temp_folder, ignore_errors=True
+                    )
 
             # Clean up base temp directory if it exists and is empty
             temp_base_path = os.path.join(self.path, "temp_accumulation")

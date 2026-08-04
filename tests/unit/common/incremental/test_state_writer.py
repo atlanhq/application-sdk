@@ -11,6 +11,7 @@ Tests cover public functions with real business logic:
 - create_current_state_snapshot: First-run + incremental orchestration
 """
 
+import shutil
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -230,6 +231,45 @@ class TestPreparePreviousState:
             # Temp dir should be cleaned up after failure
             expected_temp = state_dir.parent / f"{state_dir.name}.previous"
             assert not expected_temp.exists()
+
+    async def test_stale_temp_removal_offloaded_to_thread(self):
+        """The leftover-temp rmtree must not run inline on the event loop.
+
+        The temp tree holds a full previous-state download (one JSON file per
+        asset), so removing it inline stalls every other coroutine — including
+        the enclosing @task's auto-heartbeat — for the whole call.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_dir = Path(temp_dir) / "current-state"
+            state_dir.mkdir()
+            stale_temp = state_dir.parent / f"{state_dir.name}.previous"
+            stale_temp.mkdir()
+            (stale_temp / "leftover.json").write_text("{}")
+
+            with (
+                patch(
+                    "application_sdk.common.incremental.state.state_writer."
+                    "download_s3_prefix_with_structure",
+                    new_callable=AsyncMock,
+                ),
+                patch(
+                    "application_sdk.common.incremental.state.state_writer."
+                    "run_in_thread",
+                    new_callable=AsyncMock,
+                    side_effect=lambda func, *a, **kw: func(*a, **kw),
+                ) as mock_offload,
+            ):
+                await prepare_previous_state(
+                    connection_qualified_name="t/c/123",
+                    current_state_available=True,
+                    current_state_dir=state_dir,
+                    application_name="oracle",
+                )
+
+            assert mock_offload.await_args_list, "stale-temp removal not offloaded"
+            offloaded = mock_offload.await_args_list[0].args
+            assert offloaded[0] is shutil.rmtree
+            assert offloaded[1] == stale_temp
 
 
 # ---------------------------------------------------------------------------
@@ -505,3 +545,28 @@ class TestCreateCurrentStateSnapshot:
             "persistent/oracle/conn/123/runs/run-abc/incremental-diff"
         )
         assert result.incremental_diff_files == 7
+
+    async def test_directory_prep_and_diff_clear_offloaded_to_thread(self):
+        """Both tree removals inside the snapshot must be offloaded.
+
+        ``prepare_current_state_directory`` stays sync for its sync callers, so
+        the offload lives at this call site; the incremental-diff clear is
+        offloaded inline. Either one running on the loop would stall the
+        enclosing @task's auto-heartbeat for the tree's removal time.
+        """
+        offloaded: list[object] = []
+
+        async def _record(func, *args, **kwargs):
+            offloaded.append(func)
+            return func(*args, **kwargs)
+
+        with patch(
+            "application_sdk.common.incremental.state.state_writer.run_in_thread",
+            side_effect=_record,
+        ):
+            result = await self._run(scope_qns=["db/s/t1"], previous_state_present=True)
+
+        assert result is not None
+        assert (
+            prepare_current_state_directory in offloaded
+        ), "current-state directory prep was not offloaded"

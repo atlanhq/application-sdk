@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from application_sdk import constants
+from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.infrastructure.context import (
     InfrastructureContext,
     clear_infrastructure,
@@ -805,6 +806,30 @@ class TestParquetFileWriterConsolidation:
         assert parquet_output.current_temp_folder_path is None
         assert parquet_output.temp_folder_index == 0
         assert parquet_output.current_folder_records == 0
+
+    @pytest.mark.asyncio
+    async def test_temp_folder_removal_offloaded_to_thread(self, base_output_path: str):
+        """Temp-folder rmtree must not run inline on the event loop.
+
+        An accumulation folder holds a run's worth of parquet chunks, so
+        removing it inline stalls every other coroutine — including the
+        enclosing @task's auto-heartbeat — for the removal's full duration.
+        """
+        parquet_output = ParquetFileWriter(path=base_output_path)
+        parquet_output._start_new_temp_folder()
+        assert parquet_output.current_temp_folder_path is not None
+        folder = parquet_output.current_temp_folder_path
+
+        with patch(
+            "application_sdk.storage.formats.parquet.run_in_thread",
+            new_callable=AsyncMock,
+            side_effect=lambda func, *a, **kw: func(*a, **kw),
+        ) as mock_offload:
+            await parquet_output._cleanup_temp_folders()
+
+        assert mock_offload.await_args_list, "temp-folder removal was not offloaded"
+        assert mock_offload.await_args_list[0].args[0] is SafeFileOps.rmtree
+        assert not os.path.exists(folder)
 
     @pytest.mark.asyncio
     async def test_write_batches_without_consolidation(self, base_output_path: str):
