@@ -96,6 +96,8 @@ jobs:
       agent-name-override:      # OPTIONAL. Default ci-<run_id>.
       application-sdk-ref:      # OPTIONAL. Cross-repo dispatch SDK pin.
       distinct-id:              # OPTIONAL. codex-/return-dispatch correlation id.
+      clouds:                   # OPTIONAL. Default "" = the SDK's cloud list.
+                                # See Cross-CSP matrix below; "none" disables it.
     secrets: inherit
 ```
 
@@ -103,11 +105,81 @@ Threaded secrets the reusable workflow expects on the caller side:
 
 | Secret | Required | Used by |
 |---|---|---|
-| `SDR_TEST_TENANT` | yes | configurator |
-| `SDR_CLIENT_ID` / `SDR_CLIENT_SECRET` | yes | configurator OAuth |
-| `ATLAN_BASE_URL` | yes | full-DAG harness |
-| `ATLAN_API_KEY` | yes | full-DAG AE-management (`/automation/api/v1/*`). Service account must carry `realm-admin` which the OAuth client does not. |
+| `E2E_TENANT_MATRIX_JSON` | for the cross-CSP matrix | Per-leg tenant + credentials. See [Cross-CSP matrix](#cross-csp-matrix). Org-level; shared with `application-sdk` and every `atlan-*-app`. |
+| `SDR_TEST_TENANT` | fallback only | configurator |
+| `SDR_CLIENT_ID` / `SDR_CLIENT_SECRET` | fallback only | configurator OAuth |
+| `ATLAN_API_KEY` | fallback only | full-DAG AE-management (`/automation/api/v1/*`). Service account must carry `realm-admin` which the OAuth client does not. |
 | `SDR_OAUTH_CLIENT_ID` / `SDR_OAUTH_CLIENT_SECRET` | no | Dapr S3 binding + pyatlan asset queries. Falls back to API-key when absent. |
+
+`ATLAN_BASE_URL` is **not** a secret you set: it is always derived as
+`https://<resolved tenant>` so it can never name a different tenant than the rest
+of the leg's credentials do.
+
+The four `SDR_*` / `ATLAN_API_KEY` entries were the only way to name a tenant
+before the cross-CSP matrix. They are now the fallback used when
+`E2E_TENANT_MATRIX_JSON` is not available to the repo, which is what keeps a
+repo that has not been onboarded running exactly as it did before.
+
+## Cross-CSP matrix
+
+Every e2e suite runs once per cloud provider, against that cloud's tenant, so
+CSP-specific behaviour — the objectstore binding `atlan-configurator` emits, the
+tenant's blobstorage proxy, Temporal host resolution — is exercised before
+release rather than after. This is FND-6.
+
+**The secret.** One org secret, `E2E_TENANT_MATRIX_JSON`, keyed by cloud:
+
+```json
+{
+  "aws":   {"tenant": "…", "client_id": "…", "client_secret": "…", "api_key": "…"},
+  "azure": {"tenant": "…", "client_id": "…", "client_secret": "…", "api_key": "…"},
+  "gcp":   {"tenant": "…", "client_id": "…", "client_secret": "…", "api_key": "…"}
+}
+```
+
+One secret rather than four per cloud because a `strategy.matrix` value cannot
+index the `secrets` context, and the reusable workflows declare their
+`workflow_call` secrets explicitly — so per-cloud names would have to be
+re-declared for every cloud ever added. Adding a fourth CSP is a secret edit and
+a one-line change to `DEFAULT_CLOUDS`; no app repo changes at all.
+
+Each entry may also carry `"deployment_name"` when that tenant's system apps
+(publish / quality / lineage) are not registered under `production`. It reaches
+the harness as `E2E_TENANT_DEPLOYMENT_NAME`, which
+`BaseE2ETest.resolved_tenant_deployment_name()` prefers over the class default.
+
+**Per-leg resolution.** `.github/scripts/resolve_e2e_tenant.py` extracts only the
+leg's own cloud and writes `SDR_TEST_TENANT`, `SDR_CLIENT_ID`,
+`SDR_CLIENT_SECRET`, `ATLAN_API_KEY` and the derived `ATLAN_BASE_URL` to
+`$GITHUB_ENV`. A leg therefore never holds the other tenants' credentials. It
+runs in two passes (`--mask-only`, then the env write) for the same reason
+`export_extra_env.py` does: registering the blob as a secret does not redact the
+values inside it.
+
+**Leg naming and isolation.** The cloud rides in the matrix leg `name`
+(`<suite>-<cloud>`), which is already the job name, the concurrency-group key and
+the `artifact-suffix` — and `artifact-suffix` is what `derive_deployment_name.py`
+folds into `ATLAN_DEPLOYMENT_NAME`. So queues, artifacts, concurrency and job
+names all pick up the cloud with no new machinery.
+
+**Selecting clouds.** `e2e-clouds` on `tests-reusable.yaml` (`clouds` on
+`e2e-full-reusable.yaml`), surfaced as the `e2e_clouds` `workflow_dispatch` input
+on each app's `tests.yaml`:
+
+| Value | Meaning |
+|---|---|
+| `""` (default) | The SDK's current list — `DEFAULT_CLOUDS` in `discover_e2e_suites.py`. Deliberately not "no clouds": an untouched GitHub input arrives as `""`, and that must not silently opt a repo out. |
+| `aws` (or any subset) | Just those clouds. Use this to re-run one cloud, or to keep the fleet moving while one tenant is down. |
+| `none` | No cloud dimension — one leg against the single fallback tenant. |
+
+Every cloud is a **required** leg: the matrix is `fail-fast: false` and the Tests
+Gate reads `needs.e2e.result`, the matrix aggregate, so any cloud failing reds the
+gate. Narrowing `e2e-clouds` is the escape hatch, and trimming the secret to one
+key is the org-wide one.
+
+When the secret is not available to a repo, `clouds` is forced to `none` and the
+`Discover e2e suites` job emits a `::warning::` saying so — a run that asked for
+three clouds and got one must not look identical to one that got three.
 
 ## Cross-repo dispatch
 

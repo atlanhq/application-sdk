@@ -35,8 +35,12 @@
     the SDK provides hermetic paths for it (embedded Temporal, testcontainers,
     mocked infra) (T011).
   - **End-to-end** — the full pipeline including system apps, in SDR mode
-    against a real tenant. Needs only one representative run, not
-    scenario-level coverage (T012).
+    against a real tenant. Needs only one representative *scenario*, not
+    scenario-level coverage (T012) — but that scenario runs against one
+    tenant per cloud provider, because the CSP-specific parts of the stack
+    (the objectstore binding the configurator emits, blobstorage proxy
+    behaviour, Temporal host resolution) are exactly what no other tier
+    touches. See `docs/standards/connector-ci-e2e.md#cross-csp-matrix`.
   - **UI** — see above; front-end rendering bugs (lineage display,
     description fields) belong to the front-end team, so one connector
     proving the UI renders is sufficient — the rest validate data via API.

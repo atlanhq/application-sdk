@@ -6,19 +6,48 @@ description: |
   so the SDK never hard-codes a connector's suites. The driver is co-located
   with this action (checked out with it in consumer repos).
 
+  Set `clouds` to cross every suite with a cloud provider (FND-6), so each
+  suite runs once per CSP tenant. Leaving it empty keeps the single-tenant
+  shape, which is what a caller without the tenant-matrix secret wants.
+
 inputs:
   test-dir:
     description: Directory to glob for test_*.py e2e suites.
     required: false
     default: tests/e2e
+  clouds:
+    description: |
+      Comma-separated cloud providers to cross each discovered suite with
+      (e.g. "aws,azure,gcp"). Each leg's `cloud` selects which tenant the e2e
+      job resolves its credentials for.
+
+      Empty means the driver's default list, NOT "no clouds" — an untouched
+      GitHub input arrives as "", and that must not silently opt a repo out of
+      the matrix. Pass "none" to disable the cloud dimension.
+
+      Defaulted to "none" here so a caller that says nothing at all gets the
+      pre-FND-6 behaviour: an action input is easy to forget, and tripling a
+      caller's matrix by default is the wrong direction to fail in.
+    required: false
+    default: "none"
+  clouds-only:
+    description: |
+      "true" emits only the cloud dimension, with no file dimension, for
+      callers that pass a whole directory to pytest rather than fanning out
+      per suite (e2e-full-reusable.yaml). `test-dir` is unused in that mode.
+    required: false
+    default: "false"
 
 outputs:
   matrix:
-    description: JSON include-list for strategy.matrix; each entry has file and name.
+    description: JSON include-list for strategy.matrix; each entry has file and name (plus suite and cloud when `clouds` is set).
     value: ${{ steps.discover.outputs.matrix }}
   count:
-    description: Number of discovered suites (0 means the e2e job should skip).
+    description: Number of discovered suites (0 means the e2e job should skip). Independent of the cloud fan-out.
     value: ${{ steps.discover.outputs.count }}
+  leg-count:
+    description: Number of matrix legs emitted (suites × clouds).
+    value: ${{ steps.discover.outputs.leg-count }}
 
 runs:
   using: composite
@@ -26,12 +55,19 @@ runs:
     - name: Discover suites
       id: discover
       shell: bash
-      # Route the caller-supplied input through env (quoted below) rather than
+      # Route the caller-supplied inputs through env (quoted below) rather than
       # interpolating ${{ }} into the command string. github.action_path is a
-      # trusted GitHub context, so it stays inline.
+      # trusted GitHub context, so it stays inline. The --clouds-only flag is
+      # selected by a step-level expression rather than an `if` in the shell,
+      # per docs/standards/ci.md; it is deliberately unquoted below so the
+      # empty case expands to no argument at all.
       env:
         TEST_DIR: ${{ inputs.test-dir }}
+        CLOUDS: ${{ inputs.clouds }}
+        CLOUDS_ONLY_FLAG: ${{ inputs.clouds-only == 'true' && '--clouds-only' || '' }}
       run: |
         set -euo pipefail
         python3 "${{ github.action_path }}/discover_e2e_suites.py" \
-          --test-dir "$TEST_DIR" >> "$GITHUB_OUTPUT"
+          --test-dir "$TEST_DIR" \
+          --clouds "$CLOUDS" \
+          ${CLOUDS_ONLY_FLAG} >> "$GITHUB_OUTPUT"
