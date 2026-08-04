@@ -7,6 +7,7 @@ in the application, including file outputs and object store interactions.
 import gc
 import inspect
 import os
+import shutil
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ import orjson
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
 from application_sdk.contracts.types import FileReference
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.storage.formats.utils import (
@@ -155,14 +157,15 @@ class Reader(ABC):
 
         Override this method in subclasses for custom cleanup behavior.
         """
-        import shutil  # noqa: PLC0415 — stdlib shutil; lazy use only
-
         for file_path in self._downloaded_files:
             try:
                 if os.path.isfile(file_path):
                     os.remove(file_path)
                 elif os.path.isdir(file_path):
-                    shutil.rmtree(file_path, ignore_errors=True)
+                    # Offloaded: a downloaded prefix is an unbounded tree, and
+                    # rmtree on the event loop stalls every other coroutine —
+                    # including a @task's auto-heartbeat — for its duration.
+                    await run_in_thread(shutil.rmtree, file_path, ignore_errors=True)
             except Exception:
                 logger.warning(
                     "Failed to clean up temporary file: %s",

@@ -50,12 +50,14 @@ Example subclass::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import warnings
 from abc import abstractmethod
 from typing import Any, ClassVar
 
 from application_sdk.app.task import task
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates._template_errors import (
     IncrementalSqlMetadataExtractorNotImplementedError,
@@ -797,7 +799,38 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
 
             raise IncrementalStateWriteError(cause=e) from e
         finally:
-            cleanup_previous_state(previous_state_dir)
+            # Offloaded at the call site (the helper stays sync for its sync
+            # callers): its rmtree spans the whole downloaded previous state,
+            # and this runs inside a @task whose auto-heartbeat must keep
+            # flowing while the tree is removed.
+            #
+            # Shielded because the thread cannot be cancelled: abandoning the
+            # await on cancellation leaves the executor thread still deleting
+            # `previous_state_dir`, which is deterministic per connection — a
+            # concurrent retry's prepare_previous_state() would clear and
+            # recreate that exact path underneath the still-running removal.
+            # Wait for it to finish before propagating the cancellation.
+            #
+            # One `asyncio.shield` is not enough: each `cancel()` landing while
+            # suspended re-raises `CancelledError` from the *current* await, so
+            # an unshielded re-await in the handler still abandons the wait on
+            # a third cancellation. Loop the shield instead — every throw is
+            # recorded and the shield is re-entered until the offloaded removal
+            # is done; only then does the cancellation propagate.
+            cleanup = asyncio.ensure_future(
+                run_in_thread(cleanup_previous_state, previous_state_dir)
+            )
+            cancelled = False
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    cancelled = True
+            # Surface a cleanup failure, if any, before the cancellation.
+            with contextlib.suppress(Exception):
+                cleanup.result()
+            if cancelled:
+                raise asyncio.CancelledError
 
     @task(timeout_seconds=120)
     async def update_incremental_marker(
