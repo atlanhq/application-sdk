@@ -4,6 +4,7 @@ Fetches credential config from S3 via Dapr binding, then resolves secret
 references via the Dapr secret store.
 """
 
+import asyncio
 import copy
 import hashlib
 import re
@@ -35,6 +36,13 @@ logger = get_logger(__name__)
 
 # Allowlist: UUIDs, hex strings, and similar safe identifiers.
 _SAFE_GUID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+#: Bounded fan-out for the single-key probe sweep (BLDX-1594). Duplicated rather
+#: than imported from :mod:`application_sdk.credentials.agent`'s twin, which
+#: lives in the ``credentials`` layer this one must not depend on. The two copies
+#: can drift; centralizing them is tracked in
+#: https://github.com/atlanhq/application-sdk/issues/2995.
+_MAX_CONCURRENT_SINGLE_KEY_PROBES = 8
 
 
 # ---------------------------------------------------------------------------
@@ -386,60 +394,67 @@ class DaprCredentialVault:
     async def _fetch_single_key_secrets(
         self, credential_config: dict[str, Any]
     ) -> dict[str, Any]:
-        """Fetch secrets in single-key mode — one lookup per string field value."""
+        """Fetch secrets in single-key mode — one lookup per string field value.
+
+        Probes run **concurrently**, bounded by
+        :data:`_MAX_CONCURRENT_SINGLE_KEY_PROBES`. They were serial until
+        BLDX-1594: a probe that misses pays a full Dapr retry ladder, so serial
+        probing cost *ladder × number of non-secret fields*.
+
+        Results are merged **in candidate order**, not completion order: each
+        probe's *inner* keys merge into one dict, so a key returned by two
+        probes is last-writer-wins, and serial order was the tiebreak. Keeping
+        it makes the resolved credential identical to the serial behaviour.
+
+        Raises:
+            SecretStoreUnavailableError: If any probe found the store
+                unreachable (cold-start outage past the retry budget).
+        """
         logger.debug("Single-key mode: fetching secrets per field")
+
+        candidates = _single_key_candidates(credential_config)
+        if not candidates:
+            return {}
+
+        sem = asyncio.Semaphore(_MAX_CONCURRENT_SINGLE_KEY_PROBES)
+
+        async def _probe(label: str, value: str) -> tuple[dict[str, Any], str | None]:
+            async with sem:
+                return await self._probe_single_key(label, value)
+
+        # return_exceptions=True: cancelling siblings on the first raise unwinds
+        # them mid-backoff and buries the real failure under CancelledError.
+        results = await asyncio.gather(
+            *(_probe(label, value) for label, value in candidates),
+            return_exceptions=True,
+        )
+
         collected: dict[str, Any] = {}
         failed_lookups: list[str] = []
+        cold_start_exc: BaseException | None = None
 
-        async def _try_fetch(label: str, value: str) -> None:
-            if not value.strip():
-                return
-            value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
-            try:
-                single_secret = await self._get_secret(
-                    value, log_label=f"sha256:{value_hash}"
-                )
-                if single_secret:
-                    for k, v in single_secret.items():
-                        if v is None or v == "":
-                            continue
-                        collected[k] = v
-            except ColdStartRaceError:
-                # The store never actually answered — a cold-start outage
-                # that exhausted the full retry budget, not "this field
-                # isn't a secret" (that case is already collapsed to {} by
-                # _get_secret without raising). Propagate so the caller
-                # raises a typed CredentialVaultError instead of silently
-                # proceeding with an incomplete credential, mirroring the
-                # multi-key branch above.
-                #
-                # Not a bare `raise` and not `from exc`: SecretStoreUnavailableError
-                # (the only ColdStartRaceError subtype this path raises) carries
-                # the raw ref-key in both `.secret_name` and `__str__()`, and its
-                # `cause` (the underlying httpx exception) can re-embed the same
-                # ref-key via a percent-encoded request URL — the exact leak the
-                # `except Exception` branch below scrubs at length. Re-raise a
-                # hash-labelled, cause-free equivalent instead of the original.
-                raise SecretStoreUnavailableError(f"sha256:{value_hash}") from None
-            # conformance: ignore[E004] exc_info=True would leak the raw ref-key (SecretStoreError.__str__ embeds `secret=<ref-key>`); hash + exception type name logged instead, mirroring retry_past_dapr_cold_start's warning log
-            except Exception as e:
-                logger.debug(
-                    "Secret resolution failed for '%s' (sha256:%s): %s",
-                    label,
-                    value_hash,
-                    type(e).__name__,
-                )
+        for (label, value), result in zip(candidates, results, strict=True):
+            if isinstance(result, BaseException):
+                # Only _probe_single_key's ColdStartRaceError branch raises;
+                # anything else is a bug, not "this field isn't a secret".
+                if isinstance(result, ColdStartRaceError):
+                    cold_start_exc = cold_start_exc or result
+                    continue
+                raise result
+            single_secret, failure_type = result
+            if failure_type is not None:
+                value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
                 failed_lookups.append(
-                    "  '%s' → sha256:%s: %s" % (label, value_hash, type(e).__name__)
+                    "  '%s' → sha256:%s: %s" % (label, value_hash, failure_type)
                 )
+                continue
+            for k, v in single_secret.items():
+                if v is None or v == "":
+                    continue
+                collected[k] = v
 
-        for field, value in credential_config.items():
-            if isinstance(value, str):
-                await _try_fetch(field, value)
-            elif field == "extra" and isinstance(value, dict):
-                for extra_key, extra_value in value.items():
-                    if isinstance(extra_value, str):
-                        await _try_fetch(f"extra.{extra_key}", extra_value)
+        if cold_start_exc is not None:
+            raise cold_start_exc
 
         if not collected and failed_lookups:
             logger.error(
@@ -456,6 +471,82 @@ class DaprCredentialVault:
             )
 
         return collected
+
+    async def _probe_single_key(
+        self, label: str, value: str
+    ) -> tuple[dict[str, Any], str | None]:
+        """Probe one candidate ref-key.
+
+        Returns ``(secret, failure_type)`` — ``failure_type`` is the exception's
+        type name on a genuine store error, else ``None``. A definitively-absent
+        key is not a failure here: :meth:`_get_secret` already collapses it to
+        ``{}`` without raising.
+
+        Raises:
+            SecretStoreUnavailableError: On a cold-start outage that exhausted
+                the retry budget, hash-labelled (see below).
+        """
+        value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
+        try:
+            single_secret = await self._get_secret(
+                value, log_label=f"sha256:{value_hash}"
+            )
+        except ColdStartRaceError:
+            # The store never actually answered — a cold-start outage
+            # that exhausted the full retry budget, not "this field
+            # isn't a secret" (that case is already collapsed to {} by
+            # _get_secret without raising). Propagate so the caller
+            # raises a typed CredentialVaultError instead of silently
+            # proceeding with an incomplete credential, mirroring the
+            # multi-key branch above.
+            #
+            # Not a bare `raise` and not `from exc`: SecretStoreUnavailableError
+            # (the only ColdStartRaceError subtype this path raises) carries
+            # the raw ref-key in both `.secret_name` and `__str__()`, and its
+            # `cause` (the underlying httpx exception) can re-embed the same
+            # ref-key via a percent-encoded request URL. Re-raise a
+            # hash-labelled, cause-free equivalent instead of the original.
+            raise SecretStoreUnavailableError(f"sha256:{value_hash}") from None
+        # conformance: ignore[E004] exc_info=True would leak the raw ref-key (SecretStoreError.__str__ embeds `secret=<ref-key>`); hash + exception type name logged instead, mirroring retry_past_dapr_cold_start's warning log
+        except Exception as e:
+            logger.debug(
+                "Secret resolution failed for '%s' (sha256:%s): %s",
+                label,
+                value_hash,
+                type(e).__name__,
+            )
+            return {}, type(e).__name__
+        return single_secret or {}, None
+
+
+def _single_key_candidates(credential_config: dict[str, Any]) -> list[tuple[str, str]]:
+    """Ordered, de-duplicated ``(label, value)`` pairs to probe as secret keys.
+
+    Collected up-front because the probes run concurrently — a ``seen`` set
+    mutated per-probe would race. Order matters: the caller merges in candidate
+    order to keep inner-key collisions resolving as they did when serial.
+
+    No literal-key exemption, unlike the ``credentials/agent.py`` sibling: this
+    path's config keys are v2 camelCase, so ``_LITERAL_KEYS`` would not match,
+    and inventing a set here risks skipping a field some deployment does use as
+    a ref-key. With probes overlapping the extra lookups are cheap.
+    """
+    candidates: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def _add(label: str, value: Any) -> None:
+        if isinstance(value, str) and value.strip() and value not in seen:
+            seen.add(value)
+            candidates.append((label, value))
+
+    for field, value in credential_config.items():
+        if isinstance(value, str):
+            _add(field, value)
+        elif field == "extra" and isinstance(value, dict):
+            for extra_key, extra_value in value.items():
+                _add(f"extra.{extra_key}", extra_value)
+
+    return candidates
 
 
 def create_dapr_credential_vault(

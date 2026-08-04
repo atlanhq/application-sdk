@@ -42,11 +42,25 @@ _T = TypeVar("_T")
 
 _DEFAULT_DAPR_HTTP_PORT = 3500
 _DEFAULT_TIMEOUT = 30.0
-# Retry budget spans the sidecar cold-start: with backoff_factor=1.0 the waits
-# are ~1+2+4+8s, so a Dapr call issued just before daprd is accepting requests
-# retries across ~15s rather than giving up in ~1.5s (the old total=3,
-# backoff=0.5). Retries only fire on failures; healthy calls are unaffected.
-_DEFAULT_RETRY_TOTAL = 5
+# Retry budget spans the sidecar cold-start; retries only fire on failures.
+#
+# The ladder is ``backoff_factor * 2**n`` for n in 1..total — httpx-retries
+# increments before sleeping — so total=3 is 2+4+8s nominal across 4 requests,
+# and ``backoff_jitter`` defaults to 1.0 (scaling each sleep by uniform(0, 1)),
+# giving ~2-12s in practice. Do NOT read it as ``2**(n-1)`` starting at 1:
+# total=5 was chosen believing it bought ~15s when it actually bought 62s, a 4x
+# overshoot with a 32s tail sleep. test_retry_budget_spans_cold_start asserts
+# the resulting budget rather than this constant so that can't recur.
+#
+# Cold-start coverage does not rest on this ladder: retry_past_dapr_cold_start
+# has a 120s budget at the layer that can read Dapr's errorCode,
+# wait_for_dapr_sidecar closes the connection race at startup, and activities
+# sit under Temporal retry. A wider ladder here only delays those.
+#
+# Global to the shared transport (state, bindings, pub/sub, secrets), so this is
+# wider than the credential fix it shipped with — see
+# https://github.com/atlanhq/application-sdk/issues/2995.
+_DEFAULT_RETRY_TOTAL = 3
 
 # ---------------------------------------------------------------------------
 # Metrics
@@ -254,7 +268,8 @@ async def wait_for_dapr_sidecar(
 #: :func:`retry_past_dapr_cold_start` caller shares this one budget, since
 #: they all race the same sidecar. This is a floor, not a hard ceiling: each
 #: retried ``call()`` can itself burn up to the transport's own internal
-#: retry budget (~15s, see ``_DEFAULT_RETRY_TOTAL`` above) before raising, so
+#: retry budget (~14s nominal, see ``_DEFAULT_RETRY_TOTAL`` above) before
+#: raising, so
 #: the worst-case total wait before final failure can exceed this value by
 #: up to one attempt's duration. Env-overridable for pathological runners.
 DAPR_COLD_START_MAX_WAIT_SECONDS: float = float(
@@ -414,9 +429,11 @@ class AsyncDaprClient:
                 # delete_state) keep the exact retry coverage they had before —
                 # listing leaf classes like ConnectError/ReadError would have
                 # narrowed it and dropped WriteError/WriteTimeout/CloseError.
-                # NOTE: these errors were already retried by default; the real
-                # change in this fix is the wider *budget* above (total 3->5,
-                # backoff 0.5->1.0, ~1.5s -> ~15s) that bridges a daprd cold start.
+                # NOTE: these errors were already retried by default; what the
+                # original fix changed was the *budget* above (raising
+                # backoff_factor to 1.0) to bridge a daprd cold start. See
+                # _DEFAULT_RETRY_TOTAL for the ladder arithmetic and why the
+                # accompanying total=5 was later cut back to 3.
                 retry_on_exceptions=[
                     httpx.TimeoutException,
                     httpx.NetworkError,
