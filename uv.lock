@@ -21,14 +21,14 @@ constraints = [
 
 [[package]]
 name = "aiofile"
-version = "3.12.0"
+version = "3.12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "caio" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2d/7a/c2f346b353b22ca473532386e67cb36f65ada481f3406eb4d467d3e33d89/aiofile-3.12.0.tar.gz", hash = "sha256:451ec755398f749b90333a16a3000194c53437c1f9cb2dc9b812d9317281dffc", size = 19911, upload-time = "2026-08-04T14:43:26.316Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/59/d9/eddc8a0ed487d7e635af0a8748b09cfac38e246cfe01ab245bfc159dce08/aiofile-3.12.1.tar.gz", hash = "sha256:d0949082c814bce07966ab34cdc497f96c27ce5e4305da86eeabf5e56eccea1e", size = 20346, upload-time = "2026-08-04T15:39:42.387Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fa/72/5fd9428759477fd2bf914b7e638bc15646f6c8c4ad306d61aea1783e67a9/aiofile-3.12.0-py3-none-any.whl", hash = "sha256:22606b25c9c3343d0bb8ac28c434de25ae6de4b1d1cb4aee2c06ed77dd874744", size = 20863, upload-time = "2026-08-04T14:43:25.275Z" },
+    { url = "https://files.pythonhosted.org/packages/4d/36/7cbf1ccd8d6ca2b708aaebdae743b6f92197fb09f10b5a2b5ce504793f81/aiofile-3.12.1-py3-none-any.whl", hash = "sha256:80e2a8c47f3aba490af27c39261e002cc4ec58de86c8b856affeb94ca397ed0d", size = 20924, upload-time = "2026-08-04T15:39:41.124Z" },
 ]
 
 [[package]]
