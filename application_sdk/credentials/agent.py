@@ -63,7 +63,6 @@ from application_sdk.infrastructure import (
 )
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
-    SecretStoreError,
     SecretStoreUnavailableError,
 )
 from application_sdk.observability.logger_adaptor import get_logger
@@ -118,9 +117,9 @@ _MAX_CONCURRENT_SINGLE_KEY_PROBES = 8
 
 #: :func:`_probe_one` outcomes. ``ABSENT`` means the store answered "no such
 #: key" (the expected result for a literal-valued field); ``STORE_ERROR`` means
-#: the store answered with a failure. They are distinguished because *all*
-#: probes erroring is a store fault worth raising on, while all probes being
-#: absent can legitimately mean "this spec has no secret refs".
+#: the store answered with a failure. Both are non-fatal — they are
+#: distinguished only to decide whether the summary log would duplicate a
+#: per-probe WARNING that already fired.
 _PROBE_RESOLVED = "resolved"
 _PROBE_ABSENT = "absent"
 _PROBE_STORE_ERROR = "store_error"
@@ -293,13 +292,13 @@ async def _fetch_per_key_bundle(
     path; an outage that exhausts the retry budget is raised instead,
     mirroring every other :func:`retry_past_dapr_cold_start` call site.
 
+    Resolving *nothing* is not an error: some deployments carry literal
+    credentials in the workflow config rather than ref-keys, so no key is ever
+    expected back from the store. That is recorded at INFO, not raised.
+
     Raises:
         SecretStoreUnavailableError: If any probe found the store
             unreachable (cold-start outage past the retry budget).
-        SecretStoreError: If there was more than one candidate and *every*
-            probe returned a store-level error with nothing resolved — the
-            store is at fault, not the fields, and proceeding would
-            authenticate with ref-keys as literal values.
     """
     candidates = _probe_candidates(raw)
     if not candidates:
@@ -348,34 +347,26 @@ async def _fetch_per_key_bundle(
         # rather than proceeding with a partially-resolved credential.
         raise cold_start_exc
 
-    if len(candidates) > 1 and store_errors == len(candidates):
-        # Every probe hit a store-level error and nothing resolved. Proceeding
-        # would authenticate with ref-keys as literal values and stack
-        # ``failed_login_attempts`` on the source — the lockout the caller's
-        # retry_max_attempts=1 exists to prevent — so fail loudly instead.
-        #
-        # Requires more than one candidate: with a single probe, "all probes
-        # errored" is just "the one probe errored", which is genuinely
-        # ambiguous (that field may simply not be a secret) and is the
-        # documented swallow-and-fall-through case. The signal here is
-        # aggregate — a store fault (denied credentials, throttling, wrong
-        # component) hits every probe, whereas a non-secret field hits none.
-        #
-        # This fail-loud path is intentionally asymmetric with the vault
-        # sibling (credential_vault.py), which preserves its legacy
-        # fall-through with only an error log; converging the two is tracked
-        # in https://github.com/atlanhq/application-sdk/issues/2995.
-        raise SecretStoreError(
-            f"Single-key credential resolution failed: all {len(candidates)} "
-            "secret-store probes returned a store error and no secret "
-            "resolved. Treating this as a secret-store failure rather than "
-            "proceeding with unresolved credentials.",
-        )
+    # No fail-loud branch here, and none in the vault sibling
+    # (credential_vault.py) either — the two are symmetric on this point. See
+    # the note above for why resolving nothing cannot be treated as an error,
+    # and https://github.com/atlanhq/application-sdk/issues/2995 for the
+    # durable fix that would let absence be distinguished from a store fault.
 
     # The one positive-resolution record for this path. Counts only — ref-keys
-    # encode secret-store topology (see _probe_one). Without this, a fully
-    # unresolved credential is only inferable from the *absence* of DEBUG
-    # lines, which is why this failure mode went unattributed.
+    # encode secret-store topology (see _probe_one). Without this, resolution
+    # provenance was only inferable from the *absence* of DEBUG lines, which is
+    # why this class of failure went unattributed.
+    #
+    # Deliberately NOT an exception when nothing resolves, at any count of
+    # store errors. "Zero fields resolved" is a legitimate, observed
+    # production configuration: some deployments put literal usernames and
+    # passwords directly in the workflow config rather than ref-keys, so no
+    # key is ever expected to come back from the store, and those workflows
+    # work today. Raising would break them — including the variant where a
+    # scope-restricted store answers every probe with 403
+    # (``ERR_PERMISSION_DENIED``) rather than a plain "absent" 500, which
+    # counts as a store error on every probe.
     if bundle:
         logger.info(
             "single-key credential resolution: resolved %d of %d probed fields",
@@ -383,27 +374,22 @@ async def _fetch_per_key_bundle(
             len(candidates),
         )
     elif store_errors == 0:
-        # Nothing resolved and no probe errored — the store answered "absent"
-        # for every candidate.
+        # Nothing resolved, no probe errored — the store answered "absent" for
+        # every candidate. INFO, not WARNING: for a config carrying literal
+        # credentials inline this is the expected steady state and would warn
+        # on every run. It is also what a *throttled* cloud vault looks like,
+        # because Dapr reports a throttled secrets GET as the same
+        # 500/``ERR_SECRET_GET`` it uses for a missing key (see
+        # ``_dapr/client.py::classify_secret_fetch_error``) — the two are
+        # genuinely indistinguishable here, so this line records the fact
+        # without asserting which one it is.
         #
-        # Not an exception: a genuinely secret-free spec (e.g. auth-type
-        # noauth whose every field is a literal) is legitimate. But "absent"
-        # is also what a *throttled* cloud vault looks like, because Dapr
-        # reports a throttled secrets GET as a plain 500/ERR_SECRET_GET —
-        # indistinguishable from a missing key (see
-        # _dapr/client.py::classify_secret_fetch_error). So this is the only
-        # record distinguishing "no secrets to resolve" from "could not
-        # resolve any secrets", and it must be loud enough to attribute a
-        # downstream auth failure to.
-        #
-        # Skipped when store_errors > 0: each of those probes already logged
-        # its own WARNING carrying the same conclusion, so a summary here
-        # would only duplicate it.
-        logger.warning(
-            "single-key credential resolution resolved 0 of %d probed fields — "
-            "every probed value will be used as-is. If any of them was a real "
-            "ref-key, the auth attempt will fail with the ref-key as the "
-            "literal value.",
+        # Skipped when store_errors > 0: those probes already logged their own
+        # WARNING, so a summary would duplicate it.
+        logger.info(
+            "single-key credential resolution resolved 0 of %d probed fields; "
+            "all values used as-is (expected when the config carries literal "
+            "credentials rather than ref-keys)",
             len(candidates),
         )
 

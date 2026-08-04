@@ -1551,34 +1551,58 @@ class TestSingleKeyProbeConcurrency:
 
         assert sorted(calls) == ["other-key", "shared-key"]
 
-    async def test_all_probes_erroring_raises_instead_of_silently_proceeding(
+    async def test_literal_credentials_inline_still_resolve_to_themselves(
         self,
     ) -> None:
-        """A store-wide fault must fail loudly.
+        """Zero fields resolving must NOT be an error.
 
-        Silently falling through leaves ref-keys as literal values, so the
-        source sees an auth attempt with the ref-key as the password — the
-        ``failed_login_attempts`` stacking that ``prime_sql_auth``'s
-        ``retry_max_attempts=1`` exists to prevent.
+        Some deployments put literal usernames/passwords directly in the
+        workflow config instead of ref-keys, so nothing is ever expected back
+        from the store and every probed value is legitimately used as-is.
+        Those workflows work today and must keep working.
         """
 
-        class BrokenStore:
+        class EmptyStore:
             async def get_optional(self, name: str) -> str | None:
-                raise SecretStoreError("vault denied", secret_name=name)
+                return None
+
+        raw = self._spec(
+            **{
+                "basic.username": "svc_reader",
+                "basic.password": "hunter2-literal",
+                "database": "analytics",
+            }
+        ).to_raw_dict()
+
+        bundle = await _fetch_per_key_bundle(EmptyStore(), raw)
+
+        assert bundle == {}
+        # The literals survive substitution unchanged.
+        resolved = _substitute(raw, bundle)
+        assert resolved["basic.password"] == "hunter2-literal"
+
+    async def test_every_probe_erroring_still_falls_through(self) -> None:
+        """Nothing resolving is not an error even when *every* probe errored.
+
+        A scope-restricted store answers a non-allowlisted key with 403
+        (``ERR_PERMISSION_DENIED``) rather than a plain "absent" 500, so a
+        config carrying literal credentials against such a store produces a
+        store error on every probe while still being a working configuration.
+        Raising here would break it.
+        """
+
+        class ScopedStore:
+            async def get_optional(self, name: str) -> str | None:
+                raise SecretStoreError("access denied by policy", secret_name=name)
 
         raw = self._spec(
             **{"basic.username": "u", "basic.password": "p", "database": "db"}
         ).to_raw_dict()
 
-        with pytest.raises(SecretStoreError) as exc_info:
-            await _fetch_per_key_bundle(BrokenStore(), raw)
-
-        assert "all 3 secret-store probes" in str(exc_info.value)
+        assert await _fetch_per_key_bundle(ScopedStore(), raw) == {}
 
     async def test_single_candidate_erroring_still_falls_through(self) -> None:
-        """With one probe, 'all probes errored' is just 'the probe errored' —
-        genuinely ambiguous (the field may not be a secret), so the documented
-        swallow-and-fall-through behaviour is preserved."""
+        """The documented swallow-and-fall-through behaviour, single-probe."""
 
         class BrokenStore:
             async def get_optional(self, name: str) -> str | None:
@@ -1605,10 +1629,12 @@ class TestSingleKeyProbeConcurrency:
             "real-key": "real-value"
         }
 
-    async def test_zero_resolved_is_logged_as_warning(self) -> None:
-        """A throttled vault answers 500/ERR_SECRET_GET, which the SDK cannot
-        tell from 'key absent'. The zero-resolution WARNING is the only record
-        that distinguishes 'nothing to resolve' from 'resolved nothing'."""
+    async def test_zero_resolved_is_recorded_at_info_not_warning(self) -> None:
+        """Zero resolutions is recorded, but at INFO — for a config carrying
+        literal credentials inline it is the expected steady state and would
+        otherwise warn on every run. It is also indistinguishable from a
+        throttled vault (Dapr reports both as 500/ERR_SECRET_GET), so the line
+        states the fact without asserting which case it is."""
         from unittest.mock import patch
 
         class EmptyStore:
@@ -1620,8 +1646,9 @@ class TestSingleKeyProbeConcurrency:
         with patch("application_sdk.credentials.agent.logger") as mock_logger:
             assert await _fetch_per_key_bundle(EmptyStore(), raw) == {}
 
-        mock_logger.warning.assert_called_once()
-        assert "resolved 0 of" in mock_logger.warning.call_args.args[0]
+        mock_logger.warning.assert_not_called()
+        mock_logger.info.assert_called_once()
+        assert "resolved 0 of" in mock_logger.info.call_args.args[0]
 
     async def test_successful_resolution_is_logged_at_info(self) -> None:
         """Positive-resolution logging: resolution provenance was previously

@@ -114,16 +114,28 @@ lookups, so they run **concurrently**, bounded by a small fan-out cap
 full store retry ladder per field. Results are merged in candidate order, so
 resolution is byte-identical to the previous serial behavior.
 
-Two failure modes are worth knowing when reading logs:
+What the logs tell you, and what they cannot:
 
-- **Every probe errored at the store level** (more than one candidate, none
-  resolved) now raises `SecretStoreError` instead of silently proceeding — the
-  old behavior would have authenticated with the ref-keys as literal values and
-  stacked `failed_login_attempts` on the source.
-- **Nothing resolved and no probe errored** logs a WARNING ("resolved 0 of N
-  probed fields"). This is the only record distinguishing a genuinely
-  secret-free credential from a throttled vault, which Dapr reports as the same
-  "absent" response.
+- **Some fields resolved** logs INFO with the counts ("resolved N of M probed
+  fields"). Ref-key names are never logged — they encode secret-store topology —
+  so probes are identified by a `sha256:` prefix.
+- **Nothing resolved** also logs INFO ("resolved 0 of N probed fields"). This is
+  *not* treated as an error: a credential that carries literal usernames and
+  passwords inline rather than ref-keys legitimately resolves nothing, and those
+  workflows work. It is deliberately not a WARNING, because for such a
+  credential it is the expected steady state on every run.
+- **A probe hit a store-level error** logs a WARNING for that probe. Note that a
+  scope-restricted store answers a non-allowlisted key with `403`
+  (`ERR_PERMISSION_DENIED`) rather than an "absent" `500`, so an inline-literal
+  credential against such a store produces one of these per field while still
+  being a working configuration.
+
+The limitation worth knowing: Dapr's secrets API returns `500`/`ERR_SECRET_GET`
+for *any* backend error, and models "not found" nowhere — so a genuinely missing
+key, a throttled vault, and an expired vault credential are indistinguishable to
+the SDK. That is why nothing here can be raised on: "resolved nothing" cannot be
+told apart from "nothing to resolve". Tracked in
+[#2995](https://github.com/atlanhq/application-sdk/issues/2995).
 
 ### MetadataInput / MetadataOutput
 
