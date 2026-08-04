@@ -37,20 +37,11 @@ logger = get_logger(__name__)
 # Allowlist: UUIDs, hex strings, and similar safe identifiers.
 _SAFE_GUID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
-#: Bounded fan-out for the single-key probe sweep (BLDX-1594).
-#:
-#: Deliberately duplicated rather than imported from
-#: :mod:`application_sdk.credentials.agent`'s twin: that constant lives in the
-#: ``credentials`` layer and this is ``infrastructure``, which must not depend
-#: on it. Both exist for the same reason — a probe that misses pays a full Dapr
-#: retry ladder, because Dapr answers "no such key" with a 500 that the
-#: transport retries blind, so probing serially cost one ladder per field.
-#: Bounded because a wide burst invites vault throttling, which Dapr reports as
-#: that same ambiguous 500.
-#:
-#: The two copies (and their semaphore / gather / cold-start aggregation
-#: orchestration) have no shared policy contract, so they can drift; centralizing
-#: them is tracked in https://github.com/atlanhq/application-sdk/issues/2995.
+#: Bounded fan-out for the single-key probe sweep (BLDX-1594). Duplicated rather
+#: than imported from :mod:`application_sdk.credentials.agent`'s twin, which
+#: lives in the ``credentials`` layer this one must not depend on. The two copies
+#: can drift; centralizing them is tracked in
+#: https://github.com/atlanhq/application-sdk/issues/2995.
 _MAX_CONCURRENT_SINGLE_KEY_PROBES = 8
 
 
@@ -408,15 +399,12 @@ class DaprCredentialVault:
         Probes run **concurrently**, bounded by
         :data:`_MAX_CONCURRENT_SINGLE_KEY_PROBES`. They were serial until
         BLDX-1594: a probe that misses pays a full Dapr retry ladder, so serial
-        probing cost *ladder × number of non-secret fields*, which on the
-        sibling path (``credentials/agent.py``) exhausted a fixed activity
-        budget before the source was ever contacted.
+        probing cost *ladder × number of non-secret fields*.
 
-        Results are merged **in candidate order**, not completion order. Each
-        probe returns a secret whose *inner* keys are merged into one dict, so
-        two probes yielding the same inner key are resolved last-writer-wins —
-        serial iteration order was the tiebreak, and preserving it keeps the
-        resolved credential byte-identical to the pre-concurrency behaviour.
+        Results are merged **in candidate order**, not completion order: each
+        probe's *inner* keys merge into one dict, so a key returned by two
+        probes is last-writer-wins, and serial order was the tiebreak. Keeping
+        it makes the resolved credential identical to the serial behaviour.
 
         Raises:
             SecretStoreUnavailableError: If any probe found the store
@@ -434,10 +422,8 @@ class DaprCredentialVault:
             async with sem:
                 return await self._probe_single_key(label, value)
 
-        # return_exceptions=True rather than letting gather cancel siblings on
-        # the first raise: a sibling cancelled mid-backoff unwinds through the
-        # retry transport's sleep and buries the real failure under
-        # CancelledError tracebacks. Let every probe settle, then decide.
+        # return_exceptions=True: cancelling siblings on the first raise unwinds
+        # them mid-backoff and buries the real failure under CancelledError.
         results = await asyncio.gather(
             *(_probe(label, value) for label, value in candidates),
             return_exceptions=True,
@@ -450,8 +436,7 @@ class DaprCredentialVault:
         for (label, value), result in zip(candidates, results, strict=True):
             if isinstance(result, BaseException):
                 # Only _probe_single_key's ColdStartRaceError branch raises;
-                # anything else is a bug and must not be swallowed into
-                # "this field isn't a secret".
+                # anything else is a bug, not "this field isn't a secret".
                 if isinstance(result, ColdStartRaceError):
                     cold_start_exc = cold_start_exc or result
                     continue
@@ -537,18 +522,14 @@ class DaprCredentialVault:
 def _single_key_candidates(credential_config: dict[str, Any]) -> list[tuple[str, str]]:
     """Ordered, de-duplicated ``(label, value)`` pairs to probe as secret keys.
 
-    Collected up-front rather than de-duplicated inside the probe: the probes
-    run concurrently, so a ``seen`` set mutated per-probe would race. Order is
-    preserved because the caller merges results in candidate order to keep
-    inner-key collisions resolving as they did when probing was serial.
+    Collected up-front because the probes run concurrently — a ``seen`` set
+    mutated per-probe would race. Order matters: the caller merges in candidate
+    order to keep inner-key collisions resolving as they did when serial.
 
-    Unlike the ``credentials/agent.py`` sibling there is no literal-key
-    exemption, so non-secret fields (``host``, ``port``) are probed too. That is
-    deliberate: this path's config keys are the v2 camelCase shape rather than
-    the agent spec's hyphenated aliases, so ``_LITERAL_KEYS`` would not match
-    anyway, and inventing an exemption set here risks skipping a field some
-    deployment does use as a ref-key. With probes overlapping, the extra
-    lookups cost round trips rather than ladders.
+    No literal-key exemption, unlike the ``credentials/agent.py`` sibling: this
+    path's config keys are v2 camelCase, so ``_LITERAL_KEYS`` would not match,
+    and inventing a set here risks skipping a field some deployment does use as
+    a ref-key. With probes overlapping the extra lookups are cheap.
     """
     candidates: list[tuple[str, str]] = []
     seen: set[str] = set()

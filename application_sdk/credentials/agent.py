@@ -93,33 +93,17 @@ _LITERAL_KEYS: frozenset[str] = frozenset(
     }
 )
 
-#: Bounded fan-out for the single-key probe sweep.
-#:
-#: Probes are independent point lookups, so they run concurrently: instead of
-#: paying one retry ladder per literal-valued field, overlapping probes pay
-#: ``ceil(candidates / this)`` ladders. A probe holds its slot for the whole
-#: ladder — most of which is backoff sleep — so this value is what decides how
-#: many ladders deep the sweep can get, not just how many sockets are open.
-#: Set above the field count of realistic agent payloads (observed 3–4
-#: probed fields, see BLDX-1594) so the common case is a single wave.
-#:
-#: Bounded rather than unbounded because a pathological payload (``extra.*`` is
-#: unbounded — ``AgentCredentialSpec`` is ``extra="allow"``) would otherwise
-#: burst one request per field at once: a cloud vault throttles that, and Dapr
-#: reports a throttled secrets GET as a plain 500/``ERR_SECRET_GET`` —
-#: indistinguishable from "key absent" — so a throttle storm degrades into
-#: *silently* unresolved credentials. It also caps concurrent cold-start
-#: waiters: in parallel every probe starts before any has armed
-#: :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start`'s
-#: per-component gate, so a genuinely cold sidecar would otherwise see one
-#: waiter per candidate instead of a bounded few.
+#: Bounded fan-out for the single-key probe sweep (BLDX-1594). A probe holds its
+#: slot for its whole retry ladder, so the sweep costs
+#: ``ceil(candidates / this)`` ladders — set above realistic payload field
+#: counts so the common case is one wave. Bounded because ``extra.*`` is
+#: unbounded (``AgentCredentialSpec`` is ``extra="allow"``) and a wide burst
+#: invites vault throttling, which Dapr reports as the same ambiguous 500 it
+#: uses for a missing key.
 _MAX_CONCURRENT_SINGLE_KEY_PROBES = 8
 
-#: :func:`_probe_one` outcomes. ``ABSENT`` means the store answered "no such
-#: key" (the expected result for a literal-valued field); ``STORE_ERROR`` means
-#: the store answered with a failure. Both are non-fatal — they are
-#: distinguished only to decide whether the summary log would duplicate a
-#: per-probe WARNING that already fired.
+#: :func:`_probe_one` outcomes. Both non-fatal; distinguished only so the
+#: summary log doesn't duplicate a per-probe WARNING that already fired.
 _PROBE_RESOLVED = "resolved"
 _PROBE_ABSENT = "absent"
 _PROBE_STORE_ERROR = "store_error"
@@ -269,21 +253,13 @@ async def _fetch_per_key_bundle(
 
     Probes run **concurrently**, bounded by
     :data:`_MAX_CONCURRENT_SINGLE_KEY_PROBES`. They were serial until
-    BLDX-1594: a missing-key probe costs a full Dapr retry ladder (Dapr
-    returns 500 for "no such key" and the transport retries it blind), so
-    serial probing made resolution cost *ladder × number of literal-valued
-    fields* — which exhausted the fixed ``prime_sql_auth`` activity budget
-    before the source was ever contacted.
-
-    Overlapping them makes the cost ``ceil(candidates / cap)`` ladders — one
-    ladder for any payload within the cap, which covers realistic agent
-    specs. Note it is *not* unconditionally one ladder: a probe holds its
-    slot for its whole ladder, so a payload with more candidates than the cap
-    still runs in successive waves. Concurrency bounds the symptom, not the
-    root cause (a missing key still pays a full ladder); the durable fix is
-    tracked in https://github.com/atlanhq/application-sdk/issues/2995.
-    Order is irrelevant: each probe is an
-    independent point lookup and results are merged by ref-key.
+    BLDX-1594: a missing-key probe pays a full Dapr retry ladder, so serial
+    probing cost *ladder × number of literal-valued fields* and exhausted the
+    fixed ``prime_sql_auth`` activity budget before the source was contacted.
+    Overlapping them costs ``ceil(candidates / cap)`` ladders — not
+    unconditionally one, since a probe holds its slot for its whole ladder.
+    This bounds the symptom, not the cause; the durable fix is tracked in
+    https://github.com/atlanhq/application-sdk/issues/2995.
 
     A transient cold-start outage on a probe is retried via
     :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start`
@@ -292,9 +268,9 @@ async def _fetch_per_key_bundle(
     path; an outage that exhausts the retry budget is raised instead,
     mirroring every other :func:`retry_past_dapr_cold_start` call site.
 
-    Resolving *nothing* is not an error: some deployments carry literal
-    credentials in the workflow config rather than ref-keys, so no key is ever
-    expected back from the store. That is recorded at INFO, not raised.
+    Resolving *nothing* is not an error, at any count of store errors: some
+    deployments carry literal credentials in the workflow config rather than
+    ref-keys, so no key is ever expected back. Recorded at INFO, not raised.
 
     Raises:
         SecretStoreUnavailableError: If any probe found the store
@@ -304,21 +280,14 @@ async def _fetch_per_key_bundle(
     if not candidates:
         return {}
 
-    # Probes are independent point lookups, so run them concurrently: N
-    # overlapping retry ladders cost about one ladder instead of N. See
-    # _MAX_CONCURRENT_SINGLE_KEY_PROBES for why this is bounded.
     sem = asyncio.Semaphore(_MAX_CONCURRENT_SINGLE_KEY_PROBES)
 
     async def _probe(value: str) -> tuple[str, str, Any]:
         async with sem:
             return await _probe_one(secret_store, value)
 
-    # return_exceptions=True rather than letting gather cancel siblings on the
-    # first raise: a sibling cancelled mid-backoff unwinds through
-    # ``httpx_retries``' sleep and buries the real failure under
-    # CancelledError tracebacks — the exact shape that made this class of
-    # incident hard to read in the first place. Let every probe settle, then
-    # decide below.
+    # return_exceptions=True: letting gather cancel siblings on the first raise
+    # unwinds them mid-backoff and buries the real failure under CancelledError.
     results = await asyncio.gather(
         *(_probe(value) for value in candidates), return_exceptions=True
     )
@@ -329,9 +298,8 @@ async def _fetch_per_key_bundle(
 
     for result in results:
         if isinstance(result, BaseException):
-            # Only _probe_one's ColdStartRaceError branch raises; anything
-            # else is a genuine bug and must not be swallowed into
-            # "this field isn't a secret".
+            # Only _probe_one's ColdStartRaceError branch raises; anything else
+            # is a bug, not "this field isn't a secret".
             if isinstance(result, ColdStartRaceError):
                 cold_start_exc = cold_start_exc or result
                 continue
@@ -343,30 +311,11 @@ async def _fetch_per_key_bundle(
             store_errors += 1
 
     if cold_start_exc is not None:
-        # The store never answered for at least one probe. Surface the outage
-        # rather than proceeding with a partially-resolved credential.
+        # The store never answered at all — don't proceed on a partial resolve.
         raise cold_start_exc
 
-    # No fail-loud branch here, and none in the vault sibling
-    # (credential_vault.py) either — the two are symmetric on this point. See
-    # the note above for why resolving nothing cannot be treated as an error,
-    # and https://github.com/atlanhq/application-sdk/issues/2995 for the
-    # durable fix that would let absence be distinguished from a store fault.
-
-    # The one positive-resolution record for this path. Counts only — ref-keys
-    # encode secret-store topology (see _probe_one). Without this, resolution
-    # provenance was only inferable from the *absence* of DEBUG lines, which is
-    # why this class of failure went unattributed.
-    #
-    # Deliberately NOT an exception when nothing resolves, at any count of
-    # store errors. "Zero fields resolved" is a legitimate, observed
-    # production configuration: some deployments put literal usernames and
-    # passwords directly in the workflow config rather than ref-keys, so no
-    # key is ever expected to come back from the store, and those workflows
-    # work today. Raising would break them — including the variant where a
-    # scope-restricted store answers every probe with 403
-    # (``ERR_PERMISSION_DENIED``) rather than a plain "absent" 500, which
-    # counts as a store error on every probe.
+    # Positive-resolution record: counts only, since ref-keys encode
+    # secret-store topology. Its absence is why this went unattributed.
     if bundle:
         logger.info(
             "single-key credential resolution: resolved %d of %d probed fields",
@@ -374,18 +323,11 @@ async def _fetch_per_key_bundle(
             len(candidates),
         )
     elif store_errors == 0:
-        # Nothing resolved, no probe errored — the store answered "absent" for
-        # every candidate. INFO, not WARNING: for a config carrying literal
-        # credentials inline this is the expected steady state and would warn
-        # on every run. It is also what a *throttled* cloud vault looks like,
-        # because Dapr reports a throttled secrets GET as the same
-        # 500/``ERR_SECRET_GET`` it uses for a missing key (see
-        # ``_dapr/client.py::classify_secret_fetch_error``) — the two are
-        # genuinely indistinguishable here, so this line records the fact
-        # without asserting which one it is.
-        #
-        # Skipped when store_errors > 0: those probes already logged their own
-        # WARNING, so a summary would duplicate it.
+        # INFO, not WARNING: for an inline-literal config this is the expected
+        # steady state every run. It is also indistinguishable from a throttled
+        # vault (Dapr reports both as 500/ERR_SECRET_GET), so it states the fact
+        # without asserting which. Skipped when store_errors > 0 — those probes
+        # already logged their own WARNING.
         logger.info(
             "single-key credential resolution resolved 0 of %d probed fields; "
             "all values used as-is (expected when the config carries literal "
@@ -399,9 +341,8 @@ async def _fetch_per_key_bundle(
 def _probe_candidates(raw: dict[str, Any]) -> list[str]:
     """Ordered, de-duplicated field values to probe as candidate secret keys.
 
-    Collected up-front rather than de-duplicated inside the probe itself: the
-    probes run concurrently, so a ``seen`` set mutated per-probe would race
-    and could issue the same lookup twice.
+    Collected up-front because the probes run concurrently — a ``seen`` set
+    mutated per-probe would race.
     """
     candidates: list[str] = []
     seen: set[str] = set()

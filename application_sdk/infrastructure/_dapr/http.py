@@ -42,31 +42,23 @@ _T = TypeVar("_T")
 
 _DEFAULT_DAPR_HTTP_PORT = 3500
 _DEFAULT_TIMEOUT = 30.0
-# Retry budget spans the sidecar cold-start: a Dapr call issued just before
-# daprd is accepting requests retries across ~14s rather than giving up
-# immediately. Retries only fire on failures; healthy calls are unaffected.
+# Retry budget spans the sidecar cold-start; retries only fire on failures.
 #
-# The ladder is ``backoff_factor * 2**n`` for n in 1..total (httpx-retries
-# increments before sleeping), so total=3 at backoff_factor=1.0 is 2+4+8s
-# nominal across 4 requests — and ``backoff_jitter`` defaults to 1.0, which
-# scales each sleep by ``uniform(0, 1)``, giving ~2-12s in practice.
+# The ladder is ``backoff_factor * 2**n`` for n in 1..total — httpx-retries
+# increments before sleeping — so total=3 is 2+4+8s nominal across 4 requests,
+# and ``backoff_jitter`` defaults to 1.0 (scaling each sleep by uniform(0, 1)),
+# giving ~2-12s in practice. Do NOT read it as ``2**(n-1)`` starting at 1:
+# total=5 was chosen believing it bought ~15s when it actually bought 62s, a 4x
+# overshoot with a 32s tail sleep. test_retry_budget_spans_cold_start asserts
+# the resulting budget rather than this constant so that can't recur.
 #
-# Do NOT read the ladder as ``2**(n-1)`` starting at 1: total=5 was chosen
-# believing it bought ~15s (1+2+4+8) when it actually bought 62s nominal
-# (2+4+8+16+32), a 4x overshoot whose 32s tail sleep dominated everything
-# else. See test_retry_budget_spans_cold_start, which asserts the resulting
-# budget rather than this constant, so a future edit can't repeat that.
+# Cold-start coverage does not rest on this ladder: retry_past_dapr_cold_start
+# has a 120s budget at the layer that can read Dapr's errorCode,
+# wait_for_dapr_sidecar closes the connection race at startup, and activities
+# sit under Temporal retry. A wider ladder here only delays those.
 #
-# Deeper cold-start coverage does not depend on this ladder: component
-# readiness is handled by retry_past_dapr_cold_start's 120s budget at the
-# layer that can read Dapr's errorCode, the connection race is closed by
-# wait_for_dapr_sidecar at startup, and every activity sits under Temporal's
-# own retry. A wider ladder here only delays those.
-#
-# This constant is global to the shared AsyncDaprClient transport (state,
-# bindings, pub/sub, metadata, secrets), so the 5→3 correction is wider than
-# the credential fix it shipped with; confirming no non-secret caller relied
-# on the old ~62s budget is tracked in
+# Global to the shared transport (state, bindings, pub/sub, secrets), so this is
+# wider than the credential fix it shipped with — see
 # https://github.com/atlanhq/application-sdk/issues/2995.
 _DEFAULT_RETRY_TOTAL = 3
 
