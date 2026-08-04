@@ -82,7 +82,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
     """Scan a single Python file for S001 + S002 findings."""
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
     try:
         rel = path.relative_to(root)

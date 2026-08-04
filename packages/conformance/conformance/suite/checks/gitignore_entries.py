@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from conformance.suite.checks._ast_common import safe_read_text
 from conformance.suite.schema.findings import Finding
 
 SERIES = "C"
@@ -69,7 +70,10 @@ def _is_covered(required: str, present: frozenset[str]) -> bool:
 def _present_lines(path: Path) -> frozenset[str]:
     """Return the set of non-blank, non-comment, stripped lines in *path*."""
     lines: set[str] = set()
-    for raw in path.read_text(encoding="utf-8-sig").splitlines():
+    text = safe_read_text(path, encoding="utf-8-sig")
+    if text is None:
+        return frozenset()
+    for raw in text.splitlines():
         stripped = raw.strip()
         if stripped and not stripped.startswith("#"):
             lines.add(stripped)

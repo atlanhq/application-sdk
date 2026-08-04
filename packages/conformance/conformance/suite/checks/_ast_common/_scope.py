@@ -25,6 +25,8 @@ from pathlib import Path
 
 from conformance.suite.schema.disposition import RuleScope
 
+from ._io import safe_read_text
+
 # Distribution-name prefix that identifies the SDK and its sibling packages
 # (``atlan-application-sdk``, ``atlan-application-sdk-conformance``, …).  Kept in
 # sync with ``checks.dependency_conformance.SDK_PACKAGE``.
@@ -80,9 +82,8 @@ def detect_scope(root: Path) -> RuleScope | None:
     behaviour from before scope existed.
     """
     pyproject = root / "pyproject.toml"
-    try:
-        text = pyproject.read_text(encoding="utf-8")
-    except OSError:
+    text = safe_read_text(pyproject)
+    if text is None:
         return None
     name = _project_name(text)
     if name is None:

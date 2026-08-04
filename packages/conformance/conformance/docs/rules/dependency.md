@@ -5,7 +5,7 @@
 
 # Dependency Rules (D-series)
 
-**9 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
+**10 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -24,6 +24,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [D007](#d007) | `NonStandardBuildBackend` | `warn` | `app` | `build-system` | yes | 0.5.0 |
 | [D008](#d008) | `WeakenedTypeChecking` | `warn` | `app` | `tooling-baseline` | yes | 0.5.0 |
 | [D009](#d009) | `RemoteDaprComponentFetch` | `block` | `app` | `dapr-components` | yes | 0.12.0 |
+| [D010](#d010) | `QueryTransformerWithoutDuckdb` | `warn` | `app` | `runtime-dependencies` | — | 0.18.0 |
 
 ---
 
@@ -220,5 +221,58 @@ there instead, e.g. `shutil.copytree(pathlib.Path(application_sdk.__file__).pare
 already be installed into the venv before the task runs (true both locally and in the
 Docker build, where `uv sync` precedes `poe download-components`). Inline suppression:
 `# conformance: ignore[D009] <reason>` on the line above the offending entry.
+
+---
+
+## D010 — `QueryTransformerWithoutDuckdb` {#d010}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `runtime-dependencies` · **Autofixable:** — · **Since:** 0.18.0
+
+> App imports the SDK query transformer but duckdb is not resolved (no [sql]/[incremental] extra, no direct dependency)
+
+**Rationale:** The SDK's query transformer (application_sdk.transformers.query, the transform_metadata
+path) executes its transform SQL through DuckDBConnectionManager, and duckdb ships only
+in the SDK's [sql] and [incremental] extras — never in core. On SDK >= 3.22 the [daft]
+extra is empty, so an app that imports the query transformer without pulling one of
+those extras (or duckdb directly) hits a guaranteed runtime ImportError ('duckdb is
+required for DuckDBConnectionManager') in EVERY transform — latent until the first real
+pipeline run, because imports alone succeed (observed live on main for a document-store
+connector in fleet testing after renovate crossed the 3.22 line). Statically checkable:
+transformer-usage scan + lockfile/pyproject scan.
+
+An app whose source imports the SDK query transformer
+(`application_sdk.transformers.query` — the `transform_metadata` /
+`QueryBasedTransformer` path) must be able to import `duckdb` at runtime: the
+transformer executes its transform SQL through `DuckDBConnectionManager`, which raises
+`ImportError: duckdb is required for DuckDBConnectionManager` when the package is
+absent.
+
+`duckdb` is provided by the SDK's `[sql]` and `[incremental]` extras only — never by the
+core dependency set, and (on SDK >= 3.22) no longer by the emptied `[daft]` extra.
+Locks that crossed the 3.22 line via automated upgrades broke silently: imports succeed,
+unit tests that mock the transformer pass, and the failure appears only in the first
+real end-to-end transform.
+
+Resolution order of the check:
+
+* with a parseable `uv.lock` present, `duckdb` must be reachable   from the app's OWN
+production dependencies — the lock is walked   from the app's `[[package]]` entry along
+`dependencies` and the   `optional-dependencies` groups an incoming extra activates.
+`uv.lock` is a *universal* resolution graph covering dev groups   and every extra, so
+duckdb merely appearing somewhere in it does   NOT mean a default `uv sync --no-dev`
+installs it;   `[package.dev-dependencies]` is deliberately not traversed; * without a
+usable lock, the app's `pyproject.toml` must declare   `duckdb` directly or reference
+`atlan-application-sdk` with a   `sql` or `incremental` extra — in `[project]
+dependencies`   specifically.  Dependency groups and optional-dependency arrays do   not
+count: they are not installed by default.
+
+**Remediation:** change the SDK reference to `atlan-application-sdk[sql]` (or
+`[incremental]` for the incremental analytics stack) in `[project.dependencies]` and
+relock (`uv lock`).  Declaring `duckdb` directly also clears the finding but duplicates
+a pin the SDK's extras already manage.
+
+This is a WARN (per the new-rule tier policy), but unlike most WARN findings it
+indicates a *guaranteed* runtime failure on SDK >= 3.22 — treat it as an error when the
+app's lock is at or past that line.
 
 ---

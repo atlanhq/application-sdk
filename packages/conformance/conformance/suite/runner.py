@@ -40,6 +40,8 @@ from conformance.suite.checks import (
     dockerfile_conformance,
     e2e_agent_spec,
     e2e_deployment_name,
+    e2e_generated_harness,
+    e2e_workflow_shape,
     entrypoint_alignment,
     error_handling,
     generated_freshness,
@@ -56,6 +58,7 @@ from conformance.suite.checks import (
     security,
     test_quality,
     test_structure,
+    transform_templates,
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
@@ -187,6 +190,18 @@ _CHECKS: list[CheckRegistration] = [
         scan_path=e2e_agent_spec.scan_path,
     ),
     CheckRegistration(
+        series=e2e_workflow_shape.SERIES,
+        discover=e2e_workflow_shape.discover,
+        scan_path=e2e_workflow_shape.scan_path,
+        scan_all=e2e_workflow_shape.scan_all,
+    ),
+    CheckRegistration(
+        series=e2e_generated_harness.SERIES,
+        discover=e2e_generated_harness.discover,
+        scan_path=e2e_generated_harness.scan_path,
+        scan_all=e2e_generated_harness.scan_all,
+    ),
+    CheckRegistration(
         series=dockerfile_conformance.SERIES,
         discover=dockerfile_conformance.discover,
         scan_path=dockerfile_conformance.scan_path,
@@ -243,6 +258,11 @@ _CHECKS: list[CheckRegistration] = [
         discover=sdr_checks.discover,
         scan_path=sdr_checks.scan_path,
         scan_all=sdr_checks.scan_all,
+    ),
+    CheckRegistration(
+        series=transform_templates.SERIES,
+        discover=transform_templates.discover,
+        scan_path=transform_templates.scan_path,
     ),
     CheckRegistration(
         series=sdr_test_checks.SERIES,

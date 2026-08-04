@@ -110,7 +110,7 @@ def build_manifest(sdk_root: Path) -> Manifest:
     for file in discover(package_root):
         try:
             tree = ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
-        except (OSError, SyntaxError):
+        except (OSError, SyntaxError, UnicodeDecodeError):
             continue
         module = _module_path(file, sdk_root)
         for site in extract_sites(tree):
@@ -181,7 +181,7 @@ def load_manifest(path: Path | None = None) -> Manifest:
             )
         else:
             text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
+    except (FileNotFoundError, UnicodeDecodeError):
         return Manifest(symbols=())
     except OSError as exc:  # pragma: no cover - unusual IO failure
         print(f"warning: could not read deprecation manifest: {exc}", file=sys.stderr)

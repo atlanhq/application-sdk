@@ -22,6 +22,7 @@ from typing import Protocol
 from conformance.suite.schema.findings import Finding, findings_to_report
 
 from ._discovery import discover as _default_discover
+from ._io import safe_read_text
 
 
 class CliMain(Protocol):
@@ -116,9 +117,12 @@ def make_cli_main(
                     rel = path.relative_to(root)
                 except ValueError:
                     rel = path
-                return _scan_text(path.read_text(encoding="utf-8"), str(rel))
+                text = safe_read_text(path)
+                if text is None:
+                    return []
+                return _scan_text(text, str(rel))
 
-            findings = []
+            findings: list[Finding] = []
             for raw in args.scan_paths:
                 p = Path(raw)
                 if not p.is_absolute():

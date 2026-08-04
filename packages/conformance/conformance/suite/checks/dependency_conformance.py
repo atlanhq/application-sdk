@@ -23,9 +23,18 @@ Rules in this check module:
   Dapr component YAMLs from ``raw.githubusercontent.com`` or the GitHub
   contents API for ``atlanhq/application-sdk``; the installed SDK wheel
   bundles them at ``application_sdk/components/``.
+* **D010 QueryTransformerWithoutDuckdb** — an app that imports the SDK query
+  transformer (``application_sdk.transformers.query``) must resolve
+  ``duckdb`` on a *default* install: reachable from the app's own production
+  dependencies in ``uv.lock`` when one exists (not merely present somewhere in
+  that universal graph), else declared in ``[project] dependencies`` directly
+  or via an ``atlan-application-sdk[sql]``/``[incremental]`` extra.
+  On SDK >= 3.22 (empty ``[daft]`` extra) a missing duckdb is a guaranteed
+  runtime ``ImportError`` in every transform.
 
 D004/D005 are metadata-based (need the SDK importable) like D002; D006/D007/D008/D009
-are pure-text.
+are pure-text.  D010 is cross-file (source imports + lock/pyproject) and runs in
+``scan_all``.
 
 Self-check exemption: any pyproject whose ``[project].name`` starts with
 ``atlan-application-sdk`` is skipped entirely (the SDK and its sibling packages
@@ -50,6 +59,7 @@ from conformance.suite.checks._ast_common import (
     is_sdk_package_name,
     make_cli_main,
     parse_toml_suppressions,
+    safe_read_text,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -63,6 +73,7 @@ RULE_D006 = "D006"
 RULE_D007 = "D007"
 RULE_D008 = "D008"
 RULE_D009 = "D009"
+RULE_D010 = "D010"
 
 SDK_PACKAGE = "atlan-application-sdk"
 
@@ -987,7 +998,9 @@ def scan_path(
     sdk_published_extras: Iterable[str] | None = None,
 ) -> list[Finding]:
     """Scan a single pyproject.toml on disk."""
-    text = path.read_text(encoding="utf-8")
+    text = safe_read_text(path)
+    if text is None:
+        return []
     try:
         rel = path.relative_to(root)
     except ValueError:
@@ -998,6 +1011,289 @@ def scan_path(
         sdk_managed_packages=sdk_managed_packages,
         sdk_published_extras=sdk_published_extras,
     )
+
+
+# ---------------------------------------------------------------------------
+# D010 — query transformer imported without a resolvable duckdb
+# ---------------------------------------------------------------------------
+
+#: The SDK module whose import gates an app into D010: everything under it
+#: (``transform_metadata`` / ``QueryBasedTransformer``) executes transform SQL
+#: through ``DuckDBConnectionManager``.
+_QUERY_TRANSFORMER_MODULE = "application_sdk.transformers.query"
+
+#: The parent package, for the ``from application_sdk.transformers import
+#: query`` form.
+_TRANSFORMERS_PACKAGE = "application_sdk.transformers"
+
+#: SDK extras that provide duckdb (per the SDK's published extras; the
+#: ``[daft]`` extra is empty on SDK >= 3.22 and provides nothing).
+_DUCKDB_PROVIDING_EXTRAS = frozenset({"sql", "incremental"})
+
+
+def _first_query_transformer_import(
+    py_files: Iterable[Path], root: Path
+) -> tuple[str, int] | None:
+    """Return ``(rel_file, lineno)`` of the first query-transformer import.
+
+    Matches ``import application_sdk.transformers.query`` (or a submodule),
+    ``from application_sdk.transformers.query import ...``, and
+    ``from application_sdk.transformers import query``.
+    """
+    for path in py_files:
+        try:
+            tree = ast.parse(path.read_bytes())
+        except (OSError, SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            hit = False
+            if isinstance(node, ast.Import):
+                hit = any(
+                    alias.name == _QUERY_TRANSFORMER_MODULE
+                    or alias.name.startswith(_QUERY_TRANSFORMER_MODULE + ".")
+                    for alias in node.names
+                )
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                if node.module == _QUERY_TRANSFORMER_MODULE or node.module.startswith(
+                    _QUERY_TRANSFORMER_MODULE + "."
+                ):
+                    hit = True
+                elif node.module == _TRANSFORMERS_PACKAGE:
+                    hit = any(alias.name == "query" for alias in node.names)
+            if hit:
+                try:
+                    rel = str(path.relative_to(root))
+                except ValueError:
+                    rel = str(path)
+                return rel, node.lineno
+    return None
+
+
+#: Marker axes that describe the *machine*, and are therefore decidable from the
+#: scanning host. Everything else — notably the ``python_version`` family — is
+#: treated as non-decidable, because a lock resolved for the app's own
+#: ``requires-python`` range says nothing about the interpreter running the scan.
+_PLATFORM_MARKER_AXES = frozenset(
+    {"sys_platform", "os_name", "platform_system", "platform_machine"}
+)
+
+_MARKER_VARIABLE_RE = re.compile(r"\b([a-z_]+)\s*(?:==|!=|<|>|<=|>=|~=|\bin\b)")
+
+
+def _marker_can_hold(marker: object) -> bool:
+    """Whether a PEP 508 environment marker on a lock edge can hold here.
+
+    Markers gate whether an edge is installed at all, so ignoring them lets a
+    platform-specific dependency read as universally reachable — a
+    ``marker = "sys_platform == 'win32'"`` duckdb edge would silence D010 on
+    Linux and macOS, where the ``ImportError`` it exists to catch is real.
+
+    Only **platform** axes are evaluated, against the scanning host.  Markers
+    touching ``python_version``/``python_full_version``/``implementation_name``
+    are deliberately treated as non-decidable and left contributing: ``uv.lock``
+    partitions its resolution on exactly those axes, so evaluating them against
+    the scanning interpreter would report a fully compliant app whenever the
+    scan host's Python differs from the app's declared target — the mirror image
+    of the bug this function exists to fix.
+
+    ``packaging`` is not a declared dependency of this package (it is
+    deliberately dependency-light), so when it is unavailable — or the marker
+    does not parse — the edge is treated as contributing, matching the prior
+    behaviour rather than inventing a false positive.
+    """
+    if marker is None:
+        return True
+    text = str(marker)
+    axes = set(_MARKER_VARIABLE_RE.findall(text))
+    if not axes or not axes <= _PLATFORM_MARKER_AXES:
+        return True  # non-decidable (or unrecognised): stay conservative
+    try:
+        from packaging.markers import InvalidMarker, Marker
+    except ImportError:
+        return True
+    try:
+        return bool(Marker(text).evaluate())
+    except (InvalidMarker, ValueError, KeyError):
+        return True
+
+
+def _lock_dependency_edges(
+    pkg: dict[str, object], extras: frozenset[str]
+) -> list[tuple[str, frozenset[str]]]:
+    """Production dependency edges out of a locked package.
+
+    Only ``dependencies`` plus the ``optional-dependencies`` groups actually
+    activated by an incoming extra.  ``dev-dependencies`` and
+    ``[package.metadata]`` are deliberately not traversed — they are not part of
+    a default (``uv sync --no-dev``) install, which is the environment D010
+    grades.
+    """
+    raw: list[object] = []
+    deps = pkg.get("dependencies")
+    if isinstance(deps, list):
+        raw.extend(deps)
+    optional = pkg.get("optional-dependencies")
+    if isinstance(optional, dict):
+        for extra in extras:
+            group = optional.get(extra)
+            if isinstance(group, list):
+                raw.extend(group)
+
+    out: list[tuple[str, frozenset[str]]] = []
+    for dep in raw:
+        if not isinstance(dep, dict):
+            continue
+        name = _normalise_name(str(dep.get("name", "")))
+        if not name:
+            continue
+        if not _marker_can_hold(dep.get("marker")):
+            continue  # e.g. a win32-only edge, unreachable on this install
+        dep_extras = dep.get("extra")
+        activated = (
+            frozenset(_normalise_name(str(e)) for e in dep_extras)
+            if isinstance(dep_extras, list)
+            else frozenset()
+        )
+        out.append((name, activated))
+    return out
+
+
+def _duckdb_in_lock(lock_text: str, pyproject_text: str) -> bool | None:
+    """Whether duckdb is reachable from the app's own production dependencies.
+
+    ``uv.lock`` is a *universal* resolution graph: it carries dev groups and
+    every extra of every package, so the mere presence of a ``duckdb`` package
+    block says nothing about whether a default install gets it.  This walks the
+    graph from the app's own ``[[package]]`` entry along production edges only.
+
+    Returns ``None`` when the lock cannot be parsed or the app's root entry
+    cannot be identified — the caller then falls back to declaration intent.
+    """
+    try:
+        lock = tomllib.loads(lock_text)
+    except tomllib.TOMLDecodeError:
+        return None
+    packages = lock.get("package")
+    if not isinstance(packages, list):
+        return None
+
+    by_name: dict[str, dict[str, object]] = {}
+    for pkg in packages:
+        if not isinstance(pkg, dict):
+            continue
+        name = _normalise_name(str(pkg.get("name", "")))
+        if name:
+            by_name.setdefault(name, pkg)
+
+    raw_app_name = _project_name(pyproject_text)
+    if raw_app_name is None:
+        return None
+    app_name = _normalise_name(raw_app_name)
+    if app_name not in by_name:
+        return None
+
+    seen: set[tuple[str, frozenset[str]]] = set()
+    queue: list[tuple[str, frozenset[str]]] = [(app_name, frozenset())]
+    while queue:
+        name, extras = queue.pop()
+        key = (name, extras)
+        if key in seen:
+            continue
+        seen.add(key)
+        if name == "duckdb":
+            return True
+        pkg = by_name.get(name)
+        if pkg is None:
+            continue
+        queue.extend(_lock_dependency_edges(pkg, extras))
+    return False
+
+
+def _duckdb_resolved(root: Path, pyproject_text: str) -> bool:
+    """Whether ``duckdb`` resolves for the repo at *root* on a default install.
+
+    With a parseable ``uv.lock`` the lock is the ground truth, walked from the
+    app's own package entry along production edges (see :func:`_duckdb_in_lock`)
+    rather than searched flat — duckdb sitting in the graph because a dev-only
+    tool pulls it in does NOT save a production ``uv sync --no-dev``.
+
+    Without a usable lock, fall back to declaration intent in
+    ``pyproject.toml``, restricted to ``[project] dependencies``: a direct
+    ``duckdb`` dependency, or an ``atlan-application-sdk`` reference carrying a
+    duckdb-providing extra (``sql``/``incremental``).  Dependency groups and
+    optional-dependency arrays are excluded — they are not installed by default.
+    """
+    uv_lock = root / "uv.lock"
+    if uv_lock.is_file():
+        try:
+            lock_text = uv_lock.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            lock_text = None
+        if lock_text is not None:
+            resolved = _duckdb_in_lock(lock_text, pyproject_text)
+            if resolved is not None:
+                return resolved
+        # unreadable/unparseable lock, or an unidentifiable root package —
+        # fall back to pyproject intent below.
+
+    sdk_norm = _normalise_name(SDK_PACKAGE)
+    for entry in _iter_dep_entries(pyproject_text):
+        if entry.array_path != "project.dependencies":
+            continue
+        if entry.name == "duckdb":
+            return True
+        if entry.name == sdk_norm and _DUCKDB_PROVIDING_EXTRAS & {
+            _normalise_name(e) for e in _sdk_extras_in(entry.raw)
+        }:
+            return True
+    return False
+
+
+def _scan_query_transformer_duckdb(
+    py_files: list[Path],
+    root: Path,
+    pyproject_text: str,
+    file: str,
+) -> list[Finding]:
+    """D010: query-transformer import present but duckdb does not resolve."""
+    import_site = _first_query_transformer_import(py_files, root)
+    if import_site is None:
+        return []
+    if _duckdb_resolved(root, pyproject_text):
+        return []
+
+    rel_import, import_line = import_site
+    suppressions = parse_toml_suppressions(pyproject_text)
+    # Anchor at the SDK dependency line (where the extra belongs) so the
+    # finding lands where the fix goes; fall back to the [project] header.
+    sdk_norm = _normalise_name(SDK_PACKAGE)
+    anchor_line = 1
+    for entry in _iter_dep_entries(pyproject_text):
+        if entry.name == sdk_norm and entry.array_path == "project.dependencies":
+            anchor_line = entry.line
+            break
+    return [
+        _make_finding(
+            rule_id=RULE_D010,
+            file=file,
+            line=anchor_line,
+            column=1,
+            message=(
+                f"The SDK query transformer is imported ({rel_import}:{import_line}"
+                f" — application_sdk.transformers.query) but 'duckdb' does not "
+                f"resolve from the app's production dependencies (uv.lock is a "
+                f"universal graph — a dev-only or unactivated-extra duckdb does "
+                f"not install by default) and no "
+                f"'{SDK_PACKAGE}[sql]'/'[incremental]' extra or direct duckdb "
+                f"dependency is declared. On SDK >= 3.22 (the [daft] extra is "
+                f"empty) every transform_metadata call fails at runtime with "
+                f"ImportError: 'duckdb is required for DuckDBConnectionManager'. "
+                f"Reference the SDK as '{SDK_PACKAGE}[sql]' (or [incremental]) "
+                f"and relock."
+            ),
+            suppressions=suppressions,
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1087,7 +1383,10 @@ def _dist_import_names(dist_name: str) -> set[str] | None:
         return None
 
     names: set[str] = set()
-    top_level = dist.read_text("top_level.txt")
+    # Distribution.read_text takes a filename positionally and returns None when
+    # absent — a metadata lookup with no decode step, so the read-guard
+    # invariant (tests/test_read_guard_invariant.py) exempts it explicitly.
+    top_level = dist.read_text("top_level.txt")  # read-guard: exempt
     if top_level:
         names.update(line.strip() for line in top_level.splitlines() if line.strip())
 
@@ -1203,16 +1502,27 @@ def scan_all(
     for pyproject in pyprojects:
         findings.extend(scan_path(pyproject, root))
 
-    # ── D003 ────────────────────────────────────────────────────────────────
     root_pyproject = root / "pyproject.toml"
     if not root_pyproject.is_file():
         return findings
-    text = root_pyproject.read_text(encoding="utf-8")
     try:
+        text = root_pyproject.read_text(encoding="utf-8")
         tomllib.loads(text)
-    except tomllib.TOMLDecodeError:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return findings
 
+    try:
+        rel_pyproject = str(root_pyproject.relative_to(root))
+    except ValueError:
+        rel_pyproject = str(root_pyproject)
+
+    # ── D010 (cross-file; app-only like the rest of the per-pyproject rules) ─
+    if not _is_self_check(_project_name(text)):
+        findings.extend(
+            _scan_query_transformer_duckdb(py_files, root, text, rel_pyproject)
+        )
+
+    # ── D003 ────────────────────────────────────────────────────────────────
     dep_entries = [
         e
         for e in _iter_dep_entries(text)

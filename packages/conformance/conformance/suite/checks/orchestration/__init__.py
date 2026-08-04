@@ -97,7 +97,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
     """Scan a single Python file (P004 + P005 + P006).  P007 requires :func:`scan_all`."""
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
     try:
         rel = path.relative_to(root)
@@ -115,7 +115,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     for path in paths:
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
         try:
             tree = ast.parse(text, filename=str(path))

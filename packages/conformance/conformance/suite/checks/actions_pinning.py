@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import make_cli_main
+from conformance.suite.checks._ast_common import make_cli_main, safe_read_text
 from conformance.suite.schema.findings import Finding
 
 SERIES = "C"
@@ -104,7 +104,9 @@ def scan_text(text: str, file: str) -> list[Finding]:
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
     """Scan a single workflow file, producing repo-root-relative URIs."""
-    text = path.read_text(encoding="utf-8")
+    text = safe_read_text(path)
+    if text is None:
+        return []
     try:
         rel = path.relative_to(root)
     except ValueError:

@@ -70,7 +70,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     for path in paths:
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
         try:
             tree = ast.parse(text, filename=str(path))
