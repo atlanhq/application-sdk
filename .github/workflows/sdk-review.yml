@@ -499,6 +499,7 @@ jobs:
               repositories: ["atlanhq/application-sdk"],
               base_branch: $base_branch,
               snapshot: "_base",
+              ai_gateway_key_name: "sdk_review",
               prompt: $prompt,
               max_timeout_seconds: 7200,
               idle_timeout_seconds: 1800,
