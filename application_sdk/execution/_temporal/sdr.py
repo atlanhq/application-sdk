@@ -48,6 +48,13 @@ with workflow.unsafe.imports_passed_through():
         PreflightOutput,
         PreflightStatus,
     )
+
+    # execution → handler seam: this module already imports handler.contracts /
+    # handler.context (the worker invokes the typed handler), so sourcing the FE
+    # envelope converters from handler.sdr_output follows the existing edge
+    # rather than introducing a new layering direction. The converters are pure
+    # typed-output → dict transforms; moving them to a neutral contracts module
+    # is an optional future cleanup if the team wants strict layer hygiene.
     from application_sdk.handler.sdr_output import (
         auth_output_to_response,
         metadata_output_to_response,

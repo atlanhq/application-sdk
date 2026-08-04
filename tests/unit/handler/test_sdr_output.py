@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.wire import FailureDetails
 from application_sdk.handler.contracts import (
     AuthOutput,
     AuthStatus,
@@ -12,6 +14,7 @@ from application_sdk.handler.contracts import (
 from application_sdk.handler.sdr_output import (
     auth_output_to_response,
     preflight_output_to_response,
+    preflight_runtime_summary,
 )
 
 
@@ -49,6 +52,45 @@ def test_auth_output_to_response_envelope() -> None:
     assert resp["success"] is True
     assert resp["message"] == "auth ok"
     assert resp["data"]["status"] == "success"
+
+
+def test_auth_output_to_response_failed_status() -> None:
+    resp = auth_output_to_response(
+        AuthOutput(status=AuthStatus.INVALID_CREDENTIALS, message="bad key")
+    )
+    assert resp["success"] is False
+    assert resp["message"] == "bad key"
+    assert resp["data"]["status"] == "invalid_credentials"
+
+
+def test_auth_output_to_response_empty_message_fallback() -> None:
+    resp = auth_output_to_response(AuthOutput(status=AuthStatus.FAILED))
+    assert resp["success"] is False
+    # empty message falls back to the f"Authentication {status}" default
+    assert resp["message"] == "Authentication failed"
+
+
+def test_preflight_runtime_summary_suggested_action() -> None:
+    check = PreflightCheck(
+        name="Secret store",
+        passed=False,
+        error=FailureDetails(
+            category=FailureCategory.DEPENDENCY_UNAVAILABLE,
+            code="DEPENDENCY_UNAVAILABLE",
+            retryable=True,
+            audience=Audience.PLATFORM,
+            message="store unreachable",
+            suggested_action="restart the secret store sidecar",
+        ),
+    )
+    out = PreflightOutput(
+        status=PreflightStatus.NOT_READY, message="blocked", checks=[check]
+    )
+    summary = preflight_runtime_summary(out)
+    row = summary["checks"][0]
+    # typed error wins over message; suggested_action surfaces on the failed row
+    assert row["message"] == "store unreachable"
+    assert row["suggested_action"] == "restart the secret store sidecar"
 
 
 def test_metadata_output_to_response_is_bare_list() -> None:

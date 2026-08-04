@@ -7,9 +7,16 @@ frontend already consumes from the direct-mode HTTP endpoints — rather than a
 typed ``PreflightOutput``/``AuthOutput``/``MetadataOutput`` that heracles would
 otherwise have to re-transform in Go.
 
-These helpers are the single source of truth for that envelope shape, shared by
-the HTTP endpoints (``handler/service.py``) and the ``sdr:*`` activities
-(``execution/_temporal/sdr.py``).
+These helpers are the single source of truth for that envelope shape on the
+worker side, used by the ``sdr:*`` activities (``execution/_temporal/sdr.py``).
+
+.. note::
+   The direct-mode HTTP endpoints (``handler/service.py``) still build the same
+   envelope from their own pre-existing inline copy (``_summarize_check`` /
+   ``_preflight_runtime_summary`` / inline ``v2_data``). The two copies are
+   byte-identical today; unifying the HTTP path onto these helpers is a
+   deliberate follow-up refactor, out of scope for this PR (the worker path this
+   PR ships is the corrected one).
 """
 
 from __future__ import annotations
