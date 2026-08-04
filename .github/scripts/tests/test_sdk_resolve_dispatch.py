@@ -22,39 +22,84 @@ def _stream(*lines: str):
 
 def test_payload_shape():
     p = sr.build_payload(
-        "1234", "http://run", 8, "2026-07-08", "cmgrote,vaibhavatlan", "octocat"
+        "1234",
+        "http://run",
+        8,
+        "2026-07-08",
+        "reviewer-one,reviewer-two",
+        "requester-login",
     )
     assert p["mode"] == "direct" and p["stream"] is True
     assert p["source_id"] == "sdk-resolve-1234-2026-07-08"
     assert p["repositories"] == ["atlanhq/application-sdk"]
     assert p["metadata"]["pr_number"] == "1234"
     assert p["metadata"]["max_rounds"] == 8
-    assert p["metadata"]["reviewers"] == "cmgrote,vaibhavatlan"
-    assert p["metadata"]["requester"] == "octocat"
+    assert p["metadata"]["reviewers"] == "reviewer-one,reviewer-two"
+    assert p["metadata"]["requester"] == "requester-login"
+
+
+def test_payload_pins_all_three_model_lanes():
+    # All three lanes must be pinned: leaving any unset silently falls back to
+    # mothership's Claude defaults (main -> claude-opus-5, sub-agent ->
+    # claude-sonnet-5), and `small_fast_model` unset resolves to `model`.
+    p = sr.build_payload("1", "u", 8, "2026-07-08", "reviewer-one", "requester-login")
+    assert p["model"] == "kimi-k3"
+    assert p["small_fast_model"] == "gpt-5.6-luna"
+    assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-5.6-luna"
+    # Every pinned value must survive JSON encoding as a non-blank string —
+    # env_vars skips the API's model-id validation that `model` gets.
+    encoded = json.loads(json.dumps(p))
+    for value in (
+        encoded["model"],
+        encoded["small_fast_model"],
+        encoded["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"],
+    ):
+        assert isinstance(value, str) and value == value.strip() and value
 
 
 def test_prompt_carries_pr_stop_line_and_review_request():
-    prompt = sr.build_prompt("42", "u", 8, "cmgrote,vaibhavatlan", "octocat")
+    prompt = sr.build_prompt(
+        "42", "u", 8, "reviewer-one,reviewer-two", "requester-login"
+    )
     assert "PR_NUMBER:    42" in prompt
     assert "MERGE-READY" in prompt
     assert "Do NOT `gh pr merge`" in prompt  # human merges
     assert "pr-resolve/ORCHESTRATION.md" in prompt
     # requests human review + tags reviewers AND the requester
-    assert "gh pr edit 42 --add-reviewer cmgrote,vaibhavatlan" in prompt
-    assert "@cmgrote" in prompt and "@vaibhavatlan" in prompt and "@octocat" in prompt
+    assert "gh pr edit 42 --add-reviewer reviewer-one,reviewer-two" in prompt
+    assert (
+        "@reviewer-one" in prompt
+        and "@reviewer-two" in prompt
+        and "@requester-login" in prompt
+    )
+
+
+def test_prompt_without_configured_reviewers_asks_for_a_human_assignment():
+    # REVIEWERS comes from a repo variable and may be unset. The prompt must not
+    # emit an argument-less `gh pr edit --add-reviewer`, which would fail — and
+    # it must not silently skip the hand-off either: the missing list is named
+    # in the report so someone assigns a reviewer.
+    prompt = sr.build_prompt("42", "u", 8, "", "requester-login")
+    assert "--add-reviewer" not in prompt
+    assert "NO reviewer list is configured" in prompt
+    assert "SDK_RESOLVE_REVIEWERS" in prompt
+    # the requester is still tagged so someone is pinged
+    assert "@requester-login" in prompt
+    # whitespace/comma-only values are treated as unset too
+    assert "--add-reviewer" not in sr.build_prompt("42", "u", 8, " , ", "")
 
 
 def test_reviewer_handles_dedupe_and_strip():
     # strips '@', de-dupes, appends requester, drops blanks
-    assert sr._reviewer_handles("@cmgrote, vaibhavatlan", "octocat") == [
-        "cmgrote",
-        "vaibhavatlan",
-        "octocat",
+    assert sr._reviewer_handles("@reviewer-one, reviewer-two", "requester-login") == [
+        "reviewer-one",
+        "reviewer-two",
+        "requester-login",
     ]
     # requester already in the reviewer list → not duplicated
-    assert sr._reviewer_handles("cmgrote,vaibhavatlan", "cmgrote") == [
-        "cmgrote",
-        "vaibhavatlan",
+    assert sr._reviewer_handles("reviewer-one,reviewer-two", "reviewer-one") == [
+        "reviewer-one",
+        "reviewer-two",
     ]
 
 

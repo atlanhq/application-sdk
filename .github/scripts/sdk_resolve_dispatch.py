@@ -17,7 +17,10 @@ Environment:
     HARNESS_TOKEN       bearer for /api/sandbox/execute
     PR_NUMBER           the open PR to drive to merge-ready
     MAX_ROUNDS          max @sdk-review rounds before stopping (default 8)
-    REVIEWERS           comma-separated GitHub handles to request + tag at the end
+    REVIEWERS           comma-separated GitHub handles to request + tag at the
+                        end; fed by vars.SDK_RESOLVE_REVIEWERS. Optional, no
+                        default — unset means no reviewer is requested and the
+                        run logs a warning.
     REQUESTER           login that invoked @sdk-resolve (also tagged)
     GHA_RUN_URL         this workflow run's URL
     RUN_DATE            ISO date (computed if absent)
@@ -50,6 +53,12 @@ READ_IDLE_TIMEOUT_SECONDS = 1900
 # keeping the last N bytes always preserves it.
 BUFFER_CAP_BYTES = 65536
 DEFAULT_MAX_ROUNDS = 8
+# Models this lane runs on, mirroring sdk-review.yml. Chosen on cost per TASK,
+# not per token: kimi-k3 (index 57.2, ~$0.85/task) vs claude-opus-5 (60.5,
+# ~$2.40) and gpt-5.6-luna (51.2, $0.20/Mtok in) vs claude-haiku-4-5 (29.6,
+# $1.00/Mtok) — better and cheaper on the fast lane. Reverting is a one-liner.
+MAIN_MODEL = "kimi-k3"
+FAST_MODEL = "gpt-5.6-luna"
 
 # --- Out-of-band hand-off backstop -----------------------------------------
 # The resolver runs in its OWN mothership sandbox; our SSE stream only observes
@@ -93,6 +102,22 @@ def build_prompt(
     # Reviewers to request + the requester who triggered the run — tagged at the
     # end so a human takes the merge from a green, review-requested PR.
     tag_list = ", ".join(f"@{h}" for h in _reviewer_handles(reviewers, requester))
+    # REVIEWERS comes from a repo variable and may be unset. Build the
+    # reviewer-request instruction from the cleaned list so an empty value
+    # can't produce an argument-less `gh pr edit --add-reviewer`, which fails
+    # and burns a round. Unset does NOT silently skip the hand-off: the
+    # resolver is told to state that no reviewer list is configured, and the
+    # dispatch step logs a ::warning:: as well. (CODEOWNERS auto-request only
+    # fires when a PR is opened, so it is not a fallback for a PR this
+    # resolver has been iterating on.)
+    request_list = ",".join(_reviewer_handles(reviewers, ""))
+    review_request = (
+        f"run `gh pr edit {pr_number} --add-reviewer {request_list}` "
+        '(ignore "can\'t request from the author" errors) and '
+        if request_list
+        else "state in the report that NO reviewer list is configured "
+        "(vars.SDK_RESOLVE_REVIEWERS is unset) so a human assigns one, then "
+    )
     return f"""You are running the SDK Resolver in a Cloudflare sandbox.
 
 Repository cloned at: /workspace/application-sdk.
@@ -118,10 +143,8 @@ verdict READY_TO_MERGE. You are the only writer — the reviewer runs in its own
 separate sandbox; you trigger it with `@sdk-review` (post as-is; the reviewer
 workflow now accepts the sandbox bot identity) and consume its comment.
 Do NOT `gh pr merge` — stop at merge-ready and hand back to a human. When you
-finish (merge-ready OR NEEDS_HUMAN), REQUEST HUMAN REVIEW: run
-`gh pr edit {pr_number} --add-reviewer {reviewers}` (ignore "can't request from
-the author" errors) and post the final report @-mentioning {tag_list} so they
-know it's their turn. Expect each push to reset the reviewer labels/status
+finish (merge-ready OR NEEDS_HUMAN), REQUEST HUMAN REVIEW: {review_request}post
+the final report @-mentioning {tag_list} so they know it's their turn. Expect each push to reset the reviewer labels/status
 (reset-on-push) — that is normal; key the loop off findings + CI, not labels.
 Stop after MAX_ROUNDS rounds, or if a dismissed finding is re-raised, and
 report. At the very end print the `=== SDK RESOLVE SUMMARY ===` block from
@@ -154,6 +177,16 @@ def build_payload(
         "repositories": ["atlanhq/application-sdk"],
         "base_branch": "main",
         "snapshot": "_base",
+        # Model pinning, same three lanes as sdk-review.yml (PR #2985). Without
+        # these the lane inherits mothership's DEFAULT_CLAUDE_MODEL
+        # (claude-opus-5) and `_base` leaves CLAUDE_CODE_SUBAGENT_MODEL on
+        # claude-sonnet-5, so Task/Explore legwork bills Claude rates whatever
+        # the main lane runs. `small_fast_model` must be pinned explicitly:
+        # mothership's model_routing_env does `fast = small_fast_model or model`,
+        # so pinning `model` alone would put the background lane on kimi-k3.
+        "model": MAIN_MODEL,
+        "small_fast_model": FAST_MODEL,
+        "env_vars": {"CLAUDE_CODE_SUBAGENT_MODEL": FAST_MODEL},
         "prompt": build_prompt(
             pr_number, gha_run_url, max_rounds, reviewers, requester
         ),
@@ -582,7 +615,17 @@ def main() -> int:
     gha_run_url = os.environ.get("GHA_RUN_URL", "")
     run_date = os.environ.get("RUN_DATE") or time.strftime("%Y-%m-%d", time.gmtime())
     max_rounds = _max_rounds()
-    reviewers = os.environ.get("REVIEWERS", "cmgrote,vaibhavatlan")
+    # No hardcoded handles: the list comes from the repo variable
+    # vars.SDK_RESOLVE_REVIEWERS via the workflow. Unset is tolerated but never
+    # silent — without it the run ends with no reviewer requested, which is the
+    # kind of thing that only gets noticed weeks later.
+    reviewers = os.environ.get("REVIEWERS", "")
+    if not _reviewer_handles(reviewers, ""):
+        print(
+            "::warning::SDK_RESOLVE_REVIEWERS is unset — no reviewer will be "
+            "requested when this PR reaches merge-ready. Set the repo variable "
+            "to a comma-separated list of GitHub handles."
+        )
     requester = os.environ.get("REQUESTER", "")
     github_token = os.environ.get("GITHUB_TOKEN", "")
     # Lower bound for matching *this* run's hand-off comment; captured before the

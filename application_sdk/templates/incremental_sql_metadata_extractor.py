@@ -810,15 +810,27 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             # concurrent retry's prepare_previous_state() would clear and
             # recreate that exact path underneath the still-running removal.
             # Wait for it to finish before propagating the cancellation.
+            #
+            # One `asyncio.shield` is not enough: each `cancel()` landing while
+            # suspended re-raises `CancelledError` from the *current* await, so
+            # an unshielded re-await in the handler still abandons the wait on
+            # a third cancellation. Loop the shield instead — every throw is
+            # recorded and the shield is re-entered until the offloaded removal
+            # is done; only then does the cancellation propagate.
             cleanup = asyncio.ensure_future(
                 run_in_thread(cleanup_previous_state, previous_state_dir)
             )
-            try:
-                await asyncio.shield(cleanup)
-            except asyncio.CancelledError:
-                with contextlib.suppress(Exception):
-                    await cleanup
-                raise
+            cancelled = False
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    cancelled = True
+            # Surface a cleanup failure, if any, before the cancellation.
+            with contextlib.suppress(Exception):
+                cleanup.result()
+            if cancelled:
+                raise asyncio.CancelledError
 
     @task(timeout_seconds=120)
     async def update_incremental_marker(
