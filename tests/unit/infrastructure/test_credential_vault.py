@@ -750,3 +750,161 @@ class TestGetLocalSecret:
             os.chdir(original_cwd)
 
         assert result == {"username": "local-user", "password": "local-pass"}
+
+
+class TestSingleKeyProbeConcurrency:
+    """Single-key vault probes must overlap, stay bounded, and merge
+    deterministically (BLDX-1594).
+
+    A probe that misses pays a full Dapr retry ladder, because Dapr answers
+    "no such key" with a 500 the transport retries blind. Serial probing
+    therefore cost *ladder x number of non-secret fields*.
+    """
+
+    @staticmethod
+    def _vault(get_secret) -> DaprCredentialVault:
+        vault = DaprCredentialVault(MagicMock())
+        vault._get_secret = get_secret  # type: ignore[method-assign]
+        return vault
+
+    async def test_probes_run_concurrently_not_serially(self) -> None:
+        """N slow probes must cost ~one probe, not N.
+
+        Asserted via observed overlap rather than wall-clock, so it can't flake
+        on a loaded runner. Against the pre-fix serial implementation the gate
+        is never set and this deadlocks into the wait_for timeout.
+        """
+        import asyncio
+
+        state = {"in_flight": 0, "peak": 0}
+        gate = asyncio.Event()
+
+        async def _get_secret(value: str, *, log_label: str | None = None):
+            state["in_flight"] += 1
+            state["peak"] = max(state["peak"], state["in_flight"])
+            if state["in_flight"] >= 3:
+                gate.set()
+            await gate.wait()
+            state["in_flight"] -= 1
+            return {}
+
+        config = {"username": "u-lit", "password": "p-lit", "database": "db-lit"}
+
+        await asyncio.wait_for(
+            self._vault(_get_secret)._fetch_single_key_secrets(config), timeout=5
+        )
+
+        assert state["peak"] == 3, (
+            "vault probes did not overlap — still serial, which is the "
+            "regression this test exists to catch"
+        )
+
+    async def test_concurrency_is_bounded(self) -> None:
+        """Fan-out is capped so a wide config can't burst a vault into
+        throttling — which Dapr reports indistinguishably from 'key absent'."""
+        import asyncio
+
+        from application_sdk.infrastructure._dapr.credential_vault import (
+            _MAX_CONCURRENT_SINGLE_KEY_PROBES as CAP,
+        )
+
+        state = {"in_flight": 0, "peak": 0}
+        wave_full = asyncio.Event()
+
+        async def _get_secret(value: str, *, log_label: str | None = None):
+            state["in_flight"] += 1
+            state["peak"] = max(state["peak"], state["in_flight"])
+            if state["in_flight"] >= CAP:
+                wave_full.set()
+            await wave_full.wait()
+            state["in_flight"] -= 1
+            return {}
+
+        config = {f"f{i}": f"lit-{i}" for i in range(CAP * 2)}
+
+        await asyncio.wait_for(
+            self._vault(_get_secret)._fetch_single_key_secrets(config), timeout=5
+        )
+
+        assert state["peak"] == CAP
+
+    async def test_inner_key_collision_resolves_in_candidate_order(self) -> None:
+        """The load-bearing ordering guarantee.
+
+        Each probe's *inner* keys are merged into one dict, so two probes
+        returning the same inner key are last-writer-wins. Serial iteration
+        order was the tiebreak; concurrent completion order must not become it,
+        or the resolved credential changes under load.
+
+        Here the *second* candidate wins, and it is deliberately made to
+        resolve *first* so completion order and candidate order disagree.
+        """
+        import asyncio
+
+        async def _get_secret(value: str, *, log_label: str | None = None):
+            if value == "ref-two":
+                # Wins on candidate order, resolves first.
+                return {"password": "from-two"}
+            await asyncio.sleep(0.01)
+            return {"password": "from-one"}
+
+        config = {"a": "ref-one", "b": "ref-two"}
+
+        collected = await self._vault(_get_secret)._fetch_single_key_secrets(config)
+
+        assert collected == {"password": "from-two"}, (
+            "inner-key collision resolved by completion order instead of "
+            "candidate order — resolved credentials would vary under load"
+        )
+
+    async def test_each_unique_ref_key_probed_exactly_once(self) -> None:
+        """De-duplication must hold under concurrency."""
+        calls: list[str] = []
+
+        async def _get_secret(value: str, *, log_label: str | None = None):
+            calls.append(value)
+            return {}
+
+        config = {
+            "username": "shared-key",
+            "password": "shared-key",
+            "extra": {"role": "shared-key", "warehouse": "other-key"},
+        }
+
+        await self._vault(_get_secret)._fetch_single_key_secrets(config)
+
+        assert sorted(calls) == ["other-key", "shared-key"]
+
+    async def test_cold_start_outage_propagates_even_when_others_resolve(self) -> None:
+        """A probe that never got an answer must surface as an outage rather
+        than being masked by its siblings' success, hash-labelled."""
+        from application_sdk.infrastructure.secrets import SecretStoreUnavailableError
+
+        async def _get_secret(value: str, *, log_label: str | None = None):
+            if value == "unreachable-key":
+                raise SecretStoreUnavailableError(value)
+            return {"password": "fine"}
+
+        config = {"a": "unreachable-key", "b": "fine-key"}
+
+        with pytest.raises(SecretStoreUnavailableError) as exc_info:
+            await self._vault(_get_secret)._fetch_single_key_secrets(config)
+
+        assert "unreachable-key" not in str(exc_info.value)
+        assert "sha256:" in str(exc_info.value)
+
+    async def test_store_errors_still_fall_through_and_are_summarised(self) -> None:
+        """A genuine store error on one field stays non-fatal (it may simply
+        not be a secret), and the existing failure summary is preserved."""
+        from application_sdk.infrastructure.secrets import SecretStoreError
+
+        async def _get_secret(value: str, *, log_label: str | None = None):
+            if value == "real-key":
+                return {"password": "resolved"}
+            raise SecretStoreError("vault denied", secret_name=value)
+
+        config = {"a": "real-key", "b": "literal-value"}
+
+        collected = await self._vault(_get_secret)._fetch_single_key_secrets(config)
+
+        assert collected == {"password": "resolved"}
