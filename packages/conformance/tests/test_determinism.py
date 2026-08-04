@@ -333,6 +333,32 @@ def test_p023_flags_safefileops_wrapper() -> None:
     assert len(_rule(body, "P023")) == 1
 
 
+def test_p023_flags_safefileops_move_wrapper() -> None:
+    """The move wrapper is matched too (SafeFileOps wraps rmtree and move)."""
+    body = (
+        "from application_sdk.common.file_ops import SafeFileOps\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def stage(self, input):\n"
+        "        SafeFileOps.move('/a', '/b')\n"
+    )
+    assert len(_rule(body, "P023")) == 1
+
+
+def test_p023_silent_for_safefileops_lookalike_class() -> None:
+    """The wrapper match is anchored on the segment boundary: a class whose name
+    merely *ends in* ``SafeFileOps`` (``MySafeFileOps`` / ``NotSafeFileOps``) is
+    not the SDK wrapper and must not be flagged."""
+    body = (
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def cleanup(self, input):\n"
+        "        MySafeFileOps.rmtree('/tmp/out')\n"
+        "        NotSafeFileOps.move('/a', '/b')\n"
+    )
+    assert _rule(body, "P023") == []
+
+
 def test_p023_silent_when_rmtree_is_offloaded() -> None:
     """``run_in_thread(shutil.rmtree, path)`` passes the callable, never calls it."""
     body = (

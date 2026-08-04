@@ -17,7 +17,8 @@ code — the second half of the user's async-correctness ask.  Two patterns:
   skipped here to avoid double-reporting.
 
 * **Tree-scale filesystem work** — ``shutil.rmtree`` / ``copytree`` / ``move``,
-  and the SDK's own ``SafeFileOps`` wrappers over them.  These walk an unbounded
+  and the SDK's own ``SafeFileOps`` wrappers (``SafeFileOps.rmtree`` /
+  ``SafeFileOps.move``; it has no ``copytree``).  These walk an unbounded
   directory tree, so their duration scales with the data, not with a fixed
   syscall cost: on the loop they stall every other coroutine — including a
   ``@task``'s auto-heartbeat, which makes Temporal retry an activity that is
@@ -58,8 +59,14 @@ _BLOCKING_PREFIXES = ("requests.", "urllib.request.")
 _TREE_FS_OPS = frozenset({"rmtree", "copytree", "move"})
 _TREE_FS_EXACT = frozenset(f"shutil.{op}" for op in _TREE_FS_OPS)
 # The SDK's own wrappers over the same calls, so routing through SafeFileOps is
-# not a way around this rule.
-_TREE_FS_SUFFIXES = tuple(f"SafeFileOps.{op}" for op in _TREE_FS_OPS)
+# not a way around this rule. SafeFileOps wraps only rmtree and move (its `copy`
+# is single-file, and there is no `copytree` wrapper) — so the wrapper set is a
+# strict subset of _TREE_FS_OPS. Patterns are anchored on the segment boundary
+# (a leading dot, or the bare name) so a look-alike class such as
+# `MySafeFileOps` does not match.
+_SAFE_FILE_OPS_WRAPPED = frozenset({"rmtree", "move"})
+_TREE_FS_WRAPPER_SUFFIXES = tuple(f".SafeFileOps.{op}" for op in _SAFE_FILE_OPS_WRAPPED)
+_TREE_FS_WRAPPER_BARE = frozenset(f"SafeFileOps.{op}" for op in _SAFE_FILE_OPS_WRAPPED)
 
 _BRIDGE_HINT = (
     "Running an event loop from inside an async function re-enters the loop and "
@@ -139,7 +146,9 @@ class _Visitor(ast.NodeVisitor):
         # Tree-scale filesystem work — also P021's territory inside workflow
         # context (file I/O belongs in a @task at all), so skip it there.
         if self._wf_depth == 0 and (
-            target in _TREE_FS_EXACT or target.endswith(_TREE_FS_SUFFIXES)
+            target in _TREE_FS_EXACT
+            or target.endswith(_TREE_FS_WRAPPER_SUFFIXES)
+            or target in _TREE_FS_WRAPPER_BARE
         ):
             self._add(node, f"{target}()", _TREE_FS_HINT)
 
