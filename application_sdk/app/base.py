@@ -1364,6 +1364,18 @@ class App(ABC):
 
         path_results: dict[str, bool] = {}
 
+        async def _remove_path(path: str) -> None:
+            """Delete ``path`` (file or directory) off the event loop.
+
+            Offloaded because ``rmtree``/``remove`` over a large tracked
+            directory is syscall-bound and can run long enough to starve the
+            auto-heartbeat if it ran directly on the event loop.
+            """
+            if os.path.isdir(path):
+                await run_in_thread(shutil.rmtree, path)
+            else:
+                await run_in_thread(os.remove, path)
+
         # 1. Delete tracked FileReference local paths (+ .sha256 sidecars).
         tracked_refs = TaskStateAccessor().get(TRACKED_FILE_REFS_KEY)
         if tracked_refs:
@@ -1372,14 +1384,7 @@ class App(ABC):
                     for p in (ref.local_path, ref.local_path + ".sha256"):
                         try:
                             if os.path.exists(p):
-                                if os.path.isdir(p):
-                                    # Offloaded: rmtree over a large tracked
-                                    # directory is syscall-bound and can run
-                                    # long enough to starve the auto-heartbeat
-                                    # if it ran directly on the event loop.
-                                    await run_in_thread(shutil.rmtree, p)
-                                else:
-                                    await run_in_thread(os.remove, p)
+                                await _remove_path(p)
                             path_results[p] = True
                         except Exception:
                             _task_logger.warning(
@@ -1399,10 +1404,7 @@ class App(ABC):
         for base_path in dir_paths:
             try:
                 if os.path.exists(base_path):
-                    if os.path.isdir(base_path):
-                        await run_in_thread(shutil.rmtree, base_path)
-                    else:
-                        await run_in_thread(os.remove, base_path)
+                    await _remove_path(base_path)
                 path_results[base_path] = True
             except Exception:
                 _task_logger.warning(

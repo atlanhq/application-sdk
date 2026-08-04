@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 from dataclasses import dataclass
 from typing import Any
 from unittest import mock
@@ -16,6 +17,7 @@ from application_sdk.app.task import get_task_metadata
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.cleanup import CleanupInput, CleanupOutput
 from application_sdk.contracts.types import FileReference
+from application_sdk.execution import heartbeat
 
 
 @dataclass
@@ -179,53 +181,62 @@ class TestCleanupFiles:
         assert metadata.timeout_seconds == 300
 
     @pytest.mark.asyncio
-    async def test_file_removal_offloaded_to_thread(self, tmp_path: Any) -> None:
-        # Regression guard for HB-12: os.remove() must not run inline on the
-        # event loop (that starves the auto-heartbeat for the call's duration).
-        f = tmp_path / "output.parquet"
-        f.write_text("data")
-        ref = FileReference(local_path=str(f), storage_path="artifacts/x")
+    @pytest.mark.parametrize("section", ["tracked_ref", "extra_paths"])
+    @pytest.mark.parametrize("kind", ["file", "dir"])
+    async def test_removal_runs_off_the_event_loop(
+        self, tmp_path: Any, section: str, kind: str
+    ) -> None:
+        # Regression guard for HB-12: every removal cleanup_files performs must
+        # run off the event loop, or it starves the auto-heartbeat for the
+        # call's duration. Parametrised over both sections (tracked
+        # FileReference paths / extra_paths) and both branches (file / dir) so
+        # all four call sites are covered — re-inlining any one of them fails.
+        #
+        # This drives the real run_in_thread (real executor, real worker
+        # thread) and records where the fs call actually ran, so the assertion
+        # tracks the property the fix is about rather than merely which
+        # callable was handed to the wrapper.
+        if kind == "dir":
+            target = tmp_path / "workflow-artifacts"
+            target.mkdir()
+            (target / "some-file.txt").write_text("data")
+            expected_func: Any = shutil.rmtree
+        else:
+            target = tmp_path / "output.parquet"
+            target.write_text("data")
+            expected_func = os.remove
+
+        real_run_in_thread = heartbeat.run_in_thread
+        calls: list[tuple[Any, int]] = []
+
+        async def recording_run_in_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+            def wrapped(*a: Any, **kw: Any) -> Any:
+                calls.append((func, threading.get_ident()))
+                return func(*a, **kw)
+
+            return await real_run_in_thread(wrapped, *args, **kwargs)
+
+        tracked_refs = None
+        extra_paths = ["nonexistent-dir"]
+        if section == "tracked_ref":
+            tracked_refs = {
+                FileReference(local_path=str(target), storage_path="artifacts/x")
+            }
+        else:
+            extra_paths = [str(target)]
 
         app = _CleanupApp()
         with mock.patch(
             "application_sdk.app.base.TaskStateAccessor.get",
-            return_value={ref},
+            return_value=tracked_refs,
         ):
-            with mock.patch(
-                "application_sdk.execution.heartbeat.run_in_thread",
-                new_callable=mock.AsyncMock,
-                side_effect=lambda func, *a, **kw: func(*a, **kw),
-            ) as mock_run_in_thread:
-                result = await app.cleanup_files(
-                    CleanupInput(extra_paths=["nonexistent-dir"])
-                )
+            with mock.patch.object(heartbeat, "run_in_thread", recording_run_in_thread):
+                result = await app.cleanup_files(CleanupInput(extra_paths=extra_paths))
 
-        assert not f.exists()
-        assert result.path_results[str(f)] is True
-        offloaded_funcs = [call.args[0] for call in mock_run_in_thread.call_args_list]
-        assert os.remove in offloaded_funcs
-
-    @pytest.mark.asyncio
-    async def test_directory_removal_offloaded_to_thread(self, tmp_path: Any) -> None:
-        # Same regression guard as above, for the shutil.rmtree() directory branch.
-        test_dir = tmp_path / "workflow-artifacts"
-        test_dir.mkdir()
-        (test_dir / "some-file.txt").write_text("data")
-
-        app = _CleanupApp()
-        with mock.patch(
-            "application_sdk.app.base.TaskStateAccessor.get", return_value=None
-        ):
-            with mock.patch(
-                "application_sdk.execution.heartbeat.run_in_thread",
-                new_callable=mock.AsyncMock,
-                side_effect=lambda func, *a, **kw: func(*a, **kw),
-            ) as mock_run_in_thread:
-                result = await app.cleanup_files(
-                    CleanupInput(extra_paths=[str(test_dir)])
-                )
-
-        assert not test_dir.exists()
-        assert result.path_results[str(test_dir)] is True
-        offloaded_funcs = [call.args[0] for call in mock_run_in_thread.call_args_list]
-        assert shutil.rmtree in offloaded_funcs
+        assert not target.exists()
+        assert result.path_results[str(target)] is True
+        # Exactly one offload, using the branch-appropriate callable …
+        assert [func for func, _ in calls] == [expected_func]
+        # … and it did not execute on the event loop's thread.
+        loop_thread = threading.get_ident()
+        assert all(ident != loop_thread for _, ident in calls)
