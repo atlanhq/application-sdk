@@ -96,20 +96,25 @@ _LITERAL_KEYS: frozenset[str] = frozenset(
 
 #: Bounded fan-out for the single-key probe sweep.
 #:
-#: Probes are independent point lookups, so they run concurrently — N
-#: overlapping retry ladders cost about one ladder instead of N, which makes
-#: credential-resolution wall-clock independent of how many literal-valued
-#: fields a payload happens to carry.
+#: Probes are independent point lookups, so they run concurrently: instead of
+#: paying one retry ladder per literal-valued field, overlapping probes pay
+#: ``ceil(candidates / this)`` ladders. A probe holds its slot for the whole
+#: ladder — most of which is backoff sleep — so this value is what decides how
+#: many ladders deep the sweep can get, not just how many sockets are open.
+#: Set above the field count of realistic agent payloads (observed 3–4
+#: probed fields, see BLDX-1594) so the common case is a single wave.
 #:
-#: Bounded rather than unbounded for three reasons: a cloud vault throttles a
-#: wide burst, and Dapr reports a throttled secrets GET as a plain
-#: 500/``ERR_SECRET_GET`` — indistinguishable from "key absent" — so a throttle
-#: storm degrades into *silently* unresolved credentials; and in parallel every
-#: probe starts before any has armed
+#: Bounded rather than unbounded because a pathological payload (``extra.*`` is
+#: unbounded — ``AgentCredentialSpec`` is ``extra="allow"``) would otherwise
+#: burst one request per field at once: a cloud vault throttles that, and Dapr
+#: reports a throttled secrets GET as a plain 500/``ERR_SECRET_GET`` —
+#: indistinguishable from "key absent" — so a throttle storm degrades into
+#: *silently* unresolved credentials. It also caps concurrent cold-start
+#: waiters: in parallel every probe starts before any has armed
 #: :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start`'s
 #: per-component gate, so a genuinely cold sidecar would otherwise see one
-#: concurrent cold-start waiter per candidate instead of one overall.
-_MAX_CONCURRENT_SINGLE_KEY_PROBES = 4
+#: waiter per candidate instead of a bounded few.
+_MAX_CONCURRENT_SINGLE_KEY_PROBES = 8
 
 #: :func:`_probe_one` outcomes. ``ABSENT`` means the store answered "no such
 #: key" (the expected result for a literal-valued field); ``STORE_ERROR`` means
@@ -269,9 +274,14 @@ async def _fetch_per_key_bundle(
     returns 500 for "no such key" and the transport retries it blind), so
     serial probing made resolution cost *ladder × number of literal-valued
     fields* — which exhausted the fixed ``prime_sql_auth`` activity budget
-    before the source was ever contacted. Overlapping them makes the cost
-    ~one ladder regardless of field count. Order is irrelevant: each probe
-    is an independent point lookup and results are merged by ref-key.
+    before the source was ever contacted.
+
+    Overlapping them makes the cost ``ceil(candidates / cap)`` ladders — one
+    ladder for any payload within the cap, which covers realistic agent
+    specs. Note it is *not* unconditionally one ladder: a probe holds its
+    slot for its whole ladder, so a payload with more candidates than the cap
+    still runs in successive waves. Order is irrelevant: each probe is an
+    independent point lookup and results are merged by ref-key.
 
     A transient cold-start outage on a probe is retried via
     :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start`

@@ -1482,33 +1482,49 @@ class TestSingleKeyProbeConcurrency:
             "regression this test exists to catch"
         )
 
-    async def test_concurrency_is_bounded(self) -> None:
-        """Fan-out is capped so a wide payload can't burst a cloud vault into
-        throttling (which Dapr reports indistinguishably from 'key absent')."""
+    async def test_concurrency_saturates_but_never_exceeds_the_cap(self) -> None:
+        """Fan-out is capped so a pathological payload can't burst a cloud
+        vault into throttling (which Dapr reports indistinguishably from 'key
+        absent'), but it must actually *reach* the cap.
+
+        Saturating exactly is what makes the cost ``ceil(candidates / cap)``
+        ladders: a probe holds its slot for its whole ladder, so a payload
+        larger than the cap runs in successive waves. Under-saturating would
+        silently add waves.
+        """
         import asyncio
 
-        from application_sdk.credentials.agent import _MAX_CONCURRENT_SINGLE_KEY_PROBES
+        from application_sdk.credentials.agent import (
+            _MAX_CONCURRENT_SINGLE_KEY_PROBES as CAP,
+        )
 
-        state = {"in_flight": 0, "max_in_flight": 0}
+        state = {"in_flight": 0, "peak": 0, "total": 0}
+        wave_full = asyncio.Event()
 
         class CountingStore:
             async def get_optional(self, name: str) -> str | None:
                 state["in_flight"] += 1
-                state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
-                await asyncio.sleep(0)
+                state["total"] += 1
+                state["peak"] = max(state["peak"], state["in_flight"])
+                # Hold every probe until the cap is reached, so the peak
+                # reflects the real limit rather than scheduling luck.
+                if state["in_flight"] >= CAP:
+                    wave_full.set()
+                await wave_full.wait()
                 state["in_flight"] -= 1
                 return None
 
-        # Twice the cap, so exceeding it would be observable.
-        fields = {
-            f"extra.f{i}": f"lit-{i}"
-            for i in range(_MAX_CONCURRENT_SINGLE_KEY_PROBES * 2)
-        }
+        # Twice the cap, so both under- and over-saturation are observable.
+        fields = {f"extra.f{i}": f"lit-{i}" for i in range(CAP * 2)}
         raw = self._spec(**fields).to_raw_dict()
 
-        await _fetch_per_key_bundle(CountingStore(), raw)
+        await asyncio.wait_for(_fetch_per_key_bundle(CountingStore(), raw), timeout=5)
 
-        assert state["max_in_flight"] <= _MAX_CONCURRENT_SINGLE_KEY_PROBES
+        assert state["peak"] == CAP, (
+            f"expected the sweep to saturate the cap exactly, saw "
+            f"{state['peak']} concurrent probes against a cap of {CAP}"
+        )
+        assert state["total"] == CAP * 2, "every candidate must still be probed"
 
     async def test_each_unique_ref_key_probed_exactly_once(self) -> None:
         """De-duplication must survive the concurrent rewrite — the ``seen``
