@@ -32,10 +32,10 @@ azure-core==1.41.0
     # via azure-identity
 azure-identity==1.25.3
     # via atlan-application-sdk
-boto3==1.43.62
+boto3==1.43.63
     # via atlan-application-sdk
-boto3-stubs==1.43.62
-botocore==1.43.62
+boto3-stubs==1.43.63
+botocore==1.43.63
     # via
     #   boto3
     #   s3transfer
@@ -47,7 +47,7 @@ certifi==2026.7.22
     #   httpx
     #   requests
     #   sentry-sdk
-cffi==2.1.0 ; platform_python_implementation != 'PyPy'
+cffi==2.1.1 ; platform_python_implementation != 'PyPy'
     # via cryptography
 cfgv==3.5.0
     # via pre-commit

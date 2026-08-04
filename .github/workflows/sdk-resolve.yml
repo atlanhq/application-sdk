@@ -20,6 +20,11 @@
 #   secrets.GLOBALPROTECT_PASSWORD  VPN auth.
 #   vars.GLOBALPROTECT_PORTAL_URL   VPN portal URL.
 #   vars.MOTHERSHIP_URL             e.g. https://mothership.atlan.dev
+#
+# Optional configuration:
+#   vars.SDK_RESOLVE_REVIEWERS      Comma-separated GitHub handles to request as
+#                                   reviewers at merge-ready. Unset → nobody is
+#                                   requested and the run logs a warning.
 
 name: SDK Resolve (mothership)
 
@@ -213,9 +218,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
           MAX_ROUNDS: ${{ inputs.max_rounds || '8' }}
-          # Human reviewers to request + tag when the PR reaches merge-ready
-          # (Chris = cmgrote, Vaibhav = vaibhavatlan); the requester is added too.
-          REVIEWERS: cmgrote,vaibhavatlan
+          # Human reviewers to request + tag when the PR reaches merge-ready;
+          # the requester is tagged too. Comma-separated GitHub handles, held in
+          # a repo variable rather than named here so the list can change without
+          # a code change. Unset is tolerated but not silent: no reviewer is
+          # requested, the step logs a ::warning::, and the resolver's report
+          # says the list is missing.
+          REVIEWERS: ${{ vars.SDK_RESOLVE_REVIEWERS }}
           REQUESTER: ${{ steps.parse.outputs.requester }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 .github/scripts/sdk_resolve_dispatch.py

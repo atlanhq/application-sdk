@@ -19,6 +19,7 @@ from application_sdk.common.incremental.helpers import (
     get_persistent_artifacts_path,
     get_persistent_s3_prefix,
 )
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix
 from application_sdk.storage.errors import StorageError
@@ -65,9 +66,11 @@ async def download_current_state(
         connection_qualified_name, "current-state", application_name
     )
 
-    # Clear and recreate local directory to prevent stale data from prior runs
+    # Clear and recreate local directory to prevent stale data from prior runs.
+    # Offloaded: a prior run's current-state is one JSON file per asset, so this
+    # tree scales with the connection and would stall the loop inline.
     if current_state_dir.exists():
-        shutil.rmtree(current_state_dir)
+        await run_in_thread(shutil.rmtree, current_state_dir)
     current_state_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Downloading current-state folder from S3: %s", current_state_s3_prefix)

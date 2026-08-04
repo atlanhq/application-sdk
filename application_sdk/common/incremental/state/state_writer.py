@@ -53,6 +53,7 @@ from application_sdk.common.incremental.storage.duckdb_utils import (
 )
 from application_sdk.constants import INCREMENTAL_DIFF_SUBPATH_TEMPLATE
 from application_sdk.execution import get_object_store_prefix
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix, upload_prefix
 
@@ -160,9 +161,11 @@ async def prepare_previous_state(
         f"{current_state_dir.name}.previous"
     )
 
-    # Clean up any existing temp directory from previous failed runs
+    # Clean up any existing temp directory from previous failed runs.
+    # Offloaded: this tree scales with the connection's asset count, so rmtree
+    # inline would stall the loop (and the auto-heartbeat) for its duration.
     if previous_state_temp_dir.exists():
-        shutil.rmtree(previous_state_temp_dir)
+        await run_in_thread(shutil.rmtree, previous_state_temp_dir)
     previous_state_temp_dir.mkdir(parents=True, exist_ok=True)
 
     # Download previous state from S3 to temporary location
@@ -180,7 +183,7 @@ async def prepare_previous_state(
     # conformance: ignore[E004] re-raises as typed StateDownloadError; exception propagates to caller
     except Exception as e:
         if previous_state_temp_dir.exists():
-            shutil.rmtree(previous_state_temp_dir)
+            await run_in_thread(shutil.rmtree, previous_state_temp_dir)
         from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
             StateDownloadError,
         )
@@ -412,8 +415,10 @@ async def create_current_state_snapshot(
                 get_scope_length(table_scope),
             )
 
-            # Step 2: Clear and prepare current-state directory
-            prepare_current_state_directory(current_state_dir)
+            # Step 2: Clear and prepare current-state directory.
+            # Offloaded at the call site (the helper stays sync for its sync
+            # callers): its rmtree spans the previous snapshot's whole tree.
+            await run_in_thread(prepare_current_state_directory, current_state_dir)
 
             # Step 3: Copy non-column entities (tables, schemas, databases)
             copy_non_column_entities(
@@ -463,7 +468,7 @@ async def create_current_state_snapshot(
 
                 # Clear and recreate incremental-diff directory
                 if incremental_diff_dir.exists():
-                    shutil.rmtree(incremental_diff_dir)
+                    await run_in_thread(shutil.rmtree, incremental_diff_dir)
 
                 diff_result = create_incremental_diff(
                     transformed_dir=transformed_dir,
