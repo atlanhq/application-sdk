@@ -62,6 +62,12 @@ _DEFAULT_TIMEOUT = 30.0
 # layer that can read Dapr's errorCode, the connection race is closed by
 # wait_for_dapr_sidecar at startup, and every activity sits under Temporal's
 # own retry. A wider ladder here only delays those.
+#
+# This constant is global to the shared AsyncDaprClient transport (state,
+# bindings, pub/sub, metadata, secrets), so the 5→3 correction is wider than
+# the credential fix it shipped with; confirming no non-secret caller relied
+# on the old ~62s budget is tracked in
+# https://github.com/atlanhq/application-sdk/issues/2995.
 _DEFAULT_RETRY_TOTAL = 3
 
 # ---------------------------------------------------------------------------

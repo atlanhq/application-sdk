@@ -280,7 +280,10 @@ async def _fetch_per_key_bundle(
     ladder for any payload within the cap, which covers realistic agent
     specs. Note it is *not* unconditionally one ladder: a probe holds its
     slot for its whole ladder, so a payload with more candidates than the cap
-    still runs in successive waves. Order is irrelevant: each probe is an
+    still runs in successive waves. Concurrency bounds the symptom, not the
+    root cause (a missing key still pays a full ladder); the durable fix is
+    tracked in https://github.com/atlanhq/application-sdk/issues/2995.
+    Order is irrelevant: each probe is an
     independent point lookup and results are merged by ref-key.
 
     A transient cold-start outage on a probe is retried via
@@ -357,6 +360,11 @@ async def _fetch_per_key_bundle(
         # documented swallow-and-fall-through case. The signal here is
         # aggregate — a store fault (denied credentials, throttling, wrong
         # component) hits every probe, whereas a non-secret field hits none.
+        #
+        # This fail-loud path is intentionally asymmetric with the vault
+        # sibling (credential_vault.py), which preserves its legacy
+        # fall-through with only an error log; converging the two is tracked
+        # in https://github.com/atlanhq/application-sdk/issues/2995.
         raise SecretStoreError(
             f"Single-key credential resolution failed: all {len(candidates)} "
             "secret-store probes returned a store error and no secret "

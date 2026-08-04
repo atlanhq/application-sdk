@@ -47,6 +47,10 @@ _SAFE_GUID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 #: transport retries blind, so probing serially cost one ladder per field.
 #: Bounded because a wide burst invites vault throttling, which Dapr reports as
 #: that same ambiguous 500.
+#:
+#: The two copies (and their semaphore / gather / cold-start aggregation
+#: orchestration) have no shared policy contract, so they can drift; centralizing
+#: them is tracked in https://github.com/atlanhq/application-sdk/issues/2995.
 _MAX_CONCURRENT_SINGLE_KEY_PROBES = 8
 
 
