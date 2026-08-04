@@ -218,7 +218,7 @@ async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str
         # "HTTPStatusError: 500 ... http://localhost:3500/v1.0/secrets/..." string
         # (exactly the unfriendly message seen in preflight). ``from None`` keeps
         # the customer-facing message clean while the log preserves the detail.
-        logger.warning(
+        logger.warning(  # conformance: ignore[L009,L004] the raise below drops the raw exception (`from None`), so this scrubbed redact_secrets() dump is the only record of the underlying cause — context the caller does not have; exc_info=True would re-log the unscrubbed traceback
             "Agent secret-bundle fetch failed — secret store unreachable:\n%s",
             redact_secrets("".join(traceback.format_exception(exc))),
         )
