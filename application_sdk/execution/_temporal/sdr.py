@@ -232,6 +232,7 @@ class SdrTestAuthWorkflow:
         output = await workflow.execute_activity(
             SDR_TEST_AUTH_ACTIVITY,
             input,
+            result_type=AuthOutput,
             retry_policy=_AUTH_RETRY,
             schedule_to_close_timeout=_AUTH_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_AUTH_START_TO_CLOSE,
@@ -250,6 +251,7 @@ class SdrPreflightCheckWorkflow:
         output = await workflow.execute_activity(
             SDR_PREFLIGHT_ACTIVITY,
             input,
+            result_type=PreflightOutput,
             retry_policy=_DEFAULT_RETRY,
             schedule_to_close_timeout=_PREFLIGHT_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_PREFLIGHT_START_TO_CLOSE,
@@ -266,6 +268,7 @@ class SdrFetchMetadataWorkflow:
         output = await workflow.execute_activity(
             SDR_FETCH_METADATA_ACTIVITY,
             input,
+            result_type=MetadataOutput,
             retry_policy=_DEFAULT_RETRY,
             schedule_to_close_timeout=_METADATA_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_METADATA_START_TO_CLOSE,
