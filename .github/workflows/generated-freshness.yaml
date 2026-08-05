@@ -50,15 +50,6 @@ on:
         required: false
         default: true
         type: boolean
-      post-generate:
-        description: >
-          Shell command run from the repo root after regeneration, before the
-          diff. Must be the SAME value the app passes to renovate-pkl-sync's
-          post-generate — otherwise this gate reports drift on an artifact the
-          sync post-processes, which the sync would never produce.
-        required: false
-        default: ""
-        type: string
 
 permissions:
   contents: read
@@ -125,12 +116,10 @@ jobs:
         id: freshness
         env:
           CHECK_FRESHNESS: ${{ inputs.check-freshness }}
-          POST_GENERATE: ${{ inputs.post-generate }}
         run: |
           python3 .sdk-scripts/.github/scripts/check_generated_freshness.py \
             --contract-dir contract \
-            --check-freshness "$CHECK_FRESHNESS" \
-            --post-generate "$POST_GENERATE"
+            --check-freshness "$CHECK_FRESHNESS"
 
       - name: Post sticky comment on failure
         if: failure() && github.event.pull_request.head.repo.fork == false

@@ -94,9 +94,7 @@ def _changed_output_paths() -> list[str] | None:
     return sorted(changed)
 
 
-def check_freshness(
-    contract_dir: str = "contract", post_generate: str = ""
-) -> tuple[str, list[str]]:
+def check_freshness(contract_dir: str = "contract") -> tuple[str, list[str]]:
     """Return ``(status, changed_paths)``.
 
     ``status`` is one of:
@@ -113,10 +111,11 @@ def check_freshness(
         return ("na", [])
 
     try:
-        # Same post-generate hook the renovate sync runs: without it, an app that
-        # installs a hand-maintained artifact over the toolkit output would be
-        # reported as permanently drifted against raw `pkl eval`.
-        regenerated = regenerate(contract_dir, post_generate)
+        # `regenerate` also runs the app's contract/post-generate.sh if present,
+        # so this gate and the renovate sync agree on what "freshly generated"
+        # means; without it an app that installs a hand-maintained artifact over
+        # the toolkit output would read as permanently drifted.
+        regenerated = regenerate(contract_dir)
     except OSError as exc:
         # pkl / uvx not installed or not runnable — an infra gap, not a broken
         # contract. Inconclusive, never block.
@@ -155,13 +154,6 @@ def main(argv: list[str] | None = None) -> int:
         "with hand-maintained generated config). Mirrors renovate-pkl-sync's "
         "regenerate-contract opt-out.",
     )
-    parser.add_argument(
-        "--post-generate",
-        default="",
-        help="Optional shell command run after regeneration, before the diff — "
-        "must be the same value the app passes to renovate-pkl-sync, or this "
-        "gate reports drift the sync would never produce.",
-    )
     args = parser.parse_args(argv)
 
     if args.check_freshness != "true":
@@ -170,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    status, changed = check_freshness(args.contract_dir, args.post_generate)
+    status, changed = check_freshness(args.contract_dir)
 
     if status == "eval_failed":
         print(

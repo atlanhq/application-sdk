@@ -195,3 +195,34 @@ def test_empty_output_returns_false(tree, capsys):
 
     assert (tree / "app" / "generated" / "manifest.json").read_text() == "stale\n"
     assert "(empty)" in capsys.readouterr().out
+
+
+# ── run_post_generate ────────────────────────────────────────────────────────
+
+
+def test_post_generate_absent_is_silent_noop(tree, capsys):
+    (tree / "contract").mkdir()
+
+    mod.run_post_generate("contract")
+
+    assert capsys.readouterr().out == ""
+
+
+def test_post_generate_runs_from_repo_root_without_exec_bit(tree):
+    """Run via `sh`, so an app does not have to remember chmod +x — and with cwd
+    at the repo root, so the script's paths match what it would use locally."""
+    _write(tree / "contract" / mod.POST_GENERATE_SCRIPT, "echo patched > marker.txt\n")
+
+    mod.run_post_generate("contract")
+
+    assert (tree / "marker.txt").read_text().strip() == "patched"
+
+
+def test_post_generate_failure_warns_and_returns(tree, capsys):
+    """Best-effort: a failing step must not raise — it runs after the swap, so
+    the caller's fresh output stands and the diff is left for a human."""
+    _write(tree / "contract" / mod.POST_GENERATE_SCRIPT, "exit 7\n")
+
+    mod.run_post_generate("contract")
+
+    assert "post-generate.sh failed" in capsys.readouterr().out

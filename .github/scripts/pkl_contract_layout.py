@@ -76,6 +76,15 @@ ROOT_FILES = ("atlan.yaml", "app.yaml")
 # the fleet; apps that differ are refused rather than mis-written.
 GENERATED_DIR = "app/generated"
 
+# Optional app-owned script run after a successful swap, relative to the contract
+# dir. A convention rather than a per-workflow input on purpose: every
+# regeneration entry point picks it up automatically, so they cannot disagree
+# about what "freshly generated" means — an input would have to be threaded
+# through (and kept in sync across) the renovate sync, the freshness gate and the
+# pre-test regeneration, and any mismatch shows up as a gate reporting drift the
+# sync would never produce.
+POST_GENERATE_SCRIPT = "post-generate.sh"
+
 
 def detect_layout(out_dir: Path) -> str:
     """Classify what ``pkl eval -m <out_dir>`` produced.
@@ -193,25 +202,35 @@ def swap_outputs(out_dir: Path, generated_dir: str = GENERATED_DIR) -> bool:
     return False
 
 
-def run_post_generate(command: str) -> None:
-    """Run an app's declared post-generate step, after ``swap_outputs``.
+def run_post_generate(contract_dir: str = "contract") -> None:
+    """Run ``<contract_dir>/post-generate.sh`` if the app ships one, after
+    ``swap_outputs``. No-op otherwise, which is almost every app.
 
     Placement is layout-aware but content is not app-aware: some apps install a
     hand-maintained artifact over the toolkit's output for a construct the
     toolkit cannot yet express (a semicolon-delimited JDBC URL group, conditional
-    file-upload widgets). Without this hook the swap reverts that override and
-    ships the unusable version — so the app declares the step and every
-    regeneration entry point runs it, or they disagree about what "fresh" means.
+    file-upload widgets keyed on an auth mode). Without this step a working swap
+    reverts that override and ships the unusable version — so the app owns the
+    step, and every regeneration entry point runs it from the same conventional
+    path. See ``POST_GENERATE_SCRIPT`` for why this is a convention and not an
+    input.
+
+    The script runs from the repo root (cwd) with ``sh``, so it needs no
+    executable bit — one less thing for an app to get wrong. It is app-repo
+    content executed in the app's own CI, the same trust level as the
+    ``contract/app.pkl`` this module just evaluated and the app's own test suite.
 
     Best-effort by design: this runs after the swap, so a failure leaves fresh
     toolkit output in the tree rather than blocking the caller. The resulting
     diff is visible for a human to judge, which beats failing a dependency bump
     over an app-side script."""
-    if not command:
+    script = Path(contract_dir) / POST_GENERATE_SCRIPT
+    if not script.is_file():
         return
-    print(f"Running post-generate hook: {command}")
-    if subprocess.run(command, shell=True, text=True).returncode != 0:
+    print(f"Running post-generate step: {script}")
+    if subprocess.run(["sh", str(script)], text=True).returncode != 0:
         print(
-            "::warning::post-generate hook failed — generated artifacts are raw "
-            "`pkl eval` output. Review the diff before merging."
+            f"::warning::{script} failed — generated artifacts are raw `pkl eval` "
+            "output, so anything this step installs over them is missing. Review "
+            "the diff before merging."
         )

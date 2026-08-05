@@ -225,13 +225,6 @@ def main(argv: list[str] | None = None) -> int:
         help="'true' (default) to warn (never fail) when committed app/generated "
         "drifts from freshly-generated output. Ignored in SDK-level mode.",
     )
-    parser.add_argument(
-        "--post-generate",
-        default="",
-        help="Optional shell command run after the swap — must be the same value "
-        "the app passes to renovate-pkl-sync, or the drift warning fires on a "
-        "difference the sync would never produce. Best-effort: a failure warns.",
-    )
     args = parser.parse_args(argv)
 
     contract_dir = args.contract_dir
@@ -300,7 +293,7 @@ def main(argv: list[str] | None = None) -> int:
                 "not emit them)."
             )
 
-        run_post_generate(args.post_generate)
+        run_post_generate(contract_dir)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

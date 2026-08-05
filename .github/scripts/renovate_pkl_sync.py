@@ -113,7 +113,7 @@ def resolve(contract_dir: str) -> None:
     run(["pkl", "project", "resolve", f"{contract_dir}/"], check=True)
 
 
-def regenerate(contract_dir: str, post_generate: str = "") -> bool:
+def regenerate(contract_dir: str) -> bool:
     """Regenerate contract artifacts; swap gated on eval+format success.
 
     Eval runs into a temp dir; the working tree is only touched once eval (and
@@ -121,14 +121,8 @@ def regenerate(contract_dir: str, post_generate: str = "") -> bool:
     crash-safe — but the caller commits only after this returns, so a failed or
     killed run commits nothing and never publishes a half-regenerated tree.
 
-    ``post_generate`` is an optional shell command run after the swap, before
-    formatting — the hook for an app whose generate task does something ``pkl
-    eval`` alone does not. Some apps install a hand-maintained artifact over the
-    toolkit's output for a construct the toolkit cannot yet express (a
-    semicolon-delimited JDBC URL group, conditional file-upload widgets); the
-    swap would otherwise revert that override and ship a broken credential UI.
-    Placement is layout-aware but content is not app-aware, so the app declares
-    this step. Best-effort: a failing hook warns and never gates the swap.
+    An app shipping ``contract/post-generate.sh`` gets it run after the swap and
+    before formatting — see ``pkl_contract_layout.run_post_generate``.
 
     Returns True only when the working tree was actually updated with fresh
     artifacts. Returns False when there is no contract to generate from, when
@@ -181,7 +175,7 @@ def regenerate(contract_dir: str, post_generate: str = "") -> bool:
         if not swap_outputs(tmp):
             # swap_outputs already warned with the specific reason.
             return False
-        run_post_generate(post_generate)
+        run_post_generate(contract_dir)
         _format_generated()
         print("Regenerated contract artifacts.")
         return True
@@ -272,14 +266,6 @@ def main(argv: list[str] | None = None) -> int:
         "upgrade branch. Without this flag the driver stages and commits (the "
         "GitHub Actions glue-workflow behaviour).",
     )
-    parser.add_argument(
-        "--post-generate",
-        default="",
-        help="Optional shell command run after the swap, before formatting — "
-        "for an app whose generate task does more than `pkl eval` (e.g. "
-        "installing a hand-maintained connector config the toolkit cannot yet "
-        "express). Best-effort: a failure warns, never fails the sync.",
-    )
     args = parser.parse_args(argv)
     regenerate_enabled = args.regenerate == "true"
 
@@ -295,11 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     resolve(args.contract_dir)
-    regenerated = (
-        regenerate(args.contract_dir, args.post_generate)
-        if regenerate_enabled
-        else False
-    )
+    regenerated = regenerate(args.contract_dir) if regenerate_enabled else False
     if args.no_commit:
         # Renovate commits the fileFilters matches itself; the driver only
         # generates. Leaving git untouched here also keeps the git identity /

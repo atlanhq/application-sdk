@@ -59,18 +59,6 @@ on:
         required: false
         default: true
         type: boolean
-      post-generate:
-        description: >
-          Shell command run from the repo root after regeneration, for an app
-          whose generate task does more than `pkl eval` — e.g. installing a
-          hand-maintained connector config over the toolkit's output for a
-          construct the toolkit cannot yet express. Without it the swap reverts
-          that override. Pass the SAME value to generated-freshness.yaml, or
-          that gate reports drift this sync would never produce. Best-effort: a
-          failing hook warns and never fails the sync.
-        required: false
-        default: ""
-        type: string
     secrets:
       push_token:
         description: >
@@ -139,13 +127,10 @@ jobs:
           path: .sdk-scripts
 
       - name: Re-resolve and (optionally) regenerate
-        env:
-          POST_GENERATE: ${{ inputs.post-generate }}
         run: |
           python3 .sdk-scripts/.github/scripts/renovate_pkl_sync.py \
             --contract-dir contract \
-            --regenerate "${{ inputs.regenerate-contract }}" \
-            --post-generate "${POST_GENERATE}"
+            --regenerate "${{ inputs.regenerate-contract }}"
 
       - name: Push
         run: git push
