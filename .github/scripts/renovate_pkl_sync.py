@@ -193,7 +193,7 @@ def _format_generated() -> None:
     Best-effort: a ruff hiccup must not fail the sync (many apps exclude
     app/generated from lint entirely).
 
-    Runs after `_swap_outputs`, on the real `app/generated/**` path relative
+    Runs after `swap_outputs`, on the real `app/generated/**` path relative
     to cwd (the consumer repo root) — not the temp eval output dir. `ruff
     check --fix` also runs with no --select, so it applies whatever the
     consumer's own pyproject.toml configures (fleet configs aren't uniform:
