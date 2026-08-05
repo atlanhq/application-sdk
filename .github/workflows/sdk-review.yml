@@ -177,6 +177,40 @@ jobs:
               ].join('\n'),
             });
 
+  # When the gate skips a bot-trigger, react to the original comment so the
+  # PR shows the trigger was seen and consciously declined. Without this, a
+  # skipped trigger is invisible: the `@sdk-review` comment gets no reaction
+  # and no starting comment — indistinguishable to the resolver from the
+  # reviewer being dead.
+  #
+  # `::notice::` is already emitted by the gate script for all decisions
+  # (including skip), so the run log has a record. This reaction surfaces it
+  # on the PR timeline without adding a new comment that the resolver may
+  # re-read as pending work.
+  react-on-skip:
+    needs: gate
+    # Only on issue_comment triggers — workflow_dispatch has no comment to react to.
+    # Humans are never skipped (the gate always proceeds on human triggers).
+    if: >-
+      needs.gate.outputs.decision == 'skip'
+      && github.event_name == 'issue_comment'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: React to skipped trigger
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            // React with 'eyes' so the PR shows the trigger was acknowledged.
+            // No new PR comment — that would be noise the resolver may re-read
+            // as a new review request.
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
+
   sdk-review-dispatch:
     needs: gate
     if: needs.gate.outputs.decision == 'proceed'
