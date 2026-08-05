@@ -94,8 +94,29 @@ jobs:
           fi
           echo "Detected verdict: '${VERDICT}'"
 
+          # Extract the sha that was actually reviewed from the structured
+          # marker `<!-- REVIEWED_HEAD: sha -->`. Uses the same idiom as
+          # VERDICT extraction above (`grep -oP '<!--\s*KEY:\s*\K...'`).
+          # A missing or empty marker means this is a legacy comment whose
+          # reviewed sha cannot be established; treat it as unverifiable
+          # rather than approving blind.
+          REVIEWED_HEAD=$(printf '%s' "$COMMENT_BODY" | grep -oP '<!--\s*REVIEWED_HEAD:\s*\K[0-9a-f]+' | head -1 || true)
+          if [ -z "$REVIEWED_HEAD" ]; then
+            echo "::warning::PR #${PR_NUMBER}: verdict comment has no REVIEWED_HEAD marker — cannot confirm which sha was reviewed; skipping all stamps."
+            exit 0
+          fi
+
           # Resolve the PR HEAD so we can apply the commit status.
           HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha')
+
+          # Guard: the verdict was computed for REVIEWED_HEAD. If the PR
+          # received a new push after the verdict comment was posted,
+          # REVIEWED_HEAD != HEAD_SHA. Do not stamp labels, commit status,
+          # or approval — that would bless unreviewed code.
+          if [ "$REVIEWED_HEAD" != "$HEAD_SHA" ]; then
+            echo "::warning::PR #${PR_NUMBER}: verdict was computed for ${REVIEWED_HEAD} but current head is ${HEAD_SHA} — skipping all stamps."
+            exit 0
+          fi
 
           # Strip the legacy `test-sdk-review-*` labels so PRs that
           # pre-date the promotion don't end up wearing both prefixes.
