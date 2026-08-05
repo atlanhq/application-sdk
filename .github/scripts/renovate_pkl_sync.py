@@ -43,10 +43,17 @@ re-resolve:
     ruff hiccup leaves valid-but-unformatted generated output rather than
     blocking the commit.
 
-Scope: assumes the standard repo-root layout (``contract/PklProject``,
-``contract/app.pkl``, output at the repo root). Non-standard layouts
-(``app/contract/``, monorepo ``apps/*/contract/``) self-skip regeneration when
-``contract/app.pkl`` is absent.
+Both contract families are supported: ``App.pkl`` (output keys prefixed
+``app/generated/``) and ``NativeApp.pkl`` / ``NativeAppBundle.pkl`` (unprefixed
+keys, relative to the generated dir). Placement for each lives in
+``pkl_contract_layout.py`` — see that module for why they differ and what makes
+a swap refuse. A refusal degrades this sync to lock-only and says so; it is
+never silent, because a silent refusal is exactly how the native family came to
+merge toolkit bumps with stale artifacts and a green check.
+
+Scope: assumes the contract lives in ``contract/`` with ``PklProject`` +
+``app.pkl`` beside each other. Other layouts (``app/contract/``, monorepo
+``apps/*/contract/``) self-skip regeneration when ``contract/app.pkl`` is absent.
 """
 
 from __future__ import annotations
@@ -60,12 +67,22 @@ import tempfile
 import time
 from pathlib import Path
 
+# Placement of eval output is family-dependent and shared with
+# regenerate_contract.py / check_generated_freshness.py — see that module.
+sys.path.insert(0, str(Path(__file__).parent))
+from pkl_contract_layout import (  # noqa: E402
+    GENERATED_DIR,
+    ROOT_FILES,
+    run_post_generate,
+    swap_outputs,
+)
+
 # Lock file produced by `pkl project resolve`.
 LOCK_PATH = "contract/PklProject.deps.json"
 
-# Everything `pkl eval -m .` emits, relative to the repo root. Mirrors the
+# Everything a contract can emit, relative to the repo root. Mirrors the
 # cleanup list in contract-toolkit/scripts/regenerate-all.sh.
-OUTPUT_PATHS = ["app/generated", "atlan.yaml", "app.yaml"]
+OUTPUT_PATHS = [GENERATED_DIR, *ROOT_FILES]
 
 # `pkl eval` can fail transiently on a cold CI runner while fetching the remote
 # @app-contract-toolkit package — a network blip returns a non-zero code (not an
@@ -96,7 +113,7 @@ def resolve(contract_dir: str) -> None:
     run(["pkl", "project", "resolve", f"{contract_dir}/"], check=True)
 
 
-def regenerate(contract_dir: str) -> bool:
+def regenerate(contract_dir: str, post_generate: str = "") -> bool:
     """Regenerate contract artifacts; swap gated on eval+format success.
 
     Eval runs into a temp dir; the working tree is only touched once eval (and
@@ -104,11 +121,21 @@ def regenerate(contract_dir: str) -> bool:
     crash-safe — but the caller commits only after this returns, so a failed or
     killed run commits nothing and never publishes a half-regenerated tree.
 
+    ``post_generate`` is an optional shell command run after the swap, before
+    formatting — the hook for an app whose generate task does something ``pkl
+    eval`` alone does not. Some apps install a hand-maintained artifact over the
+    toolkit's output for a construct the toolkit cannot yet express (a
+    semicolon-delimited JDBC URL group, conditional file-upload widgets); the
+    swap would otherwise revert that override and ship a broken credential UI.
+    Placement is layout-aware but content is not app-aware, so the app declares
+    this step. Best-effort: a failing hook warns and never gates the swap.
+
     Returns True only when the working tree was actually updated with fresh
-    artifacts. Returns False when there is no contract to generate from, or when
-    ``pkl eval`` still fails after ``EVAL_MAX_ATTEMPTS`` attempts — never raises
-    on an eval failure, so a bad regen cannot fail the job. How to degrade
-    (lock-only sync, red gate) is the caller's decision, not this function's.
+    artifacts. Returns False when there is no contract to generate from, when
+    ``pkl eval`` still fails after ``EVAL_MAX_ATTEMPTS`` attempts, or when the
+    swap refused the output layout — never raises on any of those, so a bad
+    regen cannot fail the job. How to degrade (lock-only sync, red gate) is the
+    caller's decision, not this function's.
     """
     app_pkl = Path(contract_dir) / "app.pkl"
     if not app_pkl.exists():
@@ -151,7 +178,10 @@ def regenerate(contract_dir: str) -> bool:
             )
             return False
 
-        _swap_outputs(tmp)
+        if not swap_outputs(tmp):
+            # swap_outputs already warned with the specific reason.
+            return False
+        run_post_generate(post_generate)
         _format_generated()
         print("Regenerated contract artifacts.")
         return True
@@ -193,27 +223,6 @@ def _format_generated() -> None:
     paths = [str(p) for p in inputs]
     run(["uvx", "ruff", "check", "--fix", "--quiet", "--force-exclude", *paths])
     run(["uvx", "ruff", "format", "--force-exclude", *paths])
-
-
-def _swap_outputs(out_dir: Path) -> None:
-    """Replace the working tree's generated artifacts with the freshly
-    generated ones. Replacing app/generated wholesale clears orphans left by a
-    removed/renamed bundle.
-
-    If eval emitted no app/generated at all (a degenerate/partial output a real
-    contract never produces), the existing committed dir is left untouched
-    rather than deleted — we never destroy generated output just because one
-    eval didn't reproduce it. Only the artifacts eval actually emitted are
-    swapped in; stage_and_commit then commits whatever changed."""
-    generated = out_dir / "app" / "generated"
-    if generated.is_dir():
-        shutil.rmtree("app/generated", ignore_errors=True)
-        os.makedirs("app", exist_ok=True)
-        shutil.copytree(generated, "app/generated")
-    for name in ("atlan.yaml", "app.yaml"):
-        src = out_dir / name
-        if src.exists():
-            shutil.copyfile(src, name)
 
 
 def stage_and_commit(message: str) -> bool:
@@ -263,6 +272,14 @@ def main(argv: list[str] | None = None) -> int:
         "upgrade branch. Without this flag the driver stages and commits (the "
         "GitHub Actions glue-workflow behaviour).",
     )
+    parser.add_argument(
+        "--post-generate",
+        default="",
+        help="Optional shell command run after the swap, before formatting — "
+        "for an app whose generate task does more than `pkl eval` (e.g. "
+        "installing a hand-maintained connector config the toolkit cannot yet "
+        "express). Best-effort: a failure warns, never fails the sync.",
+    )
     args = parser.parse_args(argv)
     regenerate_enabled = args.regenerate == "true"
 
@@ -278,7 +295,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     resolve(args.contract_dir)
-    regenerated = regenerate(args.contract_dir) if regenerate_enabled else False
+    regenerated = (
+        regenerate(args.contract_dir, args.post_generate)
+        if regenerate_enabled
+        else False
+    )
     if args.no_commit:
         # Renovate commits the fileFilters matches itself; the driver only
         # generates. Leaving git untouched here also keeps the git identity /

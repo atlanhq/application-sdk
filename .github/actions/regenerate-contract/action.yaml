@@ -42,6 +42,16 @@ inputs:
       drifts from freshly-generated output. Set 'false' on pre-build
       invocations where uv (hence ruff formatting) is not yet available.
       Ignored when application-sdk-ref is set (drift is expected).
+  post-generate:
+    required: false
+    default: ""
+    description: |
+      Shell command run from working-directory after regeneration, for an app
+      whose generate task does more than `pkl eval` (e.g. installing a
+      hand-maintained connector config the toolkit cannot yet express). Must be
+      the SAME value the app passes to renovate-pkl-sync / generated-freshness,
+      or check-drift warns on a difference regeneration never actually produces.
+      Best-effort: a failing hook warns and never fails the job.
   pkl-version:
     required: false
     default: "0.27.2"
@@ -121,9 +131,11 @@ runs:
         CONTRACT_DIR: ${{ inputs.contract-dir }}
         CHECK_DRIFT: ${{ inputs.check-drift }}
         SDK_TOOLKIT_SRC: ${{ steps.sdk.outputs.toolkit-src }}
+        POST_GENERATE: ${{ inputs.post-generate }}
       run: |
         set -euo pipefail
         python3 "${{ github.action_path }}/../../scripts/regenerate_contract.py" \
           --contract-dir "${CONTRACT_DIR}" \
           --check-drift "${CHECK_DRIFT}" \
-          --sdk-toolkit-src "${SDK_TOOLKIT_SRC:-}"
+          --sdk-toolkit-src "${SDK_TOOLKIT_SRC:-}" \
+          --post-generate "${POST_GENERATE:-}"
