@@ -35,19 +35,27 @@ name: tests-reusable
 #                  per-commit PR signal, greens in seconds of test time.
 #   integration  → tests/integration/ via connector-integration-tests (boots
 #                  the app + testcontainers / services-script, exercising the
-#                  real extraction workflow). Skipped on pull_request (the unit
-#                  tier is the PR signal) and when the connector ships no
-#                  integration suite; runs on merge_group / push — the exact
-#                  batched state that will land, the one point a regression
-#                  could actually ship — re-run in place if the base moves under
-#                  the queue. Gated by the `detect-integration` job.
+#                  real extraction workflow). Skipped when the connector ships
+#                  no integration suite. WHERE it runs depends on whether the
+#                  base branch is behind a merge queue (`detect-merge-queue`):
+#                    • queue present → merge_group / push, the exact batched
+#                      state that will land, the one point a regression could
+#                      actually ship — re-run in place if the base moves under
+#                      the queue. (Skipped on pull_request; unit is the PR
+#                      signal.)
+#                    • queue absent  → pull_request, per commit. Without a
+#                      queue there is no batched pre-merge state to test in, so
+#                      gating on the PR is the only way the tier blocks a bad
+#                      merge; `push`-only would just redden main after the fact.
+#                  Gated by the `detect-integration` job either way.
 #   e2e (label/dispatch) → full-DAG against a real tenant (the `e2e` job).
 #   A caller-supplied `test-paths` scopes the INTEGRATION job only; the unit job
 #   always runs tests/unit/.
 #
 # GitHub check name hierarchy (caller → tests-reusable):
 #   Tests / tests / Unit         (every event)
-#   Tests / tests / Integration  (skipped on PRs / no suite; runs in merge queue)
+#   Tests / tests / Integration  (merge queue if the base branch has one, else
+#                                 on the PR; skipped when there is no suite)
 #   Tests / tests / End-to-end   (label / dispatch)
 #   Tests / tests / Tests Gate   (aggregator — the required check)
 #
@@ -354,16 +362,77 @@ jobs:
           # unit tier too (parity with integration); empty = lockfile version.
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
 
+  # ── Detect whether the PR's base branch is behind a merge queue ──────────
+  # Decides WHERE the integration tier gates. The tier must run before a merge
+  # lands, and the queue is the ideal place for it (the exact batched state) —
+  # but only a repo that HAS a queue gets that. On a consumer without one, the
+  # old `!= 'pull_request'` gating left integration running solely on `push`,
+  # i.e. after the merge, where a failure reddens main and blocks nobody. A
+  # fleet sweep found most atlan-*-app consumers in exactly that state.
+  #
+  # So: queue present ⇒ integration runs in the queue (cadence unchanged);
+  # queue absent ⇒ integration runs on the pull_request instead. Either way the
+  # tier gates before code lands.
+  #
+  # Only needed for the pull_request case — on merge_group the queue is
+  # self-evidently enabled, and on push/dispatch integration always runs — so
+  # this job is skipped on every other event and costs nothing there.
+  #
+  # Fails open to "no queue" (⇒ the PR tier runs): see the script's docstring
+  # for why that direction is the safe one.
+  detect-merge-queue:
+    name: Detect merge queue
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      enabled: ${{ steps.detect.outputs.enabled }}
+    steps:
+      # Sparse-checkout of the SDK's scripts only: this reusable is called at
+      # @main by consumers whose own checkout has no such script, so the driver
+      # must come from the workflow's own repo, matching the ref the caller
+      # pinned (`job.workflow_sha`), exactly as the integration job does.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Detect merge queue on base branch
+        id: detect
+        # A PAT reads rulesets reliably; GITHUB_TOKEN is the fallback and the
+        # script fails open if neither has the scope.
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB || github.token }}
+        run: |
+          python3 .github/scripts/detect_merge_queue.py \
+            --repo "${{ github.repository }}" \
+            --base-ref "${{ github.event.pull_request.base.ref }}" \
+            --default-branch "${{ github.event.repository.default_branch }}" \
+            >> "$GITHUB_OUTPUT"
+
   # ── Detect whether an integration suite exists ───────────────────────────
   # The integration job runs tests/integration/ explicitly; a connector may
   # legitimately ship no integration tier (e.g. hello-world), where pytest would
   # otherwise error on a missing path. A checkout + a tested glob (discover-e2e-
   # suites is a generic test_*.py counter, reused here) lets the integration job
   # be a clean skip via a job-level `if` — no inlined conditional shell. Runs on
-  # the same non-PR events the integration job does.
+  # the same events the integration job does, so the two `if`s move together.
   detect-integration:
     name: Detect integration suite
-    if: github.event_name != 'pull_request'
+    needs: detect-merge-queue
+    # `always()` because detect-merge-queue is *skipped* on every non-PR event
+    # and a skipped `need` would otherwise block this job. On a PR it runs only
+    # when no queue was detected — the same condition as the integration job
+    # below, so detection never runs for a tier that won't.
+    if: >-
+      always() &&
+      ( github.event_name != 'pull_request' ||
+        needs.detect-merge-queue.outputs.enabled == 'false' )
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -380,20 +449,23 @@ jobs:
           test-dir: tests/integration
 
   # ── Integration (boots the app + testcontainers / services-script) ───────
-  # Skipped on pull_request (unit is the per-commit signal) and when there is no
-  # integration suite (detect-integration count == 0); runs on merge_group /
-  # push / dispatch — the exact batched state that will land.
+  # Runs on merge_group / push / dispatch, and on pull_request only when the base
+  # branch has no merge queue to run it in (see detect-merge-queue). Skipped when
+  # the connector ships no integration suite (detect-integration count == 0).
   integration:
     name: Integration
-    needs: detect-integration
+    needs: [detect-merge-queue, detect-integration]
     # Specifying `if` drops the implied success() on `needs`, so require the
     # detection to have actually succeeded (else count is empty and would read
-    # as "present"). On pull_request detect-integration is skipped, so this is
-    # false and integration skips — the unit tier is the PR signal.
+    # as "present"). `always()` is needed because detect-merge-queue is skipped
+    # on non-PR events; the queue check then keeps this tier off PRs whose merge
+    # will be batched through a queue that already runs it.
     if: >-
-      github.event_name != 'pull_request' &&
+      always() &&
       needs.detect-integration.result == 'success' &&
-      needs.detect-integration.outputs.count != '0'
+      needs.detect-integration.outputs.count != '0' &&
+      ( github.event_name != 'pull_request' ||
+        needs.detect-merge-queue.outputs.enabled == 'false' )
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
@@ -920,7 +992,15 @@ jobs:
   # ── Aggregator gate (single required check for branch protection) ────────
   tests-passed:
     name: Tests Gate
-    needs: [unit, detect-integration, integration, discover-e2e, e2e]
+    needs:
+      [
+        unit,
+        detect-merge-queue,
+        detect-integration,
+        integration,
+        discover-e2e,
+        e2e,
+      ]
     if: always()
     runs-on: ubuntu-latest
     # Comment + gate-eval only; cap so a wedged runner can't hold the required
@@ -947,6 +1027,7 @@ jobs:
           unit-result: ${{ needs.unit.result }}
           integration-result: ${{ needs.integration.result }}
           detect-integration-result: ${{ needs.detect-integration.result }}
+          detect-merge-queue-result: ${{ needs.detect-merge-queue.result }}
           discover-e2e-result: ${{ needs.discover-e2e.result }}
           e2e-result: ${{ needs.e2e.result }}
 
