@@ -135,30 +135,45 @@ jobs:
       # expression again just to be renamed — every hop is a hop it can be
       # mishandled on. Those are the OAuth client pair the marketplace publish
       # route authorises on, NOT ATLAN_API_KEY (the harness's API key).
+      # Every dispatch input reaches the shell through env:, never through
+        # `${{ }}` inside run:. A workflow_dispatch input is attacker-influenced
+        # free text, and direct interpolation splices it into the script before
+        # bash sees a quote — so a crafted `version` would execute rather than be
+        # compared. Via env:, bash receives it as data.
       - name: Install onto the tenant
         id: install
+        env:
+          APP_ID: ${{ inputs.app_id }}
+          IMAGE: ${{ inputs.image }}
+          VERSION: ${{ inputs.version }}
+          BRANCH: ${{ inputs.branch }}
+          SCAN_WAIT_SECONDS: ${{ inputs.scan_wait_seconds }}
+          TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
         run: |
           set -euo pipefail
           python3 .github/scripts/e2e_tenant_app.py install \
             --base-url "$ATLAN_BASE_URL" \
-            --app-id "${{ inputs.app_id }}" \
-            --image "${{ inputs.image }}" \
-            --version "${{ inputs.version }}" \
-            --branch "${{ inputs.branch }}" \
+            --app-id "$APP_ID" \
+            --image "$IMAGE" \
+            --version "$VERSION" \
+            --branch "$BRANCH" \
             --tenant "$SDR_TEST_TENANT" \
-            --scan-wait-seconds "${{ inputs.scan_wait_seconds }}" \
-            --timeout-seconds "${{ inputs.timeout_seconds }}"
+            --scan-wait-seconds "$SCAN_WAIT_SECONDS" \
+            --timeout-seconds "$TIMEOUT_SECONDS"
 
       # Independent read-back through the same check the e2e legs will run, so a
       # green install that somehow left the tenant on another version still fails
       # here rather than in a leg later.
       - name: Verify the tenant reports the installed version
+        env:
+          APP_ID: ${{ inputs.app_id }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           python3 .github/scripts/e2e_tenant_app.py verify \
             --base-url "$ATLAN_BASE_URL" \
-            --app-id "${{ inputs.app_id }}" \
-            --expected "${{ inputs.version }}"
+            --app-id "$APP_ID" \
+            --expected "$VERSION"
 
       # The findings, in the run summary rather than buried in step logs — this
       # workflow's first purpose is answering the scan-gate question, and the
@@ -166,19 +181,23 @@ jobs:
       - name: Summarise
         if: always()
         env:
+          CLOUD: ${{ inputs.cloud }}
+          APP_ID: ${{ inputs.app_id }}
+          IMAGE: ${{ inputs.image }}
+          VERSION: ${{ inputs.version }}
           RELEASE_STATUS: ${{ steps.install.outputs.release_status }}
           SKIPPED: ${{ steps.install.outputs.skipped }}
           INSTALLED: ${{ steps.install.outputs.installed_version }}
           DEPLOYMENT_ID: ${{ steps.install.outputs.deployment_id }}
         run: |
           {
-            echo "### E2E tenant install — ${{ inputs.cloud }}"
+            echo "### E2E tenant install — ${CLOUD}"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
-            echo "| App | \`${{ inputs.app_id }}\` |"
-            echo "| Image | \`${{ inputs.image }}\` |"
-            echo "| Version | \`${{ inputs.version }}\` |"
+            echo "| App | \`${APP_ID}\` |"
+            echo "| Image | \`${IMAGE}\` |"
+            echo "| Version | \`${VERSION}\` |"
             echo "| Already current (no-op) | \`${SKIPPED:-unknown}\` |"
             echo "| Release status at install | \`${RELEASE_STATUS:-unreadable}\` |"
             echo "| Deployment | \`${DEPLOYMENT_ID:-none}\` |"
