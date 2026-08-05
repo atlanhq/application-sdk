@@ -176,3 +176,16 @@ def test_buildx_cache_scope_is_unchanged() -> None:
         "before the build was extracted from sdr-e2e; changing it silently "
         "discards every connector's warm `uv sync` layer."
     )
+    # The set comparison above catches a *changed* scope string but not a
+    # *deleted* cache direction — removing `--cache-from` entirely still leaves
+    # the `--cache-to` match, so the set stays a singleton and the test passes
+    # while every build goes cold-read. Pin both directions explicitly.
+    assert '--cache-from "type=gha,scope=sdr-${{ inputs.app-name }}"' in text, (
+        "the `--cache-from` line was removed. Builds would go cold-read on "
+        "every run, a ~2 minute regression per leg that no assertion would "
+        "otherwise catch."
+    )
+    assert '--cache-to "type=gha,mode=max,scope=sdr-${{ inputs.app-name }}"' in text, (
+        "the `--cache-to` line was removed (or `mode=max` was dropped). Builds "
+        "would never write the cache, so every leg goes cold on the next run."
+    )
