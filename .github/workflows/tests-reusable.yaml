@@ -128,6 +128,28 @@ on:
         type: boolean
         default: true
         description: Set to false to skip the e2e job entirely (e.g. hello-world).
+      e2e-clouds:
+        required: false
+        type: string
+        default: ""
+        description: |
+          Cross-CSP e2e fan-out (FND-6). Comma-separated cloud keys; every
+          discovered e2e suite runs once per cloud, against that cloud's tenant
+          from the E2E_TENANT_MATRIX_JSON secret. Each cloud is a required leg:
+          the matrix is fail-fast:false and Tests Gate reads the aggregate, so
+          any cloud failing reds the gate.
+
+          Empty (the default) means the SDK's current cloud list, which lives in
+          discover_e2e_suites.py's DEFAULT_CLOUDS — deliberately NOT restated
+          here, so adding a fourth CSP is one edit rather than one per repo, and
+          so an app forwarding an untouched dispatch input doesn't opt out of
+          the matrix by accident.
+
+          Narrow it to re-run one cloud ("aws"), or pass "none" to collapse back
+          to the single legacy tenant — the escape hatch when a tenant is down
+          and the fleet should not be blocked on it. Forced to "none" when
+          E2E_TENANT_MATRIX_JSON is not shared with the calling repo, which is
+          what keeps un-onboarded repos on their existing behaviour.
       timeout-minutes:
         required: false
         type: number
@@ -272,18 +294,47 @@ on:
           JSON rather than KEY=VALUE lines because a key-pair PEM or
           service-account key is multi-line. Connectors with a hermetic
           container source (the mysql shape) need none of this.
+      # Resolved per leg by .github/scripts/resolve_e2e_tenant.py. The pointer
+      # lives in a YAML comment rather than in the description below because
+      # test_resolve_e2e_tenant.py's call-site guard treats any non-comment
+      # mention of that script as an invocation it must be able to parse and
+      # check for mask-before-write ordering — deliberately, so a real caller can
+      # never hide behind prose.
+      E2E_TENANT_MATRIX_JSON:
+        required: false
+        description: |
+          Cross-CSP tenant map for the e2e matrix (FND-6): a JSON object keyed
+          by cloud, each entry carrying tenant / client_id / client_secret /
+          api_key (plus an optional deployment_name when the tenant's system
+          apps are not deployed under "production").
+
+              {"aws": {"tenant": "…", "client_id": "…", "client_secret": "…",
+                       "api_key": "…"}, "azure": {…}, "gcp": {…}}
+
+          One secret rather than four per cloud because a strategy.matrix value
+          cannot index the `secrets` context and this workflow declares its
+          workflow_call secrets explicitly — so per-cloud names would have to be
+          re-declared here for every cloud ever added. Same shape and same
+          masking protocol as E2E_SOURCE_ENV_JSON above; the resolver named in
+          the comment above extracts only the leg's own cloud, so a leg never
+          holds the other tenants' credentials.
+
+          Unset = the four single-tenant secrets below are used and the cloud
+          fan-out is skipped, which is exactly the pre-FND-6 behaviour.
       SDR_TEST_TENANT:
         required: false
-        description: CI test tenant host for the e2e job (also derives ATLAN_BASE_URL).
+        description: |
+          Single-tenant fallback host for the e2e job, used when
+          E2E_TENANT_MATRIX_JSON is unset (also derives ATLAN_BASE_URL).
       SDR_CLIENT_ID:
         required: false
-        description: OAuth client id the e2e worker authenticates to the tenant with.
+        description: OAuth client id the e2e worker authenticates to the tenant with (fallback path).
       SDR_CLIENT_SECRET:
         required: false
-        description: OAuth client secret paired with SDR_CLIENT_ID.
+        description: OAuth client secret paired with SDR_CLIENT_ID (fallback path).
       ATLAN_API_KEY:
         required: false
-        description: Tenant API key the e2e harness drives Automation Engine + Atlas with.
+        description: Tenant API key the e2e harness drives Automation Engine + Atlas with (fallback path).
       ORG_PAT_GITHUB:
         required: false
         description: |
@@ -584,12 +635,17 @@ jobs:
           force-external-runtime: ${{ inputs.force-external-runtime }}
           health-check-timeout-seconds: ${{ inputs.health-check-timeout-seconds }}
 
-  # ── Discover e2e suites → matrix ─────────────────────────────────────────
+  # ── Discover e2e suites × clouds → matrix ────────────────────────────────
   # Globs the connector's tests/e2e/test_*.py into a strategy.matrix so the
   # e2e job fans out one leg per suite (parallel, live per-job logs, per-suite
   # re-run, isolation). Connector-agnostic: the SDK never hard-codes a
   # connector's suites — the discovery script scans the checked-out tree.
   # Same label/dispatch gate the e2e job used to carry.
+  #
+  # Each suite is then crossed with `e2e-clouds` (FND-6), so every scenario runs
+  # against one tenant per CSP and cloud-specific behaviour — the objectstore
+  # binding atlan-configurator emits, blobstorage proxy behaviour, Temporal host
+  # resolution — is exercised before release rather than after.
   discover-e2e:
     name: Discover e2e suites
     runs-on: ubuntu-latest
@@ -609,6 +665,11 @@ jobs:
     outputs:
       matrix: ${{ steps.discover.outputs.matrix }}
       count: ${{ steps.discover.outputs.count }}
+      leg-count: ${{ steps.discover.outputs.leg-count }}
+    env:
+      # Job-level so the step-level `if:` below can read it — a step condition
+      # cannot reference the `secrets` context directly.
+      HAS_TENANT_MATRIX: ${{ secrets.E2E_TENANT_MATRIX_JSON != '' && 'true' || '' }}
     steps:
       # Human breadcrumb correlating this dispatched run back to the SDK PR that
       # fired it. Emitted here (the first job in the e2e path) so it is visible
@@ -629,6 +690,28 @@ jobs:
         uses: atlanhq/application-sdk/.github/actions/discover-e2e-suites@main
         with:
           test-dir: ${{ inputs.e2e-test-path }}
+          # The cloud dimension is only meaningful when the tenant map exists;
+          # without it every leg would resolve the same fallback tenant, so N
+          # identical runs would masquerade as N clouds of coverage. Collapsing
+          # to the legacy single leg is the honest degradation — and it is the
+          # warning below, not silence, that says so.
+          #
+          # Written `<no secret> && 'none' || <input>` rather than the more
+          # natural `<secret> && <input> || 'none'`: GitHub treats "" as falsy,
+          # so the natural form collapses the default (empty = SDK cloud list)
+          # into "none" and quietly disables the matrix on every un-customised
+          # caller. The negated form never evaluates the input for truthiness.
+          clouds: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
+
+      # A repo that has not been granted the tenant-matrix secret silently gets
+      # one cloud's worth of coverage from a workflow that asked for three.
+      # Nothing downstream can tell the difference — the gate goes green either
+      # way — so say it out loud at the point the fan-out is decided.
+      - name: Warn that the cross-CSP matrix is unavailable
+        if: inputs.e2e-clouds != 'none' && env.HAS_TENANT_MATRIX == ''
+        shell: bash
+        run: |
+          echo "::warning::This run asked for the cross-CSP e2e matrix (e2e-clouds='${{ inputs.e2e-clouds }}'; empty means the SDK default list) but E2E_TENANT_MATRIX_JSON is not available to this repository, so it falls back to a single run against SDR_TEST_TENANT. Cross-CSP coverage for this run is NOT what the workflow asked for. Share the org secret with this repo to enable it."
 
       # This job only runs when e2e was explicitly requested (label / run-e2e),
       # so zero discovered suites means "requested but nothing found" — a
@@ -643,14 +726,20 @@ jobs:
           exit 1
 
   # ── Full-DAG e2e (system apps — extract→qi→publish→lineage) ─────────────
-  # One matrix leg per discovered suite. fail-fast:false so one suite's failure
-  # doesn't cancel the others, and "Re-run failed jobs" re-runs only the failed
-  # leg. Each leg spins its own worker container on its OWN Temporal queue: the
-  # sdr-e2e action derives a per-leg ATLAN_DEPLOYMENT_NAME (base + artifact-
-  # suffix) so legs don't co-serve one queue — under the two-store posture a
-  # shared queue lets Temporal split a workflow's activities across leg-workers
-  # with per-container localstorage, hiding artifacts cross-worker. 120-min
-  # timeout (> ae_poll + atlas_poll + build/setup overhead).
+  # One matrix leg per discovered suite × cloud. fail-fast:false so one leg's
+  # failure doesn't cancel the others, and "Re-run failed jobs" re-runs only the
+  # failed leg. Each leg spins its own worker container on its OWN Temporal
+  # queue: the sdr-e2e action derives a per-leg ATLAN_DEPLOYMENT_NAME (base +
+  # artifact-suffix) so legs don't co-serve one queue — under the two-store
+  # posture a shared queue lets Temporal split a workflow's activities across
+  # leg-workers with per-container localstorage, hiding artifacts cross-worker.
+  # 120-min timeout (> ae_poll + atlas_poll + build/setup overhead).
+  #
+  # The cloud rides in `matrix.name`, which is already the artifact suffix, the
+  # concurrency key and the job name — so adding the CSP dimension needed no new
+  # isolation machinery: deployment names, queues and artifact names all pick it
+  # up. Legs on different clouds hit different tenants (and therefore different
+  # Temporal servers) besides.
   e2e:
     name: End-to-end (${{ matrix.name }})
     needs: discover-e2e
@@ -674,12 +763,19 @@ jobs:
       statuses: write
       packages: write
     env:
-      SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
-      SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
-      SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
-      ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
-      # Derived so ATLAN_BASE_URL is always the same tenant as SDR_TEST_TENANT.
-      ATLAN_BASE_URL: https://${{ secrets.SDR_TEST_TENANT }}
+      # SDR_TEST_TENANT / SDR_CLIENT_ID / SDR_CLIENT_SECRET / ATLAN_API_KEY /
+      # ATLAN_BASE_URL are deliberately NOT set here any more. They are written
+      # per-leg by the resolver step below, from whichever source applies to this
+      # leg. Setting them here as well would leave the runner's job-env-versus-
+      # $GITHUB_ENV precedence load-bearing for whether a leg hits the right
+      # tenant — a silent wrong-tenant run is indistinguishable from a right one
+      # in the logs, since the host is masked. One writer, no precedence.
+      E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+      E2E_CLOUD: ${{ matrix.cloud }}
+      FALLBACK_SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
+      FALLBACK_SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
+      FALLBACK_SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
+      FALLBACK_ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
       GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
       # See the integration job: needed as env for the step-level `if:` gates.
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
@@ -694,12 +790,15 @@ jobs:
         with:
           persist-credentials: false
 
-      # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON). Exported here rather
-      # than passed to the composite action below, because every action this
-      # workflow calls is pinned @main: an input added on a feature branch is
-      # silently ignored until it lands. Sparse-checks-out only .github/scripts.
-      - name: Fetch SDK CI scripts (source-credential export)
-        if: env.E2E_SOURCE_ENV_JSON != ''
+      # SDK CI scripts. Used here rather than passing the payloads to the
+      # composite action below, because every action this workflow calls is
+      # pinned @main: an input added on a feature branch is silently ignored
+      # until it lands. Sparse-checks-out only .github/scripts.
+      #
+      # Unconditional since FND-6: resolve_e2e_tenant.py lives in the same sparse
+      # path and every leg needs it, whereas export_extra_env.py is only needed
+      # when the connector declares source credentials.
+      - name: Fetch SDK CI scripts (tenant resolution, source-credential export)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
@@ -708,8 +807,46 @@ jobs:
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          # Falls back to the run's own token because this step became
+          # unconditional. It used to run only when the caller declared
+          # E2E_SOURCE_ENV_JSON — a repo that already had ORG_PAT_GITHUB — so an
+          # empty PAT was unreachable; now every e2e leg hits it, and passing
+          # `token: ''` explicitly overrides checkout's own default and 403s on
+          # the clone. application-sdk is public, so github.token is sufficient
+          # and this is a strictly wider set of callers that can fetch, not a
+          # privilege escalation.
+          token: ${{ secrets.ORG_PAT_GITHUB || github.token }}
           persist-credentials: false
+
+      # This leg's tenant. Takes E2E_TENANT_MATRIX_JSON[E2E_CLOUD] when both are
+      # set and the FALLBACK_* values otherwise, then writes SDR_TEST_TENANT,
+      # SDR_CLIENT_ID, SDR_CLIENT_SECRET, ATLAN_API_KEY and the derived
+      # ATLAN_BASE_URL — the env the sdr-e2e action and the pytest harness read.
+      # Must precede every step that touches the tenant, so it sits ahead of the
+      # source-credential export as well as the action itself.
+      #
+      # Two invocations for the same reason as the export below: `--mask-only`
+      # writes ::add-mask:: to the log, and the second call's stdout is the env
+      # file. Masks first, so nothing reaches $GITHUB_ENV before it is redactable.
+      - name: Resolve e2e tenant for this leg
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
+            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
+            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
+            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
+            --mask-only
+          python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
+            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
+            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
+            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
+            >> "$GITHUB_ENV"
 
       # See the integration job above for why this is two invocations, why the
       # `--mask-only` pass has to come first, and why `set -e` is explicit.

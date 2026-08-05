@@ -184,30 +184,117 @@ on:
         required: false
         type: boolean
         default: true
+      clouds:
+        description: |
+          Cross-CSP fan-out (FND-6). Comma-separated cloud keys; this workflow
+          runs once per cloud, against that cloud's tenant from the
+          E2E_TENANT_MATRIX_JSON secret. Unlike tests-reusable.yaml this
+          workflow targets a whole directory rather than fanning out per suite,
+          so the cloud is the only matrix dimension.
+
+          Empty (the default) means the SDK's current cloud list, which lives in
+          discover_e2e_suites.py's DEFAULT_CLOUDS. Pass "none" to collapse back
+          to the single legacy tenant. Forced to "none" when
+          E2E_TENANT_MATRIX_JSON is not available to the calling repo, which
+          keeps un-onboarded repos on today's behaviour.
+        required: false
+        type: string
+        default: ""
     secrets:
+      # Resolved per leg by .github/scripts/resolve_e2e_tenant.py — see the
+      # equivalent comment in tests-reusable.yaml for why the pointer is here
+      # rather than in the description.
+      E2E_TENANT_MATRIX_JSON:
+        description: |
+          Cross-CSP tenant map (FND-6): a JSON object keyed by cloud, each entry
+          carrying tenant / client_id / client_secret / api_key (plus an optional
+          deployment_name). See tests-reusable.yaml's secrets block for the full
+          rationale and shape.
+
+          Unset = the four single-tenant secrets below are used and the cloud
+          fan-out is skipped, which is exactly the pre-FND-6 behaviour.
+        required: false
+      # The four below were `required: true` before FND-6, when they were the
+      # only way to name a tenant. They are now the fallback for a caller that
+      # has not been granted the tenant map, so they cannot be mandatory —
+      # `required: true` would fail a matrix-configured caller at workflow-call
+      # validation, before any leg runs.
       SDR_TEST_TENANT:
-        description: Tenant FQDN (e.g. devex.atlan.com — no https:// prefix). ATLAN_BASE_URL is derived from this.
-        required: true
+        description: |
+          Single-tenant fallback FQDN (e.g. devex.atlan.com — no https:// prefix),
+          used when E2E_TENANT_MATRIX_JSON is unset. ATLAN_BASE_URL is derived
+          from whichever tenant resolves.
+        required: false
       SDR_CLIENT_ID:
-        description: OAuth client id — used by the configurator and for runtime auth (Temporal, objectstore).
-        required: true
+        description: OAuth client id — used by the configurator and for runtime auth (Temporal, objectstore). Fallback path.
+        required: false
       SDR_CLIENT_SECRET:
-        description: OAuth client secret matching SDR_CLIENT_ID.
-        required: true
+        description: OAuth client secret matching SDR_CLIENT_ID. Fallback path.
+        required: false
       ATLAN_API_KEY:
         description: |
           API key for AE-management calls (/automation/api/v1/*) and
-          pyatlan asset queries. Required because the API-key service
+          pyatlan asset queries. Needed because the API-key service
           account carries realm-admin which the OAuth client does not.
-        required: true
+          Fallback path.
+        required: false
 
 jobs:
+  # ── Plan the cloud fan-out ───────────────────────────────────────────────
+  # A strategy.matrix cannot read the `secrets` context, so whether the tenant
+  # map is available has to be decided in a job and handed down as an output.
+  # `--clouds-only` gives the cloud dimension without the per-suite one this
+  # workflow does not use.
+  plan-clouds:
+    name: Plan cloud matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    env:
+      HAS_TENANT_MATRIX: ${{ secrets.E2E_TENANT_MATRIX_JSON != '' && 'true' || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Plan clouds
+        id: plan
+        uses: atlanhq/application-sdk/.github/actions/discover-e2e-suites@main
+        with:
+          clouds-only: "true"
+          # Without the tenant map every leg would resolve the same fallback
+          # tenant, so N legs would masquerade as N clouds of coverage. Written
+          # negated for the same reason as in tests-reusable.yaml: "" is falsy in
+          # GitHub expressions, and it is the default here.
+          clouds: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.clouds }}
+
+      - name: Warn that the cross-CSP matrix is unavailable
+        if: inputs.clouds != 'none' && env.HAS_TENANT_MATRIX == ''
+        shell: bash
+        run: |
+          echo "::warning::This run asked for the cross-CSP e2e matrix (clouds='${{ inputs.clouds }}'; empty means the SDK default list) but E2E_TENANT_MATRIX_JSON is not available to this repository, so it falls back to a single run against SDR_TEST_TENANT. Cross-CSP coverage for this run is NOT what the workflow asked for."
+
   e2e-full:
-    name: End-to-end
+    name: End-to-end${{ matrix.cloud && format(' ({0})', matrix.cloud) || '' }}
+    needs: plan-clouds
+    strategy:
+      # One cloud's tenant being down must not cancel the others; "Re-run failed
+      # jobs" then re-runs only that cloud.
+      fail-fast: false
+      # No clouds (no tenant map, or clouds: "none") still has to produce exactly
+      # one leg — the legacy single-tenant run — so the include-list falls back
+      # to a single entry with an empty `cloud`, which is precisely what makes
+      # the resolver take its fallback path. The key is spelled out rather than
+      # left as `{}` so the entry defines a matrix variable: `matrix.cloud` is
+      # then a defined-but-empty string in the job name and env below.
+      matrix: ${{ fromJson(needs.plan-clouds.outputs.count != '0' && needs.plan-clouds.outputs.matrix || '{"include":[{"cloud":""}]}') }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
-      group: e2e-full-${{ github.workflow }}-${{ github.ref }}
+      # Per-cloud group: a shared group would serialise the legs.
+      group: e2e-full-${{ github.workflow }}-${{ github.ref }}-${{ matrix.cloud || 'default' }}
       cancel-in-progress: false
     permissions:
       pull-requests: write
@@ -215,12 +302,15 @@ jobs:
       statuses: write
       packages: write
     env:
-      SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
-      SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
-      SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
-      ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
-      # Derived so ATLAN_BASE_URL is always the same tenant as SDR_TEST_TENANT.
-      ATLAN_BASE_URL: https://${{ secrets.SDR_TEST_TENANT }}
+      # Written per-leg by the resolver step below rather than pinned here — see
+      # the equivalent block in tests-reusable.yaml for why there is exactly one
+      # writer of the tenant env.
+      E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+      E2E_CLOUD: ${{ matrix.cloud }}
+      FALLBACK_SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
+      FALLBACK_SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
+      FALLBACK_SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
+      FALLBACK_ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
     steps:
       # No-op step whose name correlates this dispatched run back to the SDK PR
       # that fired it. Nothing reads the step name: codex-/return-dispatch v3
@@ -234,6 +324,43 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The tenant resolver is an SDK script, and this workflow runs in the
+      # caller's repo, so it has to be fetched. Sparse, so only .github/scripts
+      # lands. Pinned to job.workflow_sha for the same reason as the equivalent
+      # checkout in tests-reusable.yaml: a PR editing this workflow must run its
+      # own version of the script, not main's.
+      - name: Fetch SDK CI scripts (tenant resolution)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+
+      # This leg's tenant — see the equivalent step in tests-reusable.yaml for
+      # why it is two invocations and why the mask pass has to come first.
+      - name: Resolve e2e tenant for this leg
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
+            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
+            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
+            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
+            --mask-only
+          python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
+            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
+            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
+            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
+            >> "$GITHUB_ENV"
 
       - name: Resolve agent-name
         id: agent
@@ -265,6 +392,11 @@ jobs:
           # operators can watch the colour-emoji DAG progression
           # instead of waiting for a final dump.
           pytest-extra-args: "-s"
+          # Unique per-leg artifact name so parallel cloud legs don't collide on
+          # upload-artifact (which rejects duplicate names within a run). Empty
+          # on the single-tenant fallback, which keeps the pre-FND-6 artifact
+          # name and the bare `e2e-full-ci-<run_id>` deployment name.
+          artifact-suffix: ${{ matrix.cloud }}
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
           runtime-sdk-ref: ${{ inputs.runtime-sdk-ref }}
           harness-sdk-ref: ${{ inputs.harness-sdk-ref }}

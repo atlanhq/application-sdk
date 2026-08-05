@@ -67,6 +67,15 @@ on:
         required: false
         default: ""
         type: string
+      e2e_clouds:
+        description: |
+          Cloud providers to run the e2e suites against, comma-separated
+          (default aws,azure,gcp — every suite runs once per CSP tenant).
+          Narrow it to re-run a single cloud, e.g. when one tenant was down.
+          Empty here means "use the SDK default", not "no clouds".
+        required: false
+        default: ""
+        type: string
 
 jobs:
   tests:
@@ -93,6 +102,13 @@ jobs:
       run-e2e: ${{ inputs.run_e2e }}
       base-image-ref: ${{ inputs.base_image_ref }}
       agent-name-override: ${{ inputs.agent_name_override }}
+      # Cross-CSP e2e matrix (FND-6): every e2e suite runs once per cloud
+      # provider, against that cloud's tenant. Forwarded empty on every
+      # non-dispatch event, which the SDK reads as "use the current default
+      # cloud list" — so the list stays defined in application-sdk and this
+      # file never needs an edit when a fourth CSP is added. Pass "none" on a
+      # dispatch to fall back to the single legacy tenant.
+      e2e-clouds: ${{ inputs.e2e_clouds }}
       # ADR-0014 two-store SDR posture (docs/adr/0014-two-store-storage-
       # architecture.md in application-sdk): the e2e job's `objectstore`
       # is forced to the SDK-default CI-local binding and
