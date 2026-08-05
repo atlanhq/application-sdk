@@ -73,6 +73,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from pkl_contract_layout import (  # noqa: E402
     GENERATED_DIR,
     ROOT_FILES,
+    baseline_contract_ref,
+    export_contract_at,
     run_post_generate,
     swap_outputs,
 )
@@ -139,6 +141,7 @@ def regenerate(contract_dir: str) -> bool:
         return False
 
     tmp = Path(tempfile.mkdtemp())
+    baseline_work: Path | None = None
     try:
         # --project-dir: the contract is a Pkl project declaring
         # app-contract-toolkit as a *remote package*, so eval must load that
@@ -172,7 +175,8 @@ def regenerate(contract_dir: str) -> bool:
             )
             return False
 
-        if not swap_outputs(tmp):
+        baseline_out, baseline_work = _baseline_output(contract_dir)
+        if not swap_outputs(tmp, baseline_dir=baseline_out):
             # swap_outputs already warned with the specific reason.
             return False
         run_post_generate(contract_dir)
@@ -181,6 +185,61 @@ def regenerate(contract_dir: str) -> bool:
         return True
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        if baseline_work is not None:
+            shutil.rmtree(baseline_work, ignore_errors=True)
+
+
+def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:
+    """Evaluate the contract at its pre-bump pin, for override detection.
+
+    Returns ``(eval_output_dir, workdir_to_clean)``; the output is None whenever
+    there is no baseline to compute or producing it failed, which turns override
+    detection off and makes the swap overwrite everything the eval emitted (the
+    behaviour without this function). Never raises and never fails the sync — a
+    missing baseline must not block a dependency bump.
+
+    The baseline eval is a *second* `pkl eval`, against the toolkit version the
+    committed artifacts came from, so it fetches an older package (a few seconds
+    on a cold runner). Worth it: comparing committed content against it is what
+    lets every app's post-processed artifacts survive regeneration with no per-app
+    declaration at all.
+    """
+    ref = baseline_contract_ref(contract_dir)
+    if ref is None:
+        # Common and fine: no pin change in flight, so nothing to protect.
+        return (None, None)
+
+    work = Path(tempfile.mkdtemp())
+    if not export_contract_at(ref, contract_dir, work):
+        print(
+            f"::warning::Could not export {contract_dir}/ at {ref[:12]} — "
+            "app-maintained generated files cannot be detected, so regeneration "
+            "will overwrite them. Check the diff for reverted post-processing."
+        )
+        return (None, work)
+
+    out = work / "out"
+    out.mkdir()
+    base_contract = work / contract_dir
+    result = run(
+        [
+            "pkl",
+            "eval",
+            "--project-dir",
+            str(base_contract),
+            "-m",
+            str(out),
+            str(base_contract / "app.pkl"),
+        ]
+    )
+    if result.returncode != 0:
+        print(
+            "::warning::Baseline pkl eval (pre-bump toolkit pin) failed — "
+            "app-maintained generated files cannot be detected, so regeneration "
+            "will overwrite them. Check the diff for reverted post-processing."
+        )
+        return (None, work)
+    return (out, work)
 
 
 def _format_generated() -> None:

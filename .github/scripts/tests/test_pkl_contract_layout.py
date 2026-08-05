@@ -12,6 +12,7 @@ test_renovate_pkl_sync.py; this file pins the placement rules themselves.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -226,3 +227,167 @@ def test_post_generate_failure_warns_and_returns(tree, capsys):
     mod.run_post_generate("contract")
 
     assert "post-generate.sh failed" in capsys.readouterr().out
+
+
+# ── override detection (app-post-processed files) ────────────────────────────
+
+
+def test_baseline_preserves_overridden_file_and_refreshes_the_rest(tree, capsys):
+    """The core of centralized override protection. `connector.json` is committed
+    with hand-maintained content that differs from what the old pin emitted, so
+    the app post-processes it -> preserve. `manifest.json` matches the old pin's
+    output exactly, so the toolkit owns it -> refresh."""
+    _write(tree / "app" / "generated" / "manifest.json", "old-toolkit\n")
+    _write(tree / "app" / "generated" / "connector.json", "hand-maintained\n")
+    # Baseline = what the PREVIOUS toolkit pin emitted.
+    _write(tree / "base" / "manifest.json", "old-toolkit\n")
+    _write(tree / "base" / "connector.json", "toolkit-default\n")
+    # New eval at the bumped pin.
+    _write(tree / "out" / "manifest.json", "new-toolkit\n")
+    _write(tree / "out" / "connector.json", "toolkit-default-v2\n")
+
+    assert mod.swap_outputs(tree / "out", baseline_dir=tree / "base") is True
+
+    gen = tree / "app" / "generated"
+    assert gen.joinpath("manifest.json").read_text() == "new-toolkit\n"
+    assert gen.joinpath("connector.json").read_text() == "hand-maintained\n"
+    assert "Preserved app-maintained generated file(s)" in capsys.readouterr().out
+
+
+def test_baseline_protection_also_covers_the_prefixed_wholesale_replace(tree):
+    """The prefixed family rmtree's the whole dir, so preserved content has to be
+    read out and written back — not just skipped."""
+    _write(tree / "app" / "generated" / "manifest.json", "old-toolkit\n")
+    _write(tree / "app" / "generated" / "connector.json", "hand-maintained\n")
+    _write(tree / "base" / "app" / "generated" / "manifest.json", "old-toolkit\n")
+    _write(tree / "base" / "app" / "generated" / "connector.json", "toolkit-default\n")
+    _write(tree / "out" / "app" / "generated" / "manifest.json", "new-toolkit\n")
+    _write(tree / "out" / "app" / "generated" / "connector.json", "toolkit-v2\n")
+
+    assert mod.swap_outputs(tree / "out", baseline_dir=tree / "base") is True
+
+    gen = tree / "app" / "generated"
+    assert gen.joinpath("manifest.json").read_text() == "new-toolkit\n"
+    assert gen.joinpath("connector.json").read_text() == "hand-maintained\n"
+
+
+def test_baseline_does_not_protect_a_newly_emitted_file(tree):
+    """A file absent from the baseline is new, not overridden — it must land."""
+    _write(tree / "app" / "generated" / "manifest.json", "old\n")
+    _write(tree / "base" / "manifest.json", "old\n")
+    _write(tree / "out" / "manifest.json", "new\n")
+    _write(tree / "out" / "brand-new.json", "new\n")
+
+    assert mod.swap_outputs(tree / "out", baseline_dir=tree / "base") is True
+
+    assert (tree / "app" / "generated" / "brand-new.json").exists()
+
+
+def test_without_baseline_everything_is_overwritten(tree):
+    """No baseline (no pin change in flight, or it could not be produced) keeps
+    the plain behaviour — overwrite, so regeneration is never a silent no-op."""
+    _write(tree / "app" / "generated" / "connector.json", "hand-maintained\n")
+    _write(tree / "out" / "connector.json", "toolkit-default\n")
+
+    assert mod.swap_outputs(tree / "out") is True
+
+    assert (
+        tree / "app" / "generated" / "connector.json"
+    ).read_text() == "toolkit-default\n"
+
+
+# ── baseline_contract_ref ────────────────────────────────────────────────────
+
+
+def _repo(tree: Path) -> None:
+    for args in (
+        ["init", "-q"],
+        ["config", "user.email", "t@e.com"],
+        ["config", "user.name", "t"],
+    ):
+        subprocess.run(["git", *args], cwd=tree, check=True, capture_output=True)
+
+
+def _commit(tree: Path, message: str) -> None:
+    subprocess.run(["git", "add", "-A"], cwd=tree, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-qm", message], cwd=tree, check=True, capture_output=True
+    )
+
+
+def test_baseline_ref_is_head_for_an_uncommitted_bump(tree):
+    """Renovate's postUpgradeTasks path: the pin is rewritten in the working tree
+    but not committed, so HEAD still holds the pre-bump pin."""
+    _repo(tree)
+    _write(tree / "contract" / "PklProject", "toolkit@1.0.0\n")
+    _commit(tree, "pin 1.0.0")
+    (tree / "contract" / "PklProject").write_text("toolkit@1.0.1\n")
+
+    assert mod.baseline_contract_ref("contract") == "HEAD"
+
+
+def test_baseline_ref_is_the_bump_commits_parent_when_committed(tree):
+    """The workflow-shim path: Renovate already committed the bump."""
+    _repo(tree)
+    _write(tree / "contract" / "PklProject", "toolkit@1.0.0\n")
+    _commit(tree, "pin 1.0.0")
+    parent = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tree,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    (tree / "contract" / "PklProject").write_text("toolkit@1.0.1\n")
+    _commit(tree, "bump to 1.0.1")
+
+    assert mod.baseline_contract_ref("contract") == parent
+
+
+def test_baseline_ref_is_none_when_the_pin_is_unchanged(tree):
+    """No bump in flight — an ordinary PR. Protection must stay OFF here, or an
+    arbitrarily old baseline would freeze the tree and blind the freshness gate."""
+    _repo(tree)
+    _write(tree / "contract" / "PklProject", "toolkit@1.0.0\n")
+    _commit(tree, "pin 1.0.0")
+    _write(tree / "app" / "generated" / "manifest.json", "x\n")
+    _commit(tree, "unrelated change")
+
+    assert mod.baseline_contract_ref("contract") is None
+
+
+def test_baseline_ref_is_none_without_a_parent_commit(tree):
+    """Root commit (or a shallow clone that lacks the parent): no baseline, so the
+    caller overwrites and says so rather than preserving everything."""
+    _repo(tree)
+    _write(tree / "contract" / "PklProject", "toolkit@1.0.0\n")
+    _commit(tree, "initial, pin arrives in the root commit")
+
+    assert mod.baseline_contract_ref("contract") is None
+
+
+def test_baseline_ref_is_none_outside_a_repo(tree):
+    _write(tree / "contract" / "PklProject", "toolkit@1.0.0\n")
+
+    assert mod.baseline_contract_ref("contract") is None
+
+
+def test_export_contract_at_materialises_the_old_pin(tree):
+    _repo(tree)
+    _write(tree / "contract" / "PklProject", "toolkit@1.0.0\n")
+    _write(tree / "contract" / "app.pkl", "amends x\n")
+    _commit(tree, "pin 1.0.0")
+    (tree / "contract" / "PklProject").write_text("toolkit@1.0.1\n")
+    _commit(tree, "bump")
+
+    dest = tree / "exported"
+    assert mod.export_contract_at("HEAD~1", "contract", dest) is True
+    assert (dest / "contract" / "PklProject").read_text() == "toolkit@1.0.0\n"
+
+
+def test_export_contract_at_returns_false_for_a_bad_ref(tree):
+    _repo(tree)
+    _write(tree / "contract" / "PklProject", "x\n")
+    _commit(tree, "init")
+
+    assert mod.export_contract_at("nope-not-a-ref", "contract", tree / "e") is False

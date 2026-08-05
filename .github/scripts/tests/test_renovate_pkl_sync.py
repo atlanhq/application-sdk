@@ -87,7 +87,12 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def _write_eval_output(out_dir: Path, layout: str) -> None:
+def _write_eval_output(
+    out_dir: Path,
+    layout: str,
+    manifest: str = FRESH_MANIFEST,
+    connector: str = TOOLKIT_CONNECTOR_CONFIG,
+) -> None:
     """Write what `pkl eval -m out_dir` emits for each contract family.
 
     The families differ in whether output keys carry the `app/generated/` prefix
@@ -97,17 +102,17 @@ def _write_eval_output(out_dir: Path, layout: str) -> None:
     if layout == "prefixed":  # App.pkl
         gen = out_dir / "app" / "generated"
         gen.mkdir(parents=True, exist_ok=True)
-        (gen / "manifest.json").write_text(FRESH_MANIFEST)
+        (gen / "manifest.json").write_text(manifest)
         (gen / "_input.py").write_text("import os\n")
     elif layout == "native":  # NativeApp.pkl — bare keys
-        (out_dir / "manifest.json").write_text(FRESH_MANIFEST)
+        (out_dir / "manifest.json").write_text(manifest)
         (out_dir / "_input.py").write_text("import os\n")
     elif layout == "native-bundle":  # NativeAppBundle.pkl — <entrypoint>/<file>
         crawler = out_dir / "crawler"
         crawler.mkdir(parents=True, exist_ok=True)
-        (crawler / "manifest.json").write_text(FRESH_MANIFEST)
+        (crawler / "manifest.json").write_text(manifest)
         (crawler / "_input.py").write_text("import os\n")
-        (out_dir / "atlan-connectors-x.json").write_text(TOOLKIT_CONNECTOR_CONFIG)
+        (out_dir / "atlan-connectors-x.json").write_text(connector)
     elif layout != "root-only":
         raise AssertionError(f"unknown layout {layout!r}")
     if layout != "empty":
@@ -138,7 +143,18 @@ def _make_fake_run(
             return types.SimpleNamespace(returncode=0)
         if prog == "pkl" and cmd[1] == "eval":
             if eval_rc == 0:
-                _write_eval_output(Path(cmd[cmd.index("-m") + 1]), layout)
+                # The driver evaluates twice: the app's contract (bumped pin) and
+                # the same contract exported at the pre-bump pin, for override
+                # detection. Distinguish by --project-dir, and give the baseline
+                # the OLD manifest so a real refresh is visible.
+                project_dir = cmd[cmd.index("--project-dir") + 1]
+                is_baseline = Path(project_dir).is_absolute()
+                _write_eval_output(
+                    Path(cmd[cmd.index("-m") + 1]),
+                    layout,
+                    manifest=STALE_MANIFEST if is_baseline else FRESH_MANIFEST,
+                    connector=TOOLKIT_CONNECTOR_CONFIG,
+                )
             return types.SimpleNamespace(returncode=eval_rc)
         if prog == "uvx":  # ruff — no-op in tests
             return types.SimpleNamespace(returncode=0)
@@ -446,6 +462,65 @@ def test_post_generate_failure_warns_but_still_commits(repo, monkeypatch, capsys
     assert (repo / "app" / "generated" / "manifest.json").read_text() == FRESH_MANIFEST
     assert mod.COMMIT_MESSAGE_REGEN in _last_commit_subject(repo)
     assert "post-generate.sh failed" in capsys.readouterr().out
+
+
+def _bump_pin(repo: Path) -> None:
+    """Commit a toolkit-pin bump, the way Renovate does on its branch. Gives
+    baseline_contract_ref a parent commit holding the pre-bump pin."""
+    pkl_project = repo / "contract" / "PklProject"
+    pkl_project.write_text(pkl_project.read_text().replace("0.14.1", "0.14.2"))
+    _git(repo, "commit", "-qam", "chore(deps): bump app-contract-toolkit")
+
+
+def test_app_overridden_file_survives_a_bump_with_no_app_level_config(
+    repo, monkeypatch, capsys
+):
+    """Centralized override protection, end to end: no post-generate.sh, no
+    workflow input, nothing app-side.
+
+    The committed connector config is hand-maintained (differs from what the
+    pre-bump toolkit emitted), so it must be preserved; the manifest matches the
+    pre-bump output exactly, so it must be refreshed. This is what stops a
+    now-working swap from reverting six apps' post-processing."""
+    _reshape_generated(
+        repo,
+        {
+            "crawler/manifest.json": STALE_MANIFEST,
+            "atlan-connectors-x.json": CANONICAL_CONNECTOR_CONFIG,
+        },
+    )
+    _bump_pin(repo)
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo, layout="native-bundle"))
+
+    assert mod.main(["--regenerate", "true"]) == 0
+
+    gen = repo / "app" / "generated"
+    assert (gen / "crawler" / "manifest.json").read_text() == FRESH_MANIFEST
+    assert (gen / "atlan-connectors-x.json").read_text() == CANONICAL_CONNECTOR_CONFIG
+    out = capsys.readouterr().out
+    assert "Preserved app-maintained generated file(s)" in out
+    assert "atlan-connectors-x.json" in out
+
+
+def test_no_baseline_without_a_pin_change_so_drift_stays_visible(repo, monkeypatch):
+    """With no bump in flight (an ordinary PR, or the freshness gate) there is no
+    baseline, so everything is overwritten and genuine staleness still shows up.
+    Protecting files here would freeze the tree and blind the gate."""
+    _reshape_generated(
+        repo,
+        {
+            "crawler/manifest.json": STALE_MANIFEST,
+            "atlan-connectors-x.json": CANONICAL_CONNECTOR_CONFIG,
+        },
+    )
+    # No _bump_pin() — contract/PklProject is untouched.
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo, layout="native-bundle"))
+
+    assert mod.main(["--regenerate", "true"]) == 0
+
+    gen = repo / "app" / "generated"
+    assert (gen / "crawler" / "manifest.json").read_text() == FRESH_MANIFEST
+    assert (gen / "atlan-connectors-x.json").read_text() == TOOLKIT_CONNECTOR_CONFIG
 
 
 def test_no_post_generate_script_is_a_noop(repo, monkeypatch, capsys):

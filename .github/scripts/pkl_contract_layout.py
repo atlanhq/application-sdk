@@ -112,7 +112,7 @@ def detect_layout(out_dir: Path) -> str:
     return "empty"
 
 
-def _native_target_is_plausible(sources: list[Path], target: Path) -> bool:
+def _native_target_is_plausible(entries: list[str], target: Path) -> bool:
     """Guard against writing native-family output to the wrong generated dir.
 
     The native families emit keys relative to whatever base the app passes to
@@ -135,16 +135,95 @@ def _native_target_is_plausible(sources: list[Path], target: Path) -> bool:
     existing = {p.name for p in target.iterdir()}
     if not existing:
         return True
-    return any(src.name in existing for src in sources)
+    return any(name in existing for name in entries)
 
 
-def swap_outputs(out_dir: Path, generated_dir: str = GENERATED_DIR) -> bool:
+def plan_swap(
+    out_dir: Path, generated_dir: str = GENERATED_DIR
+) -> tuple[str, dict[Path, Path]]:
+    """Map every file in ``out_dir`` to where it belongs in the working tree.
+
+    Returns ``(layout, {dest: src})``. Destinations are repo-relative, so the
+    same call against a baseline eval output yields keys directly comparable with
+    the working tree — that is what makes override detection possible.
+
+    Root files map to the repo root; generated artifacts map under
+    ``generated_dir`` with the family's prefix stripped. An empty mapping means
+    there was nothing to place.
+    """
+    layout = detect_layout(out_dir)
+    plan: dict[Path, Path] = {}
+
+    for name in ROOT_FILES:
+        src = out_dir / name
+        if src.exists():
+            plan[Path(name)] = src
+
+    target = Path(generated_dir)
+    base = out_dir / "app" / "generated" if layout == "prefixed" else out_dir
+    if layout in ("prefixed", "native"):
+        for src in sorted(base.rglob("*")):
+            if src.is_dir():
+                continue
+            rel = src.relative_to(base)
+            # In the native layout the root files sit alongside the generated
+            # artifacts; they are already planned to the repo root above.
+            if layout == "native" and len(rel.parts) == 1 and rel.name in ROOT_FILES:
+                continue
+            plan[target / rel] = src
+
+    return layout, plan
+
+
+def overridden_files(
+    plan: dict[Path, Path], baseline_plan: dict[Path, Path]
+) -> set[Path]:
+    """Destinations the app maintains itself, so regeneration must not touch them.
+
+    A file is app-owned when its committed content differs from what the toolkit
+    produced for the *baseline* pin — the pin that the committed artifacts were
+    generated from. Several apps install a hand-maintained artifact over the
+    toolkit's output (a credential form the toolkit cannot yet express, a patched
+    input contract); the committed file is therefore not what `pkl eval` emits,
+    and a swap that overwrites it silently reverts the override and ships the
+    unusable version.
+
+    Detecting it this way needs no per-app declaration: the difference between
+    "what the toolkit produced then" and "what is committed" IS the app's
+    post-processing. Only destinations present in both plans are considered, so a
+    newly-emitted file is never treated as an override.
+
+    Caveat worth knowing: if the committed tree is *stale* against its own pin —
+    a contract change merged without regenerating, which the freshness gate is
+    meant to catch but does not block — that staleness also reads as an override
+    and the file is preserved rather than refreshed. Callers therefore log every
+    preserved path instead of silently skipping it.
+    """
+    overridden = set()
+    for dest, baseline_src in baseline_plan.items():
+        if dest not in plan or not dest.exists():
+            continue
+        if dest.read_bytes() != baseline_src.read_bytes():
+            overridden.add(dest)
+    return overridden
+
+
+def swap_outputs(
+    out_dir: Path,
+    generated_dir: str = GENERATED_DIR,
+    baseline_dir: Path | None = None,
+) -> bool:
     """Move eval output from ``out_dir`` into the working tree. Returns True iff
     generated artifacts were actually placed.
 
     Repo-root files (``atlan.yaml``/``app.yaml``) are copied for either family
     whenever emitted. The generated artifacts are placed per the family rules in
     this module's docstring.
+
+    ``baseline_dir`` is the eval output for the pin the committed artifacts were
+    generated from. When given, files the app post-processes are detected and
+    preserved — see ``overridden_files``. Omit it (the default) to overwrite
+    everything the eval emitted.
 
     Returns False — touching nothing under ``generated_dir`` — when the output
     holds no generated artifacts (``root-only``/``empty``) or when the native
@@ -153,53 +232,162 @@ def swap_outputs(out_dir: Path, generated_dir: str = GENERATED_DIR) -> bool:
     remove. Note that root files may still have been copied on a False return:
     they are unambiguous and correct in every layout.
     """
-    layout = detect_layout(out_dir)
-
-    for name in ROOT_FILES:
-        src = out_dir / name
-        if src.exists():
-            shutil.copyfile(src, name)
-
+    layout, plan = plan_swap(out_dir, generated_dir)
     target = Path(generated_dir)
+
+    if layout not in ("prefixed", "native"):
+        print(
+            f"::warning::pkl eval produced no generated contract artifacts "
+            f"({layout}) — {generated_dir}/ left unchanged."
+        )
+        _copy_planned(plan, skip=set())
+        return False
+
+    if layout == "native":
+        entries = sorted(
+            {
+                dest.relative_to(target).parts[0]
+                for dest in plan
+                if dest.is_relative_to(target)
+            }
+        )
+        if not _native_target_is_plausible(entries, target):
+            print(
+                f"::warning::pkl eval emitted unprefixed contract artifacts "
+                f"({', '.join(entries)}) but none of them match anything in "
+                f"{generated_dir}/ — this app most likely generates into a "
+                f"different directory. Refusing to write to the wrong base; "
+                f"generated artifacts left unchanged. Regenerate with the app's "
+                f"own generate task (e.g. `uv run poe generate`) and commit the "
+                f"result."
+            )
+            return False
+
+    skip: set[Path] = set()
+    if baseline_dir is not None:
+        _, baseline_plan = plan_swap(baseline_dir, generated_dir)
+        skip = overridden_files(plan, baseline_plan)
+        if skip:
+            print(
+                "::notice::Preserved app-maintained generated file(s) — committed "
+                "content differs from what the previous toolkit pin emitted, so "
+                "the app post-processes them: "
+                + ", ".join(sorted(str(p) for p in skip))
+                + ". If any of those is NOT app-maintained, this app's committed "
+                "artifacts are stale against its own contract — regenerate with "
+                "the app's generate task and commit."
+            )
 
     if layout == "prefixed":
         # App.pkl owns every file under the generated dir, so replacing it
-        # wholesale is safe and clears orphans.
+        # wholesale is safe and clears orphans. Preserved files are read out
+        # first and written back after, so the wholesale replace keeps them.
+        preserved = {
+            dest: dest.read_bytes() for dest in skip if dest.is_relative_to(target)
+        }
         shutil.rmtree(target, ignore_errors=True)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(out_dir / "app" / "generated", target)
+        _copy_planned(
+            {d: s for d, s in plan.items() if not d.is_relative_to(target)}, skip
+        )
+        for dest, content in preserved.items():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(content)
         return True
 
-    if layout == "native":
-        sources = [p for p in sorted(out_dir.iterdir()) if p.name not in ROOT_FILES]
-        if not _native_target_is_plausible(sources, target):
-            print(
-                f"::warning::pkl eval emitted unprefixed contract artifacts "
-                f"({', '.join(p.name for p in sources)}) but none of them match "
-                f"anything in {generated_dir}/ — this app most likely generates "
-                f"into a different directory. Refusing to write to the wrong "
-                f"base; generated artifacts left unchanged. Regenerate with the "
-                f"app's own generate task (e.g. `uv run poe generate`) and "
-                f"commit the result."
-            )
-            return False
-        # Overwrite-only: the generated dir can hold app-owned files this eval
-        # does not emit, and an unprefixed key set cannot tell them from
-        # orphans. See the module docstring.
-        target.mkdir(parents=True, exist_ok=True)
-        for src in sources:
-            dest = target / src.name
-            if src.is_dir():
-                shutil.copytree(src, dest, dirs_exist_ok=True)
-            else:
-                shutil.copyfile(src, dest)
-        return True
+    # Native: overwrite-only. The generated dir can hold app-owned files this
+    # eval does not emit, and an unprefixed key set cannot tell them from
+    # orphans. See the module docstring.
+    _copy_planned(plan, skip)
+    return True
 
-    print(
-        f"::warning::pkl eval produced no generated contract artifacts "
-        f"({layout}) — {generated_dir}/ left unchanged."
+
+def _copy_planned(plan: dict[Path, Path], skip: set[Path]) -> None:
+    """Copy each planned (dest, src) pair, minus the preserved destinations."""
+    for dest, src in sorted(plan.items()):
+        if dest in skip:
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dest)
+
+
+def _git(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], capture_output=True, text=True, check=False)
+
+
+def baseline_contract_ref(contract_dir: str = "contract") -> str | None:
+    """Git rev holding the contract state the committed artifacts were generated
+    from, or None when there is no pin change in flight (or git can't tell us).
+
+    "Baseline" means: the last state where ``PklProject`` — hence the toolkit pin
+    — differed from what the tree has now. Two shapes, because the two ways a
+    bump reaches this code differ in whether it is committed yet:
+
+      * Renovate ``postUpgradeTasks`` (``--no-commit``): Renovate rewrote
+        ``contract/PklProject`` in the working tree but has not committed, so
+        ``HEAD`` still holds the old pin.
+      * The per-app ``renovate-pkl-sync.yaml`` shim: Renovate already committed
+        the bump, so the baseline is the parent of the last commit that touched
+        ``PklProject``.
+
+    Returns None when the pin is unchanged — which is the common case on an
+    ordinary PR, and deliberately switches override detection OFF there. With no
+    bump in flight the "baseline" would be an arbitrarily old toolkit version, and
+    every artifact the toolkit has changed since would read as an app override —
+    freezing the tree and making the freshness gate blind again. Override
+    protection only makes sense while a pin change is what's in flight.
+
+    Also returns None when git is unavailable or history is too shallow to name
+    the parent commit (a depth-1 checkout). Callers then overwrite as before and
+    say so, because preserving everything would regenerate nothing.
+    """
+    pkl_project = f"{contract_dir}/PklProject"
+    if not Path(pkl_project).exists():
+        return None
+
+    # Establish a usable HEAD first. Without it every check below is meaningless,
+    # and `git diff` reports a fatal error with an exit code that is easy to
+    # mistake for "differs" (it is not always 128 — this cost a test).
+    if _git("rev-parse", "--verify", "HEAD").returncode != 0:
+        return None  # not a repo, or no commits yet.
+
+    # Uncommitted bump (postUpgradeTasks): HEAD still has the old pin.
+    diff = _git("diff", "--quiet", "HEAD", "--", pkl_project)
+    if diff.returncode == 1:
+        return "HEAD"
+    if diff.returncode != 0:
+        return None  # anything unexpected: no baseline rather than a wrong one.
+
+    # Committed bump (workflow shim): parent of the last commit touching it.
+    last = _git("log", "-1", "--format=%H", "--", pkl_project)
+    if last.returncode != 0 or not last.stdout.strip():
+        return None
+    parent = _git("rev-parse", "--verify", f"{last.stdout.strip()}^")
+    if parent.returncode != 0:
+        return None  # root commit, or a shallow clone that lacks the parent.
+    return parent.stdout.strip()
+
+
+def export_contract_at(ref: str, contract_dir: str, dest: Path) -> bool:
+    """Materialise ``contract_dir`` as of ``ref`` under ``dest``. False on failure.
+
+    ``git archive`` keeps this to one plumbing call and cannot touch the working
+    tree. The exported tree carries that revision's ``PklProject.deps.json``, so
+    the baseline eval resolves the OLD toolkit package without re-resolving.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    archive = subprocess.run(
+        ["git", "archive", ref, contract_dir],
+        capture_output=True,
+        check=False,
     )
-    return False
+    if archive.returncode != 0:
+        return False
+    extract = subprocess.run(
+        ["tar", "-x", "-C", str(dest)], input=archive.stdout, check=False
+    )
+    return extract.returncode == 0 and (dest / contract_dir / "app.pkl").exists()
 
 
 def run_post_generate(contract_dir: str = "contract") -> None:
