@@ -119,9 +119,22 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
         run: |
-          set -euo pipefail
-          SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha')
-          echo "head_sha=${SHA}" >> "$GITHUB_OUTPUT"
+          # 3 attempts, 5 s / 10 s backoff. On exhaustion emit head_resolved=false
+          # rather than failing the job — the gate script then proceeds fail-open
+          # (reviewing is the safe default; a missing review is the harmful outcome).
+          for attempt in 1 2 3; do
+            if SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/dev/null) \
+               && [ -n "$SHA" ]; then
+              echo "head_sha=${SHA}" >> "$GITHUB_OUTPUT"
+              echo "head_resolved=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::warning::Head resolution attempt ${attempt}/3 failed"
+            [ "$attempt" -lt 3 ] && sleep $((attempt * 5))
+          done
+          echo "::warning::All 3 head-resolution attempts failed — gate will proceed fail-open"
+          echo "head_sha=" >> "$GITHUB_OUTPUT"
+          echo "head_resolved=false" >> "$GITHUB_OUTPUT"
 
       - name: Decide whether to review
         id: gate
@@ -130,9 +143,39 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
           HEAD_SHA: ${{ steps.head.outputs.head_sha }}
+          HEAD_RESOLVED: ${{ steps.head.outputs.head_resolved }}
           EVENT_NAME: ${{ github.event_name }}
           TRIGGER_ACTOR: ${{ github.event.comment.user.login }}
         run: python3 .github/scripts/sdk_review_gate.py
+
+      # If the gate job itself fails (e.g. checkout failure, unexpected error in
+      # the gate script), post a comment on the PR so the author knows to re-tag.
+      # Head-resolution exhaustion is handled inside the gate script (fail-open),
+      # so this step fires only for unexpected failures.
+      - name: Post gate-failure comment on PR
+        if: always() && failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            if (!prNumber) return;
+            const runUrl = process.env.GHA_RUN_URL;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: [
+                `⚠️ **SDK Review gate encountered an unexpected error** and could not decide whether to dispatch.`,
+                ``,
+                `[View the failing workflow run](${runUrl}) for details.`,
+                ``,
+                `Please retry by commenting \`@sdk-review\` again. If it keeps failing, reach out to the platform team.`,
+              ].join('\n'),
+            });
 
   sdk-review-dispatch:
     needs: gate

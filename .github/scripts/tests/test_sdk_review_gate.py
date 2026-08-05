@@ -160,3 +160,64 @@ def test_main_does_not_query_github_for_a_human_trigger(tmp_path, monkeypatch: p
 
     assert gate.main(_explode) == 0
     assert "decision=proceed" in (tmp_path / "gh_output").read_text()
+
+
+# --- head-resolution failure (B3) ----------------------------------------
+
+
+def test_head_resolution_failure_emits_proceed(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """Exhausted head-resolution retries must never silently drop the tag."""
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("REPO", "atlanhq/application-sdk")
+    monkeypatch.setenv("PR_NUMBER", "2987")
+    monkeypatch.setenv("HEAD_SHA", "")
+    monkeypatch.setenv("EVENT_NAME", "issue_comment")
+    monkeypatch.setenv("TRIGGER_ACTOR", "mothership-ai[bot]")
+    monkeypatch.setenv("HEAD_RESOLVED", "false")
+
+    def _should_not_be_called(*_args, **_kwargs):
+        raise AssertionError("gate queried GitHub when head-resolution failed")
+
+    assert gate.main(_should_not_be_called) == 0
+
+    written = out.read_text()
+    assert "decision=proceed" in written
+    assert "reason=head-resolution-failed" in written
+
+
+def test_head_resolution_failure_human_trigger_also_proceeds(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """Even human triggers proceed (trivially) when head resolution failed."""
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("REPO", "atlanhq/application-sdk")
+    monkeypatch.setenv("PR_NUMBER", "2987")
+    monkeypatch.setenv("HEAD_SHA", "")
+    monkeypatch.setenv("EVENT_NAME", "issue_comment")
+    monkeypatch.setenv("TRIGGER_ACTOR", "vaibhavatlan")
+    monkeypatch.setenv("HEAD_RESOLVED", "false")
+
+    assert gate.main(fake_runner([])) == 0
+    written = out.read_text()
+    assert "decision=proceed" in written
+    assert "reason=head-resolution-failed" in written
+
+
+def test_head_resolved_true_uses_normal_flow(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """HEAD_RESOLVED=true must not short-circuit to fail-open."""
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("REPO", "atlanhq/application-sdk")
+    monkeypatch.setenv("PR_NUMBER", "2987")
+    monkeypatch.setenv("HEAD_SHA", HEAD)
+    monkeypatch.setenv("EVENT_NAME", "issue_comment")
+    monkeypatch.setenv("TRIGGER_ACTOR", "mothership-ai[bot]")
+    monkeypatch.setenv("HEAD_RESOLVED", "true")
+
+    assert gate.main(fake_runner([[summary(HEAD)]])) == 0
+
+    written = out.read_text()
+    assert "decision=skip" in written
+    assert "reason=unchanged-head-bot-retrigger" in written
