@@ -671,7 +671,7 @@ class TestSdrPreflightObjectStoreChecks:
         names = [c.name for c in result.checks]
         assert names == [
             "Deployment reachability",
-            "Object store (deployment)",
+            "Object store",
             "Metadata / egress connectivity",
         ]
         # Names avoid the "SDR" acronym so the frontend title-caser doesn't

@@ -64,7 +64,7 @@ logger = get_logger(__name__)
 # the name by inserting a space before every capital, so "SDR" would render as
 # "S D R". The SDR context lives in the (verbatim) messages below instead.
 _OBJECT_STORE_CHECK_NAMES: dict[str, str] = {
-    "deployment": "Object store (deployment)",
+    "deployment": "Object store",
     "upstream": "Metadata / egress connectivity",
 }
 
