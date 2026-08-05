@@ -221,15 +221,18 @@ def test_stale_residue_removed_on_regeneration(repo, monkeypatch):
     assert (repo / "app" / "generated" / "manifest.json").read_text() == FRESH_MANIFEST
 
 
-def test_app_level_empty_eval_output_restores(repo, monkeypatch, capsys):
-    """Eval 'succeeding' without emitting app/generated must restore the
-    committed artifacts — no manifest at all is strictly worse than stale."""
+def test_app_level_empty_eval_output_leaves_committed(repo, monkeypatch, capsys):
+    """Eval 'succeeding' without emitting anything must leave the committed
+    artifacts alone — no manifest at all is strictly worse than a stale one.
+    Eval runs into a temp dir, so 'leave alone' needs no restore step."""
     monkeypatch.setattr(mod, "run", _make_fake_run(repo, emit_output=False))
 
     assert mod.main([]) == 0
 
     assert (repo / "app" / "generated" / "manifest.json").read_text() == STALE_MANIFEST
-    assert "::warning::pkl eval emitted no app/generated" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "::warning::pkl eval produced no generated contract artifacts" in out
+    assert "::warning::Committed contract artifacts left unchanged" in out
 
 
 def test_sdk_level_empty_eval_output_is_fatal(repo, monkeypatch, tmp_path, capsys):
@@ -243,9 +246,9 @@ def test_sdk_level_empty_eval_output_is_fatal(repo, monkeypatch, tmp_path, capsy
 
 
 def _commit_root_yamls(repo: Path) -> tuple[str, str]:
-    """Commit root atlan.yaml/app.yaml (which the fixture omits) so clean_outputs
-    removes them — mirrors a connector whose contract eval does not re-emit the
-    root YAMLs. Returns their committed contents."""
+    """Commit root atlan.yaml/app.yaml (which the fixture omits) — mirrors a
+    connector whose contract eval does not emit the root YAMLs. Returns their
+    committed contents."""
     atlan_yaml = "version: 1\nname: metabase\n"
     app_yaml = "app: metabase\n"
     (repo / "atlan.yaml").write_text(atlan_yaml)
@@ -255,16 +258,17 @@ def _commit_root_yamls(repo: Path) -> tuple[str, str]:
     return atlan_yaml, app_yaml
 
 
-def test_app_level_restores_root_yaml_when_not_reemitted(repo, monkeypatch, capsys):
-    """Eval re-emits app/generated but not the committed root atlan.yaml/app.yaml
-    it also cleaned: those must be restored from HEAD, not left deleted (a later
-    sdr-e2e step hard-errors on a missing root app.yaml)."""
+def test_app_level_keeps_root_yaml_when_not_reemitted(repo, monkeypatch, capsys):
+    """Eval emits app/generated but not the committed root atlan.yaml/app.yaml:
+    those must be left in place, not deleted (a later sdr-e2e step hard-errors on
+    a missing root app.yaml). Temp-dir eval gives this for free — the warning is
+    still emitted so the human knows the contract stopped emitting them."""
     atlan_yaml, app_yaml = _commit_root_yamls(repo)
     monkeypatch.setattr(mod, "run", _make_fake_run(repo))
 
     assert mod.main([]) == 0
 
-    # app/generated regenerated, root YAMLs restored to their committed content.
+    # app/generated regenerated, root YAMLs still at their committed content.
     assert (repo / "app" / "generated" / "manifest.json").read_text() == FRESH_MANIFEST
     assert (repo / "atlan.yaml").read_text() == atlan_yaml
     assert (repo / "app.yaml").read_text() == app_yaml
@@ -274,8 +278,8 @@ def test_app_level_restores_root_yaml_when_not_reemitted(repo, monkeypatch, caps
 
 
 def test_sdk_level_missing_root_yaml_is_fatal(repo, monkeypatch, tmp_path, capsys):
-    """SDK-level: a cleaned root YAML the toolkit does not re-emit is fatal, same
-    policy split as the empty-app/generated case."""
+    """SDK-level: a committed root YAML the toolkit under test does not emit is
+    fatal, same policy split as the empty-output case."""
     _commit_root_yamls(repo)
     toolkit = tmp_path / "sdk" / "contract-toolkit" / "src"
     toolkit.mkdir(parents=True)
