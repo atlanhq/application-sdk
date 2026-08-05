@@ -12,17 +12,25 @@ A human tagging `@sdk-review` always dispatches, even on an unchanged HEAD:
 re-reading the same diff is a legitimate thing to ask for, and second-guessing
 it would make the tag feel broken.
 
+If head resolution (the `gh api` call that fetches the PR's current HEAD SHA)
+fails after all retries, we emit `decision=proceed` with
+`reason=head-resolution-failed`. Reviewing is always the safe default; a
+missing review is the harmful outcome.
+
 Decision logic lives here rather than inlined in the workflow, per
 docs/standards/ci.md.
 
 Environment:
-    REPO           owner/repo (e.g. atlanhq/application-sdk)
-    PR_NUMBER      pull request number
-    HEAD_SHA       40-char sha this trigger would review
-    EVENT_NAME     issue_comment | workflow_dispatch
-    TRIGGER_ACTOR  login of the commenter ("" for workflow_dispatch)
-    GH_TOKEN       consumed by `gh` for auth (not read here directly)
-    GITHUB_OUTPUT  path to the step-output file (optional; falls back to stdout)
+    REPO            owner/repo (e.g. atlanhq/application-sdk)
+    PR_NUMBER       pull request number
+    HEAD_SHA        40-char sha this trigger would review (empty when
+                    HEAD_RESOLVED=false)
+    EVENT_NAME      issue_comment | workflow_dispatch
+    TRIGGER_ACTOR   login of the commenter ("" for workflow_dispatch)
+    HEAD_RESOLVED   true (default) | false — set by the workflow when all
+                    head-resolution retries are exhausted
+    GH_TOKEN        consumed by `gh` for auth (not read here directly)
+    GITHUB_OUTPUT   path to the step-output file (optional; falls back to stdout)
 
 Outputs:
     decision  proceed | skip
@@ -48,9 +56,7 @@ REVIEWED_HEAD_RE = re.compile(r"<!--\s*REVIEWED_HEAD:\s*([0-9a-f]{40})\s*-->")
 Runner = Callable[..., subprocess.CompletedProcess]
 
 
-def fetch_comments(
-    repo: str, pr_number: str, runner: Runner = subprocess.run
-) -> list[dict]:
+def fetch_comments(repo: str, pr_number: str, runner: Runner = subprocess.run) -> list[dict]:
     """Every comment on the PR, or [] if the query fails.
 
     `--slurp` returns one array per page wrapped in an outer array; it is used
@@ -72,9 +78,7 @@ def fetch_comments(
         check=False,
     )
     if result.returncode != 0:
-        print(
-            f"::warning::could not list PR comments (exit {result.returncode}) — not gating"
-        )
+        print(f"::warning::could not list PR comments (exit {result.returncode}) — not gating")
         return []
     try:
         pages = json.loads(result.stdout or "[]")
@@ -122,11 +126,7 @@ def decide(
             f"from @{actor}, not a human. Push a commit, or tag `@sdk-review` yourself to "
             f"force a re-review.",
         )
-    return (
-        "proceed",
-        "bot-trigger-new-head",
-        f"Bot trigger by @{actor} on a new HEAD — reviewing.",
-    )
+    return "proceed", "bot-trigger-new-head", f"Bot trigger by @{actor} on a new HEAD — reviewing."
 
 
 def set_output(key: str, value: str) -> None:
@@ -145,6 +145,21 @@ def main(runner: Runner = subprocess.run) -> int:
     head_sha = os.environ.get("HEAD_SHA", "")
     event_name = os.environ.get("EVENT_NAME", "issue_comment")
     actor = os.environ.get("TRIGGER_ACTOR", "")
+    head_resolved = os.environ.get("HEAD_RESOLVED", "true")
+
+    # If all head-resolution retries were exhausted, proceed fail-open.
+    # A missing review is always worse than an extra review.
+    if head_resolved != "true":
+        message = (
+            "Head SHA could not be resolved after 3 attempts "
+            "(transient GitHub API error). Proceeding fail-open — "
+            "reviewing is the safe default."
+        )
+        set_output("decision", "proceed")
+        set_output("reason", "head-resolution-failed")
+        set_output("message", message)
+        print(f"::notice::sdk-review gate: proceed (head-resolution-failed) — {message}")
+        return 0
 
     reviewed_head: str | None = None
     # Only a bot trigger can be gated, so skip the API call entirely otherwise.
