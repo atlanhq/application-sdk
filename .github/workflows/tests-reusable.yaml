@@ -404,8 +404,19 @@ jobs:
 
       - name: Detect merge queue on base branch
         id: detect
-        # A PAT reads rulesets reliably; GITHUB_TOKEN is the fallback and the
-        # script fails open if neither has the scope.
+        # ORG_PAT_GITHUB is what makes detection authoritative. Reading
+        # /repos/{repo}/rulesets needs administration-level read, and
+        # `administration` is not among the scopes a GITHUB_TOKEN can be granted
+        # via `permissions:` at all — so the github.token fallback exists only to
+        # keep the step from erroring on a missing secret; it is expected to fail
+        # open (⇒ integration also runs on the PR) with a loud ::warning::.
+        #
+        # Consequence worth stating: the "queued repos are unaffected" property
+        # holds only where the PAT reaches this reusable. Every consumer with a
+        # merge queue today calls it with `secrets: inherit`, so it does; a
+        # consumer that swaps that for an explicit `secrets:` block omitting
+        # ORG_PAT_GITHUB would start running integration on PRs as well as in the
+        # queue — ~1-2 min of redundant work, never a wrong gate.
         #
         # Event-derived values are routed through `env` and referenced as shell
         # variables rather than interpolated into the `run:` body — the same

@@ -204,6 +204,59 @@ def test_main_emits_github_output(
     assert expected in capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    "listing,detail,expected",
+    [([{"id": 1}], _ruleset(), "enabled=true\n"), ([], {}, "enabled=false\n")],
+)
+def test_stdout_is_exactly_the_github_output_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    listing,
+    detail,
+    expected,
+) -> None:
+    """stdout must be `enabled=<bool>` and NOTHING else.
+
+    The caller redirects this script's stdout straight into $GITHUB_OUTPUT, and
+    the runner rejects any line without an `=` — which fails the step and, via
+    the gate's detect-merge-queue rule, reddens Tests Gate on every pull_request
+    in every consumer. A substring assertion (the test above) cannot catch a
+    stray line, so this one pins the whole stream by equality.
+    """
+    monkeypatch.setattr("detect_merge_queue._run_gh", _stub(listing, detail))
+    assert main(["--repo", REPO, "--base-ref", "main", "--default-branch", "main"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == expected
+    # The human-readable annotation still has to be emitted — on stderr.
+    assert "::notice::" in captured.err
+
+
+def test_no_stdout_line_lacks_an_equals_sign(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    # The precise property the runner enforces on $GITHUB_OUTPUT, stated directly
+    # so a future line added to stdout fails here rather than in the fleet.
+    monkeypatch.setattr("detect_merge_queue._run_gh", lambda _args: "")
+    main(["--repo", REPO, "--base-ref", "main"])
+    out = capsys.readouterr().out
+    assert [line for line in out.splitlines() if "=" not in line] == []
+
+
+def test_unreadable_rulesets_warns_rather_than_failing_silently(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    # A 403 body returns "no queue" like a genuinely queue-less repo does; the
+    # warning is the only thing distinguishing them in the log.
+    monkeypatch.setattr(
+        "detect_merge_queue._run_gh",
+        lambda _args: '{"message": "Resource not accessible by integration"}',
+    )
+    main(["--repo", REPO, "--base-ref", "main"])
+    captured = capsys.readouterr()
+    assert "enabled=false\n" == captured.out
+    assert "could not read rulesets" in captured.err
+
+
 def test_main_never_exits_nonzero_on_api_failure(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:

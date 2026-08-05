@@ -184,6 +184,20 @@ def detect(
     listing = _load(run(["api", f"repos/{repo}/rulesets", "--paginate", "--slurp"]))
     if not isinstance(listing, list):
         # Fail open: no readable ruleset list ⇒ assume no queue ⇒ PR tier runs.
+        #
+        # Announce it. "Could not read the rulesets" and "this repo has no queue"
+        # produce the same return value but mean very different things: the first
+        # means a repo that DOES have a queue will also run integration on its
+        # PRs. Without this line that difference is invisible in the log, and the
+        # usual cause is a token without the scope to read rulesets
+        # (GITHUB_TOKEN cannot carry it — ORG_PAT_GITHUB is what makes detection
+        # authoritative), which is exactly the case worth noticing.
+        print(
+            f"::warning::could not read rulesets for {repo} — assuming no merge "
+            "queue, so the integration tier will run on this pull_request. If the "
+            "repo does have a queue, forward ORG_PAT_GITHUB via `secrets: inherit`.",
+            file=sys.stderr,
+        )
         return False
 
     for entry in listing:
@@ -220,10 +234,19 @@ def main(argv: list | None = None) -> int:
     # Surface the decision and its consequence in the log: this is the reason
     # the integration tier does or doesn't appear on the PR, and a reader
     # should not have to re-derive it from job `if:` expressions.
+    #
+    # MUST go to stderr, not stdout. The caller redirects this script's stdout
+    # straight into $GITHUB_OUTPUT, and the runner rejects any line there that
+    # has no `=` ("Unable to process file command 'output' successfully"), which
+    # would fail the step — and, via the gate's detect-merge-queue rule, redden
+    # Tests Gate on every pull_request in every consumer. Workflow commands are
+    # honoured on stderr too, so the annotation still renders.
+    # stdout is a strict contract: `enabled=<bool>` and nothing else.
     tier = "merge queue" if enabled else "pull_request"
     print(
         f"::notice::merge queue for {args.repo}@{args.base_ref}: "
-        f"{'enabled' if enabled else 'not detected'} — integration tier runs on {tier}"
+        f"{'enabled' if enabled else 'not detected'} — integration tier runs on {tier}",
+        file=sys.stderr,
     )
     print(f"enabled={'true' if enabled else 'false'}")
     return 0
