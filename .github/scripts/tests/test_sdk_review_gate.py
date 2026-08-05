@@ -92,7 +92,10 @@ def test_ignores_non_summary_comments():
 
 def test_returns_none_when_summary_predates_the_marker():
     """A summary from before REVIEWED_HEAD existed must not gate anything."""
-    assert gate.last_reviewed_head([{"body": "<!-- SDK_REVIEW -->\n## SDK Review"}]) is None
+    assert (
+        gate.last_reviewed_head([{"body": "<!-- SDK_REVIEW -->\n## SDK Review"}])
+        is None
+    )
 
 
 def test_tolerates_missing_body_key():
@@ -115,14 +118,18 @@ def test_gh_failure_returns_empty_so_the_gate_fails_open():
 
 def test_malformed_json_returns_empty_so_the_gate_fails_open():
     def _run(*_args, **_kwargs):
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout="not json", stderr="")
+        return subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="not json", stderr=""
+        )
 
     assert gate.fetch_comments("o/r", "1", _run) == []
 
 
 def test_fail_open_means_a_bot_retrigger_still_reviews():
     """An API outage must never silently stop reviews from running."""
-    reviewed = gate.last_reviewed_head(gate.fetch_comments("o/r", "1", fake_runner([], returncode=1)))
+    reviewed = gate.last_reviewed_head(
+        gate.fetch_comments("o/r", "1", fake_runner([], returncode=1))
+    )
     decision, _, _ = gate.decide("issue_comment", "mothership-ai[bot]", HEAD, reviewed)
     assert decision == "proceed"
 
@@ -146,7 +153,9 @@ def test_main_writes_outputs(tmp_path, monkeypatch: pytest.MonkeyPatch):
     assert "reason=unchanged-head-bot-retrigger" in written
 
 
-def test_main_does_not_query_github_for_a_human_trigger(tmp_path, monkeypatch: pytest.MonkeyPatch):
+def test_main_does_not_query_github_for_a_human_trigger(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
     """The gate must cost nothing on the common path."""
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "gh_output"))
     monkeypatch.setenv("REPO", "atlanhq/application-sdk")
