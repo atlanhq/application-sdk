@@ -404,19 +404,18 @@ jobs:
 
       - name: Detect merge queue on base branch
         id: detect
-        # ORG_PAT_GITHUB is what makes detection authoritative. Reading
-        # /repos/{repo}/rulesets needs administration-level read, and
-        # `administration` is not among the scopes a GITHUB_TOKEN can be granted
-        # via `permissions:` at all — so the github.token fallback exists only to
-        # keep the step from erroring on a missing secret; it is expected to fail
-        # open (⇒ integration also runs on the PR) with a loud ::warning::.
+        # Reading /repos/{repo}/rulesets is NOT administration-gated: the
+        # endpoint is readable by anyone who can read the repo (an
+        # unauthenticated GET against a public repo returns the full ruleset
+        # list, 200). So `contents: read` above is expected to be sufficient on a
+        # private consumer repo, and ORG_PAT_GITHUB is preferred only as the
+        # token least likely to be scope-limited.
         #
-        # Consequence worth stating: the "queued repos are unaffected" property
-        # holds only where the PAT reaches this reusable. Every consumer with a
-        # merge queue today calls it with `secrets: inherit`, so it does; a
-        # consumer that swaps that for an explicit `secrets:` block omitting
-        # ORG_PAT_GITHUB would start running integration on PRs as well as in the
-        # queue — ~1-2 min of redundant work, never a wrong gate.
+        # If that expectation is ever wrong, the failure is safe and loud rather
+        # than silent: detection fails open (⇒ integration also runs on the PR,
+        # ~1-2 min of redundant work, never a wrong gate) and the script emits a
+        # ::warning:: naming the cause. The first real PR run in a queued
+        # consumer confirms it either way — look for the ::notice:: line.
         #
         # Event-derived values are routed through `env` and referenced as shell
         # variables rather than interpolated into the `run:` body — the same

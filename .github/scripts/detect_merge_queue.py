@@ -188,14 +188,13 @@ def detect(
         # Announce it. "Could not read the rulesets" and "this repo has no queue"
         # produce the same return value but mean very different things: the first
         # means a repo that DOES have a queue will also run integration on its
-        # PRs. Without this line that difference is invisible in the log, and the
-        # usual cause is a token without the scope to read rulesets
-        # (GITHUB_TOKEN cannot carry it — ORG_PAT_GITHUB is what makes detection
-        # authoritative), which is exactly the case worth noticing.
+        # PRs. Without this line that difference is invisible in the log.
         print(
             f"::warning::could not read rulesets for {repo} — assuming no merge "
             "queue, so the integration tier will run on this pull_request. If the "
-            "repo does have a queue, forward ORG_PAT_GITHUB via `secrets: inherit`.",
+            "repo does have a queue, check the token: reading rulesets needs only "
+            "repo read access, so this usually means GH_TOKEN was empty or "
+            "scope-limited rather than that the endpoint is admin-gated.",
             file=sys.stderr,
         )
         return False
