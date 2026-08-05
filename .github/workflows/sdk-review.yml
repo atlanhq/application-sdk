@@ -82,6 +82,13 @@ jobs:
   # couple of minutes after a review lands, and the result is two summaries
   # for one sha that read like a bug. A human tagging `@sdk-review` always
   # reviews, unchanged HEAD or not.
+  #
+  # NOTE — this job is an OPTIMIZATION, not the authority. It runs outside
+  # the per-PR concurrency group (sdk-review-$PR), so two concurrent bot
+  # triggers can both pass it ("no review yet") and both reach the sandbox.
+  # The authoritative dedupe check lives inside the sandbox (ORCHESTRATION.md
+  # Phase 0 §6b bot-trigger dedupe guard), which runs under the concurrency
+  # lock and sees true post-lock comment state.
   gate:
     if: >-
       github.event_name == 'workflow_dispatch'
