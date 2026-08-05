@@ -78,6 +78,9 @@ from e2e_tenant_api import (
     TenantApiError,
     TenantClient,
     mint_oauth_token,
+    path_segment,
+    validate_app_id,
+    validate_tenant_base_url,
 )
 from marketplace_publish_body import PublishBodyError, PublishRequest, build
 
@@ -171,7 +174,7 @@ def _installed_version(client: TenantClient, app_id: str) -> str:
     treat those the same way: install. Distinguishing them would require LM to
     commit to a shape it has not.
     """
-    response = client.get(APP_INFO_PATH.format(app_id=app_id))
+    response = client.get(APP_INFO_PATH.format(app_id=path_segment(app_id)))
     if not response.ok:
         # Not fatal: a 404 is the "never installed on this tenant" case, which
         # FND-31 requirement 2 says to install rather than fail on.
@@ -199,6 +202,22 @@ def _extract_version(payload: dict[str, object]) -> str:
     return ""
 
 
+#: Cap on rendered response bodies in error messages. The token-mint path
+#: withholds bodies entirely because they can echo request parameters; the
+#: publish/install routes render a bounded prefix instead — enough of a live
+#: tenant error page to diagnose a 4xx, not enough to dump a verbose framework
+#: page (or anything auth-adjacent it carries) into the CI log unredacted.
+_ERROR_BODY_CHARS = 2000
+
+
+def _render_body(body: object) -> str:
+    """Render a response body for an error message, length-bounded."""
+    rendered = repr(body)
+    if len(rendered) > _ERROR_BODY_CHARS:
+        rendered = f"{rendered[:_ERROR_BODY_CHARS]}…(truncated)"
+    return rendered
+
+
 def _looks_like_scan_gate(response: Response) -> bool:
     """True when a failed install looks like GM's release-scan gate refusing.
 
@@ -222,7 +241,9 @@ def _release_status(client: TenantClient, app_id: str, release_id: str) -> str:
     if not release_id:
         return ""
     response = client.get(
-        RELEASE_SCAN_PATH.format(app_id=app_id, release_id=release_id)
+        RELEASE_SCAN_PATH.format(
+            app_id=path_segment(app_id), release_id=path_segment(release_id)
+        )
     )
     if not response.ok:
         return ""
@@ -267,7 +288,7 @@ def _publish(client: TenantClient, request: PublishRequest) -> tuple[str, str]:
             )
         raise TenantAppError(
             f"marketplace publish failed with HTTP {response.status}.{hint}\n"
-            f"response={response.body!r}"
+            f"response={_render_body(response.body)}"
         )
 
     data = response.data()
@@ -283,7 +304,7 @@ def _publish(client: TenantClient, request: PublishRequest) -> tuple[str, str]:
 def _install(client: TenantClient, app_id: str, version_id: str, scan_hint: str) -> str:
     """Trigger the install. Returns the deployment id."""
     response = client.post(
-        INSTALL_PATH.format(app_id=app_id),
+        INSTALL_PATH.format(app_id=path_segment(app_id)),
         body={"version_id": version_id, "force_install": True},
     )
     if not response.ok:
@@ -302,7 +323,7 @@ def _install(client: TenantClient, app_id: str, version_id: str, scan_hint: str)
             )
         raise TenantAppError(
             f"install failed with HTTP {response.status}.{hint}\n"
-            f"response={response.body!r}"
+            f"response={_render_body(response.body)}"
         )
     deployment_id = str(response.data().get("deployment_id") or "")
     if not deployment_id:
@@ -323,7 +344,9 @@ def _poll_deployment(client: TenantClient, deployment_id: str, timeout: int) -> 
     deadline = time.monotonic() + timeout
     last = ""
     while time.monotonic() < deadline:
-        response = client.get(DEPLOYMENT_PATH.format(deployment_id=deployment_id))
+        response = client.get(
+            DEPLOYMENT_PATH.format(deployment_id=path_segment(deployment_id))
+        )
         if response.ok:
             status = str(response.data().get("deployment_status") or "")
             if status != last:
@@ -354,7 +377,7 @@ def _poll_deployment(client: TenantClient, deployment_id: str, timeout: int) -> 
 def _dump_failure(client: TenantClient, app_id: str) -> None:
     """Print LM's failure diagnostics. Best-effort — never masks the real error."""
     try:
-        response = client.get(APP_FAILURE_PATH.format(app_id=app_id))
+        response = client.get(APP_FAILURE_PATH.format(app_id=path_segment(app_id)))
     except TenantApiError as exc:
         print(f"::warning::could not fetch failure diagnostics: {exc}")
         return
@@ -365,23 +388,25 @@ def _dump_failure(client: TenantClient, app_id: str) -> None:
 
 def install(args: argparse.Namespace) -> InstallOutcome:
     """Register + install + wait, converging by version."""
-    publish_client, read_client = _clients(args.base_url)
+    # app_id is a free-text workflow input that lands in request paths; the
+    # base URL takes the OAuth secret. Validate both before any API call.
+    app_id = validate_app_id(args.app_id)
+    base_url = validate_tenant_base_url(args.base_url)
+    publish_client, read_client = _clients(base_url)
 
-    current = _installed_version(read_client, args.app_id)
+    current = _installed_version(read_client, app_id)
     if current and current == args.version:
-        print(f"tenant already runs {args.app_id} at {args.version} — nothing to do")
+        print(f"tenant already runs {app_id} at {args.version} — nothing to do")
         return InstallOutcome(
             version=args.version, installed_version=current, skipped=True
         )
     if current:
         print(f"tenant runs {current}; installing {args.version}")
     else:
-        print(
-            f"{args.app_id} is not installed on this tenant; installing {args.version}"
-        )
+        print(f"{app_id} is not installed on this tenant; installing {args.version}")
 
     request = PublishRequest(
-        app_id=args.app_id,
+        app_id=app_id,
         image=args.image,
         version=args.version,
         branch=args.branch,
@@ -402,26 +427,26 @@ def install(args: argparse.Namespace) -> InstallOutcome:
 
     if args.scan_wait_seconds > 0:
         status = _wait_for_scan(
-            publish_client, args.app_id, release_id, args.scan_wait_seconds
+            publish_client, app_id, release_id, args.scan_wait_seconds
         )
         print(f"release status after waiting: {status or '<unreadable>'}")
     else:
-        status = _release_status(publish_client, args.app_id, release_id)
+        status = _release_status(publish_client, app_id, release_id)
         print(
             f"release status at install time: {status or '<unreadable>'} "
             "(not waiting for the scan by design)"
         )
 
-    deployment_id = _install(publish_client, args.app_id, version_id, status)
+    deployment_id = _install(publish_client, app_id, version_id, status)
     print(f"install accepted, deployment_id={deployment_id}")
 
     try:
         _poll_deployment(read_client, deployment_id, args.timeout_seconds)
     except TenantAppError:
-        _dump_failure(read_client, args.app_id)
+        _dump_failure(read_client, app_id)
         raise
 
-    installed = _installed_version(read_client, args.app_id)
+    installed = _installed_version(read_client, app_id)
     print(f"tenant reports installed version: {installed or '<unreported>'}")
     return InstallOutcome(
         version=args.version,
@@ -435,12 +460,14 @@ def install(args: argparse.Namespace) -> InstallOutcome:
 
 def verify(args: argparse.Namespace) -> str:
     """Assert the tenant runs ``--expected``. Returns the installed version."""
-    _, read_client = _clients(args.base_url)
-    installed = _installed_version(read_client, args.app_id)
+    app_id = validate_app_id(args.app_id)
+    base_url = validate_tenant_base_url(args.base_url)
+    _, read_client = _clients(base_url)
+    installed = _installed_version(read_client, app_id)
     if installed != args.expected:
         raise TenantAppError(
             f"tenant is running {installed or '<nothing / unreported>'} for app "
-            f"{args.app_id}, but this leg tests {args.expected}. Heracles fetches "
+            f"{app_id}, but this leg tests {args.expected}. Heracles fetches "
             "the DAG from the deployed pod at AE submit, so continuing would "
             "test a different version than the one under test. A concurrent e2e "
             "run against this tenant, or a manual deploy, is the usual cause."

@@ -567,3 +567,58 @@ def test_transport_failure_surfaces_as_an_error_not_a_traceback(
         == 1
     )
     assert "could not reach tenant" in capsys.readouterr().err
+
+
+# ── Driver-side input validation ─────────────────────────────────────────────
+#
+# app_id is a free-text workflow input that lands in a request path, and the
+# base URL takes the OAuth secret — both are validated before any API call.
+
+
+def test_install_rejects_a_malformed_app_id_before_any_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _wire(monkeypatch, StubTransport(routes=[]))
+    with pytest.raises(TenantApiError, match="invalid app_id"):
+        app.install(_install_args(app_id="../../admin"))
+    assert transport.calls == [], "no tenant call may leave before validation"
+
+
+def test_verify_rejects_a_plaintext_base_url_before_any_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _wire(monkeypatch, StubTransport(routes=[]))
+    with pytest.raises(TenantApiError, match="invalid tenant base URL"):
+        app.verify(
+            argparse.Namespace(base_url="http://x", app_id=_APP_ID, expected="1")
+        )
+    assert transport.calls == []
+
+
+# ── Error-body rendering ─────────────────────────────────────────────────────
+
+
+def test_render_body_truncates_a_verbose_error_page() -> None:
+    body = "x" * 10000
+    rendered = app._render_body(body)
+    assert len(rendered) <= app._ERROR_BODY_CHARS + len("…(truncated)")
+    assert rendered.endswith("…(truncated)")
+
+
+def test_render_body_leaves_a_short_body_intact() -> None:
+    assert app._render_body({"error": "nope"}) == repr({"error": "nope"})
+
+
+def test_publish_error_body_is_truncated(monkeypatch: pytest.MonkeyPatch) -> None:
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", Response(404, {})),
+                StubRoute("POST", "/publish", Response(500, "y" * 10000)),
+            ]
+        ),
+    )
+    with pytest.raises(app.TenantAppError) as excinfo:
+        app.install(_install_args())
+    assert len(str(excinfo.value)) < 5000

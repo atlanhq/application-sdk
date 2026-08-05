@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -60,8 +61,12 @@ _USER_AGENT = "atlan-application-sdk-e2e-tenant/1.0"
 _SERVICE_PREFIX = "/api/service"
 
 #: Marketplace routes, mirroring `atlan-cli/pkg/voyager/endpoints.go` and
-#: `heracles/api/marketplace.json`. Kept as format strings so a caller cannot
-#: assemble a path by string-concatenating an unvalidated id into a URL.
+#: `heracles/api/marketplace.json`. Format strings, filled only through
+#: :func:`path_segment`: ``str.format`` inserts a value verbatim, so a segment
+#: containing ``/``, ``?`` or ``#`` would rewrite the request path. Keeping the
+#: constants as format strings means a caller cannot assemble a path by
+#: string-concatenating an unvalidated id into a URL, and the quoting in
+#: :func:`path_segment` means a formatted-in value cannot either.
 PUBLISH_PATH = f"{_SERVICE_PREFIX}/marketplace/publish"
 INSTALL_PATH = f"{_SERVICE_PREFIX}/marketplace/tenant/default/apps/{{app_id}}/install"
 APP_INFO_PATH = f"{_SERVICE_PREFIX}/marketplace/apps/{{app_id}}/info"
@@ -80,6 +85,11 @@ TOKEN_PATH = "/auth/realms/default/protocol/openid-connect/token"
 
 Method = Literal["GET", "POST", "PUT"]
 
+#: A GM app id is a UUID (see ``app_id`` in any app's ``atlan.yaml``).
+_APP_ID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-" r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
 
 class TenantApiError(RuntimeError):
     """A tenant call failed in a way the caller cannot recover from.
@@ -92,6 +102,60 @@ class TenantApiError(RuntimeError):
         super().__init__(message)
         self.status = status
         self.body = body
+
+
+def validate_tenant_base_url(base_url: str) -> str:
+    """Return ``base_url`` with any trailing slash stripped, or raise.
+
+    The client POSTs the OAuth client secret to, and sends every bearer token
+    to, ``{base_url}/...`` — so the base is validated before any request: an
+    ``https`` scheme (plaintext would leak the credentials), a non-empty host,
+    and no userinfo/query/fragment (which would redirect or mangle the token
+    endpoint). A misconfigured tenant-matrix value fails here, at construction,
+    rather than after the secret has gone to the wrong place.
+    """
+    candidate = base_url.strip().rstrip("/")
+    parsed = urllib.parse.urlparse(candidate)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise TenantApiError(
+            f"invalid tenant base URL {base_url!r}: expected a bare "
+            "https://<host> with no userinfo, query, or fragment. Check the "
+            "tenant value in E2E_TENANT_MATRIX_JSON / SDR_TEST_TENANT."
+        )
+    return candidate
+
+
+def validate_app_id(app_id: str) -> str:
+    """Return ``app_id`` when it has the GM UUID shape, or raise.
+
+    ``app_id`` is a free-text workflow input that lands in a request path, so
+    it is validated before any API call: a value containing ``/``, ``?`` or
+    ``#`` would rewrite the path on the live tenant, and ``str.format`` does
+    no escaping on its own.
+    """
+    value = app_id.strip()
+    if not _APP_ID_RE.fullmatch(value):
+        raise TenantApiError(
+            f"invalid app_id {app_id!r}: GM app ids are UUIDs (the app_id "
+            "field in the app's atlan.yaml)."
+        )
+    return value
+
+
+def path_segment(value: str) -> str:
+    """Quote one value for safe insertion into a path-constant format string.
+
+    Belt after the validators' braces: callers validate ids up front, and this
+    guarantees that even a caller that forgot cannot rewrite the request path.
+    """
+    return urllib.parse.quote(str(value), safe="")
 
 
 @dataclass(frozen=True)
@@ -139,7 +203,8 @@ class TenantClient:
 
     Args:
         base_url: Tenant base URL, e.g. ``https://e2e-azure-main.atlan.com``.
-            A trailing slash is stripped.
+            Validated by :func:`validate_tenant_base_url` before any request
+            can be made: https-only, a host, and no userinfo/query/fragment.
         bearer: The token to send. Use :meth:`with_oauth_token` to build a
             client authenticated by the OAuth client pair (required for
             publish), or pass the API key directly for routes that accept it.
@@ -149,7 +214,7 @@ class TenantClient:
     bearer: str = field(repr=False)
 
     def __post_init__(self) -> None:
-        self.base_url = self.base_url.rstrip("/")
+        self.base_url = validate_tenant_base_url(self.base_url)
 
     # -- construction ---------------------------------------------------
 
@@ -186,7 +251,7 @@ class TenantClient:
         """
         url = f"{self.base_url}{path}"
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(url, data=data, method=method)  # noqa: S310 — https URL built from a validated base + a module-owned path constant
+        req = urllib.request.Request(url, data=data, method=method)  # noqa: S310 — https URL: base validated by validate_tenant_base_url + a module-owned path constant filled through path_segment
         req.add_header("Authorization", f"Bearer {self.bearer}")
         req.add_header("Accept", "application/json")
         req.add_header("User-Agent", _USER_AGENT)
@@ -234,6 +299,7 @@ def mint_oauth_token(base_url: str, client_id: str, client_secret: str) -> str:
     Raises rather than returning an empty string: every caller needs the token,
     and an empty bearer would fail later as an opaque 401 far from its cause.
     """
+    base_url = validate_tenant_base_url(base_url)
     missing = [
         name
         for name, value in (("client_id", client_id), ("client_secret", client_secret))
@@ -246,7 +312,7 @@ def mint_oauth_token(base_url: str, client_id: str, client_secret: str) -> str:
             "usually means the secret is not shared with this repository."
         )
 
-    url = f"{base_url.rstrip('/')}{TOKEN_PATH}"
+    url = f"{base_url}{TOKEN_PATH}"
     payload = urllib.parse.urlencode(
         {
             "grant_type": "client_credentials",
@@ -254,7 +320,7 @@ def mint_oauth_token(base_url: str, client_id: str, client_secret: str) -> str:
             "client_secret": client_secret,
         }
     ).encode()
-    req = urllib.request.Request(url, data=payload, method="POST")  # noqa: S310 — https URL from the caller-validated tenant base
+    req = urllib.request.Request(url, data=payload, method="POST")  # noqa: S310 — https URL: base validated above
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
     req.add_header("Accept", "application/json")
     req.add_header("User-Agent", _USER_AGENT)

@@ -67,6 +67,67 @@ def test_trailing_slash_is_stripped_so_paths_do_not_double_up() -> None:
     assert api.TenantClient(base_url=f"{_TENANT}/", bearer="t").base_url == _TENANT
 
 
+# ── Base-URL validation ──────────────────────────────────────────────────────
+#
+# The client POSTs the OAuth client secret to {base_url}/... and sends every
+# bearer there, so a misconfigured matrix value must fail before any request.
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://example-tenant.atlan.test",  # plaintext would leak the pair
+        "https://",  # no host
+        "not-a-url",
+        "https://user:pw@example-tenant.atlan.test",  # userinfo
+        "https://example-tenant.atlan.test?x=1",  # query
+        "https://example-tenant.atlan.test#frag",  # fragment
+    ],
+)
+def test_base_url_is_rejected_before_any_request(base_url: str) -> None:
+    with pytest.raises(api.TenantApiError, match="invalid tenant base URL"):
+        api.TenantClient(base_url=base_url, bearer="t")
+
+
+def test_mint_rejects_a_plaintext_base_url() -> None:
+    with pytest.raises(api.TenantApiError, match="invalid tenant base URL"):
+        api.mint_oauth_token("http://example-tenant.atlan.test", "i", "s")
+
+
+# ── Path-segment handling ────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "app_id",
+    [
+        "019d1f6b-6fea-7db3-96d8-e61e159d0351",
+        "019D1F6B-6FEA-7DB3-96D8-E61E159D0351",  # upper-case hex is still a UUID
+    ],
+)
+def test_validate_app_id_accepts_uuid_shapes(app_id: str) -> None:
+    assert api.validate_app_id(app_id) == app_id
+
+
+@pytest.mark.parametrize(
+    "app_id",
+    [
+        "",
+        "not-a-uuid",
+        "../../admin",  # would rewrite the request path if formatted verbatim
+        "019d1f6b-6fea-7db3-96d8-e61e159d0351/extra",
+        "019d1f6b-6fea-7db3-96d8-e61e159d0351?force=true",
+    ],
+)
+def test_validate_app_id_rejects_non_uuid_shapes(app_id: str) -> None:
+    with pytest.raises(api.TenantApiError, match="invalid app_id"):
+        api.validate_app_id(app_id)
+
+
+def test_path_segment_quotes_everything_but_unreserved() -> None:
+    assert api.path_segment("a/b?c#d") == "a%2Fb%3Fc%23d"
+    assert api.path_segment("plain-value_1.2~3") == "plain-value_1.2~3"
+
+
 def test_repr_never_contains_the_bearer() -> None:
     client = api.TenantClient(base_url=_TENANT, bearer=_SECRET)
     assert _SECRET not in repr(client)
