@@ -20,9 +20,19 @@ inputs:
   detect-integration-result:
     description: |
       needs.detect-integration.result (the suite-detection job gating the
-      integration tier). "skipped" (pull_request) and "success" are passes; a
-      "failure" must fail the gate rather than silently skip integration.
+      integration tier). "skipped" (no integration tier for this event) and
+      "success" are passes; a "failure" must fail the gate rather than silently
+      skip integration.
     required: true
+  detect-merge-queue-result:
+    description: |
+      needs.detect-merge-queue.result (decides whether the integration tier runs
+      in the merge queue or on the PR). "skipped" (non-PR events) and "success"
+      are passes; a "failure" must fail the gate rather than silently drop the
+      integration tier. Optional and defaults to "skipped" so callers pinned at
+      @main that have not yet added the job keep working unchanged.
+    required: false
+    default: skipped
   discover-e2e-result:
     description: needs.discover-e2e.result (skipped = e2e not requested).
     required: true
@@ -58,6 +68,7 @@ runs:
         UNIT_RESULT: ${{ inputs.unit-result }}
         INTEGRATION_RESULT: ${{ inputs.integration-result }}
         DETECT_INTEGRATION_RESULT: ${{ inputs.detect-integration-result }}
+        DETECT_MERGE_QUEUE_RESULT: ${{ inputs.detect-merge-queue-result }}
         DISCOVER_E2E_RESULT: ${{ inputs.discover-e2e-result }}
         E2E_RESULT: ${{ inputs.e2e-result }}
       run: |
@@ -66,5 +77,6 @@ runs:
           --unit "$UNIT_RESULT" \
           --integration "$INTEGRATION_RESULT" \
           --detect-integration "$DETECT_INTEGRATION_RESULT" \
+          --detect-merge-queue "$DETECT_MERGE_QUEUE_RESULT" \
           --discover-e2e "$DISCOVER_E2E_RESULT" \
           --e2e "$E2E_RESULT" >> "$GITHUB_OUTPUT"

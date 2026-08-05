@@ -9,12 +9,18 @@ Gate passes iff:
 
   * ``unit`` tests succeeded (the per-commit tier; runs on every event), AND
   * ``detect-integration`` (the suite-detection job that gates the integration
-    tier) succeeded OR was skipped (skipped = pull_request; a *failed* detection
-    must not be indistinguishable from "no suite" — otherwise a checkout/glob
-    flake silently skips integration and greens the gate), AND
+    tier) succeeded OR was skipped (skipped = the tier does not apply to this
+    event; a *failed* detection must not be indistinguishable from "no suite" —
+    otherwise a checkout/glob flake silently skips integration and greens the
+    gate), AND
+  * ``detect-merge-queue`` (which decides whether the integration tier runs in
+    the merge queue or on the PR) succeeded OR was skipped (skipped = a non-PR
+    event, where the question does not arise). Same reasoning as above: a
+    *failed* detection drops the integration tier to a skip, so it must fail the
+    gate rather than green it, AND
   * ``integration`` tests succeeded OR were skipped (skipped is legitimate: the
-    job is skipped on pull_request — the unit tier is the PR signal — and when
-    the connector ships no integration suite), AND
+    job is skipped on pull_request when a merge queue will run it instead, and
+    when the connector ships no integration suite), AND
   * e2e discovery succeeded OR was skipped (skipped = e2e not requested; a
     *failed* discovery means e2e was requested but no suites were found), AND
   * the e2e matrix succeeded OR was skipped (matrix aggregate is success only
@@ -47,9 +53,19 @@ _OK_OPTIONAL = ("success", "skipped")
 
 
 def evaluate(
-    unit: str, integration: str, detect_integration: str, discover_e2e: str, e2e: str
+    unit: str,
+    integration: str,
+    detect_integration: str,
+    discover_e2e: str,
+    e2e: str,
+    detect_merge_queue: str = "skipped",
 ) -> list[str]:
-    """Return human-readable failure reasons (empty ⇒ the gate passes)."""
+    """Return human-readable failure reasons (empty ⇒ the gate passes).
+
+    ``detect_merge_queue`` is last and defaults to "skipped" because this driver
+    is consumed cross-repo via ``@main``: a required positional would break every
+    caller the instant it merged, before their workflows could update.
+    """
     errors: list[str] = []
     if unit != "success":
         errors.append(f"unit tests did not succeed (result={unit})")
@@ -61,6 +77,13 @@ def evaluate(
     if detect_integration not in _OK_OPTIONAL:
         errors.append(
             f"integration-suite detection did not succeed (result={detect_integration})"
+        )
+    # Same hole, one job upstream: detect-merge-queue decides whether the
+    # integration tier runs on the PR at all, so a failure there also drops the
+    # tier to a skip that the check below would read as a legitimate pass.
+    if detect_merge_queue not in _OK_OPTIONAL:
+        errors.append(
+            f"merge-queue detection did not succeed (result={detect_merge_queue})"
         )
     # Integration is optional-by-skip: the job is intentionally skipped on
     # pull_request and when the connector has no integration suite. Any result
@@ -90,16 +113,23 @@ def _unit_status(unit: str) -> str:
     return "❌ Failed"
 
 
-def _integration_status(integration: str, detect_integration: str) -> str:
+def _integration_status(
+    integration: str, detect_integration: str, detect_merge_queue: str = "skipped"
+) -> str:
     # A detection failure drops integration to a skip; surface that as a failure
     # rather than the benign "skipped" string, so the display never claims the
     # tier was cleanly skipped when detection actually broke.
+    if detect_merge_queue not in _OK_OPTIONAL:
+        return "❌ Merge-queue detection failed"
     if detect_integration not in _OK_OPTIONAL:
         return "❌ Integration-suite detection failed"
     if integration == "success":
         return "✅ Passed"
     if integration == "skipped":
-        return "⊘ Skipped — PRs, or no integration suite (runs in merge queue)"
+        # Two distinct reasons, and the difference matters to a reader deciding
+        # whether their change was actually exercised: a queue will run the tier
+        # on the batched merge, whereas "no suite" means it runs nowhere.
+        return "⊘ Skipped — no integration suite, or it runs in the merge queue"
     return "❌ Failed"
 
 
@@ -118,14 +148,23 @@ def _e2e_status(discover_e2e: str, e2e: str) -> str:
 
 
 def render(
-    unit: str, integration: str, detect_integration: str, discover_e2e: str, e2e: str
+    unit: str,
+    integration: str,
+    detect_integration: str,
+    discover_e2e: str,
+    e2e: str,
+    detect_merge_queue: str = "skipped",
 ) -> dict[str, str]:
     """Compute the gate's outputs: pass/fail + the display status strings."""
-    errors = evaluate(unit, integration, detect_integration, discover_e2e, e2e)
+    errors = evaluate(
+        unit, integration, detect_integration, discover_e2e, e2e, detect_merge_queue
+    )
     return {
         "passed": "true" if not errors else "false",
         "unit-status": _unit_status(unit),
-        "integration-status": _integration_status(integration, detect_integration),
+        "integration-status": _integration_status(
+            integration, detect_integration, detect_merge_queue
+        ),
         "e2e-status": _e2e_status(discover_e2e, e2e),
         "overall-status": "✅ All passed" if not errors else "❌ Some failed",
     }
@@ -139,6 +178,14 @@ def main(argv: list[str] | None = None) -> int:
         "--detect-integration",
         required=True,
         help="needs.detect-integration.result",
+    )
+    # Optional with a "skipped" default: this driver is consumed cross-repo at
+    # @main, so a required flag would break callers that have not yet wired the
+    # detect-merge-queue job.
+    parser.add_argument(
+        "--detect-merge-queue",
+        default="skipped",
+        help="needs.detect-merge-queue.result",
     )
     parser.add_argument(
         "--discover-e2e", required=True, help="needs.discover-e2e.result"
@@ -154,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
         args.detect_integration,
         args.discover_e2e,
         args.e2e,
+        args.detect_merge_queue,
     ):
         print(f"::error::{reason}", file=sys.stderr)
 
@@ -163,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         args.detect_integration,
         args.discover_e2e,
         args.e2e,
+        args.detect_merge_queue,
     ).items():
         print(f"{key}={value}")
     return 0
