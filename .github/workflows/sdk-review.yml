@@ -1209,6 +1209,26 @@ jobs:
             exit 0
           fi
 
+          # S1 guard — REVIEWED_HEAD: belt-and-suspenders over the
+          # DISPATCH_HEAD_SHA vs CURRENT_HEAD check above (line ~1169).
+          # That check verifies the PR HEAD didn't move while the sandbox
+          # ran. This check verifies the summary comment explicitly claims
+          # to have reviewed DISPATCH_HEAD_SHA — catching the (rare but
+          # possible) case where the sandbox checked out a different commit
+          # (e.g., the REVIEWED_HEAD placeholder was not substituted, or the
+          # sandbox started from a stale snapshot). If REVIEWED_HEAD is
+          # absent the comment pre-dates the marker; treat it as unverifiable
+          # rather than approving blind, matching the fast-path behaviour.
+          REVIEWED_HEAD=$(printf '%s' "$SUMMARY" | grep -oP '<!--\s*REVIEWED_HEAD:\s*\K[0-9a-f]+' | head -1 || true)
+          if [ -z "$REVIEWED_HEAD" ]; then
+            echo "::warning::PR #${PR_NUMBER}: verdict comment has no REVIEWED_HEAD marker — cannot confirm which sha was reviewed; skipping all stamps."
+            exit 0
+          fi
+          if [ "$REVIEWED_HEAD" != "$DISPATCH_HEAD_SHA" ]; then
+            echo "::warning::PR #${PR_NUMBER}: verdict was computed for ${REVIEWED_HEAD} but this run was dispatched for ${DISPATCH_HEAD_SHA} — skipping all stamps."
+            exit 0
+          fi
+
           # Extract the verdict. Prefer the structured marker
           # `<!-- VERDICT: READY_TO_MERGE -->` (deterministic, formatting-
           # invariant). Fall back to the `### Verdict:` grep for legacy
@@ -1273,13 +1293,23 @@ jobs:
                 # by the dismiss-on-human workflow to identify approvals posted
                 # by this flow. Keep this in sync with
                 # sdk-review-approve-on-verdict.yml.
+                #
+                # S2: pin to commit_id=DISPATCH_HEAD_SHA (which we verified ==
+                # REVIEWED_HEAD above). If a push landed between our checks and
+                # this POST, branch protection's dismiss_stale_reviews_on_push
+                # dismisses the review — the unreviewed HEAD is never approved.
+                # `gh pr review --approve` does not expose commit_id; use raw API.
                 APPROVE_BODY=$(printf '%s\n' \
                   "**SDK reviewer's verdict:** READY TO MERGE." \
                   "" \
                   "Full review summary is in the comment posted on this PR." \
                   "")
-                gh pr review "$PR_NUMBER" --repo "$REPO" --approve --body "$APPROVE_BODY"
-                echo "Approved PR #${PR_NUMBER} as atlan-ci (slow path fallback)."
+                gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+                  -X POST \
+                  -f commit_id="$DISPATCH_HEAD_SHA" \
+                  -f event=APPROVE \
+                  -f body="$APPROVE_BODY"
+                echo "Approved PR #${PR_NUMBER} as atlan-ci (slow path fallback, commit_id=${DISPATCH_HEAD_SHA})."
               fi
               ;;
             "NEEDS_HUMAN")

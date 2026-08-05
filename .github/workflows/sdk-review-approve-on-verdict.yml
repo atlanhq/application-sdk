@@ -61,6 +61,17 @@ jobs:
         contains(github.event.comment.body, '<!-- SDK_REVIEW -->')
         || contains(github.event.comment.body, '<!-- TEST_SDK_REVIEW -->')
       )
+    # S3: serialize verdict processing per PR. Without a concurrency group,
+    # two verdict comments posted close together (e.g., a NEEDS_FIXES
+    # followed by READY_TO_MERGE on a retry) can race — the earlier run
+    # may complete AFTER the later one and overwrite its label writes.
+    # `cancel-in-progress: false` is required: we must not cancel the
+    # newer run. GitHub queues the blocked run; by the time it starts, the
+    # freshness check below ensures it either acts on the newest comment or
+    # no-ops if a different verdict comment has since landed.
+    concurrency:
+      group: sdk-review-approve-${{ github.event.issue.number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -70,6 +81,7 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
           COMMENT_BODY: ${{ github.event.comment.body }}
+          TRIGGERING_COMMENT_ID: ${{ github.event.comment.id }}
         run: |
           set -euo pipefail
 
@@ -115,6 +127,26 @@ jobs:
           # or approval — that would bless unreviewed code.
           if [ "$REVIEWED_HEAD" != "$HEAD_SHA" ]; then
             echo "::warning::PR #${PR_NUMBER}: verdict was computed for ${REVIEWED_HEAD} but current head is ${HEAD_SHA} — skipping all stamps."
+            exit 0
+          fi
+
+          # S3 freshness check: verify the triggering comment is the NEWEST
+          # SDK_REVIEW summary on this PR. The concurrency group above
+          # serializes runs, but GitHub's queue is not event-time ordered —
+          # after waiting in queue, this run may execute after a NEWER
+          # verdict comment has already been processed. If so, skip to avoid
+          # overwriting a more-recent verdict's labels/status/approval.
+          #
+          # Fetch the id of the most-recent SDK_REVIEW comment using the
+          # same --paginate --slurp idiom used in sdk-review.yml. The
+          # TRIGGERING_COMMENT_ID is the event payload's comment id
+          # (integer). If a newer comment exists, its id will be larger
+          # (GitHub ids are monotonically increasing).
+          NEWEST_SDK_COMMENT_ID=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --paginate --slurp 2>/dev/null \
+            | jq -r '[.[][] | select((.body | contains("<!-- SDK_REVIEW -->")) or (.body | contains("<!-- TEST_SDK_REVIEW -->")))] | last | .id // 0')
+          if [ "${NEWEST_SDK_COMMENT_ID:-0}" -gt "${TRIGGERING_COMMENT_ID:-0}" ]; then
+            echo "::notice::PR #${PR_NUMBER}: a newer SDK_REVIEW comment (id=${NEWEST_SDK_COMMENT_ID}) exists after this one (id=${TRIGGERING_COMMENT_ID}) — that run will/did process the final verdict; skipping."
             exit 0
           fi
 
@@ -167,15 +199,35 @@ jobs:
           # Only READY_TO_MERGE gets a formal atlan-ci approval.
           if [ "$VERDICT" != "READY_TO_MERGE" ]; then
             echo "Verdict '${VERDICT}' is not READY TO MERGE — labels applied, no approval posted."
+            # S3: dismiss any existing bot approval. sdk-review-dismiss-on-human.yml
+            # only fires on HUMAN activity — it will not run here. When a newer
+            # verdict (e.g. NEEDS_FIXES after a second review of the same HEAD)
+            # supersedes a prior READY_TO_MERGE, the prior atlan-ci approval must be
+            # dismissed so the merge gate returns to requiring a fresh approval.
+            # Reuse the same selector used by sdk-review-dismiss-on-human.yml.
+            STALE_IDS=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+              --paginate --slurp 2>/dev/null \
+              | jq -r '[.[][] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | .[].id' 2>/dev/null || true)
+            if [ -n "$STALE_IDS" ]; then
+              DISMISS_MSG="Newer SDK review verdict (${VERDICT}) supersedes the prior bot approval — auto-dismissing. Re-run \`@sdk-review\` when ready for re-approval."
+              for rid in $STALE_IDS; do
+                gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews/${rid}/dismissals" \
+                  -X PUT -f message="$DISMISS_MSG" 2>/dev/null || true
+                echo "Dismissed stale atlan-ci approval ${rid} (newer verdict: ${VERDICT})."
+              done
+            fi
             exit 0
           fi
 
           # Idempotency guard: don't post a second atlan-ci approval if
           # one already exists with our signature. Otherwise the slow-path
           # approve step in sdk-review.yml would double-approve.
-          EXISTING=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" --paginate \
-            --jq '[.[] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | length')
-          if [ "$EXISTING" != "0" ]; then
+          # --slurp collapses pages into one array so the count is a single
+          # number. --paginate --jq runs jq per page and concatenates numbers.
+          EXISTING=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+            --paginate --slurp 2>/dev/null \
+            | jq '[.[][] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | length' 2>/dev/null || echo "0")
+          if [ "${EXISTING:-0}" != "0" ]; then
             echo "atlan-ci has already approved PR #${PR_NUMBER} with the bot signature — skipping."
             exit 0
           fi
@@ -183,10 +235,29 @@ jobs:
           # NOTE: the leading line of the body is a STABLE SIGNATURE used
           # by sdk-review-dismiss-on-human.yml to identify approvals
           # posted by the bot. Keep this in sync with sdk-review.yml.
+          #
+          # S2: pin the review to commit_id=HEAD_SHA so GitHub associates
+          # the approval with the specific commit we verified. If a push
+          # lands between our REVIEWED_HEAD check and this POST, GitHub
+          # attaches the review to the OLD commit and branch protection's
+          # dismiss_stale_reviews_on_push dismisses it — the unreviewed
+          # HEAD is never auto-approved.
+          # Residual TOCTOU: label writes above are PR-scoped (no sha
+          # param in the labels API). A push after label-write leaves a
+          # stale label until sdk-review-reset-on-push.yml clears it —
+          # this is the known irreducible window. Labels are display-only;
+          # branch protection gates on the review + commit status, both of
+          # which are sha-pinned.
+          # `gh pr review --approve` does not expose commit_id; use the
+          # raw API instead.
           APPROVE_BODY=$(printf '%s\n' \
             "**SDK reviewer's verdict:** READY TO MERGE." \
             "" \
             "Full review summary is in the comment posted on this PR." \
             "")
-          gh pr review "$PR_NUMBER" --repo "$REPO" --approve --body "$APPROVE_BODY"
-          echo "Approved PR #${PR_NUMBER} as atlan-ci (fast path)."
+          gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+            -X POST \
+            -f commit_id="$HEAD_SHA" \
+            -f event=APPROVE \
+            -f body="$APPROVE_BODY"
+          echo "Approved PR #${PR_NUMBER} as atlan-ci (fast path, commit_id=${HEAD_SHA})."

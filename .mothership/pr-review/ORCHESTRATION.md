@@ -158,9 +158,15 @@ BUDGET
     carried forward, downgraded, or re-checked given the current HEAD.
 
     ```bash
+    # S5: use --paginate --slurp and pipe into standalone jq. The naive
+    # --paginate --jq idiom runs the jq filter once PER PAGE, so `last`
+    # picks the last match on the FIRST page, not the last match across all
+    # pages. On PRs with many comments spanning multiple API pages this
+    # would silently load an older review. --slurp collapses pages into one
+    # outer array; `.[][]` flattens into a single stream before `last`.
     PRIOR_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-      --paginate \
-      --jq '[.[] | select(.body | contains("<!-- SDK_REVIEW -->"))] | last | .body // ""')
+      --paginate --slurp 2>/dev/null \
+      | jq -r '[.[][] | select(.body | contains("<!-- SDK_REVIEW -->"))] | last | .body // ""')
 
     if [ -n "$PRIOR_REVIEW" ]; then
       printf '%s\n' "$PRIOR_REVIEW" > /tmp/PRIOR_REVIEW.md
@@ -171,11 +177,15 @@ BUDGET
     fi
     ```
 
-    **CRITICAL — jq idiom:** wrap the selection in `[ ... ] | last`
-    and take `.body` from the array element. A naive
-    `--jq '.[] | select(...) | .body' | head -1` collapses the raw
-    multiline body to its first line (the `<!-- SDK_REVIEW -->`
-    HTML marker) and silently drops the entire review content.
+    **CRITICAL — jq idiom:** two mistakes to avoid:
+    - `--jq '.[] | select(...) | .body' | head -1` collapses the raw
+      multiline body to its first line (the `<!-- SDK_REVIEW -->`
+      HTML marker) and silently drops the entire review content.
+    - `--paginate --jq '[.[] | select(...)] | last'` runs the jq filter
+      ONCE PER PAGE, so `last` picks the final match on page 1, not
+      across all pages. On a PR with enough comments to span pages,
+      this returns a stale older review. Always use `--paginate --slurp`
+      and pipe into standalone `jq -r '[.[][] | select(...)] | last'`.
 
     Every subsequent phase that reasons about the PR (Phase 2 agents,
     cross-model debias, verdict determination) should treat
@@ -245,6 +255,28 @@ BUDGET
         | grep -oE '[0-9a-f]{40}' || true)
       if [ -n "$NEWEST_REVIEWED_HEAD" ] && [ "$NEWEST_REVIEWED_HEAD" = "$HEAD_SHA" ]; then
         echo "SKIP: bot-trigger dedupe — @${COMMENTER} re-triggered on HEAD ${HEAD_SHA} which the newest summary already reviewed. Gate was not authoritative (runs outside the concurrency lock). Stopping without posting."
+        # S4: Restore the commit status so the dispatch run's pending state
+        # does not linger after this no-op. The dispatch run always sets
+        # sdk-review to "pending" before the sandbox starts. If the sandbox
+        # exits here without posting a new verdict comment, the fast-path
+        # approve workflow never fires, and the pending status persists —
+        # which is misleading (the review was already delivered). Re-apply
+        # the status implied by the prior verdict.
+        PRIOR_VERDICT=$(grep -oE '<!-- VERDICT: [A-Z_]+ -->' /tmp/PRIOR_REVIEW.md \
+          | grep -oE '[A-Z_]+' | head -1 || true)
+        case "$PRIOR_VERDICT" in
+          "READY_TO_MERGE")
+            gh api "repos/${REPO}/statuses/${HEAD_SHA}" -X POST \
+              -f state=success -f context=sdk-review \
+              -f description="Approved (bot-retrigger skipped: already reviewed this HEAD)" 2>/dev/null || true;;
+          "")
+            : # No prior verdict found — leave status as-is to avoid stomping
+            ;;
+          *)
+            gh api "repos/${REPO}/statuses/${HEAD_SHA}" -X POST \
+              -f state=failure -f context=sdk-review \
+              -f description="Verdict: ${PRIOR_VERDICT} (bot-retrigger skipped: already reviewed this HEAD)" 2>/dev/null || true;;
+        esac
         exit 0
       fi
     fi

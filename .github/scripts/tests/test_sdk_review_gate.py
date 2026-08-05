@@ -109,6 +109,23 @@ def test_flattens_slurped_pages():
     assert gate.last_reviewed_head(comments) == HEAD
 
 
+def test_prior_review_load_last_across_pages():
+    """S5: the §6b bootstrap uses --paginate --slurp so `last` picks the
+    genuinely newest SDK_REVIEW comment across ALL pages, not the last one
+    on page 1 (which is what --paginate --jq returns when jq runs per page).
+
+    Invariant: given two SDK_REVIEW comments on separate pages — an older
+    one on page 1 and a newer one on page 2 — fetch_comments+last_reviewed_head
+    returns the page-2 sha, not the page-1 sha.
+    """
+    non_review = {"body": "LGTM, looks good!"}
+    page1 = [non_review, summary(OTHER), non_review]  # older SDK_REVIEW on p1
+    page2 = [non_review, summary(HEAD)]                # newer SDK_REVIEW on p2
+    comments = gate.fetch_comments("o/r", "1", fake_runner([page1, page2]))
+    # Must return HEAD (page 2), not OTHER (page 1).
+    assert gate.last_reviewed_head(comments) == HEAD
+
+
 def test_gh_failure_returns_empty_so_the_gate_fails_open():
     assert gate.fetch_comments("o/r", "1", fake_runner([], returncode=1)) == []
 
