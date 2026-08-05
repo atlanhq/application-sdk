@@ -75,7 +75,14 @@ permissions:
   checks: write
 
 jobs:
-  sdk-review-dispatch:
+  # Cheap pre-flight: decide whether this trigger deserves a review at all,
+  # before spending a VPN connect and a sandbox on it. The only trigger this
+  # turns away is an automated re-request (`mothership-ai[bot]` / `atlan-ci`)
+  # for a HEAD that already carries an SDK review — the resolver does this a
+  # couple of minutes after a review lands, and the result is two summaries
+  # for one sha that read like a bug. A human tagging `@sdk-review` always
+  # reviews, unchanged HEAD or not.
+  gate:
     if: >-
       github.event_name == 'workflow_dispatch'
       || (
@@ -90,13 +97,58 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      decision: ${{ steps.gate.outputs.decision }}
+      reason: ${{ steps.gate.outputs.reason }}
+    steps:
+      - name: Checkout repo (for the gate script)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve PR head
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha')
+          echo "head_sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to review
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
+          HEAD_SHA: ${{ steps.head.outputs.head_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          TRIGGER_ACTOR: ${{ github.event.comment.user.login }}
+        run: python3 .github/scripts/sdk_review_gate.py
+
+  sdk-review-dispatch:
+    needs: gate
+    if: needs.gate.outputs.decision == 'proceed'
+    runs-on: ubuntu-latest
     # Total budget: 5 min for orient + retries + dispatch.
     # The sandbox itself runs for up to 2h (max_timeout_seconds: 7200),
     # but `curl --max-time 7200` blocks this job for that duration.
     timeout-minutes: 130
     concurrency:
       group: sdk-review-${{ github.event.issue.number || inputs.pr_number }}
-      cancel-in-progress: true
+      # NEVER cancel a review that is already running. `cancel-in-progress: true`
+      # meant a second `@sdk-review` killed the first one mid-flight — on #2989 a
+      # human tag at 16:42 destroyed a run that was 28m23s in and had not yet
+      # posted. Worse, the replacement dispatched the SAME session id the
+      # terminator was tearing down, so it died 63s later with zero SSE events;
+      # the same collision produced "No conversation found with session" on #2987.
+      #
+      # With this false, GitHub keeps at most one run in progress and one
+      # pending per PR, and a newer trigger replaces the pending one — an
+      # effective cap of two, which is the behaviour we want: the in-flight
+      # review finishes and posts, the newest re-tag runs after it.
+      cancel-in-progress: false
     steps:
       - name: Checkout repo (for local globalprotect-connect action)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -188,18 +240,25 @@ jobs:
       # session id silently fails to stop anything, which is exactly the
       # bug it exists to prevent. Compute once, read twice.
       #
-      # Deterministic on the PR head: a new commit produces a new HEAD_SHA
-      # → fresh sandbox; a re-trigger on the same HEAD resumes the same
-      # session (mothership serialises those on a per-session lock).
+      # Unique per run, not per HEAD. It used to end at HEAD_SHA_SHORT, so two
+      # triggers on an unchanged HEAD sent the same session id — and mothership
+      # reads a supplied session_id as a follow-up (`is_follow_up =
+      # request.session_id is not None`), so the second dispatch tried to RESUME
+      # a conversation that had been cancelled or had already finished. That is
+      # the "No conversation found with session" failure on #2987 and the
+      # zero-SSE death on #2989. GITHUB_RUN_ID makes every dispatch a fresh
+      # session; the HEAD stays in the id purely so the sandbox is legible in
+      # Cloudflare logs.
       - name: Compute mothership session id
         id: session
         env:
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
           HEAD_SHA_SHORT: ${{ steps.pr.outputs.head_sha_short }}
           REPO_FULL_NAME: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          echo "session_id=sdk-review-${REPO_FULL_NAME//\//-}-${PR_NUMBER}-${HEAD_SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "session_id=sdk-review-${REPO_FULL_NAME//\//-}-${PR_NUMBER}-${HEAD_SHA_SHORT}-${RUN_ID}" >> "$GITHUB_OUTPUT"
 
       - name: Post 'review starting' notice to PR
         id: starter
