@@ -221,6 +221,35 @@ BUDGET
     re-trigger against an unchanged HEAD comes from a *different* run and
     must still produce a review.
 
+    **Bot-trigger dedupe guard — run immediately after the replay guard.**
+    The `gate` job in `sdk-review.yml` is an *optimization*, not the
+    authority: it runs outside the per-PR concurrency group, so two
+    automated triggers can both pass it concurrently ("no review for this
+    HEAD yet") and both reach the sandbox. The sandbox runs inside the
+    concurrency lock and is the only place that sees true comment state.
+
+    Check: if `COMMENTER` is an automated trigger (`mothership-ai[bot]`
+    or `atlan-ci`) **and** the newest summary's `<!-- REVIEWED_HEAD -->`
+    equals `HEAD_SHA`, this run is a duplicate. Stop without posting.
+    Humans (`COMMENTER` is any other login) are never stopped by this
+    guard — re-reading the same diff is a legitimate human request.
+
+    Use "newest summary" (the body already in `/tmp/PRIOR_REVIEW.md`),
+    never the oldest.
+
+    ```bash
+    # COMMENTER and HEAD_SHA are from the prompt header.
+    BOT_TRIGGERS="mothership-ai[bot] atlan-ci"
+    if echo "$BOT_TRIGGERS" | grep -qF "$COMMENTER"; then
+      NEWEST_REVIEWED_HEAD=$(grep -oE '<!-- REVIEWED_HEAD: [0-9a-f]{40} -->' /tmp/PRIOR_REVIEW.md \
+        | grep -oE '[0-9a-f]{40}' || true)
+      if [ -n "$NEWEST_REVIEWED_HEAD" ] && [ "$NEWEST_REVIEWED_HEAD" = "$HEAD_SHA" ]; then
+        echo "SKIP: bot-trigger dedupe — @${COMMENTER} re-triggered on HEAD ${HEAD_SHA} which the newest summary already reviewed. Gate was not authoritative (runs outside the concurrency lock). Stopping without posting."
+        exit 0
+      fi
+    fi
+    ```
+
 6c. **Compute the re-review delta (scope-cutter).** Each review summary
     stamps the HEAD it reviewed as `<!-- REVIEWED_HEAD: <sha> -->` (§3e).
     On a re-review, use it to scope Phase 1–2 to what actually changed —
