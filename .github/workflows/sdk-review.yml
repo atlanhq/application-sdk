@@ -201,14 +201,16 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            // React with 'eyes' so the PR shows the trigger was acknowledged.
-            // No new PR comment — that would be noise the resolver may re-read
-            // as a new review request.
+            // React with 'confused' (😕) to signal "seen, consciously declined".
+            // The dispatch job uses 'eyes' (👀) for proceed — keeping distinct
+            // reactions means a user can tell "seen and running" (👀) from "seen
+            // and skipped" (😕) without reading the workflow log.
+            // No new PR comment — that would be noise the resolver may re-read.
             await github.rest.reactions.createForIssueComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               comment_id: context.payload.comment.id,
-              content: 'eyes',
+              content: 'confused',
             });
 
   sdk-review-dispatch:
