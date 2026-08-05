@@ -10,6 +10,7 @@ This doc covers what the SDK ships — the composite action, the reusable workfl
 | Component | Location | Purpose |
 |---|---|---|
 | `sdr-e2e` composite action | `.github/actions/sdr-e2e/action.yaml` | Build PR image, configurator + Dapr + Temporal stack-up, pytest, PR sticky comment, teardown. Used by both pipelines. |
+| `build-app-image` composite action | `.github/actions/build-app-image/action.yaml` | SDK-ref repin → manifest regeneration → buildx build/push → interpreter assert. Extracted from `sdr-e2e` so the image can be built **once per run** ahead of the e2e matrix (see [Building the image once](#building-the-image-once)). |
 | `e2e-full-reusable.yaml` reusable workflow | `.github/workflows/e2e-full-reusable.yaml` | Boilerplate (120-min timeout, concurrency group, env wiring, agent-name resolution) for the full-DAG pipeline. Connector repos `uses:` it as a 5-line wrapper. |
 | `e2e-apps` cross-repo dispatcher | `.github/actions/e2e-apps/action.yaml` | Fires `workflow_dispatch` on the connector repo with the apps-sdk PR's head SHA. Polls for completion, surfaces a sticky status comment on the SDK PR. |
 | `BaseSDRIntegrationTest` | `application_sdk/testing/sdr/` | pytest base for the SDR pipeline. Connector test class declares `Scenario(...)` instances. |
@@ -47,6 +48,10 @@ Both call the same composite action; difference is test target, Dapr components,
                         # before the docker build AND after setup-deps (so both
                         # the image and the host pytest runtime use the dispatched
                         # SDK).
+    prebuilt-image:     # OPTIONAL. Full image reference to use INSTEAD of
+                        # building one. Skips the build + interpreter assert and
+                        # uses this everywhere the built image would have been.
+                        # See "Building the image once" below.
     components-dir:     # OPTIONAL. App-level Dapr components dir. Defaults to
                         # $SDR_CONFIG_DIR/components. Override when SDR and
                         # full-DAG share one config dir but need different
@@ -208,6 +213,44 @@ Since v4 the action reads the dispatched run's id straight out of the `workflow_
 
 The SDR composite renders one PR-comment body, writes it to `results/pr-comment-body.md`, and uploads it as part of the test artifact. Both posting sides (connector PR + cross-repo SDK PR) read this same file and post it as a sticky-update comment, swapping the marker line so updates don't collide.
 
+## Building the image once
+
+The test image reference is deterministic — `ghcr.io/atlanhq/<app-image-name>:sdr-test-<short-sha>`
+— so every cloud leg of a run used to rebuild the identical tag. The build
+sequence (SDK-ref repin → manifest regeneration → buildx → push → interpreter
+assert) therefore lives in its own [`build-app-image`](../../.github/actions/build-app-image/action.yaml)
+composite, and `sdr-e2e` takes a `prebuilt-image` input that skips its own build
+and uses the supplied reference everywhere the built one would have gone (the
+configurator's `app_image`, and the action's `image` output).
+
+This exists for FND-31, not just to save build minutes: the full-DAG pipeline has
+to install the app under test **onto the target tenant before any leg starts**, so
+the image must exist before the matrix fans out. Saving N−1 duplicate builds is the
+side benefit.
+
+> **Why it matters that the tenant runs the app under test.** At AE submit,
+> Heracles re-fetches the manifest from the **tenant-deployed pod** and *that* DAG
+> is what executes (`processAutomationEngineWorkflow`); the harness's local
+> `manifest_path` seed DAG establishes the workflow record, not the graph. So the
+> DAG contract a full-DAG e2e exercises is whatever version is installed on that
+> tenant. Until FND-31 lands, that is whatever was last hand-deployed there.
+
+Two seams worth knowing about when editing either action:
+
+- **Skipped-step outputs are empty.** With `prebuilt-image` set, the build step is
+  skipped and `steps.build.outputs.image` is `""`. One resolver step
+  (`${PREBUILT:-$BUILT}`) is the single writer of the effective reference, and it
+  hard-fails when both are empty rather than letting an empty `app_image` reach the
+  configurator and surface as an opaque compose pull error. `test_build_app_image_action.py`
+  regression-guards this.
+- **Nested actions resolve at `@main`.** `sdr-e2e` invokes `build-app-image` as
+  `@main`, so on the local-action dispatch path
+  (`./.application-sdk/.github/actions/sdr-e2e`) the build steps come from main
+  rather than from the application-sdk PR under test. `regenerate-contract` and
+  `setup-deps` — both already inside this sequence — have the same property. A PR
+  editing the build steps is covered by the remote `@main` path and the merge
+  queue, not by a local-action dispatch.
+
 ## Contract regeneration before tests
 
 The e2e/integration tests consume `app/generated/manifest.json` (the Automation Engine DAG): the host-side harness reads the committed file, and the connector Docker image `COPY`s `app/generated/` at build time and serves `manifest.json` at runtime. Nothing used to regenerate that file from `contract/app.pkl`, so a Contract Toolkit change — at the app level (`contract/app.pkl`) or the SDK level (`contract-toolkit/src`) — ran against a possibly-stale committed manifest and was never actually exercised (BLDX-1493).
@@ -217,12 +260,12 @@ The shared [`regenerate-contract`](../../.github/actions/regenerate-contract/act
 | Where it runs | Placement | Drift gate |
 |---|---|---|
 | `connector-integration-tests` (always-on host harness) | after the SDK-ref repin, before the app server boots | **Warn-only** — annotates a stale committed `app/generated/`, never fails |
-| `sdr-e2e` (image-based, incl. the full-DAG path via `e2e-full-reusable`) | **before the image build** (bakes the fresh manifest into the connector image) | Off (`check-drift: "false"` — uv/ruff aren't installed yet; the integration job owns the gate) |
+| `build-app-image` (image-based; reached from `sdr-e2e`, incl. the full-DAG path via `e2e-full-reusable`) | **before the image build** (bakes the fresh manifest into the connector image) | Off (`check-drift: "false"` — uv/ruff aren't installed yet; the integration job owns the gate) |
 
 - **App-level** (default): regenerate from the app's pinned `@app-contract-toolkit` version, so a `contract/app.pkl` change is exercised even when the committed manifest was not regenerated.
 - **SDK-level** (cross-repo dispatch, `application-sdk-ref` set): the `@app-contract-toolkit` dependency is overridden to the SDK PR's `contract-toolkit/src`, so a toolkit change in the SDK PR is generated against the *real* connector contract end-to-end. Drift is expected, so the gate is skipped and a `pkl eval` failure is fatal.
 
-Because the e2e suite is matrixed one leg per test file and each leg builds its own image inside `sdr-e2e`, regeneration runs once per leg (it cannot be hoisted ahead of the matrix — the fresh `app/generated/` must exist in the workspace when each leg builds).
+Regeneration is bound to the build, so it runs wherever the build runs: once per leg while each leg builds its own image, and once per run for a caller that builds ahead of the matrix and passes `prebuilt-image` (see [Building the image once](#building-the-image-once)). The binding is the invariant — the fresh `app/generated/` must exist in the workspace at the moment the image is built — not the per-leg cardinality.
 
 ## Workspace-wipe defences (local-action mode)
 
