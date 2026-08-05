@@ -410,14 +410,16 @@ def _secret_store_check_row(result: SecretStoreCheckResult) -> PreflightCheck:
     """Build the secret-store preflight check row from a probe result.
 
     Name avoids the "SDR" acronym (the frontend spaces out capitals). Failure
-    category distinguishes an unreachable store (DEPENDENCY_UNAVAILABLE) from a
-    reachable-but-nothing-resolved config gap (PRECONDITION)."""
+    category distinguishes a store outage (DEPENDENCY_UNAVAILABLE) from a config
+    gap (PRECONDITION) — a multi-key spec with no secret-path is the latter even
+    though the store is never contacted, so it keys off ``store_down``, not
+    whether a fetch happened."""
     error: FailureDetails | None = None
     if not result.passed:
         error = FailureDetails(
             category=(
                 FailureCategory.DEPENDENCY_UNAVAILABLE
-                if not result.reachable
+                if result.store_down
                 else FailureCategory.PRECONDITION
             ),
             code="SECRET_STORE_ACCESS",
@@ -469,26 +471,29 @@ def build_sdr_activities(
     async def preflight_check(input: PreflightInput) -> PreflightOutput:
         secret_row: PreflightCheck | None = None
         if input.agent_json is not None and input.agent_json.is_populated():
-            # SDR-only: verify the customer secret store first. It fails in two
-            # ways — unreachable/down, or reachable but nothing resolved.
+            # SDR-only: verify the customer secret store first. A failure is
+            # either FATAL (credentials can't resolve — the store is down, or the
+            # config can't reach a bundle) or not.
             #
-            # Only an UNREACHABLE store is fatal: credential resolution itself
-            # would raise (_fetch_bundle errors), so short-circuit to NOT_READY
-            # with a clear reason instead of a confusing downstream error.
+            # A FATAL result short-circuits to NOT_READY with a clear reason:
+            # resolving credentials would itself raise (or has nothing to
+            # resolve), so there is nothing for the connectivity checks to try.
             #
-            # A reachable store that resolved nothing is NOT fatal: every field
+            # A non-fatal result (reachable store that resolved nothing) is kept
+            # as a failed row for visibility, but the run continues: every field
             # falls back to its literal value (see _substitute), so a customer who
             # put raw secrets directly in the workflow config can still connect.
-            # Keep the (failed) secret-store row for visibility, but still run the
-            # connectivity / schema / tables checks below and let the real
-            # connection result stand.
+            #
+            # On the non-fatal path check_secret_store_access already fetched and
+            # substituted the bundle, so reuse ``secret_result.resolved`` instead
+            # of resolving again — one store round-trip per preflight, not two.
             infra = get_infrastructure()
             secret_store = infra.secret_store if infra is not None else None
             secret_result = await check_secret_store_access(
                 input.agent_json, secret_store
             )
             secret_row = _secret_store_check_row(secret_result)
-            if not secret_result.reachable:
+            if secret_result.fatal:
                 output = PreflightOutput(
                     status=PreflightStatus.NOT_READY,
                     message=secret_result.message,
@@ -496,7 +501,12 @@ def build_sdr_activities(
                 )
                 await _append_object_store_checks(output)
                 return output
-            input.credentials = await _resolve_agent_credentials(input.agent_json)
+            if secret_result.resolved is not None:
+                input.credentials = HandlerCredential.list_from_raw(
+                    secret_result.resolved
+                )
+            else:
+                input.credentials = await _resolve_agent_credentials(input.agent_json)
         with bind_invocation_context(binding.app_name, input.credentials):
             output = await binding.handler.preflight_check(input)
         # SDR-only: fold the secret-store + object-store access checks into the

@@ -17,6 +17,7 @@ from application_sdk.execution._temporal.sdr import (
     SdrFetchMetadataWorkflow,
     SdrPreflightCheckWorkflow,
     SdrTestAuthWorkflow,
+    _secret_store_check_row,
     build_sdr_activities,
 )
 from application_sdk.handler.base import Handler
@@ -58,8 +59,15 @@ class _StubHandler(Handler):
         return SqlMetadataOutput(objects=[])
 
 
+# resolved=None (the default) so the preflight activity falls back to the
+# resolver mock these tests assert on; the resolved-reuse path is covered
+# separately in test_preflight_reuses_resolved_credentials.
 _PASS_SECRET_STORE = SecretStoreCheckResult(
-    passed=True, reachable=True, substituted=1, message="Secret store reachable"
+    passed=True,
+    store_down=False,
+    fatal=False,
+    substituted=1,
+    message="Secret store reachable",
 )
 
 
@@ -531,11 +539,16 @@ class TestSdrAgentJsonResolution:
         resolver.resolve_raw = mock.AsyncMock(return_value={"username": "literal-user"})
         fake_infra = mock.MagicMock()
         fake_infra.secret_store = mock.MagicMock(name="SecretStore")
+        # Non-fatal: the probe already substituted (falling back to literals), so
+        # ``resolved`` carries those credentials and the activity reuses them
+        # rather than re-fetching from the store.
         zero_resolved = SecretStoreCheckResult(
             passed=False,
-            reachable=True,
+            store_down=False,
+            fatal=False,
             substituted=0,
             message="Secret store is reachable, but no secret was resolved.",
+            resolved={"username": "literal-user"},
         )
         with (
             mock.patch(
@@ -557,6 +570,12 @@ class TestSdrAgentJsonResolution:
 
         # Handler ran (connectivity attempted with literal values) — NOT short-circuited.
         assert handler.preflight_input is not None
+        # Credentials came from the reused ``resolved`` dict, so the probe's
+        # already-fetched bundle was NOT re-resolved from the store.
+        resolver.resolve_raw.assert_not_awaited()
+        assert {c.key: c.value for c in handler.preflight_input.credentials} == {
+            "username": "literal-user"
+        }
         # The failed secret-store row is still surfaced for visibility...
         secret_check = next(c for c in result.checks if c.name == "Secret store")
         assert secret_check.passed is False
@@ -777,3 +796,61 @@ class TestSdrPreflightObjectStoreChecks:
         # Handler's own result stands; no crash, no extra checks.
         assert result.status == PreflightStatus.READY
         assert result.checks == []
+
+
+class TestSecretStoreCheckRow:
+    """``_secret_store_check_row`` maps a probe result onto the UI check row —
+    the failure category must come from ``store_down`` (is the store the
+    blocker?), not from whether a fetch happened."""
+
+    def test_store_down_is_dependency_unavailable(self) -> None:
+        from application_sdk.credentials.agent import SecretStoreCheckResult
+        from application_sdk.errors.categories import FailureCategory
+
+        row = _secret_store_check_row(
+            SecretStoreCheckResult(
+                passed=False,
+                store_down=True,
+                fatal=True,
+                substituted=0,
+                message="Secret store is not reachable.",
+            )
+        )
+        assert row.passed is False
+        assert row.error is not None
+        assert row.error.category == FailureCategory.DEPENDENCY_UNAVAILABLE
+
+    def test_config_gap_is_precondition_not_dependency_unavailable(self) -> None:
+        # A multi-key spec with no secret-path is fatal (creds can't resolve) but
+        # the store is never contacted — it is a PRECONDITION config gap, and must
+        # NOT be miscategorised as a store outage.
+        from application_sdk.credentials.agent import SecretStoreCheckResult
+        from application_sdk.errors.categories import FailureCategory
+
+        row = _secret_store_check_row(
+            SecretStoreCheckResult(
+                passed=False,
+                store_down=False,
+                fatal=True,
+                substituted=0,
+                message="Multi-key credentials require a secret-path...",
+            )
+        )
+        assert row.passed is False
+        assert row.error is not None
+        assert row.error.category == FailureCategory.PRECONDITION
+
+    def test_passed_row_has_no_error(self) -> None:
+        from application_sdk.credentials.agent import SecretStoreCheckResult
+
+        row = _secret_store_check_row(
+            SecretStoreCheckResult(
+                passed=True,
+                store_down=False,
+                fatal=False,
+                substituted=2,
+                message="Secret store reachable; 2 secret(s) resolved.",
+            )
+        )
+        assert row.passed is True
+        assert row.error is None

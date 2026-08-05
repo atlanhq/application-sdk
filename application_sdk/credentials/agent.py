@@ -526,14 +526,30 @@ def _substitute(
 class SecretStoreCheckResult:
     """Outcome of the SDR secret-store preflight probe.
 
-    ``passed`` is the UI verdict; ``reachable`` / ``substituted`` explain which
-    of the two failure cases (unreachable, or reachable-but-nothing-resolved)
-    tripped, and ``message`` is the customer-facing check-row text."""
+    ``passed`` is the UI verdict. The two failure axes are tracked separately
+    because a single flag conflated them:
+
+    * ``store_down`` — the secret store *itself* is the failure (unreachable /
+      erroring). The caller renders this as ``DEPENDENCY_UNAVAILABLE``; every
+      other failure is a ``PRECONDITION`` config gap. A multi-key spec with no
+      ``secret-path`` is a config gap, not an outage, so it is **not**
+      ``store_down`` even though the store is never contacted.
+    * ``fatal`` — the preflight cannot proceed past this: credentials can't be
+      resolved, so connectivity has nothing to try. The caller short-circuits.
+      A reachable-but-nothing-resolved result is *not* fatal (fields fall back to
+      literals and connectivity still runs).
+
+    ``substituted`` is the resolved-key count (for the message). ``resolved`` is
+    the fully-substituted credential dict — returned so the caller reuses it
+    instead of re-fetching the bundle from the store a second time; ``None``
+    whenever nothing was successfully fetched (every fatal case)."""
 
     passed: bool
-    reachable: bool
+    store_down: bool
+    fatal: bool
     substituted: int
     message: str
+    resolved: dict[str, Any] | None = None
 
 
 async def check_secret_store_access(
@@ -542,24 +558,31 @@ async def check_secret_store_access(
 ) -> SecretStoreCheckResult:
     """Probe the customer secret store for the SDR interactive preflight.
 
-    Fails (never raises — returns a structured result the preflight renders as a
-    check row):
+    Never raises — returns a structured result the preflight renders as a check
+    row. Failure modes, and how they map onto ``store_down`` / ``fatal``:
 
-    1. **Unreachable / down** — no secret store configured, the store errors, or
-       the configured ``secret-path`` doesn't exist.
-    2. **Unresolvable config** — a multi-key (non single-key) spec with no
-       ``secret-path``: the ref-keys have nowhere to resolve from, so the
-       credentials can't be used.
-    3. **Nothing resolved** — the store is reachable but not a single ref-key was
-       substituted, so every credential field falls back to its literal value.
-       This is a likely misconfiguration (surfaced as a failed row), but NOT
-       fatal: a customer who put raw secrets directly in the config can still
-       connect, so the preflight keeps running the connectivity checks.
+    1. **Store down** (``store_down``, ``fatal``) — no secret store configured, or
+       the store errors / is unreachable. The store itself is the blocker.
+    2. **Unresolvable config** (``fatal`` only) — a multi-key (non single-key) spec
+       with no ``secret-path``: the ref-keys have nowhere to resolve from. The
+       store may be perfectly healthy — this is a *config* gap, so it is a
+       ``PRECONDITION``, not a store outage; the store is never contacted.
+    3. **Secret-path not found** (``fatal`` only) — the store is reachable but the
+       configured ``secret-path`` doesn't exist, so credentials can't resolve.
+    4. **Nothing resolved** (neither flag) — the store is reachable but not a
+       single ref-key was substituted, so every credential field falls back to
+       its literal value. A likely misconfiguration (surfaced as a failed row),
+       but NOT fatal: a customer who put raw secrets directly in the config can
+       still connect, so the preflight keeps running the connectivity checks.
+
+    On any non-fatal outcome ``resolved`` carries the substituted credential dict
+    so the caller can build credentials without a second store fetch.
     """
     if secret_store is None:
         return SecretStoreCheckResult(
             passed=False,
-            reachable=False,
+            store_down=True,
+            fatal=True,
             substituted=0,
             message="No secret store is configured on the SDR deployment.",
         )
@@ -569,10 +592,12 @@ async def check_secret_store_access(
         # Multi-key (non single-key) resolution fetches the bundle from a
         # secret-path. With neither single-key probing nor a secret-path, the
         # ref-keys can never be resolved, so the credentials can't be used — fail
-        # the check (and short-circuit; there is nothing for connectivity to try).
+        # the check and short-circuit (nothing for connectivity to try). The
+        # store is never contacted, so this is a config gap, NOT store_down.
         return SecretStoreCheckResult(
             passed=False,
-            reachable=False,
+            store_down=False,
+            fatal=True,
             substituted=0,
             message=(
                 "Multi-key credentials require a secret-path, but none is "
@@ -586,9 +611,13 @@ async def check_secret_store_access(
         else:
             bundle = await _fetch_bundle(secret_store, spec.secret_path)
     except CredentialNotFoundError:
+        # Store reachable, but the configured path is absent: credentials can't
+        # resolve, so short-circuit (fatal) with a clean row — it's a config
+        # problem (PRECONDITION), not a store outage.
         return SecretStoreCheckResult(
             passed=False,
-            reachable=True,
+            store_down=False,
+            fatal=True,
             substituted=0,
             message="Secret store is reachable, but the configured secret-path was not found.",
         )
@@ -599,25 +628,33 @@ async def check_secret_store_access(
     ):
         return SecretStoreCheckResult(
             passed=False,
-            reachable=False,
+            store_down=True,
+            fatal=True,
             substituted=0,
             message="Secret store is not reachable.",
         )
 
-    _, substituted = _substitute(raw, bundle)
+    resolved_flat, substituted = _substitute(raw, bundle)
+    # Same substitution the resolver runs (resolve_agent_credential): return the
+    # transformed dict so the caller reuses it instead of re-fetching the bundle.
+    resolved = transform_agent_credentials(resolved_flat)
     if substituted == 0:
         return SecretStoreCheckResult(
             passed=False,
-            reachable=True,
+            store_down=False,
+            fatal=False,
             substituted=0,
             message=(
                 "Secret store is reachable, but no secret was resolved. Check "
                 "that the configured secret keys / secret-path exist in the store."
             ),
+            resolved=resolved,
         )
     return SecretStoreCheckResult(
         passed=True,
-        reachable=True,
+        store_down=False,
+        fatal=False,
         substituted=substituted,
         message=f"Secret store reachable; {substituted} secret(s) resolved.",
+        resolved=resolved,
     )

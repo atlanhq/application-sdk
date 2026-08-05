@@ -1475,8 +1475,12 @@ class TestCheckSecretStoreAccess:
 
         r = await check_secret_store_access(self._spec(), Store())  # type: ignore[arg-type]
         assert r.passed is True
-        assert r.reachable is True
+        assert r.store_down is False
+        assert r.fatal is False
         assert r.substituted >= 1
+        # The bundle was fetched + substituted here; the caller reuses this
+        # instead of re-fetching from the store.
+        assert r.resolved is not None
 
     async def test_fails_when_store_is_unreachable(self) -> None:
         class DownStore:
@@ -1485,7 +1489,9 @@ class TestCheckSecretStoreAccess:
 
         r = await check_secret_store_access(self._spec(), DownStore())  # type: ignore[arg-type]
         assert r.passed is False
-        assert r.reachable is False
+        # The store itself is the failure: a fatal DEPENDENCY_UNAVAILABLE outage.
+        assert r.store_down is True
+        assert r.fatal is True
         assert "not reachable" in r.message
 
     async def test_fails_when_nothing_resolves(self) -> None:
@@ -1495,13 +1501,18 @@ class TestCheckSecretStoreAccess:
 
         r = await check_secret_store_access(self._spec(), EmptyStore())  # type: ignore[arg-type]
         assert r.passed is False
-        assert r.reachable is True
+        # Store is fine, nothing resolved: NOT fatal (fields fall back to
+        # literals) and NOT a store outage.
+        assert r.store_down is False
+        assert r.fatal is False
         assert r.substituted == 0
+        assert r.resolved is not None
 
     async def test_fails_when_no_store_configured(self) -> None:
         r = await check_secret_store_access(self._spec(), None)
         assert r.passed is False
-        assert r.reachable is False
+        assert r.store_down is True
+        assert r.fatal is True
 
     async def test_fails_when_multi_key_has_no_secret_path(self) -> None:
         # Multi-key (non single-key) with no secret-path: the ref-keys have
@@ -1514,7 +1525,10 @@ class TestCheckSecretStoreAccess:
         assert spec.secret_path == "" and spec.key_type != "single-key"
         r = await check_secret_store_access(spec, Store())  # type: ignore[arg-type]
         assert r.passed is False
-        assert r.reachable is False
+        # Fatal (credentials can't resolve), but the store is never contacted —
+        # this is a config gap (PRECONDITION), NOT a store outage.
+        assert r.store_down is False
+        assert r.fatal is True
         assert "secret-path" in r.message
 
 
