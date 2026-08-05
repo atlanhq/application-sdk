@@ -714,7 +714,15 @@ jobs:
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          # Falls back to the run's own token because this step became
+          # unconditional. It used to run only when the caller declared
+          # E2E_SOURCE_ENV_JSON — a repo that already had ORG_PAT_GITHUB — so an
+          # empty PAT was unreachable; now every e2e leg hits it, and passing
+          # `token: ''` explicitly overrides checkout's own default and 403s on
+          # the clone. application-sdk is public, so github.token is sufficient
+          # and this is a strictly wider set of callers that can fetch, not a
+          # privilege escalation.
+          token: ${{ secrets.ORG_PAT_GITHUB || github.token }}
           persist-credentials: false
 
       # This leg's tenant. Takes E2E_TENANT_MATRIX_JSON[E2E_CLOUD] when both are
