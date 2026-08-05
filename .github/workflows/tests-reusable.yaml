@@ -406,13 +406,24 @@ jobs:
         id: detect
         # A PAT reads rulesets reliably; GITHUB_TOKEN is the fallback and the
         # script fails open if neither has the scope.
+        #
+        # Event-derived values are routed through `env` and referenced as shell
+        # variables rather than interpolated into the `run:` body — the same
+        # pattern as the verify-test-gate action ("Route job results through env,
+        # not inline ${{ }}"). `${{ }}` is substituted textually *before* bash
+        # parses the script, so a ref containing `$(...)`, a backtick or `;`
+        # would execute as code, and wrapping it in double quotes does not stop
+        # command substitution. A `"$BASE_REF"` expansion cannot.
         env:
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB || github.token }}
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           python3 .github/scripts/detect_merge_queue.py \
-            --repo "${{ github.repository }}" \
-            --base-ref "${{ github.event.pull_request.base.ref }}" \
-            --default-branch "${{ github.event.repository.default_branch }}" \
+            --repo "$REPO" \
+            --base-ref "$BASE_REF" \
+            --default-branch "$DEFAULT_BRANCH" \
             >> "$GITHUB_OUTPUT"
 
   # ── Detect whether an integration suite exists ───────────────────────────
