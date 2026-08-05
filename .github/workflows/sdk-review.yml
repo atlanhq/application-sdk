@@ -240,15 +240,23 @@ jobs:
       # session id silently fails to stop anything, which is exactly the
       # bug it exists to prevent. Compute once, read twice.
       #
-      # Unique per run, not per HEAD. It used to end at HEAD_SHA_SHORT, so two
-      # triggers on an unchanged HEAD sent the same session id — and mothership
-      # reads a supplied session_id as a follow-up (`is_follow_up =
+      # Unique per attempt, not just per run. It used to end at HEAD_SHA_SHORT,
+      # so two triggers on an unchanged HEAD sent the same session id — and
+      # mothership reads a supplied session_id as a follow-up (`is_follow_up =
       # request.session_id is not None`), so the second dispatch tried to RESUME
       # a conversation that had been cancelled or had already finished. That is
       # the "No conversation found with session" failure on #2987 and the
-      # zero-SSE death on #2989. GITHUB_RUN_ID makes every dispatch a fresh
+      # zero-SSE death on #2989. GITHUB_RUN_ID makes every NEW dispatch a fresh
       # session; the HEAD stays in the id purely so the sandbox is legible in
       # Cloudflare logs.
+      #
+      # GITHUB_RUN_ID is stable across re-runs of the same workflow run (docs:
+      # "does not change if you re-run the workflow run"). GITHUB_RUN_ATTEMPT
+      # increments with every re-run (1 on the first run, 2 on the first re-run,
+      # etc.). Without the attempt suffix, clicking "Re-run failed jobs" on a
+      # failed SDK Review would dispatch the same session id into a sandbox that
+      # mothership may still have in its DB — causing the same resume-of-a-dead-
+      # session failure the RUN_ID addition fixed for multi-trigger cases.
       - name: Compute mothership session id
         id: session
         env:
@@ -256,9 +264,10 @@ jobs:
           HEAD_SHA_SHORT: ${{ steps.pr.outputs.head_sha_short }}
           REPO_FULL_NAME: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          echo "session_id=sdk-review-${REPO_FULL_NAME//\//-}-${PR_NUMBER}-${HEAD_SHA_SHORT}-${RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "session_id=sdk-review-${REPO_FULL_NAME//\//-}-${PR_NUMBER}-${HEAD_SHA_SHORT}-${RUN_ID}-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
       - name: Post 'review starting' notice to PR
         id: starter
