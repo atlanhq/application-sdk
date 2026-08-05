@@ -111,6 +111,10 @@ def check_freshness(contract_dir: str = "contract") -> tuple[str, list[str]]:
         return ("na", [])
 
     try:
+        # `regenerate` also runs the app's contract/post-generate.sh if present,
+        # so this gate and the renovate sync agree on what "freshly generated"
+        # means; without it an app that installs a hand-maintained artifact over
+        # the toolkit output would read as permanently drifted.
         regenerated = regenerate(contract_dir)
     except OSError as exc:
         # pkl / uvx not installed or not runnable — an infra gap, not a broken

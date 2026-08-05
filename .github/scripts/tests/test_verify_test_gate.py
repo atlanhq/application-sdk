@@ -12,6 +12,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(
     0, str(Path(__file__).parent.parent.parent / "actions" / "verify-test-gate")
 )
@@ -222,3 +224,102 @@ def test_main_detect_integration_failure_annotates(capsys) -> None:
     assert rc == 0
     assert "passed=false" in captured.out
     assert "integration-suite detection" in captured.err
+
+
+# --- merge-queue detection (integration tier routing) ----------------------
+# detect-merge-queue decides WHERE the integration tier runs: in the merge queue
+# when the base branch has one, else on the pull_request. It is the last
+# positional arg and defaults to "skipped" because this driver is consumed
+# cross-repo at @main.
+
+
+def test_detect_merge_queue_defaults_to_skipped() -> None:
+    # Back-compat: a caller that has not wired the job at all still passes.
+    assert evaluate("success", "skipped", "skipped", "skipped", "skipped") == []
+
+
+@pytest.mark.parametrize("result", ["success", "skipped"])
+def test_detect_merge_queue_ok_states_pass(result) -> None:
+    # "success" = a PR where detection ran; "skipped" = a non-PR event.
+    assert evaluate("success", "success", "success", "skipped", "skipped", result) == []
+
+
+@pytest.mark.parametrize("result", ["failure", "cancelled", "timed_out"])
+def test_detect_merge_queue_failure_fails_the_gate(result) -> None:
+    # A detection failure drops the integration tier to a skip, so it must fail
+    # the gate rather than green it — the same hole closed for detect-integration.
+    errors = evaluate("success", "skipped", "skipped", "skipped", "skipped", result)
+    assert len(errors) == 1
+    assert "merge-queue detection" in errors[0]
+
+
+def test_detect_merge_queue_failure_shows_in_integration_row() -> None:
+    # Display must not claim the tier was cleanly skipped when routing broke.
+    out = render("success", "skipped", "skipped", "skipped", "skipped", "failure")
+    assert out["passed"] == "false"
+    assert out["integration-status"] == "❌ Merge-queue detection failed"
+
+
+def test_integration_runs_on_pr_when_no_queue() -> None:
+    # No queue ⇒ detect-merge-queue succeeded and integration ran on the PR.
+    out = render("success", "success", "success", "skipped", "skipped", "success")
+    assert out["passed"] == "true"
+    assert out["integration-status"] == "✅ Passed"
+
+
+def test_integration_failure_on_pr_blocks_the_gate() -> None:
+    # The whole point: on a queue-less repo a broken integration suite now
+    # blocks the PR instead of reddening main after the merge.
+    out = render("success", "failure", "success", "skipped", "skipped", "success")
+    assert out["passed"] == "false"
+    assert out["integration-status"] == "❌ Failed"
+
+
+def test_skipped_integration_string_does_not_promise_a_merge_queue() -> None:
+    # Queue-less repos have no merge queue to defer to, so the row must not
+    # assert one exists.
+    out = render("success", "skipped", "success", "skipped", "skipped", "success")
+    assert "no integration suite" in out["integration-status"]
+
+
+def test_main_detect_merge_queue_failure_annotates(capsys) -> None:
+    rc = main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "skipped",
+            "--detect-integration",
+            "skipped",
+            "--detect-merge-queue",
+            "failure",
+            "--discover-e2e",
+            "skipped",
+            "--e2e",
+            "skipped",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "passed=false" in captured.out
+    assert "merge-queue detection" in captured.err
+
+
+def test_main_omitting_detect_merge_queue_still_passes(capsys) -> None:
+    # Cross-repo @main back-compat at the CLI boundary, not just the function.
+    rc = main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "skipped",
+            "--detect-integration",
+            "skipped",
+            "--discover-e2e",
+            "skipped",
+            "--e2e",
+            "skipped",
+        ]
+    )
+    assert rc == 0
+    assert "passed=true" in capsys.readouterr().out

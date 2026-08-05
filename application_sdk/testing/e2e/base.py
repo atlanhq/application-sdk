@@ -201,6 +201,11 @@ class BaseE2ETest:
     # or the entrypoint name differs from the manifest subdir. Empty resolved value
     # => single-entrypoint app, no selector sent (AE fetches the bare manifest).
     entrypoint: ClassVar[str] = ""
+    # Deployment name the tenant's SYSTEM apps (publish, quality, lineage) are
+    # registered under, substituted for ``{deployment_name}`` when the harness
+    # addresses them. Read via :meth:`resolved_tenant_deployment_name` rather
+    # than directly, so a CI run against a tenant that diverges from
+    # "production" is an env var on that leg rather than a code change here.
     tenant_deployment_name: ClassVar[str] = "production"
     extract_workflow_type: ClassVar[str] = ""
     # Credential-config name for the ``credential-guid.credential-type`` routing
@@ -707,6 +712,26 @@ class BaseE2ETest:
         """
         return None
 
+    def resolved_tenant_deployment_name(self) -> str:
+        """Deployment name to substitute for ``{deployment_name}``.
+
+        ``E2E_TENANT_DEPLOYMENT_NAME`` wins over the :attr:`tenant_deployment_name`
+        class default when set. The class attribute is a property of the *suite*,
+        but the value it needs is a property of the *tenant* — and since FND-6 one
+        suite runs against several tenants in one CI run, so it cannot be fixed in
+        the class. A tenant whose system apps are not registered under
+        "production" is then a per-leg env var (supplied by the tenant-matrix
+        secret's optional ``deployment_name`` field) rather than an edit here.
+
+        Blank is treated as unset: an unset GitHub Actions env var arrives as an
+        empty string, and an empty deployment name would address ``atlan-publish-``
+        and fail far from its cause.
+        """
+        return (
+            os.environ.get("E2E_TENANT_DEPLOYMENT_NAME", "").strip()
+            or self.tenant_deployment_name
+        )
+
     def _resolved_entrypoint(self) -> str:
         """App-entrypoint for AE's manifest fetch: explicit ``entrypoint`` if set,
         else derived from ``manifest_path`` (``.../generated/<ep>/manifest.json`` ->
@@ -785,10 +810,12 @@ class BaseE2ETest:
                 location=str(path),
             )
 
+        deployment_name = self.resolved_tenant_deployment_name()
+
         def _sub_queue(node_name: str, raw: str) -> str:
             if node_name == "extract":
                 return extract_task_queue
-            return raw.replace("{deployment_name}", self.tenant_deployment_name)
+            return raw.replace("{deployment_name}", deployment_name)
 
         for name, node in dag.items():
             inputs = node.get("inputs")
