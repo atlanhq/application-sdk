@@ -411,7 +411,14 @@ def run_post_generate(contract_dir: str = "contract") -> None:
     Best-effort by design: this runs after the swap, so a failure leaves fresh
     toolkit output in the tree rather than blocking the caller. The resulting
     diff is visible for a human to judge, which beats failing a dependency bump
-    over an app-side script."""
+    over an app-side script.
+
+    SECURITY: the safety of running app-repo content rests entirely on the
+    caller using a ``push``-triggered (same-repo-branch) workflow, where placing
+    the script already requires push access to that repo. This must never be
+    wired into a ``pull_request`` / ``pull_request_target`` context, where a
+    fork's branch content runs with a token — there the same line is a genuine
+    untrusted-code-execution path."""
     script = Path(contract_dir) / POST_GENERATE_SCRIPT
     if not script.is_file():
         return
