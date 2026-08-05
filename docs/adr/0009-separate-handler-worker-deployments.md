@@ -1,7 +1,13 @@
 # ADR-0009: Separate Handler and Worker Deployments
 
 ## Status
-**Accepted**
+**Superseded** by [ADR-0018](0018-single-pod-deployment-and-unified-check-core.md).
+
+Both premises below have lapsed: handler pods are now KEDA-managed and scale to zero (so the
+always-on / no-cold-start benefit is gone), and a handler pod measurably costs the same as
+worker + handler together (88 MB either way — importing the handler service pulls the worker
+stack in), so the second pod buys no memory isolation. Retained for the options analysis and
+the environment-variable reference.
 
 ## Context
 

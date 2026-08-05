@@ -8,7 +8,9 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import AppContextError
-from application_sdk.execution._temporal.sdr import (
+from application_sdk.execution._temporal.sdr import (  # noqa: I001
+    _PREFLIGHT_START_TO_CLOSE,
+    CHECKS_SCHEDULED_ACTIVITY,
     SDR_FETCH_METADATA_ACTIVITY,
     SDR_PREFLIGHT_ACTIVITY,
     SDR_TEST_AUTH_ACTIVITY,
@@ -70,10 +72,29 @@ class TestSdrWorkflows:
         assert defn.name == "sdr:fetch_metadata"
 
     def test_sdr_workflows_constant(self) -> None:
-        assert len(SDR_WORKFLOWS) == 3
+        # The three sdr:* wrappers, the same three under checks:*, and the
+        # scheduled probe. Both name sets are registered: LM starts sdr:* by name,
+        # new callers use checks:*.
+        assert len(SDR_WORKFLOWS) == 7
         assert SdrTestAuthWorkflow in SDR_WORKFLOWS
         assert SdrPreflightCheckWorkflow in SDR_WORKFLOWS
         assert SdrFetchMetadataWorkflow in SDR_WORKFLOWS
+
+    def test_checks_aliases_registered_under_non_sdr_names(self) -> None:
+        # Nothing about these wrappers is SDR-specific; the checks:* names are what
+        # the config UI on any deployment and the scheduler should start.
+        names = {
+            getattr(w, "__temporal_workflow_definition").name for w in SDR_WORKFLOWS
+        }
+        assert {
+            "sdr:test_auth",
+            "sdr:preflight_check",
+            "sdr:fetch_metadata",
+            "checks:test_auth",
+            "checks:preflight_check",
+            "checks:fetch_metadata",
+            "checks:scheduled_preflight",
+        } == names
 
 
 class TestSdrTimeoutsAndRetries:
@@ -171,15 +192,19 @@ class TestSdrTimeoutsAndRetries:
 class TestBuildSdrActivities:
     """Tests for build_sdr_activities()."""
 
-    def test_returns_three_activities_with_sdr_names(self) -> None:
+    def test_returns_the_handler_op_activities(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")
-        assert len(activities) == 3
+        assert len(activities) == 4
         names = [getattr(a, "__temporal_activity_definition").name for a in activities]
         assert set(names) == {
             SDR_TEST_AUTH_ACTIVITY,
             SDR_PREFLIGHT_ACTIVITY,
             SDR_FETCH_METADATA_ACTIVITY,
+            # The scheduled probe is its own activity, not a flag on preflight: it
+            # stamps a different trigger, never raises on an unverifiable source, and
+            # returns a cadence recommendation.
+            CHECKS_SCHEDULED_ACTIVITY,
         }
 
     async def test_test_auth_activity_dispatches_and_sets_context(self) -> None:
@@ -212,7 +237,21 @@ class TestBuildSdrActivities:
         result = await preflight(input_obj)
 
         assert result.status == PreflightStatus.READY
-        assert handler.preflight_input is input_obj
+        # NOT the same object: every path now normalizes into a CheckRequest and the
+        # shared core rebuilds the handler input from it, which is what makes the
+        # SDR test and the pre-run gate ask the handler the same question. The
+        # caller's config is forwarded as sent — connection_config only, with
+        # metadata left empty, because mirroring is an HTTP-boundary behaviour and
+        # this input never passed through it.
+        seen = handler.preflight_input
+        assert seen is not None and seen is not input_obj
+        assert seen.connection_config["host"] == "x"
+        assert "host" not in seen.metadata
+        # timeout_seconds now carries the enforced budget net of credential
+        # resolution, not the contract default the caller happened to send.
+        assert (
+            0 < seen.timeout_seconds <= int(_PREFLIGHT_START_TO_CLOSE.total_seconds())
+        )
         with pytest.raises(AppContextError):
             _ = handler.context
 
@@ -393,6 +432,14 @@ class TestSdrAgentJsonResolution:
                 "application_sdk.execution._temporal.sdr.CredentialResolver",
                 return_value=resolver,
             ),
+            mock.patch(
+                "application_sdk.checks.credentials.get_infrastructure",
+                return_value=fake_infra,
+            ),
+            mock.patch(
+                "application_sdk.checks.credentials.CredentialResolver",
+                return_value=resolver,
+            ),
         ):
             result = await preflight(
                 PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
@@ -432,6 +479,14 @@ class TestSdrAgentJsonResolution:
                     "application_sdk.execution._temporal.sdr.CredentialResolver",
                     return_value=resolver,
                 ),
+                mock.patch(
+                    "application_sdk.checks.credentials.get_infrastructure",
+                    return_value=fake_infra,
+                ),
+                mock.patch(
+                    "application_sdk.checks.credentials.CredentialResolver",
+                    return_value=resolver,
+                ),
             ):
                 await activity(input_obj)
             captured = handler.context_during_call
@@ -446,7 +501,7 @@ class TestSdrAgentJsonResolution:
 
         creds = [HandlerCredential(key="api_key", value="secret123")]
         with mock.patch(
-            "application_sdk.execution._temporal.sdr.CredentialResolver",
+            "application_sdk.checks.credentials.CredentialResolver",
         ) as resolver_cls:
             await preflight(PreflightInput(credentials=creds))
 
@@ -468,7 +523,7 @@ class TestSdrAgentJsonResolution:
         creds = [HandlerCredential(key="api_key", value="secret123")]
         # secret-path but no agent-name => is_populated() is False.
         with mock.patch(
-            "application_sdk.execution._temporal.sdr.CredentialResolver",
+            "application_sdk.checks.credentials.CredentialResolver",
         ) as resolver_cls:
             await preflight(
                 PreflightInput(credentials=creds, agent_json={"secret-path": "p"})
@@ -520,6 +575,14 @@ class TestSdrAgentJsonResolution:
                 "application_sdk.execution._temporal.sdr.CredentialResolver",
                 return_value=resolver,
             ),
+            mock.patch(
+                "application_sdk.checks.credentials.get_infrastructure",
+                return_value=fake_infra,
+            ),
+            mock.patch(
+                "application_sdk.checks.credentials.CredentialResolver",
+                return_value=resolver,
+            ),
         ):
             result = await preflight(
                 PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
@@ -550,7 +613,7 @@ class TestSdrPreflightObjectStoreChecks:
         preflight = self._preflight(handler)
 
         with mock.patch(
-            "application_sdk.execution._temporal.sdr.check_object_store_access",
+            "application_sdk.checks.runner.check_object_store_access",
             mock.AsyncMock(return_value=[]),
         ):
             result = await preflight(PreflightInput(credentials=[]))
@@ -574,7 +637,7 @@ class TestSdrPreflightObjectStoreChecks:
             ),
         ]
         with mock.patch(
-            "application_sdk.execution._temporal.sdr.check_object_store_access",
+            "application_sdk.checks.runner.check_object_store_access",
             mock.AsyncMock(return_value=results),
         ):
             result = await preflight(PreflightInput(credentials=[]))
@@ -611,7 +674,7 @@ class TestSdrPreflightObjectStoreChecks:
             ),
         ]
         with mock.patch(
-            "application_sdk.execution._temporal.sdr.check_object_store_access",
+            "application_sdk.checks.runner.check_object_store_access",
             mock.AsyncMock(return_value=results),
         ):
             result = await preflight(PreflightInput(credentials=[]))
@@ -651,7 +714,7 @@ class TestSdrPreflightObjectStoreChecks:
             ),
         ]
         with mock.patch(
-            "application_sdk.execution._temporal.sdr.check_object_store_access",
+            "application_sdk.checks.runner.check_object_store_access",
             mock.AsyncMock(return_value=results),
         ):
             result = await preflight(PreflightInput(credentials=[]))
@@ -666,7 +729,7 @@ class TestSdrPreflightObjectStoreChecks:
         preflight = self._preflight(handler)
 
         with mock.patch(
-            "application_sdk.execution._temporal.sdr.check_object_store_access",
+            "application_sdk.checks.runner.check_object_store_access",
             mock.AsyncMock(side_effect=RuntimeError("boom")),
         ):
             result = await preflight(PreflightInput(credentials=[]))

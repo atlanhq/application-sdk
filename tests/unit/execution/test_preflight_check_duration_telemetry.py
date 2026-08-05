@@ -15,6 +15,7 @@ exist, so the fix has something to break.
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 from unittest import mock
 
 import orjson
@@ -35,6 +36,24 @@ from application_sdk.handler.contracts import (
 from application_sdk.observability.logger_adaptor import CHECK_MATRIX_KEY
 
 _GATE = "application_sdk.execution._temporal.preflight_gate"
+_OUTCOME = "application_sdk.checks.outcome"
+
+
+@contextmanager
+def _patch_logger():
+    """One mock for both loggers a gate run writes through.
+
+    The outcome row is emitted by the shared check core while the gate keeps its own
+    prose, and these tests assert on both (the row's contents, and that nothing
+    warns about an impossible duration).
+    """
+    shared = mock.MagicMock()
+    with (
+        mock.patch(f"{_GATE}.logger", shared),
+        mock.patch(f"{_OUTCOME}.logger", shared),
+    ):
+        yield shared
+
 
 # The worst production value observed on a completed ``proceeded`` row: a single
 # check claiming 292.8s under an SDK that kills the activity at 25s.
@@ -84,7 +103,7 @@ class TestSelfReportedDurationsAreUnvalidated:
             budget_seconds=0.3,
         )
         started = time.monotonic()
-        with mock.patch(f"{_GATE}.logger") as m:
+        with _patch_logger() as m:
             await gate(PreflightGateInput())
         elapsed_ms = (time.monotonic() - started) * 1000
 
@@ -102,7 +121,7 @@ class TestSelfReportedDurationsAreUnvalidated:
             enforce=False,
             budget_seconds=0.3,
         )
-        with mock.patch(f"{_GATE}.logger") as m:
+        with _patch_logger() as m:
             await gate(PreflightGateInput())
 
         assert m.warning.call_args_list == []
@@ -122,7 +141,7 @@ class TestSelfReportedDurationsAreUnvalidated:
             budget_seconds=GATE_TIMEOUT_DEFAULT_SECONDS,
         )
         started = time.monotonic()
-        with mock.patch(f"{_GATE}.logger") as m:
+        with _patch_logger() as m:
             await gate(PreflightGateInput())
         elapsed_seconds = time.monotonic() - started
 

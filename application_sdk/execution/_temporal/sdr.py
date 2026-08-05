@@ -1,22 +1,33 @@
-"""SDR (Self Deployed Runtime) Temporal workflows for handler operations.
+"""Handler operations as durable Temporal workflows.
 
-Exposes the three handler operations -- ``test_auth``, ``preflight_check``,
-``fetch_metadata`` -- as durable, retryable Temporal workflows in addition to
-the HTTP endpoints already served by :mod:`application_sdk.handler.service`.
+Exposes ``test_auth``, ``preflight_check`` and ``fetch_metadata`` as generic,
+per-app, retryable workflows, alongside the HTTP endpoints in
+:mod:`application_sdk.handler.service`. At worker assembly time,
+:func:`build_sdr_activities` binds the concrete Handler into activity closures;
+the workflows reference them by name.
 
-The workflows are generic and registered once per worker.  At worker
-assembly time, :func:`build_sdr_activities` binds the concrete Handler
-instance into three activity closures; the workflows reference those
-activities by name.
+Originally built for SDR (Self Deployed Runtime), where the app runs on customer
+infrastructure and Atlan's control plane cannot reach it over HTTP — hence the
+``sdr:`` names, which stay registered because LM starts them by name. Nothing about
+them is actually SDR-specific, though: a durable, per-app, retryable wrapper around a
+handler operation is exactly what an interactive test needs on *any* deployment, and
+what proactive drift detection needs. So the same wrappers are also registered under
+``checks:*``, which is what new callers should use, and a fourth workflow —
+``checks:scheduled_preflight`` — serves the Automation Engine's periodic probe.
 
-SDR is enabled by default and silently skipped when the worker is started
-without a Handler (see ``create_worker(handler=...)``).
+The verdict itself comes from :mod:`application_sdk.checks`, shared with the config
+UI and the pre-run gate. What differs per workflow here is policy: whether a source
+we could not verify fails the activity (interactive: yes, a human is waiting;
+scheduled: no, a retry-and-alert on a slow source is worse than an honest verdict),
+and how patient the timeouts are.
+
+Registered by default and silently skipped when the worker is started without a
+Handler (see ``create_worker(handler=...)``).
 """
 
 from __future__ import annotations
 
 import os
-import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -26,45 +37,59 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from application_sdk.checks.cadence import recheck_after_seconds
+    from application_sdk.checks.outcome import emit as emit_outcome
+    from application_sdk.checks.outcome import outcome_for
+    from application_sdk.checks.request import CheckRequest, CheckTrigger
+    from application_sdk.checks.runner import run_checks
+    from application_sdk.checks.verdict import CheckClassification
     from application_sdk.credentials.ref import CredentialRef
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.spec import AgentCredentialSpec
-    from application_sdk.errors.categories import FailureCategory
     from application_sdk.errors.leaves import DependencyUnavailableError
-    from application_sdk.errors.wire import FailureDetails
+    from application_sdk.handler.base import implements_test_auth
     from application_sdk.handler.context import bind_invocation_context
     from application_sdk.handler.contracts import (
         AuthInput,
         AuthOutput,
+        AuthStatus,
         HandlerCredential,
         MetadataInput,
         MetadataOutput,
-        PreflightCheck,
         PreflightInput,
         PreflightOutput,
-        PreflightStatus,
     )
     from application_sdk.infrastructure.context import get_infrastructure
     from application_sdk.observability.logger_adaptor import get_logger
-    from application_sdk.storage.preflight import check_object_store_access
 
 if TYPE_CHECKING:
     from application_sdk.handler.base import Handler
 
 logger = get_logger(__name__)
 
-# UI-facing check-row names for the object-store access probes appended to the
-# SDR interactive preflight output.  "deployment" is the customer's own store;
-# "upstream" is the Atlan upload proxy.
-_OBJECT_STORE_CHECK_NAMES: dict[str, str] = {
-    "deployment": "Object store access (deployment)",
-    "upstream": "Object store access (Atlan upload)",
-}
-
-
 SDR_TEST_AUTH_ACTIVITY = "sdr:test_auth"
 SDR_PREFLIGHT_ACTIVITY = "sdr:preflight_check"
 SDR_FETCH_METADATA_ACTIVITY = "sdr:fetch_metadata"
+
+# Activity for the scheduled probe. A separate activity, not a flag, because it
+# stamps a different trigger and returns a cadence recommendation the interactive
+# paths have no use for.
+CHECKS_SCHEDULED_ACTIVITY = "checks:scheduled_preflight"
+
+# Workflow names. ``sdr:*`` (above, on the workflow classes) stays registered because
+# LM starts those by name; ``checks:*`` is what new callers should use, since none of
+# this is SDR-specific — the same durable, per-app wrapper serves an interactive test
+# on any deployment and the Automation Engine's proactive drift detection.
+CHECKS_TEST_AUTH_WORKFLOW = "checks:test_auth"
+CHECKS_PREFLIGHT_WORKFLOW = "checks:preflight_check"
+CHECKS_FETCH_METADATA_WORKFLOW = "checks:fetch_metadata"
+CHECKS_SCHEDULED_WORKFLOW = "checks:scheduled_preflight"
+
+# Error type for an interactive preflight that could not reach a verdict. Distinct
+# from the gate's ``PreflightFailed``, which the log interceptor treats as a
+# deliberate pre-run abort — an interactive test that could not reach the source is
+# a failure to report, not a policy decision.
+SDR_UNVERIFIABLE_ERROR_TYPE = "PreflightUnverifiable"
 
 
 def _env_seconds(name: str, default: int) -> int:
@@ -185,6 +210,19 @@ _AUTH_RETRY = RetryPolicy(maximum_attempts=1)
 # by schedule_to_close above.
 _DEFAULT_RETRY = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
 
+# The scheduled probe can afford to be patient: nobody is watching a spinner, and a
+# verdict half an hour late is far better than a wrong verdict now. It gets a longer
+# wall clock and one more attempt than the interactive paths, so a source that is
+# merely slow (a cold warehouse resuming) reports READY rather than being recorded as
+# drift and paging someone.
+_SCHEDULED_RETRY = RetryPolicy(maximum_attempts=3, backoff_coefficient=2)
+_SCHEDULED_START_TO_CLOSE = timedelta(
+    seconds=_env_seconds("ATLAN_CHECKS_SCHEDULED_START_TO_CLOSE_SECONDS", 300)
+)
+_SCHEDULED_SCHEDULE_TO_CLOSE = timedelta(
+    seconds=_env_seconds("ATLAN_CHECKS_SCHEDULED_SCHEDULE_TO_CLOSE_SECONDS", 1200)
+)
+
 
 @workflow.defn(name="sdr:test_auth")
 class SdrTestAuthWorkflow:
@@ -231,11 +269,104 @@ class SdrFetchMetadataWorkflow:
         )
 
 
+@workflow.defn(name=CHECKS_TEST_AUTH_WORKFLOW)
+class CheckAuthWorkflow:
+    """``checks:test_auth`` — the same operation under its non-SDR name.
+
+    These wrappers were only ever "SDR" by deployment accident: generic, per-app and
+    durable is exactly what an interactive test needs on any deployment, and what a
+    scheduled probe needs. The ``sdr:*`` names stay registered because LM starts them
+    by name; new callers should use these.
+
+    Spelled out rather than subclassing the ``sdr:*`` class: Temporal requires
+    ``@workflow.run`` on the class itself and rejects an inherited one, so the
+    delegation has to be explicit. Both names dispatch the same activity, so there is
+    one implementation regardless.
+    """
+
+    @workflow.run
+    async def run(self, input: AuthInput) -> AuthOutput:
+        return await workflow.execute_activity(
+            SDR_TEST_AUTH_ACTIVITY,
+            input,
+            retry_policy=_AUTH_RETRY,
+            schedule_to_close_timeout=_AUTH_SCHEDULE_TO_CLOSE,
+            start_to_close_timeout=_AUTH_START_TO_CLOSE,
+        )
+
+
+@workflow.defn(name=CHECKS_PREFLIGHT_WORKFLOW)
+class CheckPreflightWorkflow:
+    """``checks:preflight_check`` — see :class:`CheckAuthWorkflow`."""
+
+    @workflow.run
+    async def run(self, input: PreflightInput) -> PreflightOutput:
+        return await workflow.execute_activity(
+            SDR_PREFLIGHT_ACTIVITY,
+            input,
+            retry_policy=_DEFAULT_RETRY,
+            schedule_to_close_timeout=_PREFLIGHT_SCHEDULE_TO_CLOSE,
+            start_to_close_timeout=_PREFLIGHT_START_TO_CLOSE,
+        )
+
+
+@workflow.defn(name=CHECKS_FETCH_METADATA_WORKFLOW)
+class CheckFetchMetadataWorkflow:
+    """``checks:fetch_metadata`` — see :class:`CheckAuthWorkflow`."""
+
+    @workflow.run
+    async def run(self, input: MetadataInput) -> MetadataOutput:
+        return await workflow.execute_activity(
+            SDR_FETCH_METADATA_ACTIVITY,
+            input,
+            retry_policy=_DEFAULT_RETRY,
+            schedule_to_close_timeout=_METADATA_SCHEDULE_TO_CLOSE,
+            start_to_close_timeout=_METADATA_START_TO_CLOSE,
+        )
+
+
+@workflow.defn(name=CHECKS_SCHEDULED_WORKFLOW)
+class ScheduledCheckWorkflow:
+    """``checks:scheduled_preflight`` — proactive drift detection for one connection.
+
+    A separate workflow rather than a flag on the interactive one, so the *caller*
+    expresses intent by choosing what to start. Two things follow from that which a
+    flag could not give: the outcome row's ``trigger`` cannot be mis-stamped by a
+    caller that forgot to set it, and the retry/timeout profile can differ — nobody is
+    waiting on this answer, so it can afford to be patient where the UI cannot.
+
+    Returns the verdict with ``recheck_after_seconds`` populated, which is the whole
+    interface for adaptive cadence: the scheduler honours that number and needs to
+    know nothing else about what was checked.
+    """
+
+    @workflow.run
+    async def run(self, input: PreflightInput) -> PreflightOutput:
+        return await workflow.execute_activity(
+            CHECKS_SCHEDULED_ACTIVITY,
+            input,
+            retry_policy=_SCHEDULED_RETRY,
+            schedule_to_close_timeout=_SCHEDULED_SCHEDULE_TO_CLOSE,
+            start_to_close_timeout=_SCHEDULED_START_TO_CLOSE,
+        )
+
+
 SDR_WORKFLOWS: tuple[type, ...] = (
     SdrTestAuthWorkflow,
     SdrPreflightCheckWorkflow,
     SdrFetchMetadataWorkflow,
+    CheckAuthWorkflow,
+    CheckPreflightWorkflow,
+    CheckFetchMetadataWorkflow,
+    ScheduledCheckWorkflow,
 )
+"""Every handler-op workflow the worker registers.
+
+Named ``SDR_WORKFLOWS`` for continuity with the worker that imports it, though the
+set is no longer SDR-specific: the ``checks:*`` names serve interactive tests on any
+deployment and the scheduled probe, and the ``sdr:*`` names remain because LM starts
+them by name.
+"""
 
 
 @dataclass
@@ -280,67 +411,6 @@ async def _resolve_agent_credentials(
     return HandlerCredential.list_from_raw(raw)
 
 
-async def _append_object_store_checks(output: PreflightOutput) -> None:
-    """Fold SDR object-store access probes into a handler's ``PreflightOutput``.
-
-    Runs the customer object-store access check (deployment store + upstream
-    Atlan upload proxy) and appends one ``PreflightCheck`` per probed store to
-    ``output.checks`` so they render as UI check rows alongside the handler's own
-    source/credential checks.  A failed probe carries a typed ``FailureDetails``
-    (``DEPENDENCY_UNAVAILABLE`` / ``OBJECT_STORE_ACCESS``) so the message and
-    remediation hint surface in the UI.
-
-    No-op when not in SDR mode (``check_object_store_access`` returns ``[]`` when
-    ``ENABLE_ATLAN_UPLOAD`` is falsy).  If any object-store check fails and the
-    handler reported ``READY``, the verdict is downgraded to ``NOT_READY``; an
-    already ``NOT_READY``/``PARTIAL`` verdict is left untouched.
-
-    Never raises — any unexpected error is logged and the handler's own result is
-    returned unchanged.
-    """
-    try:
-        start = time.monotonic()
-        results = await check_object_store_access(get_infrastructure())
-        elapsed_ms = (time.monotonic() - start) * 1000.0
-        if not results:
-            return
-
-        any_failed = False
-        for result in results:
-            name = _OBJECT_STORE_CHECK_NAMES.get(
-                result.label, f"Object store access ({result.label})"
-            )
-            error: FailureDetails | None = None
-            if not result.passed:
-                any_failed = True
-                error = FailureDetails(
-                    category=FailureCategory.DEPENDENCY_UNAVAILABLE,
-                    code="OBJECT_STORE_ACCESS",
-                    retryable=False,
-                    message=result.message,
-                    suggested_action=result.hint,
-                )
-            output.checks.append(
-                PreflightCheck(
-                    name=name,
-                    passed=result.passed,
-                    message=result.message,
-                    error=error,
-                )
-            )
-
-        output.total_duration_ms += elapsed_ms
-        if any_failed and output.status == PreflightStatus.READY:
-            output.status = PreflightStatus.NOT_READY
-    except Exception:
-        # Must never break the handler's own preflight result.
-        logger.warning(
-            "SDR preflight: object-store access check augmentation failed; "
-            "leaving handler result unchanged",
-            exc_info=True,
-        )
-
-
 def build_sdr_activities(
     handler: Handler,
     app_name: str,
@@ -369,6 +439,41 @@ def build_sdr_activities(
 
     @activity.defn(name=SDR_TEST_AUTH_ACTIVITY)
     async def test_auth(input: AuthInput) -> AuthOutput:
+        """Interactive auth test.
+
+        Handlers that still implement ``test_auth`` themselves keep the path they
+        have always taken — their behaviour is what that app's users see today.
+        Handlers on the inherited default go through the shared core as an
+        ``AUTH``-depth run, which is the same handler method (and the same resolved
+        credential) the run itself will use.
+        """
+        if not implements_test_auth(binding.handler):
+            request = CheckRequest.from_preflight_input(
+                input.to_preflight_input(),
+                app_name=binding.app_name,
+                trigger=CheckTrigger.UI_AUTH,
+                budget_seconds=_AUTH_START_TO_CLOSE.total_seconds(),
+            )
+            verdict = await run_checks(
+                binding.handler,
+                request,
+                # An object store has no bearing on whether a credential works, and
+                # auth is meant to be the cheapest question the UI can ask.
+                augment_object_store=False,
+            )
+            emit_outcome(
+                verdict,
+                outcome=outcome_for(blocked=not verdict.is_ready, enforce=False),
+                reason=verdict.status.value,
+            )
+            if verdict.classification is CheckClassification.SOURCE_UNVERIFIABLE:
+                # Never got far enough to judge the credential — say so, rather than
+                # telling the user their password is wrong when the host was down.
+                return AuthOutput(
+                    status=AuthStatus.FAILED, message=verdict.output.message
+                )
+            return AuthOutput.from_preflight_output(verdict.output)
+
         if input.agent_json is not None and input.agent_json.is_populated():
             input.credentials = await _resolve_agent_credentials(input.agent_json)
         with bind_invocation_context(binding.app_name, input.credentials):
@@ -376,13 +481,86 @@ def build_sdr_activities(
 
     @activity.defn(name=SDR_PREFLIGHT_ACTIVITY)
     async def preflight_check(input: PreflightInput) -> PreflightOutput:
-        if input.agent_json is not None and input.agent_json.is_populated():
-            input.credentials = await _resolve_agent_credentials(input.agent_json)
-        with bind_invocation_context(binding.app_name, input.credentials):
-            output = await binding.handler.preflight_check(input)
-        # SDR-only: fold the customer object-store access check into the
-        # interactive preflight so it shows up as a UI check row. Non-raising.
-        await _append_object_store_checks(output)
+        """Interactive preflight, on the shared check core.
+
+        Everything that decides the answer — credential resolution, the budget net
+        of it, the object-store probe, the classification, the outcome row — is the
+        same code the pre-run gate uses. What stays local is one policy choice: a
+        source we could not verify still **fails the activity** here, because a
+        human is waiting on a "Test connection" button and LM's proxy turns a failed
+        activity into the error the UI shows. The gate makes the opposite choice
+        (report and let posture decide) because nobody is watching.
+        """
+        request = CheckRequest.from_preflight_input(
+            input,
+            app_name=binding.app_name,
+            trigger=CheckTrigger.SDR,
+            budget_seconds=_PREFLIGHT_START_TO_CLOSE.total_seconds(),
+        )
+        verdict = await run_checks(binding.handler, request)
+        emit_outcome(
+            verdict,
+            outcome=outcome_for(blocked=not verdict.is_ready, enforce=False),
+            reason=(
+                verdict.output.checks[0].error.code
+                if verdict.classification is CheckClassification.SOURCE_UNVERIFIABLE
+                and verdict.output.checks
+                and verdict.output.checks[0].error
+                else verdict.status.value
+            ),
+        )
+        if verdict.classification is CheckClassification.SOURCE_UNVERIFIABLE:
+            # Fail the activity, as this path always has — but with a typed,
+            # attributed, redacted failure instead of whatever the driver raised.
+            # Deliberately not the gate's block type: the log interceptor reads that
+            # as a *deliberate* pre-run abort, which this is not.
+            from application_sdk.execution.errors import (  # noqa: PLC0415 — avoid import cycle at module load
+                ApplicationError,
+            )
+
+            details = verdict.output.checks[0].error if verdict.output.checks else None
+            raise ApplicationError(
+                verdict.output.message or "Preflight could not verify the source",
+                *([details] if details is not None else []),
+                type=SDR_UNVERIFIABLE_ERROR_TYPE,
+                non_retryable=True,
+            )
+        return verdict.output
+
+    @activity.defn(name=CHECKS_SCHEDULED_ACTIVITY)
+    async def scheduled_preflight(input: PreflightInput) -> PreflightOutput:
+        """Proactive drift detection for one connection.
+
+        The point of this path is to find out that access broke *before* the next
+        real run does. So it differs from the interactive one in exactly two ways,
+        both because nobody is waiting on the answer:
+
+        * It **never raises** on a source it could not verify. A failed activity would
+          make the scheduler retry-and-alert on what is often just a slow source, and
+          the honest ``NOT_READY`` verdict is the more useful record. Only our own
+          plumbing failures propagate (from the core), where a retry is the right
+          response.
+        * It returns ``recheck_after_seconds``, so the scheduler's next fire is paced
+          by what was actually found rather than a fixed interval — a broken
+          connection is looked at again soon, an all-green one is left alone.
+
+        Advisory by design: this blocks nothing and pauses nothing. Enforcement stays
+        with the pre-run gate, whose posture ladder already exists for it.
+        """
+        request = CheckRequest.from_preflight_input(
+            input,
+            app_name=binding.app_name,
+            trigger=CheckTrigger.SCHEDULED,
+            budget_seconds=_SCHEDULED_START_TO_CLOSE.total_seconds(),
+        )
+        verdict = await run_checks(binding.handler, request)
+        emit_outcome(
+            verdict,
+            outcome=outcome_for(blocked=not verdict.is_ready, enforce=False),
+            reason=verdict.status.value,
+        )
+        output = verdict.output
+        output.recheck_after_seconds = recheck_after_seconds(verdict)
         return output
 
     @activity.defn(name=SDR_FETCH_METADATA_ACTIVITY)
@@ -392,4 +570,4 @@ def build_sdr_activities(
         with bind_invocation_context(binding.app_name, input.credentials):
             return await binding.handler.fetch_metadata(input)
 
-    return [test_auth, preflight_check, fetch_metadata]
+    return [test_auth, preflight_check, scheduled_preflight, fetch_metadata]

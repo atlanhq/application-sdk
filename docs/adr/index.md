@@ -12,7 +12,7 @@ ADRs capture the architectural decisions behind the Application SDK — what was
 | [ADR-0006](0006-schema-driven-contracts.md) | Schema-Driven Contracts with Additive Evolution |
 | [ADR-0007](0007-apps-as-coordination-unit.md) | Apps as the Unit of Inter-App Coordination |
 | [ADR-0008](0008-payload-safe-bounded-types.md) | Payload-Safe Bounded Types in Contracts |
-| [ADR-0009](0009-separate-handler-worker-deployments.md) | Separate Handler and Worker Deployments |
+| [ADR-0009](0009-separate-handler-worker-deployments.md) | Separate Handler and Worker Deployments — **superseded by [ADR-0018](0018-single-pod-deployment-and-unified-check-core.md)** |
 | [ADR-0010](0010-async-first-blocking-code.md) | Async-First Design and Blocking Code Pitfalls |
 | [ADR-0011](0011-logging-level-guidelines.md) | Logging Level Guidelines |
 | [ADR-0012](0012-observability-consolidation.md) | Observability Consolidation |
@@ -21,3 +21,4 @@ ADRs capture the architectural decisions behind the Application SDK — what was
 | [ADR-0015](0015-directory-listing-race-fix.md) | Directory Listing Race Fix (safe_list_directory primitive) |
 | [ADR-0016](0016-multi-pool-worker-routing.md) | Multi-Pool Worker Routing (N pools per app, @task(pool=...) static affinity) |
 | [ADR-0017](0017-native-execution-isolation.md) | Native Execution Isolation (best-effort work in an isolated process; run_fault_isolated / run_best_effort, conformance rule P036) |
+| [ADR-0018](0018-single-pod-deployment-and-unified-check-core.md) | One Pod Per App, and One Check Core Behind Every Ingress (supersedes ADR-0009) |

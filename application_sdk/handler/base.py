@@ -19,7 +19,6 @@ from application_sdk.handler.context import get_handler_context
 from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
-    AuthStatus,
     MetadataInput,
     MetadataOutput,
     PreflightInput,
@@ -126,20 +125,57 @@ class Handler(ABC):
             )
         return ctx
 
-    @abstractmethod
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Warn a subclass that still implements ``test_auth`` separately.
+
+        Authentication is preflight's cheapest layer, not a second operation. Two
+        methods meant two implementations that could disagree — credentials that
+        pass the UI's "Test authentication" button and then fail the run, or the
+        reverse — and two sets of error handling to keep in step.
+
+        Overriding still works and still takes precedence, so nothing breaks today.
+        The migration is to drop the override and tag the credential check
+        ``depth=CheckDepth.AUTH`` in ``preflight_check`` instead; the default
+        :meth:`test_auth` then answers from that one implementation.
+        """
+        super().__init_subclass__(**kwargs)
+        # Only the app's own override is interesting: an intermediate SDK class that
+        # already carries the default would otherwise warn every app beneath it.
+        if (
+            "test_auth" in cls.__dict__
+            and cls.__module__.split(".")[0] != "application_sdk"
+        ):
+            warnings.warn(
+                f"{cls.__name__} implements test_auth separately from preflight_check; "
+                "use preflight_check with a check tagged depth=CheckDepth.AUTH instead "
+                "and drop the test_auth override. Authentication is an AUTH-depth "
+                "preflight check, so two implementations can disagree about the same "
+                "credential — Handler.test_auth will be removed in v4.0.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
     async def test_auth(self, input: AuthInput) -> AuthOutput:
-        """Test authentication with the provided credentials.
+        """Test authentication — by default, an ``AUTH``-depth preflight run.
+
+        Not abstract, and not meant to be overridden: it delegates to
+        :meth:`preflight_check` with
+        ``depth=CheckDepth.AUTH`` and projects the verdict onto the auth contract,
+        so a connector implements credential checking exactly once. A run capped at
+        ``AUTH`` keeps only the checks tagged at that depth (plus untagged ones, for
+        handlers that predate depth tagging), so a permission gap elsewhere does not
+        report as bad credentials.
+
+        Overriding is still honoured — and warns, naming v4.0 as the removal.
 
         Args:
             input: Credentials and connection context.
 
         Returns:
             AuthOutput with status and optional identity/scope information.
-
-        Raises:
-            HandlerError: On authentication errors that should surface as HTTP 500.
         """
-        ...
+        output = await self.preflight_check(input.to_preflight_input())
+        return AuthOutput.from_preflight_output(output)
 
     @abstractmethod
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
@@ -196,6 +232,25 @@ class Handler(ABC):
         ...
 
 
+def implements_test_auth(handler: Handler) -> bool:
+    """Whether ``handler`` carries its own ``test_auth`` rather than the default.
+
+    The auth ingresses need to know: a legacy override must still be called
+    directly (its behaviour is what that app's users see today), while a handler on
+    the default can go through the shared check core and pick up credential
+    resolution, the enforced budget, classification and the outcome row.
+
+    Walks the MRO up to :class:`Handler` so an app's own intermediate base class
+    counts, while the SDK's own classes do not.
+    """
+    for klass in type(handler).__mro__:
+        if klass is Handler:
+            return False
+        if "test_auth" in klass.__dict__:
+            return klass.__module__.split(".")[0] != "application_sdk"
+    return False
+
+
 class DefaultHandler(Handler):
     """Pass-through handler that always returns SUCCESS/READY/empty.
 
@@ -203,11 +258,9 @@ class DefaultHandler(Handler):
     or as a placeholder during development.
     """
 
-    async def test_auth(self, input: AuthInput) -> AuthOutput:
-        """Always returns SUCCESS."""
-        return AuthOutput(
-            status=AuthStatus.SUCCESS, message="Authentication successful"
-        )
+    # test_auth is deliberately NOT overridden: the inherited default answers from
+    # this class's own preflight_check, which is the behaviour every app should
+    # inherit too. It still reports SUCCESS, since that preflight returns READY.
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         """Returns READY (no checks) when no handler is registered."""

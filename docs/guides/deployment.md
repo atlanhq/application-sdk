@@ -1,6 +1,6 @@
 # Deployment
 
-Every Application SDK app ships as a Docker image deployed to Kubernetes as two pods: a **handler** (always-on HTTP server) and a **worker** (scales to zero via KEDA). Both pods run the same image with a different `--mode` flag.
+Every Application SDK app ships as a Docker image deployed to Kubernetes. The recommended shape is a **single pod** running `--mode combined` (worker + HTTP server in one process), KEDA-scaled on Temporal queue depth — see [ADR-0018](../adr/0018-single-pod-deployment-and-unified-check-core.md). The older split shape (a `handler` pod and a `worker` pod from the same image) still works and is what `splitDeploymentEnabled: true` produces.
 
 This guide covers the `atlan.yaml` manifest, Dockerfile patterns, and the environment variables that drive production deployments.
 
@@ -28,7 +28,7 @@ dapr:
 |-------|------|-------------|
 | `app_id` | string | Unique identifier for this app. Must be kebab-case and match the Temporal task queue prefix. |
 | `execution_mode` | enum | `native` — standard SDK handler + worker. `argo` — transitional value retained for legacy manifests; do not use for new apps. Will be removed in a future release. |
-| `splitDeploymentEnabled` | bool | `true` → deploy handler and worker as separate Kubernetes Deployments (recommended). `false` → single combined deployment (use only for very small apps). |
+| `splitDeploymentEnabled` | bool | `true` → deploy handler and worker as separate Kubernetes Deployments (legacy; see [ADR-0018](../adr/0018-single-pod-deployment-and-unified-check-core.md)). `false` → one combined pod, now the recommended shape. |
 | `self_deployed_runtime` | bool | `true` → publish the image to Docker Hub for self-hosted customers (SDR). Default: `false`. |
 
 ### `dapr` section
@@ -84,7 +84,29 @@ ENV ATLAN_CONTRACT_GENERATED_DIR=app/generated
 
 ## Kubernetes Topology
 
-With `splitDeploymentEnabled: true`, the platform creates two Deployments from the same image:
+### Recommended: one pod (`--mode combined`)
+
+```
+Deployment: my-app  (KEDA ScaledObject, scales 0 → N on Temporal queue depth)
+└── command: application-sdk --mode combined --app app.connector:PostgresApp
+    ├── Temporal worker — task queue atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME} (auto-derived)
+    ├── Port 8000  — HTTP API (UI, Heracles, Automation Engine), Dapr pub/sub, /metrics, MCP
+    └── Port 8081  — health endpoints; point k8s probes HERE, not at :8000
+```
+
+Point liveness/readiness at **`:8081`**, not `:8000`: the worker health server carries the
+poll-loop liveness window (BLDX-1552) that can observe a silently stalled worker, which the
+FastAPI probes cannot.
+
+The pod scales to zero when the task queue is empty; each new workflow run — including an
+interactive check, which arrives as a Temporal workflow — wakes it. Running the worker
+alongside the HTTP server costs effectively nothing: the handler service already imports the
+worker stack, so both together measure the same resident memory as the handler alone (see
+[ADR-0018](../adr/0018-single-pod-deployment-and-unified-check-core.md) for the numbers). A
+worker crash does not take HTTP down — combined mode supervises and restarts the worker
+independently of uvicorn.
+
+### Legacy: two pods (`splitDeploymentEnabled: true`)
 
 ```
 Handler Deployment (min 1 replica, max N)
@@ -98,7 +120,9 @@ Worker Deployment (KEDA ScaledObject, scales 0 → N)
 └── Connects to Temporal task queue: atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME} (auto-derived)
 ```
 
-Workers scale to zero when the Temporal task queue is empty. Each new workflow run wakes a worker pod.
+Both pods scale to zero in practice, which is why the split no longer buys what
+[ADR-0009](../adr/0009-separate-handler-worker-deployments.md) intended. Worker-only mode has
+no `/metrics` endpoint to scrape and pushes to a Pushgateway instead.
 
 ---
 
@@ -131,13 +155,23 @@ ENABLE_ATLAN_UPLOAD=true
 
 ## Combined Mode (local / small apps)
 
-For local development or very small apps that don't need separate scaling:
+The recommended production shape, and what local development uses:
 
 ```bash
 application-sdk --mode combined --app app.connector:PostgresApp
 ```
 
-`combined` mode starts the handler and worker in a single process. Use it for local development via `run_dev_combined()`. Do not use it in production with high workflow volume — the handler HTTP latency competes with the Temporal worker event loop.
+`combined` mode runs the handler and worker in one process, sharing an event loop. It is what
+SDR deployments have always run, and what [ADR-0018](../adr/0018-single-pod-deployment-and-unified-check-core.md)
+adopts generally — a handler pod already carries the worker stack in memory, so the second pod
+buys nothing. Locally, reach it through `run_dev_combined()`.
+
+The one real caveat: HTTP request handling and the Temporal worker share an event loop, so a
+high-volume app whose HTTP traffic is latency-sensitive can still prefer the split shape.
+Note this is about *concurrency*, not memory, and that the check operations now arrive as
+Temporal workflows rather than HTTP requests — which moves the interactive load off the HTTP
+side. Blocking synchronous work in a handler or activity remains the thing that actually
+hurts here (see [ADR-0010](../adr/0010-async-first-blocking-code.md)).
 
 ---
 
