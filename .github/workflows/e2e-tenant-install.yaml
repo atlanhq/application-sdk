@@ -1,0 +1,186 @@
+# Manually install a specific app image onto one e2e tenant.
+#
+# FND-31. Two jobs for this workflow:
+#
+# 1. It settles the last open spike question — will GM install a release that has
+#    not finished its Snyk scan? The e2e path deliberately does not wait for the
+#    scan (a base-image CVE must not red an unrelated PR's e2e), so this run
+#    reports the release status at install time and whether the install was
+#    accepted. `e2e_tenant_app.py` recognises a scan-gate rejection and names
+#    `--scan-wait-seconds` in the error, so either answer is self-explaining.
+#
+# 2. It stays as the manual escape hatch: re-point an e2e tenant at a known
+#    image without a full e2e run, which is what you want when a tenant has
+#    drifted or a leg failed its version check.
+#
+# WHY THIS IS workflow_dispatch AND NOT AUTOMATIC: installing an app onto a
+# tenant is a deployment. The manual trigger IS the human authorisation, and the
+# `confirm` input makes firing it at the wrong tenant a deliberate act rather
+# than a default. The automatic path (once per run per cloud, ahead of the e2e
+# matrix) lands separately in e2e-full-reusable.yaml.
+#
+# Credentials never leave CI. `resolve_e2e_tenant.py` writes the leg's tenant and
+# credentials into $GITHUB_ENV behind the two-pass mask protocol, and
+# `e2e_tenant_app.py` reads them from the environment rather than argv (argv is
+# visible in process listings and in `set -x` output). Nothing prints a token.
+name: E2E Tenant Install
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: "Which cloud's e2e tenant to install onto."
+        required: true
+        type: choice
+        options: [aws, azure, gcp]
+        default: aws
+      confirm:
+        description: "This INSTALLS an app onto a live tenant. Select yes to proceed."
+        required: true
+        type: choice
+        options: ["no", "yes"]
+        default: "no"
+      app_id:
+        description: "GM app UUID (the app_id field in the app repo's atlan.yaml)."
+        required: true
+        type: string
+      image:
+        description: "Full image reference, e.g. ghcr.io/atlanhq/atlan-openapi-app:sdr-test-abc12345"
+        required: true
+        type: string
+      version:
+        description: >-
+          GM version string. Required rather than derived from the image tag so
+          this workflow needs no conditional shell (docs/standards/ci.md) —
+          normally the image tag itself.
+        required: true
+        type: string
+      branch:
+        description: "Git ref the image was built from, recorded on the GM version."
+        required: true
+        type: string
+      scan_wait_seconds:
+        description: >-
+          Seconds to wait for GM's release scan before installing. 0 (default)
+          does not wait. Raise this only if a run shows GM refusing to install an
+          unscanned release.
+        required: false
+        type: string
+        default: "0"
+      timeout_seconds:
+        description: "Budget for the deployment to reconcile before failing."
+        required: false
+        type: string
+        default: "600"
+
+permissions:
+  contents: read
+
+concurrency:
+  # One install at a time per cloud: the installation is tenant-scoped (one per
+  # app per tenant), so two concurrent installs would race and the loser would
+  # silently be the version left running. Not cancel-in-progress — cancelling
+  # mid-install leaves the tenant in whatever state LM reached.
+  group: e2e-tenant-install-${{ inputs.cloud }}
+  cancel-in-progress: false
+
+jobs:
+  install:
+    name: Install onto ${{ inputs.cloud }}
+    # The gate is a job-level `if:` rather than a shell test so the job is
+    # visibly skipped instead of green-but-did-nothing.
+    if: inputs.confirm == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+      E2E_CLOUD: ${{ inputs.cloud }}
+      FALLBACK_SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
+      FALLBACK_SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
+      FALLBACK_SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
+      FALLBACK_ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Two invocations: the mask pass must reach the log BEFORE the write pass
+      # redirects stdout into $GITHUB_ENV, because registering the matrix blob as
+      # a secret does not redact the values inside it. Same protocol as
+      # tests-reusable.yaml and e2e-full-reusable.yaml — see
+      # .github/scripts/export_extra_env.py for why the two passes are separate.
+      - name: Resolve the target tenant
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
+            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
+            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
+            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
+            --mask-only
+          python3 .github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
+            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
+            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
+            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
+            >> "$GITHUB_ENV"
+
+      # No env: block re-exporting the credentials. The script reads
+      # SDR_CLIENT_ID / SDR_CLIENT_SECRET straight out of the environment the
+      # resolver wrote, so the secret is not interpolated through a GitHub
+      # expression again just to be renamed — every hop is a hop it can be
+      # mishandled on. Those are the OAuth client pair the marketplace publish
+      # route authorises on, NOT ATLAN_API_KEY (the harness's API key).
+      - name: Install onto the tenant
+        id: install
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/e2e_tenant_app.py install \
+            --base-url "$ATLAN_BASE_URL" \
+            --app-id "${{ inputs.app_id }}" \
+            --image "${{ inputs.image }}" \
+            --version "${{ inputs.version }}" \
+            --branch "${{ inputs.branch }}" \
+            --tenant "$SDR_TEST_TENANT" \
+            --scan-wait-seconds "${{ inputs.scan_wait_seconds }}" \
+            --timeout-seconds "${{ inputs.timeout_seconds }}"
+
+      # Independent read-back through the same check the e2e legs will run, so a
+      # green install that somehow left the tenant on another version still fails
+      # here rather than in a leg later.
+      - name: Verify the tenant reports the installed version
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/e2e_tenant_app.py verify \
+            --base-url "$ATLAN_BASE_URL" \
+            --app-id "${{ inputs.app_id }}" \
+            --expected "${{ inputs.version }}"
+
+      # The findings, in the run summary rather than buried in step logs — this
+      # workflow's first purpose is answering the scan-gate question, and the
+      # answer should be readable without opening a log.
+      - name: Summarise
+        if: always()
+        env:
+          RELEASE_STATUS: ${{ steps.install.outputs.release_status }}
+          SKIPPED: ${{ steps.install.outputs.skipped }}
+          INSTALLED: ${{ steps.install.outputs.installed_version }}
+          DEPLOYMENT_ID: ${{ steps.install.outputs.deployment_id }}
+        run: |
+          {
+            echo "### E2E tenant install — ${{ inputs.cloud }}"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| App | \`${{ inputs.app_id }}\` |"
+            echo "| Image | \`${{ inputs.image }}\` |"
+            echo "| Version | \`${{ inputs.version }}\` |"
+            echo "| Already current (no-op) | \`${SKIPPED:-unknown}\` |"
+            echo "| Release status at install | \`${RELEASE_STATUS:-unreadable}\` |"
+            echo "| Deployment | \`${DEPLOYMENT_ID:-none}\` |"
+            echo "| Tenant reports installed | \`${INSTALLED:-unreported}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

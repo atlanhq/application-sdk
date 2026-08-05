@@ -368,6 +368,10 @@ def test_call_sites_are_the_expected_files() -> None:
     relative = {p.relative_to(_REPO_ROOT).as_posix() for p in _call_site_files()}
     assert relative == {
         ".github/workflows/e2e-full-reusable.yaml",
+        # FND-31: installs a given app image onto one e2e tenant, so it resolves
+        # that tenant the same way a leg does. Audited: it runs the two-pass
+        # --mask-only-then-write protocol, which the ordering guard below checks.
+        ".github/workflows/e2e-tenant-install.yaml",
         ".github/workflows/tests-reusable.yaml",
     }
 
