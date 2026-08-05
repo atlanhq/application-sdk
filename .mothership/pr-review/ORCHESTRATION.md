@@ -185,6 +185,37 @@ BUDGET
     threads) the human's response, which materially changes what
     counts as a "new" finding vs a known-and-discussed one.
 
+    **Same-run replay guard — run this immediately after loading
+    `/tmp/PRIOR_REVIEW.md`, before anything else.** When the Claude
+    stream drops mid-run (sandbox VPN reconnect, container eviction,
+    transient API error), mothership recovers by re-running this prompt
+    **from the top in the same sandbox** — a fresh run, not a `--resume`.
+    If the first pass had already posted its summary, that retry loads
+    its own summary as `PRIOR_REVIEW`, sees an empty delta, and posts a
+    SECOND summary for the same HEAD. The PR then shows two reviews with
+    different wording from a single `@sdk-review` trigger, and the
+    workflow's soft-success check passes because *a* summary exists.
+
+    The prior summary's footer carries the run URL that produced it
+    (§3e). If it is **this** run's URL, this process is a replay of work
+    that already landed:
+
+    ```bash
+    # GHA_RUN_URL is given in the session prompt — substitute it literally,
+    # shell variables do not persist between Bash calls.
+    if grep -qF '<GHA_RUN_URL>' /tmp/PRIOR_REVIEW.md; then
+      echo "REPLAY: this run already posted its review summary"
+    fi
+    ```
+
+    If that prints `REPLAY`, **stop the entire run here**: post nothing,
+    set no commit status, resolve no threads, do not continue to Phase 1.
+    The review was already delivered by the pass that died.
+
+    Key the guard on the run URL, never on `HEAD_SHA` alone — a genuine
+    re-trigger against an unchanged HEAD comes from a *different* run and
+    must still produce a review.
+
 6c. **Compute the re-review delta (scope-cutter).** Each review summary
     stamps the HEAD it reviewed as `<!-- REVIEWED_HEAD: <sha> -->` (§3e).
     On a re-review, use it to scope Phase 1–2 to what actually changed —
