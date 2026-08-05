@@ -287,6 +287,27 @@ inputs:
       it invokes this action; nothing here waits for a push.
     required: false
     default: ""
+  expected-app-version:
+    description: |
+      GM version string the target tenant must be running for this leg to be
+      meaningful. When set, the action asserts the tenant reports exactly this
+      version immediately before pytest, and fails the leg naming both versions
+      if it does not.
+
+      Why a re-check when the caller already installed it: the installation is
+      tenant-scoped (one per app per tenant) and GitHub has no cross-job lease, so
+      a concurrent run — or a hand-deploy — can replace it between the install and
+      the assertions. Since Heracles fetches the DAG from the tenant-deployed pod
+      at AE submit, testing against a replaced version silently exercises somebody
+      else's code. This turns that into a loud failure (FND-31).
+
+      Empty (the default) skips the check entirely, so the repos that call this
+      action directly without an install step are completely unaffected.
+
+      Requires the leg's tenant env (ATLAN_BASE_URL + the OAuth pair) to already
+      be resolved, which the reusable workflows do before invoking this action.
+    required: false
+    default: ""
   expected-python-version:
     description: |
       The Python major.minor the built worker image is expected to ship — the
@@ -697,6 +718,27 @@ runs:
           fi
           sleep 1
         done
+
+    # Last gate before the assertions: prove the tenant is still running the
+    # version this leg is testing. Placed here rather than earlier on purpose —
+    # the window that matters is the one immediately before the DAG is submitted,
+    # since Heracles fetches the manifest from the tenant-deployed pod at submit
+    # and that DAG is what executes. Checking any sooner leaves a gap a concurrent
+    # run can slip through.
+    #
+    # Self-skips when `expected-app-version` is empty, which is every caller that
+    # does not install to the tenant (FND-31).
+    - name: Verify the tenant runs the version under test
+      if: inputs.expected-app-version != ''
+      shell: bash
+      env:
+        EXPECTED: ${{ inputs.expected-app-version }}
+        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+      run: |
+        set -euo pipefail
+        python3 "$SDR_E2E_ROOT/../../scripts/e2e_tenant_app.py" verify \
+          --base-url "$ATLAN_BASE_URL" \
+          --expected "$EXPECTED"
 
     - name: Run SDR integration tests
       id: tests

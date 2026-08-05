@@ -66,6 +66,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from e2e_tenant_api import (
     APP_FAILURE_PATH,
@@ -145,6 +146,45 @@ def _env(*names: str) -> str:
         if value:
             return value
     return ""
+
+
+def resolve_app_id(explicit: str) -> str:
+    """Return *explicit* if set, else read ``app_id`` from ``atlan.yaml`` in cwd.
+
+    Mirrors what the ``atlan`` CLI does (``resolveAppIDFromYaml``), and exists so a
+    workflow step does not have to scrape another script's stdout to pass an id
+    this one can read itself.
+
+    ``yaml`` is imported lazily: the module is otherwise stdlib-only so it can run
+    before the SDK is installed, and this fallback is the only path that needs a
+    parser. A missing PyYAML is reported as such rather than as an ImportError
+    traceback.
+    """
+    if explicit.strip():
+        return explicit.strip()
+
+    path = Path("atlan.yaml")
+    if not path.is_file():
+        raise TenantAppError(
+            "no --app-id given and no atlan.yaml in the working directory "
+            f"({Path.cwd()}). Pass --app-id, or run from the app repo root."
+        )
+    try:
+        import yaml  # noqa: PLC0415 — lazy: only this fallback path needs it
+    except ModuleNotFoundError as exc:  # pragma: no cover - present on CI runners
+        raise TenantAppError(
+            "reading app_id from atlan.yaml needs PyYAML, which is not importable. "
+            "Pass --app-id explicitly instead."
+        ) from exc
+
+    parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
+    app_id = parsed.get("app_id", "") if isinstance(parsed, dict) else ""
+    if not str(app_id).strip():
+        raise TenantAppError(
+            "atlan.yaml has no app_id. The app has not been registered in the "
+            "marketplace yet, so there is nothing to install or verify against."
+        )
+    return str(app_id).strip()
 
 
 def _clients(base_url: str) -> tuple[TenantClient, TenantClient]:
@@ -390,7 +430,11 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     """Register + install + wait, converging by version."""
     # app_id is a free-text workflow input that lands in request paths; the
     # base URL takes the OAuth secret. Validate both before any API call.
-    app_id = validate_app_id(args.app_id)
+    #
+    # Resolve BEFORE validating: an app_id read out of atlan.yaml must clear the
+    # same UUID check as one passed on argv, or the fallback becomes a way around
+    # the validator.
+    app_id = validate_app_id(resolve_app_id(args.app_id))
     base_url = validate_tenant_base_url(args.base_url)
     publish_client, read_client = _clients(base_url)
 
@@ -460,7 +504,8 @@ def install(args: argparse.Namespace) -> InstallOutcome:
 
 def verify(args: argparse.Namespace) -> str:
     """Assert the tenant runs ``--expected``. Returns the installed version."""
-    app_id = validate_app_id(args.app_id)
+    # See install(): resolve from atlan.yaml first, then validate the result.
+    app_id = validate_app_id(resolve_app_id(args.app_id))
     base_url = validate_tenant_base_url(args.base_url)
     _, read_client = _clients(base_url)
     installed = _installed_version(read_client, app_id)
@@ -493,7 +538,11 @@ def _write_outputs(outputs: dict[str, str]) -> None:
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-url", required=True, help="https://<tenant>")
-    parser.add_argument("--app-id", required=True, help="GM app UUID from atlan.yaml")
+    parser.add_argument(
+        "--app-id",
+        default="",
+        help="GM app UUID. Omit to read app_id from atlan.yaml in the cwd.",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

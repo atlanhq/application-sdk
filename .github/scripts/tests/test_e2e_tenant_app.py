@@ -468,6 +468,55 @@ def test_verify_fails_when_nothing_is_installed(
         app.verify(_verify_args(_VERSION))
 
 
+# ── app_id resolution ────────────────────────────────────────────────────────
+# The verify step inside sdr-e2e passes no --app-id: it runs from the app repo
+# root, so the script reads atlan.yaml itself rather than a workflow step
+# scraping another script's stdout to hand it over.
+
+
+def test_explicit_app_id_wins() -> None:
+    assert app.resolve_app_id(_APP_ID) == _APP_ID
+
+
+def test_app_id_read_from_atlan_yaml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "atlan.yaml").write_text(
+        f"name: openapi\ntype: connector\napp_id: {_APP_ID}\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    assert app.resolve_app_id("") == _APP_ID
+
+
+def test_missing_atlan_yaml_names_the_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(app.TenantAppError, match="no atlan.yaml"):
+        app.resolve_app_id("")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "name: openapi\n",
+        "name: openapi\napp_id: ''\n",
+        "name: openapi\napp_id: '   '\n",
+        "- not-a-mapping\n",
+    ],
+)
+def test_atlan_yaml_without_an_app_id_fails_loudly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: str
+) -> None:
+    # An app with no app_id is not registered in the marketplace, so there is
+    # nothing to install or verify against — that must not read as "app_id ''"
+    # and then compare equal to an equally-absent installed version.
+    (tmp_path / "atlan.yaml").write_text(body, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(app.TenantAppError, match="app_id"):
+        app.resolve_app_id("")
+
+
 # ── Version extraction across LM shapes ──────────────────────────────────────
 
 
