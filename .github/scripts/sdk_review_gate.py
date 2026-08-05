@@ -56,7 +56,9 @@ REVIEWED_HEAD_RE = re.compile(r"<!--\s*REVIEWED_HEAD:\s*([0-9a-f]{40})\s*-->")
 Runner = Callable[..., subprocess.CompletedProcess]
 
 
-def fetch_comments(repo: str, pr_number: str, runner: Runner = subprocess.run) -> list[dict]:
+def fetch_comments(
+    repo: str, pr_number: str, runner: Runner = subprocess.run
+) -> list[dict]:
     """Every comment on the PR, or [] if the query fails.
 
     `--slurp` returns one array per page wrapped in an outer array; it is used
@@ -78,7 +80,9 @@ def fetch_comments(repo: str, pr_number: str, runner: Runner = subprocess.run) -
         check=False,
     )
     if result.returncode != 0:
-        print(f"::warning::could not list PR comments (exit {result.returncode}) — not gating")
+        print(
+            f"::warning::could not list PR comments (exit {result.returncode}) — not gating"
+        )
         return []
     try:
         pages = json.loads(result.stdout or "[]")
@@ -126,7 +130,11 @@ def decide(
             f"from @{actor}, not a human. Push a commit, or tag `@sdk-review` yourself to "
             f"force a re-review.",
         )
-    return "proceed", "bot-trigger-new-head", f"Bot trigger by @{actor} on a new HEAD — reviewing."
+    return (
+        "proceed",
+        "bot-trigger-new-head",
+        f"Bot trigger by @{actor} on a new HEAD — reviewing.",
+    )
 
 
 def set_output(key: str, value: str) -> None:
