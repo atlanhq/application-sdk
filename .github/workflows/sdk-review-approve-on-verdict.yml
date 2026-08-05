@@ -239,9 +239,11 @@ jobs:
           # S2: pin the review to commit_id=HEAD_SHA so GitHub associates
           # the approval with the specific commit we verified. If a push
           # lands between our REVIEWED_HEAD check and this POST, GitHub
-          # attaches the review to the OLD commit and branch protection's
-          # dismiss_stale_reviews_on_push dismisses it — the unreviewed
-          # HEAD is never auto-approved.
+          # attaches the approval to the OLD (reviewed) commit rather than
+          # the new HEAD. Full protection against that window additionally
+          # requires `dismiss_stale_reviews_on_push` enabled on the main
+          # branch protection rule — that setting could not be verified from
+          # a non-admin token; confirm it is ON before relying on this guard.
           # Residual TOCTOU: label writes above are PR-scoped (no sha
           # param in the labels API). A push after label-write leaves a
           # stale label until sdk-review-reset-on-push.yml clears it —

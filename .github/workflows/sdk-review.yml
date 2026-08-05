@@ -1296,8 +1296,12 @@ jobs:
                 #
                 # S2: pin to commit_id=DISPATCH_HEAD_SHA (which we verified ==
                 # REVIEWED_HEAD above). If a push landed between our checks and
-                # this POST, branch protection's dismiss_stale_reviews_on_push
-                # dismisses the review — the unreviewed HEAD is never approved.
+                # this POST, GitHub attaches the approval to the OLD (reviewed)
+                # commit rather than the new HEAD. Full protection against that
+                # window additionally requires `dismiss_stale_reviews_on_push`
+                # enabled on the main branch protection rule — that setting could
+                # not be verified from a non-admin token; confirm it is ON before
+                # relying on this guard.
                 # `gh pr review --approve` does not expose commit_id; use raw API.
                 APPROVE_BODY=$(printf '%s\n' \
                   "**SDK reviewer's verdict:** READY TO MERGE." \
