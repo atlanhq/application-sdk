@@ -48,18 +48,6 @@ with workflow.unsafe.imports_passed_through():
         PreflightOutput,
         PreflightStatus,
     )
-
-    # execution → handler seam: this module already imports handler.contracts /
-    # handler.context (the worker invokes the typed handler), so sourcing the FE
-    # envelope converters from handler.sdr_output follows the existing edge
-    # rather than introducing a new layering direction. The converters are pure
-    # typed-output → dict transforms; moving them to a neutral contracts module
-    # is an optional future cleanup if the team wants strict layer hygiene.
-    from application_sdk.handler.sdr_output import (
-        auth_output_to_response,
-        metadata_output_to_response,
-        preflight_output_to_response,
-    )
     from application_sdk.infrastructure.context import get_infrastructure
     from application_sdk.observability.logger_adaptor import get_logger
     from application_sdk.storage.preflight import check_object_store_access
@@ -235,8 +223,10 @@ class SdrTestAuthWorkflow:
     """Durable wrapper around ``Handler.test_auth``."""
 
     @workflow.run
-    async def run(self, input: AuthInput) -> dict[str, Any]:
-        output = await workflow.execute_activity(
+    async def run(self, input: AuthInput) -> AuthOutput:
+        # Returns the typed AuthOutput; heracles normalizes it into the frontend
+        # envelope at the API boundary (it owns the FE contract).
+        return await workflow.execute_activity(
             SDR_TEST_AUTH_ACTIVITY,
             input,
             result_type=AuthOutput,
@@ -244,7 +234,6 @@ class SdrTestAuthWorkflow:
             schedule_to_close_timeout=_AUTH_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_AUTH_START_TO_CLOSE,
         )
-        return auth_output_to_response(output)
 
 
 @workflow.defn(name="sdr:preflight_check")
@@ -252,10 +241,10 @@ class SdrPreflightCheckWorkflow:
     """Durable wrapper around ``Handler.preflight_check``."""
 
     @workflow.run
-    async def run(self, input: PreflightInput) -> dict[str, Any]:
-        # The activity returns a typed PreflightOutput; the workflow converts it
-        # to the frontend envelope so heracles can forward the result verbatim.
-        output = await workflow.execute_activity(
+    async def run(self, input: PreflightInput) -> PreflightOutput:
+        # Returns the typed PreflightOutput; heracles normalizes it into the
+        # SageV2 envelope at the API boundary (it owns the FE contract).
+        return await workflow.execute_activity(
             SDR_PREFLIGHT_ACTIVITY,
             input,
             result_type=PreflightOutput,
@@ -263,7 +252,6 @@ class SdrPreflightCheckWorkflow:
             schedule_to_close_timeout=_PREFLIGHT_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_PREFLIGHT_START_TO_CLOSE,
         )
-        return preflight_output_to_response(output)
 
 
 @workflow.defn(name="sdr:fetch_metadata")
@@ -271,8 +259,10 @@ class SdrFetchMetadataWorkflow:
     """Durable wrapper around ``Handler.fetch_metadata``."""
 
     @workflow.run
-    async def run(self, input: MetadataInput) -> list[Any]:
-        output = await workflow.execute_activity(
+    async def run(self, input: MetadataInput) -> MetadataOutput:
+        # Returns the typed MetadataOutput; heracles unwraps its objects into the
+        # filter-tree `results` shape at the API boundary (it owns the FE contract).
+        return await workflow.execute_activity(
             SDR_FETCH_METADATA_ACTIVITY,
             input,
             result_type=MetadataOutput,
@@ -280,7 +270,6 @@ class SdrFetchMetadataWorkflow:
             schedule_to_close_timeout=_METADATA_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_METADATA_START_TO_CLOSE,
         )
-        return metadata_output_to_response(output)
 
 
 SDR_WORKFLOWS: tuple[type, ...] = (
