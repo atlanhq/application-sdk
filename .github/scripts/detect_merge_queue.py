@@ -148,14 +148,22 @@ def governs_branch(ruleset: dict, base_ref: str, default_branch: str) -> bool:
 
 
 def _load(raw: str):
-    """Parse `gh` JSON output, returning None on empty/invalid payloads."""
+    """Parse `gh` JSON output, returning None on empty/invalid payloads.
+
+    A ``--paginate --slurp`` listing is an array *of page arrays*, so those
+    entries are flattened one level; anything else (a plain list, a dict error
+    body) passes through for the caller to shape-check.
+    """
     if not raw.strip():
         return None
     try:
-        return json.loads(raw)
+        payload = json.loads(raw)
     except json.JSONDecodeError:
         print("::warning::could not parse rulesets payload as JSON", file=sys.stderr)
         return None
+    if isinstance(payload, list) and all(isinstance(page, list) for page in payload):
+        return [entry for page in payload for entry in page]
+    return payload
 
 
 def detect(
@@ -173,7 +181,7 @@ def detect(
     stubbing the module-level seam takes effect for callers that don't pass it.
     """
     run = run or _run_gh
-    listing = _load(run(["api", f"repos/{repo}/rulesets", "--paginate"]))
+    listing = _load(run(["api", f"repos/{repo}/rulesets", "--paginate", "--slurp"]))
     if not isinstance(listing, list):
         # Fail open: no readable ruleset list ⇒ assume no queue ⇒ PR tier runs.
         return False

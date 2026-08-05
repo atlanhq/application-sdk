@@ -166,6 +166,24 @@ def test_detect_skips_entries_without_id() -> None:
     assert detect(REPO, "main", "main", run=run) is False
 
 
+def test_detect_flattens_slurped_pages() -> None:
+    # `--paginate --slurp` wraps each page in its own array; without flattening,
+    # a repo with more than one page of rulesets would parse as "no queue".
+    run = _stub([[{"id": 1}], [{"id": 2}]], _ruleset())
+    assert detect(REPO, "main", "main", run=run) is True
+
+
+def test_detect_passes_slurp_to_gh() -> None:
+    seen: list[list] = []
+
+    def run(args: list) -> str:
+        seen.append(args)
+        return json.dumps([])
+
+    detect(REPO, "main", "main", run=run)
+    assert seen and "--slurp" in seen[0] and "--paginate" in seen[0]
+
+
 # --- CLI output ------------------------------------------------------------
 
 
