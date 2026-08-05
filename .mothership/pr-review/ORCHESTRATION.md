@@ -1209,7 +1209,12 @@ after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
 `<!-- REVIEWED_HEAD: <sha> -->` records the 40-char HEAD this review
 ran against — step 6c reads it on the next round to compute the
 re-review delta; omitting it forces the next round back to a full
-review. For toolkit scopes, the fourth marker
+review. **Substitute `<HEAD_SHA>` with the verbatim 40-character hex
+SHA from the prompt header — write the raw hex characters, never the
+literal placeholder text `<HEAD_SHA>`.** The §3f submit step adds a
+shell-level safety net (`sed`) in case the LLM writes the placeholder,
+but the correct value must come from the reviewed HEAD, not a live
+re-fetch. For toolkit scopes, the fourth marker
 `<!-- TOOLKIT_ARTIFACT_HASH: <sha256> -->` records the PR-generated
 artifact hash from Phase 1b-toolkit so the next round can carry
 consumer validation forward; omit the line entirely for non-toolkit
@@ -1368,6 +1373,16 @@ gh api "repos/$REPO/statuses/$HEAD_SHA" \
   -f state="$STATE" \
   -f description="$DESCRIPTION"
 # where STATE ∈ success|failure|pending and DESCRIPTION ≤ 140 chars
+
+# Stamp the reviewed HEAD SHA into the REVIEWED_HEAD marker — safety
+# net in case the LLM wrote the `<HEAD_SHA>` placeholder literally
+# rather than substituting the actual value. headRefOid was fetched
+# from the authoritative PR metadata in Phase 0 step 3 and has not
+# changed (the stale-SHA guard in step 5 would have exited if it had).
+# The sed is idempotent: if the LLM already wrote the real SHA the
+# pattern finds no match and the file is unchanged.
+HEAD_SHA_STAMPED=$(jq -r '.headRefOid' /tmp/PR.json)
+sed -i "s|<!-- REVIEWED_HEAD: <HEAD_SHA> -->|<!-- REVIEWED_HEAD: ${HEAD_SHA_STAMPED} -->|" /tmp/review-summary.md
 
 # Summary comment (the body built in 3a, including the
 # <!-- SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON) — LAST:
