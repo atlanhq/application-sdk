@@ -196,16 +196,21 @@ BUDGET
     different wording from a single `@sdk-review` trigger, and the
     workflow's soft-success check passes because *a* summary exists.
 
-    The prior summary's footer carries the run URL that produced it
-    (§3e). If it is **this** run's URL, this process is a replay of work
-    that already landed:
+    Every summary's footer carries the run URL that produced it (§3e),
+    and §3f posts the summary **last**, after the inline comments and the
+    commit status — so a summary bearing this run's URL means this run's
+    submission completed in full. Check *every* summary on the PR, not
+    just the one 6b loaded: that one is only the latest, and an unrelated
+    review landing between the first pass and the replay would hide this
+    run's footer behind it.
 
     ```bash
     # GHA_RUN_URL is given in the session prompt — substitute it literally,
     # shell variables do not persist between Bash calls.
-    if grep -qF '<GHA_RUN_URL>' /tmp/PRIOR_REVIEW.md; then
-      echo "REPLAY: this run already posted its review summary"
-    fi
+    gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate --slurp 2>/dev/null \
+      | jq -r '[.[][] | select(.body | contains("<!-- SDK_REVIEW -->")) | .body] | join("\n")' \
+      | grep -qF '<GHA_RUN_URL>' \
+      && echo "REPLAY: this run already posted its review summary"
     ```
 
     If that prints `REPLAY`, **stop the entire run here**: post nothing,
@@ -1335,9 +1340,17 @@ if [ "$review_scope" = "contract-toolkit" ] || [ "$review_scope" = "mixed-sdk-to
   done
 fi
 
-# Summary comment (the body built in 3a, including the
-# <!-- SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON):
-gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
+# ORDER MATTERS — the summary comment goes LAST, after the inline
+# comments and the commit status.
+#
+# The summary is the completion signal that everything downstream keys
+# off: `sdk-review-approve-on-verdict.yml` fires on it, the workflow's
+# soft-success check treats its presence as "the review was delivered",
+# and the Phase 0 §6b replay guard reads its footer to decide whether a
+# recovered run has already done this work. Post it first and all three
+# read a partial submission — inline findings still unposted, status
+# unset — as a completed one. Posting it last makes its presence mean
+# what every consumer already assumes it means.
 
 # Inline finding comments — post one per finding via
 # `gh api repos/$REPO/pulls/$PR_NUMBER/comments` so each can target a
@@ -1355,6 +1368,10 @@ gh api "repos/$REPO/statuses/$HEAD_SHA" \
   -f state="$STATE" \
   -f description="$DESCRIPTION"
 # where STATE ∈ success|failure|pending and DESCRIPTION ≤ 140 chars
+
+# Summary comment (the body built in 3a, including the
+# <!-- SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON) — LAST:
+gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
 ```
 
 Retry once on 5xx from the GitHub API. On 422 (malformed inline
@@ -1371,9 +1388,10 @@ Print: `[Phase 3 complete] Review submitted`
 
 ## If You Cannot Finish
 
-Always post the summary comment + set the commit status before
-exiting (see Phase 3f). A PR with no review comment
-and no status update is the worst outcome.
+Always set the commit status + post the summary comment before
+exiting (see Phase 3f — status first, summary last, same order as the
+happy path). A PR with no review comment and no status update is the
+worst outcome.
 
 Submit minimal:
 ```json

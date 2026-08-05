@@ -795,15 +795,6 @@ jobs:
             if [ "${SUMMARY_COUNT:-0}" -gt 0 ]; then
               VERDICT_POSTED=1
             fi
-            # One trigger must produce exactly one summary. More than one means
-            # the run posted twice — mothership recovered a dropped stream by
-            # re-running the prompt from the top in the same sandbox, and the
-            # replay guard in ORCHESTRATION.md §6b did not stop it. This block
-            # only ever asked "is there at least one summary", so a double-post
-            # looked identical to a clean delivery. Surface it.
-            if [ "${SUMMARY_COUNT:-0}" -gt 1 ]; then
-              echo "::warning::PR #${PR_NUMBER} received ${SUMMARY_COUNT} SDK_REVIEW summaries from this single run — duplicate review (stream-recovery replay). Check the ORCHESTRATION.md §6b replay guard."
-            fi
           fi
 
           # Export the run summary fields BEFORE the failure checks below
