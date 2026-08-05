@@ -9,6 +9,7 @@ en-dash).
 
 from __future__ import annotations
 
+import codecs
 import importlib.util
 import sys
 import types
@@ -18,8 +19,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from application_sdk.clients.sql_typecasters import (
+    _TOLERANT_CODEC_NAME,
     _decode_tolerant_utf8,
     attach_tolerant_text_decoder,
+    install_tolerant_connection_decoder,
+    install_tolerant_text_decoder_hook,
 )
 
 _HAS_PSYCOPG3 = importlib.util.find_spec("psycopg") is not None
@@ -148,7 +152,7 @@ class TestAttachPsycopg3:
 
     def test_registers_loader_for_text_oids(self) -> None:
         # psycopg is already a SDK dep; use the real Loader base class.
-        from psycopg.adapt import Loader  # noqa: PLC0415
+        from psycopg.adapt import Loader
 
         fake_adapters = MagicMock()
         ConnClass = type("Connection", (), {})
@@ -230,3 +234,133 @@ class TestAttachTolerantTextDecoderDispatch:
         conn = ConnClass()
         assert attach_tolerant_text_decoder(conn) is True
         assert called["conn"] is conn
+
+
+class TestConnectionLevelDecoder:
+    """The connection decoder, not the typecaster (CONAT-767).
+
+    ``_attach_psycopg2`` registers a Python typecaster over the text OIDs, but
+    psycopg2 strict-decodes the wire bytes to ``str`` in ``conn_decode`` *before*
+    calling any Python typecaster::
+
+        /* typecast.c :: typecast_cast */
+        else if (self->pcast) {
+            s = conn_decode(((cursorObject *)curs)->conn, str, len);
+            res = PyObject_CallFunctionObjArgs(self->pcast, s, curs, NULL);
+
+    so the typecaster never sees a malformed byte — ``conn_decode`` has already
+    raised. These tests pin the seam that actually carries the production
+    failure: a Redshift miner run died with ``'utf-8' codec can't decode byte
+    0x96 in position 184: invalid start byte`` while the typecaster fix was
+    installed and active.
+    """
+
+    # Redshift reports its client encoding as UNICODE rather than UTF8, so it
+    # takes psycopg2's ``pydecoder`` path instead of the strict C fast codec.
+    _REDSHIFT_PG_ENCODING = "UNICODE"
+
+    # A query-history row shaped like the failing one: valid UTF-8 on both sides
+    # of a lone Windows-1252 en-dash (0x96).
+    _RAW = b"SELECT * FROM caf\xc3\xa9 WHERE note = 'Q1 \x96 Q2'"
+
+    def _install_fake_psycopg2(self) -> types.ModuleType:
+        """Install a fake ``psycopg2.extensions`` carrying the real encodings map."""
+        fake_pkg = types.ModuleType("psycopg2")
+        fake_ext = types.ModuleType("psycopg2.extensions")
+        # The entries that matter, spelled as psycopg2 ships them.
+        fake_ext.encodings = {  # type: ignore[attr-defined]
+            "UNICODE": "utf_8",
+            "UTF8": "utf_8",
+            "LATIN1": "latin_1",
+            "SQL_ASCII": "ascii",
+        }
+        fake_pkg.extensions = fake_ext  # type: ignore[attr-defined]
+        sys.modules["psycopg2"] = fake_pkg
+        sys.modules["psycopg2.extensions"] = fake_ext
+        return fake_ext
+
+    def teardown_method(self) -> None:
+        sys.modules.pop("psycopg2", None)
+        sys.modules.pop("psycopg2.extensions", None)
+
+    @staticmethod
+    def _conn_decode(encodings: dict[str, str], pg_encoding: str, raw: bytes) -> str:
+        """Mirror psycopg2's ``conn_decode`` pydecoder branch.
+
+        ``conn_decode`` resolves the codec from the encodings map and calls its
+        decoder with the bytes as the *only* argument, so the codec's own default
+        error handling decides whether a bad byte crashes the fetch.
+        """
+        decoder = codecs.getdecoder(encodings[pg_encoding])
+        return decoder(raw)[0]
+
+    def test_stock_mapping_raises_on_the_production_byte(self) -> None:
+        """Premise guard: unpatched, this is exactly the production crash."""
+        fake_ext = self._install_fake_psycopg2()
+        with pytest.raises(UnicodeDecodeError) as exc:
+            self._conn_decode(
+                fake_ext.encodings,  # type: ignore[attr-defined]
+                self._REDSHIFT_PG_ENCODING,
+                self._RAW,
+            )
+        assert "0x96" in str(exc.value)
+
+    def test_public_hook_makes_redshift_decode_tolerant(self) -> None:
+        """The regression: the public entry point must fix the decode path.
+
+        Fails before the fix — the hook only registered the (unreachable)
+        typecaster and left the connection decoder strict.
+        """
+        fake_ext = self._install_fake_psycopg2()
+
+        install_tolerant_text_decoder_hook(MagicMock())
+
+        decoded = self._conn_decode(
+            fake_ext.encodings,  # type: ignore[attr-defined]
+            self._REDSHIFT_PG_ENCODING,
+            self._RAW,
+        )
+        # The bad byte becomes U+FFFD; the surrounding valid UTF-8 survives.
+        assert decoded == "SELECT * FROM café WHERE note = 'Q1 � Q2'"
+
+    def test_installer_reports_and_rewrites_utf8_entries(self) -> None:
+        fake_ext = self._install_fake_psycopg2()
+        assert install_tolerant_connection_decoder() is True
+        assert fake_ext.encodings["UNICODE"] == _TOLERANT_CODEC_NAME  # type: ignore[attr-defined]
+        assert fake_ext.encodings["UTF8"] == _TOLERANT_CODEC_NAME  # type: ignore[attr-defined]
+
+    def test_valid_utf8_is_not_mojibaked(self) -> None:
+        """The latin1 workaround would yield 'Ã©'; tolerant UTF-8 must keep 'é'."""
+        fake_ext = self._install_fake_psycopg2()
+        install_tolerant_connection_decoder()
+        assert (
+            self._conn_decode(
+                fake_ext.encodings,  # type: ignore[attr-defined]
+                self._REDSHIFT_PG_ENCODING,
+                b"caf\xc3\xa9",
+            )
+            == "café"
+        )
+
+    def test_encoder_stays_byte_identical_to_utf8(self) -> None:
+        """Outgoing SQL must not change: only the decoder is tolerant."""
+        fake_ext = self._install_fake_psycopg2()
+        install_tolerant_connection_decoder()
+        encoder = codecs.getencoder(fake_ext.encodings["UNICODE"])  # type: ignore[attr-defined]
+        assert encoder("café – Q1")[0] == "café – Q1".encode()
+
+    def test_non_utf8_mappings_are_left_alone(self) -> None:
+        fake_ext = self._install_fake_psycopg2()
+        install_tolerant_connection_decoder()
+        assert fake_ext.encodings["LATIN1"] == "latin_1"  # type: ignore[attr-defined]
+        assert fake_ext.encodings["SQL_ASCII"] == "ascii"  # type: ignore[attr-defined]
+
+    def test_is_idempotent(self) -> None:
+        self._install_fake_psycopg2()
+        assert install_tolerant_connection_decoder() is True
+        assert install_tolerant_connection_decoder() is False
+
+    def test_no_op_without_psycopg2(self) -> None:
+        sys.modules.pop("psycopg2", None)
+        sys.modules.pop("psycopg2.extensions", None)
+        assert install_tolerant_connection_decoder() is False

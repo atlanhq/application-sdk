@@ -31,11 +31,17 @@ References
 
 from __future__ import annotations
 
+import codecs
 from typing import Any
 
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+# Name of the private codec registered by ``_ensure_tolerant_codec``. It is an
+# ordinary UTF-8 codec whose *decoder* replaces invalid bytes instead of
+# raising; the encoder is stock strict UTF-8, so outgoing SQL is unchanged.
+_TOLERANT_CODEC_NAME = "atlan_tolerant_utf8"
 
 
 # psycopg3 text-ish PostgreSQL OIDs we want to override. These match the OIDs
@@ -64,6 +70,113 @@ def _decode_tolerant_utf8(data: Any) -> str:
     if isinstance(data, memoryview) or isinstance(data, bytearray):
         data = bytes(data)
     return data.decode("utf-8", errors="replace")
+
+
+def _tolerant_utf8_decode(data: Any, errors: str = "strict") -> tuple[str, int]:
+    """Codec-protocol decoder that never raises on malformed UTF-8.
+
+    ``errors`` is accepted for codec-protocol compatibility and deliberately
+    ignored: psycopg2 invokes the connection decoder with the bytes as the only
+    argument, so honouring the default ``"strict"`` is exactly the crash we are
+    here to prevent.
+    """
+    if isinstance(data, (memoryview, bytearray)):
+        data = bytes(data)
+    return codecs.utf_8_decode(data, "replace", True)
+
+
+# Stock strict UTF-8 encoder, tolerant decoder. psycopg2 resolves *both* the
+# encoder and the decoder from the same codec name, so the encoder must stay
+# byte-identical to UTF-8 or we would corrupt outgoing SQL.
+_TOLERANT_CODEC_INFO = codecs.CodecInfo(
+    name=_TOLERANT_CODEC_NAME,
+    encode=codecs.utf_8_encode,
+    decode=_tolerant_utf8_decode,
+)
+
+
+def _ensure_tolerant_codec() -> None:
+    """Register :data:`_TOLERANT_CODEC_NAME` with the codecs registry, once.
+
+    ``codecs.register`` cannot be undone, so the search function is installed at
+    most once per process and only answers to our private codec name.
+    """
+    try:
+        codecs.lookup(_TOLERANT_CODEC_NAME)
+        return
+    except LookupError:
+        pass
+
+    def _search(name: str) -> codecs.CodecInfo | None:
+        return _TOLERANT_CODEC_INFO if name == _TOLERANT_CODEC_NAME else None
+
+    codecs.register(_search)
+
+
+def install_tolerant_connection_decoder() -> bool:
+    """Make psycopg2's *connection-level* text decode tolerant.
+
+    Why this is needed on top of :func:`_attach_psycopg2`. psycopg2 decodes wire
+    bytes to ``str`` **before** it calls any Python typecaster::
+
+        /* typecast.c :: typecast_cast */
+        else if (self->pcast) {
+            s = conn_decode(((cursorObject *)curs)->conn, str, len);
+            res = PyObject_CallFunctionObjArgs(self->pcast, s, curs, NULL);
+
+    so a Python typecaster registered over the text OIDs can never see an
+    invalid byte — ``conn_decode`` has already raised ``UnicodeDecodeError``.
+    psycopg2's own source says as much: "it is about impossible to create a
+    python typecaster on a binary type."
+
+    ``conn_decode`` uses the connection's ``pydecoder`` whenever no C fast codec
+    applies, and calls it with the bytes as the sole argument (i.e. strict).
+    ``pydecoder`` is resolved at connect time from
+    ``psycopg2.extensions.encodings``, mapping the server-reported encoding name
+    to a Python codec name — which makes that dict the only Python-reachable
+    seam. Redshift reports its client encoding as ``UNICODE`` (not ``UTF8``), so
+    it takes exactly this path.
+
+    Note the deliberate asymmetry: a connection reporting literally ``UTF8``
+    gets psycopg2's C fast decoder (``PyUnicode_DecodeUTF8``, strict) and
+    bypasses ``pydecoder`` entirely, so remapping is a harmless no-op there. No
+    Python-level hook can intervene in that case.
+
+    Must run *before* connections are opened; a per-connection ``connect``
+    listener is already too late, because ``pydecoder`` is bound during connect.
+
+    Returns:
+        True if at least one mapping was rewritten, False if psycopg2 is absent
+        or every UTF-8 entry was already tolerant.
+    """
+    try:
+        import psycopg2.extensions as ext  # type: ignore[import-not-found]  # noqa: PLC0415
+    except ImportError:  # conformance: ignore[E008] optional dep psycopg2 not installed; driver-detection probe
+        return False  # conformance: ignore[E007] driver-detection probe; ImportError means optional dep absent, not an error
+
+    encodings = getattr(ext, "encodings", None)
+    if not isinstance(encodings, dict):
+        return False
+
+    _ensure_tolerant_codec()
+
+    rewritten = False
+    for pg_name, py_name in list(encodings.items()):
+        if py_name == _TOLERANT_CODEC_NAME:
+            continue
+        try:
+            if codecs.lookup(py_name).name != "utf-8":
+                continue
+        except (LookupError, TypeError):
+            continue
+        encodings[pg_name] = _TOLERANT_CODEC_NAME
+        rewritten = True
+
+    if rewritten:
+        logger.debug(
+            "Installed tolerant UTF-8 connection decoder for psycopg2 encodings"
+        )
+    return rewritten
 
 
 def _attach_psycopg2(dbapi_connection: Any) -> bool:
@@ -142,6 +255,11 @@ def install_tolerant_text_decoder_hook(engine: Any) -> None:
     from sqlalchemy.exc import (  # noqa: PLC0415 — optional dep: sqlalchemy
         InvalidRequestError,
     )
+
+    # Runs here, not in the listener below: psycopg2 binds the connection's
+    # decoder while connecting, so by the time the ``connect`` event fires the
+    # strict decoder is already in place for that connection.
+    install_tolerant_connection_decoder()
 
     def _on_connect(dbapi_connection: Any, _connection_record: Any) -> None:
         attach_tolerant_text_decoder(dbapi_connection)
