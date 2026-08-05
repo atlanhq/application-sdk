@@ -46,8 +46,8 @@ class TestDecodeTolerantUtf8:
 
     def test_replaces_lone_0x96_with_replacement_char(self) -> None:
         # 0x96 is the Windows-1252 en-dash. In strict UTF-8 it raises
-        # UnicodeDecodeError — the exact production failure on Mercury
-        # (WARE-837). With errors='replace' we get U+FFFD instead.
+        # UnicodeDecodeError — the exact production failure in WARE-837.
+        # With errors='replace' we get U+FFFD instead.
         result = _decode_tolerant_utf8(b"a \x96 b")
         assert result == "a � b"
         assert "�" in result

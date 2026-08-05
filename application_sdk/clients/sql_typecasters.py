@@ -21,7 +21,7 @@ adapter APIs, so we dispatch on the DBAPI connection's module at runtime.
 ``BaseSQLClient`` wires this in via a SQLAlchemy ``connect`` event so every
 connector that goes through the SDK's engine inherits the fix.
 
-Tracking: WARE-970 (production stack trace: WARE-837 on Mercury Redshift).
+Tracking: WARE-970 (production stack trace from a Redshift miner run: WARE-837).
 
 References
 ----------
