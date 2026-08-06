@@ -99,7 +99,14 @@ def test_e2e_tolerates_skipped_but_not_failed_prepare(jobs: dict) -> None:  # ty
 
     # 2. The explicit gates must still be there, or the override runs the legs on
     #    a FAILED install.
-    for job in ("prepare-tenant", "build-e2e-image"):
+    #
+    #    merge-e2e-image is NOT sufficient on its own: a failed arch leg leaves it
+    #    SKIPPED (its own `if:` is unsatisfied), and 'skipped' is the benign value
+    #    below — so the legs would run after a failed build, each building its own
+    #    single-arch image against a tenant prepare-tenant never updated, with
+    #    `expected-app-version` empty so the version check self-skips. Every job in
+    #    the chain has to be named, not just the last one.
+    for job in ("prepare-tenant", "build-e2e-image", "merge-e2e-image"):
         for result in ("success", "skipped"):
             expected = f"needs.{job}.result == '{result}'"
             assert expected in condition, (
@@ -112,24 +119,29 @@ def test_e2e_tolerates_skipped_but_not_failed_prepare(jobs: dict) -> None:  # ty
 # ── The matrix-output trap ───────────────────────────────────────────────────
 
 
-def test_expected_version_does_not_come_from_the_matrix_job(jobs: dict) -> None:  # type: ignore[type-arg]
-    """`expected-app-version` must be read from the single build job.
+#: The two matrix jobs whose outputs are last-writer-wins with genuinely
+#: different values per leg, so nothing may read a version or image off them.
+_MATRIX_JOBS = ("prepare-tenant", "build-e2e-image")
 
-    prepare-tenant is a matrix job (one leg per cloud) and matrix job outputs are
-    last-writer-wins in GitHub Actions — the legs would silently read whichever
-    cloud happened to finish last. The version is cloud-independent (every cloud
-    installs the same image), so the non-matrix build job is the only correct
-    source.
+
+@pytest.mark.parametrize("key", ["expected-app-version", "prebuilt-image"])
+def test_the_legs_read_the_image_from_the_non_matrix_job(jobs: dict, key: str) -> None:  # type: ignore[type-arg]
+    """Both values must come from merge-e2e-image, the only non-matrix source.
+
+    Matrix job outputs are last-writer-wins in GitHub Actions. `prepare-tenant`
+    fans out over clouds and `build-e2e-image` over architectures, and in both
+    cases the legs write DIFFERENT values — so reading either would silently take
+    whichever finished last (a per-arch image reference, or one cloud's view).
+    merge-e2e-image is a single job producing the merged manifest, which is what
+    every leg wants.
     """
-    step = _sdr_step(jobs)
-    value = step["with"]["expected-app-version"]
-    assert "needs.build-e2e-image.outputs.version" in value
-    assert "prepare-tenant" not in value
-
-
-def test_legs_reuse_the_prebuilt_image(jobs: dict) -> None:  # type: ignore[type-arg]
-    step = _sdr_step(jobs)
-    assert "needs.build-e2e-image.outputs.image" in step["with"]["prebuilt-image"]
+    value = _sdr_step(jobs)["with"][key]
+    assert "needs.merge-e2e-image.outputs." in value
+    for job in _MATRIX_JOBS:
+        assert job not in value, (
+            f"{key} reads {job}, a matrix job whose outputs are "
+            "last-writer-wins with different values per leg"
+        )
 
 
 def _sdr_step(jobs: dict) -> dict:  # type: ignore[type-arg]

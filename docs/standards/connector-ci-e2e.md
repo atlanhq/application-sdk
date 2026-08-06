@@ -250,22 +250,46 @@ install, `deployment_status` even goes green for a while, and the tenant's kubel
 fails the pull ~2 minutes later with `no matching manifest for linux/arm64`.
 FND-31's first live install ended exactly there.
 
-So `build-app-image` takes a `platforms` input, and `tests-reusable.yaml`'s
-`build-e2e-image` passes `linux/amd64,linux/arm64` — matching what the app repos'
-release path already publishes. It must be *both*, not retargeted to the tenant's
-architecture: dropping amd64 would break the local worker instead.
+It must be *both*, not retargeted to the tenant's architecture: dropping amd64
+would break the local worker instead.
 
-`platforms` defaults to empty, which appends no `--platform` flag at all, so the
-17 repos calling `sdr-e2e` directly build exactly as they did before. That default
-is deliberate rather than tidy: the non-native architecture builds under QEMU
-emulation inside buildx's container driver, which costs real wall time, and only
-the install path needs it.
+**One architecture per job, each on a runner native to it.** `build-e2e-image` is a
+matrix — `ubuntu-latest` builds `linux/amd64`, `ubuntu-24.04-arm` builds
+`linux/arm64` — and `merge-e2e-image` combines the two with `docker buildx
+imagetools create`, a registry-side operation on digests that takes seconds.
 
-After the push, the action asserts the manifest actually serves every requested
-platform (`assert_image_platforms.py`). A dropped flag or a build that quietly fell
-back to the runner's architecture then reds the build step, where the fix is
-obvious, instead of the tenant's pull minutes later — the diagnostic distance that
-cost FND-31 four runs.
+The obvious alternative, one job with `--platform linux/amd64,linux/arm64`,
+emulates the non-native half under QEMU. That is 5-10x native — a figure this org
+has already measured and [documented](https://github.com/atlanhq/mothership), and
+`mothership`'s own `build.yml` and `lh-compute-duckdb` both use `ubuntu-24.04-arm`
+for exactly this reason. Two native jobs in parallel cost about one build; one job
+emulating costs several. On a path that runs on every install-path e2e, that is the
+whole design. arm64 runners are also ~20% cheaper per minute, so it is not a
+speed-for-money trade.
+
+Three things this shape makes load-bearing, each of which fails *silently*:
+
+- **The runner/platform pairing.** `platform: linux/arm64` on an x64 runner still
+  succeeds — just emulated. Nothing goes red; the build is simply several times
+  slower forever. `test_build_app_image_action.py` pins each leg's platform to a
+  runner native to it.
+- **The cache scope.** `tag-suffix` suffixes the buildx cache scope as well as the
+  tag, because two concurrent builds sharing one `type=gha` scope overwrite each
+  other's cache manifest — after which every run finds the other architecture's and
+  misses. One input drives both so the wrong combination can't be expressed. It
+  defaults to empty, so the 17 repos calling `sdr-e2e` directly resolve to the
+  byte-identical scope they always had.
+- **`pkl`'s architecture.** `regenerate-contract` runs inside this build and used to
+  fetch the x86 `pkl` asset unconditionally; on an ARM runner that is `cannot
+  execute binary file`, several steps before anything mentions architecture. It now
+  selects from `runner.arch`.
+
+`merge-e2e-image` then asserts the combined manifest serves both architectures
+(`assert_image_platforms.py`). That is the reference `prepare-tenant` publishes and
+the tenant pulls, so it is the one worth asserting: a leg that quietly built the
+wrong architecture produces an index with two of the same, and nothing downstream
+notices — GM accepts the version, LM accepts the install. Failing here, where the
+fix is obvious, replaces the diagnostic distance that cost FND-31 four runs.
 
 Two seams worth knowing about when editing either action:
 

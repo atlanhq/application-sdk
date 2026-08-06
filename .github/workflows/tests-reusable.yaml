@@ -792,26 +792,62 @@ jobs:
   # Only runs on the install path: with install-app-to-tenant off, each leg keeps
   # building its own image exactly as before, so an unadopted repo sees no change
   # at all (not even a different build ordering).
+  # Two machines pull this image and they are not the same architecture: this
+  # runner, which runs the per-leg worker under docker compose, and the TENANT'S
+  # cluster node, which serves the app Heracles fetches the DAG from at submit.
+  # The e2e tenants where the app is not yet installed are ARM. A single-arch
+  # image satisfies one and fails the other ~2 minutes after a successful
+  # install, as ImagePullBackOff with `no matching manifest` — exactly how
+  # FND-31's first live install ended. It must therefore be genuinely multi-arch,
+  # not retargeted: dropping amd64 would break the local worker instead.
+  #
+  # ONE ARCHITECTURE PER JOB, EACH ON A RUNNER NATIVE TO IT. The alternative —
+  # one job with `--platform linux/amd64,linux/arm64` — emulates the non-native
+  # half under QEMU, which the org has already measured at 5-10x native and
+  # documented against (atlanhq/mothership's infrastructure notes; its build.yml
+  # and lh-compute-duckdb both use `ubuntu-24.04-arm` for precisely this). Two
+  # native jobs in parallel cost about one build; one job emulating costs
+  # several. On a path that runs on every install-path e2e forever, that
+  # difference is the whole design.
+  #
+  # arm64 runners are also ~20% cheaper per minute than x64, so this is not a
+  # speed-for-money trade.
   build-e2e-image:
-    name: Build e2e image
+    name: Build e2e image (${{ matrix.arch }})
     needs: discover-e2e
     if: |
       inputs.install-app-to-tenant &&
       needs.discover-e2e.result == 'success' &&
       needs.discover-e2e.outputs.count != '0'
-    runs-on: ubuntu-latest
+    strategy:
+      # No fail-fast: knowing whether ONE arch or BOTH failed is the whole
+      # diagnosis when a build breaks on an architecture rather than in general.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            # NOT ubuntu-latest. On an x64 runner this platform would build under
+            # QEMU and still succeed, just several times slower — a regression
+            # that looks like nothing at all in review. test_build_app_image_action
+            # guards the pairing.
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # Native, so the arm64 leg needs no more headroom than the amd64 one.
     timeout-minutes: 45
     permissions:
       contents: read
       packages: write
     outputs:
-      image: ${{ steps.build.outputs.image }}
-      # The GM version string == the image tag. Emitted from THIS job rather than
-      # read off prepare-tenant, because prepare-tenant is a matrix job and matrix
-      # outputs are last-writer-wins — the legs would read whichever cloud
-      # finished last. The version is cloud-independent (every cloud installs the
-      # same image), so the single build job is the correct source.
-      version: ${{ steps.version.outputs.tag }}
+      # The tag WITHOUT the per-arch suffix — what the merge job below combines
+      # into. Matrix job outputs are last-writer-wins, which is normally a trap;
+      # it is safe here precisely because every leg writes the same string. The
+      # per-arch references are NOT surfaced for that reason: those do differ per
+      # leg, so a reader would get whichever finished last.
+      image-base: ${{ steps.build.outputs.image-base }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -826,28 +862,85 @@ jobs:
           base-image-ref: ${{ inputs.base-image-ref }}
           git-token: ${{ secrets.ORG_PAT_GITHUB }}
           ghcr-token: ${{ secrets.ORG_PAT_GITHUB }}
-          # Two machines pull this image and they are not the same architecture:
-          # this runner, which runs the per-leg worker under docker compose, and
-          # the TENANT'S cluster node, which serves the app that Heracles fetches
-          # the DAG from at submit. A single-arch image satisfies the runner and
-          # then fails the tenant ~2 minutes after a successful install, as
-          # ImagePullBackOff with `no matching manifest` — which is exactly how
-          # FND-31's first live install ended.
-          #
-          # So it must be genuinely multi-arch, not retargeted: dropping amd64
-          # would break the local worker instead. Both arches, matching what the
-          # app repos' release path already publishes (build-and-publish-app.yaml
-          # builds linux/amd64 + linux/arm64 and merges the manifest).
-          #
-          # Only this job passes it, and this job only runs on the install path,
-          # so no existing caller pays the emulated-build time.
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
+          # Suffixes the tag AND the buildx cache scope. The cache half is the
+          # one that fails silently: two concurrent builds sharing one type=gha
+          # scope overwrite each other's cache manifest, so every later run finds
+          # the other architecture's and misses. Nothing breaks; both legs just
+          # go cold forever.
+          tag-suffix: -${{ matrix.arch }}
+
+  # Combine the two per-arch images into the manifest list the tenant pulls.
+  # `imagetools create` is a registry-side operation on digests — no build
+  # context, no pull, a handful of seconds — which is what makes the native-split
+  # shape nearly free compared with emulating one half.
+  merge-e2e-image:
+    name: Merge e2e image manifest
+    needs: build-e2e-image
+    if: needs.build-e2e-image.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ needs.build-e2e-image.outputs.image-base }}
+      # The GM version string == the image tag. Emitted here rather than from
+      # prepare-tenant, which is a matrix job over clouds whose outputs are
+      # last-writer-wins with genuinely different values.
+      version: ${{ steps.version.outputs.tag }}
+    steps:
+      # This workflow runs in the caller's repo, so the platform-assert script
+      # has to be fetched. Sparse + pinned to job.workflow_sha for the same
+      # reason as prepare-tenant's copy: a PR editing the script must run its own
+      # version, not main's.
+      - name: Fetch SDK CI scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB || github.token }}
+
+      # Buildx for `imagetools`, which is a buildx subcommand.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Create the multi-arch manifest
+        env:
+          IMAGE: ${{ needs.build-e2e-image.outputs.image-base }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --tag "$IMAGE" \
+            "${IMAGE}-amd64" "${IMAGE}-arm64"
+
+      # The assert that matters: this is the reference prepare-tenant publishes
+      # and the tenant pulls. A leg that quietly built the wrong architecture
+      # shows up here as a missing one — nothing downstream would catch it, since
+      # GM accepts the version and LM accepts the install regardless.
+      - name: Assert the manifest serves both architectures
+        env:
+          IMAGE: ${{ needs.build-e2e-image.outputs.image-base }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect --raw "$IMAGE" \
+            | python3 application-sdk-scripts/.github/scripts/assert_image_platforms.py \
+                --expected linux/amd64,linux/arm64
 
       # Straight-line parameter expansion, no branching — ci.md-compliant.
       - name: Derive the GM version from the image tag
         id: version
         env:
-          IMAGE: ${{ steps.build.outputs.image }}
+          IMAGE: ${{ needs.build-e2e-image.outputs.image-base }}
         run: echo "tag=${IMAGE##*:}" >> "$GITHUB_OUTPUT"
 
   # ── Install the app under test onto each cloud's tenant ──────────────────
@@ -860,8 +953,8 @@ jobs:
   # legs can never disagree about which clouds are in play.
   prepare-tenant:
     name: Prepare tenant (${{ matrix.cloud || 'default' }})
-    needs: [discover-e2e, build-e2e-image]
-    if: inputs.install-app-to-tenant && needs.build-e2e-image.result == 'success'
+    needs: [discover-e2e, merge-e2e-image]
+    if: inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success'
     strategy:
       # One cloud's tenant being uninstallable must not cancel the others; the
       # legs for that cloud fail on their own version check.
@@ -962,8 +1055,8 @@ jobs:
       - name: Install the app under test
         id: install
         env:
-          IMAGE: ${{ needs.build-e2e-image.outputs.image }}
-          VERSION: ${{ needs.build-e2e-image.outputs.version }}
+          IMAGE: ${{ needs.merge-e2e-image.outputs.image }}
+          VERSION: ${{ needs.merge-e2e-image.outputs.version }}
           BRANCH: ${{ github.head_ref || github.ref_name }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           DEPLOY_CONFIG: ${{ steps.atlan_yaml.outputs.deploy_config }}
@@ -997,7 +1090,7 @@ jobs:
       - name: Summarise
         if: always()
         env:
-          IMAGE: ${{ needs.build-e2e-image.outputs.image }}
+          IMAGE: ${{ needs.merge-e2e-image.outputs.image }}
           SKIPPED: ${{ steps.install.outputs.skipped }}
           RELEASE_STATUS: ${{ steps.install.outputs.release_status }}
           INSTALLED: ${{ steps.install.outputs.installed_version }}
@@ -1016,8 +1109,8 @@ jobs:
 
   e2e:
     name: End-to-end (${{ matrix.name }})
-    # build-e2e-image and prepare-tenant are in `needs` so the legs cannot start
-    # before them, but both are SKIPPED on the default path
+    # The image jobs and prepare-tenant are in `needs` so the legs cannot start
+    # before them, but all are SKIPPED on the default path
     # (install-app-to-tenant off — every existing caller). That combination needs
     # `always() &&`:
     #
@@ -1035,13 +1128,24 @@ jobs:
     # Same shape as `connector-tests` in pull_request.yaml, which pairs
     # `always() &&` with `success' || 'skipped'` gates over a skippable
     # build-sdk-base-image need. Found by @sdk-review on #3023.
-    needs: [discover-e2e, build-e2e-image, prepare-tenant]
+    #
+    # build-e2e-image is gated HERE as well as merge-e2e-image, and it has to be.
+    # A failed arch leg leaves merge-e2e-image SKIPPED rather than failed (its own
+    # `if:` is not satisfied), and 'skipped' is the benign value in the clause
+    # below — so gating on merge alone would let the legs run after a failed
+    # build, each building its own single-arch image, against a tenant
+    # prepare-tenant never updated, with `expected-app-version` empty so the
+    # version check self-skips. A silently passing wrong-version run: precisely
+    # what FND-31 exists to make impossible. Adding the intermediate merge job
+    # introduced that; naming both needs closes it.
+    needs: [discover-e2e, build-e2e-image, merge-e2e-image, prepare-tenant]
     if: |
       always() &&
       needs.discover-e2e.result == 'success' &&
       needs.discover-e2e.outputs.count != '0' &&
       (needs.prepare-tenant.result == 'success' || needs.prepare-tenant.result == 'skipped') &&
-      (needs.build-e2e-image.result == 'success' || needs.build-e2e-image.result == 'skipped')
+      (needs.build-e2e-image.result == 'success' || needs.build-e2e-image.result == 'skipped') &&
+      (needs.merge-e2e-image.result == 'success' || needs.merge-e2e-image.result == 'skipped')
     strategy:
       fail-fast: false
       # Fallback to an empty matrix when discovery was skipped (no label / not
@@ -1187,16 +1291,17 @@ jobs:
         with:
           app-name: ${{ inputs.app-name }}
           app-image-name: ${{ inputs.app-image-name }}
-          # Reuse the image build-e2e-image already pushed and prepare-tenant
-          # already installed, instead of rebuilding the identical deterministic
-          # tag per leg. Empty on the non-install path, which keeps each leg
-          # building its own image exactly as before.
-          prebuilt-image: ${{ needs.build-e2e-image.outputs.image }}
+          # Reuse the merged manifest the build legs pushed and prepare-tenant
+          # installed, instead of rebuilding the identical deterministic tag per
+          # leg. The merged reference, not a per-arch one: compose pulls this on
+          # the runner and resolves it to amd64 itself. Empty on the non-install
+          # path, which keeps each leg building its own image exactly as before.
+          prebuilt-image: ${{ needs.merge-e2e-image.outputs.image }}
           # Re-assert the tenant version immediately before pytest. prepare-tenant
           # already verified it, but the installation is tenant-scoped and there is
           # no cross-job lease — another run can replace it in between. Empty
           # disables the check, so an unadopted repo is untouched.
-          expected-app-version: ${{ needs.build-e2e-image.outputs.version }}
+          expected-app-version: ${{ needs.merge-e2e-image.outputs.version }}
           # One suite per leg (the matrix file), not the whole e2e directory.
           test-path: ${{ matrix.file }}
           # Full-DAG defaults carried over from e2e-full-reusable.yaml. The

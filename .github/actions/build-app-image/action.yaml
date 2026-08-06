@@ -82,22 +82,34 @@ inputs:
     default: ""
   platforms:
     description: |
-      Comma-separated buildx platforms, e.g. `linux/amd64,linux/arm64`. Empty
-      (the default) passes no `--platform` flag at all, so the build targets
-      the runner's own architecture exactly as it did before this input
-      existed — every caller that does not set it is unaffected.
+      Comma-separated buildx platforms, e.g. `linux/arm64`. Empty (the default)
+      passes no `--platform` flag at all, so the build targets the runner's own
+      architecture exactly as it did before this input existed — every caller
+      that does not set it is unaffected.
 
-      Set it on the tenant-install path (FND-31). The image there is pulled by
-      two machines with different architectures: the runner, which runs the
-      per-leg worker under docker compose, and the TENANT'S cluster node, which
-      serves the app Heracles fetches the manifest from. A single-arch image
-      satisfies whichever of the two matches the runner and fails the other
-      ~2 minutes after a successful install, as ImagePullBackOff. So the value
-      must be genuinely multi-arch, not retargeted to the tenant's arch.
+      Prefer ONE platform per invocation, on a runner native to it, and merge
+      the results with `docker buildx imagetools create` (which is what the
+      install path does — see tests-reusable.yaml's build-e2e-image). Naming
+      two platforms here works, but the non-native one then builds under QEMU
+      emulation inside buildx's container driver, which the org measured at
+      5-10x native (atlanhq/mothership's infrastructure notes). Two native jobs
+      in parallel cost roughly one build; one job emulating costs several.
+    required: false
+    default: ""
+  tag-suffix:
+    description: |
+      Appended to the image tag AND to the buildx cache scope. Empty (the
+      default) leaves both byte-identical to what they were before this input
+      existed, so no existing caller loses its warm `uv sync` layer.
 
-      Costs real wall time: the non-native arch builds under QEMU emulation
-      inside buildx's container driver, the same way the release path's arm64
-      leg does. That is why this is opt-in per caller rather than always on.
+      One input for both deliberately: they always co-vary. A per-architecture
+      build needs a per-architecture tag (the merge step needs two references
+      to combine) and a per-architecture cache scope — and the scope is the
+      half that fails silently. Two concurrent builds sharing one `type=gha`
+      scope overwrite each other's cache manifest, so each subsequent run finds
+      the other platform's manifest and misses. Nothing fails; every build just
+      goes cold forever. Coupling them here makes that combination
+      unrepresentable.
     required: false
     default: ""
   expected-python-version:
@@ -112,8 +124,18 @@ inputs:
 
 outputs:
   image:
-    description: The full image reference built and pushed for this run.
+    description: |
+      The full image reference built and pushed, including `tag-suffix`. This is
+      the per-architecture reference when a suffix was passed, so it differs
+      between matrix legs — a merge job wants `image-base` instead.
     value: ${{ steps.build.outputs.image }}
+  image-base:
+    description: |
+      The same reference WITHOUT `tag-suffix` — the tag a merge step should
+      create. Identical from every leg of an architecture matrix, which is what
+      makes it safe to read off a matrix job whose outputs are last-writer-wins:
+      every writer writes the same string, so there is no wrong winner.
+    value: ${{ steps.build.outputs.image_base }}
 
 runs:
   using: composite
@@ -205,7 +227,10 @@ runs:
         GIT_TOKEN: ${{ inputs.git-token }}
       run: |
         SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
-        IMAGE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:sdr-test-${SHORT_SHA}"
+        IMAGE_BASE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:sdr-test-${SHORT_SHA}"
+        # Suffix is empty for every caller that does not build per-architecture,
+        # so IMAGE is unchanged for them.
+        IMAGE="${IMAGE_BASE}${{ inputs.tag-suffix }}"
         # When a base-image-ref is supplied (apps-sdk cross-repo dispatch),
         # build the connector FROM that image via the BASE_IMAGE build-arg
         # so the SDK PR's rebuilt runtime base is exercised. Append the flag
@@ -242,10 +267,11 @@ runs:
           --tag "${IMAGE}" \
           --push \
           "${BUILD_ARGS[@]}" \
-          --cache-from "type=gha,scope=sdr-${{ inputs.app-name }}" \
-          --cache-to "type=gha,mode=max,scope=sdr-${{ inputs.app-name }}" \
+          --cache-from "type=gha,scope=sdr-${{ inputs.app-name }}${{ inputs.tag-suffix }}" \
+          --cache-to "type=gha,mode=max,scope=sdr-${{ inputs.app-name }}${{ inputs.tag-suffix }}" \
           .
         echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+        echo "image_base=${IMAGE_BASE}" >> "$GITHUB_OUTPUT"
 
     # Prove the pushed manifest carries every requested platform, at the point
     # the image is produced. Nothing downstream catches a missing architecture:
@@ -255,13 +281,18 @@ runs:
     # misreading it. A dropped flag or a build that fell back to the runner's own
     # arch becomes a red step naming the missing platform instead.
     #
-    # Self-skipping on empty input, so single-arch callers are untouched.
+    # Gated on MORE THAN ONE platform, not on `platforms` being set: a
+    # single-platform push is not an index, so this would fail every leg of a
+    # per-architecture matrix for being exactly what it should be. Those legs are
+    # covered where it counts — the merge step asserts the combined manifest, and
+    # a leg that built the wrong architecture shows up there as a missing one.
+    #
     # `imagetools inspect` reads the registry rather than the local daemon,
     # which is the right source: --push means the manifest we care about is the
     # one that landed there, and the local daemon has no multi-arch index at all.
     # The parsing lives in a tested script per docs/standards/ci.md.
     - name: Assert the pushed image serves every requested platform
-      if: inputs.platforms != ''
+      if: contains(inputs.platforms, ',')
       shell: bash
       env:
         IMAGE: ${{ steps.build.outputs.image }}

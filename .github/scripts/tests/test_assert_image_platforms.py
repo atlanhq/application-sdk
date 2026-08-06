@@ -160,9 +160,9 @@ def test_a_manifests_key_of_the_wrong_type_does_not_crash() -> None:
 
 
 def test_a_non_object_entry_is_skipped() -> None:
-    assert ap.platforms_in(json.dumps({"manifests": ["nope", {"platform": _AMD64}]})) == [
-        "linux/amd64"
-    ]
+    assert ap.platforms_in(
+        json.dumps({"manifests": ["nope", {"platform": _AMD64}]})
+    ) == ["linux/amd64"]
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
