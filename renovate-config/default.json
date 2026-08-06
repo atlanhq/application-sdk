@@ -87,6 +87,30 @@
       "enabled": false
     },
     {
+      "description": "Conformance package: give in-range bumps their own uv.lock-only PR instead of riding the batched lockFileMaintenance refresh. Apps declare atlan-application-sdk-conformance as an in-range dev dep, so without update-lockfile a new release only reaches an app inside the full lock refresh — which soft-mode apps hold for human review. A dedicated single-package PR lets the soft-mode template carve out auto-merge for just this package while everything else keeps requiring approval. The lock refresh may still pick up the same bump; whichever PR merges first wins and the other rebases clean.",
+      "matchPackageNames": [
+        "atlan-application-sdk-conformance"
+      ],
+      "rangeStrategy": "update-lockfile",
+      "groupName": "conformance package",
+      "addLabels": [
+        "conformance-package-update"
+      ]
+    },
+    {
+      "description": "Conformance package: auto-merge minor/patch on green (the conformance suite itself gates the PR). Major bumps stay human-reviewed, mirroring the app-contract-toolkit policy.",
+      "matchPackageNames": [
+        "atlan-application-sdk-conformance"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
       "description": "GitHub Actions: group all update types (including major) in one PR; auto-merge on green. Major action bumps are safe to auto-merge because the auto-approval workflow gates on green CI, which validates behaviour. Unlike Python deps, action majors are frequent and low-risk compared to library API changes.",
       "matchManagers": [
         "github-actions"
