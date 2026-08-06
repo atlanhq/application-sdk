@@ -1133,6 +1133,21 @@ jobs:
           file: ${{ needs.prepare.outputs.dockerfile }}
           platforms: ${{ matrix.platform }}
           push: true
+          # Resolve the SDK base image from GHCR instead of Harbor.
+          #
+          # Harbor is S3-backed and 307-redirects blobs to presigned S3 URLs, so
+          # the bytes go S3 -> runner and bill as S3 DataTransfer-Out. GHCR pulls
+          # from GitHub-hosted runners are free. Both registries carry the same
+          # digest (published together in harbor-release.yaml), so this changes
+          # only where the layers are fetched from, not what is built.
+          #
+          # Apps keep `FROM registry.atlan.com/public/app-runtime-base:3` in their
+          # Dockerfiles -- BuildKit matches that reference (after ARG expansion)
+          # and substitutes the source below. Remove this once the Dockerfiles
+          # have been migrated to reference ghcr.io directly.
+          build-contexts: |
+            registry.atlan.com/public/app-runtime-base:3=docker-image://ghcr.io/atlanhq/app-runtime-base:3
+            registry.atlan.com/public/app-runtime-base:refactor-v3-latest=docker-image://ghcr.io/atlanhq/app-runtime-base:3
           tags: ${{ needs.prepare.outputs.ghcr_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.image_tag }}-${{ matrix.arch }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
