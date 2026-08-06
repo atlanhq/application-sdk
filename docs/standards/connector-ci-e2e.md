@@ -163,6 +163,14 @@ use the install path, and neither can the single-tenant fallback (which has no
 entry to add the field to); the `E2E Tenant Install` workflow's `tenant_id` input
 covers one-off runs in both cases.
 
+`prepare-tenant` therefore **fails** on an unresolved `tenant_id`, immediately
+after tenant resolution and before it publishes anything — it does not skip the
+install. Skipping would leave the job green having done nothing, the tenant on
+whatever version it was already running, and every leg reding on its own version
+check instead: one confusing failure per leg in place of one clear failure. Since
+`install-app-to-tenant` is opt-in, a caller that has opted in without a
+`tenant_id` is misconfigured rather than on a supported path.
+
 Each entry may also carry `"deployment_name"` when that tenant's system apps
 (publish / quality / lineage) are not registered under `production`. It reaches
 the harness as `E2E_TENANT_DEPLOYMENT_NAME`, which

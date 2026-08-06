@@ -104,6 +104,15 @@ _SCAN_POLL_SECONDS = 10
 #: Gap between install retries while LM's catalog snapshot catches up.
 _INSTALL_RETRY_POLL_SECONDS = 20
 
+#: The two waits this script can spend, as module constants rather than argparse
+#: literals, because a caller's job `timeout-minutes` has to stay above their sum:
+#: if the runner's timeout fires first, a slow LM sync reports as "job cancelled"
+#: and the actionable error this script was about to print is never written. The
+#: workflows' guards assert their timeouts against these, so raising one here
+#: fails the guard rather than silently making a job timeout reachable.
+DEFAULT_INSTALL_RETRY_SECONDS = 600
+DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS = 600
+
 #: Keys an install/info response may carry the installed version under. LM has
 #: not committed to one name across versions, so check the plausible set rather
 #: than hard-coding a guess that silently reads None and compares equal to None.
@@ -966,7 +975,7 @@ def main(argv: list[str] | None = None) -> int:
     p_install.add_argument(
         "--install-retry-seconds",
         type=int,
-        default=600,
+        default=DEFAULT_INSTALL_RETRY_SECONDS,
         help=(
             "How long to keep retrying the install while LM's tenant-catalog "
             "snapshot catches up with a fresh publish. LM excludes a release "
@@ -978,7 +987,7 @@ def main(argv: list[str] | None = None) -> int:
     p_install.add_argument(
         "--timeout-seconds",
         type=int,
-        default=600,
+        default=DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS,
         help="Budget for the deployment to reconcile. A timeout fails.",
     )
 

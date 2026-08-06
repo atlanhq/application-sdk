@@ -93,6 +93,67 @@ def test_install_requires_explicit_confirmation(workflow: dict) -> None:  # type
     )
 
 
+def test_the_ghcr_check_can_actually_read_packages(workflow: dict) -> None:  # type: ignore[type-arg]
+    """The pre-publish image check needs a token with package scope.
+
+    `docker manifest inspect` runs against GHCR, and the login falls back to
+    `github.token` when ORG_PAT_GITHUB is unset. The workflow declares only
+    `contents: read` at the top level, so without a job-level grant that token has
+    no package scope at all and the check 401s on an image that exists — a
+    guardrail that false-blocks a legitimate install.
+
+    Necessary, not sufficient: GITHUB_TOKEN package access covers only packages
+    owned by or linked to this repo, and these images belong to the app repos. The
+    step's error text names authorisation as well as absence for that reason, which
+    is asserted here too — a false block that reads as "the tag was pruned" sends
+    the next person hunting the wrong cause, which is exactly how one live run was
+    spent.
+    """
+    permissions = workflow["jobs"]["install"].get("permissions") or {}
+    assert permissions.get("packages") == "read", (
+        "the install job needs `packages: read`, or the github.token fallback "
+        "cannot read GHCR and the image check blocks installs of images that exist"
+    )
+    # The top-level grant must survive: a job-level block replaces it wholesale.
+    assert permissions.get("contents") == "read"
+
+    check = [
+        s
+        for s in _steps(workflow)
+        if str(s.get("name", "")) == "Verify the image exists"
+    ]
+    assert len(check) == 1
+    error = check[0]["run"]
+    assert "ORG_PAT_GITHUB" in error, (
+        "the failure message must name the authorisation cause, not only the "
+        "pruned-tag one — a cross-repo GHCR read fails here even with the grant"
+    )
+
+
+def test_job_timeout_stays_above_the_two_waits_it_defaults_to(workflow: dict) -> None:  # type: ignore[type-arg]
+    """The runner's timeout must not be able to fire before the script's.
+
+    Both waits are dispatch inputs here, so the budget is read off their own
+    defaults rather than the script's: raising a default without raising the job
+    timeout would turn a slow LM sync into a bare "job cancelled", discarding the
+    actionable error the script was about to print.
+    """
+    inputs = workflow.get("on", workflow.get(True))["workflow_dispatch"]["inputs"]
+    waits = (
+        int(inputs["install_retry_seconds"]["default"])
+        + int(inputs["timeout_seconds"]["default"])
+    ) // 60
+    # Same 1/2 share as prepare-tenant: both waits can run to completion and the
+    # rest of the job still has as long again, so the runner's timeout is never the
+    # first to fire.
+    required = round(waits / 0.5)
+    actual = workflow["jobs"]["install"]["timeout-minutes"]
+    assert actual >= required, (
+        f"the install job allows {actual} min but its own input defaults permit "
+        f"{waits} min of waiting. Raise it to at least {required}."
+    )
+
+
 def test_concurrency_is_per_cloud_and_does_not_cancel(workflow: dict) -> None:  # type: ignore[type-arg]
     concurrency = workflow["concurrency"]
     assert "inputs.cloud" in concurrency["group"]

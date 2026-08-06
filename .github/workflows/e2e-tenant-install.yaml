@@ -124,7 +124,26 @@ jobs:
     # visibly skipped instead of green-but-did-nothing.
     if: inputs.confirm == 'yes'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Twice the script's own waits, not a shade over them. The install retries for
+    # up to install_retry_seconds (default 600) while LM's catalog snapshot catches
+    # up, then polls the deployment for up to timeout_seconds (default 600) — ~20
+    # minutes before the script decides anything. At 30 the runner's timeout can
+    # fire first on a slow sync, and a bare "job cancelled after 30m" replaces the
+    # actionable error the script was about to print.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      # For `docker manifest inspect` on the GHCR image below when ORG_PAT_GITHUB
+      # is unset and the login falls back to github.token: without this the token
+      # carries no package scope at all and the check 401s on an image that
+      # exists, false-blocking a legitimate install.
+      #
+      # Necessary but not always sufficient: GITHUB_TOKEN package access is
+      # scoped to packages owned by or linked to THIS repo, and the images this
+      # workflow installs belong to the app repos. Cross-repo reads still need
+      # ORG_PAT_GITHUB (or the package granting this repo read access) — which is
+      # why the error below names authorisation as well as absence.
+      packages: read
     env:
       E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
       E2E_CLOUD: ${{ inputs.cloud }}
@@ -190,7 +209,7 @@ jobs:
         run: |
           set -euo pipefail
           docker manifest inspect "$IMAGE" > /dev/null || {
-            echo "::error::$IMAGE is not pullable from GHCR. Publishing it would create a GM version and release pointing at an image that cannot be pulled, and the failure would surface minutes later as ImagePullBackOff on the tenant. sdr-test-* tags are built by e2e runs and may have been pruned — take a tag from a recent e2e build log, or re-run the app's e2e to produce one."
+            echo "::error::$IMAGE could not be read from GHCR. Two causes, in likelihood order. (1) The tag does not exist: sdr-test-* tags are built by e2e runs and may have been pruned — take a tag from a recent e2e build log, or re-run the app's e2e to produce one. (2) This run cannot authorise it: with ORG_PAT_GITHUB unset the login falls back to github.token, whose package scope covers only packages owned by or linked to atlanhq/application-sdk, and these images belong to the app repos — set ORG_PAT_GITHUB. Either way the install is blocked here deliberately: publishing an unreadable image creates a GM version and release pointing at something the tenant cannot pull, and the failure would surface minutes later as ImagePullBackOff."
             exit 1
           }
           echo "$IMAGE is pullable"
