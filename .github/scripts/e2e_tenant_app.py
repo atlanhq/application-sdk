@@ -256,7 +256,7 @@ def _app_info(client: TenantClient, app_id: str) -> dict[str, object]:
     return response.data() if response.ok else {}
 
 
-def _registered_source_repo(info: dict[str, object]) -> str:
+def _registered_source_repo(info: dict[str, object], _depth: int = 0) -> str:
     """Return the repo GM has on file for this app, or "" if it has none.
 
     GM's version-create guard is exactly (``global-marketplace``,
@@ -279,6 +279,8 @@ def _registered_source_repo(info: dict[str, object]) -> str:
     returns ``{app_id, catalog, installed}`` and neither sub-object carries
     ``source_repo`` today.
     """
+    if _depth >= _WALK_MAX_DEPTH:
+        return ""
     for key in ("source_repo", "sourceRepo"):
         value = info.get(key)
         if isinstance(value, str) and value.strip():
@@ -286,7 +288,7 @@ def _registered_source_repo(info: dict[str, object]) -> str:
     for nest in ("app", "catalog", "data"):
         inner = info.get(nest)
         if isinstance(inner, dict):
-            found = _registered_source_repo(inner)
+            found = _registered_source_repo(inner, _depth + 1)
             if found:
                 return found
     return ""
@@ -354,10 +356,11 @@ def _repo_from_image(image: str) -> str:
 
     A cross-check only, never a source. The convention (GHCR image name == repo
     name) holds across the connector fleet but is a convention, not a guarantee,
-    so a disagreement warns rather than fails — the caller's value is still what
-    gets sent. It exists because the one destructive mistake available here is
-    passing the wrong repo, and that mistake is usually visible in exactly this
-    comparison.
+    so a disagreement fails closed only for ``ghcr.io`` references — the
+    confirmed e2e registry, where the convention does hold — and warns otherwise,
+    so a legitimate exception off GHCR can still publish. It exists because the
+    one destructive mistake available here is passing the wrong repo, and that
+    mistake is usually visible in exactly this comparison.
     """
     ref = image.split("@", 1)[0]
     path = ref.rsplit(":", 1)[0] if ":" in ref.rsplit("/", 1)[-1] else ref
@@ -367,19 +370,32 @@ def _repo_from_image(image: str) -> str:
     return f"https://github.com/{parts[1]}/{parts[-1]}"
 
 
-def _extract_version(payload: dict[str, object]) -> str:
+#: How deep the recursive payload walks below may descend. Both LM walks start
+#: at depth 0 and their nest lists are one level long, so real payloads never go
+#: past depth 1; the bound exists so a pathological (deeply nested or, via
+#: ``data``, self-referential) payload degrades to "" — which the callers already
+#: treat as "field absent" — instead of crashing the step with a RecursionError
+#: traceback. The nests walked are exactly the keys a JSON wrapper envelope uses
+#: for self-similar nesting, so an unbounded walk is not theoretical.
+_WALK_MAX_DEPTH = 3
+
+
+def _extract_version(payload: dict[str, object], _depth: int = 0) -> str:
     """Pull the installed version out of an ``/apps/{id}/info`` payload.
 
     Searches the nests BEFORE the top-level keys. LM's envelope carries the
     installed state under ``installed``, while the sibling ``catalog`` block
     describes the app in general — so a top-level-first search risks reading a
     catalogue-level version and reporting it as what the tenant is running, which
-    would make the version check pass against the wrong thing.
+    would make the version check pass against the wrong thing. Recursion is
+    depth-bounded (see ``_WALK_MAX_DEPTH``).
     """
+    if _depth >= _WALK_MAX_DEPTH:
+        return ""
     for nest in _VERSION_NESTS:
         inner = payload.get(nest)
         if isinstance(inner, dict):
-            found = _extract_version(inner)
+            found = _extract_version(inner, _depth + 1)
             if found:
                 return found
     for key in _VERSION_KEYS:
@@ -633,17 +649,28 @@ def install(args: argparse.Namespace) -> InstallOutcome:
 
     # Cross-check against the repo the image implies. Passing the wrong repo is
     # the one destructive mistake available here — GM would repoint the app's
-    # provenance — and it usually shows up as exactly this disagreement. A warning
-    # rather than an error: image-name == repo-name is a fleet convention, not a
-    # guarantee, so a legitimate exception must not be blocked.
+    # provenance — and it usually shows up as exactly this disagreement. Fail
+    # closed when the image is a ghcr.io reference: GHCR is the confirmed e2e
+    # registry, and there image-name == repo-name holds, so a disagreement is a
+    # provenance-rewrite attempt, not a legitimate exception. Any other registry
+    # only warns — the convention is not guaranteed to hold there, so a real
+    # exception must still be able to publish.
     implied = _repo_from_image(args.image)
     if implied and _normalize_repo_url(implied) != _normalize_repo_url(repo_url):
-        print(
-            f"::warning::repo {repo_url} does not match the repo implied by the "
-            f"image ({implied}). If {repo_url} is not this app's own repo, GM will "
+        explanation = (
+            f"repo {repo_url} does not match the repo implied by the image "
+            f"({implied}). If {repo_url} is not this app's own repo, GM will "
             "repoint the app's source_repo to it and break its CI/CD publish "
-            "gating. Double-check before relying on this run."
+            "gating."
         )
+        if args.image.split("@", 1)[0].split("/", 1)[0].lower() == "ghcr.io":
+            raise TenantAppError(
+                f"refusing to publish: {explanation} The image is a ghcr.io "
+                "reference, where image name == repo name holds across the "
+                "fleet, so this disagreement is a wrong --repo-url, not a "
+                "legitimate exception. Pass the app's own repo."
+            )
+        print(f"::warning::{explanation} Double-check before relying on this run.")
 
     request = PublishRequest(
         app_id=app_id,

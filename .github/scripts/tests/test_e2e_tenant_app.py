@@ -790,16 +790,34 @@ def test_repo_inferred_from_image(image: str, expected: str) -> None:
     assert app._repo_from_image(image) == expected
 
 
-def test_repo_image_mismatch_warns_but_proceeds(
+def test_ghcr_repo_image_mismatch_fails_closed_before_publishing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ghcr.io image whose implied repo disagrees with --repo-url is a wrong
+    repo, not a legitimate exception — image name == repo name holds on GHCR, so
+    the publish (which would repoint the app's provenance) must never happen.
+    """
+    transport = _wire(
+        monkeypatch,
+        StubTransport(routes=[StubRoute("GET", "/info", _ok({}))]),
+    )
+    with pytest.raises(
+        app.TenantAppError, match="does not match the repo implied by the image"
+    ):
+        app.install(
+            _install_args(repo_url="https://github.com/atlanhq/application-sdk")
+        )
+    assert transport.paths("POST") == []
+
+
+def test_non_ghcr_repo_image_mismatch_warns_but_proceeds(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A wrong repo is the one destructive mistake here, so it must be visible.
-
-    Warned rather than blocked: image-name == repo-name is a fleet convention,
-    not a guarantee, so a legitimate exception must still be able to publish. The
-    caller's value is what gets sent either way.
+    """Off GHCR the image-name == repo-name convention is not guaranteed, so a
+    disagreement stays warn-only: a legitimate exception must still be able to
+    publish, and the caller's value is what gets sent.
     """
-    _wire(
+    transport = _wire(
         monkeypatch,
         StubTransport(
             routes=[
@@ -814,10 +832,22 @@ def test_repo_image_mismatch_warns_but_proceeds(
             sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
         ),
     )
-    app.install(_install_args(repo_url="https://github.com/atlanhq/application-sdk"))
+    app.install(
+        _install_args(
+            image=(
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com"
+                "/atlanhq/atlan-openapi-app:tag"
+            ),
+            repo_url="https://github.com/atlanhq/application-sdk",
+        )
+    )
     out = capsys.readouterr().out
     assert (
         "::warning::" in out and "does not match the repo implied by the image" in out
+    )
+    assert (
+        transport.body_for("/marketplace/publish")["repo"]
+        == "https://github.com/atlanhq/application-sdk"
     )
 
 
@@ -840,6 +870,37 @@ def test_repo_image_mismatch_warns_but_proceeds(
 )
 def test_version_extraction(payload: dict[str, object], expected: str) -> None:
     assert app._extract_version(payload) == expected
+
+
+def test_version_extraction_degrades_on_a_self_referential_payload() -> None:
+    """``data`` is exactly the key a JSON wrapper envelope uses for self-similar
+    nesting, so the walk must be depth-bounded: a cyclic payload reads as "not
+    installed" ("") rather than crashing the step with a RecursionError.
+    """
+    payload: dict[str, object] = {"app_id": _APP_ID}
+    payload["data"] = payload
+    assert app._extract_version(payload) == ""
+
+
+def test_version_extraction_reads_a_version_within_the_depth_bound() -> None:
+    """The bound must not throw away a findable version: nests are searched at
+    every level up to it."""
+    payload: dict[str, object] = {"data": None}
+    inner = payload
+    for _ in range(app._WALK_MAX_DEPTH - 1):
+        nested: dict[str, object] = {}
+        inner["data"] = nested
+        inner = nested
+    inner["version"] = "1.2.3"
+    assert app._extract_version(payload) == "1.2.3"
+
+
+def test_registered_source_repo_degrades_on_a_self_referential_payload() -> None:
+    """Same bound on the repo walk: a cyclic ``data`` envelope reads as "no
+    registered repo" ("") instead of a RecursionError."""
+    info: dict[str, object] = {"app_id": _APP_ID}
+    info["data"] = info
+    assert app._registered_source_repo(info) == ""
 
 
 # ── Outputs ──────────────────────────────────────────────────────────────────
