@@ -136,9 +136,9 @@ release rather than after. This is FND-6.
 
 ```json
 {
-  "aws":   {"tenant": "…", "client_id": "…", "client_secret": "…", "api_key": "…"},
-  "azure": {"tenant": "…", "client_id": "…", "client_secret": "…", "api_key": "…"},
-  "gcp":   {"tenant": "…", "client_id": "…", "client_secret": "…", "api_key": "…"}
+  "aws":   {"tenant": "…", "client_id": "…", "client_secret": "…", "api_key": "…", "tenant_id": "…"},
+  "azure": {"tenant": "…", "client_id": "…", "client_secret": "…", "api_key": "…", "tenant_id": "…"},
+  "gcp":   {"tenant": "…", "client_id": "…", "client_secret": "…", "api_key": "…", "tenant_id": "…"}
 }
 ```
 
@@ -147,6 +147,29 @@ index the `secrets` context, and the reusable workflows declare their
 `workflow_call` secrets explicitly — so per-cloud names would have to be
 re-declared for every cloud ever added. Adding a fourth CSP is a secret edit and
 a one-line change to `DEFAULT_CLOUDS`; no app repo changes at all.
+
+`"tenant_id"` is the tenant's **vcluster instance name** (`markeznp37`, `home-mt`)
+— *not* its hostname, which is what `"tenant"` holds. It is required only by the
+tenant-install path (`install-app-to-tenant`, FND-31): GM matches a release's
+`allowed_tenants` against this id exactly, so scoping with a hostname publishes
+successfully and produces a release visible to **no** tenant, whose symptom
+appears one call later as `version not found` on install. It reaches the drivers
+as `E2E_TENANT_ID`.
+
+There is no way to derive it client-side — Heracles reads it from the
+`atlan-defaults` ConfigMap key `instance`, and deliberately not from the JWT,
+whose Keycloak realm is `default` for every tenant. So an entry without it cannot
+use the install path, and neither can the single-tenant fallback (which has no
+entry to add the field to); the `E2E Tenant Install` workflow's `tenant_id` input
+covers one-off runs in both cases.
+
+`prepare-tenant` therefore **fails** on an unresolved `tenant_id`, immediately
+after tenant resolution and before it publishes anything — it does not skip the
+install. Skipping would leave the job green having done nothing, the tenant on
+whatever version it was already running, and every leg reding on its own version
+check instead: one confusing failure per leg in place of one clear failure. Since
+`install-app-to-tenant` is opt-in, a caller that has opted in without a
+`tenant_id` is misconfigured rather than on a supported path.
 
 Each entry may also carry `"deployment_name"` when that tenant's system apps
 (publish / quality / lineage) are not registered under `production`. It reaches
