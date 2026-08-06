@@ -12,14 +12,26 @@ grouping) and cannot be exercised without a runner.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import e2e_tenant_app as app  # noqa: E402
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
 _SDR_ACTION = _REPO_ROOT / ".github/actions/sdr-e2e/action.yaml"
+
+#: How much job budget the script's own two waits may account for. At 1/2, both
+#: waits can run to completion and the rest of the job still has as long again —
+#: so the runner's timeout is never the first thing to fire, whatever the checkout,
+#: publish and read-back cost on a slow runner. A ratio rather than a fixed margin
+#: because it stays correct if a wait's default changes.
+_MAX_WAIT_SHARE = 0.5
 
 
 @pytest.fixture(scope="module")
@@ -210,6 +222,82 @@ def test_new_jobs_route_values_through_env_not_into_run(jobs: dict, job: str) ->
         "attacker-influenced or multi-line values into the shell. Pass them via "
         f'env: and reference quoted "$VARS". Offenders: {offenders}'
     )
+
+
+# ── A tenant we cannot scope a release to is rejected up front ───────────────
+
+
+def test_a_missing_tenant_id_is_rejected_before_anything_is_published(
+    jobs: dict,
+) -> None:  # type: ignore[type-arg]
+    """The gate must sit between tenant resolution and the atlan.yaml parse.
+
+    The resolver exports ``E2E_TENANT_ID`` only from a matrix entry carrying
+    ``tenant_id``; the legacy single-tenant fallback has no entry to carry one.
+    Without this step the job got as far as the publish and then failed inside the
+    script on an empty ``--tenant``, several steps past the actual cause.
+
+    Failing rather than skipping is the deliberate half: a skipped install leaves
+    prepare-tenant green, the tenant on whatever version it was already running,
+    and every leg reding on its own version check — one confusing failure per leg
+    in place of one clear failure here.
+    """
+    names = [str(step.get("name", "")) for step in jobs["prepare-tenant"]["steps"]]
+    gate = [
+        step
+        for step in jobs["prepare-tenant"]["steps"]
+        if str(step.get("name", "")) == "Require a tenant ID before publishing anything"
+    ]
+    assert len(gate) == 1, "the tenant-ID gate is gone; the install would fail late"
+    assert gate[0]["if"] == "env.E2E_TENANT_ID == ''", (
+        "the gate must fire on an unresolved tenant ID specifically, and via the "
+        "env context so the branch stays out of the run: block (ci.md)"
+    )
+    assert "exit 1" in gate[0]["run"], (
+        "the gate must fail the job. A warning would leave the tenant unprepared "
+        "and push the failure into every leg's version check instead."
+    )
+
+    position = names.index("Require a tenant ID before publishing anything")
+    for later in ("Read atlan.yaml", "Install the app under test"):
+        assert position < names.index(later), (
+            f"the tenant-ID gate must run before {later!r} — the whole point is "
+            "rejecting the misconfiguration before any work or any publish"
+        )
+
+
+def test_job_timeout_stays_above_the_scripts_own_waits(jobs: dict) -> None:  # type: ignore[type-arg]
+    """The runner's timeout must not be able to fire before the script's.
+
+    The install retries while LM's catalog snapshot catches up, then polls the
+    deployment — both bounded by the script's defaults, since the step overrides
+    neither. If the job budget is under their sum, a slow sync reports as a bare
+    "job cancelled after Nm" and the actionable error the script was about to
+    print is never written: the diagnosis-hostile failure this whole job exists to
+    avoid. Derived from the script's constants, so raising one of those fails here
+    rather than silently making a job timeout reachable.
+    """
+    waits = (
+        app.DEFAULT_INSTALL_RETRY_SECONDS + app.DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS
+    ) // 60
+    required = round(waits / _MAX_WAIT_SHARE)
+    actual = jobs["prepare-tenant"]["timeout-minutes"]
+    assert actual >= required, (
+        f"prepare-tenant allows {actual} min but the script can spend {waits} min "
+        "of it waiting, so a slow runner makes the GHA timeout reachable before "
+        f"the script's own. Raise it to at least {required}."
+    )
+
+    install = [
+        s
+        for s in jobs["prepare-tenant"]["steps"]
+        if str(s.get("name", "")) == "Install the app under test"
+    ][0]
+    for flag in ("--install-retry-seconds", "--timeout-seconds"):
+        assert flag not in install["run"], (
+            f"the step now passes {flag}, so the budget above is no longer the "
+            "script's default — compute the timeout from the passed value instead"
+        )
 
 
 def test_install_step_does_not_thread_app_id(jobs: dict) -> None:  # type: ignore[type-arg]
