@@ -56,6 +56,7 @@ from conformance.suite.checks import (
     security,
     test_quality,
     test_structure,
+    workflow_entrypoint_declared,
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
@@ -81,6 +82,12 @@ class CheckRegistration:
 
 
 _CHECKS: list[CheckRegistration] = [
+    CheckRegistration(
+        series=workflow_entrypoint_declared.SERIES,
+        discover=workflow_entrypoint_declared.discover,
+        scan_path=workflow_entrypoint_declared.scan_path,
+        scan_all=workflow_entrypoint_declared.scan_all,
+    ),
     CheckRegistration(
         series=actions_pinning.SERIES,
         discover=actions_pinning.discover,

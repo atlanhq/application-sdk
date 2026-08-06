@@ -5,7 +5,7 @@
 
 # Test-Quality Rules (T-series)
 
-**19 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), `suite.checks.coverage_config` (T014-T015), `suite.checks.e2e_deployment_name` (T016), `suite.checks.e2e_agent_spec` (T017), `suite.checks.integration_deselect` (T018), and `suite.checks.asyncio_loop_scope` (T019) (AST/TOML/YAML-based)
+**20 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), `suite.checks.coverage_config` (T014-T015), `suite.checks.e2e_deployment_name` (T016), `suite.checks.e2e_agent_spec` (T017), `suite.checks.integration_deselect` (T018), and `suite.checks.asyncio_loop_scope` (T019) (AST/TOML/YAML-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -34,6 +34,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [T017](#t017) | `E2EAgentSpecPinsQueue` | `warn` | `app` | `e2e-ci` | — | 0.13.0 |
 | [T018](#t018) | `IntegrationTierDeselectedByAddopts` | `warn` | `app` | `test-collection` | — | 0.16.0 |
 | [T019](#t019) | `AsyncioTestLoopScopeUnset` | `warn` | `both` | `test-async-config` | — | 0.17.0 |
+| [T020](#t020) | `UndeclaredWorkflowEntrypoint` | `warn` | `app` | `test-coverage-attribution` | — | 0.18.0 |
 
 ---
 
@@ -907,5 +908,36 @@ Suppress with `# conformance: ignore[T019] <reason>` on the
 `asyncio_default_fixture_loop_scope` line only when the mismatch is deliberate — e.g.
 every async fixture is loop-agnostic and no test drives fixture-owned work in-body — and
 state that reason.
+
+---
+
+## T020 — `UndeclaredWorkflowEntrypoint` {#t020}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `test-coverage-attribution` · **Autofixable:** — · **Since:** 0.18.0
+
+> Workflow scenario does not declare which app entrypoint it exercises
+
+**Rationale:** A Scenario with api="workflow" means 'POST /workflows/v1/start'. It does not say which
+@entrypoint gets started. On an app declaring more than one, an undeclared scenario
+silently starts the app's default entrypoint - so a suite believing it exercises the
+miner may in fact be running the crawler, and passing. The second cost is attribution:
+which product workflow a suite covers becomes recoverable only by reading the test's
+source and resolving base-class defaults through the MRO, so no tooling can report
+per-workflow integration coverage. A survey of ten connectors found two tests out of
+roughly two thousand stating it in any machine-readable form. Declaring it costs one
+line and makes both problems go away.
+
+A `Scenario(api="workflow", ...)` in an app that declares more than one `@entrypoint`
+passes neither `entrypoint=` nor an explicit `endpoint=`, and its enclosing `Test*`
+class sets no class-level `entrypoint`.
+
+Only fires for multi-entrypoint apps - on a single-entrypoint app the target is
+unambiguous and declaring it would be noise.
+
+**Remediation:** set `entrypoint="crawler"` (or whichever) on the scenario, or a
+class-level `entrypoint` on the suite when every scenario in it targets the same
+workflow.
+
+Suppress with `# conformance: ignore[T020] <reason>` on the `Scenario(` line.
 
 ---

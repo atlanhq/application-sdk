@@ -129,6 +129,13 @@ class Scenario:
             Maps to PreflightInput.checks_to_run. Empty list = run all checks.
         preflight_timeout: Timeout in seconds for preflight checks.
             Maps to PreflightInput.timeout_seconds. Defaults to 60.
+        entrypoint: Name of the app ``@entrypoint`` this scenario exercises, e.g.
+            ``"crawler"`` or ``"miner"``. Only meaningful for ``api="workflow"``
+            scenarios. Multi-entrypoint apps MUST set it — otherwise the app's
+            default entrypoint is started, which is silently wrong for every
+            workflow but one. Declaring it also makes the scenario's coverage
+            machine-readable: which product workflow a test exercises is
+            otherwise recoverable only by reading the test's source.
         validate_assets: Override the test class's ``validate_assets`` for this
             scenario. ``None`` (default) inherits the class setting (on by default
             for workflow scenarios with a resolvable extracted-output path).
@@ -165,6 +172,7 @@ class Scenario:
     preflight_timeout: int = 60
     validate_assets: bool | None = None
     asset_validation_strict: bool | None = None
+    entrypoint: str | None = None
 
     def __post_init__(self):
         """Validate the scenario after initialization."""
