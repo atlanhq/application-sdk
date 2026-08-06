@@ -1199,6 +1199,31 @@ def test_publish_error_body_is_truncated(monkeypatch: pytest.MonkeyPatch) -> Non
     assert len(str(excinfo.value)) < 5000
 
 
+# ── Tenant-ID scoping ────────────────────────────────────────────────────────
+
+
+def test_install_refuses_a_hostname_as_the_tenant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail before publishing, not after the install cannot find the version.
+
+    A hostname in `allowed_tenants` publishes successfully and produces a release
+    visible to no tenant, so the symptom appears one call later as "version not
+    found" — with the tenant's real versions listed, which reads like a lag rather
+    than a scoping mistake. Three live runs were spent on that.
+    """
+    transport = _wire(
+        monkeypatch,
+        StubTransport(routes=[StubRoute("GET", "/info", _ok({}))]),
+    )
+    with pytest.raises(TenantApiError, match="hostname"):
+        app.install(_install_args(tenant="e2e-azure-main.atlan.com"))
+    assert not any("/marketplace/publish" in p for p in transport.paths("POST")), (
+        "the bad tenant id must be caught BEFORE the publish, or it leaves a "
+        "release behind that is visible to nobody"
+    )
+
+
 # ── Failure diagnostics ──────────────────────────────────────────────────────
 # The previous implementation printed `json.dumps(payload, sort_keys=True)[:8000]`,
 # which sorts `pod_describe` ahead of `pod_events` — so the cut landed before the

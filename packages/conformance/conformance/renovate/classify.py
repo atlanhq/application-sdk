@@ -6,10 +6,14 @@ Falls back to branch/title/body parsing for PRs that predate the label rollout
 (Renovate re-labels them on its next run after the preset change ships).
 
 Auto-merge policy mirrors renovate-config/default.json:
-  - lock-maintenance: automerge=true  (uv.lock-only, in-range)
-  - github-actions:   automerge=true  (all update types, incl. major)
-  - contract-toolkit: automerge=true  for minor/patch; false for major
-  - python-dep:       automerge=false (edits pyproject.toml constraint → human)
+  - lock-maintenance:    automerge=true  (uv.lock-only, in-range)
+  - github-actions:      automerge=true  (all update types, incl. major)
+  - contract-toolkit:    automerge=true  for minor/patch; false for major
+  - conformance-package: automerge=true  for minor/patch; false for major
+                         (dedicated uv.lock-only PR via update-lockfile;
+                         auto-merged even under the soft-mode template's
+                         '*' automerge=false rule, which carves it out)
+  - python-dep:          automerge=false (edits pyproject.toml constraint → human)
 
 Blocking-reason mirrors renovate-auto-approve-reusable.yml conditions:
   file allowlist: .github/, uv.lock, package-lock.json, requirements.txt, pyproject.toml
@@ -33,6 +37,7 @@ _LABEL_CATEGORY_MAP: dict[str, Category] = {
     "update:lock-maintenance": Category.LOCK_MAINTENANCE,
     "update:github-actions": Category.GITHUB_ACTIONS,
     "contract-toolkit-update": Category.CONTRACT_TOOLKIT,
+    "conformance-package-update": Category.CONFORMANCE_PACKAGE,
 }
 _LABEL_UPDATE_TYPE_MAP: dict[str, UpdateType] = {
     "update:major": UpdateType.MAJOR,
@@ -85,6 +90,14 @@ def categorize(pr: RenovatePR) -> Category:
         return Category.GITHUB_ACTIONS
     if "app-contract-toolkit" in branch or "app-contract-toolkit" in title:
         return Category.CONTRACT_TOOLKIT
+    # groupName "conformance package" → branch slug renovate/conformance-package;
+    # ungrouped fallback branch carries the full package name.
+    if (
+        "conformance-package" in branch
+        or "application-sdk-conformance" in branch
+        or "conformance package" in title
+    ):
+        return Category.CONFORMANCE_PACKAGE
 
     return Category.PYTHON_DEP
 
@@ -137,6 +150,8 @@ def auto_merge_expected(category: Category, update_type: UpdateType) -> bool:
     if category == Category.GITHUB_ACTIONS:
         return True
     if category == Category.CONTRACT_TOOLKIT:
+        return update_type not in (UpdateType.MAJOR, UpdateType.UNKNOWN)
+    if category == Category.CONFORMANCE_PACKAGE:
         return update_type not in (UpdateType.MAJOR, UpdateType.UNKNOWN)
     # python-dep, unknown
     return False

@@ -88,6 +88,7 @@ from e2e_tenant_api import (
     path_segment,
     validate_app_id,
     validate_tenant_base_url,
+    validate_tenant_id,
 )
 from marketplace_publish_body import PublishBodyError, PublishRequest, build
 
@@ -103,6 +104,15 @@ _DEPLOY_POLL_SECONDS = 10
 _SCAN_POLL_SECONDS = 10
 #: Gap between install retries while LM's catalog snapshot catches up.
 _INSTALL_RETRY_POLL_SECONDS = 20
+
+#: The two waits this script can spend, as module constants rather than argparse
+#: literals, because a caller's job `timeout-minutes` has to stay above their sum:
+#: if the runner's timeout fires first, a slow LM sync reports as "job cancelled"
+#: and the actionable error this script was about to print is never written. The
+#: workflows' guards assert their timeouts against these, so raising one here
+#: fails the guard rather than silently making a job timeout reachable.
+DEFAULT_INSTALL_RETRY_SECONDS = 600
+DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS = 600
 
 #: Keys an install/info response may carry the installed version under. LM has
 #: not committed to one name across versions, so check the plausible set rather
@@ -965,7 +975,7 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         repo_url=repo_url,
         # The whole registration is scoped to this one tenant, so a per-PR build
         # can never become visible to a real one.
-        allowed_tenants=(args.tenant,),
+        allowed_tenants=(validate_tenant_id(args.tenant),),
         deploy_config=args.deploy_config,
         self_deployed_runtime=args.self_deployed_runtime,
         sdk_version=args.sdk_version,
@@ -1077,7 +1087,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_install.add_argument("--branch", required=True)
     p_install.add_argument(
-        "--tenant", required=True, help="tenant id for allowed_tenants scoping"
+        "--tenant",
+        required=True,
+        help=(
+            "The tenant's ID for allowed_tenants scoping — its vcluster instance "
+            "name (e.g. 'markeznp37'), NOT its hostname. GM matches this exactly; "
+            "a hostname yields a release visible to no tenant."
+        ),
     )
     p_install.add_argument("--repo-url", default="")
     p_install.add_argument("--deploy-config", default="")
@@ -1100,7 +1116,7 @@ def main(argv: list[str] | None = None) -> int:
     p_install.add_argument(
         "--install-retry-seconds",
         type=int,
-        default=600,
+        default=DEFAULT_INSTALL_RETRY_SECONDS,
         help=(
             "How long to keep retrying the install while LM's tenant-catalog "
             "snapshot catches up with a fresh publish. LM excludes a release "
@@ -1112,7 +1128,7 @@ def main(argv: list[str] | None = None) -> int:
     p_install.add_argument(
         "--timeout-seconds",
         type=int,
-        default=600,
+        default=DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS,
         help="Budget for the deployment to reconcile. A timeout fails.",
     )
 

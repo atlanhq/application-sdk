@@ -788,6 +788,36 @@ def test_renovate_json_automerge_false_is_valid_json() -> None:
     assert any(r.get("automerge") is False for r in parsed.get("packageRules", []))
 
 
+def test_renovate_json_soft_mode_conformance_package_carve_out() -> None:
+    """Soft mode keeps auto-merge for the conformance package's own dedicated PR.
+
+    The carve-out rule must come AFTER the '*' disable rule — Renovate applies
+    packageRules in order and the last matching rule wins per option — and must
+    be scoped to minor/patch (majors stay human-reviewed, like the preset).
+    """
+    import json
+
+    content = render("renovate.json", automerge="false")
+    rules = json.loads(content)["packageRules"]
+    star_idx = next(i for i, r in enumerate(rules) if r["matchPackageNames"] == ["*"])
+    conf_idx = next(
+        i
+        for i, r in enumerate(rules)
+        if r["matchPackageNames"] == ["atlan-application-sdk-conformance"]
+    )
+    assert conf_idx > star_idx
+    conf_rule = rules[conf_idx]
+    assert conf_rule["automerge"] is True
+    assert conf_rule["platformAutomerge"] is True
+    assert conf_rule["matchUpdateTypes"] == ["minor", "patch"]
+
+
+def test_renovate_json_hard_mode_has_no_conformance_carve_out() -> None:
+    """Hard mode needs no exception — the fleet preset already auto-merges."""
+    content = render("renovate.json")
+    assert "atlan-application-sdk-conformance" not in content
+
+
 def test_cmd_bootstrap_enforce_false_writes_soft_renovate(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
