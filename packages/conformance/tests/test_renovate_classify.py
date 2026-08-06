@@ -116,6 +116,19 @@ def test_category_conformance_package_fallback_ungrouped_branch() -> None:
     assert pr.category is Category.CONFORMANCE_PACKAGE
 
 
+def test_category_conformance_package_fallback_title() -> None:
+    # Title arm of categorize(): branch and labels carry no conformance signal, so
+    # the "conformance package" substring in the title is what classifies it.
+    pr = classify(
+        make_pr(
+            labels=[],
+            branch="renovate/all-minor-patch",
+            title="Update conformance package to v0.5.0",
+        )
+    )
+    assert pr.category is Category.CONFORMANCE_PACKAGE
+
+
 # ── UpdateType from labels ───────────────────────────────────────────────────
 
 
@@ -178,6 +191,29 @@ def test_auto_merge_expected_conformance_package_minor() -> None:
 def test_auto_merge_expected_conformance_package_major() -> None:
     pr = classify(make_pr(labels=["conformance-package-update", "update:major"]))
     assert pr.auto_merge_expected is False
+
+
+def test_auto_merge_expected_conformance_package_unknown() -> None:
+    # No update-type label and no parseable body table → UNKNOWN → human-reviewed.
+    pr = classify(make_pr(labels=["conformance-package-update"], body=""))
+    assert pr.update_type is UpdateType.UNKNOWN
+    assert pr.auto_merge_expected is False
+
+
+def test_conformance_package_prelabel_compatibility_composed() -> None:
+    # Pre-label-rollout PR: no self-managed labels, so category comes from the
+    # branch fallback and update type from the body table — composed through
+    # classify() end to end (not as independent units).
+    pr = classify(
+        make_pr(
+            labels=[],
+            branch="renovate/conformance-package",
+            body="Updates atlan-application-sdk-conformance from 1.2.3 -> 1.3.0",
+        )
+    )
+    assert pr.category is Category.CONFORMANCE_PACKAGE
+    assert pr.update_type is UpdateType.MINOR
+    assert pr.auto_merge_expected is True
 
 
 def test_auto_merge_expected_python_dep_minor() -> None:
