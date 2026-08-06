@@ -867,6 +867,10 @@ async def test_reader_preserves_object_store_read_error_classification() -> None
     assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ"
     assert exc_info.value.path == path
     assert exc_info.value.file_extension == ".parquet"
+    assert exc_info.value.suggested_action is not None
+    # The retryability flip is the deliberate behaviour change; pin it on every
+    # guarded frame, not just the JSON single-read path.
+    assert exc_info.value.effective_retryable is True
 
 
 @pytest.mark.asyncio
@@ -891,3 +895,7 @@ async def test_read_batches_preserves_object_store_read_error_classification() -
 
     assert not isinstance(exc_info.value, FormatReadError)
     assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ"
+    assert exc_info.value.path == path
+    assert exc_info.value.file_extension == ".parquet"
+    assert exc_info.value.suggested_action is not None
+    assert exc_info.value.effective_retryable is True
