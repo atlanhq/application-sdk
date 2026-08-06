@@ -128,6 +128,26 @@ on:
         type: boolean
         default: true
         description: Set to false to skip the e2e job entirely (e.g. hello-world).
+      install-app-to-tenant:
+        required: false
+        type: boolean
+        default: false
+        description: |
+          Install the app under test onto each cloud's e2e tenant before the
+          legs run, and fail a leg whose tenant is not on that version (FND-31).
+
+          Why this matters more than it sounds: at AE submit, Heracles re-fetches
+          the manifest from the TENANT-DEPLOYED POD and that DAG is what executes
+          (`processAutomationEngineWorkflow`). The harness's local seed DAG
+          establishes the workflow record, not the graph. So with this off, a
+          full-DAG e2e exercises whatever version was last deployed to that
+          tenant — which is nobody's PR — and a manifest/DAG/entrypoint change
+          can go green against an older contract, or red for an unrelated reason.
+
+          Off by default because turning it on makes tenant health a gate: a
+          tenant that cannot be installed to reds the leg rather than quietly
+          testing the wrong version. Adopt it per repo once that trade is
+          understood.
       e2e-clouds:
         required: false
         type: string
@@ -666,6 +686,12 @@ jobs:
       matrix: ${{ steps.discover.outputs.matrix }}
       count: ${{ steps.discover.outputs.count }}
       leg-count: ${{ steps.discover.outputs.leg-count }}
+      # The cloud dimension alone, for prepare-tenant (one install per cloud, not
+      # per suite × cloud). Derived from the same `clouds` expression as the full
+      # matrix below, so the two can never disagree about which clouds are in play
+      # — a prepare-tenant that missed a cloud the legs then ran against would be
+      # a silent coverage hole, not a visible failure.
+      cloud-matrix: ${{ steps.discover-clouds.outputs.matrix }}
     env:
       # Job-level so the step-level `if:` below can read it — a step condition
       # cannot reference the `secrets` context directly.
@@ -701,6 +727,23 @@ jobs:
           # so the natural form collapses the default (empty = SDK cloud list)
           # into "none" and quietly disables the matrix on every un-customised
           # caller. The negated form never evaluates the input for truthiness.
+          clouds: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
+
+      # The same fan-out, cloud dimension only, for prepare-tenant. A second
+      # invocation rather than deriving the unique clouds out of the matrix above:
+      # the `clouds` expression is duplicated verbatim, so the two calls cannot
+      # drift, whereas a hand-rolled uniq over the full matrix would be new
+      # untested logic doing what --clouds-only already does.
+      #
+      # Runs unconditionally (not gated on install-app-to-tenant) so the output
+      # exists whenever discovery ran. It is seconds of work, and gating it would
+      # mean prepare-tenant's matrix expression had to cope with an empty output
+      # on a path where it is skipped anyway.
+      - name: Discover clouds
+        id: discover-clouds
+        uses: atlanhq/application-sdk/.github/actions/discover-e2e-suites@main
+        with:
+          clouds-only: "true"
           clouds: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
 
       # A repo that has not been granted the tenant-matrix secret silently gets
@@ -740,10 +783,249 @@ jobs:
   # isolation machinery: deployment names, queues and artifact names all pick it
   # up. Legs on different clouds hit different tenants (and therefore different
   # Temporal servers) besides.
+  # ── Build the image ONCE, ahead of the matrix ────────────────────────────
+  # The test-image tag is deterministic (`sdr-test-<short-sha>`), so every cloud
+  # leg used to rebuild the identical image. It has to exist before prepare-tenant
+  # can install it, so the build is hoisted here and every leg reuses the
+  # reference via sdr-e2e's `prebuilt-image` input.
+  #
+  # Only runs on the install path: with install-app-to-tenant off, each leg keeps
+  # building its own image exactly as before, so an unadopted repo sees no change
+  # at all (not even a different build ordering).
+  build-e2e-image:
+    name: Build e2e image
+    needs: discover-e2e
+    if: |
+      inputs.install-app-to-tenant &&
+      needs.discover-e2e.result == 'success' &&
+      needs.discover-e2e.outputs.count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+      # The GM version string == the image tag. Emitted from THIS job rather than
+      # read off prepare-tenant, because prepare-tenant is a matrix job and matrix
+      # outputs are last-writer-wins — the legs would read whichever cloud
+      # finished last. The version is cloud-independent (every cloud installs the
+      # same image), so the single build job is the correct source.
+      version: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: build
+        uses: atlanhq/application-sdk/.github/actions/build-app-image@main
+        with:
+          app-name: ${{ inputs.app-name }}
+          app-image-name: ${{ inputs.app-image-name }}
+          application-sdk-ref: ${{ inputs.application-sdk-ref }}
+          base-image-ref: ${{ inputs.base-image-ref }}
+          git-token: ${{ secrets.ORG_PAT_GITHUB }}
+          ghcr-token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      # Straight-line parameter expansion, no branching — ci.md-compliant.
+      - name: Derive the GM version from the image tag
+        id: version
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: echo "tag=${IMAGE##*:}" >> "$GITHUB_OUTPUT"
+
+  # ── Install the app under test onto each cloud's tenant ──────────────────
+  # One leg per CLOUD, not per suite × cloud: the installation is tenant-scoped
+  # (one per app per tenant), so installing once per cloud is both sufficient and
+  # the only thing that makes sense — every suite in a run wants the same image.
+  #
+  # `--clouds-only` gives the cloud dimension without the file dimension, and the
+  # `clouds` expression is the same one discover-e2e uses, so this job and the
+  # legs can never disagree about which clouds are in play.
+  prepare-tenant:
+    name: Prepare tenant (${{ matrix.cloud || 'default' }})
+    needs: [discover-e2e, build-e2e-image]
+    if: inputs.install-app-to-tenant && needs.build-e2e-image.result == 'success'
+    strategy:
+      # One cloud's tenant being uninstallable must not cancel the others; the
+      # legs for that cloud fail on their own version check.
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      # Keyed on the TENANT (app + cloud), not the ref: the installation is
+      # tenant-scoped, so two runs installing different versions concurrently
+      # would race and the loser is silently what the tenant ends up running.
+      # cancel-in-progress:false because cancelling mid-install leaves the tenant
+      # in whatever state LM reached.
+      #
+      # This narrows the race; it does not close it. GitHub has no cross-job
+      # lease, so another run can still install between this job and the legs
+      # below — which is exactly why each leg re-verifies the version rather than
+      # trusting this job's outcome.
+      group: e2e-prepare-tenant-${{ inputs.app-name }}-${{ matrix.cloud || 'default' }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    env:
+      E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+      E2E_CLOUD: ${{ matrix.cloud }}
+      FALLBACK_SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
+      FALLBACK_SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
+      FALLBACK_SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
+      FALLBACK_ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # This workflow runs in the caller's repo, so the SDK drivers have to be
+      # fetched. Sparse + pinned to job.workflow_sha for the same reason as the
+      # equivalent checkout in the e2e job: a PR editing these scripts must run
+      # its own version, not main's.
+      - name: Fetch SDK CI scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+
+      # Two invocations, mask pass first — see the equivalent step in the e2e job
+      # for why registering the matrix blob as a secret does not redact the values
+      # inside it.
+      - name: Resolve e2e tenant for this cloud
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
+            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
+            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
+            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
+            --mask-only
+          python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
+            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
+            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
+            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
+            >> "$GITHUB_ENV"
+
+      # app_id / deploy_config / entrypoints / sdk_version all come from
+      # atlan.yaml, which parse_atlan_yaml.py already reads for the release path.
+      # Reused rather than re-parsed so the e2e registration and the release
+      # registration cannot disagree about what the app declares.
+      - name: Read atlan.yaml
+        id: atlan_yaml
+        run: python3 application-sdk-scripts/.github/scripts/parse_atlan_yaml.py
+
+      # Everything reaches the shell through env:, nothing through `${{ }}` inside
+      # run:. Three reasons, in descending order of severity:
+      #
+      #   * `github.head_ref` is the PR's branch name — attacker-controlled on a
+      #     fork PR. Interpolated into run:, a crafted branch name is spliced into
+      #     the script before bash sees a quote and executes.
+      #   * `deploy_config` is multi-line YAML read out of atlan.yaml.
+      #     Interpolating multi-line content into a backslash-continued command is
+      #     not merely unsafe, it is broken — the newline ends the command.
+      #   * `entrypoints` is JSON, so it carries the quotes that would terminate
+      #     whichever quoting style wrapped it.
+      #
+      # Same finding sdk-review raised against e2e-tenant-install.yaml; applied
+      # here at the point of writing rather than waiting to be told twice.
+      #
+      # --app-id is deliberately omitted: the script reads app_id from atlan.yaml
+      # in the working directory (and validates the result either way), so the id
+      # has one source rather than being threaded through a step output.
+      - name: Install the app under test
+        id: install
+        env:
+          IMAGE: ${{ needs.build-e2e-image.outputs.image }}
+          VERSION: ${{ needs.build-e2e-image.outputs.version }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          DEPLOY_CONFIG: ${{ steps.atlan_yaml.outputs.deploy_config }}
+          SDK_VERSION: ${{ steps.atlan_yaml.outputs.sdk_version }}
+          ENTRYPOINTS: ${{ steps.atlan_yaml.outputs.entrypoints }}
+          RELEASE_MODEL: ${{ steps.atlan_yaml.outputs.release_model }}
+          CREATED_BY: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_app.py install \
+            --base-url "$ATLAN_BASE_URL" \
+            --image "$IMAGE" \
+            --version "$VERSION" \
+            --branch "$BRANCH" \
+            --tenant "$SDR_TEST_TENANT" \
+            --repo-url "$REPO_URL" \
+            --deploy-config "$DEPLOY_CONFIG" \
+            --sdk-version "$SDK_VERSION" \
+            --entrypoints "$ENTRYPOINTS" \
+            --release-model "$RELEASE_MODEL" \
+            --created-by "$CREATED_BY"
+        # --install-retry-seconds is left at its default (600). A freshly
+        # published release is not immediately installable: LM resolves the
+        # install against its tenant-catalog snapshot, which excludes a release
+        # while it is scan_pending and picks it up on the next scheduled sync
+        # (~5 min). Worst case here is therefore ~10 min of install retry plus
+        # ~10 min of deployment polling — keep this job's timeout-minutes above
+        # the sum of the two, or a slow sync reads as a job timeout instead of
+        # the actionable error the script would otherwise raise.
+
+      - name: Summarise
+        if: always()
+        env:
+          IMAGE: ${{ needs.build-e2e-image.outputs.image }}
+          SKIPPED: ${{ steps.install.outputs.skipped }}
+          RELEASE_STATUS: ${{ steps.install.outputs.release_status }}
+          INSTALLED: ${{ steps.install.outputs.installed_version }}
+          CLOUD: ${{ matrix.cloud || 'default' }}
+        run: |
+          {
+            echo "### Tenant prepared — ${CLOUD}"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Image | \`${IMAGE}\` |"
+            echo "| Already current (no-op) | \`${SKIPPED:-unknown}\` |"
+            echo "| Release status at install | \`${RELEASE_STATUS:-unreadable}\` |"
+            echo "| Tenant reports installed | \`${INSTALLED:-unreported}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   e2e:
     name: End-to-end (${{ matrix.name }})
-    needs: discover-e2e
-    if: needs.discover-e2e.result == 'success' && needs.discover-e2e.outputs.count != '0'
+    # build-e2e-image and prepare-tenant are in `needs` so the legs cannot start
+    # before them, but both are SKIPPED on the default path
+    # (install-app-to-tenant off — every existing caller). That combination needs
+    # `always() &&`:
+    #
+    # A job's `needs` gate is evaluated SEPARATELY from its `if:`. Without a
+    # status-check function, GitHub applies an implicit success() over every
+    # `needs` entry, a skipped need does not satisfy it, and the job is skipped
+    # before the `if:` is even consulted — so the explicit `== 'skipped'` clauses
+    # below would be dead code and the e2e legs would vanish on the off path.
+    #
+    # `always()` does NOT reintroduce run-on-failure: the explicit gates still
+    # require each need to be success-or-skipped, so a FAILED prepare-tenant stops
+    # the legs, which is essential — continuing would test whatever version the
+    # tenant happens to run, the exact failure FND-31 removes.
+    #
+    # Same shape as `connector-tests` in pull_request.yaml, which pairs
+    # `always() &&` with `success' || 'skipped'` gates over a skippable
+    # build-sdk-base-image need. Found by @sdk-review on #3023.
+    needs: [discover-e2e, build-e2e-image, prepare-tenant]
+    if: |
+      always() &&
+      needs.discover-e2e.result == 'success' &&
+      needs.discover-e2e.outputs.count != '0' &&
+      (needs.prepare-tenant.result == 'success' || needs.prepare-tenant.result == 'skipped') &&
+      (needs.build-e2e-image.result == 'success' || needs.build-e2e-image.result == 'skipped')
     strategy:
       fail-fast: false
       # Fallback to an empty matrix when discovery was skipped (no label / not
@@ -882,13 +1164,23 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.1"
+          version: "0.12.2"
           enable-cache: true
 
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
         with:
           app-name: ${{ inputs.app-name }}
           app-image-name: ${{ inputs.app-image-name }}
+          # Reuse the image build-e2e-image already pushed and prepare-tenant
+          # already installed, instead of rebuilding the identical deterministic
+          # tag per leg. Empty on the non-install path, which keeps each leg
+          # building its own image exactly as before.
+          prebuilt-image: ${{ needs.build-e2e-image.outputs.image }}
+          # Re-assert the tenant version immediately before pytest. prepare-tenant
+          # already verified it, but the installation is tenant-scoped and there is
+          # no cross-job lease — another run can replace it in between. Empty
+          # disables the check, so an unadopted repo is untouched.
+          expected-app-version: ${{ needs.build-e2e-image.outputs.version }}
           # One suite per leg (the matrix file), not the whole e2e directory.
           test-path: ${{ matrix.file }}
           # Full-DAG defaults carried over from e2e-full-reusable.yaml. The
@@ -1097,7 +1389,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.1"
+          version: "0.12.2"
           enable-cache: true
 
       # Both downloads are best-effort: unit always uploads its artifact, but

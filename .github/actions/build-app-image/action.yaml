@@ -1,0 +1,240 @@
+name: Build App Image
+description: |
+  Build and push a connector's PR test image to GHCR, and assert its
+  interpreter matches the expected Python.
+
+  Extracted from `sdr-e2e` (FND-31) so the image can be built ONCE per run,
+  ahead of the e2e matrix, rather than rebuilt by every cloud leg. The
+  full-DAG pipeline needs the image before any leg starts — `prepare-tenant`
+  installs it onto the target tenant so the tenant serves the app under test
+  rather than whatever was last hand-deployed there.
+
+  The image reference is deterministic (`sdr-test-<short-sha>`), so a caller
+  that builds here and a caller that reads `image` back later agree without
+  passing anything around.
+
+  Caller is responsible for:
+  - Checking out the connector repo (this action does NOT call actions/checkout)
+  - Invoking this BEFORE any step that creates a host `.venv` — the Dockerfile's
+    `COPY . .` would otherwise pull in a virtualenv whose Python symlinks point
+    outside the image.
+
+  Self-testing caveat: `sdr-e2e` invokes this as a nested remote action
+  (`@main`), so on the LOCAL-action dispatch path
+  (`./.application-sdk/.github/actions/sdr-e2e`) these steps come from main,
+  not from the application-sdk PR under test. That is the same property
+  `regenerate-contract` and `setup-deps` already have inside this sequence — a
+  PR editing the build steps is exercised through the remote `@main` path and
+  the merge queue, not through a local-action dispatch. Kept explicit here so
+  the limitation is inherited knowingly rather than discovered.
+
+inputs:
+  app-name:
+    description: |
+      Connector short name (e.g. "mysql"). Used only as the buildx cache
+      scope and for log lines. Keep this stable: the scope is
+      `sdr-<app-name>`, and changing it silently discards the warm
+      `uv sync` layer cache.
+    required: true
+  app-image-name:
+    description: |
+      GHCR image name (e.g. "atlan-mysql-app"). The image is tagged
+      ghcr.io/atlanhq/<app-image-name>:sdr-test-<short-sha>.
+    required: true
+  application-sdk-ref:
+    description: |
+      Already-resolved application-sdk ref to repin before the build — the
+      RUNTIME side. Empty (default) builds from the connector's OWN
+      pinned/locked SDK, which is the usual case (the app is tested as
+      shipped).
+
+      This takes a resolved value rather than the runtime/harness/shared
+      triple: `sdr-e2e` owns that fallback because it also needs the harness
+      side after setup-deps, and duplicating the precedence here would give
+      the two sides two places to disagree.
+    required: false
+    default: ""
+  base-image-ref:
+    description: |
+      Optional runtime base image to build FROM, injected as the BASE_IMAGE
+      build-arg. Set by apps-sdk cross-repo dispatch to a freshly-built PR
+      base image so Dockerfile / base-image / daprd changes in the SDK PR are
+      exercised through a real connector build. Empty (the default) leaves
+      the connector Dockerfile's own default FROM untouched.
+    required: false
+    default: ""
+  git-token:
+    description: |
+      Optional GitHub token forwarded to the buildx build as the `git_token`
+      build secret, for connectors whose pyproject.toml declares git+ssh /
+      git+https dependencies on other private atlanhq repos. Empty (default)
+      appends no `--secret` flag, so PyPI-only connectors are unaffected.
+    required: false
+    default: ""
+  ghcr-token:
+    description: |
+      Optional token for the GHCR login. Some connector packages are
+      PAT-published and are NOT writable by the default `GITHUB_TOKEN`, so a
+      plain-token push 403s for those apps. Pass the org-scoped PAT
+      (typically `secrets.ORG_PAT_GITHUB`) to push with the package-owning
+      identity. Empty (default) falls back to `github.token`.
+    required: false
+    default: ""
+  expected-python-version:
+    description: |
+      The Python major.minor the built image is expected to ship — the
+      connector Dockerfile's golden base tag. Asserted against the built
+      image's interpreter so we never validate on one interpreter and ship on
+      another (the CNCT-85 failure mode). Empty disables the assertion; only
+      do that for a caller that has no interpreter expectation at all.
+    required: false
+    default: "3.13"
+
+outputs:
+  image:
+    description: The full image reference built and pushed for this run.
+    value: ${{ steps.build.outputs.image }}
+
+runs:
+  using: composite
+  steps:
+    - name: Log in to GHCR
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        # Prefer the caller-supplied org PAT (writes PAT-published connector
+        # packages); fall back to github.token when unset.
+        password: ${{ inputs.ghcr-token != '' && inputs.ghcr-token || github.token }}
+
+    # Cross-repo dispatch from apps-sdk PRs hands us a specific SDK ref;
+    # rewrite the [tool.uv.sources] entry so the Docker build's COPY +
+    # uv sync resolves atlan-application-sdk to that ref.
+    #
+    # The Docker build runs `uv sync --locked`, which requires uv.lock and
+    # pyproject.toml to be consistent. The repin only modifies
+    # pyproject.toml, so install uv inline and `uv lock` before the build to
+    # keep them aligned. setup-uv isn't used because a composite can't
+    # invoke another action under a conditional `uses:` — the curl install is
+    # the simplest fallback that doesn't pin a runner image.
+    #
+    # The script is shared from the sibling action rather than copied a third
+    # time. Reaching across action dirs with `../` is the established pattern
+    # here (see connector-unit-tests/action.yaml, which reads
+    # connector-integration-tests' copy the same way). Note there are already
+    # two byte-identical copies of this script in the repo; consolidating them
+    # is worth doing, but not as a side effect of this change.
+    - name: Pin application-sdk to dispatched ref (pre-build)
+      if: inputs.application-sdk-ref != ''
+      shell: bash
+      env:
+        SDK_REF: ${{ inputs.application-sdk-ref }}
+      run: |
+        "${{ github.action_path }}/../sdr-e2e/repin-application-sdk.sh"
+        if ! command -v uv >/dev/null 2>&1; then
+          echo "Installing uv for the pre-build re-lock..."
+          curl -LsSf https://astral.sh/uv/0.7.3/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        fi
+        uv lock
+
+    # Regenerate app/generated/** (incl. manifest.json — the AE DAG) from
+    # contract/app.pkl BEFORE the image build, so the connector image bakes a
+    # manifest generated from the CURRENT contract + toolkit rather than a
+    # possibly-stale committed one (BLDX-1493). It must precede the buildx
+    # build below that COPYs the tree.
+    #
+    # This matters more than it used to. Heracles re-fetches the manifest from
+    # the tenant-deployed pod at AE submit time and THAT DAG is what runs
+    # (heracles/handler/workflow.go, processAutomationEngineWorkflow) — so the
+    # manifest baked in here is the contract the full-DAG e2e actually
+    # exercises once the image is installed on the tenant, not just a local
+    # seed. See FND-31.
+    #
+    # check-drift is false: uv/ruff aren't installed yet, so generated-Python
+    # formatting is skipped here; the warn-only drift gate lives in the
+    # connector-integration-tests job. Self-skips when no contract/app.pkl.
+    - name: Regenerate contract artifacts (manifest.json) before image build
+      uses: atlanhq/application-sdk/.github/actions/regenerate-contract@main
+      with:
+        application-sdk-ref: ${{ inputs.application-sdk-ref }}
+        check-drift: "false"
+
+    # Buildx is required for the GHA cache backend below.
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+    # `cache-from/cache-to: type=gha` plugs buildx into GitHub Actions'
+    # cache backend so the expensive `uv sync` layer (~2 min on a cold
+    # build) is reused across PR pushes. `mode=max` saves intermediate
+    # stages too, which matters here because the Dockerfile has a
+    # separate dependency-install layer ahead of the source copy.
+    # `scope:` is keyed on the connector so two repos sharing this
+    # action don't collide caches.
+    - name: Build and push PR image
+      id: build
+      shell: bash
+      env:
+        BASE_IMAGE_REF: ${{ inputs.base-image-ref }}
+        # Read by --secret id=git_token,env=GIT_TOKEN below. The env-var
+        # form (vs --secret-file) keeps the token out of the buildx
+        # command line and out of any tmpfile on the runner — buildx
+        # streams it directly into the build context.
+        GIT_TOKEN: ${{ inputs.git-token }}
+      run: |
+        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
+        IMAGE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:sdr-test-${SHORT_SHA}"
+        # When a base-image-ref is supplied (apps-sdk cross-repo dispatch),
+        # build the connector FROM that image via the BASE_IMAGE build-arg
+        # so the SDK PR's rebuilt runtime base is exercised. Append the flag
+        # ONLY when non-empty — passing `BASE_IMAGE=` empty would clobber the
+        # Dockerfile's default FROM and break the non-e2e / merge-queue path.
+        BUILD_ARGS=()
+        if [ -n "${BASE_IMAGE_REF}" ]; then
+          echo "Building connector on dispatched base image: ${BASE_IMAGE_REF}"
+          BUILD_ARGS+=(--build-arg "BASE_IMAGE=${BASE_IMAGE_REF}")
+        fi
+        # When the caller supplies git-token, forward it as the
+        # `git_token` build secret so Dockerfiles that clone private
+        # atlanhq repos during `uv sync` can authenticate. Connectors
+        # with PyPI-only deps don't need this — leaving the input empty
+        # skips the flag entirely so their builds stay unchanged.
+        if [ -n "${GIT_TOKEN}" ]; then
+          echo "Forwarding git-token to docker build as 'git_token' secret"
+          BUILD_ARGS+=(--secret "id=git_token,env=GIT_TOKEN")
+        fi
+        # --push pushes to GHCR; compose pulls from there at run-time
+        # (atlan-configurator wires app_image into the generated
+        # compose file as a pull target). --load would conflict with
+        # --push under the standard buildx driver, and we don't need
+        # the image in the local daemon since compose handles the pull.
+        docker buildx build \
+          --tag "${IMAGE}" \
+          --push \
+          "${BUILD_ARGS[@]}" \
+          --cache-from "type=gha,scope=sdr-${{ inputs.app-name }}" \
+          --cache-to "type=gha,mode=max,scope=sdr-${{ inputs.app-name }}" \
+          .
+        echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+    # The built worker image is what actually runs the connector; its Python is
+    # fixed by the Dockerfile's golden base, not by anything this runner
+    # installs. Assert it matches `expected-python-version` so we never validate
+    # on one interpreter and ship on another — the CNCT-85 failure mode, where a
+    # concurrent-decode segfault surfaced only on the container's Python.
+    # `--entrypoint python` bypasses the app entrypoint; the base interpreter's
+    # major.minor is the golden tag we assert (venv shares it). The comparison
+    # logic lives in the tested script per docs/standards/ci.md (no branching in
+    # inline shell).
+    - name: Assert worker image Python matches expected
+      if: inputs.expected-python-version != ''
+      shell: bash
+      env:
+        IMAGE: ${{ steps.build.outputs.image }}
+        EXPECTED: ${{ inputs.expected-python-version }}
+      run: |
+        ACTUAL=$(docker run --rm --entrypoint python "${IMAGE}" --version)
+        echo "Worker image reports: ${ACTUAL} (expected ${EXPECTED}.x)"
+        python3 "${{ github.action_path }}/../../scripts/container_python_version.py" \
+          check-interpreter --expected "${EXPECTED}" --actual "${ACTUAL}"

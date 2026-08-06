@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,40 @@ import validate_allowlist
 
 
 def _future(days: int) -> str:
-    return (date.today() + timedelta(days=days)).strftime("%Y-%m-%d")
+    """Return an expiry ``days`` from now, on the SAME clock the validator uses.
+
+    UTC, because ``validate_allowlist`` compares against
+    ``datetime.now(UTC).date()``. ``date.today()`` is *local*, and the two
+    disagree for part of every day in any non-UTC zone — during which
+    ``_future(-1)`` lands exactly on the validator's "today", so
+    ``exp_date < today`` is False and the already-expired case silently stops
+    being expired. That failed for real at 00:10 BST (local 06 Aug, UTC still
+    05 Aug).
+
+    Invisible on CI, which runs UTC — which is precisely why it has to be fixed
+    rather than tolerated: it only breaks local runs, so it reads as "the suite
+    is flaky on my machine" instead of as a bug.
+    """
+    return (datetime.now(UTC).date() + timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def _freeze_today(monkeypatch) -> None:
+    """Freeze the validator's UTC clock to the moment the test samples it.
+
+    Both this test and ``validate_allowlist.main()`` call
+    ``datetime.now(UTC).date()``. If UTC midnight rolls over between the two
+    samples, ``_future(0)`` becomes "yesterday" to the validator (and
+    ``_future(-1)`` becomes "today") — a seconds-per-day flake window. Pinning
+    the validator's ``datetime`` to the same instant the test used removes it.
+    """
+    fixed_now = datetime.now(UTC)
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return fixed_now if tz is not None else fixed_now.replace(tzinfo=None)
+
+    monkeypatch.setattr(validate_allowlist, "datetime", _FrozenDateTime)
 
 
 def _entry(**overrides: Any) -> dict[str, Any]:
@@ -93,8 +126,23 @@ def test_valid_fix_pr_passes(tmp_path, monkeypatch):
 
 
 def test_already_expired_fails(tmp_path, monkeypatch):
+    _freeze_today(monkeypatch)
     entry = _entry(expires=_future(-1))
     assert _run({"CVE-2026-11": entry}, tmp_path, monkeypatch) == 1
+
+
+def test_expiring_today_is_still_valid(tmp_path, monkeypatch):
+    """The expiry boundary is exclusive: `expires == today` has not passed yet.
+
+    Pins the edge directly rather than leaving it implied by the day-either-side
+    cases. Without this, an off-by-one in `exp_date < today` — flipping it to
+    `<=` — would still pass the whole suite, and the practical effect is an
+    allowlist entry being rejected a day early, i.e. a CVE gate firing on an
+    entry that is still within policy.
+    """
+    _freeze_today(monkeypatch)
+    entry = _entry(expires=_future(0))
+    assert _run({"CVE-2026-11a": entry}, tmp_path, monkeypatch) == 0
 
 
 def test_empty_allowlist_passes(tmp_path, monkeypatch):
