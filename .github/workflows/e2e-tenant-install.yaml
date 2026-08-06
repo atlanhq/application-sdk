@@ -168,6 +168,33 @@ jobs:
       # expression again just to be renamed — every hop is a hop it can be
       # mishandled on. Those are the OAuth client pair the marketplace publish
       # route authorises on, NOT ATLAN_API_KEY (the harness's API key).
+      # Prove the image exists BEFORE publishing. Otherwise a stale or pruned tag
+      # publishes fine, installs fine, and only surfaces ~2 minutes later as
+      # ImagePullBackOff in the tenant's cluster — with a GM version and release
+      # left behind pointing at an image nobody can pull. That is exactly how one
+      # live run was spent.
+      #
+      # The automatic prepare-tenant path cannot hit this: it builds the image in
+      # the same run. This check exists because THIS workflow accepts an arbitrary
+      # tag from a human.
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB || github.token }}
+
+      - name: Verify the image exists
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          docker manifest inspect "$IMAGE" > /dev/null || {
+            echo "::error::$IMAGE is not pullable from GHCR. Publishing it would create a GM version and release pointing at an image that cannot be pulled, and the failure would surface minutes later as ImagePullBackOff on the tenant. sdr-test-* tags are built by e2e runs and may have been pruned — take a tag from a recent e2e build log, or re-run the app's e2e to produce one."
+            exit 1
+          }
+          echo "$IMAGE is pullable"
+
       #
       # Every dispatch input reaches the shell through env:, never through
       # `${{ }}` inside run:. A workflow_dispatch input is attacker-influenced
