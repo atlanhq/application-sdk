@@ -31,6 +31,25 @@ def _future(days: int) -> str:
     return (datetime.now(UTC).date() + timedelta(days=days)).strftime("%Y-%m-%d")
 
 
+def _freeze_today(monkeypatch) -> None:
+    """Freeze the validator's UTC clock to the moment the test samples it.
+
+    Both this test and ``validate_allowlist.main()`` call
+    ``datetime.now(UTC).date()``. If UTC midnight rolls over between the two
+    samples, ``_future(0)`` becomes "yesterday" to the validator (and
+    ``_future(-1)`` becomes "today") — a seconds-per-day flake window. Pinning
+    the validator's ``datetime`` to the same instant the test used removes it.
+    """
+    fixed_now = datetime.now(UTC)
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return fixed_now if tz is not None else fixed_now.replace(tzinfo=None)
+
+    monkeypatch.setattr(validate_allowlist, "datetime", _FrozenDateTime)
+
+
 def _entry(**overrides: Any) -> dict[str, Any]:
     base = {
         "package": "example-pkg",
@@ -107,6 +126,7 @@ def test_valid_fix_pr_passes(tmp_path, monkeypatch):
 
 
 def test_already_expired_fails(tmp_path, monkeypatch):
+    _freeze_today(monkeypatch)
     entry = _entry(expires=_future(-1))
     assert _run({"CVE-2026-11": entry}, tmp_path, monkeypatch) == 1
 
@@ -120,6 +140,7 @@ def test_expiring_today_is_still_valid(tmp_path, monkeypatch):
     allowlist entry being rejected a day early, i.e. a CVE gate firing on an
     entry that is still within policy.
     """
+    _freeze_today(monkeypatch)
     entry = _entry(expires=_future(0))
     assert _run({"CVE-2026-11a": entry}, tmp_path, monkeypatch) == 0
 
