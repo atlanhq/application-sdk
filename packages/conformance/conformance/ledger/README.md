@@ -1,8 +1,8 @@
 # Integration Lane Ledger
 
-A hand-maintained, citation-backed inventory of which connector workflows are
-actually protected by an integration test — and one number, **IRR**, derived
-from it.
+One number per connector — **IRR** — for how much of the app is actually
+protected by an integration test. Nothing is stored: the whole picture is
+rebuilt from the repo on every run.
 
 ## What problem this solves
 
@@ -46,7 +46,28 @@ This check earned its place immediately — it caught a real bug in the first
 draft of this ledger, where tableau's row cited the whole `tests/e2e/` directory
 and so swept in `sdr/test_tableau_full_dag.py`, a post-publish lane.
 
-## Why an inventory and not runtime tracing
+## Where every input comes from
+
+| Input | Source | Hand-maintained? |
+|---|---|---|
+| product workflows (the denominator) | `@entrypoint` AST scan, or a `run()` override where the app declares none | no |
+| the integration/e2e boundary | `app/generated/**/manifest.json` — a node's `workflow_type` is `<connector>:<entrypoint>` for the app's own work, or a bare name (`PublishWorkflow`) for a system app | no |
+| which workflow a suite covers | `Scenario.entrypoint`, a declared field (see rule T020) | one line per suite |
+| how deeply it validates | `expected_data` → golden, `schema_base_path` → schema-validated. Both are fields the SDK runner acts on, so the depth is what the runner *did*, not a guess about assertions | no |
+| cadence | GitHub Actions API | no |
+
+`app_name` is deliberately **not** used to find the boundary: tableau routes its
+own process/lineage/post-publish nodes through `automation-engine`, and
+salesforce ships an unresolved `{app_name}` placeholder. `workflow_type` is the
+reliable discriminator.
+
+## Why derived and not stored
+
+Apps evolve. A stored checklist goes stale the moment someone adds an
+entrypoint, and no amount of review discipline fixes that — the file and the
+code drift independently. Deriving on every run makes drift structurally
+impossible: add an entrypoint and it appears in the denominator, uncovered,
+immediately.
 
 Three instrumentation designs were attempted and discarded before this one.
 Each failed the same way: an automated evidence source that only sees part of
@@ -72,52 +93,62 @@ re-audit.
 ## The number
 
 ```
-        workflows with a lane at realism ∈ {L,R} AND depth ∈ {G,V} AND cadence = A
-IRR  =  ─────────────────────────────────────────────────────────────────────────
-                              total product workflows
+        workflows with a declared integration lane that validates the app's own
+        transformed output, on an automatic green CI job
+IRR  =  ──────────────────────────────────────────────────────────────────────
+                          the app's product workflows
 ```
 
-Denominator = the app's product-workflow declarations, minus ledger-listed
-exclusions (each needing a reason and a ticket).
+Three ways to miss, each reported per workflow:
 
-The ledger is TOML rather than YAML: the conformance package deliberately ships
-only pydantic, jsonschema and jinja2, and `tomllib` is stdlib on the supported
-Python floor.
+- **nothing declares it** — no suite says it covers this workflow
+- **declared but unvalidated** — the lane starts the workflow and never checks
+  what came out (`schema_base_path` / `expected_data` unset)
+- **not automatic, or red** — the job exists but only runs behind a label, a
+  manual dispatch, or is failing
 
-## What stops it rotting
+A suite naming a workflow the app no longer defines is surfaced separately as an
+orphan declaration — that is a real defect, not a scoring detail.
 
-Two of the three axes are machine-verified; only `depth` is trusted from the
-ledger.
+## What it costs a connector
 
-| Axis | Source of truth |
-|---|---|
-| denominator | AST scan of the repo's product-workflow declarations (`@entrypoint`, or a `run()` override where the app declares none). Mismatch with the ledger is a **hard failure**, so adding a workflow breaks CI until someone classifies it. |
-| `cadence` | GitHub Actions API, via `evidence.ci_workflow` / `evidence.ci_job`. Writing `A` in the ledger earns nothing if the job does not run on an automatic trigger. |
-| `boundary` | Cross-checked against the cited test's own source: a lane cannot claim to stop at the handoff while requiring tenant credentials. |
-| `realism`, `depth` | Human, citation-backed, reviewed like code. Audited by the quarterly mutation sample. |
+One line per suite:
+
+```python
+class TestCrawlerScenarios(BaseIntegrationTest):
+    entrypoint = "crawler"
+```
+
+or per scenario, when a suite spans several workflows:
+
+```python
+Scenario(name="miner run", api="workflow", entrypoint="miner",
+         schema_base_path="tests/integration/schema/miner/transformed", ...)
+```
+
+Until that lands a repo scores 0, and the report says exactly which workflows
+are unaccounted for. That is the honest reading — an undeclared suite is not
+attributable to any workflow, so nothing about it is verifiable.
 
 Gated lanes score zero rather than half credit. A lane that does not run does
-not protect anything, and partial credit for dormant lanes reintroduces exactly
-the zombie-credit failure mode this design exists to avoid. This is a
-deliberate, reversible judgment call.
+not protect anything, and partial credit for dormant lanes reintroduces the
+zombie-credit failure mode this design exists to avoid. Deliberate, reversible.
 
-## Current state (surveyed 2026-08-05/06)
+## Current state
 
-| Connector | IRR |
-|---|---|
-| bigquery | 3/3 |
-| monte-carlo | 1/1 |
-| snowflake | 0/2 |
-| mssql | 0/1 |
-| databricks | 0/2 |
-| dbt | 0/1 |
-| tableau | 0/2 |
-| powerbi | 0/2 |
-| fivetran | 0/1 |
-| salesforce | 0/1 |
-| **fleet** | **4/16 ≈ 25%** |
+Every connector scores **0** today, because none declares a workflow entrypoint
+in its tests — the field only just exists. The denominators are real and derived:
+bigquery 4 workflows, tableau 4, snowflake 2, databricks 5, salesforce 1,
+mssql 1, monte-carlo 1.
 
-The finding that matters more than the number: **the fleet's best validation
+`tests/fixtures/surveyed-lanes-2026-08.toml` holds a hand-classification of the
+same ten repos, done by reading them. It is a **verification fixture** — scoring
+never reads it — and it exists so the deriver can be checked against human
+judgment.
+
+A hand survey of the same repos found the lanes that *would* qualify once
+declared: bigquery 3/3 and monte-carlo 1/1, everything else 0. The finding that
+matters more than the number: **the fleet's best validation
 machinery is built and switched off.** Snowflake's schema suites, mssql's
 Pandera lanes, databricks' Pandera suites and tableau's 14 live suites all
 exist and all sit behind labels, env flags, or no CI job at all. The cheapest

@@ -1,34 +1,29 @@
-"""Compute IRR (Integration Readiness Ratio) from the Integration Lane Ledger.
+"""Shared primitives for integration-coverage scoring.
 
-    IRR = workflows with a lane at realism in {L,R} AND depth in {G,V}
-          AND a *verified* automatic, green cadence
-          -----------------------------------------------------------
-          total product workflows
+Scoring itself lives in :mod:`.report`, built on facts derived in
+:mod:`.derive`. What remains here is what both need:
 
-Two of the three axes are re-derived rather than trusted:
+``WorkflowRun`` / ``ActionsClient``
+    Protocols for the CI-cadence lookup, so scoring stays pure and testable
+    offline while the ``gh``-backed implementation lives in the CLI.
 
-* the **denominator** is AST-scanned from the repo's ``@entrypoint``
-  declarations, so adding a workflow fails the ledger until someone classifies
-  it;
-* **cadence** comes from the GitHub Actions API, so writing ``cadence: A`` in
-  the ledger earns nothing if the job does not actually run on an automatic
-  trigger;
-* the **boundary** claim is checked against the cited test, so a lane cannot be
-  labelled ``transformed`` while demonstrably verifying against a live tenant.
+``scan_entrypoints``
+    The product-workflow scan, kept as a standalone entry point for callers
+    that want the denominator without a full report.
 
-Only ``realism`` and ``depth`` are trusted from the ledger. They are
-citation-backed, reviewed like code, and audited by the quarterly mutation
-sample.
+``detect_tenant_access``
+    A cross-check on the integration/e2e line. The boundary itself is derived
+    from the generated AE manifest, but a suite can still overreach: a lane
+    that verifies past the handoff needs Atlan tenant credentials to do so, and
+    every full-DAG suite in the fleet gates on exactly these markers. Useful
+    for flagging a "integration" lane that is really an e2e one.
 """
 
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Protocol
-
-from conformance.ledger.schema import Boundary, ConnectorLedger, Ledger, Workflow
+from typing import Protocol
 
 #: Workflow triggers that count as automatic.
 AUTOMATIC_TRIGGERS = frozenset({"push", "pull_request", "schedule"})
@@ -101,28 +96,6 @@ class BoundaryMismatchError(RuntimeError):
         self.workflow = workflow
         self.path = path
         self.marker = marker
-
-
-class LedgerDriftError(RuntimeError):
-    """The ledger no longer matches the code it claims to describe."""
-
-    def __init__(self, connector: str, missing: set[str], stale: set[str]) -> None:
-        parts = [f"ledger drift in {connector}:"]
-        if missing:
-            parts.append(
-                f"  {len(missing)} entrypoint(s) declared in code but absent from "
-                f"the ledger: {', '.join(sorted(missing))}"
-            )
-        if stale:
-            parts.append(
-                f"  {len(stale)} ledger row(s) with no matching entrypoint in code: "
-                f"{', '.join(sorted(stale))}"
-            )
-        parts.append("  Classify or exclude each, then re-run.")
-        super().__init__("\n".join(parts))
-        self.connector = connector
-        self.missing = missing
-        self.stale = stale
 
 
 def scan_entrypoints(repo_path: Path) -> set[str]:
@@ -218,160 +191,3 @@ def detect_tenant_access(repo_path: Path, test_ref: str) -> tuple[str, str] | No
             if marker in text:
                 return (str(path.relative_to(repo_path)), marker)
     return None
-
-
-@dataclass
-class WorkflowResult:
-    """Per-workflow verdict, with the reason it did or did not qualify."""
-
-    id: str
-    covered: bool
-    reason: str
-
-
-@dataclass
-class ConnectorResult:
-    """Per-connector IRR plus the per-workflow detail behind it."""
-
-    name: str
-    workflows: list[WorkflowResult] = field(default_factory=list)
-
-    @property
-    def covered(self) -> int:
-        return sum(1 for w in self.workflows if w.covered)
-
-    @property
-    def total(self) -> int:
-        return len(self.workflows)
-
-    @property
-    def irr(self) -> float:
-        return (self.covered / self.total) if self.total else 0.0
-
-
-@dataclass
-class FleetResult:
-    """Fleet roll-up. IRR is workflow-weighted, not a mean of per-app ratios."""
-
-    connectors: list[ConnectorResult] = field(default_factory=list)
-
-    @property
-    def covered(self) -> int:
-        return sum(c.covered for c in self.connectors)
-
-    @property
-    def total(self) -> int:
-        return sum(c.total for c in self.connectors)
-
-    @property
-    def irr(self) -> float:
-        return (self.covered / self.total) if self.total else 0.0
-
-
-def evaluate_connector(
-    entry: ConnectorLedger,
-    repo_path: Path | None,
-    actions: ActionsClient | None,
-) -> ConnectorResult:
-    """Score one connector, verifying denominator and cadence where possible."""
-    if repo_path is not None:
-        declared = scan_entrypoints(repo_path)
-        if declared:
-            accounted = entry.declared_ids
-            missing = declared - accounted
-            stale = {w.id for w in entry.workflows} - declared
-            if missing or stale:
-                raise LedgerDriftError(entry.name, missing, stale)
-
-    result = ConnectorResult(name=entry.name)
-    for wf in entry.workflows:
-        if repo_path is not None and wf.lane.boundary is Boundary.TRANSFORMED:
-            _assert_boundary(entry.name, wf, repo_path)
-        result.workflows.append(_evaluate_workflow(entry.name, wf, actions))
-    return result
-
-
-def _assert_boundary(connector: str, wf: Workflow, repo_path: Path) -> None:
-    """Fail when a lane claims to stop at the handoff but demonstrably does not."""
-    test_ref = wf.lane.evidence.test
-    if not test_ref:
-        return
-    hit = detect_tenant_access(repo_path, test_ref)
-    if hit is not None:
-        raise BoundaryMismatchError(connector, wf.id, hit[0], hit[1])
-
-
-def _evaluate_workflow(
-    connector: str, wf: Workflow, actions: ActionsClient | None
-) -> WorkflowResult:
-    lane = wf.lane
-
-    if lane.boundary is not Boundary.TRANSFORMED:
-        return WorkflowResult(
-            wf.id,
-            False,
-            f"lane is boundary={lane.boundary.value}; it verifies past the "
-            f"handoff artifact, so it is an e2e lane",
-        )
-
-    if not lane.qualifies_on_declared_axes:
-        return WorkflowResult(
-            wf.id,
-            False,
-            f"lane is realism={lane.realism.value} depth={lane.depth.value}; "
-            f"needs realism in (L,R) and depth in (G,V)",
-        )
-
-    workflow_file = lane.evidence.ci_workflow
-    if not workflow_file:
-        return WorkflowResult(wf.id, False, "lane is not wired into any CI workflow")
-
-    if actions is None:
-        # No client injected (offline/dry-run): fall back to the declared
-        # cadence and say so, rather than silently crediting.
-        declared_auto = lane.cadence.value == "A"
-        return WorkflowResult(
-            wf.id,
-            declared_auto,
-            "declared cadence used; not verified against GitHub Actions",
-        )
-
-    run = actions.latest_run(connector, workflow_file, lane.evidence.ci_job)
-    if run is None:
-        return WorkflowResult(wf.id, False, f"no runs found for {workflow_file}")
-    if run.trigger not in AUTOMATIC_TRIGGERS:
-        return WorkflowResult(
-            wf.id,
-            False,
-            f"latest run triggered by {run.trigger!r}, not an automatic trigger "
-            f"({lane.evidence.gate or 'gated'})",
-        )
-    if run.conclusion != "success":
-        return WorkflowResult(
-            wf.id, False, f"latest automatic run concluded {run.conclusion!r}"
-        )
-
-    return WorkflowResult(wf.id, True, f"verified green on {run.trigger}")
-
-
-def evaluate(
-    ledger: Ledger,
-    repo_root: Path | None = None,
-    actions: ActionsClient | None = None,
-    only: Iterable[str] | None = None,
-) -> FleetResult:
-    """Score the fleet.
-
-    ``repo_root`` is the directory holding the connector checkouts; when it is
-    ``None`` the denominator is taken from the ledger without verification.
-    """
-    wanted = set(only) if only else None
-    fleet = FleetResult()
-    for name, entry in ledger.connectors.items():
-        if wanted and name not in wanted:
-            continue
-        repo_path = (repo_root / name) if repo_root else None
-        if repo_path is not None and not repo_path.is_dir():
-            repo_path = None
-        fleet.connectors.append(evaluate_connector(entry, repo_path, actions))
-    return fleet

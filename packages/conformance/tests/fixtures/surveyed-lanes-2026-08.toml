@@ -1,4 +1,14 @@
-# Integration Lane Ledger
+# VERIFICATION FIXTURE - not an input to scoring.
+#
+# A hand-classification of ten connectors, surveyed 2026-08-05/06 against their
+# main branches. It exists to check the deriver against human judgment: the
+# workflow lists and integration/e2e boundaries here were worked out by reading
+# the repos, and conformance/ledger/derive.py must reproduce them from generated
+# artifacts alone.
+#
+# Do not add rows to make a connector score better - scoring never reads this
+# file. If the deriver disagrees with a row here, one of the two is wrong and
+# that is the finding.
 #
 # One row per PRODUCT WORKFLOW per connector, recording the best integration
 # lane that exercises it. See README.md for the rationale and for why this is

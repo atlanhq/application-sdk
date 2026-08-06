@@ -228,4 +228,8 @@ class Ledger:
         )
 
 
-DEFAULT_LEDGER_PATH = Path(__file__).parent / "integration-ledger.toml"
+#: The surveyed hand-classification, kept as a verification fixture for the
+#: deriver. Scoring never reads it - see ``derive.py``.
+SURVEY_FIXTURE_PATH = (
+    Path(__file__).parents[2] / "tests" / "fixtures" / "surveyed-lanes-2026-08.toml"
+)
