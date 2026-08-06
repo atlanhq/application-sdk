@@ -1143,8 +1143,11 @@ jobs:
           #
           # Apps keep `FROM registry.atlan.com/public/app-runtime-base:3` in their
           # Dockerfiles -- BuildKit matches that reference (after ARG expansion)
-          # and substitutes the source below. Remove this once the Dockerfiles
-          # have been migrated to reference ghcr.io directly.
+          # and substitutes the source below. That split is deliberate: the
+          # Dockerfile reference stays the public interface partners build
+          # against, while retrieval is an internal detail we can repoint. When
+          # the public base moves off Harbor, update the left-hand side here --
+          # a rate-limited public registry makes this more necessary, not less.
           build-contexts: |
             registry.atlan.com/public/app-runtime-base:3=docker-image://ghcr.io/atlanhq/app-runtime-base:3
           tags: ${{ needs.prepare.outputs.ghcr_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.image_tag }}-${{ matrix.arch }}
