@@ -226,6 +226,85 @@ def _installed_version(client: TenantClient, app_id: str) -> str:
     return _extract_version(response.data())
 
 
+def _app_info(client: TenantClient, app_id: str) -> dict[str, object]:
+    """Return the app's info payload, or ``{}`` when it cannot be read."""
+    response = client.get(APP_INFO_PATH.format(app_id=path_segment(app_id)))
+    return response.data() if response.ok else {}
+
+
+def _registered_source_repo(info: dict[str, object]) -> str:
+    """Return the repo GM has on file for this app, or "" if it has none.
+
+    GM's version-create guard is exactly (``global-marketplace``,
+    ``core/app/service.py``)::
+
+        if repo:                          # sets, or UPDATES, app.source_repo
+            ...
+        elif app.source_repo:             # no repo sent, but app is CI/CD-managed
+            raise "This app's versions are managed by CI/CD..."
+
+    So an app that has a ``source_repo`` rejects any version-create that omits
+    ``repo``. Reading it back and echoing it is what makes this work without
+    asking a caller to know it: the value matches, so GM takes neither the "set"
+    nor the "update" branch.
+    """
+    for key in ("source_repo", "sourceRepo"):
+        value = info.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    for nest in ("app", "catalog", "data"):
+        inner = info.get(nest)
+        if isinstance(inner, dict):
+            found = _registered_source_repo(inner)
+            if found:
+                return found
+    return ""
+
+
+def _normalize_repo_url(value: str) -> str:
+    """Canonicalize a repo URL for *comparison only* — never for sending.
+
+    GitHub repo URLs are case-insensitive and may carry a trailing ``/`` or
+    ``.git``. Two spellings of the same repo must not trip the mismatch guard
+    (the GM-registered value is always what gets sent, so normalization here
+    only decides whether to refuse, never what to publish).
+    """
+    normalized = value.strip().lower().rstrip("/")
+    if normalized.endswith(".git"):
+        normalized = normalized[: -len(".git")]
+    return normalized.rstrip("/")
+
+
+def _resolve_repo_url(registered: str, supplied: str) -> str:
+    """Decide which ``repo`` to send, refusing to rewrite an app's provenance.
+
+    GM does not merely validate ``repo`` — on a mismatch within the same GitHub
+    org it **updates** ``app.source_repo`` to whatever was sent. So passing the
+    repo of whichever CI happens to be running (rather than the app's own) would
+    silently repoint the app's provenance and break the real CI/CD publish
+    gating. That is a destructive side effect of a call that looks read-ish, so a
+    disagreement is an error here rather than something to resolve by guessing.
+    """
+    registered, supplied = registered.strip(), supplied.strip()
+    if (
+        registered
+        and supplied
+        and _normalize_repo_url(registered) != _normalize_repo_url(supplied)
+    ):
+        raise TenantAppError(
+            f"refusing to publish: GM has this app's source_repo as {registered!r} "
+            f"but --repo-url is {supplied!r}. GM would UPDATE the app's "
+            "source_repo to the supplied value (it only blocks cross-org "
+            "changes), silently repointing the app's provenance and breaking its "
+            "real CI/CD publish gating. Pass the app's own repo, or omit "
+            "--repo-url and let the registered value be echoed back."
+        )
+    # Send the registered value when present — byte-for-byte what GM has on
+    # file — so the publish can neither trip the CI/CD guard nor rewrite
+    # provenance. Normalization above only decided *whether* to refuse.
+    return registered or supplied
+
+
 def _extract_version(payload: dict[str, object]) -> str:
     """Pull a version string out of an info/install payload."""
     for key in _VERSION_KEYS:
@@ -256,6 +335,16 @@ def _render_body(body: object) -> str:
     if len(rendered) > _ERROR_BODY_CHARS:
         rendered = f"{rendered[:_ERROR_BODY_CHARS]}…(truncated)"
     return rendered
+
+
+def _looks_like_cicd_managed(response: Response) -> bool:
+    """True when a failed publish is GM's CI/CD-managed version guard.
+
+    Matched on the rendered body: Heracles wraps GM's 409 inside its own 400, so
+    the status alone does not identify it.
+    """
+    rendered = json.dumps(response.body).lower() if response.body else ""
+    return "managed by ci/cd" in rendered or "cicd_managed" in rendered
 
 
 def _looks_like_scan_gate(response: Response) -> bool:
@@ -325,6 +414,19 @@ def _publish(client: TenantClient, request: PublishRequest) -> tuple[str, str]:
                 " Publish authorises on the OAuth client pair "
                 "(E2E_OAUTH_CLIENT_ID/SECRET), not on ATLAN_API_KEY — check that "
                 f"pair. Token realm roles: {client.token_roles() or 'none visible'}."
+            )
+        elif _looks_like_cicd_managed(response):
+            # GM rejects a version-create that omits `repo` when the app has a
+            # source_repo on file. Reaching here means the echo-back above found
+            # nothing, so say which read failed rather than restating GM's
+            # message, which points at atlan.yaml and is misleading here.
+            hint = (
+                " GM refuses a version-create without `repo` for an app that has "
+                "a source_repo on file. This normally self-resolves by echoing "
+                "GM's registered source_repo back, so reaching this means "
+                "/marketplace/apps/<id>/info did not expose it — check that read, "
+                "or pass --repo-url with the APP'S OWN repo (not the repo whose "
+                "CI is running: GM would repoint the app's provenance to it)."
             )
         raise TenantAppError(
             f"marketplace publish failed with HTTP {response.status}.{hint}\n"
@@ -438,7 +540,12 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     base_url = validate_tenant_base_url(args.base_url)
     publish_client, read_client = _clients(base_url)
 
-    current = _installed_version(read_client, app_id)
+    # One info read serves two purposes: the installed version (to converge on)
+    # and the repo GM has on file (which the version-create needs echoed back).
+    info = _app_info(read_client, app_id)
+    if not info:
+        print(f"::notice::app info unreadable for {app_id} — treating as not installed")
+    current = _extract_version(info)
     if current and current == args.version:
         print(f"tenant already runs {app_id} at {args.version} — nothing to do")
         return InstallOutcome(
@@ -449,12 +556,20 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     else:
         print(f"{app_id} is not installed on this tenant; installing {args.version}")
 
+    # Echo GM's own source_repo back on the version-create. Omitting `repo` is
+    # rejected outright for any app that has one ("versions are managed by
+    # CI/CD"), and sending a *different* one makes GM rewrite the app's
+    # provenance — so the registered value is the only safe thing to send.
+    repo_url = _resolve_repo_url(_registered_source_repo(info), args.repo_url)
+    if repo_url:
+        print(f"publishing with repo={repo_url}")
+
     request = PublishRequest(
         app_id=app_id,
         image=args.image,
         version=args.version,
         branch=args.branch,
-        repo_url=args.repo_url,
+        repo_url=repo_url,
         # The whole registration is scoped to this one tenant, so a per-PR build
         # can never become visible to a real one.
         allowed_tenants=(args.tenant,),

@@ -517,6 +517,180 @@ def test_atlan_yaml_without_an_app_id_fails_loudly(
         app.resolve_app_id("")
 
 
+# ── GM's CI/CD-managed version guard ─────────────────────────────────────────
+# GM (core/app/service.py) rejects a version-create that omits `repo` when the app
+# has a source_repo on file — every first-party app. And on a *mismatched* repo it
+# UPDATES app.source_repo rather than rejecting, so sending the wrong one silently
+# repoints the app's provenance. Echoing GM's own value back avoids both.
+
+
+@pytest.mark.parametrize(
+    "info, expected",
+    [
+        (
+            {"source_repo": "https://github.com/atlanhq/atlan-openapi-app"},
+            "https://github.com/atlanhq/atlan-openapi-app",
+        ),
+        (
+            {"sourceRepo": "https://github.com/atlanhq/x"},
+            "https://github.com/atlanhq/x",
+        ),
+        (
+            {"app": {"source_repo": "https://github.com/atlanhq/y"}},
+            "https://github.com/atlanhq/y",
+        ),
+        (
+            {"data": {"app": {"source_repo": "https://github.com/atlanhq/z"}}},
+            "https://github.com/atlanhq/z",
+        ),
+        ({}, ""),
+        ({"source_repo": "  "}, ""),
+        ({"source_repo": 7}, ""),
+    ],
+)
+def test_registered_source_repo_extraction(
+    info: dict[str, object], expected: str
+) -> None:
+    assert app._registered_source_repo(info) == expected
+
+
+def test_registered_repo_is_echoed_back_on_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The publish body must carry the repo GM already has on file.
+
+    Without it GM returns "This app's versions are managed by CI/CD" — the actual
+    failure observed on the first live run.
+    """
+    repo = "https://github.com/atlanhq/atlan-openapi-app"
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({"source_repo": repo})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+        ),
+    )
+    app.install(_install_args(repo_url=""))
+    assert transport.body_for("/marketplace/publish")["repo"] == repo
+
+
+@pytest.mark.parametrize(
+    "supplied",
+    [
+        # Same repo, different spelling: case, trailing slash, .git suffix.
+        # These must NOT trip the mismatch guard — GitHub treats them as
+        # identical, and GM's registered value is still what gets sent.
+        "HTTPS://GITHUB.COM/AtlanHQ/Atlan-OpenAPI-App",
+        "https://github.com/atlanhq/atlan-openapi-app/",
+        "https://github.com/atlanhq/atlan-openapi-app.git",
+        "https://github.com/atlanhq/atlan-openapi-app/.git",
+    ],
+)
+def test_equivalent_repo_spelling_is_not_a_mismatch(
+    monkeypatch: pytest.MonkeyPatch, supplied: str
+) -> None:
+    registered = "https://github.com/atlanhq/atlan-openapi-app"
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({"source_repo": registered})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+        ),
+    )
+    app.install(_install_args(repo_url=supplied))
+    # The registered value is sent back byte-for-byte, not the supplied spelling.
+    assert transport.body_for("/marketplace/publish")["repo"] == registered
+
+
+def test_mismatched_repo_is_refused_rather_than_repointing_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # GM only blocks CROSS-ORG source_repo changes; a same-org mismatch is
+    # silently applied. Sending the running repo instead of the app's would
+    # repoint the app and break its real CI/CD gating, so this must not proceed.
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute(
+                    "GET",
+                    "/info",
+                    _ok(
+                        {"source_repo": "https://github.com/atlanhq/atlan-openapi-app"}
+                    ),
+                )
+            ]
+        ),
+    )
+    with pytest.raises(app.TenantAppError, match="source_repo"):
+        app.install(
+            _install_args(repo_url="https://github.com/atlanhq/application-sdk")
+        )
+
+
+def test_supplied_repo_used_when_gm_has_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An app with no source_repo is not CI/CD-managed; GM's `if repo:` branch then
+    # SETS it, which is the intended first-registration path.
+    supplied = "https://github.com/atlanhq/atlan-openapi-app"
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+        ),
+    )
+    app.install(_install_args(repo_url=supplied))
+    assert transport.body_for("/marketplace/publish")["repo"] == supplied
+
+
+def test_cicd_managed_rejection_is_recognised_and_explained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    detail = (
+        "GM returned 409 creating version: This app's versions are managed by "
+        "CI/CD. Edit atlan.yaml in the app's repo and merge it."
+    )
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({})),
+                StubRoute(
+                    "POST",
+                    "/marketplace/publish",
+                    Response(status=400, body={"detail": detail}),
+                ),
+            ]
+        ),
+    )
+    with pytest.raises(app.TenantAppError, match="source_repo on file"):
+        app.install(_install_args(repo_url=""))
+
+
 # ── Version extraction across LM shapes ──────────────────────────────────────
 
 
