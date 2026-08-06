@@ -969,6 +969,14 @@ jobs:
             --entrypoints "$ENTRYPOINTS" \
             --release-model "$RELEASE_MODEL" \
             --created-by "$CREATED_BY"
+        # --install-retry-seconds is left at its default (600). A freshly
+        # published release is not immediately installable: LM resolves the
+        # install against its tenant-catalog snapshot, which excludes a release
+        # while it is scan_pending and picks it up on the next scheduled sync
+        # (~5 min). Worst case here is therefore ~10 min of install retry plus
+        # ~10 min of deployment polling — keep this job's timeout-minutes above
+        # the sum of the two, or a slow sync reads as a job timeout instead of
+        # the actionable error the script would otherwise raise.
 
       - name: Summarise
         if: always()

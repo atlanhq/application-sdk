@@ -51,11 +51,16 @@ would red every leg of an unrelated PR, and release is gated separately. So the
 default here is ``--scan-wait-seconds 0`` — install immediately, report whatever
 the scan status happens to be.
 
-Whether GM *accepts* an install of a still-``scan_pending`` release is an open
-question at the time of writing (FND-31 spike (b)); the first live run of this
-script answers it. If GM rejects it, :func:`_looks_like_scan_gate` recognises
-the rejection and the error names the fix — raise ``--scan-wait-seconds`` — so
-the failure is self-explaining rather than an opaque 4xx.
+Answered empirically (FND-31 spike (b)), and not in the shape expected: GM does
+not refuse the install. The constraint is one layer down — **LM cannot see the
+release yet**. LM resolves an install against its own tenant-catalog snapshot,
+which excludes a release while it is ``scan_pending`` and only picks it up on the
+next scheduled sync (~5 min). A run that read ``active`` straight from GM still
+had its install miss, so waiting on GM's release status is not sufficient.
+
+Hence ``--install-retry-seconds`` (default 600): the install itself is retried
+while LM catches up. ``--scan-wait-seconds`` stays at 0 — waiting on the scan
+would not have helped, and a base-image CVE must not red an unrelated PR.
 """
 
 from __future__ import annotations
@@ -95,11 +100,37 @@ _SCAN_FAILED = "scan_failed"
 
 _DEPLOY_POLL_SECONDS = 10
 _SCAN_POLL_SECONDS = 10
+#: Gap between install retries while LM's catalog snapshot catches up.
+_INSTALL_RETRY_POLL_SECONDS = 20
 
 #: Keys an install/info response may carry the installed version under. LM has
 #: not committed to one name across versions, so check the plausible set rather
 #: than hard-coding a guess that silently reads None and compares equal to None.
-_VERSION_KEYS = ("version", "installed_version", "app_version", "current_version")
+#: ``version_text`` first: that is the field LM actually populates. Its
+#: ``/apps/{id}/info`` returns ``{app_id, catalog, installed}`` where ``installed``
+#: is an ``InstalledApp``
+#: (``atlan-local-marketplace-app``, ``tenant_apps_manager/models/service.py``)::
+#:
+#:     app_id, version_id, version_text, installed_at, last_modified_on,
+#:     deployment_name
+#:
+#: The rest are kept as tolerated aliases rather than removed — LM has not
+#: committed to this shape across versions, and reading the wrong key returns ""
+#: which is indistinguishable from "not installed", so a silent miss here reads as
+#: a successful no-op instead of a broken check. Confirmed against the source
+#: rather than guessed at: the original guess-list matched none of these fields,
+#: so the version read never worked.
+_VERSION_KEYS = (
+    "version_text",
+    "version",
+    "installed_version",
+    "app_version",
+    "current_version",
+)
+
+#: Nests to search for the installed-version payload. ``installed`` is LM's real
+#: envelope; the others are tolerated aliases.
+_VERSION_NESTS = ("installed", "install", "installation", "deployment", "data")
 
 
 class TenantAppError(RuntimeError):
@@ -232,7 +263,7 @@ def _app_info(client: TenantClient, app_id: str) -> dict[str, object]:
     return response.data() if response.ok else {}
 
 
-def _registered_source_repo(info: dict[str, object]) -> str:
+def _registered_source_repo(info: dict[str, object], _depth: int = 0) -> str:
     """Return the repo GM has on file for this app, or "" if it has none.
 
     GM's version-create guard is exactly (``global-marketplace``,
@@ -244,10 +275,19 @@ def _registered_source_repo(info: dict[str, object]) -> str:
             raise "This app's versions are managed by CI/CD..."
 
     So an app that has a ``source_repo`` rejects any version-create that omits
-    ``repo``. Reading it back and echoing it is what makes this work without
-    asking a caller to know it: the value matches, so GM takes neither the "set"
-    nor the "update" branch.
+    ``repo``. Echoing GM's own value back would take neither the "set" nor the
+    "update" branch — but **LM does not expose it**, so this almost always returns
+    "" in practice and the caller has to supply the repo instead.
+
+    Kept anyway, for two reasons: it costs one dict walk on a payload already
+    fetched, and if LM ever surfaces the field the mismatch guard in
+    :func:`_resolve_repo_url` starts catching a wrong ``--repo-url`` instead of
+    merely warning about it. Verified against LM's router: ``/apps/{id}/info``
+    returns ``{app_id, catalog, installed}`` and neither sub-object carries
+    ``source_repo`` today.
     """
+    if _depth >= _WALK_MAX_DEPTH:
+        return ""
     for key in ("source_repo", "sourceRepo"):
         value = info.get(key)
         if isinstance(value, str) and value.strip():
@@ -255,7 +295,7 @@ def _registered_source_repo(info: dict[str, object]) -> str:
     for nest in ("app", "catalog", "data"):
         inner = info.get(nest)
         if isinstance(inner, dict):
-            found = _registered_source_repo(inner)
+            found = _registered_source_repo(inner, _depth + 1)
             if found:
                 return found
     return ""
@@ -299,25 +339,89 @@ def _resolve_repo_url(registered: str, supplied: str) -> str:
             "real CI/CD publish gating. Pass the app's own repo, or omit "
             "--repo-url and let the registered value be echoed back."
         )
+    if not registered and not supplied:
+        raise TenantAppError(
+            "cannot publish without a repo: GM refuses a version-create that "
+            "omits `repo` for any app that has a source_repo on file, which is "
+            "every first-party app. LM's /apps/<id>/info does not expose the "
+            "registered value, so it has to be supplied — pass --repo-url with "
+            "the APP'S OWN repo (e.g. https://github.com/atlanhq/atlan-<x>-app).\n"
+            "It must be the app's repo, NOT the repo whose CI is running: GM "
+            "only blocks CROSS-ORG source_repo changes, so a same-org value is "
+            "silently applied and would repoint the app's provenance."
+        )
     # Send the registered value when present — byte-for-byte what GM has on
     # file — so the publish can neither trip the CI/CD guard nor rewrite
     # provenance. Normalization above only decided *whether* to refuse.
     return registered or supplied
 
 
-def _extract_version(payload: dict[str, object]) -> str:
-    """Pull a version string out of an info/install payload."""
+def _repo_from_image(image: str) -> str:
+    """Best-effort guess of the app's GitHub repo from its image reference.
+
+    ``ghcr.io/atlanhq/atlan-openapi-app:tag`` -> ``https://github.com/atlanhq/atlan-openapi-app``.
+
+    A cross-check only, never a source. The convention (GHCR image name == repo
+    name) holds across the connector fleet but is a convention, not a guarantee,
+    so a disagreement fails closed only for ``ghcr.io`` references — the
+    confirmed e2e registry, where the convention does hold — and warns otherwise,
+    so a legitimate exception off GHCR can still publish. It exists because the
+    one destructive mistake available here is passing the wrong repo, and that
+    mistake is usually visible in exactly this comparison.
+    """
+    ref = image.split("@", 1)[0]
+    path = ref.rsplit(":", 1)[0] if ":" in ref.rsplit("/", 1)[-1] else ref
+    parts = [p for p in path.split("/") if p]
+    if len(parts) < 3 or "." not in parts[0]:
+        return ""
+    return f"https://github.com/{parts[1]}/{parts[-1]}"
+
+
+def _is_ghcr_image(image: str) -> bool:
+    """True when the image reference is on GHCR, the confirmed e2e registry.
+
+    Compared on the host with any explicit port stripped (``ghcr.io:443/...`` is
+    still a GHCR reference), and case-insensitively — the fail-closed mismatch
+    guard keys on this, so the one spelling variant that would otherwise slip
+    into the warn-only path must not.
+    """
+    ref = image.split("@", 1)[0]
+    authority = ref.split("/", 1)[0]
+    return authority.rsplit(":", 1)[0].lower() == "ghcr.io"
+
+
+#: How deep the recursive payload walks below may descend. Both LM walks start
+#: at depth 0 and their nest lists are one level long, so real payloads never go
+#: past depth 1; the bound exists so a pathological (deeply nested or, via
+#: ``data``, self-referential) payload degrades to "" — which the callers already
+#: treat as "field absent" — instead of crashing the step with a RecursionError
+#: traceback. The nests walked are exactly the keys a JSON wrapper envelope uses
+#: for self-similar nesting, so an unbounded walk is not theoretical.
+_WALK_MAX_DEPTH = 3
+
+
+def _extract_version(payload: dict[str, object], _depth: int = 0) -> str:
+    """Pull the installed version out of an ``/apps/{id}/info`` payload.
+
+    Searches the nests BEFORE the top-level keys. LM's envelope carries the
+    installed state under ``installed``, while the sibling ``catalog`` block
+    describes the app in general — so a top-level-first search risks reading a
+    catalogue-level version and reporting it as what the tenant is running, which
+    would make the version check pass against the wrong thing. Recursion is
+    depth-bounded (see ``_WALK_MAX_DEPTH``).
+    """
+    if _depth >= _WALK_MAX_DEPTH:
+        return ""
+    for nest in _VERSION_NESTS:
+        inner = payload.get(nest)
+        if isinstance(inner, dict):
+            found = _extract_version(inner, _depth + 1)
+            if found:
+                return found
     for key in _VERSION_KEYS:
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-    # Some shapes nest the install state one level down.
-    for nest in ("install", "installation", "deployment"):
-        inner = payload.get(nest)
-        if isinstance(inner, dict):
-            found = _extract_version(inner)
-            if found:
-                return found
     return ""
 
 
@@ -345,6 +449,20 @@ def _looks_like_cicd_managed(response: Response) -> bool:
     """
     rendered = json.dumps(response.body).lower() if response.body else ""
     return "managed by ci/cd" in rendered or "cicd_managed" in rendered
+
+
+def _looks_like_scan_gate_text(text: str) -> bool:
+    """Scan-gate detection over a plain message string.
+
+    LM reports its outcome in the body rather than the HTTP status, so the
+    install path matches on the message while the publish path still matches on
+    a whole response.
+    """
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in (_SCAN_PENDING, _SCAN_FAILED, "scan", "not active", "draft")
+    )
 
 
 def _looks_like_scan_gate(response: Response) -> bool:
@@ -443,37 +561,147 @@ def _publish(client: TenantClient, request: PublishRequest) -> tuple[str, str]:
     return version_id, release_id
 
 
-def _install(client: TenantClient, app_id: str, version_id: str, scan_hint: str) -> str:
-    """Trigger the install. Returns the deployment id."""
-    response = client.post(
-        INSTALL_PATH.format(app_id=path_segment(app_id)),
-        body={"version_id": version_id, "force_install": True},
-    )
-    if not response.ok:
+@dataclass(frozen=True)
+class _InstallReply:
+    """LM's install response, whose HTTP status is not the whole story.
+
+    ``POST /tenant/default/apps/{id}/install`` answers **HTTP 200 with an
+    error-shaped envelope** for its two non-deploying outcomes
+    (``atlan-local-marketplace-app``, ``marketplace_api/v1/router.py``)::
+
+        {"status": "error",   "message": "App with ID '…' not found: …", "status_code": 404}
+        {"status": "success", "message": "App already installed",        "status_code": 200}
+
+    So ``response.ok`` alone would read a 404 as a success. The in-body
+    ``status_code`` is authoritative and is what this parses.
+    """
+
+    http_status: int
+    status: str
+    status_code: int
+    message: str
+    deployment_id: str
+    rendered_body: str
+
+    @classmethod
+    def parse(cls, response: Response) -> _InstallReply:
+        data = response.data() if isinstance(response.body, dict) else {}
+        raw_code = data.get("status_code")
+        # `message` is LM's 200-envelope field; `detail` is what Heracles/FastAPI
+        # put on a real HTTP error. Both have to be read, or a genuine 4xx loses
+        # its text and the failure stops being self-explaining.
+        message = str(data.get("message") or data.get("detail") or "").strip()
+        return cls(
+            http_status=response.status,
+            status=str(data.get("status") or "").strip().lower(),
+            # Fall back to the HTTP status when LM omits its own.
+            status_code=raw_code if isinstance(raw_code, int) else response.status,
+            message=message,
+            deployment_id=str(data.get("deployment_id") or ""),
+            rendered_body=_render_body(response.body),
+        )
+
+    @property
+    def failed(self) -> bool:
+        return self.status == "error" or self.status_code >= 400 or not self.http_ok
+
+    @property
+    def http_ok(self) -> bool:
+        return 200 <= self.http_status < 300
+
+    @property
+    def not_found(self) -> bool:
+        """The release is not resolvable in LM's tenant-catalog snapshot yet."""
+        return self.status_code == 404 or "not found" in self.message.lower()
+
+    @property
+    def already_installed(self) -> bool:
+        return not self.failed and "already installed" in self.message.lower()
+
+
+def _install(
+    client: TenantClient,
+    app_id: str,
+    version_id: str,
+    scan_hint: str,
+    *,
+    retry_seconds: int,
+) -> str:
+    """Trigger the install, tolerating LM's catalog-snapshot lag.
+
+    Returns the deployment id, or "" when LM reports the app is already
+    installed (it does not start a deployment, so there is nothing to poll).
+
+    The retry exists because a freshly published release is not immediately
+    installable, which LM documents against this very route: a release created
+    via ``POST /publish`` starts ``scan_pending`` and is excluded from GM's tenant
+    catalog, the publish-time refresh runs while it is still ``scan_pending``, and
+    it therefore does not enter LM's snapshot until the next scheduled sync
+    (~5 min). LM refreshes once inline on a miss, but that refresh can itself race
+    the flip to ``active``.
+
+    Waiting on GM's release status is NOT sufficient: the first run to get this
+    far read ``active`` from GM and the install still missed, because what install
+    resolves against is LM's snapshot, not GM.
+    """
+    deadline = time.monotonic() + max(retry_seconds, 0)
+    attempt = 0
+    while True:
+        attempt += 1
+        reply = _InstallReply.parse(
+            client.post(
+                INSTALL_PATH.format(app_id=path_segment(app_id)),
+                body={"version_id": version_id, "force_install": True},
+            )
+        )
+
+        if reply.already_installed:
+            print(f"LM reports the app already installed: {reply.message}")
+            return ""
+
+        if not reply.failed and reply.deployment_id:
+            return reply.deployment_id
+
+        if not reply.failed:
+            raise TenantAppError(
+                "install reported success but carried no deployment_id, so the "
+                f"deployment cannot be polled. message={reply.message!r} "
+                f"status={reply.status!r} status_code={reply.status_code}"
+            )
+
+        # Retryable: LM cannot see the release yet.
+        if reply.not_found and time.monotonic() < deadline:
+            remaining = int(deadline - time.monotonic())
+            print(
+                f"attempt {attempt}: LM cannot resolve the release yet "
+                f"({reply.message or 'not found'}) — its catalog snapshot lags a "
+                f"fresh publish by up to ~5 min; retrying for {remaining}s"
+            )
+            time.sleep(_INSTALL_RETRY_POLL_SECONDS)
+            continue
+
         hint = ""
-        if _looks_like_scan_gate(response):
+        if reply.not_found:
             hint = (
-                " This looks like GM's release-scan gate refusing a release that "
-                "has not finished scanning. e2e deliberately does not wait for "
-                "the scan (a base-image CVE must not red an unrelated PR); if GM "
-                "requires it, re-run with --scan-wait-seconds set."
-                + (
-                    f" Release status at install time: {scan_hint}."
-                    if scan_hint
-                    else ""
-                )
+                " LM never saw the release. Its tenant-catalog snapshot excludes a "
+                "release while it is scan_pending and only picks it up on the next "
+                "scheduled sync (~5 min), so a fresh publish is not immediately "
+                "installable. Raise --install-retry-seconds if the sync is slower "
+                "than the current budget."
+                + (f" GM release status was {scan_hint!r}." if scan_hint else "")
+            )
+        elif _looks_like_scan_gate_text(reply.message):
+            hint = (
+                " This looks like GM's release-scan gate. e2e deliberately does "
+                "not wait for the scan (a base-image CVE must not red an unrelated "
+                "PR); re-run with --scan-wait-seconds set if it is required."
             )
         raise TenantAppError(
-            f"install failed with HTTP {response.status}.{hint}\n"
-            f"response={_render_body(response.body)}"
+            f"install failed after {attempt} attempt(s): "
+            f"status={reply.status!r} status_code={reply.status_code} "
+            f"message={reply.message!r} (HTTP {reply.http_status}).{hint}\n"
+            f"response={reply.rendered_body}"
         )
-    deployment_id = str(response.data().get("deployment_id") or "")
-    if not deployment_id:
-        raise TenantAppError(
-            "install response carried no deployment_id, so the deployment cannot "
-            f"be polled (keys: {sorted(response.data())})"
-        )
-    return deployment_id
 
 
 def _poll_deployment(client: TenantClient, deployment_id: str, timeout: int) -> None:
@@ -556,13 +784,37 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     else:
         print(f"{app_id} is not installed on this tenant; installing {args.version}")
 
-    # Echo GM's own source_repo back on the version-create. Omitting `repo` is
-    # rejected outright for any app that has one ("versions are managed by
-    # CI/CD"), and sending a *different* one makes GM rewrite the app's
-    # provenance — so the registered value is the only safe thing to send.
+    # `repo` is mandatory in practice: GM rejects a version-create without it for
+    # any app that has a source_repo on file. It prefers GM's own registered value
+    # when readable (byte-for-byte, so no provenance rewrite), and otherwise takes
+    # the caller's --repo-url, because LM's info does not expose it.
     repo_url = _resolve_repo_url(_registered_source_repo(info), args.repo_url)
-    if repo_url:
-        print(f"publishing with repo={repo_url}")
+    print(f"publishing with repo={repo_url}")
+
+    # Cross-check against the repo the image implies. Passing the wrong repo is
+    # the one destructive mistake available here — GM would repoint the app's
+    # provenance — and it usually shows up as exactly this disagreement. Fail
+    # closed when the image is a ghcr.io reference: GHCR is the confirmed e2e
+    # registry, and there image-name == repo-name holds, so a disagreement is a
+    # provenance-rewrite attempt, not a legitimate exception. Any other registry
+    # only warns — the convention is not guaranteed to hold there, so a real
+    # exception must still be able to publish.
+    implied = _repo_from_image(args.image)
+    if implied and _normalize_repo_url(implied) != _normalize_repo_url(repo_url):
+        explanation = (
+            f"repo {repo_url} does not match the repo implied by the image "
+            f"({implied}). If {repo_url} is not this app's own repo, GM will "
+            "repoint the app's source_repo to it and break its CI/CD publish "
+            "gating."
+        )
+        if _is_ghcr_image(args.image):
+            raise TenantAppError(
+                f"refusing to publish: {explanation} The image is a ghcr.io "
+                "reference, where image name == repo name holds across the "
+                "fleet, so this disagreement is a wrong --repo-url, not a "
+                "legitimate exception. Pass the app's own repo."
+            )
+        print(f"::warning::{explanation} Double-check before relying on this run.")
 
     request = PublishRequest(
         app_id=app_id,
@@ -596,14 +848,26 @@ def install(args: argparse.Namespace) -> InstallOutcome:
             "(not waiting for the scan by design)"
         )
 
-    deployment_id = _install(publish_client, app_id, version_id, status)
-    print(f"install accepted, deployment_id={deployment_id}")
-
-    try:
-        _poll_deployment(read_client, deployment_id, args.timeout_seconds)
-    except TenantAppError:
-        _dump_failure(read_client, app_id)
-        raise
+    deployment_id = _install(
+        publish_client,
+        app_id,
+        version_id,
+        status,
+        retry_seconds=args.install_retry_seconds,
+    )
+    # An empty deployment_id means LM reported the app already installed and
+    # started no deployment, so there is nothing to poll. The version read-back
+    # below is then the only thing that decides success — which is the right
+    # authority anyway.
+    if deployment_id:
+        print(f"install accepted, deployment_id={deployment_id}")
+        try:
+            _poll_deployment(read_client, deployment_id, args.timeout_seconds)
+        except TenantAppError:
+            _dump_failure(read_client, app_id)
+            raise
+    else:
+        print("no deployment started; relying on the version read-back below")
 
     installed = _installed_version(read_client, app_id)
     print(f"tenant reports installed version: {installed or '<unreported>'}")
@@ -690,6 +954,18 @@ def main(argv: list[str] | None = None) -> int:
             "Seconds to wait for GM's release scan before installing. 0 (the "
             "default) does not wait: a base-image CVE must not red an unrelated "
             "PR's e2e. Raise only if GM refuses to install an unscanned release."
+        ),
+    )
+    p_install.add_argument(
+        "--install-retry-seconds",
+        type=int,
+        default=600,
+        help=(
+            "How long to keep retrying the install while LM's tenant-catalog "
+            "snapshot catches up with a fresh publish. LM excludes a release "
+            "while it is scan_pending and picks it up on the next scheduled sync "
+            "(~5 min), so a just-published release is not immediately "
+            "installable. 0 disables the retry."
         ),
     )
     p_install.add_argument(
