@@ -1409,3 +1409,50 @@ def test_l010_fires_when_rebound_via_tuple_unpack() -> None:
         "logger.info('connecting with password %s', password)\n"
     )
     assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_except_as() -> None:
+    # ``except Exception as password:`` binds the exception object — a real
+    # value, so the placeholder exemption no longer holds.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "try:\n    x()\n"
+        "except Exception as password:\n"
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_function_parameter() -> None:
+    # A ``def`` parameter binds a real argument at call time — logging it is
+    # not a presence indicator even if the name was a placeholder elsewhere.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "def connect(password):\n"
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_lambda_parameter() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "f = lambda password: logger.info('pw %s', password)\n"
+        "logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_match_capture() -> None:
+    # A ``match`` capture pattern binds the name to the matched value.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "match creds:\n"
+        '    case {"pw": password}:\n'
+        "        logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)

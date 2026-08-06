@@ -358,6 +358,41 @@ def _iter_bound_names(target: ast.expr):
             yield from _iter_bound_names(elt)
 
 
+def _iter_arg_names(args: ast.arguments):
+    """Yield every parameter name bound by a function/lambda signature."""
+    for a in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+        yield a.arg
+    if args.vararg is not None:
+        yield args.vararg.arg
+    if args.kwarg is not None:
+        yield args.kwarg.arg
+
+
+def _iter_match_capture_names(pattern: ast.AST):
+    """Yield every name captured by a ``match`` *pattern*.
+
+    ``case {"pw": password}:`` binds ``password``; ``case [first, *rest]:``
+    binds ``first``/``rest``; ``case Point(x=px):`` binds ``px``.  ``MatchAs``
+    (``case password:`` / ``case … as password:``) and ``MatchStar``
+    (``case [*password]:``) carry the bound name directly; the wrapper patterns
+    (``MatchValue``/``MatchSingleton``/``MatchSequence``/``MatchMapping``/
+    ``MatchClass``/``MatchOr``) recurse into their sub-patterns.  ``ast.walk``
+    over the pattern reaches every nested node, so the two name-bearing types
+    are all that need explicit handling.
+    """
+    for node in ast.walk(pattern):
+        if isinstance(node, ast.MatchAs):
+            if node.name is not None:
+                yield node.name
+        elif isinstance(node, ast.MatchStar):
+            if node.name is not None:
+                yield node.name
+        # MatchMapping.rest / MatchAs capture via .name are covered above; a
+        # bare ``**rest`` in a mapping pattern lands on MatchMapping.rest.
+        if isinstance(node, ast.MatchMapping) and node.rest is not None:
+            yield node.rest
+
+
 def collect_redacted_names(tree: ast.Module) -> frozenset[str]:
     """Names *safely* bound to a redaction placeholder, scope- and order-aware.
 
@@ -387,11 +422,13 @@ def collect_redacted_names(tree: ast.Module) -> frozenset[str]:
       direction.
 
     Every binding form counts, not just ``x = <value>``: an ``AugAssign``
-    (``password += creds.get(...)``), a ``for``/``with … as`` target, an
-    ``import`` binding, and tuple/list/starred unpacking all (re)bind a name to
-    a non-placeholder value, so any of them drops the name from the exempt set.
-    L010 is BLOCK tier, so the conservative (over-flagging) direction is the
-    safe one — a missed exemption is a false positive, a kept one a leak.
+    (``password += creds.get(...)``), a ``for``/``with … as``/comprehension
+    target, an ``import`` binding, tuple/list/starred unpacking, an
+    ``except … as`` target, a function/lambda parameter, or a ``match``
+    capture pattern all (re)bind a name to a non-placeholder value, so any of
+    them drops the name from the exempt set.  L010 is BLOCK tier, so the
+    conservative (over-flagging) direction is the safe one — a missed exemption
+    is a false positive, a kept one a leak.
 
     A single source-ordered walk records each binding as placeholder /
     non-placeholder / annotation; a name survives only if it has at least one
@@ -423,9 +460,13 @@ def collect_redacted_names(tree: ast.Module) -> frozenset[str]:
         in *any* scope disqualifies the name everywhere.
 
         Only ``Assign``/``AnnAssign``/``NamedExpr`` can carry a placeholder
-        *value*, so they alone may mark a name exempt; every other binding
-        form (``AugAssign``, ``for``/``with`` targets, imports) is recorded as
-        a real binding and disqualifies the name.
+        *value*, so they alone may mark a name exempt.  Every other binding
+        form is recorded as a real binding and disqualifies the name.  The set
+        of forms is exhaustive rather than allow-listed one node type at a
+        time — ``AugAssign``, ``for``/``with``/comprehension targets, imports,
+        ``except … as``, function/lambda parameters, and ``match`` capture
+        patterns all rebind a name to a non-placeholder value, so recording
+        them ends the "one new form per round" class instead of chasing it.
         """
 
         def visit_Assign(self, node: ast.Assign) -> None:
@@ -490,6 +531,36 @@ def collect_redacted_names(tree: ast.Module) -> frozenset[str]:
         def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
             for alias in node.names:
                 record(alias.asname or alias.name, False)
+            self.generic_visit(node)
+
+        # ``except Exception as password:`` binds the caught exception object.
+        def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+            if node.name:
+                record(node.name, False)
+            self.generic_visit(node)
+
+        # ``def connect(password):`` / ``lambda password: …`` — every parameter
+        # binds a real argument value at call time.
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            for name in _iter_arg_names(node.args):
+                record(name, False)
+            self.generic_visit(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            for name in _iter_arg_names(node.args):
+                record(name, False)
+            self.generic_visit(node)
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            for name in _iter_arg_names(node.args):
+                record(name, False)
+            self.generic_visit(node)
+
+        # ``case {"pw": password}:`` — capture patterns bind real values.
+        def visit_Match(self, node: ast.Match) -> None:
+            for case in node.cases:
+                for name in _iter_match_capture_names(case.pattern):
+                    record(name, False)
             self.generic_visit(node)
 
     _Binder().visit(tree)
