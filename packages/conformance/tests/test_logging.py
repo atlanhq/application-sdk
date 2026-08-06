@@ -1342,3 +1342,70 @@ def test_l010_silent_when_name_only_rebound_between_placeholders() -> None:
         "    logger.info('connecting with password %s', password)\n"
     )
     assert "L010" not in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_augassign() -> None:
+    # ``password += creds.get(...)`` mutates from a non-placeholder source, so
+    # the name no longer reliably holds a placeholder — flag the real value.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def connect(creds):\n"
+        '    password = "[REDACTED]"\n'
+        '    password += creds.get("password")\n'
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_for_target() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "for password in creds_list:\n"
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_with_as_target() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "with open_secret() as password:\n"
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_import() -> None:
+    # An ``import`` rebinds the name to a module object — no longer a
+    # placeholder, so logging it must be flagged.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "import password\n"
+        "logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_comprehension_target() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "vals = [c for password in creds_list]\n"
+        "logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_tuple_unpack() -> None:
+    # Tuple destructuring binds the leaf name to a real (non-placeholder)
+    # element of the unpacked value — not a placeholder.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        'password, token = creds.get("password"), "***"\n'
+        "logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
