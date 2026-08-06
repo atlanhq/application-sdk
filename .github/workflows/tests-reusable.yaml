@@ -826,6 +826,22 @@ jobs:
           base-image-ref: ${{ inputs.base-image-ref }}
           git-token: ${{ secrets.ORG_PAT_GITHUB }}
           ghcr-token: ${{ secrets.ORG_PAT_GITHUB }}
+          # Two machines pull this image and they are not the same architecture:
+          # this runner, which runs the per-leg worker under docker compose, and
+          # the TENANT'S cluster node, which serves the app that Heracles fetches
+          # the DAG from at submit. A single-arch image satisfies the runner and
+          # then fails the tenant ~2 minutes after a successful install, as
+          # ImagePullBackOff with `no matching manifest` — which is exactly how
+          # FND-31's first live install ended.
+          #
+          # So it must be genuinely multi-arch, not retargeted: dropping amd64
+          # would break the local worker instead. Both arches, matching what the
+          # app repos' release path already publishes (build-and-publish-app.yaml
+          # builds linux/amd64 + linux/arm64 and merges the manifest).
+          #
+          # Only this job passes it, and this job only runs on the install path,
+          # so no existing caller pays the emulated-build time.
+          platforms: linux/amd64,linux/arm64
 
       # Straight-line parameter expansion, no branching — ci.md-compliant.
       - name: Derive the GM version from the image tag

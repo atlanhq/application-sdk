@@ -80,6 +80,26 @@ inputs:
       identity. Empty (default) falls back to `github.token`.
     required: false
     default: ""
+  platforms:
+    description: |
+      Comma-separated buildx platforms, e.g. `linux/amd64,linux/arm64`. Empty
+      (the default) passes no `--platform` flag at all, so the build targets
+      the runner's own architecture exactly as it did before this input
+      existed — every caller that does not set it is unaffected.
+
+      Set it on the tenant-install path (FND-31). The image there is pulled by
+      two machines with different architectures: the runner, which runs the
+      per-leg worker under docker compose, and the TENANT'S cluster node, which
+      serves the app Heracles fetches the manifest from. A single-arch image
+      satisfies whichever of the two matches the runner and fails the other
+      ~2 minutes after a successful install, as ImagePullBackOff. So the value
+      must be genuinely multi-arch, not retargeted to the tenant's arch.
+
+      Costs real wall time: the non-native arch builds under QEMU emulation
+      inside buildx's container driver, the same way the release path's arm64
+      leg does. That is why this is opt-in per caller rather than always on.
+    required: false
+    default: ""
   expected-python-version:
     description: |
       The Python major.minor the built image is expected to ship — the
@@ -177,6 +197,7 @@ runs:
       shell: bash
       env:
         BASE_IMAGE_REF: ${{ inputs.base-image-ref }}
+        PLATFORMS: ${{ inputs.platforms }}
         # Read by --secret id=git_token,env=GIT_TOKEN below. The env-var
         # form (vs --secret-file) keeps the token out of the buildx
         # command line and out of any tmpfile on the runner — buildx
@@ -204,6 +225,14 @@ runs:
           echo "Forwarding git-token to docker build as 'git_token' secret"
           BUILD_ARGS+=(--secret "id=git_token,env=GIT_TOKEN")
         fi
+        # Multi-arch only when asked. Appended ONLY when non-empty: passing
+        # `--platform ""` is not a no-op, buildx rejects it — and the default
+        # path must stay byte-identical to the pre-input command line, because
+        # every existing sdr-e2e caller is on it.
+        if [ -n "${PLATFORMS}" ]; then
+          echo "Building for platforms: ${PLATFORMS}"
+          BUILD_ARGS+=(--platform "${PLATFORMS}")
+        fi
         # --push pushes to GHCR; compose pulls from there at run-time
         # (atlan-configurator wires app_image into the generated
         # compose file as a pull target). --load would conflict with
@@ -218,6 +247,31 @@ runs:
           .
         echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
+    # Prove the pushed manifest carries every requested platform, at the point
+    # the image is produced. Nothing downstream catches a missing architecture:
+    # GM accepts the version, LM accepts the install, and the TENANT'S cluster
+    # node fails the pull ~2 minutes later with `no matching manifest for
+    # linux/arm64` — one live FND-31 run was spent there and three more
+    # misreading it. A dropped flag or a build that fell back to the runner's own
+    # arch becomes a red step naming the missing platform instead.
+    #
+    # Self-skipping on empty input, so single-arch callers are untouched.
+    # `imagetools inspect` reads the registry rather than the local daemon,
+    # which is the right source: --push means the manifest we care about is the
+    # one that landed there, and the local daemon has no multi-arch index at all.
+    # The parsing lives in a tested script per docs/standards/ci.md.
+    - name: Assert the pushed image serves every requested platform
+      if: inputs.platforms != ''
+      shell: bash
+      env:
+        IMAGE: ${{ steps.build.outputs.image }}
+        PLATFORMS: ${{ inputs.platforms }}
+      run: |
+        set -euo pipefail
+        docker buildx imagetools inspect --raw "$IMAGE" \
+          | python3 "${{ github.action_path }}/../../scripts/assert_image_platforms.py" \
+              --expected "$PLATFORMS"
+
     # The built worker image is what actually runs the connector; its Python is
     # fixed by the Dockerfile's golden base, not by anything this runner
     # installs. Assert it matches `expected-python-version` so we never validate
@@ -227,6 +281,13 @@ runs:
     # major.minor is the golden tag we assert (venv shares it). The comparison
     # logic lives in the tested script per docs/standards/ci.md (no branching in
     # inline shell).
+    #
+    # On a multi-arch build this pulls and asserts the RUNNER's variant only —
+    # `docker run` resolves the index to the host architecture. That is deliberate
+    # rather than a gap: the interpreter comes from the same Dockerfile and golden
+    # base tag for every platform, so a per-arch difference would be a base-image
+    # bug, and emulating the other arch here would cost a QEMU round-trip to
+    # re-assert a constant.
     - name: Assert worker image Python matches expected
       if: inputs.expected-python-version != ''
       shell: bash

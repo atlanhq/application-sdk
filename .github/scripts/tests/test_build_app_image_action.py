@@ -76,6 +76,10 @@ def _step(action_yaml: Path, name: str) -> dict:  # type: ignore[type-arg]
             r"\$\{\{ github\.action_path \}\}/(\S*?container_python_version\.py)",
             "interpreter-assert script",
         ),
+        (
+            r"\$\{\{ github\.action_path \}\}/(\S*?assert_image_platforms\.py)",
+            "platform-assert script",
+        ),
     ],
 )
 def test_build_action_asset_paths_resolve(pattern: str, description: str) -> None:
@@ -160,6 +164,87 @@ def test_resolver_prefers_prebuilt_over_built() -> None:
     assert "exit 1" in step["run"], (
         "the resolver must fail when neither an image was built nor one was "
         "supplied, rather than emitting an empty reference"
+    )
+
+
+# ── 4. Multi-arch on the install path ────────────────────────────────────────
+# The image is pulled by two machines of different architectures: the runner
+# (per-leg worker under docker compose) and the tenant's cluster node (the pod
+# Heracles fetches the DAG from at submit). A single-arch image satisfies one and
+# fails the other ~2 minutes after a successful install, as ImagePullBackOff —
+# which is how FND-31's first live install ended.
+
+
+def test_platforms_defaults_to_empty_so_existing_callers_are_untouched() -> None:
+    parsed = yaml.safe_load(_BUILD_ACTION.read_text(encoding="utf-8"))
+    spec = parsed["inputs"]["platforms"]
+    assert spec.get("default") == "", (
+        "platforms must default to empty. 17 repos call sdr-e2e directly and "
+        "every one of them would start paying for an emulated cross-build."
+    )
+    assert spec.get("required") is False
+
+
+def test_the_platform_flag_is_only_appended_when_requested() -> None:
+    """`--platform ""` is not a no-op — buildx rejects it.
+
+    So the default path has to stay byte-identical to the pre-input command line,
+    which means a conditional append rather than an always-present flag.
+    """
+    build = _step(_BUILD_ACTION, "Build and push PR image")
+    assert 'if [ -n "${PLATFORMS}" ]' in build["run"], (
+        "the --platform flag must be appended conditionally, or every "
+        "single-arch caller's build breaks on an empty value"
+    )
+    assert (
+        build["env"].get("PLATFORMS") == "${{ inputs.platforms }}"
+    ), "the value must reach the shell via env:, not be interpolated into run:"
+
+
+def test_the_pushed_manifest_is_asserted_against_the_request() -> None:
+    """A dropped flag must red the build, not the tenant's pull minutes later.
+
+    Nothing between the build and the tenant's kubelet rejects a missing
+    architecture: GM accepts the version, LM accepts the install. This step is the
+    only place the mismatch is cheap to see.
+    """
+    step = _step(
+        _BUILD_ACTION, "Assert the pushed image serves every requested platform"
+    )
+    assert step.get("if") == "inputs.platforms != ''", (
+        "the assert must self-skip for single-arch callers rather than failing "
+        f"them, got if={step.get('if')!r}"
+    )
+    assert "imagetools inspect --raw" in step["run"], (
+        "read the manifest from the REGISTRY: --push means that is the copy the "
+        "tenant will pull, and the local daemon holds no multi-arch index at all"
+    )
+    assert "assert_image_platforms.py" in step["run"]
+
+    # Order matters: asserting before the push would inspect a stale tag.
+    names = [s.get("name") for s in _steps(_BUILD_ACTION)]
+    assert names.index("Build and push PR image") < names.index(step["name"])
+
+
+def test_the_install_path_asks_for_both_architectures() -> None:
+    """amd64 as well as arm64 — the local worker needs it.
+
+    Retargeting to the tenant's architecture instead of adding to it would move
+    the breakage rather than fix it: the per-leg worker runs on the runner.
+    """
+    workflow = yaml.safe_load(
+        (_REPO_ROOT / ".github/workflows/tests-reusable.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    build_steps = workflow["jobs"]["build-e2e-image"]["steps"]
+    with_block = next(
+        s["with"] for s in build_steps if "build-app-image" in str(s.get("uses", ""))
+    )
+    requested = {p.strip() for p in with_block["platforms"].split(",")}
+    assert requested == {"linux/amd64", "linux/arm64"}, (
+        f"the install path requests {requested}. It needs BOTH: arm64 for the "
+        "tenant's node, amd64 for the per-leg worker on the runner."
     )
 
 

@@ -368,16 +368,21 @@ def test_deployment_failure_is_fatal_and_pulls_diagnostics(
                     _ok({"deployment_status": "FAILED", "message": "ImagePullBackOff"}),
                 ),
                 StubRoute("GET", "/failure", _ok({"reason": "ImagePullBackOff"})),
+                StubRoute("GET", "/events", _ok({"events": "Failed to pull image"})),
             ],
             sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
         ),
     )
     with pytest.raises(app.TenantAppError, match="ImagePullBackOff"):
         app.install(_install_args())
-    assert any("/failure" in p for p in transport.paths("GET")), (
-        "a failed deploy must pull LM's diagnostics into the step log — that is "
-        "the only pod-level detail CI can see without vcluster"
-    )
+    # Both routes: the snapshot is what LM captured at failure time, the events
+    # are live and exist even when no snapshot does. See the diagnostics section
+    # at the bottom of this file.
+    for route in ("/failure", "/events"):
+        assert any(route in p for p in transport.paths("GET")), (
+            f"a failed deploy must pull {route} into the step log — that is the "
+            "only pod-level detail CI can see without vcluster"
+        )
 
 
 def test_deployment_timeout_is_a_failure_not_a_warning(
@@ -395,7 +400,11 @@ def test_deployment_timeout_is_a_failure_not_a_warning(
             ],
             sticky=[
                 StubRoute("GET", "/releases/", Response(status=404, body={})),
+                # 404 is the real shape here: a deployment that never reached
+                # FAILED has no captured snapshot, which is precisely why the
+                # diagnostics fall back to live events.
                 StubRoute("GET", "/failure", Response(status=404, body={})),
+                StubRoute("GET", "/events", _ok({"events": "0s Normal Pulling"})),
             ],
         ),
     )
@@ -1188,3 +1197,177 @@ def test_publish_error_body_is_truncated(monkeypatch: pytest.MonkeyPatch) -> Non
     with pytest.raises(app.TenantAppError) as excinfo:
         app.install(_install_args())
     assert len(str(excinfo.value)) < 5000
+
+
+# ── Failure diagnostics ──────────────────────────────────────────────────────
+# The previous implementation printed `json.dumps(payload, sort_keys=True)[:8000]`,
+# which sorts `pod_describe` ahead of `pod_events` — so the cut landed before the
+# events on every failure, and the events are the one section that names an
+# image-pull problem. Three FND-31 live runs were misdiagnosed behind that
+# truncation, so the ordering, the budget's visibility and the events fallback are
+# asserted rather than assumed.
+
+
+_EVENTS_TEXT = (
+    "LAST SEEN   TYPE      REASON   OBJECT          MESSAGE\n"
+    "30s         Warning   Failed   pod/openapi-0   Failed to pull image "
+    '"ghcr.io/atlanhq/atlan-openapi-app:sdr-test-abc12345": no matching manifest '
+    "for linux/arm64 in the manifest list entries"
+)
+
+
+def _snapshot_response(**fields: str) -> Response:
+    """LM's /failure shape: the snapshot nested under `snapshot`."""
+    return _ok({"app_id": _APP_ID, "deployment_id": "dep-1", "snapshot": fields})
+
+
+def _dump(monkeypatch: pytest.MonkeyPatch, *routes: StubRoute) -> StubTransport:
+    transport = _wire(monkeypatch, StubTransport(routes=list(routes)))
+    app._dump_failure(TenantClient(base_url=_TENANT, bearer="t"), _APP_ID)
+    return transport
+
+
+def test_pod_events_are_printed_before_pod_describe(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _dump(
+        monkeypatch,
+        StubRoute(
+            "GET",
+            "/failure",
+            _snapshot_response(
+                failure_reason="HelmRelease not ready",
+                pod_events=_EVENTS_TEXT,
+                pod_describe="Name: openapi-0\n" + "detail\n" * 50,
+            ),
+        ),
+        StubRoute("GET", "/events", _ok({"events": ""})),
+    )
+    out = capsys.readouterr().out
+    assert out.index("--- pod_events") < out.index("--- pod_describe"), (
+        "pod_describe must not precede pod_events: with a budget in play, "
+        "whichever comes first is what survives, and the events are the section "
+        "that names an unpullable image"
+    )
+    assert "no matching manifest for linux/arm64" in out
+
+
+def test_the_platform_mismatch_names_its_cause(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _dump(
+        monkeypatch,
+        StubRoute("GET", "/failure", Response(404, {"detail": "none"})),
+        StubRoute("GET", "/events", _ok({"events": _EVENTS_TEXT})),
+    )
+    out = capsys.readouterr().out
+    assert "::error::" in out and "multi-arch" in out
+    assert "platforms" in out, "the hint must name the input that fixes it"
+
+
+def test_no_platform_hint_on_an_unrelated_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _dump(
+        monkeypatch,
+        StubRoute(
+            "GET",
+            "/failure",
+            _snapshot_response(
+                failure_reason="CrashLoopBackOff",
+                pod_logs="Traceback...\nKeyError: 'credential_guid'",
+            ),
+        ),
+        StubRoute("GET", "/events", _ok({"events": "nothing to report"})),
+    )
+    out = capsys.readouterr().out
+    assert "multi-arch" not in out, (
+        "a hint that fires on every failure is noise; it must key on the "
+        "registry's own wording"
+    )
+    assert "KeyError: 'credential_guid'" in out
+
+
+def test_live_events_are_read_when_no_snapshot_was_captured(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A timeout leaves no snapshot, which is when diagnostics matter most."""
+    transport = _dump(
+        monkeypatch,
+        StubRoute("GET", "/failure", Response(404, {"detail": "no snapshot"})),
+        StubRoute("GET", "/events", _ok({"events": _EVENTS_TEXT})),
+    )
+    out = capsys.readouterr().out
+    assert "live namespace events" in out
+    assert "no matching manifest" in out
+    assert any("/events" in path for path in transport.paths("GET"))
+
+
+def test_diagnostics_never_mask_the_real_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Both diagnostic routes failing must warn, not raise over the real cause."""
+
+    def _boom(*_a: object, **_k: object) -> Response:
+        raise TenantApiError("tenant unreachable")
+
+    monkeypatch.setattr(TenantClient, "request", _boom)
+    app._dump_failure(TenantClient(base_url=_TENANT, bearer="t"), _APP_ID)
+    assert capsys.readouterr().out.count("::warning::") == 2
+
+
+def test_an_unrecognised_snapshot_field_is_still_printed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The section list must not become a whitelist that hides new data."""
+    _dump(
+        monkeypatch,
+        StubRoute(
+            "GET",
+            "/failure",
+            _snapshot_response(
+                failure_reason="nope", flux_suspend_reason="operator-suspended"
+            ),
+        ),
+        StubRoute("GET", "/events", _ok({"events": ""})),
+    )
+    out = capsys.readouterr().out
+    assert "flux_suspend_reason" in out and "operator-suspended" in out
+
+
+def test_a_flat_snapshot_body_is_read_too(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """LM nests under `snapshot`; tolerate a flat body rather than printing nothing."""
+    _dump(
+        monkeypatch,
+        StubRoute("GET", "/failure", _ok({"pod_events": _EVENTS_TEXT})),
+        StubRoute("GET", "/events", _ok({"events": ""})),
+    )
+    assert "no matching manifest" in capsys.readouterr().out
+
+
+def test_an_over_long_section_says_what_it_dropped(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    app._print_block("pod_logs", "\n".join(f"line {i}" for i in range(500)), 10)
+    out = capsys.readouterr().out
+    assert "showing tail 10 of 500 lines" in out, (
+        "a silent cut is what hid the events for three runs; the budget must "
+        "announce itself"
+    )
+    assert "line 499" in out and "line 0\n" not in out
+
+
+def test_a_section_within_budget_is_printed_whole(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    app._print_block("pod_events", "a\nb\nc", 10)
+    out = capsys.readouterr().out
+    assert "showing" not in out
+    assert out.splitlines()[1:] == ["a", "b", "c"]
+
+
+def test_an_empty_section_prints_no_header(capsys: pytest.CaptureFixture[str]) -> None:
+    app._print_block("pod_logs", "   \n\n", 10)
+    assert capsys.readouterr().out == ""

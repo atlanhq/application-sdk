@@ -10,7 +10,7 @@ This doc covers what the SDK ships — the composite action, the reusable workfl
 | Component | Location | Purpose |
 |---|---|---|
 | `sdr-e2e` composite action | `.github/actions/sdr-e2e/action.yaml` | Build PR image, configurator + Dapr + Temporal stack-up, pytest, PR sticky comment, teardown. Used by both pipelines. |
-| `build-app-image` composite action | `.github/actions/build-app-image/action.yaml` | SDK-ref repin → manifest regeneration → buildx build/push → interpreter assert. Extracted from `sdr-e2e` so the image can be built **once per run** ahead of the e2e matrix (see [Building the image once](#building-the-image-once)). |
+| `build-app-image` composite action | `.github/actions/build-app-image/action.yaml` | SDK-ref repin → manifest regeneration → buildx build/push → platform assert → interpreter assert. Extracted from `sdr-e2e` so the image can be built **once per run** ahead of the e2e matrix, and optionally multi-arch (see [Building the image once](#building-the-image-once)). |
 | `e2e-full-reusable.yaml` reusable workflow | `.github/workflows/e2e-full-reusable.yaml` | Boilerplate (120-min timeout, concurrency group, env wiring, agent-name resolution) for the full-DAG pipeline. Connector repos `uses:` it as a 5-line wrapper. |
 | `e2e-apps` cross-repo dispatcher | `.github/actions/e2e-apps/action.yaml` | Fires `workflow_dispatch` on the connector repo with the apps-sdk PR's head SHA. Polls for completion, surfaces a sticky status comment on the SDK PR. |
 | `BaseSDRIntegrationTest` | `application_sdk/testing/sdr/` | pytest base for the SDR pipeline. Connector test class declares `Scenario(...)` instances. |
@@ -234,6 +234,38 @@ side benefit.
 > `manifest_path` seed DAG establishes the workflow record, not the graph. So the
 > DAG contract a full-DAG e2e exercises is whatever version is installed on that
 > tenant. Until FND-31 lands, that is whatever was last hand-deployed there.
+
+### Multi-arch on the install path
+
+Two machines pull that image, and they are not the same architecture:
+
+| Puller | What it runs | Architecture |
+|---|---|---|
+| The GitHub runner | The per-leg worker, under docker compose | amd64 |
+| The tenant's cluster node | The app pod Heracles fetches the DAG from at submit | may be arm64 |
+
+A single-arch image satisfies whichever of the two matches the build and fails the
+other. Nothing in between catches it: GM accepts the version, LM accepts the
+install, `deployment_status` even goes green for a while, and the tenant's kubelet
+fails the pull ~2 minutes later with `no matching manifest for linux/arm64`.
+FND-31's first live install ended exactly there.
+
+So `build-app-image` takes a `platforms` input, and `tests-reusable.yaml`'s
+`build-e2e-image` passes `linux/amd64,linux/arm64` — matching what the app repos'
+release path already publishes. It must be *both*, not retargeted to the tenant's
+architecture: dropping amd64 would break the local worker instead.
+
+`platforms` defaults to empty, which appends no `--platform` flag at all, so the
+17 repos calling `sdr-e2e` directly build exactly as they did before. That default
+is deliberate rather than tidy: the non-native architecture builds under QEMU
+emulation inside buildx's container driver, which costs real wall time, and only
+the install path needs it.
+
+After the push, the action asserts the manifest actually serves every requested
+platform (`assert_image_platforms.py`). A dropped flag or a build that quietly fell
+back to the runner's architecture then reds the build step, where the fix is
+obvious, instead of the tenant's pull minutes later — the diagnostic distance that
+cost FND-31 four runs.
 
 Two seams worth knowing about when editing either action:
 

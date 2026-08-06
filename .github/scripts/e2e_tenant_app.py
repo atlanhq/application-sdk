@@ -74,6 +74,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from e2e_tenant_api import (
+    APP_EVENTS_PATH,
     APP_FAILURE_PATH,
     APP_INFO_PATH,
     DEPLOYMENT_PATH,
@@ -131,6 +132,38 @@ _VERSION_KEYS = (
 #: Nests to search for the installed-version payload. ``installed`` is LM's real
 #: envelope; the others are tolerated aliases.
 _VERSION_NESTS = ("installed", "install", "installation", "deployment", "data")
+
+#: LM's failure-snapshot fields (``deployment_orchestrator/failure_snapshot.py``),
+#: in the order they answer "why did this deployment not become ready", with a
+#: per-section line budget and which end to keep when it bites.
+#:
+#: The order is the whole point. The previous implementation dumped the payload
+#: as ``json.dumps(..., sort_keys=True)[:8000]``, which sorts ``pod_describe``
+#: ahead of ``pod_events`` — so the cut landed before the events on every failure,
+#: and the events are where the registry says `no matching manifest for
+#: linux/arm64`. Three FND-31 runs were misdiagnosed behind that truncation.
+#:
+#: ``pod_logs`` last because a container that never pulled has none, which is the
+#: failure this ordering is tuned for; tail rather than head everywhere except
+#: where the interesting end is the first (``failure_reason`` is a sentence).
+_FAILURE_SECTIONS: tuple[tuple[str, int, str], ...] = (
+    ("failure_reason", 20, "head"),
+    ("pod_events", 200, "tail"),
+    ("helmrelease_conditions", 60, "tail"),
+    ("pod_describe", 200, "tail"),
+    ("pod_logs", 120, "tail"),
+)
+
+_EVENTS_MAX_LINES = 200
+_OTHER_FIELDS_MAX_LINES = 80
+
+#: Registry and kubelet phrasings for "this image has no variant for my
+#: architecture", matched case-insensitively across everything printed above.
+_PLATFORM_MISMATCH_MARKERS = (
+    "no matching manifest",
+    "no match for platform",
+    "does not match the specified platform",
+)
 
 
 class TenantAppError(RuntimeError):
@@ -744,16 +777,124 @@ def _poll_deployment(client: TenantClient, deployment_id: str, timeout: int) -> 
     )
 
 
+def _print_block(title: str, text: str, max_lines: int, keep: str = "tail") -> None:
+    """Print one diagnostic section as real multi-line text.
+
+    Two things this does that a ``json.dumps`` of the whole payload does not: the
+    newlines are newlines (kubectl output rendered as one line of ``\\n`` escapes
+    is not readable in a CI log), and an over-long section says how much it
+    dropped and from which end, rather than stopping mid-word.
+    """
+    lines = text.rstrip().splitlines()
+    if not lines:
+        return
+    note = ""
+    if len(lines) > max_lines:
+        note = f" (showing {keep} {max_lines} of {len(lines)} lines)"
+        lines = lines[-max_lines:] if keep == "tail" else lines[:max_lines]
+    print(f"--- {title}{note} ---")
+    for line in lines:
+        print(line)
+
+
+def _hint_platform_mismatch(text: str) -> None:
+    """Name the multi-arch cause when the diagnostics carry its signature.
+
+    This is the single most expensive misdiagnosis in FND-31: the image was
+    amd64-only, the tenant node was not, and the pull failure read as a pruned
+    tag for three runs. The registry's own wording is unambiguous, so when it
+    appears the cause is stated outright rather than left to be inferred again.
+    """
+    lowered = text.lower()
+    if not any(marker in lowered for marker in _PLATFORM_MISMATCH_MARKERS):
+        return
+    print(
+        "::error::the tenant could not pull the image because it has no variant "
+        "for that node's architecture — the events above say so. The image must "
+        "be multi-arch: build-app-image takes a `platforms` input, and the "
+        "install path passes linux/amd64,linux/arm64 (amd64 is still needed, the "
+        "per-leg worker runs on the runner). A single-arch image publishes, "
+        "installs, and only fails here."
+    )
+
+
 def _dump_failure(client: TenantClient, app_id: str) -> None:
-    """Print LM's failure diagnostics. Best-effort — never masks the real error."""
+    """Print LM's failure diagnostics. Best-effort — never masks the real error.
+
+    Reads two routes, because they fail in different circumstances and the
+    important one is the second:
+
+    ``/apps/{id}/failure``
+        The snapshot LM captured at the moment the HelmRelease went
+        ``Ready=False`` — ``failure_reason``, ``pod_events``, ``pod_describe``,
+        ``pod_logs``, ``helmrelease_conditions``
+        (``deployment_orchestrator/failure_snapshot.py``). 404s when no snapshot
+        was captured, which includes every case where we timed out rather than
+        the deployment being declared failed.
+
+    ``/apps/{id}/events``
+        Live ``kubectl get events`` for the app's namespace. Works with no
+        snapshot at all, and is where an image-pull failure names itself.
+
+    Sections are rendered in the order they answer "why did this not become
+    ready", each with its own line budget. The previous version dumped the whole
+    JSON payload truncated at 8000 characters: ``sort_keys`` put ``pod_describe``
+    ahead of ``pod_events``, so the cut landed *before* the events every time —
+    and the events were where `no matching manifest for linux/arm64` was waiting.
+    """
+    diagnostics: list[str] = []
+
+    snapshot: dict[str, object] = {}
     try:
         response = client.get(APP_FAILURE_PATH.format(app_id=path_segment(app_id)))
     except TenantApiError as exc:
-        print(f"::warning::could not fetch failure diagnostics: {exc}")
-        return
-    if response.ok:
-        print("--- app failure diagnostics ---")
-        print(json.dumps(response.body, indent=2, sort_keys=True)[:8000])
+        print(f"::warning::could not fetch the failure snapshot: {exc}")
+    else:
+        if response.ok:
+            body = response.body if isinstance(response.body, dict) else {}
+            nested = body.get("snapshot")
+            snapshot = dict(nested) if isinstance(nested, dict) else dict(body)
+        else:
+            # Expected on the timeout path: a deployment that never reached
+            # FAILED has no snapshot to read.
+            print(
+                f"::warning::no failure snapshot for {app_id} "
+                f"(HTTP {response.status}); falling back to live events"
+            )
+
+    for field, max_lines, keep in _FAILURE_SECTIONS:
+        text = str(snapshot.pop(field, "") or "")
+        diagnostics.append(text)
+        _print_block(field, text, max_lines, keep)
+
+    # Whatever is left, so a new snapshot field is visible the day it ships
+    # instead of being silently dropped by the list above.
+    leftovers = {k: v for k, v in snapshot.items() if v not in ("", None, {}, [])}
+    if leftovers:
+        _print_block(
+            "other snapshot fields",
+            json.dumps(leftovers, indent=2, sort_keys=True),
+            _OTHER_FIELDS_MAX_LINES,
+            "head",
+        )
+
+    # Live events. Fetched even when the snapshot had its own copy: the snapshot
+    # is from the moment of failure and these are from now, and on the timeout
+    # path they are the only events there are.
+    try:
+        events = client.get(APP_EVENTS_PATH.format(app_id=path_segment(app_id)))
+    except TenantApiError as exc:
+        print(f"::warning::could not fetch live events: {exc}")
+    else:
+        if events.ok:
+            body = events.body if isinstance(events.body, dict) else {}
+            text = str(body.get("events") or "")
+            diagnostics.append(text)
+            _print_block("live namespace events", text, _EVENTS_MAX_LINES)
+        else:
+            print(f"::warning::live events read returned HTTP {events.status}")
+
+    _hint_platform_mismatch("\n".join(diagnostics))
 
 
 def install(args: argparse.Namespace) -> InstallOutcome:
