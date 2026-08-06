@@ -25,6 +25,7 @@ _TENANT = "https://example-tenant.atlan.test"
 _APP_ID = "019d1f6b-6fea-7db3-96d8-e61e159d0351"
 _IMAGE = "ghcr.io/atlanhq/atlan-openapi-app:sdr-test-abc12345"
 _VERSION = "sdr-test-abc12345"
+_REPO = "https://github.com/atlanhq/atlan-openapi-app"
 
 
 # ── Typed HTTP stub ──────────────────────────────────────────────────────────
@@ -123,7 +124,7 @@ def _install_args(**overrides: object) -> argparse.Namespace:
         "version": _VERSION,
         "branch": "chrishehim/fnd-31",
         "tenant": "example-tenant",
-        "repo_url": "",
+        "repo_url": _REPO,
         "deploy_config": "",
         "self_deployed_runtime": False,
         "sdk_version": "",
@@ -578,7 +579,7 @@ def test_registered_repo_is_echoed_back_on_publish(
             sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
         ),
     )
-    app.install(_install_args(repo_url=""))
+    app.install(_install_args(repo_url=repo))
     assert transport.body_for("/marketplace/publish")["repo"] == repo
 
 
@@ -688,7 +689,136 @@ def test_cicd_managed_rejection_is_recognised_and_explained(
         ),
     )
     with pytest.raises(app.TenantAppError, match="source_repo on file"):
+        app.install(_install_args())
+
+
+# ── LM's real /apps/{id}/info shape ──────────────────────────────────────────
+# LM returns {app_id, catalog, installed}, where `installed` is an InstalledApp
+# carrying `version_text` (atlan-local-marketplace-app,
+# tenant_apps_manager/models/service.py). Neither that nest nor that key was in
+# the original guess-list, so the installed-version read never worked — it always
+# returned "", which is indistinguishable from "not installed" and therefore read
+# as a successful no-op rather than a broken check.
+
+
+def _lm_info(
+    version_text: str, catalog: dict[str, object] | None = None
+) -> dict[str, object]:
+    """The real envelope, so these tests pin the shipping contract."""
+    return {
+        "app_id": _APP_ID,
+        "catalog": catalog if catalog is not None else {"name": "openapi"},
+        "installed": {
+            "app_id": _APP_ID,
+            "version_id": "01930000-0000-7000-8000-000000000000",
+            "version_text": version_text,
+            "installed_at": "2026-08-06T00:00:00Z",
+            "last_modified_on": "2026-08-06T00:00:00Z",
+            "deployment_name": "atlan",
+        },
+    }
+
+
+def test_installed_version_read_from_lm_envelope() -> None:
+    assert app._extract_version(_lm_info("1.2.3")) == "1.2.3"
+
+
+def test_installed_nest_wins_over_a_catalog_version() -> None:
+    """`installed` must be preferred over the sibling `catalog` block.
+
+    `catalog` describes the app in general; a top-level-or-catalog-first search
+    would report a catalogue version as what the tenant is running, and the
+    version check would then pass against the wrong thing — the precise failure
+    this whole change exists to prevent.
+    """
+    info = _lm_info("1.2.3", catalog={"name": "openapi", "version": "9.9.9"})
+    assert app._extract_version(info) == "1.2.3"
+
+
+def test_absent_install_block_reads_as_not_installed() -> None:
+    assert (
+        app._extract_version({"app_id": _APP_ID, "catalog": {}, "installed": None})
+        == ""
+    )
+
+
+def test_converge_uses_the_real_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    # End-to-end through install(): the no-op path must trigger off the shape LM
+    # actually returns, not just off a flat {"version": ...}.
+    transport = _wire(
+        monkeypatch,
+        StubTransport(routes=[StubRoute("GET", "/info", _ok(_lm_info(_VERSION)))]),
+    )
+    outcome = app.install(_install_args())
+    assert outcome.skipped is True
+    assert transport.paths("POST") == []
+
+
+# ── repo is mandatory, and must be the app's own ──────────────────────────────
+
+
+def test_publish_without_any_repo_is_refused_before_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # GM would reject it anyway; failing here says why, and names --repo-url.
+    _wire(monkeypatch, StubTransport(routes=[StubRoute("GET", "/info", _ok({}))]))
+    with pytest.raises(app.TenantAppError, match="--repo-url"):
         app.install(_install_args(repo_url=""))
+
+
+@pytest.mark.parametrize(
+    "image, expected",
+    [
+        (
+            "ghcr.io/atlanhq/atlan-openapi-app:sdr-test-abc12345",
+            "https://github.com/atlanhq/atlan-openapi-app",
+        ),
+        (
+            "ghcr.io/atlanhq/atlan-mysql-app:main-1234567",
+            "https://github.com/atlanhq/atlan-mysql-app",
+        ),
+        (
+            "ghcr.io/atlanhq/atlan-openapi-app@sha256:" + "0" * 64,
+            "https://github.com/atlanhq/atlan-openapi-app",
+        ),
+        # No registry host -> cannot infer; must not guess.
+        ("atlan-openapi-app:tag", ""),
+        ("", ""),
+    ],
+)
+def test_repo_inferred_from_image(image: str, expected: str) -> None:
+    assert app._repo_from_image(image) == expected
+
+
+def test_repo_image_mismatch_warns_but_proceeds(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A wrong repo is the one destructive mistake here, so it must be visible.
+
+    Warned rather than blocked: image-name == repo-name is a fleet convention,
+    not a guarantee, so a legitimate exception must still be able to publish. The
+    caller's value is what gets sent either way.
+    """
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok(_lm_info(_VERSION))),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+        ),
+    )
+    app.install(_install_args(repo_url="https://github.com/atlanhq/application-sdk"))
+    out = capsys.readouterr().out
+    assert (
+        "::warning::" in out and "does not match the repo implied by the image" in out
+    )
 
 
 # ── Version extraction across LM shapes ──────────────────────────────────────

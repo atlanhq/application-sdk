@@ -64,6 +64,9 @@ def test_inputs_used_by_scripts_arrive_through_env(workflow: dict) -> None:
             "IMAGE",
             "VERSION",
             "BRANCH",
+            # GM rejects a version-create without `repo` for any app with a
+            # source_repo on file, and LM does not expose the registered value.
+            "REPO_URL",
             "SCAN_WAIT_SECONDS",
             "TIMEOUT_SECONDS",
         },
