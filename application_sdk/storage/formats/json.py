@@ -8,6 +8,7 @@ import orjson
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
+from application_sdk.errors import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.storage.formats.utils import (
@@ -214,6 +215,14 @@ class JsonFileReader(Reader):
                             batch = []
             if batch:
                 yield pd.DataFrame(batch)
+        # An already-typed AppError carries its own category/audience/evidence
+        # (e.g. ObjectStoreReadError -> DEPENDENCY_UNAVAILABLE + the searched
+        # prefix). Re-wrapping it as FormatReadError would downgrade that to
+        # INTERNAL/APP_OWNER and drop the evidence fields, so let it through
+        # unchanged — the same guard `_download_files` already applies one
+        # frame down for exactly this reason.
+        except AppError:
+            raise
         # conformance: ignore[E004] pure re-raise into typed FormatReadError; exception is not swallowed
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
@@ -246,6 +255,9 @@ class JsonFileReader(Reader):
                         if line:
                             all_records.append(orjson.loads(line))
             return pd.DataFrame(all_records)
+        # See _get_batched_dataframe: preserve an already-typed AppError.
+        except AppError:
+            raise
         # conformance: ignore[E004] pure re-raise into typed FormatReadError; exception is not swallowed
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415

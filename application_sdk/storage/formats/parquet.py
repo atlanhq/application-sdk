@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.contracts.types import FileReference
+from application_sdk.errors import AppError
 from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
@@ -239,6 +240,14 @@ class ParquetFileReader(Reader):
                 return pd.DataFrame()
             combined = pa.concat_tables(tables, promote_options="permissive")
             return combined.to_pandas()
+        # An already-typed AppError carries its own category/audience/evidence
+        # (e.g. ObjectStoreReadError -> DEPENDENCY_UNAVAILABLE + the searched
+        # prefix). Re-wrapping it as FormatReadError would downgrade that to
+        # INTERNAL/APP_OWNER and drop the evidence fields, so let it through
+        # unchanged — the same guard `_download_files` already applies one
+        # frame down for exactly this reason.
+        except AppError:
+            raise
         # conformance: ignore[E004] exception is re-raised as FormatReadError; traceback preserved in cause chain
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
@@ -309,6 +318,9 @@ class ParquetFileReader(Reader):
                         yield batch.to_pandas()
                 finally:
                     pf.close()
+        # See _get_dataframe: preserve an already-typed AppError.
+        except AppError:
+            raise
         # conformance: ignore[E004] exception is re-raised as FormatReadError; traceback preserved in cause chain
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415

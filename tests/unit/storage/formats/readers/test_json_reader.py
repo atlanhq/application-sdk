@@ -696,3 +696,96 @@ async def test_read_batches_skips_blank_lines(tmp_path: Path) -> None:
     assert len(chunks) == 1
     assert isinstance(chunks[0], pd.DataFrame)
     assert list(chunks[0]["id"]) == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_reader_preserves_object_store_read_error_classification() -> None:
+    """A typed ObjectStoreReadError must survive the reader, not become FormatReadError.
+
+    ``test_no_matching_files_surfaces_read_error_not_download_error`` above already
+    pins the classification inside ``_download_files``. It calls that helper
+    directly, so it never exercised the reader frame above it — where a blanket
+    ``except Exception: raise FormatReadError(cause=e)`` re-wrapped the typed error
+    and, in production, turned ``DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ`` /
+    PLATFORM into ``INTERNAL_FORMAT_READ`` / APP_OWNER, discarding ``path``,
+    ``file_extension`` and ``suggested_action``. Operators then saw
+    "Error reading data" with no prefix to check, and one identical object-store
+    miss was reported under three different audience/category pairs depending on
+    which app hit it.
+
+    This asserts the classification and the evidence fields at the reader
+    boundary, which is the path apps actually take.
+    """
+    from application_sdk.storage.formats.format_errors import (
+        FormatReadError,
+        ObjectStoreReadError,
+    )
+
+    path = "/local/does-not-exist"
+    reader = JsonFileReader(path=path)
+
+    with patch(
+        "application_sdk.storage.formats.json._download_files",
+        new_callable=AsyncMock,
+        side_effect=ObjectStoreReadError(path=path, file_extension=".json"),
+    ):
+        with pytest.raises(ObjectStoreReadError) as exc_info:
+            await reader.read()
+
+    assert not isinstance(exc_info.value, FormatReadError)
+    assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ"
+    assert exc_info.value.path == path
+    assert exc_info.value.file_extension == ".json"
+    assert exc_info.value.suggested_action is not None
+    # Retryability travels with the classification, so preserving the type also
+    # restores DependencyUnavailableError's retryable default. Pinned here
+    # because it is a deliberate behaviour change, not a side effect: the
+    # re-wrap made these reads non-retryable, while every caller that reaches
+    # _download_files without going through a reader has always been retryable.
+    # This aligns the two paths on the taxonomy's own default.
+    assert exc_info.value.effective_retryable is True
+
+
+@pytest.mark.asyncio
+async def test_read_batches_preserves_object_store_read_error_classification() -> None:
+    """Same guard on the batched read path (read_batches / _get_batched_dataframe)."""
+    from application_sdk.storage.formats.format_errors import (
+        FormatReadError,
+        ObjectStoreReadError,
+    )
+
+    path = "/local/does-not-exist"
+    reader = JsonFileReader(path=path)
+
+    with patch(
+        "application_sdk.storage.formats.json._download_files",
+        new_callable=AsyncMock,
+        side_effect=ObjectStoreReadError(path=path, file_extension=".json"),
+    ):
+        with pytest.raises(ObjectStoreReadError) as exc_info:
+            async for _ in reader.read_batches():
+                pass
+
+    assert not isinstance(exc_info.value, FormatReadError)
+    assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ"
+    assert exc_info.value.path == path
+
+
+@pytest.mark.asyncio
+async def test_reader_still_wraps_untyped_errors_as_format_read_error() -> None:
+    """An untyped exception must still become FormatReadError — the AppError
+    pass-through must not widen into a blanket re-raise."""
+    from application_sdk.storage.formats.format_errors import FormatReadError
+
+    reader = JsonFileReader(path="/local/x")
+
+    with patch(
+        "application_sdk.storage.formats.json._download_files",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("disk on fire"),
+    ):
+        with pytest.raises(FormatReadError) as exc_info:
+            await reader.read()
+
+    assert exc_info.value.code == "INTERNAL_FORMAT_READ"
+    assert isinstance(exc_info.value.cause, RuntimeError)
