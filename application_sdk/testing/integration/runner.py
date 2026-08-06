@@ -33,6 +33,7 @@ import os
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 import orjson
 import pytest
@@ -222,6 +223,9 @@ class BaseIntegrationTest:
         server_host: Base URL of the app server (auto-discovered from env if not set).
         server_version: API version prefix (default: "v1").
         workflow_endpoint: Default endpoint for workflow API (default: "/start").
+        entrypoint: Default app ``@entrypoint`` for this suite's workflow
+            scenarios (e.g. "crawler"). Multi-entrypoint apps must set it here
+            or per-scenario; see ``Scenario.entrypoint``.
         timeout: Request timeout in seconds (default: 30).
         default_credentials: Extra credential fields merged with auto-discovered ones.
         default_metadata: Default metadata for preflight/workflow tests.
@@ -245,6 +249,10 @@ class BaseIntegrationTest:
     server_host: str = ""
     server_version: str = "v1"
     workflow_endpoint: str = "/start"
+    # Default app ``@entrypoint`` for this suite's workflow scenarios. A single
+    # scenario may override it via ``Scenario.entrypoint``. Left empty the app's
+    # own default entrypoint is started — correct only for single-entrypoint apps.
+    entrypoint: str = ""
     timeout: int = 30
 
     # Default values merged with auto-discovered credentials
@@ -525,6 +533,29 @@ class BaseIntegrationTest:
 
         return args
 
+    def _resolve_workflow_endpoint(self, scenario: Scenario) -> str:
+        """Endpoint for a workflow scenario, with the declared entrypoint applied.
+
+        Precedence: an explicit ``Scenario.endpoint`` wins outright — it is a
+        full override and may already carry its own query string. Otherwise the
+        suite's ``workflow_endpoint`` is used, with ``?entrypoint=<name>``
+        appended when the scenario or the class declares one.
+
+        Declaring the entrypoint rather than hardcoding the query string is what
+        makes a suite's coverage machine-readable: which product workflow a test
+        exercises is otherwise recoverable only by reading its source.
+        """
+        if scenario.endpoint:
+            return scenario.endpoint
+
+        endpoint = self.workflow_endpoint
+        entrypoint = scenario.entrypoint or self.entrypoint
+        if not entrypoint:
+            return endpoint
+
+        separator = "&" if "?" in endpoint else "?"
+        return f"{endpoint}{separator}entrypoint={quote(entrypoint, safe='')}"
+
     def _execute_scenario(self, scenario: Scenario) -> ScenarioResult:
         """Execute a single scenario and return the result.
 
@@ -556,7 +587,7 @@ class BaseIntegrationTest:
             logger.debug("Built args for %s", scenario.name)
 
             # Step 2: Call the API
-            endpoint = scenario.endpoint or self.workflow_endpoint
+            endpoint = self._resolve_workflow_endpoint(scenario)
             response = self.client.call_api(
                 api=scenario.api,
                 args=args,
