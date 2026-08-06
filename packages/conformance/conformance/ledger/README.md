@@ -24,6 +24,28 @@ Note that lane *location* does not decide qualification — several connectors
 keep qualifying lanes under `tests/e2e/` (bigquery, monte-carlo, databricks).
 What matters is what the lane exercises, not which directory it sits in.
 
+Each row states this explicitly in its `boundary` field:
+
+| `boundary` | Meaning | Counts? |
+|---|---|---|
+| `transformed` | asserts on the app's own `transformed/` output, then stops | yes |
+| `post-publish` | continues into system apps and reads back from the tenant | no |
+
+The claim is checked rather than trusted. A lane that verifies past the handoff
+needs Atlan tenant credentials to do so — every full-DAG suite in the fleet
+gates on `ATLAN_BASE_URL` + `ATLAN_API_KEY` via the same SDK base class. So the
+check asks "does this lane need tenant credentials?", not "does it call
+publish / lineage / QI" — which system app a DAG invokes varies per connector;
+needing a tenant to verify the result does not. One uniform rule, ten repos.
+
+Only the score-inflating direction is an error: claiming `transformed` while
+demonstrably reading a tenant fails. Claiming `post-publish` is always accepted,
+since detection is a lower bound rather than proof of absence.
+
+This check earned its place immediately — it caught a real bug in the first
+draft of this ledger, where tableau's row cited the whole `tests/e2e/` directory
+and so swept in `sdr/test_tableau_full_dag.py`, a post-publish lane.
+
 ## Why an inventory and not runtime tracing
 
 Three instrumentation designs were attempted and discarded before this one.
@@ -71,6 +93,7 @@ ledger.
 |---|---|
 | denominator | AST scan of the repo's product-workflow declarations (`@entrypoint`, or a `run()` override where the app declares none). Mismatch with the ledger is a **hard failure**, so adding a workflow breaks CI until someone classifies it. |
 | `cadence` | GitHub Actions API, via `evidence.ci_workflow` / `evidence.ci_job`. Writing `A` in the ledger earns nothing if the job does not run on an automatic trigger. |
+| `boundary` | Cross-checked against the cited test's own source: a lane cannot claim to stop at the handoff while requiring tenant credentials. |
 | `realism`, `depth` | Human, citation-backed, reviewed like code. Audited by the quarterly mutation sample. |
 
 Gated lanes score zero rather than half credit. A lane that does not run does

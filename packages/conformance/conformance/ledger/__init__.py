@@ -1,6 +1,7 @@
 """Integration Lane Ledger — see README.md in this directory."""
 
 from conformance.ledger.schema import (
+    Boundary,
     Cadence,
     ConnectorLedger,
     Depth,
@@ -10,6 +11,7 @@ from conformance.ledger.schema import (
 )
 
 __all__ = [
+    "Boundary",
     "Cadence",
     "ConnectorLedger",
     "Depth",

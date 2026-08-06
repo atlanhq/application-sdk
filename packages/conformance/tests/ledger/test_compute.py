@@ -13,12 +13,15 @@ from pathlib import Path
 
 import pytest
 from conformance.ledger.compute import (
+    BoundaryMismatchError,
     LedgerDriftError,
+    detect_tenant_access,
     evaluate,
     evaluate_connector,
     scan_entrypoints,
 )
 from conformance.ledger.schema import (
+    Boundary,
     Cadence,
     ConnectorLedger,
     Depth,
@@ -45,12 +48,20 @@ class FakeActions:
         return self._runs.get(workflow_file)
 
 
-def _lane(realism="L", depth="V", cadence="A", ci_workflow=".github/workflows/ci.yaml"):
+def _lane(
+    realism="L",
+    depth="V",
+    cadence="A",
+    boundary="transformed",
+    ci_workflow=".github/workflows/ci.yaml",
+    test=None,
+):
     return Lane(
         realism=Realism(realism),
         depth=Depth(depth),
         cadence=Cadence(cadence),
-        evidence=Evidence(ci_workflow=ci_workflow, ci_job="test"),
+        boundary=Boundary(boundary),
+        evidence=Evidence(ci_workflow=ci_workflow, ci_job="test", test=test),
     )
 
 
@@ -264,3 +275,129 @@ def test_fleet_irr_is_workflow_weighted_not_a_mean_of_ratios():
     fleet = evaluate(ledger, repo_root=None, actions=actions)
     assert (fleet.covered, fleet.total) == (1, 4)
     assert fleet.irr == pytest.approx(0.25)
+
+
+# ------------------------------------------------- the integration/e2e line
+
+
+def _write_test(tmp_path: Path, relpath: str, body: str) -> Path:
+    target = tmp_path / relpath
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(textwrap.dedent(body))
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ["ATLAN_BASE_URL", "ATLAN_API_KEY", "application_sdk.testing.e2e", "pyatlan"],
+)
+def test_tenant_access_detected_uniformly(tmp_path, marker):
+    """One rule covers every repo - not a per-app list of system-app names."""
+    repo = _write_test(
+        tmp_path,
+        "tests/e2e/test_full_dag.py",
+        f"""
+        import os
+        if not os.environ.get("{marker}"):
+            pytest.skip("needs a tenant")
+        """,
+    )
+    hit = detect_tenant_access(repo, "tests/e2e/test_full_dag.py")
+    assert hit is not None and hit[1] == marker
+
+
+def test_lane_staying_inside_the_boundary_is_not_flagged(tmp_path):
+    repo = _write_test(
+        tmp_path,
+        "tests/e2e/test_extract.py",
+        """
+        def test_transformed_output_exists(output_validator):
+            output_validator.assert_transformed_output_exists()
+        """,
+    )
+    assert detect_tenant_access(repo, "tests/e2e/test_extract.py") is None
+
+
+def test_directory_citation_catches_an_e2e_lane_hiding_in_the_tree(tmp_path):
+    """A too-broad citation must fail - this caught a real ledger bug."""
+    repo = _write_test(
+        tmp_path,
+        "tests/e2e/test_extract.py",
+        "def test_ok(): assert True\n",
+    )
+    _write_test(
+        tmp_path,
+        "tests/e2e/sdr/test_full_dag.py",
+        """
+        import os
+        os.environ["ATLAN_BASE_URL"]
+        """,
+    )
+    hit = detect_tenant_access(repo, "tests/e2e/")
+    assert hit is not None
+    assert "sdr/test_full_dag.py" in hit[0]
+
+
+def test_claiming_transformed_while_reading_a_tenant_is_an_error(tmp_path):
+    repo = _write_test(
+        tmp_path,
+        "app/main.py",
+        """
+        class MyApp(App):
+            @entrypoint
+            async def crawler(self, inp): ...
+        """,
+    )
+    _write_test(
+        tmp_path,
+        "tests/e2e/test_full_dag.py",
+        'import os\nos.environ["ATLAN_API_KEY"]\n',
+    )
+    entry = ConnectorLedger(
+        name="app-x",
+        workflows=(
+            Workflow(
+                id="crawler",
+                declared_at="",
+                lane=_lane(test="tests/e2e/test_full_dag.py"),
+            ),
+        ),
+    )
+    with pytest.raises(BoundaryMismatchError) as excinfo:
+        evaluate_connector(entry, repo, None)
+    assert "post-publish" in str(excinfo.value)
+
+
+def test_claiming_post_publish_is_never_an_error(tmp_path):
+    """Detection is a lower bound; the conservative direction is accepted."""
+    repo = _write_test(
+        tmp_path,
+        "app/main.py",
+        """
+        class MyApp(App):
+            @entrypoint
+            async def crawler(self, inp): ...
+        """,
+    )
+    _write_test(tmp_path, "tests/e2e/t.py", "def test_ok(): assert True\n")
+    entry = ConnectorLedger(
+        name="app-x",
+        workflows=(
+            Workflow(
+                id="crawler",
+                declared_at="",
+                lane=_lane(boundary="post-publish", test="tests/e2e/t.py"),
+            ),
+        ),
+    )
+    result = evaluate_connector(entry, repo, None)
+    assert result.covered == 0
+
+
+def test_post_publish_lane_never_counts_however_good_it_is():
+    actions = FakeActions({".github/workflows/ci.yaml": FakeRun("push", "success")})
+    result = evaluate_connector(
+        _connector(boundary="post-publish", realism="L", depth="G"), None, actions
+    )
+    assert result.workflows[0].covered is False
+    assert "e2e lane" in result.workflows[0].reason

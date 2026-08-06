@@ -12,7 +12,9 @@ Two of the three axes are re-derived rather than trusted:
   it;
 * **cadence** comes from the GitHub Actions API, so writing ``cadence: A`` in
   the ledger earns nothing if the job does not actually run on an automatic
-  trigger.
+  trigger;
+* the **boundary** claim is checked against the cited test, so a lane cannot be
+  labelled ``transformed`` while demonstrably verifying against a live tenant.
 
 Only ``realism`` and ``depth`` are trusted from the ledger. They are
 citation-backed, reviewed like code, and audited by the quarterly mutation
@@ -26,13 +28,28 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Protocol
 
-from conformance.ledger.schema import ConnectorLedger, Ledger, Workflow
+from conformance.ledger.schema import Boundary, ConnectorLedger, Ledger, Workflow
 
 #: Workflow triggers that count as automatic.
 AUTOMATIC_TRIGGERS = frozenset({"push", "pull_request", "schedule"})
 
 #: Decorator names that declare a product workflow.
 ENTRYPOINT_DECORATORS = frozenset({"entrypoint"})
+
+#: Markers that a lane reads back from a live Atlan tenant, i.e. it verified
+#: something *after* the handoff and is therefore an e2e lane.
+#:
+#: Deliberately not a list of system-app names. Which system app a DAG invokes
+#: varies per connector (publish, lineage, QI, or several); needing tenant
+#: credentials to verify the result does not. All four full-DAG suites in the
+#: fleet gate on exactly these two environment variables via the same SDK base
+#: class, so one uniform rule covers every repo.
+TENANT_ACCESS_MARKERS = (
+    "ATLAN_BASE_URL",
+    "ATLAN_API_KEY",
+    "application_sdk.testing.e2e",
+    "pyatlan",
+)
 
 #: Base classes whose ``run()`` override is itself the product workflow.
 #: Three connectors (monte-carlo, mssql, fivetran) ship a single workflow this
@@ -62,6 +79,28 @@ class ActionsClient(Protocol):
     def latest_run(
         self, repo: str, workflow_file: str, job: str | None = None
     ) -> WorkflowRun | None: ...
+
+
+class BoundaryMismatchError(RuntimeError):
+    """A lane claims to stop at the handoff but reads back from a tenant.
+
+    Only raised in the score-inflating direction. Claiming ``post-publish``
+    when no tenant access is detected is merely conservative and is accepted
+    silently — detection is a lower bound, not a proof of absence.
+    """
+
+    def __init__(self, connector: str, workflow: str, path: str, marker: str) -> None:
+        super().__init__(
+            f"{connector}/{workflow}: lane is classified "
+            f'boundary="transformed" but {path} references {marker!r}, which '
+            f"means it verifies against a live Atlan tenant — i.e. it runs past "
+            f"the handoff artifact and is an e2e lane. Reclassify it as "
+            f'boundary="post-publish", or cite the integration lane instead.'
+        )
+        self.connector = connector
+        self.workflow = workflow
+        self.path = path
+        self.marker = marker
 
 
 class LedgerDriftError(RuntimeError):
@@ -155,6 +194,32 @@ def _has_entrypoint_decorator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> b
     return False
 
 
+def detect_tenant_access(repo_path: Path, test_ref: str) -> tuple[str, str] | None:
+    """Return ``(path, marker)`` if the cited lane reads back from a tenant.
+
+    ``test_ref`` may be a file or a directory; directories are scanned one level
+    deep for ``test_*.py``. Returns ``None`` when nothing is found — which is a
+    lower bound, not proof the lane stays inside the boundary.
+    """
+    target = repo_path / test_ref
+    if target.is_file():
+        candidates = [target]
+    elif target.is_dir():
+        candidates = sorted(target.rglob("test_*.py"))
+    else:
+        return None
+
+    for path in candidates:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for marker in TENANT_ACCESS_MARKERS:
+            if marker in text:
+                return (str(path.relative_to(repo_path)), marker)
+    return None
+
+
 @dataclass
 class WorkflowResult:
     """Per-workflow verdict, with the reason it did or did not qualify."""
@@ -220,14 +285,34 @@ def evaluate_connector(
 
     result = ConnectorResult(name=entry.name)
     for wf in entry.workflows:
+        if repo_path is not None and wf.lane.boundary is Boundary.TRANSFORMED:
+            _assert_boundary(entry.name, wf, repo_path)
         result.workflows.append(_evaluate_workflow(entry.name, wf, actions))
     return result
+
+
+def _assert_boundary(connector: str, wf: Workflow, repo_path: Path) -> None:
+    """Fail when a lane claims to stop at the handoff but demonstrably does not."""
+    test_ref = wf.lane.evidence.test
+    if not test_ref:
+        return
+    hit = detect_tenant_access(repo_path, test_ref)
+    if hit is not None:
+        raise BoundaryMismatchError(connector, wf.id, hit[0], hit[1])
 
 
 def _evaluate_workflow(
     connector: str, wf: Workflow, actions: ActionsClient | None
 ) -> WorkflowResult:
     lane = wf.lane
+
+    if lane.boundary is not Boundary.TRANSFORMED:
+        return WorkflowResult(
+            wf.id,
+            False,
+            f"lane is boundary={lane.boundary.value}; it verifies past the "
+            f"handoff artifact, so it is an e2e lane",
+        )
 
     if not lane.qualifies_on_declared_axes:
         return WorkflowResult(

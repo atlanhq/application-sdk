@@ -55,6 +55,25 @@ class Depth(str, Enum):
     NONE = "-"
 
 
+class Boundary(str, Enum):
+    """Where the lane stops — the integration/e2e line.
+
+    The scope of an integration test ends at the app's own handoff artifact.
+    A lane that continues past it (running publish / lineage / QI and checking
+    whether assets landed in the tenant) is an e2e test and does not count
+    toward IRR, however good it is.
+
+    Directory is not the discriminator — several connectors keep qualifying
+    integration lanes under ``tests/e2e/``. What the assertion *reads* is.
+    """
+
+    TRANSFORMED = "transformed"
+    """Asserts on the app's own transformed/ output, then stops."""
+
+    POST_PUBLISH = "post-publish"
+    """Continues into system apps and reads back from the Atlan tenant."""
+
+
 class Cadence(str, Enum):
     """How the lane is triggered. Advisory here; verified in compute."""
 
@@ -66,6 +85,9 @@ class Cadence(str, Enum):
 
     NONE = "-"
 
+
+#: The only boundary that counts toward IRR.
+QUALIFYING_BOUNDARY = Boundary.TRANSFORMED
 
 #: Realism values that count toward IRR.
 QUALIFYING_REALISM = frozenset({Realism.LIVE, Realism.REPLAY})
@@ -103,6 +125,7 @@ class Lane:
     realism: Realism
     depth: Depth
     cadence: Cadence
+    boundary: Boundary
     evidence: Evidence
 
     @classmethod
@@ -112,13 +135,18 @@ class Lane:
             realism=Realism(raw["realism"]),
             depth=Depth(raw["depth"]),
             cadence=Cadence(raw["cadence"]),
+            boundary=Boundary(raw["boundary"]),
             evidence=Evidence.from_dict(raw),
         )
 
     @property
     def qualifies_on_declared_axes(self) -> bool:
-        """Realism and depth are sufficient. Cadence is verified elsewhere."""
-        return self.realism in QUALIFYING_REALISM and self.depth in QUALIFYING_DEPTH
+        """Boundary, realism and depth. Cadence is verified elsewhere."""
+        return (
+            self.boundary is QUALIFYING_BOUNDARY
+            and self.realism in QUALIFYING_REALISM
+            and self.depth in QUALIFYING_DEPTH
+        )
 
 
 @dataclass(frozen=True)
