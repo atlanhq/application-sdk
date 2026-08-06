@@ -453,20 +453,21 @@ def collect_redacted_names(tree: ast.Module) -> frozenset[str]:
     class _Binder(ast.NodeVisitor):
         """Visit bindings in source order, tracking placeholder-ness.
 
-        Nested scopes are entered via ``generic_visit`` (``visit_FunctionDef``
-        is *not* overridden) so every function/class body is walked — a
-        binding in any scope counts toward that name's module-wide state.
-        This is what makes the check cross-function: a non-placeholder binding
-        in *any* scope disqualifies the name everywhere.
+        Every visitor ends in ``generic_visit``, so nested scopes are entered
+        and every function/class body is walked — a binding in any scope
+        counts toward that name's module-wide state.  This is what makes the
+        check cross-function: a non-placeholder binding in *any* scope
+        disqualifies the name everywhere.
 
         Only ``Assign``/``AnnAssign``/``NamedExpr`` can carry a placeholder
         *value*, so they alone may mark a name exempt.  Every other binding
         form is recorded as a real binding and disqualifies the name.  The set
         of forms is exhaustive rather than allow-listed one node type at a
         time — ``AugAssign``, ``for``/``with``/comprehension targets, imports,
-        ``except … as``, function/lambda parameters, and ``match`` capture
-        patterns all rebind a name to a non-placeholder value, so recording
-        them ends the "one new form per round" class instead of chasing it.
+        ``except … as``, function/lambda parameters, ``match`` capture
+        patterns, and definition names (``def``/``class``/``type``) all rebind
+        a name to a non-placeholder value, so recording them ends the
+        "one new form per round" class instead of chasing it.
         """
 
         def visit_Assign(self, node: ast.Assign) -> None:
@@ -540,20 +541,34 @@ def collect_redacted_names(tree: ast.Module) -> frozenset[str]:
             self.generic_visit(node)
 
         # ``def connect(password):`` / ``lambda password: …`` — every parameter
-        # binds a real argument value at call time.
+        # binds a real argument value at call time, and the definition name
+        # itself (``def password():``) binds the function object.
         def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            record(node.name, False)  # the definition name binds the function object
             for name in _iter_arg_names(node.args):
                 record(name, False)
             self.generic_visit(node)
 
         def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            record(node.name, False)
             for name in _iter_arg_names(node.args):
                 record(name, False)
             self.generic_visit(node)
 
         def visit_Lambda(self, node: ast.Lambda) -> None:
+            # A lambda has no name of its own — only its parameters bind.
             for name in _iter_arg_names(node.args):
                 record(name, False)
+            self.generic_visit(node)
+
+        # ``class password:`` binds the class object to the name.
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            record(node.name, False)
+            self.generic_visit(node)
+
+        # ``type password = str`` (Python ≥ 3.12) binds the alias object.
+        def visit_TypeAlias(self, node: ast.TypeAlias) -> None:  # type: ignore[attr-defined]
+            record_target(node.name, False)
             self.generic_visit(node)
 
         # ``case {"pw": password}:`` — capture patterns bind real values.

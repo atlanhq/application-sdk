@@ -1456,3 +1456,36 @@ def test_l010_fires_when_rebound_via_match_capture() -> None:
         "        logger.info('connecting with password %s', password)\n"
     )
     assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_def_name() -> None:
+    # ``def password():`` binds the function object to the name — no longer a
+    # placeholder, so logging it must be flagged.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "def password():\n    pass\n"
+        "logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_class_name() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "class password:\n    pass\n"
+        "logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_type_alias() -> None:
+    # ``type password = str`` (Python >= 3.12) binds the alias object.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "type password = str\n"
+        "logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
