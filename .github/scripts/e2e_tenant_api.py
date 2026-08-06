@@ -154,8 +154,15 @@ def validate_tenant_id(tenant_id: str) -> str:
     value = tenant_id.strip()
     if not value:
         raise TenantApiError(
-            "no tenant id given. `allowed_tenants` needs the tenant's ID (its "
-            "vcluster instance name, e.g. 'markeznp37'), not its hostname."
+            "no tenant id given. `allowed_tenants` needs the tenant's ID — its "
+            "vcluster instance name, e.g. 'markeznp37' — not its hostname.\n"
+            "Where it comes from: a `tenant_id` field on this cloud's entry in "
+            "the E2E_TENANT_MATRIX_JSON secret, which the e2e tenant resolver "
+            "exports as E2E_TENANT_ID. Add it there (alongside `tenant`, "
+            "`client_id`, `client_secret`, `api_key`) to enable the install path. "
+            "The E2E Tenant Install workflow also takes a `tenant_id` input for a "
+            "one-off run, and that is the only option on the single-tenant "
+            "fallback path, which carries no matrix entry to add the field to."
         )
     if "." in value or "://" in value:
         raise TenantApiError(
