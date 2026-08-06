@@ -261,6 +261,20 @@ def _registered_source_repo(info: dict[str, object]) -> str:
     return ""
 
 
+def _normalize_repo_url(value: str) -> str:
+    """Canonicalize a repo URL for *comparison only* — never for sending.
+
+    GitHub repo URLs are case-insensitive and may carry a trailing ``/`` or
+    ``.git``. Two spellings of the same repo must not trip the mismatch guard
+    (the GM-registered value is always what gets sent, so normalization here
+    only decides whether to refuse, never what to publish).
+    """
+    normalized = value.strip().lower().rstrip("/")
+    if normalized.endswith(".git"):
+        normalized = normalized[: -len(".git")]
+    return normalized.rstrip("/")
+
+
 def _resolve_repo_url(registered: str, supplied: str) -> str:
     """Decide which ``repo`` to send, refusing to rewrite an app's provenance.
 
@@ -272,7 +286,11 @@ def _resolve_repo_url(registered: str, supplied: str) -> str:
     disagreement is an error here rather than something to resolve by guessing.
     """
     registered, supplied = registered.strip(), supplied.strip()
-    if registered and supplied and registered != supplied:
+    if (
+        registered
+        and supplied
+        and _normalize_repo_url(registered) != _normalize_repo_url(supplied)
+    ):
         raise TenantAppError(
             f"refusing to publish: GM has this app's source_repo as {registered!r} "
             f"but --repo-url is {supplied!r}. GM would UPDATE the app's "
@@ -281,6 +299,9 @@ def _resolve_repo_url(registered: str, supplied: str) -> str:
             "real CI/CD publish gating. Pass the app's own repo, or omit "
             "--repo-url and let the registered value be echoed back."
         )
+    # Send the registered value when present — byte-for-byte what GM has on
+    # file — so the publish can neither trip the CI/CD guard nor rewrite
+    # provenance. Normalization above only decided *whether* to refuse.
     return registered or supplied
 
 

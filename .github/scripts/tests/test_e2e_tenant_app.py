@@ -582,6 +582,42 @@ def test_registered_repo_is_echoed_back_on_publish(
     assert transport.body_for("/marketplace/publish")["repo"] == repo
 
 
+@pytest.mark.parametrize(
+    "supplied",
+    [
+        # Same repo, different spelling: case, trailing slash, .git suffix.
+        # These must NOT trip the mismatch guard — GitHub treats them as
+        # identical, and GM's registered value is still what gets sent.
+        "HTTPS://GITHUB.COM/AtlanHQ/Atlan-OpenAPI-App",
+        "https://github.com/atlanhq/atlan-openapi-app/",
+        "https://github.com/atlanhq/atlan-openapi-app.git",
+        "https://github.com/atlanhq/atlan-openapi-app/.git",
+    ],
+)
+def test_equivalent_repo_spelling_is_not_a_mismatch(
+    monkeypatch: pytest.MonkeyPatch, supplied: str
+) -> None:
+    registered = "https://github.com/atlanhq/atlan-openapi-app"
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({"source_repo": registered})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+        ),
+    )
+    app.install(_install_args(repo_url=supplied))
+    # The registered value is sent back byte-for-byte, not the supplied spelling.
+    assert transport.body_for("/marketplace/publish")["repo"] == registered
+
+
 def test_mismatched_repo_is_refused_rather_than_repointing_provenance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
