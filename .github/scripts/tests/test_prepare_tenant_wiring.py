@@ -65,21 +65,48 @@ def test_e2e_needs_prepare_tenant(jobs: dict) -> None:  # type: ignore[type-arg]
 
 
 def test_e2e_tolerates_skipped_but_not_failed_prepare(jobs: dict) -> None:  # type: ignore[type-arg]
+    """The e2e legs must run when the new jobs are SKIPPED, and not when FAILED.
+
+    Both halves are load-bearing and it is easy to get exactly one of them:
+
+    * A job's `needs` gate is evaluated separately from its `if:`. With no
+      status-check function, GitHub applies an implicit success() over every
+      `needs` entry, a skipped need does not satisfy it, and the job is skipped
+      before the `if:` is consulted. So the explicit `== 'skipped'` clauses are
+      dead without a status-check override, and the legs disappear on the default
+      path — which is every existing caller.
+    * A bare `always()` with no result gates swings the other way and runs the
+      legs after a FAILED install, testing whatever version the tenant happens to
+      run.
+
+    The correct shape is `always() && <explicit success-or-skipped gates>`, which
+    is what `connector-tests` in pull_request.yaml already does over its own
+    skippable need.
+
+    An earlier version of this guard asserted `"always()" not in condition` — it
+    codified the first bug and forbade the fix. Found by @sdk-review on #3023.
+    """
     condition = " ".join(jobs["e2e"]["if"].split())
 
-    # Skipped is the off path and must be allowed through.
-    assert "needs.prepare-tenant.result == 'skipped'" in condition
-    assert "needs.prepare-tenant.result == 'success'" in condition
-
-    # always() would run the legs even when the install FAILED, which means
-    # testing against whatever version the tenant happens to run — precisely the
-    # silent-wrong-version failure this work removes.
-    assert "always()" not in condition, (
-        "the e2e legs must not run on a FAILED prepare-tenant; always() would "
-        "let a leg test an arbitrary tenant version and report it as a pass"
+    # 1. A status-check function must override the implicit success()-over-needs.
+    has_override = "always()" in condition or "!cancelled()" in condition
+    assert has_override, (
+        "the e2e `if:` has no status-check function, so GitHub's implicit "
+        "success() over `needs` skips the job whenever build-e2e-image or "
+        "prepare-tenant is skipped — which is the default path for every "
+        "existing caller. The `== 'skipped'` clauses below are dead without it."
     )
-    # `failure()`/`cancelled()` would have the same effect.
-    assert "failure()" not in condition and "cancelled()" not in condition
+
+    # 2. The explicit gates must still be there, or the override runs the legs on
+    #    a FAILED install.
+    for job in ("prepare-tenant", "build-e2e-image"):
+        for result in ("success", "skipped"):
+            expected = f"needs.{job}.result == '{result}'"
+            assert expected in condition, (
+                f"missing `{expected}`. With a status-check override present, "
+                "these gates are the only thing stopping the legs from running "
+                f"after a FAILED {job}."
+            )
 
 
 # ── The matrix-output trap ───────────────────────────────────────────────────

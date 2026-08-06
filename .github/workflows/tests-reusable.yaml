@@ -992,14 +992,28 @@ jobs:
 
   e2e:
     name: End-to-end (${{ matrix.name }})
-    # prepare-tenant is in `needs` unconditionally so the legs cannot start before
-    # it; the `if` tolerates it being SKIPPED (install-app-to-tenant off), which is
-    # what keeps unadopted repos on their current behaviour. `always()` is
-    # deliberately NOT used — a FAILED prepare-tenant must stop the legs, because
-    # continuing would test whatever version the tenant happens to run, which is
-    # the exact failure FND-31 exists to remove.
+    # build-e2e-image and prepare-tenant are in `needs` so the legs cannot start
+    # before them, but both are SKIPPED on the default path
+    # (install-app-to-tenant off — every existing caller). That combination needs
+    # `always() &&`:
+    #
+    # A job's `needs` gate is evaluated SEPARATELY from its `if:`. Without a
+    # status-check function, GitHub applies an implicit success() over every
+    # `needs` entry, a skipped need does not satisfy it, and the job is skipped
+    # before the `if:` is even consulted — so the explicit `== 'skipped'` clauses
+    # below would be dead code and the e2e legs would vanish on the off path.
+    #
+    # `always()` does NOT reintroduce run-on-failure: the explicit gates still
+    # require each need to be success-or-skipped, so a FAILED prepare-tenant stops
+    # the legs, which is essential — continuing would test whatever version the
+    # tenant happens to run, the exact failure FND-31 removes.
+    #
+    # Same shape as `connector-tests` in pull_request.yaml, which pairs
+    # `always() &&` with `success' || 'skipped'` gates over a skippable
+    # build-sdk-base-image need. Found by @sdk-review on #3023.
     needs: [discover-e2e, build-e2e-image, prepare-tenant]
     if: |
+      always() &&
       needs.discover-e2e.result == 'success' &&
       needs.discover-e2e.outputs.count != '0' &&
       (needs.prepare-tenant.result == 'success' || needs.prepare-tenant.result == 'skipped') &&
