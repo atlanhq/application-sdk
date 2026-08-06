@@ -573,7 +573,14 @@ _CALL_SITE_SUFFIXES = ("*.y*ml", "*.sh", "*.py")
 # a named exclusion rather than encoded into the predicate, and validated below:
 # if a mention here ever appears outside a comment, the exclusion stops applying
 # and the file is audited like any other caller.
-_PROSE_ONLY_FILES = {".github/workflows/scripts-tests.yaml"}
+_PROSE_ONLY_FILES = {
+    ".github/workflows/scripts-tests.yaml",
+    # FND-31. Names this script in a comment only, pointing at it as the
+    # explanation for why its own tenant-resolution step is two passes. It never
+    # invokes it. The "no live mention" assertion below is what keeps that true:
+    # if it ever starts invoking the script, it stops being excluded.
+    ".github/workflows/e2e-tenant-install.yaml",
+}
 
 # The script and its own tests are the implementation, not callers of it. Both
 # contain literal `>> "$GITHUB_ENV"` invocations — in the module docstring's usage

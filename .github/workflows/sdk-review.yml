@@ -82,6 +82,13 @@ jobs:
   # couple of minutes after a review lands, and the result is two summaries
   # for one sha that read like a bug. A human tagging `@sdk-review` always
   # reviews, unchanged HEAD or not.
+  #
+  # NOTE — this job is an OPTIMIZATION, not the authority. It runs outside
+  # the per-PR concurrency group (sdk-review-$PR), so two concurrent bot
+  # triggers can both pass it ("no review yet") and both reach the sandbox.
+  # The authoritative dedupe check lives inside the sandbox (ORCHESTRATION.md
+  # Phase 0 §6b bot-trigger dedupe guard), which runs under the concurrency
+  # lock and sees true post-lock comment state.
   gate:
     if: >-
       github.event_name == 'workflow_dispatch'
@@ -112,9 +119,22 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
         run: |
-          set -euo pipefail
-          SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha')
-          echo "head_sha=${SHA}" >> "$GITHUB_OUTPUT"
+          # 3 attempts, 5 s / 10 s backoff. On exhaustion emit head_resolved=false
+          # rather than failing the job — the gate script then proceeds fail-open
+          # (reviewing is the safe default; a missing review is the harmful outcome).
+          for attempt in 1 2 3; do
+            if SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/dev/null) \
+               && [ -n "$SHA" ]; then
+              echo "head_sha=${SHA}" >> "$GITHUB_OUTPUT"
+              echo "head_resolved=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::warning::Head resolution attempt ${attempt}/3 failed"
+            [ "$attempt" -lt 3 ] && sleep $((attempt * 5))
+          done
+          echo "::warning::All 3 head-resolution attempts failed — gate will proceed fail-open"
+          echo "head_sha=" >> "$GITHUB_OUTPUT"
+          echo "head_resolved=false" >> "$GITHUB_OUTPUT"
 
       - name: Decide whether to review
         id: gate
@@ -123,9 +143,75 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
           HEAD_SHA: ${{ steps.head.outputs.head_sha }}
+          HEAD_RESOLVED: ${{ steps.head.outputs.head_resolved }}
           EVENT_NAME: ${{ github.event_name }}
           TRIGGER_ACTOR: ${{ github.event.comment.user.login }}
         run: python3 .github/scripts/sdk_review_gate.py
+
+      # If the gate job itself fails (e.g. checkout failure, unexpected error in
+      # the gate script), post a comment on the PR so the author knows to re-tag.
+      # Head-resolution exhaustion is handled inside the gate script (fail-open),
+      # so this step fires only for unexpected failures.
+      - name: Post gate-failure comment on PR
+        if: always() && failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            if (!prNumber) return;
+            const runUrl = process.env.GHA_RUN_URL;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: [
+                `⚠️ **SDK Review gate encountered an unexpected error** and could not decide whether to dispatch.`,
+                ``,
+                `[View the failing workflow run](${runUrl}) for details.`,
+                ``,
+                `Please retry by commenting \`@sdk-review\` again. If it keeps failing, reach out to the platform team.`,
+              ].join('\n'),
+            });
+
+  # When the gate skips a bot-trigger, react to the original comment so the
+  # PR shows the trigger was seen and consciously declined. Without this, a
+  # skipped trigger is invisible: the `@sdk-review` comment gets no reaction
+  # and no starting comment — indistinguishable to the resolver from the
+  # reviewer being dead.
+  #
+  # `::notice::` is already emitted by the gate script for all decisions
+  # (including skip), so the run log has a record. This reaction surfaces it
+  # on the PR timeline without adding a new comment that the resolver may
+  # re-read as pending work.
+  react-on-skip:
+    needs: gate
+    # Only on issue_comment triggers — workflow_dispatch has no comment to react to.
+    # Humans are never skipped (the gate always proceeds on human triggers).
+    if: >-
+      needs.gate.outputs.decision == 'skip'
+      && github.event_name == 'issue_comment'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: React to skipped trigger
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            // React with 'confused' (😕) to signal "seen, consciously declined".
+            // The dispatch job uses 'eyes' (👀) for proceed — keeping distinct
+            // reactions means a user can tell "seen and running" (👀) from "seen
+            // and skipped" (😕) without reading the workflow log.
+            // No new PR comment — that would be noise the resolver may re-read.
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'confused',
+            });
 
   sdk-review-dispatch:
     needs: gate
@@ -240,15 +326,23 @@ jobs:
       # session id silently fails to stop anything, which is exactly the
       # bug it exists to prevent. Compute once, read twice.
       #
-      # Unique per run, not per HEAD. It used to end at HEAD_SHA_SHORT, so two
-      # triggers on an unchanged HEAD sent the same session id — and mothership
-      # reads a supplied session_id as a follow-up (`is_follow_up =
+      # Unique per attempt, not just per run. It used to end at HEAD_SHA_SHORT,
+      # so two triggers on an unchanged HEAD sent the same session id — and
+      # mothership reads a supplied session_id as a follow-up (`is_follow_up =
       # request.session_id is not None`), so the second dispatch tried to RESUME
       # a conversation that had been cancelled or had already finished. That is
       # the "No conversation found with session" failure on #2987 and the
-      # zero-SSE death on #2989. GITHUB_RUN_ID makes every dispatch a fresh
+      # zero-SSE death on #2989. GITHUB_RUN_ID makes every NEW dispatch a fresh
       # session; the HEAD stays in the id purely so the sandbox is legible in
       # Cloudflare logs.
+      #
+      # GITHUB_RUN_ID is stable across re-runs of the same workflow run (docs:
+      # "does not change if you re-run the workflow run"). GITHUB_RUN_ATTEMPT
+      # increments with every re-run (1 on the first run, 2 on the first re-run,
+      # etc.). Without the attempt suffix, clicking "Re-run failed jobs" on a
+      # failed SDK Review would dispatch the same session id into a sandbox that
+      # mothership may still have in its DB — causing the same resume-of-a-dead-
+      # session failure the RUN_ID addition fixed for multi-trigger cases.
       - name: Compute mothership session id
         id: session
         env:
@@ -256,9 +350,10 @@ jobs:
           HEAD_SHA_SHORT: ${{ steps.pr.outputs.head_sha_short }}
           REPO_FULL_NAME: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          echo "session_id=sdk-review-${REPO_FULL_NAME//\//-}-${PR_NUMBER}-${HEAD_SHA_SHORT}-${RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "session_id=sdk-review-${REPO_FULL_NAME//\//-}-${PR_NUMBER}-${HEAD_SHA_SHORT}-${RUN_ID}-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
       - name: Post 'review starting' notice to PR
         id: starter
@@ -1114,6 +1209,26 @@ jobs:
             exit 0
           fi
 
+          # S1 guard — REVIEWED_HEAD: belt-and-suspenders over the
+          # DISPATCH_HEAD_SHA vs CURRENT_HEAD check above (line ~1169).
+          # That check verifies the PR HEAD didn't move while the sandbox
+          # ran. This check verifies the summary comment explicitly claims
+          # to have reviewed DISPATCH_HEAD_SHA — catching the (rare but
+          # possible) case where the sandbox checked out a different commit
+          # (e.g., the REVIEWED_HEAD placeholder was not substituted, or the
+          # sandbox started from a stale snapshot). If REVIEWED_HEAD is
+          # absent the comment pre-dates the marker; treat it as unverifiable
+          # rather than approving blind, matching the fast-path behaviour.
+          REVIEWED_HEAD=$(printf '%s' "$SUMMARY" | grep -oP '<!--\s*REVIEWED_HEAD:\s*\K[0-9a-f]+' | head -1 || true)
+          if [ -z "$REVIEWED_HEAD" ]; then
+            echo "::warning::PR #${PR_NUMBER}: verdict comment has no REVIEWED_HEAD marker — cannot confirm which sha was reviewed; skipping all stamps."
+            exit 0
+          fi
+          if [ "$REVIEWED_HEAD" != "$DISPATCH_HEAD_SHA" ]; then
+            echo "::warning::PR #${PR_NUMBER}: verdict was computed for ${REVIEWED_HEAD} but this run was dispatched for ${DISPATCH_HEAD_SHA} — skipping all stamps."
+            exit 0
+          fi
+
           # Extract the verdict. Prefer the structured marker
           # `<!-- VERDICT: READY_TO_MERGE -->` (deterministic, formatting-
           # invariant). Fall back to the `### Verdict:` grep for legacy
@@ -1178,13 +1293,27 @@ jobs:
                 # by the dismiss-on-human workflow to identify approvals posted
                 # by this flow. Keep this in sync with
                 # sdk-review-approve-on-verdict.yml.
+                #
+                # S2: pin to commit_id=DISPATCH_HEAD_SHA (which we verified ==
+                # REVIEWED_HEAD above). If a push landed between our checks and
+                # this POST, GitHub attaches the approval to the OLD (reviewed)
+                # commit rather than the new HEAD. Full protection against that
+                # window additionally requires `dismiss_stale_reviews_on_push`
+                # enabled on the main branch protection rule — that setting could
+                # not be verified from a non-admin token; confirm it is ON before
+                # relying on this guard.
+                # `gh pr review --approve` does not expose commit_id; use raw API.
                 APPROVE_BODY=$(printf '%s\n' \
                   "**SDK reviewer's verdict:** READY TO MERGE." \
                   "" \
                   "Full review summary is in the comment posted on this PR." \
                   "")
-                gh pr review "$PR_NUMBER" --repo "$REPO" --approve --body "$APPROVE_BODY"
-                echo "Approved PR #${PR_NUMBER} as atlan-ci (slow path fallback)."
+                gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+                  -X POST \
+                  -f commit_id="$DISPATCH_HEAD_SHA" \
+                  -f event=APPROVE \
+                  -f body="$APPROVE_BODY"
+                echo "Approved PR #${PR_NUMBER} as atlan-ci (slow path fallback, commit_id=${DISPATCH_HEAD_SHA})."
               fi
               ;;
             "NEEDS_HUMAN")
