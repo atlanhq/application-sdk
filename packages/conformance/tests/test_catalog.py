@@ -202,6 +202,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # T017: e2e agent_spec() override must inherit the per-leg deployment queue —
     # only connector apps subclass the e2e harness and (may) override agent_spec;
     # the SDK ships the env-derived default, it doesn't hard-code a connector queue.
+    # T020: a workflow Scenario must declare which app @entrypoint it exercises —
+    # only connector apps declare @entrypoint methods and run Scenario suites
+    # against them; the SDK ships the field, it is not a subject of the rule.
     assert app_scoped == {
         "B001",
         "C002",
@@ -272,6 +275,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "I004",
         "I005",
         "S002",
+        "T020",
     }, app_scoped
     # SDK-only rules: the SDK must keep Temporal contained behind its seam
     # (P006/P007, BLDX-1417) and declare its deprecations correctly (B002–B004).
@@ -481,11 +485,12 @@ def test_catalog_t_series_present() -> None:
     marking), T002/T003 (SDR test-quality), T004 (dev-entrypoint), T005-T009
     (assertion/collection quality), T010-T013 (tier structure), T014/T015
     (coverage-config), T016/T017 (e2e-CI queue isolation), T018
-    (integration tier deselected by addopts), and T019 (asyncio test-loop scope
-    unset relative to a broadened fixture loop scope)."""
+    (integration tier deselected by addopts), T019 (asyncio test-loop scope
+    unset relative to a broadened fixture loop scope), and T020 (workflow
+    scenario not declaring which app entrypoint it exercises)."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {f"T{n:03d}" for n in range(1, 20)}
+    expected = {f"T{n:03d}" for n in range(1, 21)}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
     extra = t_ids - expected
