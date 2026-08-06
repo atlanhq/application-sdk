@@ -133,6 +133,7 @@ def _install_args(**overrides: object) -> argparse.Namespace:
         "release_model": "",
         "created_by": "",
         "scan_wait_seconds": 0,
+        "install_retry_seconds": 0,
         "timeout_seconds": 600,
     }
     values.update(overrides)
@@ -892,6 +893,114 @@ def test_non_ghcr_repo_image_mismatch_warns_but_proceeds(
         transport.body_for("/marketplace/publish")["repo"]
         == "https://github.com/atlanhq/application-sdk"
     )
+
+
+# ── LM answers 200 with an error envelope ────────────────────────────────────
+# POST .../install returns HTTP 200 carrying {status, status_code, message} for
+# its two non-deploying outcomes, so response.ok alone reads a 404 as success.
+# LM's snapshot also lags a fresh publish by up to ~5 min, which is why the
+# install is retried rather than failed on first miss.
+
+
+def _install_reply(status: str, code: int, message: str) -> Response:
+    return Response(
+        status=200, body={"status": status, "status_code": code, "message": message}
+    )
+
+
+_NOT_FOUND = _install_reply(
+    "error", 404, "App with ID '019d1f6b-6fea-7db3-96d8-e61e159d0351' not found: x"
+)
+
+
+def _publish_then(*install_replies: Response) -> StubTransport:
+    """Transport that gets as far as the install, then serves the given replies."""
+    routes = [
+        StubRoute("GET", "/info", _ok({})),
+        StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+    ]
+    routes += [StubRoute("POST", "/install", r) for r in install_replies]
+    routes += [
+        StubRoute("GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})),
+        StubRoute("GET", "/info", _ok(_lm_info(_VERSION))),
+    ]
+    return StubTransport(
+        routes=routes,
+        sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+    )
+
+
+def test_http_200_with_an_error_envelope_is_a_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The bug this guards: response.ok is True here. Only the in-body status_code
+    # says it failed.
+    _wire(monkeypatch, _publish_then(_NOT_FOUND))
+    with pytest.raises(app.TenantAppError, match="404"):
+        app.install(_install_args(install_retry_seconds=0))
+
+
+def test_install_retries_while_lm_catalog_catches_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fresh publish is not immediately installable; the retry covers the lag."""
+    transport = _wire(
+        monkeypatch,
+        _publish_then(_NOT_FOUND, _NOT_FOUND, _ok({"deployment_id": "d1"})),
+    )
+    outcome = app.install(_install_args(install_retry_seconds=600))
+    assert outcome.deployment_id == "d1"
+    assert len([p for p in transport.paths("POST") if "/install" in p]) == 3
+
+
+def test_retry_budget_is_respected_and_the_error_explains_the_lag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire(monkeypatch, _publish_then(_NOT_FOUND))
+    with pytest.raises(app.TenantAppError) as excinfo:
+        app.install(_install_args(install_retry_seconds=0))
+    assert "snapshot" in str(excinfo.value) and "--install-retry-seconds" in str(
+        excinfo.value
+    )
+
+
+def test_already_installed_is_a_no_op_not_a_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # LM starts no deployment in this case, so there is nothing to poll; the
+    # version read-back is what decides success.
+    transport = _wire(
+        monkeypatch,
+        _publish_then(_install_reply("success", 200, "App already installed")),
+    )
+    outcome = app.install(_install_args())
+    assert outcome.deployment_id == ""
+    assert outcome.installed_version == _VERSION
+    assert not any("/deployments/" in p for p in transport.paths("GET"))
+
+
+def test_success_without_a_deployment_id_still_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Not "already installed", not an error, but nothing to poll either — that is
+    # unexplained, and must not read as a completed install.
+    _wire(monkeypatch, _publish_then(_install_reply("success", 200, "queued")))
+    with pytest.raises(app.TenantAppError, match="no deployment_id"):
+        app.install(_install_args())
+
+
+@pytest.mark.parametrize(
+    "code, message, expected_not_found",
+    [
+        (404, "App with ID 'x' not found: y", True),
+        (200, "App with ID 'x' not found: y", True),
+        (500, "internal error", False),
+        (200, "App already installed", False),
+    ],
+)
+def test_not_found_detection(code: int, message: str, expected_not_found: bool) -> None:
+    reply = app._InstallReply.parse(_install_reply("error", code, message))
+    assert reply.not_found is expected_not_found
 
 
 # ── Version extraction across LM shapes ──────────────────────────────────────

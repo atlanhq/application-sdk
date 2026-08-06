@@ -78,6 +78,17 @@ on:
         required: false
         type: string
         default: "0"
+      install_retry_seconds:
+        description: >-
+          How long to keep retrying the install while LM's tenant-catalog
+          snapshot catches up with the fresh publish. LM excludes a release while
+          it is scan_pending and only picks it up on the next scheduled sync
+          (~5 min), so a just-published release is not immediately installable.
+          Waiting on GM's release status is NOT enough — a run that read `active`
+          from GM still had its install miss. 0 disables the retry.
+        required: false
+        type: string
+        default: "600"
       timeout_seconds:
         description: "Budget for the deployment to reconcile before failing."
         required: false
@@ -161,6 +172,7 @@ jobs:
           BRANCH: ${{ inputs.branch }}
           REPO_URL: ${{ inputs.repo_url }}
           SCAN_WAIT_SECONDS: ${{ inputs.scan_wait_seconds }}
+          INSTALL_RETRY_SECONDS: ${{ inputs.install_retry_seconds }}
           TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
         run: |
           set -euo pipefail
@@ -173,6 +185,7 @@ jobs:
             --repo-url "$REPO_URL" \
             --tenant "$SDR_TEST_TENANT" \
             --scan-wait-seconds "$SCAN_WAIT_SECONDS" \
+            --install-retry-seconds "$INSTALL_RETRY_SECONDS" \
             --timeout-seconds "$TIMEOUT_SECONDS"
 
       # Independent read-back through the same check the e2e legs will run, so a
