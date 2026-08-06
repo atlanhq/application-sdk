@@ -166,7 +166,9 @@ def main(runner: Runner = subprocess.run) -> int:
         set_output("decision", "proceed")
         set_output("reason", "head-resolution-failed")
         set_output("message", message)
-        print(f"::notice::sdk-review gate: proceed (head-resolution-failed) — {message}")
+        print(
+            f"::notice::sdk-review gate: proceed (head-resolution-failed) — {message}"
+        )
         return 0
 
     reviewed_head: str | None = None
