@@ -148,6 +148,42 @@ def test_transport_failure_names_the_host_not_the_credential(
     assert _SECRET not in message
 
 
+# ── Tenant ID vs hostname ────────────────────────────────────────────────────
+# `allowed_tenants` is matched EXACTLY by GM against the tenant's vcluster
+# instance name. A hostname publishes fine and yields a release visible to no
+# tenant, so the failure lands much later as "version not found" on install —
+# three live runs were lost to that, hence a fail-fast check.
+
+
+@pytest.mark.parametrize("tenant_id", ["markeznp37", "home-mt", "e2e-azure-main"])
+def test_valid_tenant_ids_pass(tenant_id: str) -> None:
+    assert api.validate_tenant_id(tenant_id) == tenant_id
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "e2e-azure-main.atlan.com",
+        "https://e2e-azure-main.atlan.com",
+        "tenant.example.com",
+    ],
+)
+def test_hostname_shaped_tenant_ids_are_refused(bad: str) -> None:
+    with pytest.raises(api.TenantApiError, match="hostname"):
+        api.validate_tenant_id(bad)
+
+
+@pytest.mark.parametrize("empty", ["", "   "])
+def test_empty_tenant_id_is_refused(empty: str) -> None:
+    # Empty would publish a release scoped to nothing at all.
+    with pytest.raises(api.TenantApiError, match="tenant"):
+        api.validate_tenant_id(empty)
+
+
+def test_tenant_id_is_trimmed() -> None:
+    assert api.validate_tenant_id("  markeznp37  ") == "markeznp37"
+
+
 # ── Token mint ───────────────────────────────────────────────────────────────
 
 

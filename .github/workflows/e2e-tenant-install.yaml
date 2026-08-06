@@ -59,6 +59,17 @@ on:
         description: "Git ref the image was built from, recorded on the GM version."
         required: true
         type: string
+      tenant_id:
+        description: >-
+          The tenant's ID — its vcluster instance name (e.g. "markeznp37"), NOT
+          its hostname. GM matches `allowed_tenants` against this exactly, so a
+          hostname publishes successfully but yields a release visible to no
+          tenant, and the install then fails with "version not found". Leave
+          empty to use E2E_TENANT_ID from the tenant-matrix secret, if that
+          entry carries one.
+        required: false
+        type: string
+        default: ""
       repo_url:
         description: >-
           The APP'S OWN repo, e.g. https://github.com/atlanhq/atlan-openapi-app.
@@ -171,6 +182,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           BRANCH: ${{ inputs.branch }}
           REPO_URL: ${{ inputs.repo_url }}
+          TENANT_ID_INPUT: ${{ inputs.tenant_id }}
           SCAN_WAIT_SECONDS: ${{ inputs.scan_wait_seconds }}
           INSTALL_RETRY_SECONDS: ${{ inputs.install_retry_seconds }}
           TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
@@ -183,7 +195,7 @@ jobs:
             --version "$VERSION" \
             --branch "$BRANCH" \
             --repo-url "$REPO_URL" \
-            --tenant "$SDR_TEST_TENANT" \
+            --tenant "${TENANT_ID_INPUT:-${E2E_TENANT_ID:-}}" \
             --scan-wait-seconds "$SCAN_WAIT_SECONDS" \
             --install-retry-seconds "$INSTALL_RETRY_SECONDS" \
             --timeout-seconds "$TIMEOUT_SECONDS"

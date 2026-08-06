@@ -87,6 +87,7 @@ from e2e_tenant_api import (
     path_segment,
     validate_app_id,
     validate_tenant_base_url,
+    validate_tenant_id,
 )
 from marketplace_publish_body import PublishBodyError, PublishRequest, build
 
@@ -824,7 +825,7 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         repo_url=repo_url,
         # The whole registration is scoped to this one tenant, so a per-PR build
         # can never become visible to a real one.
-        allowed_tenants=(args.tenant,),
+        allowed_tenants=(validate_tenant_id(args.tenant),),
         deploy_config=args.deploy_config,
         self_deployed_runtime=args.self_deployed_runtime,
         sdk_version=args.sdk_version,
@@ -936,7 +937,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_install.add_argument("--branch", required=True)
     p_install.add_argument(
-        "--tenant", required=True, help="tenant id for allowed_tenants scoping"
+        "--tenant",
+        required=True,
+        help=(
+            "The tenant's ID for allowed_tenants scoping — its vcluster instance "
+            "name (e.g. 'markeznp37'), NOT its hostname. GM matches this exactly; "
+            "a hostname yields a release visible to no tenant."
+        ),
     )
     p_install.add_argument("--repo-url", default="")
     p_install.add_argument("--deploy-config", default="")

@@ -132,6 +132,42 @@ def validate_tenant_base_url(base_url: str) -> str:
     return candidate
 
 
+def validate_tenant_id(tenant_id: str) -> str:
+    """Return the tenant ID, or raise if it looks like a hostname.
+
+    ``allowed_tenants`` scopes a GM release, and GM matches it EXACTLY against
+    the tenant's own id — the **vcluster instance name** (``markeznp37``,
+    ``home-mt``), which Heracles reads from the ``atlan-defaults`` ConfigMap key
+    ``instance`` (``heracles/handler/marketplace.go``). It is deliberately not
+    taken from the JWT: the Keycloak realm is ``default`` for every tenant.
+
+    A hostname (``e2e-azure-main.atlan.com``) is therefore silently wrong: the
+    publish succeeds, the release is created, and it is visible to NO tenant —
+    so the install fails later with "version not found" and a list of the
+    versions the tenant *can* see. That took three live runs to diagnose; this
+    turns it into an immediate, actionable error.
+
+    The check is deliberately narrow (a dot or a scheme), because tenant ids are
+    otherwise free-form vcluster names and a stricter pattern would reject valid
+    ones.
+    """
+    value = tenant_id.strip()
+    if not value:
+        raise TenantApiError(
+            "no tenant id given. `allowed_tenants` needs the tenant's ID (its "
+            "vcluster instance name, e.g. 'markeznp37'), not its hostname."
+        )
+    if "." in value or "://" in value:
+        raise TenantApiError(
+            f"tenant id {value!r} looks like a hostname. GM matches "
+            "`allowed_tenants` against the tenant's vcluster instance name (e.g. "
+            "'markeznp37'), so a hostname produces a release visible to no "
+            "tenant — the publish succeeds and the install then fails with "
+            "'version not found'. Pass the tenant ID."
+        )
+    return value
+
+
 def validate_app_id(app_id: str) -> str:
     """Return ``app_id`` when it has the GM UUID shape, or raise.
 

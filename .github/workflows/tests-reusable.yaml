@@ -962,7 +962,7 @@ jobs:
             --image "$IMAGE" \
             --version "$VERSION" \
             --branch "$BRANCH" \
-            --tenant "$SDR_TEST_TENANT" \
+            --tenant "${E2E_TENANT_ID:-}" \
             --repo-url "$REPO_URL" \
             --deploy-config "$DEPLOY_CONFIG" \
             --sdk-version "$SDK_VERSION" \
