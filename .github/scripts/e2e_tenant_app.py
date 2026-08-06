@@ -51,11 +51,16 @@ would red every leg of an unrelated PR, and release is gated separately. So the
 default here is ``--scan-wait-seconds 0`` — install immediately, report whatever
 the scan status happens to be.
 
-Whether GM *accepts* an install of a still-``scan_pending`` release is an open
-question at the time of writing (FND-31 spike (b)); the first live run of this
-script answers it. If GM rejects it, :func:`_looks_like_scan_gate` recognises
-the rejection and the error names the fix — raise ``--scan-wait-seconds`` — so
-the failure is self-explaining rather than an opaque 4xx.
+Answered empirically (FND-31 spike (b)), and not in the shape expected: GM does
+not refuse the install. The constraint is one layer down — **LM cannot see the
+release yet**. LM resolves an install against its own tenant-catalog snapshot,
+which excludes a release while it is ``scan_pending`` and only picks it up on the
+next scheduled sync (~5 min). A run that read ``active`` straight from GM still
+had its install miss, so waiting on GM's release status is not sufficient.
+
+Hence ``--install-retry-seconds`` (default 600): the install itself is retried
+while LM catches up. ``--scan-wait-seconds`` stays at 0 — waiting on the scan
+would not have helped, and a base-image CVE must not red an unrelated PR.
 """
 
 from __future__ import annotations
@@ -95,6 +100,8 @@ _SCAN_FAILED = "scan_failed"
 
 _DEPLOY_POLL_SECONDS = 10
 _SCAN_POLL_SECONDS = 10
+#: Gap between install retries while LM's catalog snapshot catches up.
+_INSTALL_RETRY_POLL_SECONDS = 20
 
 #: Keys an install/info response may carry the installed version under. LM has
 #: not committed to one name across versions, so check the plausible set rather
@@ -444,6 +451,20 @@ def _looks_like_cicd_managed(response: Response) -> bool:
     return "managed by ci/cd" in rendered or "cicd_managed" in rendered
 
 
+def _looks_like_scan_gate_text(text: str) -> bool:
+    """Scan-gate detection over a plain message string.
+
+    LM reports its outcome in the body rather than the HTTP status, so the
+    install path matches on the message while the publish path still matches on
+    a whole response.
+    """
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in (_SCAN_PENDING, _SCAN_FAILED, "scan", "not active", "draft")
+    )
+
+
 def _looks_like_scan_gate(response: Response) -> bool:
     """True when a failed install looks like GM's release-scan gate refusing.
 
@@ -540,37 +561,147 @@ def _publish(client: TenantClient, request: PublishRequest) -> tuple[str, str]:
     return version_id, release_id
 
 
-def _install(client: TenantClient, app_id: str, version_id: str, scan_hint: str) -> str:
-    """Trigger the install. Returns the deployment id."""
-    response = client.post(
-        INSTALL_PATH.format(app_id=path_segment(app_id)),
-        body={"version_id": version_id, "force_install": True},
-    )
-    if not response.ok:
+@dataclass(frozen=True)
+class _InstallReply:
+    """LM's install response, whose HTTP status is not the whole story.
+
+    ``POST /tenant/default/apps/{id}/install`` answers **HTTP 200 with an
+    error-shaped envelope** for its two non-deploying outcomes
+    (``atlan-local-marketplace-app``, ``marketplace_api/v1/router.py``)::
+
+        {"status": "error",   "message": "App with ID '…' not found: …", "status_code": 404}
+        {"status": "success", "message": "App already installed",        "status_code": 200}
+
+    So ``response.ok`` alone would read a 404 as a success. The in-body
+    ``status_code`` is authoritative and is what this parses.
+    """
+
+    http_status: int
+    status: str
+    status_code: int
+    message: str
+    deployment_id: str
+    rendered_body: str
+
+    @classmethod
+    def parse(cls, response: Response) -> _InstallReply:
+        data = response.data() if isinstance(response.body, dict) else {}
+        raw_code = data.get("status_code")
+        # `message` is LM's 200-envelope field; `detail` is what Heracles/FastAPI
+        # put on a real HTTP error. Both have to be read, or a genuine 4xx loses
+        # its text and the failure stops being self-explaining.
+        message = str(data.get("message") or data.get("detail") or "").strip()
+        return cls(
+            http_status=response.status,
+            status=str(data.get("status") or "").strip().lower(),
+            # Fall back to the HTTP status when LM omits its own.
+            status_code=raw_code if isinstance(raw_code, int) else response.status,
+            message=message,
+            deployment_id=str(data.get("deployment_id") or ""),
+            rendered_body=_render_body(response.body),
+        )
+
+    @property
+    def failed(self) -> bool:
+        return self.status == "error" or self.status_code >= 400 or not self.http_ok
+
+    @property
+    def http_ok(self) -> bool:
+        return 200 <= self.http_status < 300
+
+    @property
+    def not_found(self) -> bool:
+        """The release is not resolvable in LM's tenant-catalog snapshot yet."""
+        return self.status_code == 404 or "not found" in self.message.lower()
+
+    @property
+    def already_installed(self) -> bool:
+        return not self.failed and "already installed" in self.message.lower()
+
+
+def _install(
+    client: TenantClient,
+    app_id: str,
+    version_id: str,
+    scan_hint: str,
+    *,
+    retry_seconds: int,
+) -> str:
+    """Trigger the install, tolerating LM's catalog-snapshot lag.
+
+    Returns the deployment id, or "" when LM reports the app is already
+    installed (it does not start a deployment, so there is nothing to poll).
+
+    The retry exists because a freshly published release is not immediately
+    installable, which LM documents against this very route: a release created
+    via ``POST /publish`` starts ``scan_pending`` and is excluded from GM's tenant
+    catalog, the publish-time refresh runs while it is still ``scan_pending``, and
+    it therefore does not enter LM's snapshot until the next scheduled sync
+    (~5 min). LM refreshes once inline on a miss, but that refresh can itself race
+    the flip to ``active``.
+
+    Waiting on GM's release status is NOT sufficient: the first run to get this
+    far read ``active`` from GM and the install still missed, because what install
+    resolves against is LM's snapshot, not GM.
+    """
+    deadline = time.monotonic() + max(retry_seconds, 0)
+    attempt = 0
+    while True:
+        attempt += 1
+        reply = _InstallReply.parse(
+            client.post(
+                INSTALL_PATH.format(app_id=path_segment(app_id)),
+                body={"version_id": version_id, "force_install": True},
+            )
+        )
+
+        if reply.already_installed:
+            print(f"LM reports the app already installed: {reply.message}")
+            return ""
+
+        if not reply.failed and reply.deployment_id:
+            return reply.deployment_id
+
+        if not reply.failed:
+            raise TenantAppError(
+                "install reported success but carried no deployment_id, so the "
+                f"deployment cannot be polled. message={reply.message!r} "
+                f"status={reply.status!r} status_code={reply.status_code}"
+            )
+
+        # Retryable: LM cannot see the release yet.
+        if reply.not_found and time.monotonic() < deadline:
+            remaining = int(deadline - time.monotonic())
+            print(
+                f"attempt {attempt}: LM cannot resolve the release yet "
+                f"({reply.message or 'not found'}) — its catalog snapshot lags a "
+                f"fresh publish by up to ~5 min; retrying for {remaining}s"
+            )
+            time.sleep(_INSTALL_RETRY_POLL_SECONDS)
+            continue
+
         hint = ""
-        if _looks_like_scan_gate(response):
+        if reply.not_found:
             hint = (
-                " This looks like GM's release-scan gate refusing a release that "
-                "has not finished scanning. e2e deliberately does not wait for "
-                "the scan (a base-image CVE must not red an unrelated PR); if GM "
-                "requires it, re-run with --scan-wait-seconds set."
-                + (
-                    f" Release status at install time: {scan_hint}."
-                    if scan_hint
-                    else ""
-                )
+                " LM never saw the release. Its tenant-catalog snapshot excludes a "
+                "release while it is scan_pending and only picks it up on the next "
+                "scheduled sync (~5 min), so a fresh publish is not immediately "
+                "installable. Raise --install-retry-seconds if the sync is slower "
+                "than the current budget."
+                + (f" GM release status was {scan_hint!r}." if scan_hint else "")
+            )
+        elif _looks_like_scan_gate_text(reply.message):
+            hint = (
+                " This looks like GM's release-scan gate. e2e deliberately does "
+                "not wait for the scan (a base-image CVE must not red an unrelated "
+                "PR); re-run with --scan-wait-seconds set if it is required."
             )
         raise TenantAppError(
-            f"install failed with HTTP {response.status}.{hint}\n"
-            f"response={_render_body(response.body)}"
+            f"install failed after {attempt} attempt(s): "
+            f"status={reply.status!r} status_code={reply.status_code} "
+            f"message={reply.message!r} (HTTP {reply.http_status}).{hint}\n"
+            f"response={reply.rendered_body}"
         )
-    deployment_id = str(response.data().get("deployment_id") or "")
-    if not deployment_id:
-        raise TenantAppError(
-            "install response carried no deployment_id, so the deployment cannot "
-            f"be polled (keys: {sorted(response.data())})"
-        )
-    return deployment_id
 
 
 def _poll_deployment(client: TenantClient, deployment_id: str, timeout: int) -> None:
@@ -717,14 +848,26 @@ def install(args: argparse.Namespace) -> InstallOutcome:
             "(not waiting for the scan by design)"
         )
 
-    deployment_id = _install(publish_client, app_id, version_id, status)
-    print(f"install accepted, deployment_id={deployment_id}")
-
-    try:
-        _poll_deployment(read_client, deployment_id, args.timeout_seconds)
-    except TenantAppError:
-        _dump_failure(read_client, app_id)
-        raise
+    deployment_id = _install(
+        publish_client,
+        app_id,
+        version_id,
+        status,
+        retry_seconds=args.install_retry_seconds,
+    )
+    # An empty deployment_id means LM reported the app already installed and
+    # started no deployment, so there is nothing to poll. The version read-back
+    # below is then the only thing that decides success — which is the right
+    # authority anyway.
+    if deployment_id:
+        print(f"install accepted, deployment_id={deployment_id}")
+        try:
+            _poll_deployment(read_client, deployment_id, args.timeout_seconds)
+        except TenantAppError:
+            _dump_failure(read_client, app_id)
+            raise
+    else:
+        print("no deployment started; relying on the version read-back below")
 
     installed = _installed_version(read_client, app_id)
     print(f"tenant reports installed version: {installed or '<unreported>'}")
@@ -811,6 +954,18 @@ def main(argv: list[str] | None = None) -> int:
             "Seconds to wait for GM's release scan before installing. 0 (the "
             "default) does not wait: a base-image CVE must not red an unrelated "
             "PR's e2e. Raise only if GM refuses to install an unscanned release."
+        ),
+    )
+    p_install.add_argument(
+        "--install-retry-seconds",
+        type=int,
+        default=600,
+        help=(
+            "How long to keep retrying the install while LM's tenant-catalog "
+            "snapshot catches up with a fresh publish. LM excludes a release "
+            "while it is scan_pending and picks it up on the next scheduled sync "
+            "(~5 min), so a just-published release is not immediately "
+            "installable. 0 disables the retry."
         ),
     )
     p_install.add_argument(
