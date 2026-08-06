@@ -1489,3 +1489,31 @@ def test_l010_fires_when_rebound_via_type_alias() -> None:
         "logger.info('connecting with password %s', password)\n"
     )
     assert "L010" in _ids(src)
+
+
+# ---------------------------------------------------------------------------
+# L021 — hint must recommend individual pins, never the bare "G" category
+# (FND-58: G201 in the "G" group is the exact inverse of L017)
+# ---------------------------------------------------------------------------
+
+
+def test_l021_message_warns_against_bare_g_category(tmp_path: Path) -> None:
+    from conformance.suite.checks.logging._toml import check_ruff_config
+
+    py = tmp_path / "pyproject.toml"
+    py.write_text('[project]\nname = "some-app"\n[tool.ruff.lint]\nselect = ["E", "F"]\n')
+    findings = check_ruff_config(py, tmp_path)
+    assert findings and findings[0].rule_id == "L021"
+    msg = findings[0].message
+    assert "G201" in msg and "L017" in msg, "hint must explain the G201/L017 conflict"
+    assert "covers all rules in that group" not in msg, "hint must not recommend category prefixes"
+
+
+def test_l021_bare_g_selection_still_detected_as_covered(tmp_path: Path) -> None:
+    # Detection semantics unchanged: an existing bare "G" selection DOES cover
+    # G001/G003/G004 (the conflict with L017 is guidance, not a detection gap).
+    from conformance.suite.checks.logging._toml import check_ruff_config
+
+    py = tmp_path / "pyproject.toml"
+    py.write_text('[project]\nname = "some-app"\n[tool.ruff.lint]\nselect = ["G", "LOG", "T201"]\n')
+    assert check_ruff_config(py, tmp_path) == []

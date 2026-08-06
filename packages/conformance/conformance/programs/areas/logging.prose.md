@@ -156,6 +156,14 @@ around `finding.line` in `finding.file` before proposing a fix.
   If a category prefix already covers some rules (e.g. `"G"` covers all
   G-rules), add only the genuinely missing individual IDs.
 
+  **Never ADD the bare `"G"` category yourself.** `G` also enables `G201`,
+  which demands `.exception(...)` over `.error(..., exc_info=True)` — the
+  exact inverse of conformance L017 (LoggerExceptionUsage). Adding `"G"`
+  makes ruff and the conformance suite contradict each other on every
+  except-block log call. Always pin the five rules individually. If the repo
+  already selects `"G"` on its own, leave it and route the conflict to
+  residue for the owner.
+
 **All other L-series rules** (L003, L006, L008, L009, L010, L012, L014,
 L016, L018, L019) — `autofixable = false`; produce `classification =
 "judgment"` and a best-effort fix guided by the `hint` and `message` in the

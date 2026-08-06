@@ -459,6 +459,12 @@ A rule is covered if its full ID, any prefix (e.g. `G` covers all `G`-prefixed r
 or `ALL` appears in `select` or `extend-select` and is not in `ignore` /
 `extend-ignore`.
 
+Pin the five rules individually. Selecting the bare `G` category satisfies this check
+but also enables `G201`, which demands `.exception(...)` over `.error(...,
+exc_info=True)` — the exact inverse of conformance L017 (LoggerExceptionUsage). With `G`
+selected, ruff and the conformance suite contradict each other on every except-block log
+call.
+
 Self-check exemption: `pyproject.toml` files whose `[project].name` starts with
 `atlan-application-sdk` are skipped (the SDK's own tooling config is managed
 separately).
