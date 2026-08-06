@@ -90,6 +90,12 @@ _APP_ID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-" r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
+#: Host suffixes a tenant ID must not carry. Vcluster instance names are DNS
+#: subdomains and may legally contain dots (``team.a``), so "contains a dot" is
+#: too broad a check; what is never legitimate is a scheme or one of the known
+#: Atlan host suffixes, which only ever appear on a hostname.
+_ATLAN_HOST_SUFFIXES = (".atlan.com", ".atlan.dev")
+
 
 class TenantApiError(RuntimeError):
     """A tenant call failed in a way the caller cannot recover from.
@@ -147,9 +153,10 @@ def validate_tenant_id(tenant_id: str) -> str:
     versions the tenant *can* see. That took three live runs to diagnose; this
     turns it into an immediate, actionable error.
 
-    The check is deliberately narrow (a dot or a scheme), because tenant ids are
-    otherwise free-form vcluster names and a stricter pattern would reject valid
-    ones.
+    The check is deliberately narrow (a scheme, or a known Atlan host suffix),
+    because tenant ids are otherwise free-form vcluster names — which are DNS
+    subdomains and may legally contain dots (``team.a``) — and a stricter
+    pattern would reject valid ones.
     """
     value = tenant_id.strip()
     if not value:
@@ -164,7 +171,7 @@ def validate_tenant_id(tenant_id: str) -> str:
             "one-off run, and that is the only option on the single-tenant "
             "fallback path, which carries no matrix entry to add the field to."
         )
-    if "." in value or "://" in value:
+    if "://" in value or value.endswith(_ATLAN_HOST_SUFFIXES):
         raise TenantApiError(
             f"tenant id {value!r} looks like a hostname. GM matches "
             "`allowed_tenants` against the tenant's vcluster instance name (e.g. "

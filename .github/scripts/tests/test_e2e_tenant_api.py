@@ -155,7 +155,18 @@ def test_transport_failure_names_the_host_not_the_credential(
 # three live runs were lost to that, hence a fail-fast check.
 
 
-@pytest.mark.parametrize("tenant_id", ["markeznp37", "home-mt", "e2e-azure-main"])
+@pytest.mark.parametrize(
+    "tenant_id",
+    [
+        "markeznp37",
+        "home-mt",
+        "e2e-azure-main",
+        # Vcluster instance names are DNS subdomains and may legally contain
+        # dots; only a scheme or a known Atlan host suffix marks a hostname.
+        "team.a",
+        "tenant.example.com",
+    ],
+)
 def test_valid_tenant_ids_pass(tenant_id: str) -> None:
     assert api.validate_tenant_id(tenant_id) == tenant_id
 
@@ -165,7 +176,7 @@ def test_valid_tenant_ids_pass(tenant_id: str) -> None:
     [
         "e2e-azure-main.atlan.com",
         "https://e2e-azure-main.atlan.com",
-        "tenant.example.com",
+        "e2e-azure-main.atlan.dev",
     ],
 )
 def test_hostname_shaped_tenant_ids_are_refused(bad: str) -> None:
