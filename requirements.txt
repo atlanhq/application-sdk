@@ -101,9 +101,9 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-google-auth==2.56.2
+google-auth==2.56.3
     # via atlan-application-sdk
-googleapis-common-protos==1.75.0
+googleapis-common-protos==1.75.1
     # via
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http

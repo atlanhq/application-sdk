@@ -99,7 +99,31 @@ _SCAN_POLL_SECONDS = 10
 #: Keys an install/info response may carry the installed version under. LM has
 #: not committed to one name across versions, so check the plausible set rather
 #: than hard-coding a guess that silently reads None and compares equal to None.
-_VERSION_KEYS = ("version", "installed_version", "app_version", "current_version")
+#: ``version_text`` first: that is the field LM actually populates. Its
+#: ``/apps/{id}/info`` returns ``{app_id, catalog, installed}`` where ``installed``
+#: is an ``InstalledApp``
+#: (``atlan-local-marketplace-app``, ``tenant_apps_manager/models/service.py``)::
+#:
+#:     app_id, version_id, version_text, installed_at, last_modified_on,
+#:     deployment_name
+#:
+#: The rest are kept as tolerated aliases rather than removed — LM has not
+#: committed to this shape across versions, and reading the wrong key returns ""
+#: which is indistinguishable from "not installed", so a silent miss here reads as
+#: a successful no-op instead of a broken check. Confirmed against the source
+#: rather than guessed at: the original guess-list matched none of these fields,
+#: so the version read never worked.
+_VERSION_KEYS = (
+    "version_text",
+    "version",
+    "installed_version",
+    "app_version",
+    "current_version",
+)
+
+#: Nests to search for the installed-version payload. ``installed`` is LM's real
+#: envelope; the others are tolerated aliases.
+_VERSION_NESTS = ("installed", "install", "installation", "deployment", "data")
 
 
 class TenantAppError(RuntimeError):
@@ -232,7 +256,7 @@ def _app_info(client: TenantClient, app_id: str) -> dict[str, object]:
     return response.data() if response.ok else {}
 
 
-def _registered_source_repo(info: dict[str, object]) -> str:
+def _registered_source_repo(info: dict[str, object], _depth: int = 0) -> str:
     """Return the repo GM has on file for this app, or "" if it has none.
 
     GM's version-create guard is exactly (``global-marketplace``,
@@ -244,10 +268,19 @@ def _registered_source_repo(info: dict[str, object]) -> str:
             raise "This app's versions are managed by CI/CD..."
 
     So an app that has a ``source_repo`` rejects any version-create that omits
-    ``repo``. Reading it back and echoing it is what makes this work without
-    asking a caller to know it: the value matches, so GM takes neither the "set"
-    nor the "update" branch.
+    ``repo``. Echoing GM's own value back would take neither the "set" nor the
+    "update" branch — but **LM does not expose it**, so this almost always returns
+    "" in practice and the caller has to supply the repo instead.
+
+    Kept anyway, for two reasons: it costs one dict walk on a payload already
+    fetched, and if LM ever surfaces the field the mismatch guard in
+    :func:`_resolve_repo_url` starts catching a wrong ``--repo-url`` instead of
+    merely warning about it. Verified against LM's router: ``/apps/{id}/info``
+    returns ``{app_id, catalog, installed}`` and neither sub-object carries
+    ``source_repo`` today.
     """
+    if _depth >= _WALK_MAX_DEPTH:
+        return ""
     for key in ("source_repo", "sourceRepo"):
         value = info.get(key)
         if isinstance(value, str) and value.strip():
@@ -255,7 +288,7 @@ def _registered_source_repo(info: dict[str, object]) -> str:
     for nest in ("app", "catalog", "data"):
         inner = info.get(nest)
         if isinstance(inner, dict):
-            found = _registered_source_repo(inner)
+            found = _registered_source_repo(inner, _depth + 1)
             if found:
                 return found
     return ""
@@ -299,25 +332,89 @@ def _resolve_repo_url(registered: str, supplied: str) -> str:
             "real CI/CD publish gating. Pass the app's own repo, or omit "
             "--repo-url and let the registered value be echoed back."
         )
+    if not registered and not supplied:
+        raise TenantAppError(
+            "cannot publish without a repo: GM refuses a version-create that "
+            "omits `repo` for any app that has a source_repo on file, which is "
+            "every first-party app. LM's /apps/<id>/info does not expose the "
+            "registered value, so it has to be supplied — pass --repo-url with "
+            "the APP'S OWN repo (e.g. https://github.com/atlanhq/atlan-<x>-app).\n"
+            "It must be the app's repo, NOT the repo whose CI is running: GM "
+            "only blocks CROSS-ORG source_repo changes, so a same-org value is "
+            "silently applied and would repoint the app's provenance."
+        )
     # Send the registered value when present — byte-for-byte what GM has on
     # file — so the publish can neither trip the CI/CD guard nor rewrite
     # provenance. Normalization above only decided *whether* to refuse.
     return registered or supplied
 
 
-def _extract_version(payload: dict[str, object]) -> str:
-    """Pull a version string out of an info/install payload."""
+def _repo_from_image(image: str) -> str:
+    """Best-effort guess of the app's GitHub repo from its image reference.
+
+    ``ghcr.io/atlanhq/atlan-openapi-app:tag`` -> ``https://github.com/atlanhq/atlan-openapi-app``.
+
+    A cross-check only, never a source. The convention (GHCR image name == repo
+    name) holds across the connector fleet but is a convention, not a guarantee,
+    so a disagreement fails closed only for ``ghcr.io`` references — the
+    confirmed e2e registry, where the convention does hold — and warns otherwise,
+    so a legitimate exception off GHCR can still publish. It exists because the
+    one destructive mistake available here is passing the wrong repo, and that
+    mistake is usually visible in exactly this comparison.
+    """
+    ref = image.split("@", 1)[0]
+    path = ref.rsplit(":", 1)[0] if ":" in ref.rsplit("/", 1)[-1] else ref
+    parts = [p for p in path.split("/") if p]
+    if len(parts) < 3 or "." not in parts[0]:
+        return ""
+    return f"https://github.com/{parts[1]}/{parts[-1]}"
+
+
+def _is_ghcr_image(image: str) -> bool:
+    """True when the image reference is on GHCR, the confirmed e2e registry.
+
+    Compared on the host with any explicit port stripped (``ghcr.io:443/...`` is
+    still a GHCR reference), and case-insensitively — the fail-closed mismatch
+    guard keys on this, so the one spelling variant that would otherwise slip
+    into the warn-only path must not.
+    """
+    ref = image.split("@", 1)[0]
+    authority = ref.split("/", 1)[0]
+    return authority.rsplit(":", 1)[0].lower() == "ghcr.io"
+
+
+#: How deep the recursive payload walks below may descend. Both LM walks start
+#: at depth 0 and their nest lists are one level long, so real payloads never go
+#: past depth 1; the bound exists so a pathological (deeply nested or, via
+#: ``data``, self-referential) payload degrades to "" — which the callers already
+#: treat as "field absent" — instead of crashing the step with a RecursionError
+#: traceback. The nests walked are exactly the keys a JSON wrapper envelope uses
+#: for self-similar nesting, so an unbounded walk is not theoretical.
+_WALK_MAX_DEPTH = 3
+
+
+def _extract_version(payload: dict[str, object], _depth: int = 0) -> str:
+    """Pull the installed version out of an ``/apps/{id}/info`` payload.
+
+    Searches the nests BEFORE the top-level keys. LM's envelope carries the
+    installed state under ``installed``, while the sibling ``catalog`` block
+    describes the app in general — so a top-level-first search risks reading a
+    catalogue-level version and reporting it as what the tenant is running, which
+    would make the version check pass against the wrong thing. Recursion is
+    depth-bounded (see ``_WALK_MAX_DEPTH``).
+    """
+    if _depth >= _WALK_MAX_DEPTH:
+        return ""
+    for nest in _VERSION_NESTS:
+        inner = payload.get(nest)
+        if isinstance(inner, dict):
+            found = _extract_version(inner, _depth + 1)
+            if found:
+                return found
     for key in _VERSION_KEYS:
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-    # Some shapes nest the install state one level down.
-    for nest in ("install", "installation", "deployment"):
-        inner = payload.get(nest)
-        if isinstance(inner, dict):
-            found = _extract_version(inner)
-            if found:
-                return found
     return ""
 
 
@@ -556,13 +653,37 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     else:
         print(f"{app_id} is not installed on this tenant; installing {args.version}")
 
-    # Echo GM's own source_repo back on the version-create. Omitting `repo` is
-    # rejected outright for any app that has one ("versions are managed by
-    # CI/CD"), and sending a *different* one makes GM rewrite the app's
-    # provenance — so the registered value is the only safe thing to send.
+    # `repo` is mandatory in practice: GM rejects a version-create without it for
+    # any app that has a source_repo on file. It prefers GM's own registered value
+    # when readable (byte-for-byte, so no provenance rewrite), and otherwise takes
+    # the caller's --repo-url, because LM's info does not expose it.
     repo_url = _resolve_repo_url(_registered_source_repo(info), args.repo_url)
-    if repo_url:
-        print(f"publishing with repo={repo_url}")
+    print(f"publishing with repo={repo_url}")
+
+    # Cross-check against the repo the image implies. Passing the wrong repo is
+    # the one destructive mistake available here — GM would repoint the app's
+    # provenance — and it usually shows up as exactly this disagreement. Fail
+    # closed when the image is a ghcr.io reference: GHCR is the confirmed e2e
+    # registry, and there image-name == repo-name holds, so a disagreement is a
+    # provenance-rewrite attempt, not a legitimate exception. Any other registry
+    # only warns — the convention is not guaranteed to hold there, so a real
+    # exception must still be able to publish.
+    implied = _repo_from_image(args.image)
+    if implied and _normalize_repo_url(implied) != _normalize_repo_url(repo_url):
+        explanation = (
+            f"repo {repo_url} does not match the repo implied by the image "
+            f"({implied}). If {repo_url} is not this app's own repo, GM will "
+            "repoint the app's source_repo to it and break its CI/CD publish "
+            "gating."
+        )
+        if _is_ghcr_image(args.image):
+            raise TenantAppError(
+                f"refusing to publish: {explanation} The image is a ghcr.io "
+                "reference, where image name == repo name holds across the "
+                "fleet, so this disagreement is a wrong --repo-url, not a "
+                "legitimate exception. Pass the app's own repo."
+            )
+        print(f"::warning::{explanation} Double-check before relying on this run.")
 
     request = PublishRequest(
         app_id=app_id,
