@@ -1147,7 +1147,6 @@ jobs:
           # have been migrated to reference ghcr.io directly.
           build-contexts: |
             registry.atlan.com/public/app-runtime-base:3=docker-image://ghcr.io/atlanhq/app-runtime-base:3
-            registry.atlan.com/public/app-runtime-base:refactor-v3-latest=docker-image://ghcr.io/atlanhq/app-runtime-base:3
           tags: ${{ needs.prepare.outputs.ghcr_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.image_tag }}-${{ matrix.arch }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
