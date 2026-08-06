@@ -103,17 +103,34 @@ runs:
         uv run --with coverage coverage xml --fail-under=0 || true
         uv run --with coverage coverage json --fail-under=0 || true
         uv run --with coverage coverage html --fail-under=0 || true
-        # Propagate pytest failure first; otherwise check coverage threshold.
-        if [ $TEST_EXIT_CODE -ne 0 ]; then exit $TEST_EXIT_CODE; fi
-        uv run --with coverage coverage report --fail-under=${{ inputs.fail-under }}
+        # Evaluate the coverage gate only when the tests themselves passed —
+        # a failing suite's coverage number is not meaningful.
+        COVERAGE_EXIT_CODE=0
+        if [ "$TEST_EXIT_CODE" -eq 0 ]; then
+          # `set -e` is active here (re-enabled above), so the gate has to run
+          # with it off — otherwise a below-threshold report aborts the step
+          # before the exit code can be recorded, which is the very failure
+          # mode this change exists to remove.
+          set +e
+          uv run --with coverage coverage report --fail-under=${{ inputs.fail-under }}
+          COVERAGE_EXIT_CODE=$?
+          set -e
+        fi
+        # Record the verdict instead of exiting here. Exiting non-zero from a
+        # composite-action step TERMINATES the whole composite: every later step
+        # is dropped, and `if: always()` does NOT rescue them the way it does for
+        # job-level steps. That silently skipped "Upload coverage artifacts", so a
+        # repo whose unit tests failed produced NO unit-test-coverage artifact at
+        # all — no JUnit XML, so the scorecard aggregation short-circuits, so the
+        # repo never reaches the Test Maturity dashboard. It vanished from the tab
+        # instead of showing its true failing grade. The failure is re-raised in
+        # the final step below, after the evidence has been uploaded.
+        echo "test_exit_code=${TEST_EXIT_CODE}" >> "$GITHUB_OUTPUT"
+        echo "coverage_exit_code=${COVERAGE_EXIT_CODE}" >> "$GITHUB_OUTPUT"
 
-    - name: Comment coverage on PR
-      if: github.event_name == 'pull_request'
-      uses: orgoro/coverage@71cf993a407154ad9d8dd027c88a374b0ed002a9 # v3.3
-      with:
-        coverageFile: coverage.xml
-        token: ${{ inputs.github-token }}
-
+    # Ordered BEFORE the failure is re-raised, so the evidence survives a red
+    # suite. `if: always()` is kept as a belt-and-braces guard for a step above
+    # that fails without going through the verdict-recording path.
     - name: Upload coverage artifacts
       if: always()
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -125,3 +142,36 @@ runs:
           htmlcov/
           results/
         retention-days: 14
+
+    - name: Comment coverage on PR
+      if: github.event_name == 'pull_request'
+      uses: orgoro/coverage@71cf993a407154ad9d8dd027c88a374b0ed002a9 # v3.3
+      with:
+        coverageFile: coverage.xml
+        token: ${{ inputs.github-token }}
+
+    # Re-raise the recorded verdict. Keeps the job's pass/fail identical to
+    # before this change — only the ordering moved, so a red suite still fails
+    # the build, it just no longer takes the evidence down with it.
+    - name: Fail if unit tests or the coverage gate failed
+      if: always()
+      shell: bash
+      env:
+        TEST_EXIT_CODE: ${{ steps.tests.outputs.test_exit_code }}
+        COVERAGE_EXIT_CODE: ${{ steps.tests.outputs.coverage_exit_code }}
+      run: |
+        # Empty means the step above never recorded a verdict (it died early);
+        # treat that as a failure rather than silently passing.
+        if [ -z "${TEST_EXIT_CODE}" ]; then
+          echo "::error::unit test step did not report a verdict"
+          exit 1
+        fi
+        if [ "${TEST_EXIT_CODE}" -ne 0 ]; then
+          echo "::error::unit tests failed (exit ${TEST_EXIT_CODE})"
+          exit "${TEST_EXIT_CODE}"
+        fi
+        if [ "${COVERAGE_EXIT_CODE:-0}" -ne 0 ]; then
+          echo "::error::coverage below --fail-under=${{ inputs.fail-under }} (exit ${COVERAGE_EXIT_CODE})"
+          exit "${COVERAGE_EXIT_CODE}"
+        fi
+        echo "unit tests and coverage gate passed"
