@@ -1199,6 +1199,19 @@ def test_l004_still_fires_when_sanitizer_used_elsewhere_in_handler() -> None:
     assert "L004" in _ids(src)
 
 
+def test_l004_still_fires_for_sanitizer_named_flag_variable() -> None:
+    # A bare variable that merely *contains* "redact" but holds a flag (not
+    # sanitised text) must not exempt the call — the bare-Name branch is
+    # narrowed to sanitised-*value* names (safe_traceback / redacted_* / …).
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    redact_count = 3\n"
+        "    logger.error('auth failed after %s tries', redact_count)\n"
+    )
+    assert "L004" in _ids(src)
+
+
 # ---------------------------------------------------------------------------
 # L005 — standalone script/CLI exemption (FND-61)
 # ---------------------------------------------------------------------------
@@ -1217,8 +1230,22 @@ def test_l005_silent_with_main_guard_even_inside_functions() -> None:
     assert "L005" not in _ids(src)
 
 
-def test_l005_silent_for_argparse_cli() -> None:
+def test_l005_still_fires_for_argparse_import_without_main_guard() -> None:
+    # A bare argparse import is not sufficient evidence of a standalone script:
+    # a mixed library/CLI module imports it for its __main__ block but keeps
+    # print() calls in reusable library functions.  Without a __main__ guard,
+    # the file is treated as app code and the exemption does not apply.
     src = "import argparse\ndef run():\n    print('result')\n"
+    assert "L005" in _ids(src)
+
+
+def test_l005_silent_for_argparse_cli_with_main_guard() -> None:
+    # argparse + a __main__ guard is a real CLI entry point — exempt.
+    src = (
+        "import argparse\n\n"
+        "def run():\n    print('result')\n\n"
+        'if __name__ == "__main__":\n    run()\n'
+    )
     assert "L005" not in _ids(src)
 
 
@@ -1260,3 +1287,58 @@ def test_l010_still_fires_for_real_credential_value() -> None:
         "    logger.info('connecting with password %s', password)\n"
     )
     assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_placeholder_shadowed_cross_function() -> None:
+    # Cross-function bypass: `password` is a placeholder in one function but a
+    # real credential in another.  The exemption must NOT leak across scopes —
+    # the real credential value has to be flagged.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def mask(creds):\n"
+        '    password = "[REDACTED]"\n'
+        "    logger.info('placeholder %s', password)\n"
+        "def connect(creds):\n"
+        '    password = creds.get("password")\n'
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_name_rebound_to_real_value() -> None:
+    # Reassignment: the same name is bound to a placeholder once and to a real
+    # credential elsewhere, so the placeholder does not reliably reach the log
+    # call.  The exemption is invalidated and the real value is flagged.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def connect(creds):\n"
+        '    password = "[REDACTED]"\n'
+        '    password = creds.get("password")\n'
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_real_value_then_placeholder() -> None:
+    # Real value first, placeholder second (either order disqualifies).
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def connect(creds):\n"
+        '    password = creds.get("password")\n'
+        '    password = "[REDACTED]"\n'
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_silent_when_name_only_rebound_between_placeholders() -> None:
+    # A name rebound only between placeholder literals never carries a real
+    # value — logging it stays a presence indicator, so the exemption holds.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def connect(creds):\n"
+        '    password = "[REDACTED]"\n'
+        '    password = "***masked***"\n'
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" not in _ids(src)

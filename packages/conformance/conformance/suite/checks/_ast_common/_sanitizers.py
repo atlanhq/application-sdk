@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import ast
 
-#: Substrings that mark a callable or variable as a redaction helper.  Matched
-#: case-insensitively against simple names (``redact_secrets``) and attribute
-#: leaves (``utils.redact``).  ``sanitiz`` covers sanitize/sanitizer/sanitised.
+#: Substrings that mark a callable as a redaction helper.  Matched
+#: case-insensitively against the call target's simple name (``redact_secrets``)
+#: or attribute leaf (``utils.redact``).  ``sanitiz`` covers
+#: sanitize/sanitizer/sanitised.
 SANITIZER_NAME_WORDS: tuple[str, ...] = (
     "redact",
     "sanitiz",
@@ -34,10 +35,33 @@ SANITIZER_NAME_WORDS: tuple[str, ...] = (
     "mask_secret",
 )
 
+#: Substrings that mark a *variable* as holding pre-sanitised text.  Narrower
+#: than the call-target words on purpose: a bare name passed as a log arg must
+#: read as sanitised *output* (the redacted text/traceback built on a previous
+#: line), not as any identifier that happens to contain "redact"/"sanitiz".
+#: ``redact_count`` / ``redaction_enabled`` / ``sanitize_input`` are flags or
+#: raw inputs, not redacted text — matching them would silently exempt a log
+#: call that never redacted anything.
+_SANITIZED_VALUE_WORDS: tuple[str, ...] = (
+    "safe_traceback",
+    "redacted",
+    "sanitized",
+    "sanitised",
+    "masked",
+    "scrubbed",
+)
+
 
 def _name_is_sanitizer(name: str) -> bool:
+    """True if *name* looks like a redaction-helper *callable*."""
     lowered = name.lower()
     return any(word in lowered for word in SANITIZER_NAME_WORDS)
+
+
+def _name_is_sanitized_value(name: str) -> bool:
+    """True if a bare *variable* name marks it as already-sanitised text."""
+    lowered = name.lower()
+    return any(word in lowered for word in _SANITIZED_VALUE_WORDS)
 
 
 def _leaf_name(expr: ast.expr) -> str | None:
@@ -56,9 +80,12 @@ def call_uses_sanitizer(call: ast.Call) -> bool:
 
     * a direct helper call among the arguments — ``redact(e)``,
       ``redact_secrets(str(e))``, ``errors.sanitize_cause_repr(e)``;
-    * a variable argument whose *name* marks it as pre-sanitised —
+    * a variable argument whose *name* marks it as pre-sanitised text —
       ``safe_traceback`` in ``logger.error("…%s", safe_traceback)`` where the
-      redacted text was built on a previous line.
+      redacted text was built on a previous line.  Bare names use the narrower
+      ``_SANITIZED_VALUE_WORDS`` (``redacted``/``sanitized``/``safe_traceback``/
+      …) so a flag or counter like ``redact_count``/``redaction_enabled`` does
+      not suppress the rule.
 
     Only the log call's own arguments are inspected (positional and keyword,
     including nested expressions) — a sanitizer used elsewhere in the handler
@@ -70,6 +97,6 @@ def call_uses_sanitizer(call: ast.Call) -> bool:
                 target = _leaf_name(node.func)
                 if target is not None and _name_is_sanitizer(target):
                     return True
-            elif isinstance(node, ast.Name) and _name_is_sanitizer(node.id):
+            elif isinstance(node, ast.Name) and _name_is_sanitized_value(node.id):
                 return True
     return False

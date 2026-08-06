@@ -2104,6 +2104,29 @@ def test_e005_still_fires_without_sanitizer() -> None:
     assert "E005" in _findings(src)
 
 
+def test_e005_still_fires_for_sanitizer_named_flag_variable() -> None:
+    # A bare variable that merely *contains* "redact" but holds a flag/counter
+    # (not sanitised text) must not exempt the log call — the narrowing of the
+    # bare-Name branch to sanitised-*value* names.
+    src = (
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    redaction_enabled = True\n"
+        "    logger.warning('close failed (redaction=%s)', redaction_enabled)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_silent_for_presanitized_traceback_variable() -> None:
+    # A variable named as sanitised output (safe_traceback / redacted_*) still
+    # exempts — the pre-sanitised-text case the bare-Name branch exists for.
+    src = (
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    safe_traceback = redact_secrets(''.join(traceback.format_exception(e)))\n"
+        "    logger.error('prime failed:\\n%s', safe_traceback)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
 def test_e004_silent_when_handler_logs_via_sanitizer() -> None:
     src = (
         "try:\n    x()\nexcept Exception as e:\n"

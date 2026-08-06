@@ -283,11 +283,19 @@ _REDACTION_MARKERS: tuple[str, ...] = ("redact", "masked", "***", "xxxx")
 def is_script_file(text: str, tree: ast.Module) -> bool:
     """True when the module is a standalone script/CLI rather than app code.
 
-    Signals (any one suffices):
+    Signals (either suffices):
 
     * a shebang line — the file is meant to be executed directly;
-    * an ``if __name__ == "__main__":`` guard anywhere at module level;
-    * an ``argparse`` import — the module parses its own command line.
+    * an ``if __name__ == "__main__":`` guard at module level — the file has a
+      direct-execution entry point.
+
+    A bare ``argparse`` import is **not** sufficient evidence on its own: a
+    mixed library/CLI module imports ``argparse`` for its ``__main__`` block
+    yet keeps most of its ``print()`` calls in reusable library functions
+    unrelated to the CLI path, and exempting the whole file would hide those.
+    Such a module almost always pairs the import with a ``__main__`` guard to
+    actually run the parser, so requiring the guard keeps the exemption
+    targeted at real scripts without exempting library code.
 
     For such files stdout is the user interface; ``print()`` is not a logging
     bypass (L005).
@@ -306,12 +314,6 @@ def is_script_file(text: str, tree: ast.Module) -> bool:
                 and t.comparators[0].value == "__main__"
             ):
                 return True
-        if isinstance(node, ast.Import) and any(
-            a.name == "argparse" for a in node.names
-        ):
-            return True
-        if isinstance(node, ast.ImportFrom) and node.module == "argparse":
-            return True
     return False
 
 
@@ -340,25 +342,83 @@ def _is_redaction_placeholder_expr(value: ast.expr) -> bool:
 
 
 def collect_redacted_names(tree: ast.Module) -> frozenset[str]:
-    """Names assigned a redaction placeholder anywhere in the module.
+    """Names *safely* bound to a redaction placeholder, scope- and order-aware.
 
     ``password = "[REDACTED]" if credentials.get("password") else None`` marks
     ``password`` as a *presence indicator*: logging it discloses nothing, so
     L010 must not flag it (the check matches argument names, not values).
+
+    The set is deliberately conservative — a name is exempt only when **every**
+    binding of that name anywhere in the module is a redaction placeholder
+    (or an ``Annotated``/plain annotation with no value).  This closes the
+    cross-scope and rebinding bypasses:
+
+    * **Cross-function** — a name is only exempt in the lexical scope that
+      bound it to a placeholder.  ``password = "[REDACTED]"`` in ``connect``
+      must not exempt ``password = creds.get("password")`` in ``reconnect``:
+      the real credential value would go unflagged.  Because the two bindings
+      live in different scopes, ``reconnect``'s binding is a non-placeholder,
+      so the name is dropped from the exempt set entirely.
+
+    * **Rebinding** — if a name is assigned a placeholder once and a real
+      value anywhere else (either order), the placeholder does not reliably
+      reach the log call, so the exemption is invalidated.  A name that is
+      *only* ever rebound between placeholders (``x = "[REDACTED]"`` …
+      ``x = None``) stays exempt.
+
+    A single source-ordered walk records each binding as placeholder /
+    non-placeholder / annotation; a name survives only if it has at least one
+    placeholder binding and **no** non-placeholder binding.
     """
-    out: set[str] = set()
-    for node in ast.walk(tree):
-        targets: list[ast.expr] = []
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-            value = node.value
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            targets = [node.target]
-            value = node.value
-        else:
-            continue
-        if _is_redaction_placeholder_expr(value):
-            for t in targets:
-                if isinstance(t, ast.Name):
-                    out.add(t.id)
-    return frozenset(out)
+    # name -> (saw_placeholder_binding, saw_real_binding)
+    state: dict[str, list[bool]] = {}
+
+    def record(name: str, placeholder: bool | None) -> None:
+        saw_placeholder, saw_real = state.get(name, [False, False])
+        if placeholder is True:
+            saw_placeholder = True
+        elif placeholder is False:
+            saw_real = True
+        # placeholder is None → bare annotation; leaves both flags unchanged
+        state[name] = [saw_placeholder, saw_real]
+
+    class _Binder(ast.NodeVisitor):
+        """Visit bindings in source order, tracking placeholder-ness.
+
+        Nested scopes are entered via ``generic_visit`` (``visit_FunctionDef``
+        is *not* overridden) so every function/class body is walked — a
+        binding in any scope counts toward that name's module-wide state.
+        This is what makes the check cross-function: a non-placeholder binding
+        in *any* scope disqualifies the name everywhere.
+        """
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            placeholder = _is_redaction_placeholder_expr(node.value)
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    record(target.id, placeholder)
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            if isinstance(node.target, ast.Name):
+                if node.value is None:
+                    record(node.target.id, None)  # bare ``x: str`` — no value yet
+                else:
+                    record(
+                        node.target.id,
+                        _is_redaction_placeholder_expr(node.value),
+                    )
+            self.generic_visit(node)
+
+        # NamedExpr (walrus) in any expression position also binds a name.
+        def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+            if isinstance(node.target, ast.Name):
+                record(node.target.id, _is_redaction_placeholder_expr(node.value))
+            self.generic_visit(node)
+
+    _Binder().visit(tree)
+    return frozenset(
+        name
+        for name, (saw_placeholder, saw_real) in state.items()
+        if saw_placeholder and not saw_real
+    )
