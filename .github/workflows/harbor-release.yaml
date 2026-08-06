@@ -73,8 +73,17 @@ jobs:
           #   - ghcr.io            : base for our own app CI. Harbor 307-redirects blobs
           #                          to S3, so every internal base pull bills as S3
           #                          DataTransfer-Out; GHCR pulls from GitHub-hosted
-          #                          runners are free. Same digest => the Trivy/Snyk gate
-          #                          and provenance cover the artifact both registries serve.
+          #                          runners are free. One push => both registries
+          #                          reference an identical manifest, so provenance and
+          #                          the Trivy report from secure-build-push-apps describe
+          #                          the same artifact wherever it is pulled from. That
+          #                          report is advisory and amd64-only (the action scans a
+          #                          separate single-platform build and runs in feedback
+          #                          mode) — it is not a gate on either registry.
+          # The push is NOT transactional across registries: if the GHCR leg fails after
+          # the Harbor names have landed, re-run this workflow run rather than cutting a
+          # new release — every tag is re-pushed to both registries, so the floating
+          # aliases cannot stay skewed. See docs/standards/build-security.md.
           REPOS="registry.atlan.com/public/app-runtime-base ghcr.io/atlanhq/app-runtime-base"
           : > /tmp/tags.txt
           for REPO in $REPOS; do
