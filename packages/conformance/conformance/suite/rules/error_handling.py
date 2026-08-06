@@ -131,6 +131,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "The message is logged but the stack trace is lost.  Add ``exc_info=True``\n"
             "to every ``logger.warning()`` / ``logger.error()`` call inside an except\n"
             "block.  ``logger.exception()`` is exempt (it implies ``exc_info=True``).\n"
+            "\n\nExempt: calls whose arguments flow through a recognised redaction\n"
+            "helper (redact*/sanitiz*/safe_traceback/scrub_secret*/mask_secret*) —\n"
+            "these mark a deliberate no-traceback boundary where exc_info=True\n"
+            "would serialize the raw exception past the sanitizer and can leak\n"
+            "credentials (JDBC URLs, Authorization headers, OAuth bodies)."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e005",
     ),

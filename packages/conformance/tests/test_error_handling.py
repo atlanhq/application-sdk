@@ -2076,3 +2076,29 @@ def fetch(resp):
     raise UpstreamError("source failed")
 """
     )
+
+
+# ---------------------------------------------------------------------------
+# E005 — sanitizer / redaction-boundary exemption (FND-59)
+# ---------------------------------------------------------------------------
+
+
+def test_e005_silent_when_arg_flows_through_redaction_helper() -> None:
+    src = (
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    logger.warning('close failed: %s', redact(e))\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_silent_for_sanitize_helper_attribute() -> None:
+    src = (
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    logger.error('auth failed: %s', util.sanitize_cause_repr(e))\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_still_fires_without_sanitizer() -> None:
+    src = "try:\n    x()\nexcept Exception as e:\n    logger.warning('failed: %s', e)\n"
+    assert "E005" in _findings(src)

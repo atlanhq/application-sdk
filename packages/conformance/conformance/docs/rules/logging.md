@@ -133,6 +133,11 @@ Logging an exception without `exc_info=True` produces a message with no stack tr
 the root cause is invisible.  Add `exc_info=True` to all `logger.warning()` /
 `logger.error()` calls within an except block. `.exception()` is exempt.
 
+Exempt: calls whose arguments flow through a recognised redaction helper
+(redact*/sanitiz*/safe_traceback/scrub_secret*/mask_secret*) — these mark a deliberate
+no-traceback boundary where exc_info=True would serialize the raw exception past the
+sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodies).
+
 ---
 
 ## L005 — `PrintInProductionCode` {#l005}

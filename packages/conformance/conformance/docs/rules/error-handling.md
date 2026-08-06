@@ -122,6 +122,11 @@ The message is logged but the stack trace is lost.  Add `exc_info=True` to every
 `logger.warning()` / `logger.error()` call inside an except block.  `logger.exception()`
 is exempt (it implies `exc_info=True`).
 
+Exempt: calls whose arguments flow through a recognised redaction helper
+(redact*/sanitiz*/safe_traceback/scrub_secret*/mask_secret*) — these mark a deliberate
+no-traceback boundary where exc_info=True would serialize the raw exception past the
+sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodies).
+
 ---
 
 ## E006 — `BareExceptWithBody` {#e006}

@@ -1148,3 +1148,52 @@ def test_l004_fires_in_inner_try_body_inside_except() -> None:
         "        pass\n"
     )
     assert "L004" in _ids(src)
+
+
+# ---------------------------------------------------------------------------
+# L004 — sanitizer / redaction-boundary exemption (FND-59)
+# ---------------------------------------------------------------------------
+
+
+def test_l004_silent_when_arg_flows_through_redaction_helper() -> None:
+    # A log call formatting the exception through redact()/redact_secrets()
+    # marks a deliberate no-traceback boundary: exc_info=True would serialize
+    # the raw exception past the sanitizer (JDBC URLs, Authorization headers).
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    logger.warning('close failed: %s', redact(e))\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_silent_for_attribute_sanitizer_and_nested_call() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    logger.error('auth failed: %s', errors.redact_secrets(str(e)))\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_silent_for_presanitized_variable_argument() -> None:
+    # The redacted text was built on a previous line; the variable name marks it.
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    safe_traceback = redact_secrets(''.join(traceback.format_exception(e)))\n"
+        "    logger.error('prime failed:\\n%s', safe_traceback)\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_still_fires_when_sanitizer_used_elsewhere_in_handler() -> None:
+    # Only the log call's own arguments count — a sanitizer on another
+    # statement does not exempt an unrelated bare log call.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    msg = redact(e)\n"
+        "    logger.warning('failed')\n"
+    )
+    assert "L004" in _ids(src)

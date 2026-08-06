@@ -65,6 +65,15 @@ around `finding.line` in `finding.file` before proposing a fix.
   `logger.warning("msg")` → `logger.warning("msg", exc_info=True)`.
   If the call already has keyword arguments, append after them.
 
+  **Contraindication — redaction boundaries.** Never add `exc_info=True` when
+  the call's arguments flow through a redaction helper (`redact*`, `sanitiz*`,
+  `safe_traceback`, `scrub_secret*`, `mask_secret*`) or an adjacent comment
+  says traceback capture is omitted on purpose: driver/API exception text can
+  embed credentials (JDBC URLs, Authorization headers, OAuth bodies), and the
+  separately-serialized traceback bypasses the redaction the code performs.
+  The checker exempts sanitizer-bearing calls; if a finding still appears at a
+  commented boundary, route it to residue — do not "fix" it.
+
 - **L007 LoggerCriticalUsage** — rename `.critical(` to `.error(`.  If the
   call site is inside an except block and has no `exc_info` kwarg, also add
   `exc_info=True`.  Outside an except block, rename only.

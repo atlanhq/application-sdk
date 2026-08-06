@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 
+from .._ast_common._sanitizers import call_uses_sanitizer
 from ._constants import _BROAD_EXCEPT_TYPES, _OPTIONAL_IMPORT_TYPES
 from ._helpers import (
     _any_logging_in,
@@ -138,6 +139,10 @@ class SilentSwallowMixin:
                 continue
             if func.attr == "exception":
                 continue  # logger.exception() implies exc_info — skip
+            if call_uses_sanitizer(call):
+                # Deliberate redaction boundary — exc_info would serialize the
+                # raw exception past the sanitizer and can leak credentials.
+                continue
             if func.attr in ("warning", "error", "critical") and not _has_exc_info(
                 call
             ):
