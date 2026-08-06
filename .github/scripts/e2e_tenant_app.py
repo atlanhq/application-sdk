@@ -370,6 +370,19 @@ def _repo_from_image(image: str) -> str:
     return f"https://github.com/{parts[1]}/{parts[-1]}"
 
 
+def _is_ghcr_image(image: str) -> bool:
+    """True when the image reference is on GHCR, the confirmed e2e registry.
+
+    Compared on the host with any explicit port stripped (``ghcr.io:443/...`` is
+    still a GHCR reference), and case-insensitively — the fail-closed mismatch
+    guard keys on this, so the one spelling variant that would otherwise slip
+    into the warn-only path must not.
+    """
+    ref = image.split("@", 1)[0]
+    authority = ref.split("/", 1)[0]
+    return authority.rsplit(":", 1)[0].lower() == "ghcr.io"
+
+
 #: How deep the recursive payload walks below may descend. Both LM walks start
 #: at depth 0 and their nest lists are one level long, so real payloads never go
 #: past depth 1; the bound exists so a pathological (deeply nested or, via
@@ -663,7 +676,7 @@ def install(args: argparse.Namespace) -> InstallOutcome:
             "repoint the app's source_repo to it and break its CI/CD publish "
             "gating."
         )
-        if args.image.split("@", 1)[0].split("/", 1)[0].lower() == "ghcr.io":
+        if _is_ghcr_image(args.image):
             raise TenantAppError(
                 f"refusing to publish: {explanation} The image is a ghcr.io "
                 "reference, where image name == repo name holds across the "

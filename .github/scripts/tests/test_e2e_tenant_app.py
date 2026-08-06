@@ -790,6 +790,26 @@ def test_repo_inferred_from_image(image: str, expected: str) -> None:
     assert app._repo_from_image(image) == expected
 
 
+@pytest.mark.parametrize(
+    "image, expected",
+    [
+        ("ghcr.io/atlanhq/atlan-openapi-app:tag", True),
+        # An explicit port is still a GHCR reference — the spelling that must
+        # not slip past the fail-closed guard into the warn-only path.
+        ("ghcr.io:443/atlanhq/atlan-openapi-app:tag", True),
+        ("GHCR.IO/atlanhq/atlan-openapi-app:tag", True),
+        ("ghcr.io/atlanhq/atlan-openapi-app@sha256:" + "0" * 64, True),
+        ("123456789012.dkr.ecr.us-east-1.amazonaws.com/atlanhq/app:tag", False),
+        # ghcr.io in the path is not ghcr.io in the registry seat.
+        ("myregistry.com/ghcr.io/app:tag", False),
+        ("atlan-openapi-app:tag", False),
+        ("", False),
+    ],
+)
+def test_ghcr_image_classification(image: str, expected: bool) -> None:
+    assert app._is_ghcr_image(image) is expected
+
+
 def test_ghcr_repo_image_mismatch_fails_closed_before_publishing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -806,6 +826,29 @@ def test_ghcr_repo_image_mismatch_fails_closed_before_publishing(
     ):
         app.install(
             _install_args(repo_url="https://github.com/atlanhq/application-sdk")
+        )
+    assert transport.paths("POST") == []
+
+
+def test_ghcr_image_with_an_explicit_port_still_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``ghcr.io:443/...`` is the same registry as ``ghcr.io/...`` — the exact
+    spelling that used to fall through to warn-only and let a wrong same-org
+    repo publish. The port must not turn the guard off.
+    """
+    transport = _wire(
+        monkeypatch,
+        StubTransport(routes=[StubRoute("GET", "/info", _ok({}))]),
+    )
+    with pytest.raises(
+        app.TenantAppError, match="does not match the repo implied by the image"
+    ):
+        app.install(
+            _install_args(
+                image="ghcr.io:443/atlanhq/atlan-openapi-app:tag",
+                repo_url="https://github.com/atlanhq/application-sdk",
+            )
         )
     assert transport.paths("POST") == []
 
