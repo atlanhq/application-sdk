@@ -389,17 +389,41 @@ jobs:
           # The workflow_run trigger fires on "Vulnerability Scan", not
           # "Conformance". Conformance artifacts live in a separate run —
           # discover the latest completed one on the default branch.
-          RUN_ID=$(gh run list \
+          #
+          # Pick the newest run that STILL HAS artifacts, not simply the newest
+          # run. Taking `.[0]` blindly meant that whenever the most recent
+          # Conformance run had no retrievable SARIF (artifacts expired, or the
+          # run died before uploading), the download step below found nothing,
+          # set has_artifacts=false, and the repo was skipped — even though an
+          # older run's SARIF was sitting right there, publishable. Repos that
+          # run Conformance infrequently could sit un-published indefinitely
+          # while every job in the chain reported success.
+          CANDIDATES=$(gh run list \
             --repo "${{ github.repository }}" \
             --workflow=conformance.yaml \
             --status=completed \
             --branch="${{ github.event.repository.default_branch || 'main' }}" \
             --limit=20 \
             --json databaseId,conclusion \
-            --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId')
+            --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[].databaseId')
+
+          RUN_ID=""
+          for candidate in ${CANDIDATES}; do
+            # One artifacts call per candidate; count non-expired SARIF series.
+            SARIF_COUNT=$(gh api \
+              "repos/${{ github.repository }}/actions/runs/${candidate}/artifacts" \
+              --jq '[.artifacts[] | select(.expired == false) | select(.name | startswith("conformance-") and endswith("-sarif"))] | length' \
+              2>/dev/null || echo 0)
+            if [ "${SARIF_COUNT:-0}" -gt 0 ]; then
+              RUN_ID="${candidate}"
+              echo "Run ${candidate} has ${SARIF_COUNT} live SARIF artifact(s) — using it"
+              break
+            fi
+            echo "Run ${candidate} has no live SARIF artifacts — trying older"
+          done
 
           if [ -z "${RUN_ID:-}" ] || [ "$RUN_ID" = "null" ]; then
-            echo "::warning::No completed (success/failure) Conformance run found in the last 20 runs — all recent runs may be cancelled; skipping conformance dashboard update"
+            echo "::warning::No Conformance run with live SARIF artifacts in the last 20 completed runs — skipping conformance dashboard update"
             echo "has_run=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -644,17 +668,44 @@ jobs:
           # The scorecard is produced per-run by the Tests workflow's `scorecard`
           # aggregation job (it combines the unit + integration tiers' evidence
           # and uploads results/test-readiness.json as the test-readiness-scorecard
-          # artifact). Find the latest completed Tests run on the default branch.
-          RUN_ID=$(gh run list \
+          # artifact).
+          #
+          # Pick the newest run that STILL HAS the scorecard, not simply the
+          # newest run. Taking `.[0]` blindly meant that whenever the most recent
+          # Tests run had no scorecard (it died before the aggregation job, or the
+          # artifact expired), the download below found nothing, every later step
+          # no-opped on its hashFiles() gate, and the JOB STILL REPORTED SUCCESS —
+          # so the repo never reached the dashboard and nothing anywhere said so.
+          # Confirmed against atlan-athena-app: its publish job succeeded on
+          # 2026-08-05 while `test-readiness-dashboard/repos/atlanhq_atlan-athena-app.json`
+          # was absent from the mirror.
+          CANDIDATES=$(gh run list \
             --repo "${{ github.repository }}" \
             --workflow=tests.yaml \
             --status=completed \
             --branch="${{ github.event.repository.default_branch || 'main' }}" \
             --limit=20 \
             --json databaseId,conclusion \
-            --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId // ""')
+            --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[].databaseId')
+
+          RUN_ID=""
+          for candidate in ${CANDIDATES}; do
+            HAS_SCORECARD=$(gh api \
+              "repos/${{ github.repository }}/actions/runs/${candidate}/artifacts" \
+              --jq '[.artifacts[] | select(.expired == false) | select(.name == "test-readiness-scorecard")] | length' \
+              2>/dev/null || echo 0)
+            if [ "${HAS_SCORECARD:-0}" -gt 0 ]; then
+              RUN_ID="${candidate}"
+              echo "Run ${candidate} has a live test-readiness-scorecard — using it"
+              break
+            fi
+            echo "Run ${candidate} has no live scorecard — trying older"
+          done
+
+          if [ -z "${RUN_ID}" ]; then
+            echo "::warning::No Tests run with a live test-readiness-scorecard in the last 20 completed runs — skipping test-readiness dashboard update"
+          fi
           echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
-          echo "Latest Tests run: ${RUN_ID:-none}"
 
       - name: Download test-readiness artifact
         if: steps.discover.outputs.run_id != ''
@@ -664,12 +715,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p scorecard-dl
-          # Best-effort: a missing/expired artifact leaves the dir empty and the
-          # downstream steps (gated on hashFiles) simply no-op — never fail.
+          # No `|| true` here any more. discover only emits a run_id once it has
+          # CONFIRMED that run carries a live scorecard, so a failure to download
+          # it is a real error (token scope, network, artifact deleted mid-run) —
+          # not the routine "nothing to publish" case discover already handles by
+          # emitting an empty run_id. Swallowing it here is what turned a broken
+          # upload into a green no-op.
           gh run download "$RUN_ID" \
             --repo "${{ github.repository }}" \
             --name test-readiness-scorecard \
-            --dir scorecard-dl || echo "::warning::no test-readiness-scorecard artifact (expired?)"
+            --dir scorecard-dl
 
       - name: Build history entry
         if: hashFiles('scorecard-dl/test-readiness.json') != ''

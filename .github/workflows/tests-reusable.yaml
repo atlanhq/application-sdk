@@ -852,7 +852,12 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Twice the script's own waits, not a shade over them: the install retries for
+    # up to ~600s while LM's catalog snapshot catches up, then polls the deployment
+    # for up to ~600s. At 30 the runner's timeout can fire first on a slow sync,
+    # and a bare "job cancelled after 30m" replaces the actionable error the script
+    # was about to print — the diagnosis-hostile failure this job exists to avoid.
+    timeout-minutes: 40
     concurrency:
       # Keyed on the TENANT (app + cloud), not the ref: the installation is
       # tenant-scoped, so two runs installing different versions concurrently
@@ -917,6 +922,33 @@ jobs:
             --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
             >> "$GITHUB_ENV"
 
+      # Reject a tenant we cannot scope a release to, HERE — before atlan.yaml is
+      # parsed and before anything is published. The resolver only exports
+      # E2E_TENANT_ID from a matrix entry carrying `tenant_id`; the legacy
+      # single-tenant fallback path has no entry to carry one, so without this
+      # step the run got as far as the publish and then failed inside the script
+      # on an empty `--tenant`, several steps deeper than the actual cause.
+      #
+      # Failing rather than skipping the install, deliberately. Skipping would
+      # leave prepare-tenant green having done nothing, the tenant on whatever
+      # version it happened to be running, and every leg reding on its version
+      # check instead — one confusing failure per leg in place of one clear
+      # failure here. `install-app-to-tenant: true` is a deliberate opt-in, and a
+      # caller that has opted in without the tenant matrix cannot install at all,
+      # so this is a misconfiguration to surface, not a path to degrade into.
+      #
+      # A step-level `if:` on the env context rather than a shell `test`, so the
+      # branch lives in the expression layer and the `run:` stays straight-line
+      # (docs/standards/ci.md). The env context sees values earlier steps wrote to
+      # $GITHUB_ENV.
+      - name: Require a tenant ID before publishing anything
+        if: env.E2E_TENANT_ID == ''
+        env:
+          CLOUD: ${{ matrix.cloud || 'default' }}
+        run: |
+          echo "::error::no tenant ID resolved for cloud '${CLOUD}', so a release cannot be scoped to this tenant. GM matches allowed_tenants EXACTLY against the tenant's vcluster instance name (e.g. 'markeznp37') — not its hostname — so there is nothing to fall back to. Add a 'tenant_id' field to this cloud's entry in E2E_TENANT_MATRIX_JSON, alongside 'tenant', 'client_id', 'client_secret' and 'api_key' (see docs/standards/connector-ci-e2e.md). On the legacy single-tenant fallback path there is no matrix entry to add it to: either share the tenant-matrix secret with this repo, or leave install-app-to-tenant off and use the E2E Tenant Install workflow, whose tenant_id input covers the one-off case."
+          exit 1
+
       # app_id / deploy_config / entrypoints / sdk_version all come from
       # atlan.yaml, which parse_atlan_yaml.py already reads for the release path.
       # Reused rather than re-parsed so the e2e registration and the release
@@ -962,7 +994,7 @@ jobs:
             --image "$IMAGE" \
             --version "$VERSION" \
             --branch "$BRANCH" \
-            --tenant "$SDR_TEST_TENANT" \
+            --tenant "${E2E_TENANT_ID:-}" \
             --repo-url "$REPO_URL" \
             --deploy-config "$DEPLOY_CONFIG" \
             --sdk-version "$SDK_VERSION" \

@@ -63,7 +63,7 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   loguru
     #   pytest
     #   typer
-coverage==7.15.3
+coverage==7.15.4
 cryptography==50.0.0
     # via
     #   authlib

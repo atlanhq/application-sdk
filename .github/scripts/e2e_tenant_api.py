@@ -90,6 +90,12 @@ _APP_ID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-" r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
+#: Host suffixes a tenant ID must not carry. Vcluster instance names are DNS
+#: subdomains and may legally contain dots (``team.a``), so "contains a dot" is
+#: too broad a check; what is never legitimate is a scheme or one of the known
+#: Atlan host suffixes, which only ever appear on a hostname.
+_ATLAN_HOST_SUFFIXES = (".atlan.com", ".atlan.dev")
+
 
 class TenantApiError(RuntimeError):
     """A tenant call failed in a way the caller cannot recover from.
@@ -130,6 +136,50 @@ def validate_tenant_base_url(base_url: str) -> str:
             "tenant value in E2E_TENANT_MATRIX_JSON / SDR_TEST_TENANT."
         )
     return candidate
+
+
+def validate_tenant_id(tenant_id: str) -> str:
+    """Return the tenant ID, or raise if it looks like a hostname.
+
+    ``allowed_tenants`` scopes a GM release, and GM matches it EXACTLY against
+    the tenant's own id — the **vcluster instance name** (``markeznp37``,
+    ``home-mt``), which Heracles reads from the ``atlan-defaults`` ConfigMap key
+    ``instance`` (``heracles/handler/marketplace.go``). It is deliberately not
+    taken from the JWT: the Keycloak realm is ``default`` for every tenant.
+
+    A hostname (``e2e-azure-main.atlan.com``) is therefore silently wrong: the
+    publish succeeds, the release is created, and it is visible to NO tenant —
+    so the install fails later with "version not found" and a list of the
+    versions the tenant *can* see. That took three live runs to diagnose; this
+    turns it into an immediate, actionable error.
+
+    The check is deliberately narrow (a scheme, or a known Atlan host suffix),
+    because tenant ids are otherwise free-form vcluster names — which are DNS
+    subdomains and may legally contain dots (``team.a``) — and a stricter
+    pattern would reject valid ones.
+    """
+    value = tenant_id.strip()
+    if not value:
+        raise TenantApiError(
+            "no tenant id given. `allowed_tenants` needs the tenant's ID — its "
+            "vcluster instance name, e.g. 'markeznp37' — not its hostname.\n"
+            "Where it comes from: a `tenant_id` field on this cloud's entry in "
+            "the E2E_TENANT_MATRIX_JSON secret, which the e2e tenant resolver "
+            "exports as E2E_TENANT_ID. Add it there (alongside `tenant`, "
+            "`client_id`, `client_secret`, `api_key`) to enable the install path. "
+            "The E2E Tenant Install workflow also takes a `tenant_id` input for a "
+            "one-off run, and that is the only option on the single-tenant "
+            "fallback path, which carries no matrix entry to add the field to."
+        )
+    if "://" in value or value.endswith(_ATLAN_HOST_SUFFIXES):
+        raise TenantApiError(
+            f"tenant id {value!r} looks like a hostname. GM matches "
+            "`allowed_tenants` against the tenant's vcluster instance name (e.g. "
+            "'markeznp37'), so a hostname produces a release visible to no "
+            "tenant — the publish succeeds and the install then fails with "
+            "'version not found'. Pass the tenant ID."
+        )
+    return value
 
 
 def validate_app_id(app_id: str) -> str:

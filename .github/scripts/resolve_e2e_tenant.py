@@ -75,6 +75,19 @@ _FIELD_TO_ENV = {
 _DEPLOYMENT_NAME_FIELD = "deployment_name"
 _DEPLOYMENT_NAME_ENV = "E2E_TENANT_DEPLOYMENT_NAME"
 
+# Optional. The tenant's ID — its vcluster instance name ("markeznp37"), which is
+# what GM matches `allowed_tenants` against when a release is scoped to specific
+# tenants (heracles/handler/marketplace.go reads it from the atlan-defaults
+# ConfigMap key `instance`; it is deliberately NOT in the JWT, where the realm is
+# "default" for every tenant).
+#
+# Distinct from `tenant`, which is the HOSTNAME. Scoping a release with a hostname
+# publishes successfully and produces a release visible to no tenant, so the
+# install then fails with "version not found" — FND-31 lost three live runs to
+# exactly that. Absent for a caller that never publishes.
+_TENANT_ID_FIELD = "tenant_id"
+_TENANT_ID_ENV = "E2E_TENANT_ID"
+
 # Values excluded from ::add-mask::. Everything else is masked, including the
 # tenant host and its derived base URL — those are secrets today and staying
 # masked is not a change in posture.
@@ -139,6 +152,9 @@ def _entry(matrix_json: str, cloud: str) -> dict[str, str]:
     deployment_name = str(entry.get(_DEPLOYMENT_NAME_FIELD, "") or "").strip()
     if deployment_name:
         resolved[_DEPLOYMENT_NAME_ENV] = deployment_name
+    tenant_id = str(entry.get(_TENANT_ID_FIELD, "") or "").strip()
+    if tenant_id:
+        resolved[_TENANT_ID_ENV] = tenant_id
     return resolved
 
 
