@@ -115,6 +115,14 @@ class SilentSwallowMixin:
                 return
             if func.attr in ("warning", "error", "critical") and _has_exc_info(call):
                 return
+            # A log call that formats the exception through a redaction helper
+            # marks a deliberate no-traceback boundary (see _sanitizers.py) —
+            # the failure IS logged; exc_info there would leak past the
+            # sanitizer, so its absence must not flag the handler.
+            if func.attr in ("warning", "error", "critical") and call_uses_sanitizer(
+                call
+            ):
+                return
         self._add(
             "E004",
             node,

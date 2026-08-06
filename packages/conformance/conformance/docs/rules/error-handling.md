@@ -106,6 +106,10 @@ X(...)`, or `raise X(...) from e` — because nothing is swallowed; `raise X(...
 None` (which discards the trace) and a conditional re-raise that can fall through still
 fire.
 
+Exempt: handlers whose log call formats the exception through a recognised redaction
+helper (redact*/sanitiz*/safe_traceback/…) — the failure is logged at a deliberate
+no-traceback boundary.
+
 ---
 
 ## E005 — `ExceptBlockMissingExcInfo` {#e005}

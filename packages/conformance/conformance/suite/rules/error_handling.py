@@ -108,6 +108,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "or ``raise X(...) from e`` — because nothing is swallowed; ``raise X(...)\n"
             "from None`` (which discards the trace) and a conditional re-raise that can\n"
             "fall through still fire.\n"
+            "\n\nExempt: handlers whose log call formats the exception through a\n"
+            "recognised redaction helper (redact*/sanitiz*/safe_traceback/…) —\n"
+            "the failure is logged at a deliberate no-traceback boundary."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e004",
     ),

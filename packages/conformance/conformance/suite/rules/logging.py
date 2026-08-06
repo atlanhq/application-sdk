@@ -168,6 +168,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "In production services, output may go to stdout unformatted, be lost, or\n"
             "interleave with structured log lines.  Acceptable in CLI scripts, test/debug\n"
             'scripts, and ``if __name__ == "__main__":`` blocks.\n'
+            "\n\nExempt: standalone scripts/CLIs — files with a shebang, an\n"
+            "if __name__ == '__main__' guard, or an argparse import. For those,\n"
+            "stdout is the user interface, not a logging bypass."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l005",
     ),
@@ -299,6 +302,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "than the credential store.  Requires human security review before marking\n"
             "acceptable.  Logging a credential *name* is acceptable; logging a\n"
             "credential *value* is CRITICAL.\n"
+            "\n\nExempt: arguments assigned a redaction placeholder in the module\n"
+            '(e.g. password = "[REDACTED]" if creds.get("password") else None) —\n'
+            "logging them is a presence indicator, not a value leak."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l010",
     ),

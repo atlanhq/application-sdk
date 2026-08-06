@@ -12,8 +12,10 @@ from ._format import FormatMixin
 from ._helpers import (
     Framework,
     collect_logging_aliases,
+    collect_redacted_names,
     detect_framework,
     is_adapter_file,
+    is_script_file,
 )
 from ._level import LevelMixin
 from ._performance import PerformanceMixin
@@ -59,6 +61,8 @@ class Checker(
         adapter_file: bool,
         logging_module_names: frozenset[str],
         logging_warn_names: frozenset[str],
+        script_file: bool = False,
+        redacted_names: frozenset[str] = frozenset(),
     ) -> None:
         self._filename = filename
         self._directives = directives
@@ -66,6 +70,8 @@ class Checker(
         self._is_adapter_file = adapter_file
         self._logging_module_names = logging_module_names
         self._logging_warn_names = logging_warn_names
+        self._is_script_file = script_file
+        self._redacted_names = redacted_names
         self._findings: list[Finding] = []
         # Context stacks — managed by visit_* methods
         self._loop_stack: list[ast.For | ast.AsyncFor | ast.While] = []
@@ -206,5 +212,7 @@ def build_checker(
         adapter_file=adapter,
         logging_module_names=logging_module_names,
         logging_warn_names=logging_warn_names,
+        script_file=is_script_file(text, tree),
+        redacted_names=collect_redacted_names(tree),
     )
     return checker, tree

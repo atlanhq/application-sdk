@@ -155,6 +155,10 @@ services, output may go to stdout unformatted, be lost, or interleave with struc
 log lines.  Acceptable in CLI scripts, test/debug scripts, and `if __name__ ==
 "__main__":` blocks.
 
+Exempt: standalone scripts/CLIs — files with a shebang, an if __name__ == '__main__'
+guard, or an argparse import. For those, stdout is the user interface, not a logging
+bypass.
+
 ---
 
 ## L006 — `InfoInTightLoop` {#l006}
@@ -252,6 +256,10 @@ Credentials in log output are a security vulnerability — logs are often stored
 plaintext in log aggregation systems, accessible to more people than the credential
 store.  Requires human security review before marking acceptable.  Logging a credential
 *name* is acceptable; logging a credential *value* is CRITICAL.
+
+Exempt: arguments assigned a redaction placeholder in the module (e.g. password =
+"[REDACTED]" if creds.get("password") else None) — logging them is a presence indicator,
+not a value leak.
 
 ---
 

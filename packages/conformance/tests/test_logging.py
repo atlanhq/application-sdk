@@ -1197,3 +1197,66 @@ def test_l004_still_fires_when_sanitizer_used_elsewhere_in_handler() -> None:
         "    logger.warning('failed')\n"
     )
     assert "L004" in _ids(src)
+
+
+# ---------------------------------------------------------------------------
+# L005 — standalone script/CLI exemption (FND-61)
+# ---------------------------------------------------------------------------
+
+
+def test_l005_silent_in_shebang_script() -> None:
+    src = "#!/usr/bin/env python3\ndef run():\n    print('progress')\n"
+    assert "L005" not in _ids(src)
+
+
+def test_l005_silent_with_main_guard_even_inside_functions() -> None:
+    src = (
+        "def run():\n    print('progress')\n\n"
+        'if __name__ == "__main__":\n    run()\n'
+    )
+    assert "L005" not in _ids(src)
+
+
+def test_l005_silent_for_argparse_cli() -> None:
+    src = "import argparse\ndef run():\n    print('result')\n"
+    assert "L005" not in _ids(src)
+
+
+def test_l005_still_fires_in_plain_module() -> None:
+    src = "def handle():\n    print('debugging')\n"
+    assert "L005" in _ids(src)
+
+
+# ---------------------------------------------------------------------------
+# L010 — redaction-placeholder exemption (FND-61)
+# ---------------------------------------------------------------------------
+
+
+def test_l010_silent_for_redaction_placeholder_positional() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def connect(creds):\n"
+        '    password = "[REDACTED]" if creds.get("password") else None\n'
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" not in _ids(src)
+
+
+def test_l010_silent_for_redaction_placeholder_kwarg() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def connect(creds):\n"
+        '    token = "***masked***"\n'
+        "    logger.info('auth', token=token)\n"
+    )
+    assert "L010" not in _ids(src)
+
+
+def test_l010_still_fires_for_real_credential_value() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def connect(creds):\n"
+        '    password = creds.get("password")\n'
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)

@@ -268,3 +268,97 @@ def _is_credential_value_name(name: str) -> bool:
     if any(lower.endswith(suf) for suf in CREDENTIAL_LABEL_SUFFIXES):
         return False
     return any(lower.endswith(suf) or lower == suf for suf in CREDENTIAL_VALUE_SUFFIXES)
+
+
+# ---------------------------------------------------------------------------
+# Script/CLI detection (L005 exemption) and redaction-placeholder tracking
+# (L010 exemption) — FND-61 follow-up: rule-level fixes so fleet code does not
+# need inline suppressions for these shapes.
+# ---------------------------------------------------------------------------
+
+#: Substrings that mark a string constant as a redaction placeholder.
+_REDACTION_MARKERS: tuple[str, ...] = ("redact", "masked", "***", "xxxx")
+
+
+def is_script_file(text: str, tree: ast.Module) -> bool:
+    """True when the module is a standalone script/CLI rather than app code.
+
+    Signals (any one suffices):
+
+    * a shebang line — the file is meant to be executed directly;
+    * an ``if __name__ == "__main__":`` guard anywhere at module level;
+    * an ``argparse`` import — the module parses its own command line.
+
+    For such files stdout is the user interface; ``print()`` is not a logging
+    bypass (L005).
+    """
+    if text.startswith("#!"):
+        return True
+    for node in tree.body:
+        if isinstance(node, ast.If):
+            t = node.test
+            if (
+                isinstance(t, ast.Compare)
+                and isinstance(t.left, ast.Name)
+                and t.left.id == "__name__"
+                and len(t.comparators) == 1
+                and isinstance(t.comparators[0], ast.Constant)
+                and t.comparators[0].value == "__main__"
+            ):
+                return True
+        if isinstance(node, ast.Import) and any(
+            a.name == "argparse" for a in node.names
+        ):
+            return True
+        if isinstance(node, ast.ImportFrom) and node.module == "argparse":
+            return True
+    return False
+
+
+def _is_redaction_placeholder_expr(value: ast.expr) -> bool:
+    """True for ``"[REDACTED]"``-style constants, or conditionals whose every
+    branch is such a constant or ``None`` (``x if cond else None``)."""
+    if isinstance(value, ast.Constant):
+        if value.value is None:
+            return False  # bare None alone is not a placeholder
+        if isinstance(value.value, str):
+            lowered = value.value.lower()
+            return any(m in lowered for m in _REDACTION_MARKERS)
+        return False
+    if isinstance(value, ast.IfExp):
+        branches = (value.body, value.orelse)
+        placeholderish = 0
+        for b in branches:
+            if isinstance(b, ast.Constant) and b.value is None:
+                continue
+            if _is_redaction_placeholder_expr(b):
+                placeholderish += 1
+            else:
+                return False
+        return placeholderish >= 1
+    return False
+
+
+def collect_redacted_names(tree: ast.Module) -> frozenset[str]:
+    """Names assigned a redaction placeholder anywhere in the module.
+
+    ``password = "[REDACTED]" if credentials.get("password") else None`` marks
+    ``password`` as a *presence indicator*: logging it discloses nothing, so
+    L010 must not flag it (the check matches argument names, not values).
+    """
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+            value = node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets = [node.target]
+            value = node.value
+        else:
+            continue
+        if _is_redaction_placeholder_expr(value):
+            for t in targets:
+                if isinstance(t, ast.Name):
+                    out.add(t.id)
+    return frozenset(out)

@@ -2102,3 +2102,16 @@ def test_e005_silent_for_sanitize_helper_attribute() -> None:
 def test_e005_still_fires_without_sanitizer() -> None:
     src = "try:\n    x()\nexcept Exception as e:\n    logger.warning('failed: %s', e)\n"
     assert "E005" in _findings(src)
+
+
+def test_e004_silent_when_handler_logs_via_sanitizer() -> None:
+    src = (
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    logger.warning('close failed: %s', redact(e))\n"
+    )
+    assert "E004" not in _findings(src)
+
+
+def test_e004_still_fires_when_handler_logs_bare() -> None:
+    src = "try:\n    x()\nexcept Exception as e:\n    logger.warning('failed')\n"
+    assert "E004" in _findings(src)
