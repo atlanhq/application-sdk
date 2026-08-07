@@ -743,3 +743,84 @@ class TestActivityFnExecution:
             result = await activity_fn(ctx, _AfnIn(name="x"))
 
         assert result.captured_workflow_id == "wf-from-temporal"
+
+
+class TestSqlWrapRetryabilityReachesTheWire:
+    """End-to-end guard for CONAT-747.
+
+    The SQL client wraps unclassified driver exceptions in
+    ``SqlPandasResultError``; the activity wrapper then translates any AppError
+    into ``ApplicationError(non_retryable=not effective_retryable)``. If the
+    wrap asserts non-retryability, Temporal records
+    ``RETRY_STATE_NON_RETRYABLE_FAILURE`` and the activity's declared
+    ``maximum_attempts`` never applies. This asserts the whole chain, not just
+    the flag on the exception.
+    """
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    async def _run_task_raising(self, err: Exception):
+        from application_sdk.execution.errors import ApplicationError
+
+        class _SqlFailApp(App):
+            @task(timeout_seconds=60)
+            async def crawl(self, input: _AfnIn) -> _AfnOut:
+                raise err
+
+            async def run(self, input: _AfnIn) -> _AfnOut:
+                return await self.crawl(input)
+
+        app_slug = "_sql-fail-app"
+        tasks = TaskRegistry.get_instance().get_tasks_for_app(app_slug)
+        activity_fn = create_activity_from_task(
+            next(t for t in tasks if t.name == "crawl")
+        )
+        ctx = TaskContext(
+            app_name=app_slug,
+            task_name="crawl",
+            run_id="run-1",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+        )
+        with (
+            mock.patch.object(
+                activities_module.activity,
+                "info",
+                return_value=mock.MagicMock(workflow_id="wf-sql"),
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+            pytest.raises(ApplicationError) as exc_info,
+        ):
+            await activity_fn(ctx, _AfnIn(name="x"))
+        return exc_info.value
+
+    @pytest.mark.asyncio
+    async def test_unclassified_sql_wrap_is_not_flagged_non_retryable(self) -> None:
+        from application_sdk.clients.sql_errors import SqlPandasResultError
+
+        err = SqlPandasResultError(
+            message="Error executing SQL query",
+            cause=Exception("could not open relation with OID 328245688"),
+            retryable=True,
+        )
+        app_err = await self._run_task_raising(err)
+        assert app_err.non_retryable is False
+
+    @pytest.mark.asyncio
+    async def test_sql_invariant_violation_is_flagged_non_retryable(self) -> None:
+        from application_sdk.clients.sql_errors import SqlPandasResultError
+
+        err = SqlPandasResultError(
+            invariant="_execute_async_read_operation must return a pd.DataFrame"
+        )
+        app_err = await self._run_task_raising(err)
+        assert app_err.non_retryable is True

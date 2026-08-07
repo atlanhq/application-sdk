@@ -313,3 +313,67 @@ async def test_run_query_escapes_colons_server_side(
 
     mock_text.assert_called_once_with("RLIKE '^(?\\:cdl)'")
     mock_connection_with_options.stream.assert_called_once_with("RLIKE '^(?\\:cdl)'")
+
+
+# ---------- retryability of the unclassified-exception wrap (CONAT-747) ----------
+
+
+@pytest.mark.asyncio
+@patch("sqlalchemy.text", side_effect=lambda q: q)  # type: ignore
+async def test_run_query_wrap_is_retryable_server_side(
+    mock_text: MagicMock,
+    async_sql_client: AsyncBaseSQLClient,
+    mock_async_engine_with_connection,
+):
+    """An unclassified driver exception must NOT be marked non-retryable.
+
+    The activity that calls run_query declares its own Temporal retry policy
+    (e.g. maximum_attempts=3). Wrapping every escaping exception as a
+    non-retryable InternalError made that policy dead code, so a transient
+    source-side failure became a hard failure on the first attempt.
+    """
+    mock_engine, _mock_connection, mock_connection_with_options = (
+        mock_async_engine_with_connection
+    )
+    async_sql_client.engine = mock_engine
+
+    mock_result = MagicMock()
+    mock_result.keys.side_effect = lambda: ["col1"]
+    # Mimics psycopg.errors.InternalError_: a transient concurrent-DDL race.
+    mock_result.fetchmany = AsyncMock(
+        side_effect=[Exception("could not open relation with OID 328245688")]
+    )
+    mock_connection_with_options.stream = AsyncMock(return_value=mock_result)
+    async_sql_client.use_server_side_cursor = True
+
+    with pytest.raises(SqlPandasResultError) as exc_info:
+        async for _ in async_sql_client.run_query("SELECT * FROM t"):
+            pass
+
+    assert exc_info.value.effective_retryable is True
+    assert exc_info.value.to_failure_details().retryable is True
+
+
+@pytest.mark.asyncio
+@patch("sqlalchemy.text", side_effect=lambda q: q)  # type: ignore
+async def test_run_query_wrap_is_retryable_client_side(
+    mock_text: MagicMock,
+    async_sql_client: AsyncBaseSQLClient,
+    mock_async_engine_with_connection,
+):
+    """The client-side cursor path carries the same retryability."""
+    mock_engine, mock_connection, _ = mock_async_engine_with_connection
+    async_sql_client.engine = mock_engine
+
+    mock_result = MagicMock()
+    mock_result.keys.side_effect = lambda: ["col1"]
+    mock_result.cursor = MagicMock()
+    mock_result.cursor.fetchmany = MagicMock(side_effect=Exception("connection lost"))
+    mock_connection.execute = AsyncMock(return_value=mock_result)
+    async_sql_client.use_server_side_cursor = False
+
+    with pytest.raises(SqlPandasResultError) as exc_info:
+        async for _ in async_sql_client.run_query("SELECT * FROM t"):
+            pass
+
+    assert exc_info.value.effective_retryable is True
