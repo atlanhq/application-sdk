@@ -80,6 +80,10 @@ def _step(action_yaml: Path, name: str) -> dict:  # type: ignore[type-arg]
             r"\$\{\{ github\.action_path \}\}/(\S*?assert_image_platforms\.py)",
             "platform-assert script",
         ),
+        (
+            r"\$\{\{ github\.action_path \}\}/(\S*?with-retry\.sh)",
+            "retry helper",
+        ),
     ],
 )
 def test_build_action_asset_paths_resolve(pattern: str, description: str) -> None:
@@ -300,6 +304,70 @@ def test_the_merge_job_asserts_the_reference_the_tenant_pulls() -> None:
     # Reads image-base, never a per-arch reference: base is identical from every
     # matrix leg, which is what makes last-writer-wins outputs safe here.
     assert "outputs.image-base" in yaml.safe_dump(job)
+
+
+# ── 5. Reading back a just-pushed tag is a race ──────────────────────────────
+# buildx's container driver (required for the gha layer cache) exports straight
+# to the registry and leaves no local copy, so anything that inspects or runs the
+# image it just built has to fetch it back — and GHCR does not always serve a
+# freshly written tag. A live arm64 leg got `manifest unknown` 0.7s after its own
+# push reported success; a re-run passed unchanged.
+
+
+def test_the_interpreter_assert_retries_the_registry_read() -> None:
+    step = _step(_BUILD_ACTION, "Assert worker image Python matches expected")
+    run = step["run"]
+    assert 'with-retry.sh" docker pull' in run, (
+        "the image read-back must be retried: it fetches a tag this same job "
+        "pushed seconds earlier, and GHCR can answer `manifest unknown` for it"
+    )
+    # The pull is retried; the assertion is NOT. A genuine interpreter mismatch
+    # should fail once, immediately — not be retried three times over 15 seconds
+    # before reporting the same thing.
+    for line in run.splitlines():
+        if "with-retry.sh" in line:
+            assert (
+                "container_python_version.py" not in line and "docker run" not in line
+            ), (
+                "the retry must wrap the pull only, or a real mismatch is "
+                f"retried before it is reported: {line.strip()!r}"
+            )
+
+
+def test_both_architectures_are_asserted_not_just_one() -> None:
+    """Neither leg may opt out of the interpreter check.
+
+    A multi-arch base is a manifest list whose arm64 entry is a SEPARATELY BUILT
+    image; nothing guarantees its interpreter matches amd64's unless something
+    checks. Each leg runs on a runner native to what it built, so each asserts its
+    own variant — and the legs are parallel, so the second check is free in
+    wall-clock terms.
+    """
+    job = _reusable()["jobs"]["build-e2e-image"]
+    step = next(s for s in job["steps"] if "build-app-image" in str(s.get("uses", "")))
+    assert "expected-python-version" not in step.get("with", {}), (
+        "the install path pins expected-python-version per leg. Leave it at the "
+        "action's default so BOTH architectures are asserted — passing '' on one "
+        "leg silently skips that architecture's interpreter check."
+    )
+
+
+def test_the_merge_job_retries_its_manifest_read() -> None:
+    """Same race, same fix: it inspects a tag the previous step just created."""
+    job = _reusable()["jobs"]["merge-e2e-image"]
+    inspect = next(
+        s for s in job["steps"] if "imagetools inspect" in str(s.get("run", ""))
+    )
+    assert "with-retry.sh" in inspect["run"], (
+        "the merge job reads back a manifest it created one step earlier — the "
+        "same read-after-write that failed a build leg"
+    )
+    for line in inspect["run"].splitlines():
+        if "with-retry.sh" in line:
+            assert "assert_image_platforms.py" not in line, (
+                "retry the inspect, not the assertion: a genuinely single-arch "
+                "manifest must fail once rather than three times"
+            )
 
 
 def test_pkl_is_downloaded_for_the_runners_architecture() -> None:

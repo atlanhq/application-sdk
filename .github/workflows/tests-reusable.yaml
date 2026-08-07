@@ -935,12 +935,21 @@ jobs:
       # and the tenant pulls. A leg that quietly built the wrong architecture
       # shows up here as a missing one — nothing downstream would catch it, since
       # GM accepts the version and LM accepts the install regardless.
+      #
+      # Retried for the same reason as the interpreter assert in build-app-image:
+      # this reads back a tag the PREVIOUS STEP created, and GHCR does not always
+      # serve a just-written tag immediately — a build leg hit exactly that,
+      # `manifest unknown` 0.7s after its own push reported success. The inspect
+      # is retried; the assertion over its output is not, so a genuinely
+      # single-arch manifest still fails once rather than three times.
       - name: Assert the manifest serves both architectures
         env:
           IMAGE: ${{ needs.build-e2e-image.outputs.image-base }}
         run: |
           set -euo pipefail
-          docker buildx imagetools inspect --raw "$IMAGE" \
+          RAW=$(application-sdk-scripts/.github/scripts/with-retry.sh \
+            docker buildx imagetools inspect --raw "$IMAGE")
+          printf '%s' "$RAW" \
             | python3 application-sdk-scripts/.github/scripts/assert_image_platforms.py \
                 --expected linux/amd64,linux/arm64
 
