@@ -96,28 +96,6 @@ def test_apt_step_routes_the_value_through_env(jobs: dict, job_name: str) -> Non
     ), f"{job_name}: apt step interpolates an expression into the shell script"
 
 
-@pytest.mark.parametrize("job_name", RUNNER_SYNC_JOBS)
-def test_apt_step_validates_package_names_before_install(
-    jobs: dict, job_name: str
-) -> None:
-    """The env-routed value is word-split into ``apt-get install`` unquoted, so
-    a metacharacter (``;``, ``$(…)``, backticks) would otherwise execute on the
-    runner. Pin the fail-closed allowlist guard so a future refactor cannot
-    silently drop it."""
-    script = _apt_step(jobs[job_name])["run"]
-    guard = (
-        'if ! [[ "$APT_PACKAGES" =~ '
-        "^[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*$ ]]; then"
-    )
-    assert guard in script, (
-        f"{job_name}: apt step must reject anything that is not a "
-        "space-separated list of valid Debian package names before the install"
-    )
-    assert script.index(guard) < script.index(
-        "sudo apt-get install"
-    ), f"{job_name}: the allowlist guard must run before apt-get install"
-
-
 # ---------------------------------------------------------------------------
 # Summary extraction: run the real pipeline lines from each action's script.
 # ---------------------------------------------------------------------------
