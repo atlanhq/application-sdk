@@ -144,6 +144,41 @@ _VERSION_KEYS = (
 #: envelope; the others are tolerated aliases.
 _VERSION_NESTS = ("installed", "install", "installation", "deployment", "data")
 
+#: Placeholders LM emits in place of a version. NOT versions, and treating them as
+#: one is worse than reading nothing: it turns "this tenant cannot tell us what it
+#: runs" into "this tenant runs something called 'unknown'", which reads like a
+#: mismatch and sends the next person looking for the wrong problem.
+#:
+#: ``unknown`` is a literal fallback in LM's own code — ``version_text =
+#: attributes.get("atlanAppCurrentVersion", "unknown")`` in
+#: ``tenant_apps_manager/store/tenant_app_store.py``, commented "Semantic version
+#: (if available)". The Atlas attribute is optional, so an install can reconcile
+#: perfectly and still report this. A live azure tenant did exactly that after a
+#: SUCCEEDED deployment.
+_PLACEHOLDER_VERSIONS = frozenset({"unknown", "none", "null", "n/a"})
+
+#: Fields worth seeing when the version is unreadable, and safe to print: app and
+#: version identifiers, not credentials or config blobs. ``catalog.app_version``
+#: is a ``MarketplaceAppVersion`` (``catalog_service/models/service.py``) carrying
+#: ``version_id`` / ``version`` / ``image_url``; ``installed`` is an
+#: ``InstalledApp`` carrying ``version_id`` / ``version_text``. Between them they
+#: should be enough to say what the tenant is actually running.
+_INFO_DIAGNOSTIC_FIELDS = (
+    "app_id",
+    "app_name",
+    "version_id",
+    "version",
+    "version_text",
+    "image_url",
+    "release_id",
+    "internal_id",
+    "installed_at",
+    "last_modified_on",
+    "deployment_name",
+    "target_channel",
+    "published_at",
+)
+
 #: LM's failure-snapshot fields (``deployment_orchestrator/failure_snapshot.py``),
 #: in the order they answer "why did this deployment not become ready", with a
 #: per-section line budget and which end to keep when it bites.
@@ -167,6 +202,7 @@ _FAILURE_SECTIONS: tuple[tuple[str, int, str], ...] = (
 
 _EVENTS_MAX_LINES = 200
 _OTHER_FIELDS_MAX_LINES = 80
+_INFO_DIAGNOSTIC_MAX_LINES = 40
 
 #: Registry and kubelet phrasings for "this image has no variant for my
 #: architecture", matched case-insensitively across everything printed above.
@@ -336,7 +372,21 @@ def _installed_version(client: TenantClient, app_id: str) -> str:
             "treating as not installed"
         )
         return ""
-    return _extract_version(response.data())
+    data = response.data()
+    version = _extract_version(data)
+    if not version:
+        # Readable payload, unreadable version: either nothing is installed, or
+        # LM has an install record whose version field is a placeholder. Those
+        # need different responses, and only the payload can tell them apart —
+        # so print what it actually contains rather than leaving the caller to
+        # infer from an empty string.
+        _print_block(
+            "app info (no version could be read)",
+            "\n".join(describe_info(data)) or "<no identifying fields present>",
+            _INFO_DIAGNOSTIC_MAX_LINES,
+            "head",
+        )
+    return version
 
 
 def _app_info(client: TenantClient, app_id: str) -> dict[str, object]:
@@ -502,9 +552,37 @@ def _extract_version(payload: dict[str, object], _depth: int = 0) -> str:
                 return found
     for key in _VERSION_KEYS:
         value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+        if not isinstance(value, str):
+            continue
+        found = value.strip()
+        # A placeholder is not a version. Returning it would satisfy "we read
+        # something" and then fail the comparison as if the tenant ran a version
+        # called "unknown" — see _PLACEHOLDER_VERSIONS.
+        if found and found.lower() not in _PLACEHOLDER_VERSIONS:
+            return found
     return ""
+
+
+def describe_info(payload: dict[str, object], _depth: int = 0) -> list[str]:
+    """Return ``path = value`` lines for the identifying fields in an info payload.
+
+    Printed when the version cannot be read, so the next step is decided from what
+    the tenant actually returned rather than from a guess about its shape. Scoped
+    to :data:`_INFO_DIAGNOSTIC_FIELDS` rather than dumping the payload: ``config``
+    and ``app_configs`` are whole YAML/JSON documents, and burying six useful
+    identifiers in them is how the last diagnostic gap happened.
+    """
+    if _depth >= _WALK_MAX_DEPTH:
+        return []
+    lines: list[str] = []
+    for key, value in payload.items():
+        if isinstance(value, dict):
+            lines.extend(
+                f"{key}.{nested}" for nested in describe_info(value, _depth + 1)
+            )
+        elif key in _INFO_DIAGNOSTIC_FIELDS and value not in (None, ""):
+            lines.append(f"{key} = {value!r}")
+    return lines
 
 
 #: Cap on rendered response bodies in error messages. The token-mint path
@@ -1213,12 +1291,27 @@ def verify(args: argparse.Namespace) -> str:
     _, read_client = _clients(base_url)
     installed = _installed_version(read_client, app_id)
     if installed != args.expected:
+        # Two different situations, and the message has to distinguish them or
+        # the reader chases the wrong one. An empty read means the tenant could
+        # not tell us what it runs — which is NOT the same as running the wrong
+        # thing, and LM reports it for a perfectly reconciled install whenever
+        # Atlas has no `atlanAppCurrentVersion` attribute (see
+        # _PLACEHOLDER_VERSIONS). The shape dump above says which.
+        cause = (
+            "the tenant did not report a version at all — see the info dump "
+            "above. LM falls back to a placeholder when Atlas carries no "
+            "`atlanAppCurrentVersion` attribute, so this can happen after a "
+            "deployment that reconciled fine; it means the version is "
+            "unverifiable here, not that the wrong one is installed."
+            if not installed
+            else "A concurrent e2e run against this tenant, or a manual deploy, "
+            "is the usual cause."
+        )
         raise TenantAppError(
             f"tenant is running {installed or '<nothing / unreported>'} for app "
             f"{app_id}, but this leg tests {args.expected}. Heracles fetches "
             "the DAG from the deployed pod at AE submit, so continuing would "
-            "test a different version than the one under test. A concurrent e2e "
-            "run against this tenant, or a manual deploy, is the usual cause."
+            f"test a different version than the one under test. {cause}"
         )
     print(f"verified: tenant runs {installed}")
     return installed

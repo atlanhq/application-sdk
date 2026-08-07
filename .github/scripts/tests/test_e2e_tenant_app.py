@@ -1630,3 +1630,136 @@ def test_a_timeout_is_never_downgraded(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_deployment_failed_is_a_tenant_app_error() -> None:
     # Callers catching TenantAppError (main(), the workflows) must keep working.
     assert issubclass(app.DeploymentFailed, app.TenantAppError)
+
+
+# ── "unknown" is not a version ───────────────────────────────────────────────
+# LM's own code: `version_text = attributes.get("atlanAppCurrentVersion",
+# "unknown")` (tenant_apps_manager/store/tenant_app_store.py), commented
+# "Semantic version (if available)". The Atlas attribute is optional, so a
+# perfectly reconciled install can still report the placeholder — a live azure
+# tenant did exactly that after a SUCCEEDED deployment.
+
+
+@pytest.mark.parametrize("placeholder", ["unknown", "UNKNOWN", " unknown ", "n/a"])
+def test_a_placeholder_reads_as_no_version(placeholder: str) -> None:
+    payload = {"installed": {"version_text": placeholder}}
+    assert app._extract_version(payload) == "", (
+        "a placeholder must read as absent. Returning it turns 'the tenant "
+        "cannot tell us what it runs' into 'the tenant runs something called "
+        "unknown', which reads like a mismatch and hides the real problem"
+    )
+
+
+def test_a_real_version_alongside_a_placeholder_still_wins() -> None:
+    # Order matters: version_text is checked first and is the placeholder here.
+    payload = {"installed": {"version_text": "unknown", "version": _VERSION}}
+    assert app._extract_version(payload) == _VERSION
+
+
+def test_the_info_shape_is_dumped_when_no_version_can_be_read(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The whole point: decide the next step from the payload, not a guess."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute(
+                    "GET",
+                    "/info",
+                    _ok(
+                        {
+                            "app_id": _APP_ID,
+                            "catalog": {
+                                "app_name": "openapi",
+                                "app_version": {
+                                    "version_id": "019fdc06-dbe3-7992",
+                                    "version": _VERSION,
+                                    "image_url": _IMAGE,
+                                    "config": "a: 1\nb: 2\n",
+                                },
+                            },
+                            "installed": {
+                                "version_id": "019fdc06-dbe3-7992",
+                                "version_text": "unknown",
+                                "deployment_name": "production",
+                            },
+                        }
+                    ),
+                )
+            ]
+        ),
+    )
+    assert (
+        app._installed_version(TenantClient(base_url=_TENANT, bearer="t"), _APP_ID)
+        == ""
+    )
+    out = capsys.readouterr().out
+    assert "app info (no version could be read)" in out
+    # The identifiers that would let us resolve the version.
+    assert "installed.version_id = '019fdc06-dbe3-7992'" in out
+    assert f"catalog.app_version.version = '{_VERSION}'" in out
+    assert f"catalog.app_version.image_url = '{_IMAGE}'" in out
+    # NOT the config blob: burying the identifiers is how the last diagnostic
+    # gap happened.
+    assert "a: 1" not in out
+
+
+def test_no_dump_when_the_version_reads_fine(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute(
+                    "GET", "/info", _ok({"installed": {"version_text": _VERSION}})
+                )
+            ]
+        ),
+    )
+    app._installed_version(TenantClient(base_url=_TENANT, bearer="t"), _APP_ID)
+    assert "no version could be read" not in capsys.readouterr().out
+
+
+def test_verify_distinguishes_unreadable_from_wrong(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unverifiable tenant and a wrong-version tenant need different hunts."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute(
+                    "GET", "/info", _ok({"installed": {"version_text": "unknown"}})
+                )
+            ]
+        ),
+    )
+    with pytest.raises(app.TenantAppError) as excinfo:
+        app.verify(
+            argparse.Namespace(base_url=_TENANT, app_id=_APP_ID, expected=_VERSION)
+        )
+    message = str(excinfo.value)
+    assert "did not report a version at all" in message
+    assert "concurrent e2e run" not in message, (
+        "the concurrent-run hint is for a genuine mismatch; offering it here "
+        "sends the reader after a race that did not happen"
+    )
+
+
+def test_verify_still_names_the_race_on_a_real_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({"installed": {"version_text": "older"}}))
+            ]
+        ),
+    )
+    with pytest.raises(app.TenantAppError, match="concurrent e2e run"):
+        app.verify(
+            argparse.Namespace(base_url=_TENANT, app_id=_APP_ID, expected=_VERSION)
+        )
