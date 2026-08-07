@@ -576,6 +576,9 @@ class TestRetryGap:
         gap = _retry_gap(1, default_seconds=10, budget_left=300)
         assert gap.seconds == 10
         assert gap.requested == 1
+        # The wait is the floor, not a cap — the note must not say "capped".
+        assert "floored" in gap.origin_note
+        assert "capped" not in gap.origin_note
 
     def test_caps_a_pathological_request(self):
         gap = _retry_gap(86400, default_seconds=5, budget_left=100_000)
@@ -749,9 +752,67 @@ class TestPollNativeStatusHonoursRetryAfter:
                 timeout_seconds=200,
                 max_transient_failures=5,
             )
-        # 120s per honoured backoff: two of them exhaust a 200s budget, so the
-        # loop exits on timeout rather than running the full failure streak.
-        assert [call.args[0] for call in mock_sleep.call_args_list] == [120, 120]
+        # Each honoured sleep is clamped to the remaining timeout budget:
+        # 120s requested against a 200s deadline sleeps 120s, then only 80s,
+        # so the loop exits exactly at the deadline rather than overshooting.
+        assert [call.args[0] for call in mock_sleep.call_args_list] == [120, 80]
+
+    def test_honoured_wait_is_clamped_to_the_remaining_timeout(self):
+        """timeout_seconds < retry_after: the first sleep stops at the deadline."""
+        client = _make_client()
+        err = AtlanApiHttpError(
+            message="native-status failed: HTTP 504",
+            target="GET /api/service/package-workflows/native-status HTTP 504",
+            retry_after_seconds=120,
+        )
+        with (
+            patch.object(client, "get_native_status", side_effect=[err] * 10),
+            patch("time.sleep") as mock_sleep,
+            pytest.raises(AtlanApiTimeoutError),
+        ):
+            client.poll_native_status(
+                _RUN_ID,
+                interval_seconds=10,
+                timeout_seconds=50,
+                max_transient_failures=5,
+            )
+        # 50s remain and the origin asked for 120s: one clamped 50s sleep
+        # reaches the deadline exactly; the loop never sleeps past it.
+        assert [call.args[0] for call in mock_sleep.call_args_list] == [50]
+
+    def test_honoured_backoff_is_budgeted_across_the_poll_loop(self):
+        """A tenant repeating retry_after: 120 exhausts the shared budget, then
+        the loop falls back to the poll cadence — same accounting as
+        _post_with_retry."""
+        client = _make_client()
+        err = AtlanApiHttpError(
+            message="native-status failed: HTTP 504",
+            target="GET /api/service/package-workflows/native-status HTTP 504",
+            retry_after_seconds=120,
+        )
+        with (
+            patch.object(client, "get_native_status", side_effect=[err] * 10),
+            patch("time.sleep") as mock_sleep,
+            pytest.raises(AtlanApiHttpError),
+        ):
+            client.poll_native_status(
+                _RUN_ID,
+                interval_seconds=10,
+                timeout_seconds=10000,
+                max_transient_failures=5,
+            )
+        # 110s honoured per wait against the 300s budget: two full 120s waits
+        # (110 + 110 honoured), a third clamped to the 80s of budget left
+        # (the budget caps the whole wait, not just the above-floor part, so
+        # 110 + 110 + 80 = 300), then the fixed 10s cadence once the budget
+        # is spent — no unbounded 120s waits. The fifth error hits the
+        # transient-failure cap and re-raises.
+        assert [call.args[0] for call in mock_sleep.call_args_list] == [
+            120,
+            120,
+            80,
+            10,
+        ]
 
 
 class _FakeResponse:

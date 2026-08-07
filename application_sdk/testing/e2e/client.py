@@ -203,6 +203,11 @@ class _RetryGap:
             return ""
         if self.requested == self.seconds:
             return " (origin asked for this)"
+        if self.requested < self.seconds:
+            # The wait is longer than the origin asked for: either the fixed
+            # gap floored it (small request) or the per-loop budget did. Never
+            # a cap — a cap can only shorten the wait, this one lengthened it.
+            return f" (origin asked for {self.requested}s; floored at {self.seconds}s)"
         return f" (origin asked for {self.requested}s, capped)"
 
 
@@ -934,8 +939,11 @@ class AEWorkflowClient:
         When the failing response names a ``retry_after``, the next poll
         waits that long instead of ``interval_seconds``, so an origin asking
         for a 2-minute backoff doesn't consume the whole failure streak
-        inside its own wait window. ``timeout_seconds`` still bounds the
-        loop — the longer sleeps count against it.
+        inside its own wait window. Honoured waiting is capped per poll loop
+        at ``_RETRY_AFTER_BUDGET_SECONDS`` (same accounting as
+        ``_post_with_retry``) and each sleep is clamped to the remaining
+        ``timeout_seconds`` budget, so the loop never sleeps past its own
+        deadline.
 
         Fail-fast stall guard: when ``stall_grace_seconds`` is a positive int
         (``None`` or any value ``<= 0`` disables it) and NO DAG node has left the
@@ -964,6 +972,10 @@ class AEWorkflowClient:
         last_summary: str | None = None
         last_result: DAGRunResult | None = None
         transient_streak = 0
+        # Seconds spent waiting *beyond* the poll interval because the origin
+        # asked for longer — same accounting ``_post_with_retry`` keeps, so
+        # both retry loops bound honoured backoff at _RETRY_AFTER_BUDGET_SECONDS.
+        honoured_seconds = 0
         last_log_elapsed = 0  # seconds since the last info log fired
         any_node_started = False  # any node reached Running/terminal (stall guard)
         last_progress_elapsed = (
@@ -992,19 +1004,24 @@ class AEWorkflowClient:
                 gap = _retry_gap(
                     e.retry_after_seconds if isinstance(e, AtlanApiHttpError) else None,
                     default_seconds=interval_seconds,
-                    budget_left=_RETRY_AFTER_BUDGET_SECONDS,
+                    budget_left=_RETRY_AFTER_BUDGET_SECONDS - honoured_seconds,
                 )
+                honoured_seconds += gap.seconds - interval_seconds
+                # Never sleep past the deadline: a 120s honoured wait against
+                # a 50s remaining budget must not block the full 120s before
+                # the timeout is re-checked.
+                sleep_for = min(gap.seconds, max(timeout_seconds - elapsed, 0))
                 logger.warning(
                     "native-status transient error (streak %d/%d): %s — sleeping %ds%s and retrying",
                     transient_streak,
                     max_transient_failures,
                     e,
-                    gap.seconds,
+                    sleep_for,
                     gap.origin_note,
                     exc_info=True,
                 )
-                time.sleep(gap.seconds)
-                elapsed += gap.seconds
+                time.sleep(sleep_for)
+                elapsed += sleep_for
                 continue
             transient_streak = 0
             last_result = result
