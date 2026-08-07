@@ -163,6 +163,40 @@ use the install path, and neither can the single-tenant fallback (which has no
 entry to add the field to); the `E2E Tenant Install` workflow's `tenant_id` input
 covers one-off runs in both cases.
 
+### When the FAILED verdict is about somebody else's pod
+
+LM's deployment health check is **namespace-scoped**: it reports `Pods failed in
+namespace <ns>: <pod>` for any unhealthy pod in the app's namespace, not just the
+ones belonging to the deployment it is reconciling. So a pod orphaned by an earlier
+install — stuck in `ImagePullBackOff` on a tag that no longer resolves, say — fails
+*every* later install to that tenant, however healthy the new version is.
+
+That is not hypothetical: it is how the first successful multi-arch install
+presented. Our pods pulled the image in 12.4s and were scaled to zero by KEDA as
+designed, while a pod from an earlier attempt sat on a different tag
+(`x1048 over 3h59m`) and took the verdict down with it.
+
+`e2e_tenant_app.py install` therefore reads the pod events before accepting the
+verdict:
+
+- If **our** image is among the ones failing to pull, the failure stands. Kubelet
+  can name an image by digest (`…@sha256:…`, with or without the tag) while
+  `--image` arrives as a tag, so "ours" is decided by repository identity, not
+  string equality: a failing reference in our repository counts as ours unless it
+  carries a resolvably *different* tag, and only a different repository or a
+  different tag of ours is foreign.
+- If every failing image is provably some *other* version, the verdict is not
+  evidence about this install — so it falls through to the installed-version
+  read-back, which decides. A `::warning::` names the foreign images either way,
+  and a `::notice::` says they still need deleting, because they will fail this
+  check on every future install until someone does.
+- If the read-back **disagrees**, it still fails. The override moves the decision
+  to direct evidence; it never skips it.
+
+A timeout is never downgraded this way — an accepted-but-unreconciled deploy is
+nobody else's fault, and it is the silent wrong-version failure this whole
+mechanism exists to remove.
+
 `prepare-tenant` therefore **fails** on an unresolved `tenant_id`, immediately
 after tenant resolution and before it publishes anything — it does not skip the
 install. Skipping would leave the job green having done nothing, the tenant on
@@ -306,6 +340,25 @@ Three things this shape makes load-bearing, each of which fails *silently*:
   fetch the x86 `pkl` asset unconditionally; on an ARM runner that is `cannot
   execute binary file`, several steps before anything mentions architecture. It now
   selects from `runner.arch`.
+
+**Reading back a just-pushed tag is a race, so the build legs don't.** buildx's
+container driver exports only to the registry, so `docker run` used to fetch back
+the image the same step had just uploaded — 22.7s on a measured amd64 leg, and a
+read the registry doesn't always serve yet (a live arm64 leg got `manifest
+unknown` 0.7s after its own push reported success). The build now also `--load`s
+into the local daemon, so the interpreter assert is a local container start: 0.17s,
+and no registry read to race. Measured end to end, the amd64 leg went 89s → 76s.
+
+`--load` is skipped for a multi-platform build, because the docker exporter can't
+express a manifest list; such a caller falls back to pulling, which still works.
+
+The one read that can't be avoided is `merge-e2e-image`'s: `imagetools create` is
+purely registry-side, so the manifest list exists *only* there and inspecting it a
+step later is inherently a fresh read. That one is wrapped in
+[`with-retry.sh`](../../.github/scripts/with-retry.sh) — around the *inspect*, and
+captured into a variable before parsing, because piping a retried command
+concatenates every attempt's output into the reader's stdin and would fail the
+parse on healthy data.
 
 `merge-e2e-image` then asserts the combined manifest serves both architectures
 (`assert_image_platforms.py`). That is the reference `prepare-tenant` publishes and

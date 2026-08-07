@@ -68,6 +68,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -175,9 +176,47 @@ _PLATFORM_MISMATCH_MARKERS = (
     "does not match the specified platform",
 )
 
+#: Kubelet phrasings that mean "this pod could not get its image". Deliberately
+#: excludes ``successfully pulled``, which names an image that is FINE — reading
+#: it as a failure would invert the conclusion drawn from these.
+_PULL_FAILURE_MARKERS = (
+    "failed to pull image",
+    "back-off pulling image",
+    "imagepullbackoff",
+    "errimagepull",
+)
+
+#: An image reference in kubelet's quoted form, e.g. `pulling image "ghcr.io/x:y"`.
+_QUOTED_IMAGE_RE = re.compile(r'"([^"\s]+/[^"\s]+)"')
+
+#: A pinned image reference is the same reference with ``@sha256:…`` in place of
+#: the tag: `repo:tag@sha256:…`. Kubelet can report a pull failure in that form.
+_PINNED_IMAGE_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+
 
 class TenantAppError(RuntimeError):
     """The install or verification failed."""
+
+
+class DeploymentFailed(TenantAppError):
+    """LM reported ``deployment_status: FAILED``.
+
+    Separate from the base error because LM's verdict is **namespace-scoped**:
+    its health check reports "Pods failed in namespace <ns>: <pod>" for ANY
+    unhealthy pod in the app's namespace, including ones left behind by earlier
+    installs of other versions. A tenant carrying an orphaned broken pod
+    therefore fails every subsequent install regardless of whether the version
+    being installed is fine.
+
+    Observed on the first green multi-arch install: our own pods pulled the image
+    in 12.4s and were scaled to zero by KEDA as designed, while a pod from an
+    earlier attempt sat in ImagePullBackOff on a DIFFERENT tag
+    (``x1048 over 3h59m``) and took the verdict down with it.
+
+    So the caller checks whose pod is actually failing before deciding, and the
+    installed-version read-back becomes the authority. A timeout stays a plain
+    TenantAppError: nothing about it is somebody else's fault.
+    """
 
 
 @dataclass(frozen=True)
@@ -769,7 +808,10 @@ def _poll_deployment(client: TenantClient, deployment_id: str, timeout: int) -> 
                 return
             if status == _FAILED:
                 message = response.data().get("message")
-                raise TenantAppError(
+                # A distinct type, because the caller treats this differently
+                # from a timeout: LM's verdict is namespace-scoped and can be
+                # about somebody else's pod (see DeploymentFailed).
+                raise DeploymentFailed(
                     f"deployment {deployment_id} FAILED"
                     + (f": {message}" if message else "")
                 )
@@ -828,7 +870,96 @@ def _hint_platform_mismatch(text: str) -> None:
     )
 
 
-def _dump_failure(client: TenantClient, app_id: str) -> None:
+def failing_images(diagnostics: str) -> list[str]:
+    """Return the image references named by pull-failure lines, in order seen.
+
+    Kubernetes phrases these as ``Failed to pull image "<ref>": …`` and
+    ``Back-off pulling image "<ref>"``, both of which carry the ref in quotes. Only
+    failure lines are read: a ``Successfully pulled image "<ref>"`` line names an
+    image that is fine, and counting it would invert the conclusion.
+    """
+    found: list[str] = []
+    for line in diagnostics.splitlines():
+        lowered = line.lower()
+        if not any(marker in lowered for marker in _PULL_FAILURE_MARKERS):
+            continue
+        for ref in _QUOTED_IMAGE_RE.findall(line):
+            if ref not in found:
+                found.append(ref)
+    return found
+
+
+def _image_repository(reference: str) -> str:
+    """Return the part of an image reference before any ``@digest`` or ``:tag``.
+
+    Two references in the same repository are the same image at different
+    resolutions. ``reference.split("@")[0].rsplit(":", 1)[0]`` cannot express
+    that: an UNtagged reference ends in a colon-free final segment, and rsplit
+    would mistake that segment for a tag and cut it off — the safe direction of
+    a misread here is treating too MUCH as the same image, never less, so the
+    last colon only counts when a tag follows it.
+    """
+    reference = reference.strip().split("@", 1)[0]
+    # The last colon is a tag separator only when it sits in the FINAL
+    # slash-segment (the heuristic `_repo_from_image` already uses): in
+    # ``ghcr.io:5000/org/repo`` the colon is the registry's port, and cutting
+    # there reads the repository as bare ``ghcr.io`` — which can read OUR
+    # failing image as foreign, the misread this module must never make.
+    if ":" not in reference.rsplit("/", 1)[-1]:
+        return reference
+    return reference.rpartition(":")[0]
+
+
+def _image_tag(reference: str) -> str:
+    """Return the tag of an image reference, or "" when it carries none.
+
+    Digest-free first: ``repo:tag@sha256:…`` and ``repo@sha256:…`` both lose the
+    digest so only the ``repo[:tag]`` form is left. Then the last colon counts
+    only when a tag follows it — on a colon-free reference ``rpartition`` hands
+    back the whole string, which would read the repository AS the tag.
+    """
+    reference = _PINNED_IMAGE_RE.sub("", reference.strip())
+    # Same final-segment rule as `_image_repository`: a colon left of the last
+    # slash is a registry port (``ghcr.io:5000/org/repo``), not a tag, and
+    # reading ``5000/org/repo`` as the tag breaks the same-repository compare.
+    if ":" not in reference.rsplit("/", 1)[-1]:
+        return ""
+    head, sep, tag = reference.rpartition(":")
+    return tag if sep and head else ""
+
+
+def foreign_failure(diagnostics: str, image: str) -> list[str]:
+    """Return failing images that are NOT *image*, or [] if ours is among them.
+
+    An empty list means "do not second-guess LM": either nothing identifiable is
+    failing, or our own image is one of the things failing. Only when every
+    failing image is provably a different version does the caller get to treat
+    the verdict as being about somebody else's pod.
+
+    Proven-different, not string-different: kubelet can report a pull failure
+    pinned (``…@sha256:…``, optionally with the tag in front) while ``--image``
+    arrives as a tag, and exact-equality reads that failure of OUR image as
+    foreign — the one misread this override must never make. So a failing
+    reference counts as ours whenever it shares our repository and its tag is
+    ours, a digest, or absent; only a different repository, or a resolvably
+    different tag of ours, is foreign.
+    """
+    failing = failing_images(diagnostics)
+    if not failing:
+        return []
+    ours = image.strip()
+    ours_repo = _image_repository(ours)
+    ours_tag = _image_tag(ours)
+    for ref in failing:
+        if _image_repository(ref) != ours_repo:
+            continue  # a different repository: provably somebody else's pod
+        ref_tag = _image_tag(ref)
+        if not ref_tag or not ours_tag or ref_tag == ours_tag:
+            return []  # same repository and tag, digest-pinned, or untagged
+    return failing
+
+
+def _dump_failure(client: TenantClient, app_id: str) -> str:
     """Print LM's failure diagnostics. Best-effort — never masks the real error.
 
     Reads two routes, because they fail in different circumstances and the
@@ -904,7 +1035,11 @@ def _dump_failure(client: TenantClient, app_id: str) -> None:
         else:
             print(f"::warning::live events read returned HTTP {events.status}")
 
-    _hint_platform_mismatch("\n".join(diagnostics))
+    collected = "\n".join(diagnostics)
+    _hint_platform_mismatch(collected)
+    # Returned so the caller can work out WHOSE pod failed without a second
+    # round of API calls: everything needed is already in this text.
+    return collected
 
 
 def install(args: argparse.Namespace) -> InstallOutcome:
@@ -1010,11 +1145,34 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     # started no deployment, so there is nothing to poll. The version read-back
     # below is then the only thing that decides success — which is the right
     # authority anyway.
+    foreign: list[str] = []
     if deployment_id:
         print(f"install accepted, deployment_id={deployment_id}")
         try:
             _poll_deployment(read_client, deployment_id, args.timeout_seconds)
+        except DeploymentFailed as exc:
+            diagnostics = _dump_failure(read_client, app_id)
+            foreign = foreign_failure(diagnostics, args.image)
+            if not foreign:
+                raise
+            # LM's health check is namespace-scoped, so its FAILED verdict can be
+            # about a pod this install never touched — an orphan from an earlier
+            # version, which fails every subsequent install to that tenant until
+            # someone deletes it. Every failing image here belongs to a different
+            # version, so the verdict is not evidence about ours.
+            #
+            # NOT a pass on its own: the read-back below has to confirm the tenant
+            # actually serves the version we installed. Downgrading the verdict
+            # only moves the decision to direct evidence — it does not skip it.
+            print(
+                f"::warning::{exc} — but the failing pod(s) want "
+                f"{', '.join(foreign)}, not {args.image}. LM's health check is "
+                "namespace-scoped, so an orphaned pod from an earlier version "
+                "fails this check for every later install. Falling through to the "
+                "installed-version read-back, which decides."
+            )
         except TenantAppError:
+            # Timeout, or an unrelated failure. Nobody else's fault; fatal.
             _dump_failure(read_client, app_id)
             raise
     else:
@@ -1022,6 +1180,21 @@ def install(args: argparse.Namespace) -> InstallOutcome:
 
     installed = _installed_version(read_client, app_id)
     print(f"tenant reports installed version: {installed or '<unreported>'}")
+    if foreign and installed != args.version:
+        raise TenantAppError(
+            f"deployment reported FAILED and the tenant reports "
+            f"{installed or '<unreported>'} rather than {args.version}, so the "
+            "install did not take effect. The failing pod(s) want "
+            f"{', '.join(foreign)} — orphans from an earlier version, which are "
+            "worth deleting from the tenant's namespace either way — but with the "
+            "read-back disagreeing they are not the whole story here."
+        )
+    if foreign:
+        print(
+            f"::notice::tenant serves {installed}; the FAILED verdict was about "
+            f"{', '.join(foreign)}, not this install. Those pods should still be "
+            "cleaned up — they will fail this check on every future install."
+        )
     return InstallOutcome(
         version=args.version,
         version_id=version_id,

@@ -258,6 +258,32 @@ runs:
           echo "Building for platforms: ${PLATFORMS}"
           BUILD_ARGS+=(--platform "${PLATFORMS}")
         fi
+        # Export into the local daemon as well as the registry, so the
+        # interpreter assert below finds the image locally.
+        #
+        # buildx's container driver (needed for the type=gha layer cache) exports
+        # only to the registry, so `docker run` had to fetch back the bytes this
+        # step had just uploaded — 22.7s on a measured amd64 leg, and a read of a
+        # tag the registry does not always serve yet: one live arm64 leg got
+        # `manifest unknown` 0.7s after its own push reported success. Measured
+        # over a full run (atlan-openapi-app 31139992280 vs 31141463008), --load
+        # costs ~10-18s of local import and removes 22.7s of pull, so the amd64
+        # leg went 89s -> 76s and the assert step 22.7s -> 0.17s. The bigger win
+        # is the second one: the build legs no longer read from the registry at
+        # all, so that race cannot occur here rather than being retried through.
+        #
+        # Single-platform only — the docker exporter cannot express a manifest
+        # list, so a caller naming two platforms in one build would fail outright.
+        # Multiple exporters need buildx >= 0.13; the runners ship v0.35.0 with
+        # BuildKit v0.31.2, so nothing needs pinning.
+        case "${PLATFORMS}" in
+          *,*)
+            echo "Multi-platform build: not loading locally (the docker exporter cannot hold a manifest list); the interpreter assert will pull instead"
+            ;;
+          *)
+            BUILD_ARGS+=(--load)
+            ;;
+        esac
         # --push pushes to GHCR; compose pulls from there at run-time
         # (atlan-configurator wires app_image into the generated
         # compose file as a pull target). --load would conflict with
@@ -313,12 +339,20 @@ runs:
     # logic lives in the tested script per docs/standards/ci.md (no branching in
     # inline shell).
     #
-    # On a multi-arch build this pulls and asserts the RUNNER's variant only —
-    # `docker run` resolves the index to the host architecture. That is deliberate
-    # rather than a gap: the interpreter comes from the same Dockerfile and golden
-    # base tag for every platform, so a per-arch difference would be a base-image
-    # bug, and emulating the other arch here would cost a QEMU round-trip to
-    # re-assert a constant.
+    # No pull: the build step above `--load`ed the image into the local daemon,
+    # so this is a local container start (0.17s measured, against 22.7s when it
+    # had to fetch the image back from GHCR). A caller building two platforms in
+    # one job gets no local copy — the docker exporter cannot hold a manifest list
+    # — and `docker run` falls back to pulling, which still works, just slower.
+    #
+    # This asserts the RUNNER's variant only, since `docker run` resolves an index
+    # to the host architecture. On the per-architecture install path that is a
+    # feature rather than the gap it looks like: each leg runs on a runner native
+    # to the image it built, so every architecture is asserted on its own leg.
+    # Worth having, because a multi-arch base is a manifest list whose arm64 entry
+    # is a SEPARATELY BUILT image — nothing guarantees its interpreter matches
+    # amd64's unless something checks — and the legs are parallel, so the second
+    # check costs no wall clock.
     - name: Assert worker image Python matches expected
       if: inputs.expected-python-version != ''
       shell: bash
