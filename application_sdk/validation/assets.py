@@ -6,17 +6,19 @@ walk (per-asset validation + referential-integrity second pass).
 
 Design constraints worth preserving if you edit this file:
 
-* **msgspec Structs only on the read path.** pyatlan_v9 assets *are*
-  ``msgspec.Struct`` instances; ``<ConcreteType>.from_json(bytes)`` decodes the
-  NDJSON line straight into the concrete typed Struct. We never build an
-  intermediate ``dict`` — the only decode besides the concrete one is a tiny
-  reusable probe that reads just ``typeName`` so we can pick the concrete class.
-* **Concrete type resolution is load-bearing.** ``Asset.from_json`` alone yields a
-  *generic* ``Asset`` whose ``.validate()`` is only the 3-field base check and
-  which drops every typed relationship attribute. Resolving the concrete class via
-  :func:`pyatlan_v9.model.transform.get_type` is what unlocks the rich
-  ``for_creation`` hierarchy checks and the typed parent relationships the
-  referential pass reads.
+* **Decode through ``from_atlas_json``, not ``<ConcreteType>.from_json``.**
+  The two disagree about where relationships live. ``from_json`` reads the
+  strict nested shape and picks them up **only** from ``relationshipAttributes``;
+  ``from_atlas_json`` flattens ``attributes`` and ``relationshipAttributes``
+  together first, so it accepts both. Connector transformed output puts
+  relationships in ``attributes`` on purpose (see ``serialize_entity`` in the
+  connector apps — "publish app expects them there"), which the strict decoder
+  silently dropped. It also resolves the concrete type itself and is ~6x
+  faster. See :func:`_deserialize`.
+* **Concrete type resolution is load-bearing.** A generic ``Asset`` has only the
+  3-field base ``.validate()`` and drops every typed relationship attribute.
+  Resolving the concrete class is what unlocks the ``for_creation`` hierarchy
+  checks and the typed parent relationships the referential pass reads.
 * **Relationships are discovered, not hard-coded.** The referential pass reads
   whatever relationship references each asset actually carries in the NDJSON
   (enumerated generically off the Struct's relationship-typed fields) and
@@ -42,7 +44,7 @@ from typing import Iterator
 import msgspec
 from pyatlan_v9.model.assets import Asset
 from pyatlan_v9.model.assets.referenceable import RelatedReferenceable
-from pyatlan_v9.model.transform import get_type
+from pyatlan_v9.model.transform import from_atlas_json
 
 from application_sdk.common.spillable_dict import SpillableDict
 from application_sdk.constants import ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
@@ -269,28 +271,41 @@ def _iter_relationship_refs(asset: Asset) -> Iterator[tuple[str, str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Deserialization (msgspec Structs only — no dict materialization)
+# Deserialization
 # ---------------------------------------------------------------------------
-
-
-class _TypeProbe(msgspec.Struct, rename="camel", forbid_unknown_fields=False):
-    """Minimal decode target used only to sniff ``typeName`` off a raw line."""
-
-    type_name: str = ""
-
-
-_TYPE_PROBE_DECODER = msgspec.json.Decoder(_TypeProbe)
 
 
 def _deserialize(raw: bytes) -> Asset:
     """Decode one NDJSON line into its concrete pyatlan_v9 asset Struct.
 
+    Uses ``from_atlas_json`` rather than ``<ConcreteType>.from_json``. The two
+    differ in a way that matters here: ``from_json`` decodes the strict nested
+    shape and picks relationships up **only** from ``relationshipAttributes``,
+    whereas ``from_atlas_json`` flattens ``attributes`` and
+    ``relationshipAttributes`` together before converting.
+
+    Connector transformed output puts relationships in ``attributes``. That is
+    deliberate — see ``serialize_entity`` in the connector apps, "publish app
+    expects them there" — so the strict decoder silently dropped every
+    relationship, leaving ``column.table`` and friends UNSET and failing every
+    create-time parent check. Fleet-wide that read as ~98% of assets invalid
+    when nothing was actually wrong with them.
+
+    The transformed-output schema is a cross-repo contract this repo consumes
+    but does not own. Follow-up: FND-119 tracks documenting it explicitly (and
+    adding a contract-level fixture) so a producer-side format change fails
+    loudly here instead of drifting silently.
+
+    ``from_atlas_json`` accepts both shapes, so this is a widening, not a swap:
+    payloads that already carry relationships under ``relationshipAttributes``
+    decode exactly as before. It also resolves the concrete type itself, which
+    is why the typeName probe this used to need is gone, and it measures ~6x
+    faster than the per-class nested decoder (≈200k vs ≈31k records/sec).
+
     Raises whatever msgspec/pyatlan raise on malformed input — callers convert
     that into an ``undeserializable`` count rather than letting it abort a batch.
     """
-    type_name = _TYPE_PROBE_DECODER.decode(raw).type_name
-    asset_cls = get_type(type_name) if type_name else Asset
-    return asset_cls.from_json(raw)
+    return from_atlas_json(raw)
 
 
 # ---------------------------------------------------------------------------
