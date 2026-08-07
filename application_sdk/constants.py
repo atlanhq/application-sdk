@@ -268,6 +268,15 @@ STORAGE_UPLOAD_PART_SIZE_BYTES = int(
     os.getenv("ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES", str(8 * 1024 * 1024))
 )
 
+#: True when a deployment has explicitly set the part size. It then overrides
+#: any ``chunk_size`` passed by calling code: the part size that keeps an
+#: upload under the destination's idle timeout is a property of where the
+#: deployment writes, which the operator knows and the caller does not. A
+#: connector hardcoding a part size must not be able to defeat that.
+STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN = (
+    "ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES" in os.environ
+)
+
 #: Number of parts uploaded concurrently (default 12, obstore's own default).
 #: Peak upload memory is roughly ``STORAGE_UPLOAD_PART_SIZE_BYTES`` times this,
 #: so a deployment that raises the part size to 64 MiB and leaves this at 12

@@ -483,12 +483,14 @@ async def upload_file(
         key: Destination object key.  Normalised by default.
         local_path: Path to the local file to upload.
         store: Target store, or ``None`` to use the infrastructure store.
-        chunk_size: Desired chunk / part size in bytes.  ``None`` (default)
-            takes ``ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES``, itself defaulting
-            to 8 MiB.  Increased automatically if the file is large enough to
-            exceed the 9,900-part safety limit.  Raise it per deployment when
-            the destination charges by part *count* — see the constant's
-            docstring for the S3-proxy-over-GCS case.
+        chunk_size: Desired chunk / part size in bytes, used only when
+            ``ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES`` is unset — when that is
+            set it wins, because the workable part size is a property of the
+            destination the deployment writes to, not of the calling code.
+            Defaults to 8 MiB when neither is given.  Increased automatically
+            if the file is large enough to exceed the 9,900-part safety limit.
+            See the constant's docstring for the S3-proxy-over-GCS case that
+            makes part *count* the thing that matters.
         normalize: When ``True`` (default), normalise *key* before use.
         retain_local_copy: When ``True`` (default), keep the local file after
             upload.  When ``False``, delete the local file after a successful
@@ -520,14 +522,31 @@ async def upload_file(
 
     from application_sdk.constants import (  # noqa: PLC0415
         STORAGE_UPLOAD_MAX_CONCURRENCY as _max_concurrency,
-        STORAGE_UPLOAD_PART_SIZE_BYTES as _default_part_size,
+        STORAGE_UPLOAD_PART_SIZE_BYTES as _env_part_size,
+        STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN as _env_part_size_set,
+    )
+
+    # The environment wins over an explicit chunk_size. Part size is a property
+    # of the destination, not of the calling code: only the deployment knows
+    # what its object store is fronted by, so a connector must not be able to
+    # override the operator here.
+    if _env_part_size_set and chunk_size is not None and chunk_size != _env_part_size:
+        logger.debug(
+            "Overriding requested part size %d with "
+            "ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES=%d for key '%s'",
+            chunk_size,
+            _env_part_size,
+            key,
+        )
+    requested_chunk = (
+        _env_part_size
+        if (_env_part_size_set or chunk_size is None)
+        else chunk_size
     )
 
     path = Path(local_path)
     file_size = path.stat().st_size
-    effective_chunk = _compute_part_size(
-        file_size, _default_part_size if chunk_size is None else chunk_size
-    )
+    effective_chunk = _compute_part_size(file_size, requested_chunk)
 
     if file_size == 0:
         logger.warning(
