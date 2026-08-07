@@ -1939,9 +1939,7 @@ class TestUploadPartSizeConfiguration:
         f = tmp_path / "a.bin"
         f.write_bytes(b"x" * 1024)
 
-        with patch(
-            "application_sdk.storage.ops.obstore.open_writer_async"
-        ) as writer:
+        with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
             writer.return_value.__aenter__ = AsyncMock()
             writer.return_value.__aexit__ = AsyncMock(return_value=False)
             await upload_file("k", f, store, normalize=False)
@@ -1958,9 +1956,7 @@ class TestUploadPartSizeConfiguration:
         f = tmp_path / "b.bin"
         f.write_bytes(b"x" * 1024)
 
-        with patch(
-            "application_sdk.storage.ops.obstore.open_writer_async"
-        ) as writer:
+        with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
             writer.return_value.__aenter__ = AsyncMock()
             writer.return_value.__aexit__ = AsyncMock(return_value=False)
             await upload_file(
@@ -1979,9 +1975,7 @@ class TestUploadPartSizeConfiguration:
         f = tmp_path / "c.bin"
         f.write_bytes(b"x" * 1024)
 
-        with patch(
-            "application_sdk.storage.ops.obstore.open_writer_async"
-        ) as writer:
+        with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
             writer.return_value.__aenter__ = AsyncMock()
             writer.return_value.__aexit__ = AsyncMock(return_value=False)
             await upload_file("k", f, store, normalize=False)

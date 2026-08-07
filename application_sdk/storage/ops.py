@@ -520,6 +520,8 @@ async def upload_file(
 
     from application_sdk.constants import (  # noqa: PLC0415
         STORAGE_UPLOAD_MAX_CONCURRENCY as _max_concurrency,
+    )
+    from application_sdk.constants import (
         STORAGE_UPLOAD_PART_SIZE_BYTES as _default_part_size,
     )
 
