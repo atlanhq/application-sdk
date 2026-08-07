@@ -832,3 +832,70 @@ async def test_read_batches_corrupt_file_raises_format_read_error(
             async for _ in reader.read_batches():
                 pass
         assert isinstance(exc_info.value.cause, pa.lib.ArrowInvalid)
+
+
+@pytest.mark.asyncio
+async def test_reader_preserves_object_store_read_error_classification() -> None:
+    """A typed ObjectStoreReadError must survive the parquet reader unchanged.
+
+    Companion to the JSON reader guard. The blanket
+    ``except Exception: raise FormatReadError(cause=e)`` around the read body
+    also encloses ``_download_files``, which is what raises the typed
+    ``ObjectStoreReadError``. Re-wrapping it downgraded
+    ``DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ`` / PLATFORM to
+    ``INTERNAL_FORMAT_READ`` / APP_OWNER and dropped the searched prefix.
+    ``test_read_batches_corrupt_file_raises_format_read_error`` pins the
+    complementary case: an untyped pyarrow error must still be wrapped.
+    """
+    from application_sdk.storage.formats.format_errors import (
+        FormatReadError,
+        ObjectStoreReadError,
+    )
+
+    path = "/local/does-not-exist"
+    reader = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
+
+    with patch(
+        "application_sdk.storage.formats.parquet._download_files",
+        new_callable=AsyncMock,
+        side_effect=ObjectStoreReadError(path=path, file_extension=".parquet"),
+    ):
+        with pytest.raises(ObjectStoreReadError) as exc_info:
+            await reader.read()
+
+    assert not isinstance(exc_info.value, FormatReadError)
+    assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ"
+    assert exc_info.value.path == path
+    assert exc_info.value.file_extension == ".parquet"
+    assert exc_info.value.suggested_action is not None
+    # The retryability flip is the deliberate behaviour change; pin it on every
+    # guarded frame, not just the JSON single-read path.
+    assert exc_info.value.effective_retryable is True
+
+
+@pytest.mark.asyncio
+async def test_read_batches_preserves_object_store_read_error_classification() -> None:
+    """Same guard on the parquet batched read path."""
+    from application_sdk.storage.formats.format_errors import (
+        FormatReadError,
+        ObjectStoreReadError,
+    )
+
+    path = "/local/does-not-exist"
+    reader = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
+
+    with patch(
+        "application_sdk.storage.formats.parquet._download_files",
+        new_callable=AsyncMock,
+        side_effect=ObjectStoreReadError(path=path, file_extension=".parquet"),
+    ):
+        with pytest.raises(ObjectStoreReadError) as exc_info:
+            async for _ in reader.read_batches():
+                pass
+
+    assert not isinstance(exc_info.value, FormatReadError)
+    assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ"
+    assert exc_info.value.path == path
+    assert exc_info.value.file_extension == ".parquet"
+    assert exc_info.value.suggested_action is not None
+    assert exc_info.value.effective_retryable is True
