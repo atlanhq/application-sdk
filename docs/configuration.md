@@ -158,7 +158,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAN_SQL_USE_SERVER_SIDE_CURSOR` | `true` | Use server-side cursors for SQL queries. Reduces memory for large result sets by streaming data row-by-row. Default: enabled. To disable, **explicitly set the variable to an empty string** (e.g. `ATLAN_SQL_USE_SERVER_SIDE_CURSOR=`). Any non-empty string, including `"false"`, is truthy and keeps it enabled. |
+| `ATLAN_SQL_USE_SERVER_SIDE_CURSOR` | `true` | Use server-side cursors for SQL queries. Reduces memory for large result sets by streaming data row-by-row. Default: enabled. To disable, set the variable to any value other than `true` (e.g. `ATLAN_SQL_USE_SERVER_SIDE_CURSOR=false`). Matching is case-insensitive and surrounding whitespace is ignored. |
 
 ---
 

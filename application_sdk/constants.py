@@ -375,8 +375,12 @@ def _load_worker_liveness_max_idle_seconds() -> float:
 WORKER_LIVENESS_MAX_IDLE_SECONDS = _load_worker_liveness_max_idle_seconds()
 
 # SQL Client Constants
-#: Whether to use server-side cursors for SQL operations
-USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
+#: Whether to use server-side cursors for SQL operations.
+#: Enabled by default; set ATLAN_SQL_USE_SERVER_SIDE_CURSOR to any value other
+#: than "true" (e.g. "false") to opt out.
+USE_SERVER_SIDE_CURSOR = (
+    os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true").strip().lower() == "true"
+)
 
 # DAPR Constants
 #: Name of the state store component in DAPR
