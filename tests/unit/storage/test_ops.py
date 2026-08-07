@@ -1946,9 +1946,37 @@ class TestUploadPartSizeConfiguration:
 
         assert writer.call_args.kwargs["buffer_size"] == 32 * 1024 * 1024
 
-    async def test_explicit_chunk_size_still_wins(
+    async def test_env_overrides_an_explicit_chunk_size(
         self, store, tmp_path, monkeypatch
     ) -> None:
+        """The operator outranks the caller: an app cannot know which tenant
+        it lands on, so it must not pin a size the operator cannot correct."""
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_BYTES",
+            32 * 1024 * 1024,
+        )
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN", True
+        )
+        f = tmp_path / "b.bin"
+        f.write_bytes(b"x" * 1024)
+
+        with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
+            writer.return_value.__aenter__ = AsyncMock()
+            writer.return_value.__aexit__ = AsyncMock(return_value=False)
+            await upload_file(
+                "k", f, store, chunk_size=5 * 1024 * 1024, normalize=False
+            )
+
+        assert writer.call_args.kwargs["buffer_size"] == 32 * 1024 * 1024
+
+    async def test_explicit_chunk_size_used_when_env_unset(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        """With no deployment override, calling code still chooses."""
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN", False
+        )
         monkeypatch.setattr(
             "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_BYTES",
             32 * 1024 * 1024,
