@@ -1318,3 +1318,67 @@ def test_add_connection_params_empty_dict_is_noop(sql_client_with_db_config):
     """An empty params dict must return the connection string unchanged."""
     base = "postgresql://u:p@h:5432/db"
     assert sql_client_with_db_config.add_connection_params(base, {}) == base
+
+
+# ---------- retryability split on SqlPandasResultError (CONAT-747) ----------
+
+
+@pytest.mark.asyncio
+async def test_get_batched_results_wrap_is_retryable(sql_client: BaseSQLClient):
+    """An unclassified read-path failure must not override the retry policy."""
+    sql_client.engine = MagicMock()
+    with (
+        patch.object(
+            sql_client,
+            "_execute_async_read_operation",
+            new=AsyncMock(
+                side_effect=RuntimeError("could not open relation with OID 1")
+            ),
+        ),
+        pytest.raises(SqlPandasResultError) as exc_info,
+    ):
+        await sql_client.get_batched_results("SELECT 1")
+    assert exc_info.value.effective_retryable is True
+
+
+@pytest.mark.asyncio
+async def test_get_results_wrap_is_retryable(sql_client: BaseSQLClient):
+    """Same for the single-DataFrame read path."""
+    sql_client.engine = MagicMock()
+    with (
+        patch.object(
+            sql_client,
+            "_execute_async_read_operation",
+            new=AsyncMock(side_effect=RuntimeError("connection reset by peer")),
+        ),
+        pytest.raises(SqlPandasResultError) as exc_info,
+    ):
+        await sql_client.get_results("SELECT 1")
+    assert exc_info.value.effective_retryable is True
+
+
+@pytest.mark.asyncio
+async def test_get_results_invariant_violation_stays_non_retryable(
+    sql_client: BaseSQLClient,
+):
+    """The invariant-violation raise is OUR bug — retrying cannot help.
+
+    Guards against over-broadening the fix by flipping the class default:
+    only the catch-and-rewrap sites opt into retryability.
+    """
+    sql_client.engine = MagicMock()
+    with (
+        patch.object(
+            sql_client,
+            "_execute_async_read_operation",
+            new=AsyncMock(return_value=iter([])),  # not a DataFrame
+        ),
+        pytest.raises(SqlPandasResultError) as exc_info,
+    ):
+        await sql_client.get_results("SELECT 1")
+    assert exc_info.value.effective_retryable is False
+
+
+def test_sql_pandas_result_error_class_default_is_non_retryable():
+    """The INTERNAL class default is unchanged; retryability is per-instance."""
+    assert SqlPandasResultError.default_retryable is False

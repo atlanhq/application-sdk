@@ -104,6 +104,13 @@ It **must** be a `ClassVar`, not a pydantic field: declared as a field the gate
 reads `{}` and silently falls back to the single-credential path. Apps that
 declare nothing keep the unchanged single-credential path via `input.credentials`.
 
+An agent credential spec routes to agent resolution only when it is
+*populated*: `agent-name` plus a fetch anchor — `secret-path` (bundle fetch) or
+`key-type: single-key` (per-key fetch). A name-only spec (for example the
+Automation Engine placeholder `{"agent-name": "agent-name", ...}` stamped on
+non-agent runs) is not populated and falls through to `credential_guid`
+routing.
+
 #### Single-key secret resolution
 
 When a credential arrives as a flat dict of fields rather than a named ref, the

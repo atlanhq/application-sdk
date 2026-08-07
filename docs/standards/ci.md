@@ -58,6 +58,61 @@ failure mode. Because it now concludes on every PR, it can be added to branch
 protection directly, without the always-concluding-gate wrapper that
 path-filtered required checks need (see `sdk-gate.yaml` for that pattern).
 
+## Label gates must be event-aware
+
+**Rule:** if a workflow can receive a `labeled` event, every job gated on a
+label must check *which* label fired, not only whether the PR carries it:
+
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+jobs:
+  expensive-thing:
+    if: |
+      contains(github.event.pull_request.labels.*.name, 'e2e') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'e2e')
+```
+
+**Why:** `contains(...labels...)` is a **state** check — "does this PR carry
+`e2e` right now". On `opened` / `synchronize` / `reopened` that is exactly
+right. On `labeled` it is wrong, because GitHub offers no way to filter the
+trigger by which label was added: on a PR that already carries `e2e`, adding
+*any* other label satisfies the state check and re-runs the job. Bots add and
+remove size, area, dependency and review-state labels constantly, so in practice
+this fires repeatedly and at random. FND-48 was the e2e case — a 20–40 minute
+live-tenant suite, multiplied by the cross-CSP matrix, and queued rather than
+replaced because `cancel-in-progress: false` is deliberate there.
+
+The added term is inert on every other event: only a `labeled` payload carries
+`github.event.label`, so a real push (`synchronize`) still re-triggers, and
+adding — or re-adding — the label still triggers.
+
+**What it does not fix:** the workflow *run* is still created, because the
+filter is at job level and GitHub has no trigger-level label filter. The jobs
+skip within seconds, so no tenant time or runner minutes are consumed, but a
+stream of skipped runs still appears in the Actions list. Removing those means
+dropping `labeled` for an explicit signal (`workflow_dispatch`, a `/e2e`
+comment command, a re-run button) — more work, and it changes how everyone
+triggers the suite today.
+
+**Reusable workflows always count as reachable.** A `workflow_call` workflow
+cannot see its callers' trigger lists, and the connector `tests.yaml` this repo
+scaffolds ships `labeled`, so a gate inside a reusable must carry the term
+unconditionally.
+
+Both halves are enforced by
+[`test_label_trigger_gates.py`](../../.github/scripts/tests/test_label_trigger_gates.py):
+a repo-wide sweep fails any new label gate that omits the term, and a
+behavioural layer lifts each real gate out of the YAML and evaluates it against
+synthetic payloads. The second layer exists because presence is not
+correctness — `&&` binds tighter than `||` in GitHub expressions, so a term
+added one parenthesis out is a no-op that a textual check waves through.
+Evaluation uses [`_gha_expr.py`](../../.github/scripts/tests/_gha_expr.py), a
+deliberately partial evaluator that raises on anything it does not model rather
+than guessing.
+
 ## Mask secrets before writing them to `$GITHUB_ENV`
 
 **Rule:** if a step derives secret values from something else — unpacking a

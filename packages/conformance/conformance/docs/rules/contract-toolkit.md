@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**12 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts)
+**13 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -27,6 +27,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K010](#k010) | `E2EScaffoldingMissing` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
 | [K011](#k011) | `AppIdMissingFromContract` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
 | [K012](#k012) | `GeneratePoeTaskMissing` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
+| [K013](#k013) | `ManifestNodeAppNameMisattributed` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
 
 ---
 
@@ -517,5 +518,69 @@ tree unchanged.
 **Suppress** with `# conformance: ignore[K012] <reason>` on the `[tool.poe.tasks]`
 header line (or the line above). Only justified for an app that is genuinely never
 published through the marketplace pipeline.
+
+---
+
+## K013 — `ManifestNodeAppNameMisattributed` {#k013}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.18.0
+
+> Generated manifest DAG node declares an app_name that disagrees with the app its workflow type or task queue says runs it
+
+**Rationale:** A DAG node's app_name is the identity its logs, metrics and failures are filed under:
+the SDK tags log records with it and the tenant's Workflow Center reads them back by it,
+so a wrong value makes the step's logs unreachable rather than merely mislabelled -- the
+step shows 'No error logs available for this pod' even though logging worked. Nothing
+else catches it, because the node still runs correctly: task_queue governs dispatch, so
+a misattributed node executes in the right place and only its telemetry goes to the
+wrong app. That is why the drift survived across the connector fleet unnoticed (CNCT-24,
+CNCT-129). Two signals establish the owning app independently. Automation Engine hosts
+none of the toolkit-owned workflows, so QueryIntelligenceWorkflow paired with app_name
+'automation-engine' is impossible rather than merely suspect -- the signature of a
+contract that hand-wrote a raw DAGNode instead of the matching node class and inherited
+the default. Separately, a task queue naming a known system app says which worker polls
+the node whatever its workflow type. Both are exact-match checks against closed sets, so
+neither guesses.
+
+A node in a committed generated `manifest.json` declares an `app_name` that disagrees
+with the app actually running it. Two independent signals are checked, each against a
+closed set:
+
+**1. The workflow type.** Automation Engine hosts none of the toolkit-owned workflows --
+each has its own worker:
+
+    QueryIntelligenceWorkflow -> query-intelligence     PublishWorkflow           ->
+publish     LineageWorkflow           -> lineage     PopularityWorkflow        ->
+popularity     NotificationWorkflow      -> notification-app
+
+One of these paired with `app_name: automation-engine` is drift by construction: the
+contract hand-wrote a raw `DAGNode` instead of the matching node class and inherited the
+default. An `app_name` set to some *other* value is left alone -- that may be a bespoke
+worker, which is the author's call.
+
+**2. The task queue.** A queue of the form `atlan-<system-app>-...` names the worker
+that polls the node, and so the app that runs it, whatever its workflow type. A
+disagreeing `app_name` is misattributed. Only the *app* segment is matched, against the
+known system apps -- the suffix (`-production`, `-{deployment_name}`, a tenant name) is
+not interpreted.
+
+Why nothing else catches it: `task_queue` governs dispatch, so a misattributed node
+still executes in the right place. Only its telemetry goes astray -- the logs are
+written under one identity and read back under another, so the step shows `No error logs
+available for this pod` even though logging worked.
+
+**Fix:** in `contract/app.pkl`, either replace the hand-written `DAGNode` with the
+matching built-in node class (`QueryIntelligenceNode`, `PublishNode`, `LineageNode`,
+`PopularityNode`, `NotificationNode`), which sets `appName` and `taskQueue` together, or
+set `appName` explicitly to the app named in the finding. Then regenerate with `pkl eval
+-m . contract/app.pkl`.
+
+**Change `appName` only.** The rule never asks for a `taskQueue` change: the queue is
+the routing decision, and in these manifests it is generally already right. Rewriting it
+would move where the node runs.
+
+**No suppression is available.** The finding is anchored on a generated `.json`
+artifact, which has no comment syntax to carry a directive -- as with K009, the only
+resolution is to fix the contract and regenerate. Never hand-edit `manifest.json`.
 
 ---

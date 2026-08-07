@@ -86,7 +86,26 @@ class InvalidSqlEngineTypeError(InternalError):
 
 @dataclass(kw_only=True)
 class SqlPandasResultError(InternalError):
-    """A SQL read operation failed to produce a valid pandas DataFrame result."""
+    """A SQL read operation failed to produce a valid pandas DataFrame result.
+
+    Raised in two distinct situations, which differ in retryability:
+
+    - **Invariant violation** (the read path returned a non-DataFrame). A bug in
+      our code; retrying cannot help. Keeps the ``INTERNAL`` default
+      ``retryable=False``.
+    - **Catch-and-rewrap of an unclassified driver exception** at the query
+      boundary. Here the SDK has *not* established what failed — a transient
+      source-side condition (concurrent DDL, lock contention, a dropped
+      connection) is wrapped identically to a permanent one. Those sites pass
+      ``retryable=True`` explicitly, which does not assert "this will succeed on
+      retry"; it declines to override the activity's own declared Temporal retry
+      policy for an error we never classified. Asserting ``retryable=False``
+      there marks the failure ``non_retryable`` on the wire and makes the
+      activity's declared ``maximum_attempts`` dead code (CONAT-747).
+
+    Errors that *are* classified never reach either site — the enclosing
+    ``except AppError: raise`` clauses re-raise them with their own retryability.
+    """
 
     code: ClassVar[str] = "INTERNAL_SQL_PANDAS"
     message: str = "Error reading data from SQL into a pandas DataFrame"

@@ -87,6 +87,64 @@ def test_prefixed_creates_missing_target(tree):
     assert (tree / "app" / "generated" / "manifest.json").read_text() == "fresh\n"
 
 
+def test_prefixed_preserves_reserved_frontend_subdir(tree):
+    """`frontend/` (the app-playground install target) is not an orphan — no
+    pkl contract, in any family or version, ever emits it — so it must survive
+    the wholesale rmtree+copytree untouched, unlike `orphan.json` above."""
+    _write(tree / "app" / "generated" / "frontend" / "static" / "index.html", "ui\n")
+    _write(tree / "out" / "app" / "generated" / "manifest.json", "fresh\n")
+
+    assert mod.swap_outputs(tree / "out") is True
+
+    assert (tree / "app" / "generated" / "manifest.json").read_text() == "fresh\n"
+    assert (
+        tree / "app" / "generated" / "frontend" / "static" / "index.html"
+    ).read_text() == "ui\n"
+
+
+def test_prefixed_reserved_subdir_survives_alongside_override_protection(tree):
+    """Reserved-subdir preservation and baseline override protection are
+    independent mechanisms that must not interfere with each other."""
+    _write(tree / "app" / "generated" / "frontend" / "static" / "index.html", "ui\n")
+    _write(tree / "app" / "generated" / "manifest.json", "old-toolkit\n")
+    _write(tree / "app" / "generated" / "connector.json", "hand-maintained\n")
+    _write(tree / "base" / "app" / "generated" / "manifest.json", "old-toolkit\n")
+    _write(tree / "base" / "app" / "generated" / "connector.json", "toolkit-default\n")
+    _write(tree / "out" / "app" / "generated" / "manifest.json", "new-toolkit\n")
+    _write(tree / "out" / "app" / "generated" / "connector.json", "toolkit-v2\n")
+
+    assert mod.swap_outputs(tree / "out", baseline_dir=tree / "base") is True
+
+    gen = tree / "app" / "generated"
+    assert gen.joinpath("manifest.json").read_text() == "new-toolkit\n"
+    assert gen.joinpath("connector.json").read_text() == "hand-maintained\n"
+    assert gen.joinpath("frontend", "static", "index.html").read_text() == "ui\n"
+
+
+def test_prefixed_reserved_subdir_absent_is_a_noop(tree):
+    """No `frontend/` to preserve is the common case — must not error."""
+    _write(tree / "out" / "app" / "generated" / "manifest.json", "fresh\n")
+
+    assert mod.swap_outputs(tree / "out") is True
+
+    assert not (tree / "app" / "generated" / "frontend").exists()
+
+
+def test_prefixed_reserved_subdir_yields_to_a_real_emitted_key(tree, capsys):
+    """If a contract ever legitimately emits a `frontend` key, that is a real
+    change to surface, not something to silently clobber with the withheld
+    copy — the fresh output wins and a warning is printed."""
+    _write(tree / "app" / "generated" / "frontend" / "static" / "index.html", "old\n")
+    _write(tree / "out" / "app" / "generated" / "frontend" / "manifest.json", "fresh\n")
+
+    assert mod.swap_outputs(tree / "out") is True
+
+    gen = tree / "app" / "generated"
+    assert gen.joinpath("frontend", "manifest.json").read_text() == "fresh\n"
+    assert not gen.joinpath("frontend", "static", "index.html").exists()
+    assert "collides with a reserved name" in capsys.readouterr().out
+
+
 # ── swap_outputs: native family ──────────────────────────────────────────────
 
 

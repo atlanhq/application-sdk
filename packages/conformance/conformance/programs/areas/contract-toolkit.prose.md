@@ -17,7 +17,10 @@ description: >
   sourced from a non-canonical base URI), K009 (unresolved scaffold placeholder
   in a generated artifact), and K010 (missing generated E2E scaffolding) are
   toolkit-hygiene findings fixed by re-pointing/bumping the PklProject dependency
-  and regenerating — all verified by the pkl-eval gate.  K009, K011, and K012 are
+  and regenerating — all verified by the pkl-eval gate.  K013 (a DAG node running a
+  toolkit-owned workflow but still attributed to automation-engine) is fixed in
+  contract/app.pkl -- by switching to the built-in node class or setting appName
+  explicitly -- and verified by the pkl-eval gate.  K009, K011, and K012 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
 
@@ -39,7 +42,7 @@ remediated in default mode.  In **strict** mode the fingerprint-set also include
 unsuppressed WARNING results (K003/K004/K005/K007/K008/K010), which is where the
 rest of K-series remediation runs.
 
-The active scope decides which rules can appear: K001–K012 are all `scope=APP`,
+The active scope decides which rules can appear: K001–K013 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
 the SDK repo sees 0 findings.
 
@@ -91,7 +94,7 @@ generated artifact directly** — those are outputs of `pkl eval`, and K004/K005
 catch the staleness that hand-editing causes.  The *only* sanctioned way to
 change a generated artifact is to regenerate it from the contract.  After every
 edit to `contract/**/*.pkl`, `contract/PklProject`, or the Pkl lock (K001–K005,
-K007–K011), the `pkl-eval` gate runs `pkl eval` to verify the contract compiled
+K007–K011, K013), the `pkl-eval` gate runs `pkl eval` to verify the contract compiled
 and regenerated cleanly.  **K006 and K012 are the exceptions**: K006's fix is a
 plain Python edit and K012's is a `pyproject.toml` edit (both see below), neither
 involving `.pkl` or generated artifacts, so both are verified by the standard
@@ -445,6 +448,49 @@ finding**.  `classification = "mechanical"`; **does not require `pkl`** (it is a
 3. Suppress only for an app never published through the marketplace pipeline:
    `# conformance: ignore[K012] <reason>` on the `[tool.poe.tasks]` header line
    and route to residue.
+
+---
+
+**K013 ManifestNodeAppNameMisattributed** — a DAG node in a committed generated
+`manifest.json` declares an `app_name` that disagrees with the app running it,
+established by either its toolkit-owned `workflow_type` (paired with the raw
+`DAGNode` default `automation-engine`) or a `task_queue` naming a known system
+app.  The node's logs are written under one identity and read back under another,
+so the step shows no logs in the Workflow Center (CNCT-24).
+`classification = "judgment"` — choosing between the built-in node class and an
+explicit `appName` depends on why the node was hand-written — and it **requires
+`pkl`**, since the finding only clears once the contract is regenerated.
+
+The finding is anchored on the generated `manifest.json`, but **the fix is never
+in that file** — it is in `contract/app.pkl`.  There is no suppression path: JSON
+carries no comment syntax, so a legitimate exception must be routed to residue.
+
+*Procedure:*
+
+1. Locate the offending node in `contract/app.pkl` — the `finding.message` names
+   its DAG node id (e.g. `extraNodes["qi"]`) and its `workflow_type`.
+2. **Prefer the built-in node class.**  Replace `new DAGNode { … }` with the
+   matching class — `QueryIntelligenceNode`, `PublishNode`, `LineageNode`,
+   `PopularityNode`, `NotificationNode` — which sets `appName` *and* the
+   consistent `taskQueue` together, and carries the typed args for that workflow.
+   This also removes the hand-written `workflowType` line.
+3. **Only when the node must stay a raw `DAGNode`** — typically because it pins a
+   task queue the built-in class would not emit — set `appName` explicitly to the
+   app named in the `finding.message` (e.g. `appName = "query-intelligence"`).
+   Leave the pinned `taskQueue` alone: the rule is about log identity, not
+   routing, and silently re-deriving a live queue would move where the node runs.
+4. Do NOT run `pkl eval` manually — stage the `contract/app.pkl` edit; the
+   `pkl-eval` gate regenerates and captures the result.
+5. Set `touched_files` to the union of every path reported changed by
+   `git status --porcelain -- contract/ app/generated/`, diffed before step 2 and
+   after step 4, so a rejected fix reverts the contract *and* every regenerated
+   artifact (same determinism argument as K003 step 4).
+
+There is no toolkit-side fix to fall back on: the toolkit renders what the
+contract declares, deliberately — silently correcting an author-set `appName`
+would make the contract text stop matching its generated output.  The contract is
+the only place this is fixable.  If `pkl` is unavailable, route to residue with a
+note to regenerate locally; never hand-edit `manifest.json`.
 
 ---
 
