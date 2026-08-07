@@ -1597,7 +1597,7 @@ def test_an_orphan_failure_still_fails_when_the_readback_disagrees(
             sticky=[StubRoute("GET", "/releases/", Response(404, {}))],
         ),
     )
-    with pytest.raises(app.TenantAppError, match="did not take effect"):
+    with pytest.raises(app.TenantAppError, match="cannot be confirmed"):
         app.install(_install_args())
 
 
@@ -1656,6 +1656,96 @@ def test_a_real_version_alongside_a_placeholder_still_wins() -> None:
     assert app._extract_version(payload) == _VERSION
 
 
+# ── Resolving the version through the catalog ────────────────────────────────
+# Taken from a live azure tenant whose version_text was the placeholder:
+#
+#   catalog.app_version.version_id = '019fdc06-dbe3-7992-93a0-1791575164b3'
+#   catalog.app_version.version    = 'sdr-test-1024d47f'
+#   installed.version_id           = '019fdc06-dbe3-7992-93a0-1791575164b3'
+#
+# Matching UUIDs make this exact identity. A MISMATCH must never resolve: /info
+# describes the LATEST catalog version, so reading its string regardless would
+# report the newest version as installed — the silent wrong-version pass FND-31
+# exists to prevent.
+
+_UUID = "019fdc06-dbe3-7992-93a0-1791575164b3"
+
+
+def _info(installed_id: str, version: str = _VERSION, text: str = "unknown") -> dict:  # type: ignore[type-arg]
+    return {
+        "catalog": {"app_version": {"version_id": _UUID, "version": version}},
+        "installed": {"version_id": installed_id, "version_text": text},
+    }
+
+
+def test_a_matching_uuid_resolves_the_real_version() -> None:
+    assert app.resolve_version_via_catalog(_info(_UUID)) == _VERSION
+
+
+def test_a_mismatched_uuid_never_resolves() -> None:
+    assert app.resolve_version_via_catalog(_info("some-other-uuid")) == "", (
+        "the catalog describes the LATEST version, not necessarily the installed "
+        "one. Resolving on a mismatch would report the newest version as "
+        "installed — a silent wrong-version pass."
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"installed": {"version_id": _UUID}},  # no catalog
+        {
+            "catalog": {"app_version": {"version_id": _UUID, "version": "v"}}
+        },  # no installed
+        {"catalog": {"app_version": "not-a-dict"}, "installed": {"version_id": _UUID}},
+        {
+            "catalog": {"app_version": {"version": "v"}},
+            "installed": {"version_id": _UUID},
+        },
+    ],
+)
+def test_an_incomplete_payload_never_resolves(payload: dict) -> None:  # type: ignore[type-arg]
+    assert app.resolve_version_via_catalog(payload) == ""
+
+
+def test_an_absent_installed_uuid_never_resolves() -> None:
+    # Both sides empty would otherwise compare equal and resolve on nothing.
+    assert app.resolve_version_via_catalog(_info("")) == ""
+    assert (
+        app.resolve_version_via_catalog(
+            {
+                "catalog": {"app_version": {"version_id": "", "version": "v"}},
+                "installed": {"version_id": ""},
+            }
+        )
+        == ""
+    )
+
+
+def test_a_placeholder_in_the_catalog_does_not_resolve() -> None:
+    assert app.resolve_version_via_catalog(_info(_UUID, version="unknown")) == ""
+
+
+def test_the_readback_uses_the_catalog_when_version_text_is_a_placeholder(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """End to end: the exact shape the live tenant returned."""
+    _wire(
+        monkeypatch,
+        StubTransport(routes=[StubRoute("GET", "/info", _ok(_info(_UUID)))]),
+    )
+    resolved = app._installed_version(
+        TenantClient(base_url=_TENANT, bearer="t"), _APP_ID
+    )
+    assert resolved == _VERSION
+    out = capsys.readouterr().out
+    assert "resolved to" in out and "version_id" in out, (
+        "resolving via a fallback must say so — a reader comparing this against "
+        "the tenant UI should know which field the answer came from"
+    )
+    assert "no version could be read" not in out
+
+
 def test_the_info_shape_is_dumped_when_no_version_can_be_read(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1679,8 +1769,12 @@ def test_the_info_shape_is_dumped_when_no_version_can_be_read(
                                     "config": "a: 1\nb: 2\n",
                                 },
                             },
+                            # A DIFFERENT UUID, so the catalog cannot resolve it
+                            # — the catalog only ever describes the latest
+                            # version. This is the unresolvable case, which is
+                            # exactly when the dump has to appear.
                             "installed": {
-                                "version_id": "019fdc06-dbe3-7992",
+                                "version_id": "a-different-uuid",
                                 "version_text": "unknown",
                                 "deployment_name": "production",
                             },
@@ -1696,8 +1790,8 @@ def test_the_info_shape_is_dumped_when_no_version_can_be_read(
     )
     out = capsys.readouterr().out
     assert "app info (no version could be read)" in out
-    # The identifiers that would let us resolve the version.
-    assert "installed.version_id = '019fdc06-dbe3-7992'" in out
+    # The identifiers a reader needs to work out what the tenant runs.
+    assert "installed.version_id = 'a-different-uuid'" in out
     assert f"catalog.app_version.version = '{_VERSION}'" in out
     assert f"catalog.app_version.image_url = '{_IMAGE}'" in out
     # NOT the config blob: burying the identifiers is how the last diagnostic
@@ -1746,6 +1840,62 @@ def test_verify_distinguishes_unreadable_from_wrong(
         "the concurrent-run hint is for a genuine mismatch; offering it here "
         "sends the reader after a race that did not happen"
     )
+
+
+def test_install_fails_when_it_cannot_confirm_the_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """prepare-tenant must fail here rather than leave it to every leg.
+
+    It went green while reporting a placeholder, and both e2e legs then failed on
+    their own version check — N confusing failures instead of one clear one. This
+    job's whole purpose is leaving the tenant on the version under test, so it has
+    to confirm that before reporting success.
+    """
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", Response(404, {})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                # Reconciled fine, but reports a placeholder no catalog can resolve.
+                StubRoute("GET", "/info", _ok(_info("a-different-uuid"))),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(404, {}))],
+        ),
+    )
+    with pytest.raises(app.TenantAppError) as excinfo:
+        app.install(_install_args())
+    message = str(excinfo.value)
+    assert "cannot be confirmed" in message
+    assert (
+        "no usable version" in message
+    ), "an unverifiable tenant and a wrong-version tenant need different hunts"
+
+
+def test_install_succeeds_when_the_catalog_resolves_the_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", Response(404, {})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok(_info(_UUID))),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(404, {}))],
+        ),
+    )
+    assert app.install(_install_args()).installed_version == _VERSION
 
 
 def test_verify_still_names_the_race_on_a_real_mismatch(
