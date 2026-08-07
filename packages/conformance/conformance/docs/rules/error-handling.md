@@ -106,6 +106,10 @@ X(...)`, or `raise X(...) from e` — because nothing is swallowed; `raise X(...
 None` (which discards the trace) and a conditional re-raise that can fall through still
 fire.
 
+Exempt: handlers whose log call formats the exception through a recognised redaction
+helper (redact*/sanitiz*/safe_traceback/…) — the failure is logged at a deliberate
+no-traceback boundary.
+
 ---
 
 ## E005 — `ExceptBlockMissingExcInfo` {#e005}
@@ -121,6 +125,11 @@ often impossible under production data volumes.
 The message is logged but the stack trace is lost.  Add `exc_info=True` to every
 `logger.warning()` / `logger.error()` call inside an except block.  `logger.exception()`
 is exempt (it implies `exc_info=True`).
+
+Exempt: calls whose arguments flow through a recognised redaction helper
+(redact*/sanitiz*/safe_traceback/scrub_secret*/mask_secret*) — these mark a deliberate
+no-traceback boundary where exc_info=True would serialize the raw exception past the
+sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodies).
 
 ---
 

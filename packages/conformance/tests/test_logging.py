@@ -1148,3 +1148,377 @@ def test_l004_fires_in_inner_try_body_inside_except() -> None:
         "        pass\n"
     )
     assert "L004" in _ids(src)
+
+
+# ---------------------------------------------------------------------------
+# L004 — sanitizer / redaction-boundary exemption (FND-59)
+# ---------------------------------------------------------------------------
+
+
+def test_l004_silent_when_arg_flows_through_redaction_helper() -> None:
+    # A log call formatting the exception through redact()/redact_secrets()
+    # marks a deliberate no-traceback boundary: exc_info=True would serialize
+    # the raw exception past the sanitizer (JDBC URLs, Authorization headers).
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    logger.warning('close failed: %s', redact(e))\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_silent_for_attribute_sanitizer_and_nested_call() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    logger.error('auth failed: %s', errors.redact_secrets(str(e)))\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_silent_for_presanitized_variable_argument() -> None:
+    # The redacted text was built on a previous line; the variable name marks it.
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    safe_traceback = redact_secrets(''.join(traceback.format_exception(e)))\n"
+        "    logger.error('prime failed:\\n%s', safe_traceback)\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_still_fires_when_sanitizer_used_elsewhere_in_handler() -> None:
+    # Only the log call's own arguments count — a sanitizer on another
+    # statement does not exempt an unrelated bare log call.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    msg = redact(e)\n"
+        "    logger.warning('failed')\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_still_fires_for_sanitizer_named_flag_variable() -> None:
+    # A bare variable that merely *contains* "redact" but holds a flag (not
+    # sanitised text) must not exempt the call — the bare-Name branch is
+    # narrowed to sanitised-*value* names (safe_traceback / redacted_* / …).
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    redact_count = 3\n"
+        "    logger.error('auth failed after %s tries', redact_count)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+# ---------------------------------------------------------------------------
+# L005 — standalone script/CLI exemption (FND-61)
+# ---------------------------------------------------------------------------
+
+
+def test_l005_silent_in_shebang_script() -> None:
+    src = "#!/usr/bin/env python3\ndef run():\n    print('progress')\n"
+    assert "L005" not in _ids(src)
+
+
+def test_l005_silent_with_main_guard_even_inside_functions() -> None:
+    src = (
+        "def run():\n    print('progress')\n\nif __name__ == \"__main__\":\n    run()\n"
+    )
+    assert "L005" not in _ids(src)
+
+
+def test_l005_still_fires_for_argparse_import_without_main_guard() -> None:
+    # A bare argparse import is not sufficient evidence of a standalone script:
+    # a mixed library/CLI module imports it for its __main__ block but keeps
+    # print() calls in reusable library functions.  Without a __main__ guard,
+    # the file is treated as app code and the exemption does not apply.
+    src = "import argparse\ndef run():\n    print('result')\n"
+    assert "L005" in _ids(src)
+
+
+def test_l005_silent_for_argparse_cli_with_main_guard() -> None:
+    # argparse + a __main__ guard is a real CLI entry point — exempt.
+    src = (
+        "import argparse\n\n"
+        "def run():\n    print('result')\n\n"
+        'if __name__ == "__main__":\n    run()\n'
+    )
+    assert "L005" not in _ids(src)
+
+
+def test_l005_still_fires_in_plain_module() -> None:
+    src = "def handle():\n    print('debugging')\n"
+    assert "L005" in _ids(src)
+
+
+# ---------------------------------------------------------------------------
+# L010 — redaction-placeholder exemption (FND-61)
+# ---------------------------------------------------------------------------
+
+
+def test_l010_silent_for_redaction_placeholder_positional() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def connect(creds):\n"
+        '    password = "[REDACTED]" if creds.get("password") else None\n'
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" not in _ids(src)
+
+
+def test_l010_silent_for_redaction_placeholder_kwarg() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def connect(creds):\n"
+        '    token = "***masked***"\n'
+        "    logger.info('auth', token=token)\n"
+    )
+    assert "L010" not in _ids(src)
+
+
+def test_l010_still_fires_for_real_credential_value() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def connect(creds):\n"
+        '    password = creds.get("password")\n'
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_placeholder_shadowed_cross_function() -> None:
+    # Cross-function bypass: `password` is a placeholder in one function but a
+    # real credential in another.  The exemption must NOT leak across scopes —
+    # the real credential value has to be flagged.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def mask(creds):\n"
+        '    password = "[REDACTED]"\n'
+        "    logger.info('placeholder %s', password)\n"
+        "def connect(creds):\n"
+        '    password = creds.get("password")\n'
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_name_rebound_to_real_value() -> None:
+    # Reassignment: the same name is bound to a placeholder once and to a real
+    # credential elsewhere, so the placeholder does not reliably reach the log
+    # call.  The exemption is invalidated and the real value is flagged.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def connect(creds):\n"
+        '    password = "[REDACTED]"\n'
+        '    password = creds.get("password")\n'
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_real_value_then_placeholder() -> None:
+    # Real value first, placeholder second (either order disqualifies).
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def connect(creds):\n"
+        '    password = creds.get("password")\n'
+        '    password = "[REDACTED]"\n'
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_silent_when_name_only_rebound_between_placeholders() -> None:
+    # A name rebound only between placeholder literals never carries a real
+    # value — logging it stays a presence indicator, so the exemption holds.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def connect(creds):\n"
+        '    password = "[REDACTED]"\n'
+        '    password = "***masked***"\n'
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" not in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_augassign() -> None:
+    # ``password += creds.get(...)`` mutates from a non-placeholder source, so
+    # the name no longer reliably holds a placeholder — flag the real value.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "def connect(creds):\n"
+        '    password = "[REDACTED]"\n'
+        '    password += creds.get("password")\n'
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_for_target() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "for password in creds_list:\n"
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_with_as_target() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "with open_secret() as password:\n"
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_import() -> None:
+    # An ``import`` rebinds the name to a module object — no longer a
+    # placeholder, so logging it must be flagged.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "import password\n"
+        "logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_comprehension_target() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "vals = [c for password in creds_list]\n"
+        "logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_tuple_unpack() -> None:
+    # Tuple destructuring binds the leaf name to a real (non-placeholder)
+    # element of the unpacked value — not a placeholder.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        'password, token = creds.get("password"), "***"\n'
+        "logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_except_as() -> None:
+    # ``except Exception as password:`` binds the exception object — a real
+    # value, so the placeholder exemption no longer holds.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "try:\n    x()\n"
+        "except Exception as password:\n"
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_function_parameter() -> None:
+    # A ``def`` parameter binds a real argument at call time — logging it is
+    # not a presence indicator even if the name was a placeholder elsewhere.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "def connect(password):\n"
+        "    logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_lambda_parameter() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "f = lambda password: logger.info('pw %s', password)\n"
+        "logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_match_capture() -> None:
+    # A ``match`` capture pattern binds the name to the matched value.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "match creds:\n"
+        '    case {"pw": password}:\n'
+        "        logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_def_name() -> None:
+    # ``def password():`` binds the function object to the name — no longer a
+    # placeholder, so logging it must be flagged.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "def password():\n    pass\n"
+        "logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_class_name() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "class password:\n    pass\n"
+        "logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+def test_l010_fires_when_rebound_via_type_alias() -> None:
+    # ``type password = str`` (Python >= 3.12) binds the alias object.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        'password = "[REDACTED]"\n'
+        "type password = str\n"
+        "logger.info('connecting with password %s', password)\n"
+    )
+    assert "L010" in _ids(src)
+
+
+# ---------------------------------------------------------------------------
+# L021 — hint must recommend individual pins, never the bare "G" category
+# (FND-58: G201 in the "G" group is the exact inverse of L017)
+# ---------------------------------------------------------------------------
+
+
+def test_l021_message_warns_against_bare_g_category(tmp_path: Path) -> None:
+    from conformance.suite.checks.logging._toml import check_ruff_config
+
+    py = tmp_path / "pyproject.toml"
+    py.write_text(
+        '[project]\nname = "some-app"\n[tool.ruff.lint]\nselect = ["E", "F"]\n'
+    )
+    findings = check_ruff_config(py, tmp_path)
+    assert findings and findings[0].rule_id == "L021"
+    msg = findings[0].message
+    assert "G201" in msg and "L017" in msg, "hint must explain the G201/L017 conflict"
+    assert (
+        "covers all rules in that group" not in msg
+    ), "hint must not recommend category prefixes"
+
+
+def test_l021_bare_g_selection_still_detected_as_covered(tmp_path: Path) -> None:
+    # Detection semantics unchanged: an existing bare "G" selection DOES cover
+    # G001/G003/G004 (the conflict with L017 is guidance, not a detection gap).
+    from conformance.suite.checks.logging._toml import check_ruff_config
+
+    py = tmp_path / "pyproject.toml"
+    py.write_text(
+        '[project]\nname = "some-app"\n[tool.ruff.lint]\nselect = ["G", "LOG", "T201"]\n'
+    )
+    assert check_ruff_config(py, tmp_path) == []

@@ -140,6 +140,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "stack trace — the root cause is invisible.  Add ``exc_info=True`` to all\n"
             "``logger.warning()`` / ``logger.error()`` calls within an except block.\n"
             "``.exception()`` is exempt.\n"
+            "\n\nExempt: calls whose arguments flow through a recognised redaction\n"
+            "helper (redact*/sanitiz*/safe_traceback/scrub_secret*/mask_secret*) —\n"
+            "these mark a deliberate no-traceback boundary where exc_info=True\n"
+            "would serialize the raw exception past the sanitizer and can leak\n"
+            "credentials (JDBC URLs, Authorization headers, OAuth bodies)."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l004",
     ),
@@ -163,6 +168,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "In production services, output may go to stdout unformatted, be lost, or\n"
             "interleave with structured log lines.  Acceptable in CLI scripts, test/debug\n"
             'scripts, and ``if __name__ == "__main__":`` blocks.\n'
+            "\n\nExempt: standalone scripts/CLIs — files with a shebang or an\n"
+            "if __name__ == '__main__' guard. For those,\n"
+            "stdout is the user interface, not a logging bypass."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l005",
     ),
@@ -294,6 +302,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "than the credential store.  Requires human security review before marking\n"
             "acceptable.  Logging a credential *name* is acceptable; logging a\n"
             "credential *value* is CRITICAL.\n"
+            "\n\nExempt: arguments assigned a redaction placeholder in the module\n"
+            '(e.g. password = "[REDACTED]" if creds.get("password") else None) —\n'
+            "logging them is a presence indicator, not a value leak."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l010",
     ),
@@ -572,6 +583,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "A rule is covered if its full ID, any prefix (e.g. ``G`` covers all\n"
             "``G``-prefixed rules), or ``ALL`` appears in ``select`` or\n"
             "``extend-select`` and is not in ``ignore`` / ``extend-ignore``.\n"
+            "\n"
+            "Pin the five rules individually. Selecting the bare ``G`` category\n"
+            "satisfies this check but also enables ``G201``, which demands\n"
+            "``.exception(...)`` over ``.error(..., exc_info=True)`` — the exact\n"
+            "inverse of conformance L017 (LoggerExceptionUsage). With ``G``\n"
+            "selected, ruff and the conformance suite contradict each other on\n"
+            "every except-block log call.\n"
             "\n"
             "Self-check exemption: ``pyproject.toml`` files whose\n"
             "``[project].name`` starts with ``atlan-application-sdk`` are skipped\n"

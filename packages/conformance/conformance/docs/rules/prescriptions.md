@@ -758,20 +758,20 @@ false-positive-free.  Land as `WARN`; suppress with `# conformance: ignore[P022]
 asyncio.run()/loop.run_until_complete() from within a running loop raises or deadlocks;
 calling a synchronous blocking library (requests, time.sleep) stalls the loop and every
 other coroutine on it. Tree-scale filesystem work (shutil.rmtree / copytree / move, and
-the SafeFileOps rmtree / move wrappers) blocks for as long as the tree takes to walk, which
-starves a @task's auto-heartbeat and makes Temporal retry an activity that is still
-making progress — App.cleanup_files shipped with exactly that bug while this rule's
-inventory was network/sleep-only. The correct pattern is to await an async equivalent,
-or offload blocking work via App.run_in_thread() inside a @task — not to bridge async
-with a sync workaround.
+the SafeFileOps rmtree / move wrappers) blocks for as long as the tree takes to walk,
+which starves a @task's auto-heartbeat and makes Temporal retry an activity that is
+still making progress — App.cleanup_files shipped with exactly that bug while this
+rule's inventory was network/sleep-only. The correct pattern is to await an async
+equivalent, or offload blocking work via App.run_in_thread() inside a @task — not to
+bridge async with a sync workaround.
 
 Inside an `async def`, code either re-enters the event loop (`asyncio.run(...)` or
 `*.run_until_complete(...)`, including `loop.run_until_complete` /
 `asyncio.get_event_loop()....`), makes a blocking synchronous call (`requests.*`,
 `urllib.request.*`, `time.sleep`), or does tree-scale filesystem work (`shutil.rmtree` /
-`shutil.copytree` / `shutil.move`, plus the SDK's `SafeFileOps.rmtree` / `SafeFileOps.move` wrappers).
-Await the coroutine directly, or offload genuinely blocking work with
-`App.run_in_thread()` inside a `@task`.
+`shutil.copytree` / `shutil.move`, plus the SDK's `SafeFileOps.rmtree` /
+`SafeFileOps.move` wrappers).  Await the coroutine directly, or offload genuinely
+blocking work with `App.run_in_thread()` inside a `@task`.
 
 Single-syscall filesystem operations (`os.remove`, `os.unlink`, `os.rmdir`) are **not**
 flagged: one inode operation does not earn a thread hop, and flagging them would bury

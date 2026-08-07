@@ -268,3 +268,319 @@ def _is_credential_value_name(name: str) -> bool:
     if any(lower.endswith(suf) for suf in CREDENTIAL_LABEL_SUFFIXES):
         return False
     return any(lower.endswith(suf) or lower == suf for suf in CREDENTIAL_VALUE_SUFFIXES)
+
+
+# ---------------------------------------------------------------------------
+# Script/CLI detection (L005 exemption) and redaction-placeholder tracking
+# (L010 exemption) — FND-61 follow-up: rule-level fixes so fleet code does not
+# need inline suppressions for these shapes.
+# ---------------------------------------------------------------------------
+
+#: Substrings that mark a string constant as a redaction placeholder.
+_REDACTION_MARKERS: tuple[str, ...] = ("redact", "masked", "***", "xxxx")
+
+
+def is_script_file(text: str, tree: ast.Module) -> bool:
+    """True when the module is a standalone script/CLI rather than app code.
+
+    Signals (either suffices):
+
+    * a shebang line — the file is meant to be executed directly;
+    * an ``if __name__ == "__main__":`` guard at module level — the file has a
+      direct-execution entry point.
+
+    A bare ``argparse`` import is **not** sufficient evidence on its own: a
+    mixed library/CLI module imports ``argparse`` for its ``__main__`` block
+    yet keeps most of its ``print()`` calls in reusable library functions
+    unrelated to the CLI path, and exempting the whole file would hide those.
+    Such a module almost always pairs the import with a ``__main__`` guard to
+    actually run the parser, so requiring the guard keeps the exemption
+    targeted at real scripts without exempting library code.
+
+    For such files stdout is the user interface; ``print()`` is not a logging
+    bypass (L005).
+    """
+    if text.startswith("#!"):
+        return True
+    for node in tree.body:
+        if isinstance(node, ast.If):
+            t = node.test
+            if (
+                isinstance(t, ast.Compare)
+                and isinstance(t.left, ast.Name)
+                and t.left.id == "__name__"
+                and len(t.comparators) == 1
+                and isinstance(t.comparators[0], ast.Constant)
+                and t.comparators[0].value == "__main__"
+            ):
+                return True
+    return False
+
+
+def _is_redaction_placeholder_expr(value: ast.expr) -> bool:
+    """True for ``"[REDACTED]"``-style constants, or conditionals whose every
+    branch is such a constant or ``None`` (``x if cond else None``)."""
+    if isinstance(value, ast.Constant):
+        if value.value is None:
+            return False  # bare None alone is not a placeholder
+        if isinstance(value.value, str):
+            lowered = value.value.lower()
+            return any(m in lowered for m in _REDACTION_MARKERS)
+        return False
+    if isinstance(value, ast.IfExp):
+        branches = (value.body, value.orelse)
+        placeholderish = 0
+        for b in branches:
+            if isinstance(b, ast.Constant) and b.value is None:
+                continue
+            if _is_redaction_placeholder_expr(b):
+                placeholderish += 1
+            else:
+                return False
+        return placeholderish >= 1
+    return False
+
+
+def _iter_bound_names(target: ast.expr):
+    """Yield every plain name bound by an assignment *target*.
+
+    Recurses into tuple/list/starred destructuring so that
+    ``password, tok = a, b`` and ``(password, *rest) = ...`` both yield their
+    leaf names; attribute/subscript targets (``self.x = …``) bind no plain name
+    and are skipped.
+    """
+    if isinstance(target, ast.Name):
+        yield target.id
+    elif isinstance(target, ast.Starred):
+        yield from _iter_bound_names(target.value)
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for elt in target.elts:
+            yield from _iter_bound_names(elt)
+
+
+def _iter_arg_names(args: ast.arguments):
+    """Yield every parameter name bound by a function/lambda signature."""
+    for a in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+        yield a.arg
+    if args.vararg is not None:
+        yield args.vararg.arg
+    if args.kwarg is not None:
+        yield args.kwarg.arg
+
+
+def _iter_match_capture_names(pattern: ast.AST):
+    """Yield every name captured by a ``match`` *pattern*.
+
+    ``case {"pw": password}:`` binds ``password``; ``case [first, *rest]:``
+    binds ``first``/``rest``; ``case Point(x=px):`` binds ``px``.  ``MatchAs``
+    (``case password:`` / ``case … as password:``) and ``MatchStar``
+    (``case [*password]:``) carry the bound name directly; the wrapper patterns
+    (``MatchValue``/``MatchSingleton``/``MatchSequence``/``MatchMapping``/
+    ``MatchClass``/``MatchOr``) recurse into their sub-patterns.  ``ast.walk``
+    over the pattern reaches every nested node, so the two name-bearing types
+    are all that need explicit handling.
+    """
+    for node in ast.walk(pattern):
+        if isinstance(node, ast.MatchAs):
+            if node.name is not None:
+                yield node.name
+        elif isinstance(node, ast.MatchStar):
+            if node.name is not None:
+                yield node.name
+        # MatchMapping.rest / MatchAs capture via .name are covered above; a
+        # bare ``**rest`` in a mapping pattern lands on MatchMapping.rest.
+        if isinstance(node, ast.MatchMapping) and node.rest is not None:
+            yield node.rest
+
+
+def collect_redacted_names(tree: ast.Module) -> frozenset[str]:
+    """Names *safely* bound to a redaction placeholder, scope- and order-aware.
+
+    ``password = "[REDACTED]" if credentials.get("password") else None`` marks
+    ``password`` as a *presence indicator*: logging it discloses nothing, so
+    L010 must not flag it (the check matches argument names, not values).
+
+    The set is deliberately conservative — a name is exempt only when **every**
+    binding of that name anywhere in the module is a redaction placeholder
+    (or an ``Annotated``/plain annotation with no value).  This closes the
+    cross-scope and rebinding bypasses:
+
+    * **Cross-function** — a name is only exempt in the lexical scope that
+      bound it to a placeholder.  ``password = "[REDACTED]"`` in ``connect``
+      must not exempt ``password = creds.get("password")`` in ``reconnect``:
+      the real credential value would go unflagged.  Because the two bindings
+      live in different scopes, ``reconnect``'s binding is a non-placeholder,
+      so the name is dropped from the exempt set entirely.
+
+    * **Rebinding** — if a name is assigned a placeholder once and a real
+      value anywhere else (either order), the placeholder does not reliably
+      reach the log call, so the exemption is invalidated.  A name that is
+      *only* ever rebound between placeholder literals (``x = "[REDACTED]"`` …
+      ``x = "***masked***"``) stays exempt.  Note that a bare ``x = None``
+      counts as a **real** binding here (``None`` alone is not a placeholder),
+      so it too invalidates the exemption — the conservative, BLOCK-tier-safe
+      direction.
+
+    Every binding form counts, not just ``x = <value>``: an ``AugAssign``
+    (``password += creds.get(...)``), a ``for``/``with … as``/comprehension
+    target, an ``import`` binding, tuple/list/starred unpacking, an
+    ``except … as`` target, a function/lambda parameter, or a ``match``
+    capture pattern all (re)bind a name to a non-placeholder value, so any of
+    them drops the name from the exempt set.  L010 is BLOCK tier, so the
+    conservative (over-flagging) direction is the safe one — a missed exemption
+    is a false positive, a kept one a leak.
+
+    A single source-ordered walk records each binding as placeholder /
+    non-placeholder / annotation; a name survives only if it has at least one
+    placeholder binding and **no** non-placeholder binding.
+    """
+    # name -> [saw_placeholder_binding, saw_real_binding]
+    state: dict[str, list[bool]] = {}
+
+    def record(name: str, placeholder: bool | None) -> None:
+        saw_placeholder, saw_real = state.get(name, [False, False])
+        if placeholder is True:
+            saw_placeholder = True
+        elif placeholder is False:
+            saw_real = True
+        # placeholder is None → bare annotation; leaves both flags unchanged
+        state[name] = [saw_placeholder, saw_real]
+
+    def record_target(target: ast.expr, placeholder: bool) -> None:
+        for name in _iter_bound_names(target):
+            record(name, placeholder)
+
+    class _Binder(ast.NodeVisitor):
+        """Visit bindings in source order, tracking placeholder-ness.
+
+        Every visitor ends in ``generic_visit``, so nested scopes are entered
+        and every function/class body is walked — a binding in any scope
+        counts toward that name's module-wide state.  This is what makes the
+        check cross-function: a non-placeholder binding in *any* scope
+        disqualifies the name everywhere.
+
+        Only ``Assign``/``AnnAssign``/``NamedExpr`` can carry a placeholder
+        *value*, so they alone may mark a name exempt.  Every other binding
+        form is recorded as a real binding and disqualifies the name.  The set
+        of forms is exhaustive rather than allow-listed one node type at a
+        time — ``AugAssign``, ``for``/``with``/comprehension targets, imports,
+        ``except … as``, function/lambda parameters, ``match`` capture
+        patterns, and definition names (``def``/``class``/``type``) all rebind
+        a name to a non-placeholder value, so recording them ends the
+        "one new form per round" class instead of chasing it.
+        """
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            placeholder = _is_redaction_placeholder_expr(node.value)
+            for target in node.targets:
+                record_target(target, placeholder)
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            if node.value is None:
+                # bare ``x: str`` — no value yet; do not disqualify the name
+                for name in _iter_bound_names(node.target):
+                    record(name, None)
+            else:
+                record_target(node.target, _is_redaction_placeholder_expr(node.value))
+            self.generic_visit(node)
+
+        # ``password += creds.get(...)`` — the value is mutated from a
+        # non-placeholder source, so the name no longer holds a placeholder.
+        def visit_AugAssign(self, node: ast.AugAssign) -> None:
+            record_target(node.target, False)
+            self.generic_visit(node)
+
+        # Walrus in any expression position binds a name to a real value.
+        def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+            record_target(node.target, _is_redaction_placeholder_expr(node.value))
+            self.generic_visit(node)
+
+        # ``for password in …`` / ``async for`` — loop targets bind real values.
+        def visit_For(self, node: ast.For) -> None:
+            record_target(node.target, False)
+            self.generic_visit(node)
+
+        def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+            record_target(node.target, False)
+            self.generic_visit(node)
+
+        # ``with open() as password:`` — the as-target binds a real value.
+        def visit_With(self, node: ast.With) -> None:
+            for item in node.items:
+                if item.optional_vars is not None:
+                    record_target(item.optional_vars, False)
+            self.generic_visit(node)
+
+        def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+            for item in node.items:
+                if item.optional_vars is not None:
+                    record_target(item.optional_vars, False)
+            self.generic_visit(node)
+
+        # Comprehension loop variables bind real values (``[p for p in …]``).
+        def visit_comprehension(self, node: ast.comprehension) -> None:
+            record_target(node.target, False)
+            self.generic_visit(node)
+
+        # ``import password`` / ``from x import password`` bind module names.
+        def visit_Import(self, node: ast.Import) -> None:
+            for alias in node.names:
+                record(alias.asname or alias.name.split(".")[0], False)
+            self.generic_visit(node)
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            for alias in node.names:
+                record(alias.asname or alias.name, False)
+            self.generic_visit(node)
+
+        # ``except Exception as password:`` binds the caught exception object.
+        def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+            if node.name:
+                record(node.name, False)
+            self.generic_visit(node)
+
+        # ``def connect(password):`` / ``lambda password: …`` — every parameter
+        # binds a real argument value at call time, and the definition name
+        # itself (``def password():``) binds the function object.
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            record(node.name, False)  # the definition name binds the function object
+            for name in _iter_arg_names(node.args):
+                record(name, False)
+            self.generic_visit(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            record(node.name, False)
+            for name in _iter_arg_names(node.args):
+                record(name, False)
+            self.generic_visit(node)
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            # A lambda has no name of its own — only its parameters bind.
+            for name in _iter_arg_names(node.args):
+                record(name, False)
+            self.generic_visit(node)
+
+        # ``class password:`` binds the class object to the name.
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            record(node.name, False)
+            self.generic_visit(node)
+
+        # ``type password = str`` (Python ≥ 3.12) binds the alias object.
+        def visit_TypeAlias(self, node: ast.TypeAlias) -> None:  # type: ignore[attr-defined]
+            record_target(node.name, False)
+            self.generic_visit(node)
+
+        # ``case {"pw": password}:`` — capture patterns bind real values.
+        def visit_Match(self, node: ast.Match) -> None:
+            for case in node.cases:
+                for name in _iter_match_capture_names(case.pattern):
+                    record(name, False)
+            self.generic_visit(node)
+
+    _Binder().visit(tree)
+    return frozenset(
+        name
+        for name, (saw_placeholder, saw_real) in state.items()
+        if saw_placeholder and not saw_real
+    )

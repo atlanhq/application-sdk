@@ -133,6 +133,11 @@ Logging an exception without `exc_info=True` produces a message with no stack tr
 the root cause is invisible.  Add `exc_info=True` to all `logger.warning()` /
 `logger.error()` calls within an except block. `.exception()` is exempt.
 
+Exempt: calls whose arguments flow through a recognised redaction helper
+(redact*/sanitiz*/safe_traceback/scrub_secret*/mask_secret*) — these mark a deliberate
+no-traceback boundary where exc_info=True would serialize the raw exception past the
+sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodies).
+
 ---
 
 ## L005 — `PrintInProductionCode` {#l005}
@@ -149,6 +154,9 @@ sink or interleave with structured lines, invisible to observability.
 services, output may go to stdout unformatted, be lost, or interleave with structured
 log lines.  Acceptable in CLI scripts, test/debug scripts, and `if __name__ ==
 "__main__":` blocks.
+
+Exempt: standalone scripts/CLIs — files with a shebang or an if __name__ == '__main__'
+guard. For those, stdout is the user interface, not a logging bypass.
 
 ---
 
@@ -247,6 +255,10 @@ Credentials in log output are a security vulnerability — logs are often stored
 plaintext in log aggregation systems, accessible to more people than the credential
 store.  Requires human security review before marking acceptable.  Logging a credential
 *name* is acceptable; logging a credential *value* is CRITICAL.
+
+Exempt: arguments assigned a redaction placeholder in the module (e.g. password =
+"[REDACTED]" if creds.get("password") else None) — logging them is a presence indicator,
+not a value leak.
 
 ---
 
@@ -445,6 +457,12 @@ in log message (overlaps L011) * `G004` — f-string in log message (overlaps L0
 A rule is covered if its full ID, any prefix (e.g. `G` covers all `G`-prefixed rules),
 or `ALL` appears in `select` or `extend-select` and is not in `ignore` /
 `extend-ignore`.
+
+Pin the five rules individually. Selecting the bare `G` category satisfies this check
+but also enables `G201`, which demands `.exception(...)` over `.error(...,
+exc_info=True)` — the exact inverse of conformance L017 (LoggerExceptionUsage). With `G`
+selected, ruff and the conformance suite contradict each other on every except-block log
+call.
 
 Self-check exemption: `pyproject.toml` files whose `[project].name` starts with
 `atlan-application-sdk` are skipped (the SDK's own tooling config is managed

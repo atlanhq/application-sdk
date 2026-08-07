@@ -69,6 +69,15 @@ lines around `finding.line` in `finding.file` before proposing a fix.
   addition.  Example: `logger.warning("msg")` → `logger.warning("msg",
   exc_info=True)`.
 
+  **Contraindication — redaction boundaries.** Never add `exc_info=True` when
+  the call's arguments flow through a redaction helper (`redact*`, `sanitiz*`,
+  `safe_traceback`, `scrub_secret*`, `mask_secret*`) or an adjacent comment
+  says traceback capture is omitted on purpose: driver/API exception text can
+  embed credentials (JDBC URLs, Authorization headers, OAuth bodies), and the
+  separately-serialized traceback bypasses the redaction the code performs.
+  The checker exempts sanitizer-bearing calls; if a finding still appears at a
+  commented boundary, route it to residue — do not "fix" it.
+
 - **E016 MissingExceptionChaining** — add `from exc` (or `from e`, matching
   the existing except clause variable) to the bare `raise X(...)` inside the
   except block.  Example: `raise ValueError(msg)` → `raise ValueError(msg)

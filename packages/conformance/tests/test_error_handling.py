@@ -2076,3 +2076,65 @@ def fetch(resp):
     raise UpstreamError("source failed")
 """
     )
+
+
+# ---------------------------------------------------------------------------
+# E005 — sanitizer / redaction-boundary exemption (FND-59)
+# ---------------------------------------------------------------------------
+
+
+def test_e005_silent_when_arg_flows_through_redaction_helper() -> None:
+    src = (
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    logger.warning('close failed: %s', redact(e))\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_silent_for_sanitize_helper_attribute() -> None:
+    src = (
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    logger.error('auth failed: %s', util.sanitize_cause_repr(e))\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_still_fires_without_sanitizer() -> None:
+    src = "try:\n    x()\nexcept Exception as e:\n    logger.warning('failed: %s', e)\n"
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_for_sanitizer_named_flag_variable() -> None:
+    # A bare variable that merely *contains* "redact" but holds a flag/counter
+    # (not sanitised text) must not exempt the log call — the narrowing of the
+    # bare-Name branch to sanitised-*value* names.
+    src = (
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    redaction_enabled = True\n"
+        "    logger.warning('close failed (redaction=%s)', redaction_enabled)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_silent_for_presanitized_traceback_variable() -> None:
+    # A variable named as sanitised output (safe_traceback / redacted_*) still
+    # exempts — the pre-sanitised-text case the bare-Name branch exists for.
+    src = (
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    safe_traceback = redact_secrets(''.join(traceback.format_exception(e)))\n"
+        "    logger.error('prime failed:\\n%s', safe_traceback)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e004_silent_when_handler_logs_via_sanitizer() -> None:
+    src = (
+        "try:\n    x()\nexcept Exception as e:\n"
+        "    logger.warning('close failed: %s', redact(e))\n"
+    )
+    assert "E004" not in _findings(src)
+
+
+def test_e004_still_fires_when_handler_logs_bare() -> None:
+    src = "try:\n    x()\nexcept Exception as e:\n    logger.warning('failed')\n"
+    assert "E004" in _findings(src)
