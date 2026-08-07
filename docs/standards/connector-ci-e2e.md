@@ -307,6 +307,25 @@ Three things this shape makes load-bearing, each of which fails *silently*:
   execute binary file`, several steps before anything mentions architecture. It now
   selects from `runner.arch`.
 
+**Reading back a just-pushed tag is a race, so the build legs don't.** buildx's
+container driver exports only to the registry, so `docker run` used to fetch back
+the image the same step had just uploaded — 22.7s on a measured amd64 leg, and a
+read the registry doesn't always serve yet (a live arm64 leg got `manifest
+unknown` 0.7s after its own push reported success). The build now also `--load`s
+into the local daemon, so the interpreter assert is a local container start: 0.17s,
+and no registry read to race. Measured end to end, the amd64 leg went 89s → 76s.
+
+`--load` is skipped for a multi-platform build, because the docker exporter can't
+express a manifest list; such a caller falls back to pulling, which still works.
+
+The one read that can't be avoided is `merge-e2e-image`'s: `imagetools create` is
+purely registry-side, so the manifest list exists *only* there and inspecting it a
+step later is inherently a fresh read. That one is wrapped in
+[`with-retry.sh`](../../.github/scripts/with-retry.sh) — around the *inspect*, and
+captured into a variable before parsing, because piping a retried command
+concatenates every attempt's output into the reader's stdin and would fail the
+parse on healthy data.
+
 `merge-e2e-image` then asserts the combined manifest serves both architectures
 (`assert_image_platforms.py`). That is the reference `prepare-tenant` publishes and
 the tenant pulls, so it is the one worth asserting: a leg that quietly built the
