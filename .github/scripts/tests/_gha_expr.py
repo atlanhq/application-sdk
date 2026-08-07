@@ -30,6 +30,7 @@ __all__ = [
     "UnknownContext",
     "UnsupportedExpression",
     "evaluate",
+    "evaluate_operand",
     "truthy",
 ]
 
@@ -414,6 +415,17 @@ def _eval(node: _Node, contexts: dict[str, Any]) -> Any:
     raise UnsupportedExpression(f"unhandled node {kind!r}")
 
 
+def _parse(expression: str) -> _Node:
+    source = expression.strip()
+    if source.startswith("${{") and source.endswith("}}"):
+        source = source[3:-2].strip()
+    if "${{" in source:
+        raise UnsupportedExpression(
+            f"partially-interpolated expressions are not supported: {expression!r}"
+        )
+    return _Parser(_lex(source), source).parse()
+
+
 def evaluate(expression: str, contexts: dict[str, Any]) -> bool:
     """Evaluate a workflow `if:` expression and return whether the job runs.
 
@@ -422,12 +434,14 @@ def evaluate(expression: str, contexts: dict[str, Any]) -> bool:
     expression reads (``github``, ``inputs``, ``needs``, …) to its value; a root
     the expression reads but the caller omits raises :class:`UnknownContext`.
     """
-    source = expression.strip()
-    if source.startswith("${{") and source.endswith("}}"):
-        source = source[3:-2].strip()
-    if "${{" in source:
-        raise UnsupportedExpression(
-            f"partially-interpolated expressions are not supported: {expression!r}"
-        )
-    node = _Parser(_lex(source), source).parse()
-    return truthy(_eval(node, contexts))
+    return truthy(_eval(_parse(expression), contexts))
+
+
+def evaluate_operand(expression: str, contexts: dict[str, Any]) -> Any:
+    """Evaluate like :func:`evaluate` but return the operand, not its truthiness.
+
+    ``&&``/``||`` return an operand rather than a boolean in GHA, so this is the
+    way to pin that semantics directly — ``evaluate`` alone would mask a broken
+    evaluator that coerced the result to a boolean.
+    """
+    return _eval(_parse(expression), contexts)

@@ -19,6 +19,7 @@ from _gha_expr import (  # noqa: E402
     UnknownContext,
     UnsupportedExpression,
     evaluate,
+    evaluate_operand,
     truthy,
 )
 
@@ -116,6 +117,24 @@ def test_and_or_return_an_operand_so_a_falsy_right_hand_side_wins() -> None:
     # `'' || 'fallback'` is the documented default-value idiom.
     assert _eval("x.empty || x.fallback", x={"empty": "", "fallback": "v"})
     assert not _eval("x.set && x.empty", x={"set": "v", "empty": ""})
+
+
+def test_and_or_return_the_selected_operand_not_a_boolean() -> None:
+    # Value-level: pin the operand itself, not just its truthiness, so an
+    # evaluator that returned booleans instead would fail here even though it
+    # would still pass the truthy-only assertions above.
+    assert (
+        evaluate_operand("x.empty || x.fallback", {"x": {"empty": "", "fallback": "v"}})
+        == "v"
+    )
+    assert evaluate_operand("x.set && x.empty", {"x": {"set": "v", "empty": ""}}) == ""
+    assert (
+        evaluate_operand("x.set || x.fallback", {"x": {"set": "v", "fallback": "w"}})
+        == "v"
+    )
+    assert (
+        evaluate_operand("x.set && x.other", {"x": {"set": "v", "other": "w"}}) == "w"
+    )
 
 
 def test_not_yields_a_boolean() -> None:
