@@ -149,7 +149,12 @@ async def resolve_agent_credential(
           substituted from it (the original v2 multi-key behavior).
         * Both empty: raw spec values are used as-is (no store
           lookup). Intended for dev/testing where ``agent_json``
-          carries literal credentials inline.
+          carries literal credentials inline. Only reachable via a
+          direct call to this function — the routed path never gets
+          here, because :meth:`AgentCredentialSpec.is_populated`
+          returns False without a fetch anchor (``secret-path`` or
+          ``key-type: single-key``) and routing falls through to
+          ``credential_guid`` instead.
     """
     raw = spec.to_raw_dict()
 

@@ -155,6 +155,55 @@ class TestAgentCredentialSpec:
         spec = AgentCredentialSpec.model_validate({})
         assert not spec.is_populated()
 
+    def test_ae_placeholder_agent_name_not_populated(self) -> None:
+        spec = AgentCredentialSpec.model_validate(
+            {
+                "agent-name": "agent-name",
+                "secret-manager": "",
+                "secret-path": "",
+                "auth-type": "",
+                "host": "",
+                "port": 0,
+            }
+        )
+        assert not spec.is_populated()
+
+    def test_agent_name_without_secret_ref_not_populated(self) -> None:
+        spec = AgentCredentialSpec.model_validate({"agent-name": "acme-prod-agent"})
+        assert not spec.is_populated()
+
+    def test_agent_spec_with_secret_ref_is_populated(self) -> None:
+        spec = AgentCredentialSpec.model_validate(
+            {"agent-name": "acme-prod-agent", "secret-path": "atlan/prod/acme"}
+        )
+        assert spec.is_populated()
+
+    def test_single_key_spec_without_secret_path_is_populated(self) -> None:
+        # single-key fetches per ref-key, so no secret_path is needed.
+        spec = AgentCredentialSpec.model_validate(
+            {
+                "agent-name": "acme-prod-agent",
+                "key-type": "single-key",
+                "basic.username": "SDR_MYSQL_USERNAME",
+            }
+        )
+        assert spec.is_populated()
+
+    def test_secret_manager_only_not_populated(self) -> None:
+        # secret_manager is not a fetch anchor.
+        spec = AgentCredentialSpec.model_validate(
+            {"agent-name": "acme-prod-agent", "secret-manager": "awssecretmanager"}
+        )
+        assert not spec.is_populated()
+
+    def test_multi_key_spec_without_secret_path_not_populated(self) -> None:
+        # Only single-key is a fetch anchor on its own; multi-key still
+        # needs secret_path to fetch the bundle from.
+        spec = AgentCredentialSpec.model_validate(
+            {"agent-name": "acme-prod-agent", "key-type": "multi-key"}
+        )
+        assert not spec.is_populated()
+
     def test_invalid_json_raises_parse_error(self) -> None:
         import pytest
 
