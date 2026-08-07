@@ -21,9 +21,37 @@ This doc covers what the SDK ships — the composite action, the reusable workfl
 | Pipeline | What it validates | Stack | Wall time | Triggers |
 |---|---|---|---|---|
 | **SDR Integration Tests (testcontainer)** | Credential → secret-store → connector-client chain. Auth / preflight / extract polled to `COMPLETED` on CI tenant Temporal. | Hermetic — testcontainer DB + worker + Dapr + Temporal. | ~3 min | Auto on every connector PR push |
-| **E2E Full Tests (system apps)** | Full DAG: connector extract → publish → query-intelligence → lineage-app → lineage-publish. Asset counts + lineage assertions in Atlas. | Live — configurator-generated compose, worker on a dynamic Temporal queue against the CI tenant's full Atlan stack. | ~20–40 min | Label-gated (`e2e-full`) |
+| **E2E Full Tests (system apps)** | Full DAG: connector extract → publish → query-intelligence → lineage-app → lineage-publish. Asset counts + lineage assertions in Atlas. | Live — configurator-generated compose, worker on a dynamic Temporal queue against the CI tenant's full Atlan stack. | ~20–40 min | Label-gated (`e2e`) — see below |
 
 Both call the same composite action; difference is test target, Dapr components, compose overlay, and secret-bundle shape.
+
+### What the `e2e` label actually gates
+
+Adding the `e2e` label starts the suite; a subsequent push (`synchronize`) on a
+PR still carrying it re-runs the suite. What does **not** re-run it is an
+unrelated label add — `size/`, `area/`, dependency and review-state labels churn
+constantly on an open PR, and every one of those used to re-fire the whole
+matrix (FND-48).
+
+The `Discover e2e suites` gate in `tests-reusable.yaml` therefore asks two
+questions, not one:
+
+```yaml
+contains(github.event.pull_request.labels.*.name, 'e2e') &&
+(github.event.action != 'labeled' || github.event.label.name == 'e2e')
+```
+
+You will still see a *workflow run* appear for every label add — GitHub has no
+trigger-level label filter, so the run is created and then skips within seconds.
+That is expected; it costs no tenant time and nothing queues behind it. Do not
+"fix" it by removing `labeled` from your `tests.yaml` trigger list: that is what
+makes adding the label start a run in the first place. See
+[`docs/standards/ci.md`](ci.md#label-gates-must-be-event-aware).
+
+Note that a genuine re-trigger still **queues** behind an in-flight run rather
+than cancelling it (`cancel-in-progress: false`). That is deliberate —
+cancelling mid-run abandons a live Automation Engine run and leaves tenant state
+behind — and it is a separate decision from the gating above.
 
 ## SDR composite action inputs
 

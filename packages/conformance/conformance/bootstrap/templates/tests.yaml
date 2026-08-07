@@ -23,6 +23,12 @@ on:
       - main
   pull_request:
     types:
+      # `labeled` is what makes adding the `e2e` label start a run. GitHub has
+      # no trigger-level filter for WHICH label, so an unrelated label add
+      # creates a run here too — the SDK's reusable workflow gates on
+      # `github.event.label.name` so those runs skip in seconds instead of
+      # re-running the live-tenant suite (FND-48). Keep the type; the filtering
+      # is not this file's job.
       - opened
       - synchronize
       - reopened

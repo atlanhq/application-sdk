@@ -672,12 +672,25 @@ jobs:
     # Just a checkout + a seconds-long glob; cap it so a wedged runner can't
     # hold the required check pending for GitHub's 6-hour default.
     timeout-minutes: 10
+    # The `contains(...labels...)` term asks "does the PR carry `e2e` right now",
+    # which is the right question for `opened`/`synchronize`/`reopened` but the
+    # wrong one for `labeled`: on a PR that already carries `e2e`, adding ANY
+    # other label (size/, area/, dependency, review-state — bots add and remove
+    # these constantly) satisfies it and re-runs the whole suite. Crossed with
+    # the cross-CSP matrix that is suites × clouds live tenants per spurious
+    # add, and `cancel-in-progress: false` below means each one queues behind
+    # the last rather than replacing it. The added term makes a `labeled` event
+    # count only when `e2e` is the label that was just added; every other event
+    # type is unaffected, so a real push still re-triggers. GitHub has no
+    # trigger-level label filter, so the workflow RUN is still created — it now
+    # skips in seconds instead of holding tenants for 20–40 minutes. FND-48.
     if: |
       inputs.enable-e2e && (
         (github.event_name == 'workflow_dispatch' && inputs.run-e2e == 'true') ||
         (
           github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'e2e') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
           github.event.pull_request.head.repo.fork != true &&
           github.event.pull_request.user.login != 'dependabot[bot]'
         )
