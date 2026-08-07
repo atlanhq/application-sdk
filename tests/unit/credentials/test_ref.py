@@ -165,6 +165,29 @@ class TestCredentialRefResolve:
         assert ref.agent_spec is not None
         assert ref.credential_guid == ""
 
+    def test_resolve_ae_placeholder_spec_does_not_route_to_agent(self):
+        # Placeholder is not populated, so resolve won't route to agent (raises).
+        spec = AgentCredentialSpec.model_validate({"agent-name": "agent-name"})
+        inp = ExtractionInput(
+            extraction_method="agent",
+            agent_json=spec,
+            credential_guid="real-guid",
+        )
+        with pytest.raises(CredentialRoutingError):
+            CredentialRef.resolve(inp)
+
+    def test_resolve_or_none_ae_placeholder_falls_back_to_guid(self):
+        spec = AgentCredentialSpec.model_validate({"agent-name": "agent-name"})
+        inp = ExtractionInput(
+            extraction_method="agent",
+            agent_json=spec,
+            credential_guid="real-guid",
+        )
+        ref = CredentialRef.resolve_or_none(inp)
+        assert ref is not None
+        assert ref.credential_guid == "real-guid"
+        assert ref.agent_spec is None
+
     def test_resolve_direct_with_guid(self):
         inp = ExtractionInput(
             extraction_method="direct",
