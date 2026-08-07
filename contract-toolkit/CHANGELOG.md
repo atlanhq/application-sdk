@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.20.0] - 2026-08-07
+
+### Features
+
+- worker-side sdr:* workflows (typed contracts) for heracles-native dispatch (#2914) ([b3059cd](https://github.com/atlanhq/application-sdk/commit/b3059cd))
+
 ## [0.19.2] - 2026-07-31
 
 ### Bug fixes
