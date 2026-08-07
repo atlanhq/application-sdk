@@ -412,7 +412,9 @@ def test_relationships_in_attributes_survive_deserialization():
 
     asset = assets_module._deserialize(json.dumps(connector).encode())
 
-    assert asset.table is not None
+    # Absent relationships decode to msgspec.UNSET, not None — name the real
+    # sentinel or a regression to UNSET slips past this assertion.
+    assert asset.table is not msgspec.UNSET
     assert asset.table.qualified_name.endswith("/alibaba_flags")
     assert validate_asset(asset) == []
 
@@ -426,7 +428,7 @@ def test_relationships_in_relationship_attributes_still_work():
 
     asset = assets_module._deserialize(json.dumps(nested).encode())
 
-    assert asset.table is not None
+    assert asset.table is not msgspec.UNSET
     assert validate_asset(asset) == []
 
 
@@ -535,15 +537,30 @@ PROD_RELATIONSHIP_SIGNATURES = [
 
 
 def _related_class(cls: type, field_name: str) -> type:
-    """The concrete Related* struct a relationship field accepts."""
+    """The concrete Related* struct a relationship field accepts.
+
+    Recurses through the annotation so ``Optional[list[RelatedX]]`` resolves to
+    ``RelatedX``, not ``list`` — scalar unions are all the matrix carries today,
+    but a list-typed relationship would silently resolve wrong without this.
+    """
     import typing
+
+    def _first_concrete(annotation) -> type | None:
+        for arg in typing.get_args(annotation):
+            if arg is type(None) or arg is msgspec.UnsetType:
+                continue
+            if isinstance(arg, type):
+                return arg
+            nested = _first_concrete(arg)
+            if nested is not None:
+                return nested
+        return None
 
     for f in msgspec.structs.fields(cls):
         if f.name == field_name:
-            for arg in typing.get_args(f.type):
-                if arg is type(None) or arg is msgspec.UnsetType:
-                    continue
-                return arg
+            resolved = f.type if isinstance(f.type, type) else _first_concrete(f.type)
+            if resolved is not None:
+                return resolved
     raise AssertionError(f"{cls.__name__} has no relationship field {field_name!r}")
 
 

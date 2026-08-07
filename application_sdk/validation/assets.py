@@ -291,6 +291,11 @@ def _deserialize(raw: bytes) -> Asset:
     create-time parent check. Fleet-wide that read as ~98% of assets invalid
     when nothing was actually wrong with them.
 
+    The transformed-output schema is a cross-repo contract this repo consumes
+    but does not own. Follow-up: FND-119 tracks documenting it explicitly (and
+    adding a contract-level fixture) so a producer-side format change fails
+    loudly here instead of drifting silently.
+
     ``from_atlas_json`` accepts both shapes, so this is a widening, not a swap:
     payloads that already carry relationships under ``relationshipAttributes``
     decode exactly as before. It also resolves the concrete type itself, which
