@@ -1917,3 +1917,95 @@ class TestIsAzureContainerNotFound:
             pytest.raises(StorageConfigError, match="pre-create the container"),
         ):
             await upload_file("key/data.json", src, store=store)
+
+
+class TestUploadPartSizeConfiguration:
+    """Part size and concurrency are deployment-tunable (DISTR-899).
+
+    A destination that emulates multipart with GCS ``compose`` pays one
+    sequential round trip per part while sending no response bytes, so part
+    *count* — not part size — decides whether an upload outruns a gateway idle
+    timeout.  Deployments behind such a proxy need to raise the part size
+    without a code change.
+    """
+
+    async def test_default_part_size_comes_from_constant(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_BYTES",
+            32 * 1024 * 1024,
+        )
+        f = tmp_path / "a.bin"
+        f.write_bytes(b"x" * 1024)
+
+        with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
+            writer.return_value.__aenter__ = AsyncMock()
+            writer.return_value.__aexit__ = AsyncMock(return_value=False)
+            await upload_file("k", f, store, normalize=False)
+
+        assert writer.call_args.kwargs["buffer_size"] == 32 * 1024 * 1024
+
+    async def test_env_overrides_an_explicit_chunk_size(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        """The operator outranks the caller: an app cannot know which tenant
+        it lands on, so it must not pin a size the operator cannot correct."""
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_BYTES",
+            32 * 1024 * 1024,
+        )
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN", True
+        )
+        f = tmp_path / "b.bin"
+        f.write_bytes(b"x" * 1024)
+
+        with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
+            writer.return_value.__aenter__ = AsyncMock()
+            writer.return_value.__aexit__ = AsyncMock(return_value=False)
+            await upload_file(
+                "k", f, store, chunk_size=5 * 1024 * 1024, normalize=False
+            )
+
+        assert writer.call_args.kwargs["buffer_size"] == 32 * 1024 * 1024
+
+    async def test_explicit_chunk_size_used_when_env_unset(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        """With no deployment override, calling code still chooses."""
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN", False
+        )
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_BYTES",
+            32 * 1024 * 1024,
+        )
+        f = tmp_path / "b.bin"
+        f.write_bytes(b"x" * 1024)
+
+        with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
+            writer.return_value.__aenter__ = AsyncMock()
+            writer.return_value.__aexit__ = AsyncMock(return_value=False)
+            await upload_file(
+                "k", f, store, chunk_size=5 * 1024 * 1024, normalize=False
+            )
+
+        assert writer.call_args.kwargs["buffer_size"] == 5 * 1024 * 1024
+
+    async def test_max_concurrency_is_passed_through(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        """Peak memory is part_size * max_concurrency, so both must be tunable."""
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_MAX_CONCURRENCY", 4
+        )
+        f = tmp_path / "c.bin"
+        f.write_bytes(b"x" * 1024)
+
+        with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
+            writer.return_value.__aenter__ = AsyncMock()
+            writer.return_value.__aexit__ = AsyncMock(return_value=False)
+            await upload_file("k", f, store, normalize=False)
+
+        assert writer.call_args.kwargs["max_concurrency"] == 4
