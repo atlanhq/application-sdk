@@ -259,6 +259,21 @@ on:
           otherwise fails (or wastes minutes) during `uv sync`.  Leave false
           for connectors that genuinely need their LFS content at test time
           (the same reason build-and-publish takes an explicit `lfs` input).
+      apt-packages:
+        required: false
+        type: string
+        default: ""
+        description: |
+          Space-separated Ubuntu packages apt-installed in the Unit,
+          Integration and e2e jobs BEFORE dependency sync.  For connectors
+          whose Python dependencies build a native extension the runner image
+          lacks headers for — hive's pykerberos ships only an sdist and needs
+          libkrb5-dev for gssapi/gssapi.h, so its `uv sync` fails on a cold
+          cache in every tier (FND-110).  The retired bespoke workflows ran
+          their own apt-get step for this; a reusable-workflow caller cannot
+          inject steps, hence this input.  The e2e IMAGE build is not covered:
+          the connector's Dockerfile owns its own system deps.  Empty (the
+          default) skips the step entirely.
       container-health-timeout-seconds:
         required: false
         type: string
@@ -400,6 +415,18 @@ jobs:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
+
+      # Must precede the deps action's `uv sync`: a native sdist build (hive's
+      # pykerberos → gssapi/gssapi.h) fails during sync, not at test time.
+      # Routed through env, never interpolated into the script
+      # (docs/standards/ci.md).
+      - name: Install system packages (apt-packages)
+        if: inputs.apt-packages != ''
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
       # The flag promises a token. With ORG_PAT_GITHUB absent, GIT_TOKEN expands
       # empty and the rewrite below would still install a global redirect of
@@ -579,6 +606,15 @@ jobs:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
+
+      # See the unit job: must precede the deps action's `uv sync`.
+      - name: Install system packages (apt-packages)
+        if: inputs.apt-packages != ''
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
       # See the unit job for why this gates on the token, not just the flag.
       - name: Require ORG_PAT_GITHUB when private-git-deps is set
@@ -1241,6 +1277,18 @@ jobs:
         if: inputs.distinct-id != ''
         shell: bash
         run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
+
+      # See the unit job: the sdr-e2e action runs `uv sync` on the RUNNER as
+      # well as in the image, so a native sdist build needs its headers here
+      # too. The IMAGE build is not covered — the Dockerfile owns its own
+      # system deps.
+      - name: Install system packages (apt-packages)
+        if: inputs.apt-packages != ''
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
