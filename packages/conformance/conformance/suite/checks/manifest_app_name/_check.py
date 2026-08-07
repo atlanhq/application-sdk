@@ -1,16 +1,28 @@
 """K013 ManifestNodeAppNameMisattributed — check implementation.
 
-Reads every committed generated ``manifest.json`` and flags a DAG node that
-declares a toolkit-owned ``workflow_type`` while still carrying the raw
-``DAGNode`` ``app_name`` default, ``"automation-engine"``.
+Reads every committed generated ``manifest.json`` and flags a DAG node whose
+declared ``app_name`` disagrees with the app that actually runs it.
 
-Automation Engine never runs these workflows itself — ``QueryIntelligenceWorkflow``
-runs on the QI worker, ``PublishWorkflow`` on publish-app, and so on. So the
-pairing is never legitimate: it means the contract hand-wrote a ``DAGNode``
-instead of using the matching built-in node class (``QueryIntelligenceNode``,
-``PublishNode``, …), inherited the AE default, and now files that node's logs,
-metrics and failures under ``automation-engine`` rather than the app that
-actually ran them (CNCT-24).
+``app_name`` is the identity a node's logs are *written* under and *read back*
+by. A wrong value therefore does not merely mislabel the step — the logs become
+unreachable ("No error logs available for this pod" in the Workflow Center even
+though logging worked) and failures are attributed to the wrong app (CNCT-24,
+CNCT-129).
+
+Two independent signals establish which app owns a node, so a contract that gets
+it wrong is caught whichever way it got there:
+
+* **workflow_type** — Automation Engine hosts none of the toolkit-owned
+  workflows, so ``QueryIntelligenceWorkflow`` + ``automation-engine`` is drift by
+  construction: the contract hand-wrote a raw ``DAGNode`` instead of the matching
+  node class and inherited the default.
+* **task_queue** — a queue of the form ``atlan-<system-app>-…`` says which worker
+  polls the node, and so which app runs it, regardless of workflow type.
+
+The rule reports **log identity only**. It never asks for a ``task_queue``
+change: the queue is the routing decision and is generally the correct thing in
+these manifests — it is precisely because routing was right that the
+misattribution went unnoticed.
 
 Because the manifest is a ``pkl eval`` output and JSON carries no comment
 syntax, there is nowhere to write a suppression directive — as with K009, the
@@ -32,9 +44,8 @@ _RULE_ID = "K013"
 _AE_DEFAULT_APP_NAME = "automation-engine"
 
 # Workflow types the contract-toolkit owns, mapped to the app that runs them.
-# Mirrors ``builtinWorkflowAppNames`` in ``contract-toolkit/src/App.pkl``; the
-# toolkit resolves this at render time, so a manifest still pairing one of these
-# with the AE default was generated before that fix (or by a hand-edit).
+# Automation Engine hosts none of these — each has its own worker — so pairing
+# one with the AE default is always drift, never configuration.
 _BUILTIN_WORKFLOW_APP_NAMES = {
     "QueryIntelligenceWorkflow": "query-intelligence",
     "PublishWorkflow": "publish",
@@ -42,6 +53,26 @@ _BUILTIN_WORKFLOW_APP_NAMES = {
     "PopularityWorkflow": "popularity",
     "NotificationWorkflow": "notification-app",
 }
+
+# Apps whose task queues are recognisable by name. A queue of the form
+# ``atlan-<app>-<suffix>`` for one of these says which worker polls the node,
+# and therefore which app runs it — independent of ``workflow_type``.
+#
+# Restricted to this closed set on purpose: the suffix is not parseable in
+# general (``-production`` vs ``-{deployment_name}`` vs a tenant name), so the
+# check anchors on the *app* segment against known values rather than trying to
+# interpret what follows it.
+_SYSTEM_APP_QUEUE_OWNERS = frozenset(
+    {
+        "query-intelligence",
+        "publish",
+        "lineage",
+        "popularity",
+        "notification-app",
+    }
+)
+
+_QUEUE_RE = re.compile(r"^atlan-(?P<app>.+?)-[^-]+$")
 
 # The built-in node class an author should use instead of a raw ``DAGNode``.
 _BUILTIN_NODE_CLASSES = {
@@ -102,6 +133,60 @@ def _node_workflow_type(node: dict[str, Any]) -> str | None:
     return workflow_type if isinstance(workflow_type, str) else None
 
 
+def _queue_owner(node: dict[str, Any]) -> str | None:
+    """The system app whose queue this node dispatches to, if recognisable.
+
+    Returns ``None`` for a connector's own queue or any queue whose app segment
+    is not a known system app — those say nothing about which app should own the
+    node's log identity.
+    """
+    inputs = node.get("inputs")
+    if not isinstance(inputs, dict):
+        return None
+    task_queue = inputs.get("task_queue")
+    if not isinstance(task_queue, str):
+        return None
+    match = _QUEUE_RE.match(task_queue)
+    if match is None:
+        return None
+    app = match.group("app")
+    return app if app in _SYSTEM_APP_QUEUE_OWNERS else None
+
+
+def _expected_app(node: dict[str, Any], declared: str) -> tuple[str, str] | None:
+    """Which app should own this node, and the evidence for it.
+
+    Two independent signals, checked in order of strength:
+
+    1. **workflow_type** — a toolkit-owned workflow names its app exactly. Only
+       reported when the node still carries the raw ``DAGNode`` default, since
+       an author who set some *other* value may be routing to a bespoke worker
+       and that is their call to make.
+    2. **task_queue** — a queue of the form ``atlan-<system-app>-…`` says which
+       worker polls the node, so a disagreeing ``app_name`` is misattributed
+       whatever the workflow type is. This catches a node whose workflow type
+       the toolkit does not own but whose queue is unambiguous.
+
+    Returns ``(expected_app, evidence)``, or ``None`` when the node is
+    consistent or nothing can be concluded about it.
+    """
+    workflow_type = _node_workflow_type(node)
+    if (
+        workflow_type in _BUILTIN_WORKFLOW_APP_NAMES
+        and declared == _AE_DEFAULT_APP_NAME
+    ):
+        expected = _BUILTIN_WORKFLOW_APP_NAMES[workflow_type]
+        return expected, f"runs '{workflow_type}'"
+
+    owner = _queue_owner(node)
+    if owner is not None and owner != declared:
+        inputs = node.get("inputs")
+        task_queue = inputs.get("task_queue") if isinstance(inputs, dict) else ""
+        return owner, f"dispatches to '{task_queue}'"
+
+    return None
+
+
 def _app_name_line(text: str, node_id: str) -> int:
     """Best-effort line number of the offending node's first ``app_name`` key.
 
@@ -152,14 +237,24 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:  # noqa: ARG001
         for node_id, node in dag.items():
             if not isinstance(node, dict):
                 continue
-            workflow_type = _node_workflow_type(node)
-            if workflow_type not in _BUILTIN_WORKFLOW_APP_NAMES:
-                continue
-            if _node_app_name(node) != _AE_DEFAULT_APP_NAME:
+            declared = _node_app_name(node)
+            if declared is None:
                 continue
 
-            expected = _BUILTIN_WORKFLOW_APP_NAMES[workflow_type]
-            node_class = _BUILTIN_NODE_CLASSES[workflow_type]
+            verdict = _expected_app(node, declared)
+            if verdict is None:
+                continue
+            expected, evidence = verdict
+
+            workflow_type = _node_workflow_type(node)
+            node_class = _BUILTIN_NODE_CLASSES.get(workflow_type or "")
+            remedy = (
+                f"Replace it with the built-in '{node_class}' in "
+                f"'contract/app.pkl' (which sets appName and taskQueue together), "
+                f'or set appName = "{expected}" on the node'
+                if node_class is not None
+                else f"Set appName = \"{expected}\" on the node in 'contract/app.pkl'"
+            )
             findings.append(
                 Finding(
                     rule_id=_RULE_ID,
@@ -167,24 +262,19 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:  # noqa: ARG001
                     line=_app_name_line(text, node_id),
                     column=1,
                     message=(
-                        f"DAG node '{node_id}' in '{rel}' runs "
-                        f"'{workflow_type}' but declares "
-                        f"app_name '{_AE_DEFAULT_APP_NAME}'. Automation Engine does "
-                        f"not run that workflow — '{expected}' does — so this node's "
-                        f"logs, metrics and failures are filed under Automation "
-                        f"Engine instead of the app that ran them, and the tenant's "
-                        f"Workflow Center shows no logs for the step. The node was "
-                        f"hand-written as a raw 'DAGNode', inheriting its "
-                        f"'{_AE_DEFAULT_APP_NAME}' default. Replace it with the "
-                        f"built-in '{node_class}' in 'contract/app.pkl' (which sets "
-                        f"both appName and taskQueue), or set "
-                        f'appName = "{expected}" on the node, then regenerate with '
-                        f"'pkl eval -m . contract/app.pkl'. Upgrading "
-                        f"app-contract-toolkit also corrects a defaulted appName at "
-                        f"render time. Never hand-edit the generated manifest — "
-                        f"it is a pkl eval output, and being JSON it carries no "
-                        f"comment syntax to suppress this finding on. Fix the "
-                        f"contract and regenerate."
+                        f"DAG node '{node_id}' in '{rel}' {evidence}, so "
+                        f"'{expected}' runs it — but it declares app_name "
+                        f"'{declared}'. app_name is the identity this node's logs "
+                        f"are written under and read back by, so the mismatch does "
+                        f"not merely mislabel the step: its logs become unreachable "
+                        f"in the Workflow Center ('No error logs available for this "
+                        f"pod') and its failures are attributed to the wrong app. "
+                        f"{remedy}, then regenerate with 'pkl eval -m . "
+                        f"contract/app.pkl'. Change app_name only — task_queue is "
+                        f"the routing decision and is already correct. Never "
+                        f"hand-edit the generated manifest: it is a pkl eval "
+                        f"output, and being JSON it carries no comment syntax to "
+                        f"suppress this finding on."
                     ),
                     snippet=None,
                     suppressed=False,

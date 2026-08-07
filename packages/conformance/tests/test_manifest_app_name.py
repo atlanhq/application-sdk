@@ -204,6 +204,151 @@ def test_app_name_only_inside_inputs_args_is_still_flagged(tmp_path: Path) -> No
 
 
 # ---------------------------------------------------------------------------
+# Signal 2 — the task queue names the owning system app
+# ---------------------------------------------------------------------------
+
+
+def test_system_app_queue_disagreeing_with_app_name_is_flagged(
+    tmp_path: Path,
+) -> None:
+    """A queue naming a system app contradicts a different ``app_name``.
+
+    Independent of ``workflow_type`` — this node's type is the connector's own,
+    so signal 1 says nothing about it.
+    """
+    _write_manifest(
+        tmp_path,
+        "app/generated/manifest.json",
+        {
+            "qi": _node(
+                "someconnector:parse",
+                "someconnector",
+                task_queue="atlan-query-intelligence-production",
+            )
+        },
+    )
+
+    findings = _run(tmp_path)
+
+    assert len(findings) == 1
+    message = findings[0].message
+    assert "query-intelligence" in message
+    assert "atlan-query-intelligence-production" in message
+    # Log identity only — the rule must never ask for a routing change.
+    assert "task_queue is the routing decision" in message
+
+
+def test_deployment_name_placeholder_suffix_is_not_interpreted(
+    tmp_path: Path,
+) -> None:
+    """The app segment is matched; the suffix may be a template or an env word."""
+    _write_manifest(
+        tmp_path,
+        "app/generated/manifest.json",
+        {
+            "publish": _node(
+                "someconnector:publish",
+                "someconnector",
+                task_queue="atlan-publish-{deployment_name}",
+            )
+        },
+    )
+
+    findings = _run(tmp_path)
+
+    assert len(findings) == 1
+    assert "publish" in findings[0].message
+
+
+def test_connector_own_queue_is_never_flagged(tmp_path: Path) -> None:
+    """A connector's own queue says nothing about system-app ownership."""
+    _write_manifest(
+        tmp_path,
+        "app/generated/manifest.json",
+        {
+            "process": _node(
+                "domo-app:process-metadata",
+                "domo",
+                task_queue="atlan-domo-{deployment_name}",
+            )
+        },
+    )
+
+    assert _run(tmp_path) == []
+
+
+def test_queue_agreeing_with_app_name_is_clean(tmp_path: Path) -> None:
+    """The correct shape a built-in node class renders."""
+    _write_manifest(
+        tmp_path,
+        "app/generated/manifest.json",
+        {
+            "qi": _node(
+                "QueryIntelligenceWorkflow",
+                "query-intelligence",
+                task_queue="atlan-query-intelligence-{deployment_name}",
+            )
+        },
+    )
+
+    assert _run(tmp_path) == []
+
+
+def test_unparseable_queue_is_skipped(tmp_path: Path) -> None:
+    """A queue that does not match the atlan-<app>-<suffix> shape concludes nothing."""
+    _write_manifest(
+        tmp_path,
+        "app/generated/manifest.json",
+        {"custom": _node("some:workflow", "someconnector", task_queue="my-own-queue")},
+    )
+
+    assert _run(tmp_path) == []
+
+
+def test_explicit_non_default_app_name_on_builtin_workflow_is_left_alone(
+    tmp_path: Path,
+) -> None:
+    """Signal 1 fires only on the AE default; a bespoke worker is the author's call.
+
+    Guards against the rule creeping into overriding deliberate author intent —
+    the reason this is a detection rule and not a generation-time rewrite.
+    """
+    _write_manifest(
+        tmp_path,
+        "app/generated/manifest.json",
+        {
+            "qi": _node(
+                "QueryIntelligenceWorkflow",
+                "custom-qi-worker",
+                task_queue="atlan-custom-qi-worker-{deployment_name}",
+            )
+        },
+    )
+
+    assert _run(tmp_path) == []
+
+
+def test_one_finding_per_node_when_both_signals_agree(tmp_path: Path) -> None:
+    """The real-world shape: both signals point at the same app. Report once."""
+    _write_manifest(
+        tmp_path,
+        "app/generated/manifest.json",
+        {
+            "qi": _node(
+                "QueryIntelligenceWorkflow",
+                "automation-engine",
+                task_queue="atlan-query-intelligence-production",
+            )
+        },
+    )
+
+    findings = _run(tmp_path)
+
+    assert len(findings) == 1
+    assert "query-intelligence" in findings[0].message
+
+
+# ---------------------------------------------------------------------------
 # Negative cases — no finding
 # ---------------------------------------------------------------------------
 

@@ -525,42 +525,59 @@ published through the marketplace pipeline.
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.18.0
 
-> Generated manifest DAG node runs a toolkit-owned workflow but is attributed to 'automation-engine'
+> Generated manifest DAG node declares an app_name that disagrees with the app its workflow type or task queue says runs it
 
 **Rationale:** A DAG node's app_name is the identity its logs, metrics and failures are filed under:
 the SDK tags log records with it and the tenant's Workflow Center reads them back by it,
-so a wrong value makes the step's logs unreachable rather than merely mislabelled.
-Automation Engine does not itself run QueryIntelligenceWorkflow, PublishWorkflow,
-LineageWorkflow, PopularityWorkflow or NotificationWorkflow -- each runs on its own
-worker -- so pairing one of those workflow types with app_name 'automation-engine' is
-never a legitimate configuration. It is the signature of a contract that hand-wrote a
-raw DAGNode instead of using the matching built-in node class and silently inherited the
-AE default, which is how QI and lineage steps across the connector fleet came to report
-their failures as Automation Engine (CNCT-24). Because the pairing is impossible rather
-than merely suspect, the check has no false positives; it lands as WARN only so apps
-generated before the toolkit-side fix are not blocked before they regenerate.
+so a wrong value makes the step's logs unreachable rather than merely mislabelled -- the
+step shows 'No error logs available for this pod' even though logging worked. Nothing
+else catches it, because the node still runs correctly: task_queue governs dispatch, so
+a misattributed node executes in the right place and only its telemetry goes to the
+wrong app. That is why the drift survived across the connector fleet unnoticed (CNCT-24,
+CNCT-129). Two signals establish the owning app independently. Automation Engine hosts
+none of the toolkit-owned workflows, so QueryIntelligenceWorkflow paired with app_name
+'automation-engine' is impossible rather than merely suspect -- the signature of a
+contract that hand-wrote a raw DAGNode instead of the matching node class and inherited
+the default. Separately, a task queue naming a known system app says which worker polls
+the node whatever its workflow type. Both are exact-match checks against closed sets, so
+neither guesses.
 
-A node in a committed generated `manifest.json` declares an `inputs.workflow_type` the
-contract-toolkit owns while its `app_name` is still the raw `DAGNode` default,
-`automation-engine`:
+A node in a committed generated `manifest.json` declares an `app_name` that disagrees
+with the app actually running it. Two independent signals are checked, each against a
+closed set:
+
+**1. The workflow type.** Automation Engine hosts none of the toolkit-owned workflows --
+each has its own worker:
 
     QueryIntelligenceWorkflow -> query-intelligence     PublishWorkflow           ->
 publish     LineageWorkflow           -> lineage     PopularityWorkflow        ->
 popularity     NotificationWorkflow      -> notification-app
 
-The node runs on the worker named on the right, but reports itself as Automation Engine.
-Its logs are written under one identity and read back under another, so the step shows
-`No error logs available for this pod` in the Workflow Center even though logging
-worked, and failure attribution points at the wrong app.
+One of these paired with `app_name: automation-engine` is drift by construction: the
+contract hand-wrote a raw `DAGNode` instead of the matching node class and inherited the
+default. An `app_name` set to some *other* value is left alone -- that may be a bespoke
+worker, which is the author's call.
 
-**Fix:** in `contract/app.pkl`, replace the hand-written `DAGNode` with the matching
-built-in node class -- `QueryIntelligenceNode`, `PublishNode`, `LineageNode`,
-`PopularityNode`, `NotificationNode` -- which sets both `appName` and `taskQueue`
-consistently. When the node must stay a raw `DAGNode` (e.g. it targets a pinned task
-queue), set `appName` explicitly to the app that runs it. Then regenerate with `pkl eval
--m . contract/app.pkl`. Bumping `app-contract-toolkit` also resolves a *defaulted*
-`appName` at render time, so a plain toolkit upgrade plus regeneration clears the
-finding.
+**2. The task queue.** A queue of the form `atlan-<system-app>-...` names the worker
+that polls the node, and so the app that runs it, whatever its workflow type. A
+disagreeing `app_name` is misattributed. Only the *app* segment is matched, against the
+known system apps -- the suffix (`-production`, `-{deployment_name}`, a tenant name) is
+not interpreted.
+
+Why nothing else catches it: `task_queue` governs dispatch, so a misattributed node
+still executes in the right place. Only its telemetry goes astray -- the logs are
+written under one identity and read back under another, so the step shows `No error logs
+available for this pod` even though logging worked.
+
+**Fix:** in `contract/app.pkl`, either replace the hand-written `DAGNode` with the
+matching built-in node class (`QueryIntelligenceNode`, `PublishNode`, `LineageNode`,
+`PopularityNode`, `NotificationNode`), which sets `appName` and `taskQueue` together, or
+set `appName` explicitly to the app named in the finding. Then regenerate with `pkl eval
+-m . contract/app.pkl`.
+
+**Change `appName` only.** The rule never asks for a `taskQueue` change: the queue is
+the routing decision, and in these manifests it is generally already right. Rewriting it
+would move where the node runs.
 
 **No suppression is available.** The finding is anchored on a generated `.json`
 artifact, which has no comment syntax to carry a directive -- as with K009, the only

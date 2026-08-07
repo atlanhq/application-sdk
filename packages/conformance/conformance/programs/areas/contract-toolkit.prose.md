@@ -452,12 +452,11 @@ finding**.  `classification = "mechanical"`; **does not require `pkl`** (it is a
 ---
 
 **K013 ManifestNodeAppNameMisattributed** — a DAG node in a committed generated
-`manifest.json` declares a toolkit-owned `workflow_type`
-(`QueryIntelligenceWorkflow`, `PublishWorkflow`, `LineageWorkflow`,
-`PopularityWorkflow`, `NotificationWorkflow`) while its `app_name` is still the
-raw `DAGNode` default `automation-engine`.  Automation Engine does not run those
-workflows, so the node's logs are written under one identity and read back under
-another and the step shows no logs in the Workflow Center (CNCT-24).
+`manifest.json` declares an `app_name` that disagrees with the app running it,
+established by either its toolkit-owned `workflow_type` (paired with the raw
+`DAGNode` default `automation-engine`) or a `task_queue` naming a known system
+app.  The node's logs are written under one identity and read back under another,
+so the step shows no logs in the Workflow Center (CNCT-24).
 `classification = "judgment"` — choosing between the built-in node class and an
 explicit `appName` depends on why the node was hand-written — and it **requires
 `pkl`**, since the finding only clears once the contract is regenerated.
@@ -487,11 +486,11 @@ carries no comment syntax, so a legitimate exception must be routed to residue.
    after step 4, so a rejected fix reverts the contract *and* every regenerated
    artifact (same determinism argument as K003 step 4).
 
-Bumping `app-contract-toolkit` to a version that resolves a defaulted `appName`
-at render time and regenerating also clears the finding, and is the right fix when
-several nodes across the fleet drifted the same way — but it does not correct a
-node whose wrong `appName` was set explicitly.  If `pkl` is unavailable, route to
-residue with a note to regenerate locally; never hand-edit `manifest.json`.
+There is no toolkit-side fix to fall back on: the toolkit renders what the
+contract declares, deliberately — silently correcting an author-set `appName`
+would make the contract text stop matching its generated output.  The contract is
+the only place this is fixable.  If `pkl` is unavailable, route to residue with a
+note to regenerate locally; never hand-edit `manifest.json`.
 
 ---
 

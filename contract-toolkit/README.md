@@ -160,16 +160,7 @@ SDK stamps on that node's logs (CNCT-93; metric labels stay connector-level).
 set it at contract time via `name` or `DAGNode.appName`, never as a form field. A
 `uiConfig` property named `app_name` (or `app-name`) is a **generation error**, because
 the extract node bakes the contract `name` so failure logs stay attributable — a
-tenant-typed value would render a widget that reaches nothing.
-
-Two `appName` values are corrected at render time, since neither can be what the
-author meant: a toolkit-owned `workflowType` (`QueryIntelligenceWorkflow`,
-`PublishWorkflow`, `LineageWorkflow`, `PopularityWorkflow`,
-`NotificationWorkflow`) left at `DAGNode`'s `"automation-engine"` default resolves
-to the app that actually runs it, and the dead `"{app_name}"` scaffold token
-resolves to the contract `name`. An explicitly-set `appName` and any pinned
-`taskQueue` are always emitted verbatim. Prefer the matching built-in node class
-over relying on the correction. See
+tenant-typed value would render a widget that reaches nothing. See
 [`docs/reference.md`](docs/reference.md) → *Per-node `app_name` in `inputs.args`*.
 
 ### `_input.py` (`app/generated/_input.py`)
