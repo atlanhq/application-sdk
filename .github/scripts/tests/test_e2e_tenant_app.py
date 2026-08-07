@@ -1437,6 +1437,65 @@ def test_our_own_image_failing_is_never_foreign() -> None:
     )
 
 
+_DIGEST = "sha256:" + "a1" * 32
+
+
+def test_our_image_failing_by_digest_is_never_foreign() -> None:
+    """Kubelet can report the failure pinned while --image arrives as a tag.
+
+    Exact string equality reads that as foreign — the one misread this override
+    must never make, since it turns a broken install of OUR image green.
+    """
+    repo = _IMAGE.rpartition(":")[0]
+    for pinned in (f"{repo}@{_DIGEST}", f"{_IMAGE}@{_DIGEST}"):
+        events = f'Failed to pull image "{pinned}": manifest unknown'
+        assert app.foreign_failure(events, _IMAGE) == []
+
+
+def test_our_image_failing_by_tag_is_never_foreign_when_we_pass_a_digest() -> None:
+    """The same ambiguity, mirrored: we hand over a digest, kubelet names the tag."""
+    repo, _, tag = _IMAGE.rpartition(":")
+    ours = f"{repo}@{_DIGEST}"
+    events = f'Back-off pulling image "{repo}:{tag}"'
+    assert app.foreign_failure(events, ours) == []
+
+
+def test_a_mix_of_our_digest_and_an_orphan_is_never_foreign() -> None:
+    """One ambiguous own failure keeps the whole verdict ours, orphans or not."""
+    repo = _IMAGE.rpartition(":")[0]
+    events = (
+        f'Back-off pulling image "{_ORPHAN}"\n'
+        f'Failed to pull image "{repo}@{_DIGEST}": manifest unknown'
+    )
+    assert app.foreign_failure(events, _IMAGE) == []
+
+
+def test_another_tag_of_our_own_repository_is_foreign() -> None:
+    """The override's whole point is distinguishing tags of the SAME repository."""
+    other_tag = _IMAGE.rpartition(":")[0] + ":sdr-test-older999"
+    events = f'Back-off pulling image "{other_tag}"'
+    assert app.foreign_failure(events, _IMAGE) == [other_tag]
+
+
+def test_image_repository_identity() -> None:
+    repo = _IMAGE.rpartition(":")[0]
+    assert app._image_repository(_IMAGE) == repo
+    assert app._image_repository(f"{repo}@{_DIGEST}") == repo
+    assert app._image_repository(f"{_IMAGE}@{_DIGEST}") == repo
+    # An untagged reference must not lose its final segment to the tag rule.
+    assert app._image_repository(repo) == repo
+
+
+def test_image_tag_extraction() -> None:
+    repo, _, tag = _IMAGE.rpartition(":")
+    assert app._image_tag(_IMAGE) == tag
+    assert app._image_tag(f"{_IMAGE}@{_DIGEST}") == tag
+    # A colon-free or digest-only reference has NO tag — rpartition on one hands
+    # back the whole string, which must not be read as a tag.
+    assert app._image_tag(repo) == ""
+    assert app._image_tag(f"{repo}@{_DIGEST}") == ""
+
+
 def test_a_mix_of_ours_and_an_orphan_is_never_foreign() -> None:
     events = (
         f'Back-off pulling image "{_ORPHAN}"\n'
@@ -1483,7 +1542,10 @@ def test_an_orphan_failure_passes_when_the_readback_agrees(
     outcome = app.install(_install_args())
     assert outcome.installed_version == _VERSION
     out = capsys.readouterr().out
-    assert "::warning::" in out and _ORPHAN in out
+    # The orphan must be named on the WARNING line itself: `_ORPHAN` also shows
+    # up in the echoed diagnostic events, so a whole-output `in` check passes
+    # even if the ::warning:: never mentioned the foreign image.
+    assert any("::warning::" in line and _ORPHAN in line for line in out.splitlines())
     assert "cleaned up" in out, (
         "a tolerated orphan must still be reported — it fails this check on "
         "every future install until someone deletes it"

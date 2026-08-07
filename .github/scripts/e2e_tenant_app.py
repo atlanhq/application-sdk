@@ -189,6 +189,10 @@ _PULL_FAILURE_MARKERS = (
 #: An image reference in kubelet's quoted form, e.g. `pulling image "ghcr.io/x:y"`.
 _QUOTED_IMAGE_RE = re.compile(r'"([^"\s]+/[^"\s]+)"')
 
+#: A pinned image reference is the same reference with ``@sha256:…`` in place of
+#: the tag: `repo:tag@sha256:…`. Kubelet can report a pull failure in that form.
+_PINNED_IMAGE_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+
 
 class TenantAppError(RuntimeError):
     """The install or verification failed."""
@@ -885,23 +889,62 @@ def failing_images(diagnostics: str) -> list[str]:
     return found
 
 
+def _image_repository(reference: str) -> str:
+    """Return the part of an image reference before any ``@digest`` or ``:tag``.
+
+    Two references in the same repository are the same image at different
+    resolutions. ``reference.split("@")[0].rsplit(":", 1)[0]`` cannot express
+    that: an UNtagged reference ends in a colon-free final segment, and rsplit
+    would mistake that segment for a tag and cut it off — the safe direction of
+    a misread here is treating too MUCH as the same image, never less, so the
+    last colon only counts when a tag follows it.
+    """
+    reference = reference.strip().split("@", 1)[0]
+    head, sep, tag = reference.rpartition(":")
+    return head if sep and tag else reference
+
+
+def _image_tag(reference: str) -> str:
+    """Return the tag of an image reference, or "" when it carries none.
+
+    Digest-free first: ``repo:tag@sha256:…`` and ``repo@sha256:…`` both lose the
+    digest so only the ``repo[:tag]`` form is left. Then the last colon counts
+    only when a tag follows it — on a colon-free reference ``rpartition`` hands
+    back the whole string, which would read the repository AS the tag.
+    """
+    reference = _PINNED_IMAGE_RE.sub("", reference.strip())
+    head, sep, tag = reference.rpartition(":")
+    return tag if sep and head else ""
+
+
 def foreign_failure(diagnostics: str, image: str) -> list[str]:
     """Return failing images that are NOT *image*, or [] if ours is among them.
 
     An empty list means "do not second-guess LM": either nothing identifiable is
     failing, or our own image is one of the things failing. Only when every
-    failing image belongs to some other version does the caller get to treat the
-    verdict as being about somebody else's pod.
+    failing image is provably a different version does the caller get to treat
+    the verdict as being about somebody else's pod.
 
-    Compared on the full reference including the tag, because the whole point is
-    distinguishing two tags of the SAME repository.
+    Proven-different, not string-different: kubelet can report a pull failure
+    pinned (``…@sha256:…``, optionally with the tag in front) while ``--image``
+    arrives as a tag, and exact-equality reads that failure of OUR image as
+    foreign — the one misread this override must never make. So a failing
+    reference counts as ours whenever it shares our repository and its tag is
+    ours, a digest, or absent; only a different repository, or a resolvably
+    different tag of ours, is foreign.
     """
     failing = failing_images(diagnostics)
     if not failing:
         return []
     ours = image.strip()
-    if any(ref == ours for ref in failing):
-        return []
+    ours_repo = _image_repository(ours)
+    ours_tag = _image_tag(ours)
+    for ref in failing:
+        if _image_repository(ref) != ours_repo:
+            continue  # a different repository: provably somebody else's pod
+        ref_tag = _image_tag(ref)
+        if not ref_tag or not ours_tag or ref_tag == ours_tag:
+            return []  # same repository and tag, digest-pinned, or untagged
     return failing
 
 

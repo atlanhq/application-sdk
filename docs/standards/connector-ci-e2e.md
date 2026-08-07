@@ -179,8 +179,13 @@ designed, while a pod from an earlier attempt sat on a different tag
 `e2e_tenant_app.py install` therefore reads the pod events before accepting the
 verdict:
 
-- If **our** image is among the ones failing to pull, the failure stands.
-- If every failing image belongs to some *other* version, the verdict is not
+- If **our** image is among the ones failing to pull, the failure stands. Kubelet
+  can name an image by digest (`…@sha256:…`, with or without the tag) while
+  `--image` arrives as a tag, so "ours" is decided by repository identity, not
+  string equality: a failing reference in our repository counts as ours unless it
+  carries a resolvably *different* tag, and only a different repository or a
+  different tag of ours is foreign.
+- If every failing image is provably some *other* version, the verdict is not
   evidence about this install — so it falls through to the installed-version
   read-back, which decides. A `::warning::` names the foreign images either way,
   and a `::notice::` says they still need deleting, because they will fail this
