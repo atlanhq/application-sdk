@@ -238,15 +238,30 @@ def test_both_reusables_fall_back_the_same_way() -> None:
     e2e-full-reusable.yaml's without its mechanism — the count guard — and that
     is precisely the bug above. Pinning them together is cheaper than
     rediscovering it on the next live run.
+
+    Parsed, not grepped: `count != '0'` also guards three unrelated job gates
+    in tests-reusable.yaml, so a whole-file text search stays green even if the
+    fan-out matrix itself loses the guard. Asserting on the parsed
+    `strategy.matrix` of each cloud fan-out job binds the drift guard to the
+    expression that actually expands to zero legs.
     """
-    full = (_REPO_ROOT / ".github/workflows/e2e-full-reusable.yaml").read_text(
-        encoding="utf-8"
+    full = yaml.safe_load(
+        (_REPO_ROOT / ".github/workflows/e2e-full-reusable.yaml").read_text(
+            encoding="utf-8"
+        )
     )
-    tests = _WORKFLOW.read_text(encoding="utf-8")
+    tests = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
     fallback = '{"include":[{"cloud":""}]}'
-    for name, text in (("e2e-full-reusable", full), ("tests-reusable", tests)):
-        assert fallback in text, f"{name} no longer carries the single-leg fallback"
-        assert "count != '0'" in text, (
+    fan_outs = (
+        ("e2e-full-reusable", full["jobs"]["e2e-full"]),
+        ("tests-reusable", tests["jobs"]["prepare-tenant"]),
+    )
+    for name, job in fan_outs:
+        matrix = " ".join(job["strategy"]["matrix"].split())
+        assert (
+            fallback in matrix
+        ), f"{name}'s cloud fan-out no longer carries the single-leg fallback"
+        assert "count != '0'" in matrix, (
             f"{name}'s cloud matrix no longer guards on the count. Falling back "
             "on the matrix string alone silently produces a zero-leg job."
         )
