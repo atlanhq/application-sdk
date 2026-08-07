@@ -163,6 +163,35 @@ use the install path, and neither can the single-tenant fallback (which has no
 entry to add the field to); the `E2E Tenant Install` workflow's `tenant_id` input
 covers one-off runs in both cases.
 
+### When the FAILED verdict is about somebody else's pod
+
+LM's deployment health check is **namespace-scoped**: it reports `Pods failed in
+namespace <ns>: <pod>` for any unhealthy pod in the app's namespace, not just the
+ones belonging to the deployment it is reconciling. So a pod orphaned by an earlier
+install — stuck in `ImagePullBackOff` on a tag that no longer resolves, say — fails
+*every* later install to that tenant, however healthy the new version is.
+
+That is not hypothetical: it is how the first successful multi-arch install
+presented. Our pods pulled the image in 12.4s and were scaled to zero by KEDA as
+designed, while a pod from an earlier attempt sat on a different tag
+(`x1048 over 3h59m`) and took the verdict down with it.
+
+`e2e_tenant_app.py install` therefore reads the pod events before accepting the
+verdict:
+
+- If **our** image is among the ones failing to pull, the failure stands.
+- If every failing image belongs to some *other* version, the verdict is not
+  evidence about this install — so it falls through to the installed-version
+  read-back, which decides. A `::warning::` names the foreign images either way,
+  and a `::notice::` says they still need deleting, because they will fail this
+  check on every future install until someone does.
+- If the read-back **disagrees**, it still fails. The override moves the decision
+  to direct evidence; it never skips it.
+
+A timeout is never downgraded this way — an accepted-but-unreconciled deploy is
+nobody else's fault, and it is the silent wrong-version failure this whole
+mechanism exists to remove.
+
 `prepare-tenant` therefore **fails** on an unresolved `tenant_id`, immediately
 after tenant resolution and before it publishes anything — it does not skip the
 install. Skipping would leave the job green having done nothing, the tenant on

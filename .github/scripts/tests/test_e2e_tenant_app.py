@@ -1396,3 +1396,150 @@ def test_a_section_within_budget_is_printed_whole(
 def test_an_empty_section_prints_no_header(capsys: pytest.CaptureFixture[str]) -> None:
     app._print_block("pod_logs", "   \n\n", 10)
     assert capsys.readouterr().out == ""
+
+
+# ── Whose pod is actually failing ────────────────────────────────────────────
+# LM's health check is namespace-scoped: it reports "Pods failed in namespace
+# <ns>: <pod>" for ANY unhealthy pod in the app's namespace, so an orphan left by
+# an earlier version fails every later install to that tenant. Observed on the
+# first green multi-arch install — our pods pulled the image in 12.4s and were
+# scaled to zero by KEDA, while a pod from an earlier attempt sat in
+# ImagePullBackOff on a different tag (x1048 over 3h59m) and took the verdict with
+# it.
+#
+# The direction that matters is the SAFE one: our own image among the failures, or
+# a read-back that disagrees, must still fail. The override is narrow.
+
+_ORPHAN = "ghcr.io/atlanhq/atlan-openapi-app:sdr-test-1c232889"
+_ORPHAN_EVENTS = (
+    f'9s Normal BackOff pod/openapi-d4849884b-7cwdp Back-off pulling image "{_ORPHAN}"\n'
+    f"20s Warning Failed pod/openapi-d4849884b-7cwdp Error: ImagePullBackOff\n"
+    f'75s Normal Pulled pod/openapi-worker-abc Successfully pulled image "{_IMAGE}" in 12.4s'
+)
+
+
+def test_a_successfully_pulled_image_is_not_read_as_failing() -> None:
+    """The inverting mistake: our image appears in the same event stream.
+
+    It is there on a `Successfully pulled` line. Counting that as a failure would
+    make every namespace look like ours is broken, which turns the override off
+    exactly when it is needed.
+    """
+    assert app.failing_images(_ORPHAN_EVENTS) == [_ORPHAN]
+    assert app.foreign_failure(_ORPHAN_EVENTS, _IMAGE) == [_ORPHAN]
+
+
+def test_our_own_image_failing_is_never_foreign() -> None:
+    events = f'Failed to pull image "{_IMAGE}": manifest unknown'
+    assert app.foreign_failure(events, _IMAGE) == [], (
+        "when our own image is among the failures the verdict IS about us, and "
+        "downgrading it would turn a real broken install into a green run"
+    )
+
+
+def test_a_mix_of_ours_and_an_orphan_is_never_foreign() -> None:
+    events = (
+        f'Back-off pulling image "{_ORPHAN}"\n'
+        f'Failed to pull image "{_IMAGE}": manifest unknown'
+    )
+    assert app.foreign_failure(events, _IMAGE) == []
+
+
+def test_unreadable_diagnostics_are_never_foreign() -> None:
+    # Nothing identifiable failing means no evidence to override LM with.
+    for text in ("", "deployment failed", "Pods failed in namespace openapi-app"):
+        assert app.foreign_failure(text, _IMAGE) == []
+
+
+def test_an_orphan_failure_passes_when_the_readback_agrees(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The workaround, and it still rests on direct evidence."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", Response(404, {})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET",
+                    "/deployments/",
+                    _ok(
+                        {
+                            "deployment_status": "FAILED",
+                            "message": "Pods failed in namespace openapi-app: openapi-d4849884b-7cwdp",
+                        }
+                    ),
+                ),
+                StubRoute("GET", "/failure", Response(404, {})),
+                StubRoute("GET", "/events", _ok({"events": _ORPHAN_EVENTS})),
+                # The authority: the tenant really does serve what we installed.
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(404, {}))],
+        ),
+    )
+    outcome = app.install(_install_args())
+    assert outcome.installed_version == _VERSION
+    out = capsys.readouterr().out
+    assert "::warning::" in out and _ORPHAN in out
+    assert "cleaned up" in out, (
+        "a tolerated orphan must still be reported — it fails this check on "
+        "every future install until someone deletes it"
+    )
+
+
+def test_an_orphan_failure_still_fails_when_the_readback_disagrees(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The override moves the decision to the read-back; it does not skip it."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", Response(404, {})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute("GET", "/deployments/", _ok({"deployment_status": "FAILED"})),
+                StubRoute("GET", "/failure", Response(404, {})),
+                StubRoute("GET", "/events", _ok({"events": _ORPHAN_EVENTS})),
+                # Tenant still on the old version: the install did NOT take.
+                StubRoute("GET", "/info", _ok({"version": "older"})),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(404, {}))],
+        ),
+    )
+    with pytest.raises(app.TenantAppError, match="did not take effect"):
+        app.install(_install_args())
+
+
+def test_a_timeout_is_never_downgraded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only LM's FAILED verdict is namespace-scoped. A timeout is our problem.
+
+    `DeploymentFailed` exists to keep these apart: catching the base error here
+    would let an accepted-but-never-reconciled deploy pass whenever the namespace
+    happened to contain an orphan.
+    """
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", Response(404, {})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+            ],
+            sticky=[
+                StubRoute("GET", "/releases/", Response(404, {})),
+                StubRoute("GET", "/failure", Response(404, {})),
+                StubRoute("GET", "/events", _ok({"events": _ORPHAN_EVENTS})),
+            ],
+        ),
+    )
+    with pytest.raises(app.TenantAppError, match="terminal state"):
+        app.install(_install_args(timeout_seconds=0))
+
+
+def test_deployment_failed_is_a_tenant_app_error() -> None:
+    # Callers catching TenantAppError (main(), the workflows) must keep working.
+    assert issubclass(app.DeploymentFailed, app.TenantAppError)
