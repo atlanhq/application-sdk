@@ -349,16 +349,22 @@ def swap_outputs(
             dest: dest.read_bytes() for dest in skip if dest.is_relative_to(target)
         }
         reserved = _withhold_reserved_subdirs(target)
-        shutil.rmtree(target, ignore_errors=True)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(out_dir / "app" / "generated", target)
-        _copy_planned(
-            {d: s for d, s in plan.items() if not d.is_relative_to(target)}, skip
-        )
-        for dest, content in preserved.items():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(content)
-        _restore_reserved_subdirs(target, reserved)
+        try:
+            shutil.rmtree(target, ignore_errors=True)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(out_dir / "app" / "generated", target)
+            _copy_planned(
+                {d: s for d, s in plan.items() if not d.is_relative_to(target)}, skip
+            )
+            for dest, content in preserved.items():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(content)
+        finally:
+            # Restore even on a mid-swap failure: the withheld reserved subdirs
+            # live in a tempdir, so an exception here would otherwise strand the
+            # working tree without them. The swap failing still propagates; this
+            # just guarantees the restore runs.
+            _restore_reserved_subdirs(target, reserved)
         return True
 
     # Native: overwrite-only. The generated dir can hold app-owned files this
