@@ -373,7 +373,7 @@ def _installed_version(client: TenantClient, app_id: str) -> str:
         )
         return ""
     data = response.data()
-    version = _extract_version(data)
+    version = _extract_version(data) or resolve_version_via_catalog(data)
     if not version:
         # Readable payload, unreadable version: either nothing is installed, or
         # LM has an install record whose version field is a placeholder. Those
@@ -561,6 +561,53 @@ def _extract_version(payload: dict[str, object], _depth: int = 0) -> str:
         if found and found.lower() not in _PLACEHOLDER_VERSIONS:
             return found
     return ""
+
+
+def resolve_version_via_catalog(payload: dict[str, object]) -> str:
+    """Return the installed version string, resolved through the catalog by UUID.
+
+    LM's ``version_text`` is optional (see :data:`_PLACEHOLDER_VERSIONS`), but the
+    UUID beside it is not, and the same payload carries the catalog entry that
+    names it. From a live azure tenant whose ``version_text`` was ``unknown``::
+
+        catalog.app_version.version_id = '019fdc06-dbe3-7992-93a0-1791575164b3'
+        catalog.app_version.version    = 'sdr-test-1024d47f'
+        installed.version_id           = '019fdc06-dbe3-7992-93a0-1791575164b3'
+
+    Matching UUIDs make this exact identity rather than inference: the catalog
+    says which version that UUID *is*, and the install record says that UUID is
+    what is installed.
+
+    **Only when they match.** ``/apps/{id}/info`` calls ``get_app_info(app_id)``
+    with no version argument, so ``catalog`` describes the LATEST version, which
+    is not necessarily the installed one. Reading its string whenever
+    ``version_text`` is missing would report the newest version as installed —
+    a silent wrong-version pass, which is the single failure FND-31 exists to
+    prevent. A mismatch returns "" so the caller fails as unverifiable.
+    """
+    installed = payload.get("installed")
+    catalog = payload.get("catalog")
+    if not isinstance(installed, dict) or not isinstance(catalog, dict):
+        return ""
+    app_version = catalog.get("app_version")
+    if not isinstance(app_version, dict):
+        return ""
+
+    installed_id = str(installed.get("version_id") or "").strip()
+    catalog_id = str(app_version.get("version_id") or "").strip()
+    if not installed_id or installed_id != catalog_id:
+        return ""
+
+    version = str(app_version.get("version") or "").strip()
+    if not version or version.lower() in _PLACEHOLDER_VERSIONS:
+        return ""
+    print(
+        f"::notice::tenant reports version_text='{installed.get('version_text')}', "
+        f"resolved to '{version}' via catalog version_id={installed_id}. LM only "
+        "populates version_text from an optional Atlas attribute; the UUID is the "
+        "reliable identifier."
+    )
+    return version
 
 
 def describe_info(payload: dict[str, object], _depth: int = 0) -> list[str]:
@@ -1258,14 +1305,35 @@ def install(args: argparse.Namespace) -> InstallOutcome:
 
     installed = _installed_version(read_client, app_id)
     print(f"tenant reports installed version: {installed or '<unreported>'}")
-    if foreign and installed != args.version:
+    # Unconditional, not just on the foreign-pod path. This job exists to leave
+    # the tenant serving the version under test, so it has to confirm that before
+    # reporting success — otherwise every e2e leg rediscovers the same problem
+    # separately, which is exactly what happened when the read-back returned a
+    # placeholder: prepare-tenant went green and both legs then failed on their
+    # own version check. One clear failure here beats N confusing ones after.
+    if installed != args.version:
+        orphans = (
+            " The failing pod(s) want "
+            f"{', '.join(foreign)} — orphans from an earlier version, worth "
+            "deleting from the tenant's namespace either way, though with the "
+            "read-back disagreeing they are not the whole story."
+            if foreign
+            else ""
+        )
+        unverifiable = (
+            " The tenant reported no usable version: see the info dump above. "
+            "That is not the same as running the wrong one — LM's version_text "
+            "is an optional Atlas attribute, and the UUID fallback could not be "
+            "resolved through the catalog either."
+            if not installed
+            else ""
+        )
         raise TenantAppError(
-            f"deployment reported FAILED and the tenant reports "
-            f"{installed or '<unreported>'} rather than {args.version}, so the "
-            "install did not take effect. The failing pod(s) want "
-            f"{', '.join(foreign)} — orphans from an earlier version, which are "
-            "worth deleting from the tenant's namespace either way — but with the "
-            "read-back disagreeing they are not the whole story here."
+            f"the tenant reports {installed or '<unreported>'} rather than "
+            f"{args.version}, so this install cannot be confirmed. Heracles "
+            "fetches the DAG from the deployed pod at AE submit, so letting the "
+            "legs run now would test an unverified version."
+            f"{unverifiable}{orphans}"
         )
     if foreign:
         print(
