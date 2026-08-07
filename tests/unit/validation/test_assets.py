@@ -347,3 +347,119 @@ class TestSingleFileInput:
         assert report.passed == 1
         assert report.failed == 1
         assert not report.ok
+
+
+# ---------------------------------------------------------------------------
+# Relationship round-trip (FND-113)
+# ---------------------------------------------------------------------------
+#
+# Connector transformed output carries relationships inside ``attributes``, not
+# ``relationshipAttributes`` — see ``serialize_entity`` in the connector apps,
+# which moves them there deliberately because the publish app reads them from
+# that bucket. Decoding with ``<ConcreteType>.from_json`` picked them up only
+# from ``relationshipAttributes``, so every relationship was silently dropped
+# and every create-time parent check failed. Fleet-wide that read as ~98% of
+# assets invalid when nothing was wrong with them.
+
+
+def _hive_column_pair():
+    """A Column with its parent relationship, in both on-disk shapes.
+
+    Returns ``(nested, connector)`` where ``nested`` keeps relationships in
+    ``relationshipAttributes`` (what pyatlan emits) and ``connector`` is the
+    same record after ``serialize_entity`` moves them into ``attributes``
+    (what actually lands in transformed output).
+    """
+    import copy
+    import json
+
+    from pyatlan_v9.model.assets.sql_related import RelatedTable
+
+    conn = "default/hive/1698426951"
+    tbl = f"{conn}/Hive/alibaba/alibaba_flags"
+    col = Column(
+        name="loan_id",
+        qualified_name=f"{tbl}/loan_id",
+        connection_qualified_name=conn,
+        connector_name="hive",
+        database_name="Hive",
+        database_qualified_name=f"{conn}/Hive",
+        schema_name="alibaba",
+        schema_qualified_name=f"{conn}/Hive/alibaba",
+        table_name="alibaba_flags",
+        table_qualified_name=tbl,
+        order=1,
+    )
+    col.table = RelatedTable(qualified_name=tbl, type_name="Table")
+
+    nested = json.loads(col.to_nested_bytes())
+    connector = copy.deepcopy(nested)
+    rels = connector.pop("relationshipAttributes", None) or {}
+    for key, value in rels.items():
+        if value is not None:
+            connector.setdefault("attributes", {})[key] = value
+    return nested, connector
+
+
+def test_relationships_in_attributes_survive_deserialization():
+    """The production shape: relationships moved into ``attributes``."""
+    import json
+
+    _, connector = _hive_column_pair()
+    assert "table" in connector["attributes"], "fixture must exercise the moved shape"
+    assert "relationshipAttributes" not in connector
+
+    asset = assets_module._deserialize(json.dumps(connector).encode())
+
+    assert asset.table is not None
+    assert asset.table.qualified_name.endswith("/alibaba_flags")
+    assert validate_asset(asset) == []
+
+
+def test_relationships_in_relationship_attributes_still_work():
+    """Widening, not swapping — the unmoved shape must keep decoding."""
+    import json
+
+    nested, _ = _hive_column_pair()
+    assert "table" in nested["relationshipAttributes"]
+
+    asset = assets_module._deserialize(json.dumps(nested).encode())
+
+    assert asset.table is not None
+    assert validate_asset(asset) == []
+
+
+def test_both_shapes_agree():
+    """The two encodings of one asset must validate identically."""
+    import json
+
+    nested, connector = _hive_column_pair()
+    a = assets_module._deserialize(json.dumps(nested).encode())
+    b = assets_module._deserialize(json.dumps(connector).encode())
+
+    assert type(a) is type(b) is Column
+    assert validate_asset(a) == validate_asset(b) == []
+    assert a.table.qualified_name == b.table.qualified_name
+
+
+def test_concrete_type_is_still_resolved():
+    """A generic Asset would silently skip every for_creation check, so the
+    decoder must still return the concrete class."""
+    import json
+
+    _, connector = _hive_column_pair()
+    assert type(assets_module._deserialize(json.dumps(connector).encode())) is Column
+
+
+def test_missing_parent_still_fails():
+    """The fix must not blunt the check — a Column with no parent at all still
+    has to fail, or the validator stops being worth running."""
+    import json
+
+    _, connector = _hive_column_pair()
+    connector["attributes"].pop("table")
+
+    asset = assets_module._deserialize(json.dumps(connector).encode())
+    errors = validate_asset(asset)
+
+    assert any("table" in e for e in errors), errors
