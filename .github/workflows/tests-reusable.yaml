@@ -274,6 +274,16 @@ on:
           inject steps, hence this input.  The e2e IMAGE build is not covered:
           the connector's Dockerfile owns its own system deps.  Empty (the
           default) skips the step entirely.
+
+          Accepted form is deliberately narrow — plain package NAMES only,
+          separated by whitespace, each matching Debian's own
+          `[a-z0-9][a-z0-9+.-]*` (so `g++`, `libstdc++6`, `python3.11-dev` are
+          fine).  Anything else fails the job before apt runs, including
+          arch-qualified (`libkrb5-dev:amd64`) and version-pinned
+          (`libkrb5-dev=1.2.3`) forms, apt flags, local `.deb` paths, and
+          globs.  If a connector genuinely needs one of those, widen the
+          allowlist in this workflow deliberately rather than working around it
+          from the caller.
       container-health-timeout-seconds:
         required: false
         type: string
@@ -418,13 +428,31 @@ jobs:
 
       # Must precede the deps action's `uv sync`: a native sdist build (hive's
       # pykerberos → gssapi/gssapi.h) fails during sync, not at test time.
+      #
       # Routed through env, never interpolated into the script
-      # (docs/standards/ci.md).
+      # (docs/standards/ci.md). That routing is the control that matters: a
+      # `${{ }}` in the script text would splice a caller-supplied value into
+      # the shell, which is why a test pins the env form.
+      #
+      # The value is then matched WHOLE against a strict Debian package-name
+      # allowlist before it is used. It has to reach apt-get unquoted — that is
+      # how a list of packages is passed — and while word splitting does not
+      # re-parse `;`/`|`/`$(…)` as operators (they arrive as literal argv
+      # words), it does still glob-expand, and a leading `-o …` or `./x.deb`
+      # would reach apt-get as a flag or a local package path instead of a name.
+      # The allowlist closes both, and fails closed: a straight-line `grep`
+      # rather than an `if`, so the check stays inside the
+      # no-inline-conditionals rule, with `set -e` explicit so a later
+      # `defaults: run: shell:` cannot silently turn it into a fail-open.
       - name: Install system packages (apt-packages)
         if: inputs.apt-packages != ''
         env:
           APT_PACKAGES: ${{ inputs.apt-packages }}
         run: |
+          set -euo pipefail
+          echo "Validating and installing apt packages: $APT_PACKAGES"
+          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
+            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
@@ -613,6 +641,10 @@ jobs:
         env:
           APT_PACKAGES: ${{ inputs.apt-packages }}
         run: |
+          set -euo pipefail
+          echo "Validating and installing apt packages: $APT_PACKAGES"
+          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
+            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
@@ -1300,6 +1332,10 @@ jobs:
         env:
           APT_PACKAGES: ${{ inputs.apt-packages }}
         run: |
+          set -euo pipefail
+          echo "Validating and installing apt packages: $APT_PACKAGES"
+          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
+            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
