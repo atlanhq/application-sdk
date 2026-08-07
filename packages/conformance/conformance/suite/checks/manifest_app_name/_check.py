@@ -72,7 +72,21 @@ _SYSTEM_APP_QUEUE_OWNERS = frozenset(
     }
 )
 
-_QUEUE_RE = re.compile(r"^atlan-(?P<app>.+?)-[^-]+$")
+# Anchor the app segment as the known-app alternation and accept any non-empty
+# suffix. The suffix is not parseable in general (``-production`` vs
+# ``-production-us-east-1`` vs ``-{deployment_name}`` vs a tenant name), so the
+# app is matched against the closed set rather than split off the queue. A lazy
+# ``.+?`` app group would mis-capture on a multi-segment suffix — e.g.
+# ``atlan-query-intelligence-production-us-east-1`` would yield
+# ``query-intelligence-production-us-east``, which is not a known app and so
+# silently no-ops the task_queue signal on exactly the drift it exists to catch.
+# Longest-first so a hyphenated app name (``notification-app``) is never
+# shadowed by a prefix that is also a known app.
+_QUEUE_RE = re.compile(
+    r"^atlan-(?P<app>"
+    + "|".join(sorted(_SYSTEM_APP_QUEUE_OWNERS, key=len, reverse=True))
+    + r")-.+$"
+)
 
 # The built-in node class an author should use instead of a raw ``DAGNode``.
 _BUILTIN_NODE_CLASSES = {

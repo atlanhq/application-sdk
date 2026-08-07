@@ -260,6 +260,57 @@ def test_deployment_name_placeholder_suffix_is_not_interpreted(
     assert "publish" in findings[0].message
 
 
+def test_hyphenated_deployment_suffix_still_identifies_the_owner(
+    tmp_path: Path,
+) -> None:
+    """A multi-segment suffix (``-production-us-east-1``) must not no-op signal 2.
+
+    Regression: a lazy ``.+?`` app group with a hyphenless-suffix anchor
+    mis-captured ``query-intelligence-production-us-east`` here — not a known
+    app, so the queue signal silently concluded nothing on exactly the
+    deployment-suffixed queues real system apps carry.
+    """
+    _write_manifest(
+        tmp_path,
+        "app/generated/manifest.json",
+        {
+            "qi": _node(
+                "someconnector:parse",
+                "someconnector",
+                task_queue="atlan-query-intelligence-production-us-east-1",
+            )
+        },
+    )
+
+    findings = _run(tmp_path)
+
+    assert len(findings) == 1
+    assert "query-intelligence" in findings[0].message
+    assert "atlan-query-intelligence-production-us-east-1" in findings[0].message
+
+
+def test_hyphenated_app_name_with_hyphenated_suffix_is_flagged(
+    tmp_path: Path,
+) -> None:
+    """``notification-app`` is itself hyphenated and must not be shadowed."""
+    _write_manifest(
+        tmp_path,
+        "app/generated/manifest.json",
+        {
+            "notify": _node(
+                "someconnector:notify",
+                "someconnector",
+                task_queue="atlan-notification-app-production-us-east-1",
+            )
+        },
+    )
+
+    findings = _run(tmp_path)
+
+    assert len(findings) == 1
+    assert "notification-app" in findings[0].message
+
+
 def test_connector_own_queue_is_never_flagged(tmp_path: Path) -> None:
     """A connector's own queue says nothing about system-app ownership."""
     _write_manifest(
