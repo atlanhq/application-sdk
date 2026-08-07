@@ -204,10 +204,62 @@ def test_suite_and_cloud_discovery_use_the_same_clouds_expression() -> None:
     )
 
 
+def test_the_cloud_fallback_is_guarded_on_the_count_not_the_string(jobs: dict) -> None:  # type: ignore[type-arg]
+    """An empty cloud list must yield ONE leg, never zero.
+
+    A repo without the tenant-matrix secret resolves to `--clouds none`, which
+    emits `{"include":[]}` — a perfectly non-empty string. So the natural
+    `matrix || fallback` never takes the fallback, the job expands to zero legs,
+    and a matrix job with zero legs is not a skipped job: it does not exist.
+    `needs.prepare-tenant.result` is then never success-or-skipped and every job
+    gated on it vanishes, which deleted an entire e2e matrix on the first live
+    install run.
+
+    The count is the only thing that carries the distinction, which is why
+    e2e-full-reusable.yaml has always guarded on it.
+    """
+    matrix = " ".join(jobs["prepare-tenant"]["strategy"]["matrix"].split())
+    assert "cloud-count != '0'" in matrix, (
+        "prepare-tenant's matrix falls back on the matrix STRING being empty, "
+        'which never happens — `{"include":[]}` is truthy. Guard on '
+        "`needs.discover-e2e.outputs.cloud-count != '0'` instead, or this job "
+        "expands to zero legs and takes the e2e legs with it."
+    )
+    assert '{"include":[{"cloud":""}]}' in matrix, (
+        "the fallback must be a single leg with a defined-but-empty `cloud` — "
+        "that is what makes the tenant resolver take its single-tenant path"
+    )
+
+
+def test_both_reusables_fall_back_the_same_way() -> None:
+    """The two cloud fan-outs must not drift in *mechanism*, only in wiring.
+
+    tests-reusable.yaml's version was written by copying the intent of
+    e2e-full-reusable.yaml's without its mechanism — the count guard — and that
+    is precisely the bug above. Pinning them together is cheaper than
+    rediscovering it on the next live run.
+    """
+    full = (_REPO_ROOT / ".github/workflows/e2e-full-reusable.yaml").read_text(
+        encoding="utf-8"
+    )
+    tests = _WORKFLOW.read_text(encoding="utf-8")
+    fallback = '{"include":[{"cloud":""}]}'
+    for name, text in (("e2e-full-reusable", full), ("tests-reusable", tests)):
+        assert fallback in text, f"{name} no longer carries the single-leg fallback"
+        assert "count != '0'" in text, (
+            f"{name}'s cloud matrix no longer guards on the count. Falling back "
+            "on the matrix string alone silently produces a zero-leg job."
+        )
+
+
 def test_cloud_matrix_output_is_exposed(jobs: dict) -> None:  # type: ignore[type-arg]
     outputs = jobs["discover-e2e"]["outputs"]
-    assert "cloud-matrix" in outputs
-    assert "discover-clouds" in outputs["cloud-matrix"]
+    # Both, and both from the same step: the matrix says which clouds, the count
+    # says whether there is a cloud dimension at all, and the consumer needs the
+    # second to interpret the first.
+    for key in ("cloud-matrix", "cloud-count"):
+        assert key in outputs, f"discover-e2e no longer exposes {key}"
+        assert "discover-clouds" in outputs[key]
 
 
 # ── No expression interpolation into run: in the jobs this change adds ───────
