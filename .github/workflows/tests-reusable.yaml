@@ -692,6 +692,14 @@ jobs:
       # — a prepare-tenant that missed a cloud the legs then ran against would be
       # a silent coverage hole, not a visible failure.
       cloud-matrix: ${{ steps.discover-clouds.outputs.matrix }}
+      # Exposed alongside the matrix because the CONSUMER has to distinguish "no
+      # cloud dimension" (count 0, and one fallback leg is wanted) from "these
+      # clouds". The matrix string cannot carry that distinction: `{"include":[]}`
+      # is a perfectly non-empty string, so a `matrix || fallback` expression
+      # never takes the fallback and the job expands to zero legs instead of one.
+      # e2e-full-reusable.yaml's plan-clouds has always guarded on the count for
+      # exactly this reason.
+      cloud-count: ${{ steps.discover-clouds.outputs.count }}
     env:
       # Job-level so the step-level `if:` below can read it — a step condition
       # cannot reference the `secrets` context directly.
@@ -959,7 +967,21 @@ jobs:
       # One cloud's tenant being uninstallable must not cancel the others; the
       # legs for that cloud fail on their own version check.
       fail-fast: false
-      matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
+      # Guarded on the COUNT, not on the matrix string. `--clouds none` — which is
+      # what a repo without the tenant-matrix secret resolves to — emits
+      # `{"include":[]}`, a non-empty string, so `matrix || fallback` keeps the
+      # empty include and this job expands to ZERO legs. A matrix job with no legs
+      # is not a skipped job: it does not exist, `needs.prepare-tenant.result` is
+      # never success-or-skipped, and every job gated on it disappears. That
+      # deleted the whole e2e matrix on the first live install run — Tests Gate
+      # caught it ("discovery succeeded but the matrix was skipped"), nothing else
+      # would have.
+      #
+      # Same expression e2e-full-reusable.yaml's e2e-full has always used. The
+      # single fallback leg spells out `cloud: ""` rather than `{}` so
+      # `matrix.cloud` is a defined-but-empty string, which is what makes the
+      # tenant resolver take its single-tenant path.
+      matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-count != '0' && needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
     runs-on: ubuntu-latest
     # Twice the script's own waits, not a shade over them: the install retries for
     # up to ~600s while LM's catalog snapshot catches up, then polls the deployment
