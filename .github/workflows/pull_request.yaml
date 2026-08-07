@@ -230,10 +230,25 @@ jobs:
     # sdk OR container: a Dockerfile-only PR (the prime base-image use case,
     # e.g. a daprd / base bump) is container==true / sdk==false — it must
     # still rebuild the base so the connector e2e exercises the new image.
+    #
+    # The `github.event.action != 'labeled'` term is the FND-48 gate and appears
+    # on every `e2e`-labelled job in this workflow. `contains(...labels...)` is a
+    # STATE check — "does the PR carry `e2e` right now" — but this workflow also
+    # triggers on `labeled`, and GitHub offers no trigger-level filter for WHICH
+    # label. So on a PR that already carries `e2e`, any unrelated label add (bots
+    # churn size/, area/, dependency and review-state labels constantly) satisfies
+    # the state check and re-fires the whole cross-repo e2e fan-out. Making the
+    # `labeled` event count only when `e2e` is the label just added leaves every
+    # other event type alone: a real push is `synchronize`, so it still
+    # re-triggers, and re-adding `e2e` still triggers. The workflow RUN is still
+    # created either way — the jobs now skip in seconds instead of dispatching
+    # live-tenant suites. Enforced repo-wide by
+    # .github/scripts/tests/test_label_trigger_gates.py.
     if: |
       (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true') &&
       github.event_name == 'pull_request' &&
       contains(github.event.pull_request.labels.*.name, 'e2e') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
       github.event.pull_request.head.repo.fork != true &&
       github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
@@ -319,6 +334,7 @@ jobs:
         (
           github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'e2e') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
           github.event.pull_request.head.repo.fork != true &&
           github.event.pull_request.user.login != 'dependabot[bot]'
         )
@@ -410,6 +426,7 @@ jobs:
       (
         github.event_name == 'pull_request' &&
         contains(github.event.pull_request.labels.*.name, 'e2e') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
         github.event.pull_request.head.repo.fork != true &&
         github.event.pull_request.user.login != 'dependabot[bot]'
       )
@@ -535,11 +552,15 @@ jobs:
   # Fork PRs are excluded (no secrets). Nightly counterpart lives in schedule.yaml.
   storage-integration:
     name: Storage Integration Tests (S3 / Azure / GCS)
+    # Same FND-48 shape as the e2e gates above — see build-sdk-base-image for the
+    # full rationale. The previous form OR'd the event check with the state check,
+    # which made the event arm redundant: `contains(...)` alone was already true
+    # for the label-just-added case, so every unrelated label add on a PR carrying
+    # `storage-integration` re-ran the real-cloud suite. AND-ing it is the fix.
     if: |
-      (
-        (github.event.action == 'labeled' && github.event.label.name == 'storage-integration') ||
-        contains(github.event.pull_request.labels.*.name, 'storage-integration')
-      ) && github.event.pull_request.head.repo.fork != true
+      contains(github.event.pull_request.labels.*.name, 'storage-integration') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'storage-integration') &&
+      github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Keyless: all three clouds authenticate via GitHub OIDC (no static secrets).
