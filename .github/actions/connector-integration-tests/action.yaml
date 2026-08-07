@@ -59,6 +59,13 @@ description: |
   no app server — this action handles those). The connector ships its own
   native-deps action; this action handles all the connector-agnostic setup.
 
+  This pre-step pattern only works when the caller invokes THIS ACTION
+  directly. A connector on `tests-reusable.yaml` cannot inject a step into a
+  reusable workflow's jobs, so it passes the package names to that workflow's
+  `apt-packages` input instead and the reusable runs the install itself, in
+  every job that syncs on the runner (FND-110). Package NAMES only there — the
+  input is allowlisted; see its description in tests-reusable.yaml.
+
 outputs:
   summary:
     description: |
@@ -177,8 +184,9 @@ inputs:
       It is NOT the right place for OS-level build deps (ODBC drivers, SAP
       JCo, etc.) that must be apt-installed *before* uv sync compiles native
       Python extensions.  Those require a PRE-STEP in the caller's own
-      tests.yaml before invoking this action (see the "Connectors with native
-      dependencies" section above).
+      tests.yaml before invoking this action — or, on the tests-reusable.yaml
+      path where a caller cannot inject one, that workflow's `apt-packages`
+      input (see the "Connectors with native dependencies" section above).
 
       ## Cross-repo safety
 
