@@ -602,7 +602,8 @@ def resolve_version_via_catalog(payload: dict[str, object]) -> str:
     if not version or version.lower() in _PLACEHOLDER_VERSIONS:
         return ""
     print(
-        f"::notice::tenant reports version_text='{installed.get('version_text')}', "
+        "::notice::tenant reports version_text="
+        f"{json.dumps(str(installed.get('version_text')))}, "
         f"resolved to '{version}' via catalog version_id={installed_id}. LM only "
         "populates version_text from an optional Atlas attribute; the UUID is the "
         "reliable identifier."
@@ -1184,7 +1185,10 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     info = _app_info(read_client, app_id)
     if not info:
         print(f"::notice::app info unreadable for {app_id} — treating as not installed")
-    current = _extract_version(info)
+    # Resolve through the same catalog fallback the post-install read-back and
+    # verify() use, or a re-run against a placeholder-version tenant re-installs
+    # instead of taking the no-op path.
+    current = _extract_version(info) or resolve_version_via_catalog(info)
     if current and current == args.version:
         print(f"tenant already runs {app_id} at {args.version} — nothing to do")
         return InstallOutcome(
