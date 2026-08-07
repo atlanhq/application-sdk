@@ -29,13 +29,19 @@ _INSTALL_RE = re.compile(r"install\s+-m\s+\d+\s+(\S+)\s+/usr/local/bin/\S+")
 
 
 def local_sibling_imports(driver_source: str) -> set[str]:
-    """Top-level module names the driver imports that resolve to a local .py file."""
+    """Top-level module names the driver imports that resolve to a local .py file.
+
+    Collects both `from X import ...` and plain/aliased `import X [as Y]` —
+    either form needs X.py co-installed on PATH. The local-file existence check
+    is what excludes stdlib (`import os`/`import sys` have no sibling .py).
+    """
     tree = ast.parse(driver_source)
-    imported = {
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0
-    }
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            imported.add(node.module.split(".")[0])
+        elif isinstance(node, ast.Import):
+            imported.update(a.name.split(".")[0] for a in node.names)
     return {name for name in imported if (SCRIPTS_DIR / f"{name}.py").exists()}
 
 

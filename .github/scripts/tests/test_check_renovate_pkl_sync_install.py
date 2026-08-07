@@ -37,6 +37,16 @@ class TestLocalSiblingImports:
     def test_ignores_stdlib_imports(self):
         assert guard.local_sibling_imports("import os\nimport sys\n") == set()
 
+    def test_flags_plain_import_matching_a_real_local_file(self):
+        assert "pkl_contract_layout" in guard.local_sibling_imports(
+            "import pkl_contract_layout\n"
+        )
+
+    def test_flags_aliased_import_matching_a_real_local_file(self):
+        assert "pkl_contract_layout" in guard.local_sibling_imports(
+            "import pkl_contract_layout as layout\n"
+        )
+
 
 class TestInstalledModuleNames:
     def test_captures_installed_source_stem(self):
