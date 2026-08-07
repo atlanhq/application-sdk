@@ -10,6 +10,7 @@ process.
 from __future__ import annotations
 
 import argparse
+import builtins
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1654,6 +1655,103 @@ def test_a_real_version_alongside_a_placeholder_still_wins() -> None:
     # Order matters: version_text is checked first and is the placeholder here.
     payload = {"installed": {"version_text": "unknown", "version": _VERSION}}
     assert app._extract_version(payload) == _VERSION
+
+
+# ── Reading app_id without PyYAML ────────────────────────────────────────────
+# The two call sites do not share an interpreter: prepare-tenant runs on the
+# runner's system Python (PyYAML present), the per-leg verify runs after
+# `uv sync` has put a project venv on PATH (PyYAML absent). Requiring the package
+# meant the version check — the last gate before pytest — died on an import in
+# every e2e leg while working perfectly in the job before it.
+
+
+@pytest.fixture
+def _no_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make `import yaml` fail, as it does inside a connector's venv."""
+    real_import = builtins.__import__
+
+    def _fail(name: str, *args: object, **kwargs: object) -> object:
+        if name == "yaml":
+            raise ModuleNotFoundError("No module named 'yaml'")
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", _fail)
+
+
+@pytest.mark.usefixtures("_no_yaml")
+def test_app_id_is_read_without_pyyaml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "atlan.yaml").write_text(
+        f"name: openapi\ndisplay_name: OpenAPI\napp_id: {_APP_ID}\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    assert app.resolve_app_id("") == _APP_ID
+
+
+@pytest.mark.parametrize(
+    "line, expected",
+    [
+        (f"app_id: {_APP_ID}", _APP_ID),
+        (f'app_id: "{_APP_ID}"', _APP_ID),
+        (f"app_id: '{_APP_ID}'", _APP_ID),
+        (f"app_id:    {_APP_ID}   # the registered id", _APP_ID),
+        (f"app_id:\t{_APP_ID}", _APP_ID),
+    ],
+)
+def test_the_scan_handles_the_shapes_atlan_yaml_uses(line: str, expected: str) -> None:
+    assert app._scan_app_id(f"name: openapi\n{line}\nport: 8000\n") == expected
+
+
+def test_an_indented_app_id_is_never_picked_up() -> None:
+    """The wrong-app direction, and the only one that could pass silently.
+
+    A nested `app_id` belongs to some inner stanza. Installing against it would
+    look entirely successful while targeting a different app.
+    """
+    text = "name: openapi\nentrypoints:\n  - name: sync\n    app_id: 00000000-dead-beef-0000-000000000000\n"
+    assert app._scan_app_id(text) == ""
+
+
+def test_a_commented_out_app_id_is_not_read() -> None:
+    assert app._scan_app_id(f"# app_id: {_APP_ID}\nname: openapi\n") == ""
+
+
+def test_a_missing_app_id_scans_to_empty() -> None:
+    assert app._scan_app_id("name: openapi\nport: 8000\n") == ""
+
+
+@pytest.mark.usefixtures("_no_yaml")
+def test_a_missing_app_id_still_errors_without_pyyaml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The fallback must not turn "no app_id" into a silent empty id.
+    (tmp_path / "atlan.yaml").write_text("name: openapi\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(app.TenantAppError, match="no app_id"):
+        app.resolve_app_id("")
+
+
+@pytest.mark.usefixtures("_no_yaml")
+def test_a_mis_scan_cannot_reach_a_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """validate_app_id is the backstop: a non-UUID never becomes a request path."""
+    (tmp_path / "atlan.yaml").write_text("app_id: not-a-uuid\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(TenantApiError, match="invalid app_id"):
+        app.verify(argparse.Namespace(base_url=_TENANT, app_id="", expected=_VERSION))
+
+
+def test_pyyaml_is_still_preferred_when_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A real parser handles shapes the scan does not; it stays the primary path.
+    (tmp_path / "atlan.yaml").write_text(
+        f"app_id: {_APP_ID}\nnested:\n  app_id: wrong\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    assert app.resolve_app_id("") == _APP_ID
 
 
 # ── Resolving the version through the catalog ────────────────────────────────
