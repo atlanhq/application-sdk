@@ -840,4 +840,76 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k012"
         ),
     ),
+    RuleDefinition(
+        id="K013",
+        scope=RuleScope.APP,
+        name="ManifestNodeAppNameMisattributed",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.18.0",
+        orthogonal_gate="pkl-eval",
+        rationale=(
+            "A DAG node's app_name is the identity its logs, metrics and "
+            "failures are filed under: the SDK tags log records with it and the "
+            "tenant's Workflow Center reads them back by it, so a wrong value "
+            "makes the step's logs unreachable rather than merely mislabelled. "
+            "Automation Engine does not itself run QueryIntelligenceWorkflow, "
+            "PublishWorkflow, LineageWorkflow, PopularityWorkflow or "
+            "NotificationWorkflow -- each runs on its own worker -- so pairing "
+            "one of those workflow types with app_name 'automation-engine' is "
+            "never a legitimate configuration. It is the signature of a contract "
+            "that hand-wrote a raw DAGNode instead of using the matching "
+            "built-in node class and silently inherited the AE default, which is "
+            "how QI and lineage steps across the connector fleet came to report "
+            "their failures as Automation Engine (CNCT-24). Because the pairing "
+            "is impossible rather than merely suspect, the check has no false "
+            "positives; it lands as WARN only so apps generated before the "
+            "toolkit-side fix are not blocked before they regenerate."
+        ),
+        short_description=(
+            "Generated manifest DAG node runs a toolkit-owned workflow but is "
+            "attributed to 'automation-engine'"
+        ),
+        full_description=(
+            "A node in a committed generated ``manifest.json`` declares an "
+            "``inputs.workflow_type`` the contract-toolkit owns while its "
+            "``app_name`` is still the raw ``DAGNode`` default, "
+            "``automation-engine``:\n"
+            "\n"
+            "    QueryIntelligenceWorkflow -> query-intelligence\n"
+            "    PublishWorkflow           -> publish\n"
+            "    LineageWorkflow           -> lineage\n"
+            "    PopularityWorkflow        -> popularity\n"
+            "    NotificationWorkflow      -> notification-app\n"
+            "\n"
+            "The node runs on the worker named on the right, but reports itself "
+            "as Automation Engine. Its logs are written under one identity and "
+            "read back under another, so the step shows ``No error logs "
+            "available for this pod`` in the Workflow Center even though logging "
+            "worked, and failure attribution points at the wrong app.\n"
+            "\n"
+            "**Fix:** in ``contract/app.pkl``, replace the hand-written "
+            "``DAGNode`` with the matching built-in node class -- "
+            "``QueryIntelligenceNode``, ``PublishNode``, ``LineageNode``, "
+            "``PopularityNode``, ``NotificationNode`` -- which sets both "
+            "``appName`` and ``taskQueue`` consistently. When the node must stay "
+            "a raw ``DAGNode`` (e.g. it targets a pinned task queue), set "
+            "``appName`` explicitly to the app that runs it. Then regenerate "
+            "with ``pkl eval -m . contract/app.pkl``. Bumping "
+            "``app-contract-toolkit`` also resolves a *defaulted* ``appName`` at "
+            "render time, so a plain toolkit upgrade plus regeneration clears "
+            "the finding.\n"
+            "\n"
+            "**No suppression is available.** The finding is anchored on a "
+            "generated ``.json`` artifact, which has no comment syntax to carry "
+            "a directive -- as with K009, the only resolution is to fix the "
+            "contract and regenerate. Never hand-edit ``manifest.json``.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k013"
+        ),
+    ),
 )

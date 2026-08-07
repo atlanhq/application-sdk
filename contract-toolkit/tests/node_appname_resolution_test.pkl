@@ -1,0 +1,132 @@
+// Render-time `appName` resolution for hand-written DAG nodes (CNCT-24).
+//
+// `app_name` is the identity a node's logs are written under and read back by,
+// so a wrong value does not merely mislabel the step — its logs become
+// unreachable in the Workflow Center. Two ways a hand-written `DAGNode` gets it
+// wrong, both observed on shipped connector manifests:
+//
+//   1. It copies a toolkit-owned `workflowType` (e.g. "QueryIntelligenceWorkflow")
+//      without using the matching node class, and inherits DAGNode's
+//      "automation-engine" default. AE does not run that workflow, so the value
+//      is never right.
+//   2. It sets `appName = "{app_name}"`, a scaffold token the SDK stopped
+//      substituting at serve time (#2271) — it now freezes into the DAG literally.
+//
+// `renderNode` corrects both. These guards also pin what must NOT change: an
+// explicitly-set `appName`, a pinned `taskQueue`, and the default on a workflow
+// AE genuinely runs.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "fixtures/app_node_appname_resolution.pkl" as fixture
+import "../src/App.pkl" as App
+
+local dag =
+  let (text = fixture.output.files["app/generated/manifest.json"].text)
+    new json.Parser { useMapping = true }.parse(text)["dag"]
+
+local qiDrifted = dag["qi_drifted"]
+local qiExplicit = dag["qi_explicit"]
+local lineageDrifted = dag["lineage_drifted"]
+local placeholder = dag["placeholder"]
+local aeHosted = dag["ae_hosted"]
+
+facts {
+  // ── Correction 1: toolkit-owned workflowType left at the AE default ────────
+  //
+  // All three positions must move together — the SDK logs from
+  // `inputs.args.app_name` while the tenant UI and Heracles query the node's
+  // top-level `app_name`; correcting one and not the others reintroduces the
+  // very split this rule exists to close (CNCT-129).
+  ["a drifted QI node resolves to query-intelligence at every app_name position"] {
+    qiDrifted["app_name"] == "query-intelligence"
+    qiDrifted["inputs"]["app_name"] == "query-intelligence"
+    qiDrifted["inputs"]["args"]["app_name"] == "query-intelligence"
+  }
+
+  // Dispatch is governed by `taskQueue`, not `appName`. Rewriting a pinned queue
+  // would relocate a live node — the correction is to log identity only.
+  ["resolution leaves a pinned taskQueue untouched"] {
+    qiDrifted["inputs"]["task_queue"] == "atlan-query-intelligence-production"
+  }
+
+  ["a drifted lineage node resolves to lineage"] {
+    lineageDrifted["app_name"] == "lineage"
+    lineageDrifted["inputs"]["app_name"] == "lineage"
+    lineageDrifted["inputs"]["args"]["app_name"] == "lineage"
+  }
+
+  // With no pinned queue, the derived queue follows the *resolved* app. If it
+  // derived from the raw default instead, the node would log as lineage while
+  // dispatching to the AE queue.
+  ["a derived taskQueue follows the resolved app, not the default"] {
+    lineageDrifted["inputs"]["task_queue"] == "atlan-lineage-{deployment_name}"
+  }
+
+  // ── Correction 2: the dead "{app_name}" scaffold token ────────────────────
+  ["a {app_name} placeholder resolves to the contract name"] {
+    placeholder["app_name"] == "appname-resolution"
+    placeholder["inputs"]["app_name"] == "appname-resolution"
+    placeholder["inputs"]["args"]["app_name"] == "appname-resolution"
+  }
+
+  ["a resolved placeholder also feeds the derived taskQueue"] {
+    placeholder["inputs"]["task_queue"] == "atlan-appname-resolution-{deployment_name}"
+  }
+
+  // ── What must NOT change ──────────────────────────────────────────────────
+  //
+  // An author who named an app deliberately keeps it, even on a toolkit-owned
+  // workflowType: the correction fires only on the untouched default.
+  ["an explicitly-set appName on a built-in workflowType is preserved"] {
+    qiExplicit["app_name"] == "custom-qi-worker"
+    qiExplicit["inputs"]["app_name"] == "custom-qi-worker"
+    qiExplicit["inputs"]["args"]["app_name"] == "custom-qi-worker"
+  }
+
+  // "automation-engine" is never suspect on its own — AE-hosted nodes are the
+  // reason that default exists.
+  ["a node on an AE-hosted workflow keeps the automation-engine default"] {
+    aeHosted["app_name"] == "automation-engine"
+    aeHosted["inputs"]["app_name"] == "automation-engine"
+    aeHosted["inputs"]["args"]["app_name"] == "automation-engine"
+  }
+
+  // Built-in node classes already carry the right identity; resolution must not
+  // disturb them (guards against the map and the class defaults drifting apart).
+  ["built-in node classes are unaffected by resolution"] {
+    new App.QueryIntelligenceNode { vendorName = "athena"; sqlKey = "Q" }.appName == "query-intelligence"
+    new App.PublishNode {}.appName == "publish"
+    new App.LineageNode {}.appName == "lineage"
+  }
+
+  // ── Unresolvable placeholders fail generation ─────────────────────────────
+  //
+  // Any other "{...}" has nothing to resolve against. Failing here beats
+  // shipping a literal brace that silently swallows the node's logs.
+  ["an unresolvable placeholder in appName fails generation"] {
+    module.catchOrNull(() ->
+      (fixture) { extraNodes { ["bad"] = new App.DAGNode {
+        displayName = "Bad"
+        workflowType = "custom"
+        appName = "{deployment_name}"
+        args = new Mapping {}
+      } } }.output.files["app/generated/manifest.json"].text
+    ) != null
+  }
+
+  // Ablation for the guard above: the identical amend, differing only in a
+  // brace-free `appName`, must evaluate cleanly. Without this, a typo in the
+  // amend expression itself would throw and make the guard pass vacuously.
+  ["the same amend with a brace-free appName evaluates cleanly"] {
+    module.catchOrNull(() ->
+      (fixture) { extraNodes { ["bad"] = new App.DAGNode {
+        displayName = "Bad"
+        workflowType = "custom"
+        appName = "some-worker"
+        args = new Mapping {}
+      } } }.output.files["app/generated/manifest.json"].text
+    ) == null
+  }
+}

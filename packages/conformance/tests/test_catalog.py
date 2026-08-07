@@ -226,6 +226,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K010",
         "K011",
         "K012",
+        "K013",
         "P004",
         "P005",
         "P008",
@@ -508,8 +509,10 @@ def test_catalog_k_series_present() -> None:
     generated-artifact freshness rules K003/K004/K005 (BLDX-1414), the
     manifest-vs-contract field validation rule K006 (BLDX-1527), the toolkit
     hygiene rules K007–K010 (version floor, source provenance, unresolved
-    placeholder, missing E2E scaffolding) (BLDX-1479), and the release-readiness
-    guards K011/K012 (atlan.yaml app_id, generate poe task)."""
+    placeholder, missing E2E scaffolding) (BLDX-1479), the release-readiness
+    guards K011/K012 (atlan.yaml app_id, generate poe task), and the DAG-node
+    log-identity guard K013 (toolkit-owned workflow filed under
+    ``automation-engine``) (CNCT-24)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
     expected = {
@@ -525,6 +528,7 @@ def test_catalog_k_series_present() -> None:
         "K010",
         "K011",
         "K012",
+        "K013",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"

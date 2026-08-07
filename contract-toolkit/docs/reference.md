@@ -561,6 +561,51 @@ by `_input.py` codegen and never redeclared from a `uiConfig` property.
 > misattribute to AE. When `taskQueue` is left unset it is derived from `appName`,
 > so the two stay consistent automatically.
 
+#### Render-time `appName` resolution (CNCT-24)
+
+Two `appName` values are corrected when the node is rendered, because neither can
+ever be what the author meant. Everything else — including an explicitly-set
+`appName` and any `taskQueue` — is emitted verbatim.
+
+**A toolkit-owned `workflowType` left at the `DAGNode` default.** Automation
+Engine does not run these workflows; each has its own worker:
+
+| `workflowType` | resolved `appName` | prefer this node class |
+|---|---|---|
+| `QueryIntelligenceWorkflow` | `query-intelligence` | `QueryIntelligenceNode` |
+| `PublishWorkflow` | `publish` | `PublishNode` / `LineagePublishNode` |
+| `LineageWorkflow` | `lineage` | `LineageNode` |
+| `PopularityWorkflow` | `popularity` | `PopularityNode` |
+| `NotificationWorkflow` | `notification-app` | `NotificationNode` |
+
+A contract that hand-writes one of these workflow types as a raw `DAGNode`
+inherits `"automation-engine"` and files that step's logs, metrics and failures
+under AE — the step then shows *no logs* in the Workflow Center, because the logs
+are written under one identity and read back under another. The correction fires
+**only on the untouched default**: set `appName` explicitly and your value stands,
+including when you deliberately route a node to a different worker.
+
+This is a safety net, not the intended path. Prefer the node class in the right
+column — it sets `appName` *and* a matching `taskQueue`, and carries that
+workflow's typed arguments.
+
+**A literal `"{app_name}"`.** The SDK stopped substituting this scaffold token at
+serve time (#2271), so it now freezes into the DAG verbatim and the node logs
+under the literal string `{app_name}`. It resolves to the contract `name`, the
+same value the extract node bakes and `ATLAN_APPLICATION_NAME` carries. Any
+*other* `{…}` in `appName` has nothing to resolve against and **fails
+generation** rather than shipping a literal brace.
+
+Resolution applies uniformly to all four places the value lands — the node's
+top-level `app_name`, `inputs.app_name`, `inputs.args.app_name`, and a `taskQueue`
+derived from `appName` — so they cannot disagree. A **pinned** `taskQueue` is
+never rewritten: dispatch is governed by the queue, and changing it would move
+where the node runs.
+
+Conformance rule **K013 `ManifestNodeAppNameMisattributed`** flags the first case
+in a committed manifest, for apps that have not yet regenerated onto a toolkit
+version that resolves it.
+
 ---
 
 ## Legacy: NativeApp.pkl — Base Module (pre-v0.10.0)

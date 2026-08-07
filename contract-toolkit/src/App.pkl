@@ -671,6 +671,13 @@ class DependencyCondition {
     else null
 }
 
+/// Log identity a `DAGNode` carries when the author sets none: the node runs on
+/// Automation Engine itself. Shared with `resolveNodeAppName` so the render-time
+/// correction keys off the same value the class defaults to.
+/// `const` because `DAGNode.appName` reads it from inside a class body, which
+/// Pkl allows only for const module properties.
+local const defaultDagNodeAppName: String = "automation-engine"
+
 /// A generic node in the Automation Engine DAG.
 open class DAGNode {
   nodeType: "activity"|"workflow" = "workflow"
@@ -685,7 +692,13 @@ open class DAGNode {
   /// `"automation-engine"` will make the node's logs misattribute to AE
   /// even though it runs elsewhere. When `taskQueue` is unset it is derived from
   /// `appName` (`atlan-<appName>-{deployment_name}`), so the two stay consistent.
-  appName: String = "automation-engine"
+  ///
+  /// Leaving this at the default on a toolkit-owned `workflowType` (e.g.
+  /// `"QueryIntelligenceWorkflow"`) is corrected at render time — see
+  /// `builtinWorkflowAppNames`. Prefer the matching node class
+  /// (`QueryIntelligenceNode`, `PublishNode`, …), which sets both `appName` and
+  /// `taskQueue` for you.
+  appName: String = defaultDagNodeAppName
   taskQueue: String?
   args: Mapping<String, Any>
 
@@ -2381,6 +2394,50 @@ local function renderDependencyCondition(condition: DependencyCondition): Mappin
   }
 }
 
+/// Workflow types the toolkit owns, mapped to the app that actually runs them.
+///
+/// A hand-written `DAGNode` that copies one of these `workflowType` strings
+/// (instead of using the matching node class) keeps `DAGNode`'s
+/// `"automation-engine"` default, so the node reports its logs and failures as
+/// Automation Engine even though it runs on the QI / publish / lineage worker
+/// (CNCT-24). When the author left `appName` at the default, resolve it to the
+/// app the workflow type names — AE never runs these workflows itself, so the
+/// default is always drift here. An explicitly-set `appName` is left alone.
+local builtinWorkflowAppNames: Mapping<String, String> = new {
+  ["QueryIntelligenceWorkflow"] = "query-intelligence"
+  ["PublishWorkflow"] = "publish"
+  ["LineageWorkflow"] = "lineage"
+  ["PopularityWorkflow"] = "popularity"
+  ["NotificationWorkflow"] = "notification-app"
+}
+
+/// The node's log identity, after the two corrections below. Every `app_name`
+/// a node renders (top-level, `inputs.app_name`, `inputs.args.app_name`) and
+/// the task queue derived from it use this, so the four stay in agreement.
+///
+/// 1. `"{app_name}"` — a dead scaffold placeholder. The SDK stopped
+///    substituting it at serve time (#2271), so it survives into the DAG
+///    verbatim and the node logs under the literal string `{app_name}`.
+///    Resolve it to the contract `name`, which is what the extract node bakes
+///    and what `ATLAN_APPLICATION_NAME` carries.
+/// 2. A default `appName` on a toolkit-owned `workflowType` — see
+///    `builtinWorkflowAppNames`.
+///
+/// Any other `{...}` placeholder has nothing to resolve against and fails
+/// generation rather than shipping a literal brace into the DAG.
+local function resolveNodeAppName(node: DAGNode): String =
+  if (node.appName == "{app_name}") name
+  else if (node.appName.contains("{") || node.appName.contains("}"))
+    throw("DAGNode `\(node.displayName)` sets appName = \"\(node.appName)\", which contains an "
+        + "unresolvable placeholder. The SDK does not substitute placeholders in `app_name` at "
+        + "serve time (#2271), so it would reach the DAG literally and the node's logs would be "
+        + "filed under that literal string. Set `appName` to the app that runs this node "
+        + "(the contract `name` for this app's own nodes), or use the matching built-in node "
+        + "class. See contract-toolkit/docs/reference.md → Per-node `app_name` in `inputs.args`.")
+  else if (node.appName == defaultDagNodeAppName && builtinWorkflowAppNames.containsKey(node.workflowType))
+    builtinWorkflowAppNames[node.workflowType]
+  else node.appName
+
 local function renderNode(node: DAGNode): Mapping<String, Any> =
   let (_nodeCheck = node._errorHandlingCheck)
   let (_depCheck = node._dependencyConfigCheck)
@@ -2391,11 +2448,11 @@ local function renderNode(node: DAGNode): Mapping<String, Any> =
   new Mapping {
   ["activity_name"] = "execute_workflow"
   ["activity_display_name"] = node.displayName
-  ["app_name"] = node.appName
+  ["app_name"] = resolveNodeAppName(node)
   ["inputs"] = new Mapping {
     ["workflow_type"] = node.workflowType
-    ["app_name"] = node.appName
-    ["task_queue"] = node.taskQueue ?? "atlan-\(node.appName)-{deployment_name}"
+    ["app_name"] = resolveNodeAppName(node)
+    ["task_queue"] = node.taskQueue ?? "atlan-\(resolveNodeAppName(node))-{deployment_name}"
     ["args"] = renderNodeArgs(node)
   }
   when (node.dependsOn != null && node.dependsOn.length == 1) {
@@ -2538,7 +2595,7 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
       // prevents a hard Pkl "Duplicate definition of member" crash on that
       // collision. See contract-toolkit/docs/reference.md.
       when (!nodeArgs.toMap().containsKey("app_name")) {
-        ["app_name"] = node.appName
+        ["app_name"] = resolveNodeAppName(node)
       }
       when (!nodeArgs.toMap().containsKey("tag_pipeline_enabled") && tagPipelineValue != null) {
         ["tag_pipeline_enabled"] = tagPipelineValue
@@ -2553,7 +2610,7 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
     // author-set args["app_name"] is respected and generation never crashes on a
     // duplicate key; otherwise the node's own app_name is stamped.
     when (!node.args.toMap().containsKey("app_name")) {
-      ["app_name"] = node.appName
+      ["app_name"] = resolveNodeAppName(node)
     }
   }
 
