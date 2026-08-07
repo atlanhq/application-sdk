@@ -154,3 +154,4 @@ relevant area file — this is the progressive-disclosure boundary.
 | `ci` | PHASE 1 (partial) | `areas/ci.prose.md` — C002 (and C003's absent-file case) mechanical via `bootstrap`; C001 mechanical SHA-pin, always routed to residue (`external_influence`); C003 missing-entry and drifted `tests.yaml`/`renovate.json` `not_remediable = true` |
 | `contract-toolkit` | PHASE 1 (strict-only; WARN-tier) | `areas/contract-toolkit.prose.md` |
 | `security` | PHASE 1 (suggest-only) | `areas/security.prose.md` |
+| `metadata` | PHASE 1 (suggest-only; model-detected, WARN-tier) | `areas/metadata.prose.md` |

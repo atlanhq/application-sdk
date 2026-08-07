@@ -33,13 +33,15 @@ description: >
   - `area` — series letter mapped to area name: `E` → `error-handling`,
     `L` → `logging`, `C` → `ci`, `P` → `prescriptions`, `O` → `optimizations`,
     `D` → `dependency`, `B` → `deprecation`, `I` → `dockerfile`, `T` → `tests`,
-    `K` → `contract-toolkit`, `S` → `security`.
+    `K` → `contract-toolkit`, `S` → `security`, `M` → `metadata`.
   - `file` — repo-relative path.
   - `line`, `column` — location.
   - `fingerprint` — value of `partial_fingerprints["atlanConformance/v1"]`;
     stable across runs on the same source line; used for oscillation detection.
   - `disposition` — `"failing"` or `"warning"`.
-  - `mechanism` — `"static"` or `"test"` (from `atlan/mechanism`).
+  - `mechanism` — `"static"`, `"test"`, or `"model"` (from `atlan/mechanism`).
+    `"model"` (M-series) findings are non-deterministic language-model verdicts;
+    they are advisory (WARN) and remediated suggest-only (see the metadata area).
   - `autofixable` — boolean (from `atlan/autofixable`).
   - `orthogonal_gate` — string or null (from `atlan/orthogonalGate`).
   - `forces_external_influence` — boolean (from `atlan/forcesExternalInfluence`,

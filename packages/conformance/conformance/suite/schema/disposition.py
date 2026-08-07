@@ -62,10 +62,21 @@ class RuleMechanism(str, Enum):
       Safe to run in a pre-commit hook (``--static`` flag).
     * ``TEST``   — requires a built environment and test execution; slower,
       can flake.  Only run in CI and the full gate.
+    * ``MODEL``  — the verdict comes from a language model, not deterministic
+      analysis (BLDX-1575).  Unlike ``STATIC``/``TEST`` the same input can
+      produce a different finding set across runs, so every ``MODEL`` result
+      carries provenance (``atlan/modelId``, ``atlan/promptVersion``) and the
+      evidence span it fired on (``atlan/evidence``) for audit.  Requires an
+      API key and network access, so it runs off the fast per-commit gate;
+      when no key is present the checker skips cleanly rather than erroring.
+      This label is the single downstream signal that a finding is
+      non-deterministic — dashboards, remediation routing, and CI gating all
+      key off it.
     """
 
     STATIC = "static"
     TEST = "test"
+    MODEL = "model"
 
 
 class RuleScope(str, Enum):

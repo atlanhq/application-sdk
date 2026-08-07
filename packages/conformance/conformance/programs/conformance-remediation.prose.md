@@ -12,7 +12,7 @@ description: >
 The current remediation state of the working tree across all enabled
 conformance rule areas (error-handling, logging, CI, prescriptions,
 optimizations, dependency, deprecation, dockerfile, tests, contract-toolkit,
-security).
+security, metadata).
 
 #### violations-summary
 
@@ -34,6 +34,12 @@ Postcondition (deterministic validator — never render-attested):
 **Strict mode** (`--strict`): additionally, the `atlan/summary.warning` count
 in the SARIF output is 0 — zero unsuppressed WARNING results.  Every WARNING
 was cleared by a real fix or by a justified inline suppression.
+
+**The model-driven M-series is intentionally absent from this arbiter command.**
+Its verdicts are non-deterministic, so it must never gate the deterministic
+postcondition.  The `metadata-area` still runs (suggest-only) to draft fixes for
+any M findings present in the SARIF, but it never mutates the tree and never
+affects this exit code — humans clear M findings.
 
 #### residue
 
@@ -64,6 +70,7 @@ the reason each was routed here:
 - `violations-tests` from `tests-area`
 - `violations-contract-toolkit` from `contract-toolkit-area`
 - `violations-security` from `security-area`
+- `violations-metadata` from `metadata-area`
 
 Forme auto-wires these subscriptions from the matching `#### facet` names in
 the area responsibilities.  This node is clean only when every subscribed
@@ -110,6 +117,9 @@ parallel:
     scope: scope
     mode: mode
   call security-area
+    scope: scope
+    mode: mode
+  call metadata-area
     scope: scope
     mode: mode
 

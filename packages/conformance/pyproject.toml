@@ -31,6 +31,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Model-driven check series (M-series, BLDX-1575).  Kept optional so the base
+# conformance package stays LLM-free; installed only where model checks run
+# (the dedicated model workflow), and skipped cleanly when absent.
+model = [
+    "anthropic>=0.40.0,<1.0.0",
+]
 test = [
     "pytest>=8.3.3,<10.0.0",
     "pytest-asyncio>=1.4.0,<2.0.0",

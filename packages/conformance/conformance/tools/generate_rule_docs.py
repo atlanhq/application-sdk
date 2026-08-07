@@ -221,6 +221,28 @@ _SERIES_META: list[SeriesMeta] = [
             "// conformance: ignore[K001] intentional: phased migration tracked in BLDX-XXXX"
         ),
     ),
+    SeriesMeta(
+        title="Customer-Facing Metadata Rules (M-series)",
+        prefix="M",
+        source_module="conformance/suite/rules/metadata.py",
+        output_filename="metadata.md",
+        checker=(
+            "`suite.checks.metadata` (model-driven: M001 naming convention, "
+            "M002 internal jargon in descriptions; reads `atlan.yaml`)"
+        ),
+        suppression_example=(
+            "# conformance: ignore[M002] intentional: reviewed and approved copy"
+        ),
+        stability_note=(
+            "**Model-driven series.** M-series verdicts come from a pinned "
+            "language model, not deterministic analysis, so the same input can "
+            "produce a different finding set across runs. Every M rule is "
+            "advisory (`warn`, never blocking) and records `atlan/modelId` / "
+            "`atlan/promptVersion`; each finding carries the flagged span in "
+            "`atlan/evidence`. The series runs off the fast per-commit gate and "
+            "skips cleanly when no model API key is available."
+        ),
+    ),
 ]
 
 

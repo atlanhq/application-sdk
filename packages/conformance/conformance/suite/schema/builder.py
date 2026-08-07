@@ -160,6 +160,7 @@ class ReportBuilder:
         suppressions: list[Suppression] | None = None,
         hint: str | None = None,
         snippet: str | None = None,
+        evidence: str | None = None,
         extra_properties: dict[str, Any] | None = None,
     ) -> ReportBuilder:
         """Record a rule violation (``kind="fail"``).
@@ -182,6 +183,9 @@ class ReportBuilder:
             Machine-actionable remediation hint (stored in ``atlan/hint``).
         snippet:
             Short source snippet for context (stored in ``region.snippet``).
+        evidence:
+            For ``mechanism=model`` findings: the flagged source span (stored in
+            ``atlan/evidence``) so a reviewer sees why the model fired.
         extra_properties:
             Additional ``atlan/*`` properties to merge into ``result.properties``.
         """
@@ -201,7 +205,9 @@ class ReportBuilder:
             )
         )
         fingerprint = _fingerprint(rule_id, file_uri, start_line)
-        props: dict[str, Any] = AtlanResultProperties(hint=hint).to_properties()
+        props: dict[str, Any] = AtlanResultProperties(
+            hint=hint, evidence=evidence
+        ).to_properties()
         if extra_properties:
             props.update(extra_properties)
 
