@@ -1224,8 +1224,7 @@ def test_l005_silent_in_shebang_script() -> None:
 
 def test_l005_silent_with_main_guard_even_inside_functions() -> None:
     src = (
-        "def run():\n    print('progress')\n\n"
-        'if __name__ == "__main__":\n    run()\n'
+        "def run():\n    print('progress')\n\nif __name__ == \"__main__\":\n    run()\n"
     )
     assert "L005" not in _ids(src)
 
@@ -1501,12 +1500,16 @@ def test_l021_message_warns_against_bare_g_category(tmp_path: Path) -> None:
     from conformance.suite.checks.logging._toml import check_ruff_config
 
     py = tmp_path / "pyproject.toml"
-    py.write_text('[project]\nname = "some-app"\n[tool.ruff.lint]\nselect = ["E", "F"]\n')
+    py.write_text(
+        '[project]\nname = "some-app"\n[tool.ruff.lint]\nselect = ["E", "F"]\n'
+    )
     findings = check_ruff_config(py, tmp_path)
     assert findings and findings[0].rule_id == "L021"
     msg = findings[0].message
     assert "G201" in msg and "L017" in msg, "hint must explain the G201/L017 conflict"
-    assert "covers all rules in that group" not in msg, "hint must not recommend category prefixes"
+    assert (
+        "covers all rules in that group" not in msg
+    ), "hint must not recommend category prefixes"
 
 
 def test_l021_bare_g_selection_still_detected_as_covered(tmp_path: Path) -> None:
@@ -1515,5 +1518,7 @@ def test_l021_bare_g_selection_still_detected_as_covered(tmp_path: Path) -> None
     from conformance.suite.checks.logging._toml import check_ruff_config
 
     py = tmp_path / "pyproject.toml"
-    py.write_text('[project]\nname = "some-app"\n[tool.ruff.lint]\nselect = ["G", "LOG", "T201"]\n')
+    py.write_text(
+        '[project]\nname = "some-app"\n[tool.ruff.lint]\nselect = ["G", "LOG", "T201"]\n'
+    )
     assert check_ruff_config(py, tmp_path) == []
