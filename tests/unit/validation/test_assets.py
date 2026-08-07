@@ -12,6 +12,7 @@ import importlib.util
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import msgspec
 import pytest
 from pyatlan_v9.model.assets import Column, Database, Schema, Table, View
 
@@ -463,3 +464,182 @@ def test_missing_parent_still_fails():
     errors = validate_asset(asset)
 
     assert any("table" in e for e in errors), errors
+
+
+# ---------------------------------------------------------------------------
+# Every failing (connector, typeName, relationship) seen in production
+# ---------------------------------------------------------------------------
+#
+# Harvested from the `asset_validation_matrix` on the structured
+# "Transformed-asset validation outcome" event, 2026-08-05..08 across the fleet.
+# Each tuple is a real failure signature, not an invented one: the connector that
+# emitted it, the Atlas typeName, and the relationship whose absence the error
+# named. Together they cover ~41k sampled failures across 9 connectors.
+#
+# `UnstructuredFolder.unstructured_container` (bridge, 44 samples) is deliberately
+# absent — that field does not exist on the pinned pyatlan_v9, so pinning it here
+# would assert against a model we do not ship.
+
+PROD_RELATIONSHIP_SIGNATURES = [
+    # (connector, typeName, relationship field, the EXACT error production logged)
+    (
+        "tableau",
+        "TableauCalculatedField",
+        "datasource",
+        "datasource is required for creation",
+    ),
+    ("fivetran", "ColumnProcess", "process", "process is required for creation"),
+    (
+        "thoughtspot",
+        "ThoughtspotColumn",
+        "thoughtspot_table",
+        "thoughtspot_table is required for creation",
+    ),
+    (
+        "tableau",
+        "TableauDashboardField",
+        "tableau_dashboard",
+        "tableau_dashboard is required for creation",
+    ),
+    ("tableau", "TableauDashboard", "workbook", "workbook is required for creation"),
+    ("mssql", "Schema", "database", "database is required for creation"),
+    ("mssql", "Procedure", "atlan_schema", "atlan_schema is required for creation"),
+    ("athena", "Table", "atlan_schema", "atlan_schema is required for creation"),
+    (
+        "athena",
+        "Column",
+        "table",
+        "one of table, table_partition, view, materialised_view is required for creation",
+    ),
+    (
+        "hive",
+        "Column",
+        "table",
+        "one of table, table_partition, view, materialised_view is required for creation",
+    ),
+    ("gcs", "GCSObject", "gcs_bucket", "gcs_bucket is required for creation"),
+    ("fivetran", "SalesforceField", "object", "object is required for creation"),
+    (
+        "fivetran",
+        "SalesforceObject",
+        "organization",
+        "organization is required for creation",
+    ),
+    (
+        "cosmos",
+        "CosmosMongoDBCollection",
+        "cosmos_mongo_db_database",
+        "cosmos_mongo_db_database is required for creation",
+    ),
+]
+
+
+def _related_class(cls: type, field_name: str) -> type:
+    """The concrete Related* struct a relationship field accepts."""
+    import typing
+
+    for f in msgspec.structs.fields(cls):
+        if f.name == field_name:
+            for arg in typing.get_args(f.type):
+                if arg is type(None) or arg is msgspec.UnsetType:
+                    continue
+                return arg
+    raise AssertionError(f"{cls.__name__} has no relationship field {field_name!r}")
+
+
+def _as_connector_writes_it(asset) -> bytes:
+    """Serialize the way connector apps do — relationships moved into
+    ``attributes``. Mirrors ``serialize_entity`` in the connector apps."""
+    import json
+
+    data = json.loads(asset.to_nested_bytes())
+    rels = data.pop("relationshipAttributes", None) or {}
+    for key, value in rels.items():
+        if value is not None:
+            data.setdefault("attributes", {})[key] = value
+    return json.dumps(data).encode()
+
+
+@pytest.mark.parametrize(
+    ("connector", "type_name", "relationship", "prod_error"),
+    PROD_RELATIONSHIP_SIGNATURES,
+    ids=[f"{c}-{t}.{r}" for c, t, r, _ in PROD_RELATIONSHIP_SIGNATURES],
+)
+def test_prod_relationship_signature_survives_the_move(
+    connector: str, type_name: str, relationship: str, prod_error: str
+):
+    """For every relationship production reported missing: it IS in the payload,
+    the old strict decode dropped it, and this decode keeps it.
+
+    Asserting the old decode drops it is the point — without that half, the test
+    would pass on unfixed code and prove nothing.
+
+    The assertion is on the exact message production logged, not a substring of
+    the field name: setting ``table`` activates companion checks that also
+    mention "table" (``table_name is required for creation``), so a looser
+    check would report a fix that had not happened.
+    """
+    from pyatlan_v9.model.transform import get_type
+
+    cls = get_type(type_name)
+    related_cls = _related_class(cls, relationship)
+
+    parent_qn = f"default/{connector}/1700000000/parent"
+    asset = cls(name="thing", qualified_name=f"{parent_qn}/thing")
+    setattr(asset, relationship, related_cls(qualified_name=parent_qn))
+
+    raw = _as_connector_writes_it(asset)
+
+    # Old behaviour: the strict nested decoder cannot see the relationship, and
+    # reproduces the exact production error.
+    dropped = cls.from_json(raw)
+    assert getattr(dropped, relationship) is msgspec.UNSET, (
+        f"{type_name}.{relationship} survived the old decode — "
+        "this test no longer reproduces the bug"
+    )
+    before = validate_asset(dropped)
+    assert any(prod_error in e for e in before), (
+        f"expected production error {prod_error!r}, got {before}"
+    )
+
+    # Fixed behaviour: relationship read back, that error gone.
+    decoded = assets_module._deserialize(raw)
+    assert type(decoded) is cls
+    assert getattr(decoded, relationship) is not msgspec.UNSET
+    assert getattr(decoded, relationship).qualified_name == parent_qn
+    after = validate_asset(decoded)
+    assert not any(prod_error in e for e in after), (
+        f"{prod_error!r} still reported after the fix: {after}"
+    )
+
+
+def test_prod_signature_matrix_is_not_empty():
+    """Guard against the parametrize list being emptied and the suite going
+    quietly green."""
+    assert len(PROD_RELATIONSHIP_SIGNATURES) >= 14
+    assert len({t for _, t, _, _ in PROD_RELATIONSHIP_SIGNATURES}) >= 12
+    assert len({c for c, _, _, _ in PROD_RELATIONSHIP_SIGNATURES}) >= 8
+
+
+def test_scalar_gaps_are_not_claimed_to_be_fixed():
+    """Some production failures name plain attributes, not relationships —
+    e.g. fivetran Column also reports `schema_name` / `database_name` /
+    `order` missing. Those are real gaps in the transformed data and this fix
+    does NOT address them. Pinned so nobody reads the fix as clearing every
+    failure on the board.
+    """
+    from pyatlan_v9.model.assets.sql_related import RelatedTable
+    from pyatlan_v9.model.transform import get_type
+
+    cls = get_type("Column")
+    col = cls(name="c", qualified_name="default/fivetran/1700000000/t/c")
+    col.table = RelatedTable(qualified_name="default/fivetran/1700000000/t")
+
+    decoded = assets_module._deserialize(_as_connector_writes_it(col))
+    errors = validate_asset(decoded)
+
+    # The relationship error is gone...
+    assert not any("one of table" in e for e in errors), errors
+    # ...but the missing scalars are still correctly reported.
+    assert any("schema_name is required" in e for e in errors), errors
+    assert any("database_name is required" in e for e in errors), errors
