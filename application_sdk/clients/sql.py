@@ -553,8 +553,10 @@ class BaseSQLClient(ClientInterface):
             raise
         # conformance: ignore[E004] exception re-raised immediately as typed SqlPandasResultError; cause chain preserved via `from e`
         except Exception as e:
+            # retryable=True: unclassified driver exception — do not override the
+            # activity's declared retry policy. See SqlPandasResultError docstring.
             raise SqlPandasResultError(
-                message="Error reading batched data from SQL", cause=e
+                message="Error reading batched data from SQL", cause=e, retryable=True
             ) from e
 
     async def get_results(self, query: str) -> "pd.DataFrame":
@@ -580,7 +582,9 @@ class BaseSQLClient(ClientInterface):
             raise
         # conformance: ignore[E004] exception re-raised immediately as typed SqlPandasResultError; cause chain preserved via `from e`
         except Exception as e:
-            raise SqlPandasResultError(cause=e) from e
+            # retryable=True: unclassified driver exception — do not override the
+            # activity's declared retry policy. See SqlPandasResultError docstring.
+            raise SqlPandasResultError(cause=e, retryable=True) from e
 
 
 class AsyncBaseSQLClient(BaseSQLClient):
@@ -725,8 +729,13 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 raise
             # conformance: ignore[E004] exception re-raised immediately as typed SqlPandasResultError; cause chain preserved via `from e`
             except Exception as e:
+                # retryable=True: unclassified driver exception — do not override
+                # the activity's declared retry policy. A transient source-side
+                # condition (concurrent DDL, lock contention, dropped connection)
+                # is indistinguishable from a permanent one here.
+                # See SqlPandasResultError docstring.
                 raise SqlPandasResultError(
-                    message="Error executing SQL query", cause=e
+                    message="Error executing SQL query", cause=e, retryable=True
                 ) from e
             # Async connection automatically closed by context manager
 
