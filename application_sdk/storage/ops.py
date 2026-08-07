@@ -465,7 +465,7 @@ async def upload_file(
     local_path: str | Path,
     store: BoundStore | ObjectStore | None = None,
     *,
-    chunk_size: int = 8 * 1024 * 1024,
+    chunk_size: int | None = None,
     normalize: bool = True,
     retain_local_copy: bool = True,
     compute_hash: bool = True,
@@ -483,9 +483,12 @@ async def upload_file(
         key: Destination object key.  Normalised by default.
         local_path: Path to the local file to upload.
         store: Target store, or ``None`` to use the infrastructure store.
-        chunk_size: Desired chunk / part size in bytes (default 8 MiB).
-            Increased automatically if the file is large enough to exceed
-            the 9,900-part safety limit.
+        chunk_size: Desired chunk / part size in bytes.  ``None`` (default)
+            takes ``ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES``, itself defaulting
+            to 8 MiB.  Increased automatically if the file is large enough to
+            exceed the 9,900-part safety limit.  Raise it per deployment when
+            the destination charges by part *count* — see the constant's
+            docstring for the S3-proxy-over-GCS case.
         normalize: When ``True`` (default), normalise *key* before use.
         retain_local_copy: When ``True`` (default), keep the local file after
             upload.  When ``False``, delete the local file after a successful
@@ -515,9 +518,16 @@ async def upload_file(
     if normalize:
         key = normalize_key(key)
 
+    from application_sdk.constants import (  # noqa: PLC0415
+        STORAGE_UPLOAD_MAX_CONCURRENCY as _max_concurrency,
+        STORAGE_UPLOAD_PART_SIZE_BYTES as _default_part_size,
+    )
+
     path = Path(local_path)
     file_size = path.stat().st_size
-    effective_chunk = _compute_part_size(file_size, chunk_size)
+    effective_chunk = _compute_part_size(
+        file_size, _default_part_size if chunk_size is None else chunk_size
+    )
 
     if file_size == 0:
         logger.warning(
@@ -537,7 +547,11 @@ async def upload_file(
     bytes_sent = 0
     try:
         async with obstore.open_writer_async(
-            resolved, key, buffer_size=effective_chunk, attributes=put_attributes
+            resolved,
+            key,
+            buffer_size=effective_chunk,
+            max_concurrency=_max_concurrency,
+            attributes=put_attributes,
         ) as writer:
             with path.open("rb") as fh:
                 while True:
