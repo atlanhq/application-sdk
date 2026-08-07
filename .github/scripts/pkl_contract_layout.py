@@ -47,7 +47,7 @@ files the toolkit does not own:
   * **Prefixed: replace the generated dir wholesale.** ``App.pkl`` emits every
     file under ``app/generated/`` including ``__init__.py``, so a
     rmtree+copytree is safe and clears orphans left by a removed or renamed
-    entrypoint.
+    entrypoint — with one carve-out, ``RESERVED_GENERATED_SUBDIRS`` below.
 
   * **Native: overwrite emitted files in place, never delete.** The generated
     dir here holds files pkl does not emit — e.g. the ``__init__.py`` an app's
@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 # Repo-root files both families emit at the top level of the eval output. They
@@ -75,6 +76,21 @@ ROOT_FILES = ("atlan.yaml", "app.yaml")
 # Where an app keeps its generated artifacts. The overwhelming default across
 # the fleet; apps that differ are refused rather than mis-written.
 GENERATED_DIR = "app/generated"
+
+# Subdirectory names under the generated dir that NO pkl contract, in any
+# family or toolkit version, ever emits into — so baseline/override detection
+# (which compares what a contract emitted then vs. now) can never see them and
+# the prefixed family's wholesale rmtree+copytree would otherwise delete them
+# on every regeneration.
+#
+# ``"frontend"``: ``create_app_handler_service``'s ``frontend_assets_path``
+# defaults to ``<generated_dir>/frontend/static``, populated by the
+# ``@atlanhq/app-playground`` CLI, not by any contract. Re-running that CLI to
+# restore the directory is not an option — its build output is not
+# byte-reproducible (fresh content hashes and a random build UUID every run,
+# confirmed against the same pinned package version), so a diff-based swap can
+# never converge; the only stable behavior is to leave it untouched.
+RESERVED_GENERATED_SUBDIRS = ("frontend",)
 
 # Optional app-owned script run after a successful swap, relative to the contract
 # dir. A convention rather than a per-workflow input on purpose: every
@@ -208,6 +224,49 @@ def overridden_files(
     return overridden
 
 
+def _withhold_reserved_subdirs(target: Path) -> dict[str, Path]:
+    """Move each existing ``RESERVED_GENERATED_SUBDIRS`` entry out of ``target``
+    into a temp holding dir, ahead of a wholesale rmtree.
+
+    Returns ``{name: backup_path}`` for every subdir that existed, to be handed
+    to ``_restore_reserved_subdirs``. Never raises: a reserved name that is not
+    a directory (or is absent) is simply skipped.
+    """
+    backups: dict[str, Path] = {}
+    for name in RESERVED_GENERATED_SUBDIRS:
+        src = target / name
+        if src.is_dir():
+            holding = Path(tempfile.mkdtemp())
+            backup = holding / name
+            shutil.move(str(src), str(backup))
+            backups[name] = backup
+    return backups
+
+
+def _restore_reserved_subdirs(target: Path, backups: dict[str, Path]) -> None:
+    """Move withheld reserved subdirs back under ``target`` and clean up.
+
+    Skips (and warns on) a name the fresh copytree unexpectedly recreated —
+    e.g. a future contract legitimately emitting that name — rather than
+    silently overwriting it; that would only happen if a contract started
+    emitting a key under a reserved name, which is a real change to surface,
+    not paper over.
+    """
+    for name, backup in backups.items():
+        dest = target / name
+        if dest.exists():
+            print(
+                f"::warning::pkl eval emitted '{name}' under the generated dir, "
+                "which collides with a reserved name normally left untouched "
+                f"(RESERVED_GENERATED_SUBDIRS); keeping the freshly emitted "
+                f"'{name}' and discarding the withheld copy."
+            )
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(backup), str(dest))
+        shutil.rmtree(backup.parent, ignore_errors=True)
+
+
 def swap_outputs(
     out_dir: Path,
     generated_dir: str = GENERATED_DIR,
@@ -224,6 +283,10 @@ def swap_outputs(
     generated from. When given, files the app post-processes are detected and
     preserved — see ``overridden_files``. Omit it (the default) to overwrite
     everything the eval emitted.
+
+    In the prefixed family, any existing ``RESERVED_GENERATED_SUBDIRS`` entry
+    (e.g. ``frontend/``) survives the wholesale replace unconditionally — no
+    baseline needed, since pkl never emits into it in the first place.
 
     Returns False — touching nothing under ``generated_dir`` — when the output
     holds no generated artifacts (``root-only``/``empty``) or when the native
@@ -285,6 +348,7 @@ def swap_outputs(
         preserved = {
             dest: dest.read_bytes() for dest in skip if dest.is_relative_to(target)
         }
+        reserved = _withhold_reserved_subdirs(target)
         shutil.rmtree(target, ignore_errors=True)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(out_dir / "app" / "generated", target)
@@ -294,6 +358,7 @@ def swap_outputs(
         for dest, content in preserved.items():
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(content)
+        _restore_reserved_subdirs(target, reserved)
         return True
 
     # Native: overwrite-only. The generated dir can hold app-owned files this
