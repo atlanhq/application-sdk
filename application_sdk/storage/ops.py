@@ -465,7 +465,7 @@ async def upload_file(
     local_path: str | Path,
     store: BoundStore | ObjectStore | None = None,
     *,
-    chunk_size: int = 8 * 1024 * 1024,
+    chunk_size: int | None = None,
     normalize: bool = True,
     retain_local_copy: bool = True,
     compute_hash: bool = True,
@@ -483,9 +483,14 @@ async def upload_file(
         key: Destination object key.  Normalised by default.
         local_path: Path to the local file to upload.
         store: Target store, or ``None`` to use the infrastructure store.
-        chunk_size: Desired chunk / part size in bytes (default 8 MiB).
-            Increased automatically if the file is large enough to exceed
-            the 9,900-part safety limit.
+        chunk_size: Desired chunk / part size in bytes, honoured only when
+            ``ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES`` is unset — a deployment
+            that sets it overrides the caller, since the workable part size
+            depends on the destination the deployment writes to rather than on
+            the app.  Defaults to 8 MiB when neither is given.  Increased
+            automatically if the file is large enough to exceed the 9,900-part
+            safety limit.  See the constant's docstring for the
+            S3-proxy-over-GCS case that makes part *count* what matters.
         normalize: When ``True`` (default), normalise *key* before use.
         retain_local_copy: When ``True`` (default), keep the local file after
             upload.  When ``False``, delete the local file after a successful
@@ -515,9 +520,36 @@ async def upload_file(
     if normalize:
         key = normalize_key(key)
 
+    from application_sdk.constants import (  # noqa: PLC0415
+        STORAGE_UPLOAD_MAX_CONCURRENCY,
+        STORAGE_UPLOAD_PART_SIZE_BYTES,
+        STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN,
+    )
+
+    # A deployment that sets the part size overrides the caller. The size that
+    # keeps a completion inside the destination's idle timeout depends on where
+    # the deployment writes; an app cannot know which tenant it lands on, so it
+    # must not be able to pin a value the operator then cannot correct.
+    if (
+        STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN
+        and chunk_size is not None
+        and chunk_size != STORAGE_UPLOAD_PART_SIZE_BYTES
+    ):
+        logger.debug(
+            "Using deployment part size %d instead of the requested %d " "for key '%s'",
+            STORAGE_UPLOAD_PART_SIZE_BYTES,
+            chunk_size,
+            key,
+        )
+    requested_chunk = (
+        STORAGE_UPLOAD_PART_SIZE_BYTES
+        if (STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN or chunk_size is None)
+        else chunk_size
+    )
+
     path = Path(local_path)
     file_size = path.stat().st_size
-    effective_chunk = _compute_part_size(file_size, chunk_size)
+    effective_chunk = _compute_part_size(file_size, requested_chunk)
 
     if file_size == 0:
         logger.warning(
@@ -537,7 +569,11 @@ async def upload_file(
     bytes_sent = 0
     try:
         async with obstore.open_writer_async(
-            resolved, key, buffer_size=effective_chunk, attributes=put_attributes
+            resolved,
+            key,
+            buffer_size=effective_chunk,
+            max_concurrency=STORAGE_UPLOAD_MAX_CONCURRENCY,
+            attributes=put_attributes,
         ) as writer:
             with path.open("rb") as fh:
                 while True:
