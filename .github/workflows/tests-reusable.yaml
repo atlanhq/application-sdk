@@ -935,12 +935,25 @@ jobs:
       # and the tenant pulls. A leg that quietly built the wrong architecture
       # shows up here as a missing one — nothing downstream would catch it, since
       # GM accepts the version and LM accepts the install regardless.
+      #
+      # Retried, and this is the one place that genuinely needs it. The build legs
+      # avoid the read-after-write race entirely by loading their image locally
+      # (build-app-image's `--load`), but `imagetools create` is purely
+      # registry-side: the manifest list it writes exists ONLY in the registry, so
+      # there is no local copy to inspect and reading it back one step later is
+      # exactly the pattern that failed a build leg with `manifest unknown` 0.7s
+      # after its own push reported success.
+      #
+      # The retry wraps the inspect, not the assertion over its output, so a
+      # genuinely single-arch manifest still fails once rather than three times.
       - name: Assert the manifest serves both architectures
         env:
           IMAGE: ${{ needs.build-e2e-image.outputs.image-base }}
         run: |
           set -euo pipefail
-          docker buildx imagetools inspect --raw "$IMAGE" \
+          RAW=$(application-sdk-scripts/.github/scripts/with-retry.sh \
+            docker buildx imagetools inspect --raw "$IMAGE")
+          printf '%s' "$RAW" \
             | python3 application-sdk-scripts/.github/scripts/assert_image_platforms.py \
                 --expected linux/amd64,linux/arm64
 

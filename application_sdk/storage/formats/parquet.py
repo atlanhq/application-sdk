@@ -848,8 +848,15 @@ class ParquetFileWriter(Writer):
                     len(table), 16_000_000 // max(1, table.nbytes // max(1, len(table)))
                 ),
             )
-            pq.write_table(
-                table, file_name, compression="snappy", row_group_size=row_group_size
+            # Offloaded: pq.write_table() is blocking disk I/O; running it
+            # inline stalls the event loop — including the auto-heartbeat —
+            # for the write's full duration on large chunks.
+            await run_in_thread(
+                pq.write_table,
+                table,
+                file_name,
+                compression="snappy",
+                row_group_size=row_group_size,
             )
             return
 
@@ -864,6 +871,10 @@ class ParquetFileWriter(Writer):
         row_group_size = max(
             1, min(len(table), 16_000_000 // max(1, table.nbytes // max(1, len(table))))
         )
-        pq.write_table(
-            table, file_name, compression="snappy", row_group_size=row_group_size
+        await run_in_thread(
+            pq.write_table,
+            table,
+            file_name,
+            compression="snappy",
+            row_group_size=row_group_size,
         )
