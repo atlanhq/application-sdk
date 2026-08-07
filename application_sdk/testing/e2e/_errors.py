@@ -22,10 +22,19 @@ from application_sdk.errors.leaves import (
 
 @dataclass(kw_only=True)
 class AtlanApiHttpError(DependencyUnavailableError):
-    """Non-2xx response from the Atlan Automation Engine API."""
+    """Non-2xx response from the Atlan Automation Engine API.
+
+    ``retry_after_seconds`` carries the origin's own backoff request when the
+    response body supplied one (``{"retryable": true, "retry_after": 120}``).
+    Named to match :class:`~application_sdk.errors.leaves.RateLimitedError`'s
+    field of the same meaning. Retry loops honour it instead of their fixed
+    gap; on a terminal raise it stays attached so the operator can see the
+    wait the origin asked for versus the budget the harness had.
+    """
 
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_ATLAN_API"
     service: str | None = "atlan_api"
+    retry_after_seconds: float | None = None
 
 
 @dataclass(kw_only=True)

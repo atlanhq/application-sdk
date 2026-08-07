@@ -35,6 +35,7 @@ node statuses, ``"Running" | "Pending" | "Scheduled"`` as in-flight.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 import urllib.error
 import urllib.request
@@ -86,6 +87,27 @@ _SUBMIT_TIMEOUT = 120
 _REQUEST_MAX_ATTEMPTS = 4
 _REQUEST_BACKOFF_SECONDS = 3
 
+# An overloaded tenant answers a retryable 5xx with its own estimate of how
+# long to wait before trying again:
+#
+#     {"retryable": true, "retry_after": 120,
+#      "what_you_should_do": "Wait and retry. Back off for at least 120 s."}
+#
+# The fixed inter-attempt gap used to ignore that, so a 5-attempt / 5 s budget
+# expired ~20 s into a 120 s window: the retry could not succeed by
+# construction whenever the origin was genuinely slow (it only ever helped for
+# blips shorter than the whole budget). We now honour the origin's number,
+# bounded two ways so a pathological value cannot hang a CI leg:
+#
+# * each individual wait is capped at ``_MAX_RETRY_AFTER_SECONDS``;
+# * the total honoured-above-the-fixed-gap wait within one retry loop is capped
+#   at ``_RETRY_AFTER_BUDGET_SECONDS``, after which the remaining attempts fall
+#   back to the caller's fixed gap.
+#
+# The attempt counts stay as they were — the gap was the wrong part.
+_MAX_RETRY_AFTER_SECONDS = 120
+_RETRY_AFTER_BUDGET_SECONDS = 300
+
 # Cadence for "still polling" heartbeat log lines in
 # ``poll_native_status`` — lineage stages take 2-5 min on small
 # datasets and the status string doesn't change during that time, so
@@ -118,6 +140,100 @@ _RUN_GLYPHS = {
     "TimedOut": "⏰",
     "Skipped": "⏭️",
 }
+
+
+# Keys an origin may use for the backoff hint, and the one-level envelopes we
+# have seen it wrapped in. Heracles puts it at the top level; AE's generic
+# error shape nests the detail under ``data`` / ``error``.
+_RETRY_AFTER_KEYS = ("retry_after", "retryAfter")
+_RETRY_AFTER_ENVELOPE_KEYS = ("data", "error", "detail")
+
+
+def _requested_retry_after(body: dict[str, Any] | str | None) -> int | None:
+    """Seconds the origin asked us to wait, or ``None`` when it didn't ask.
+
+    Reads ``retry_after`` from the response body — top level, or nested one
+    level inside a ``data`` / ``error`` / ``detail`` envelope. Fractional
+    values round up (a hint of 0.5 s means "at least half a second", so
+    truncating it to 0 would be wrong). Anything non-numeric or non-positive
+    is treated as absent: a hint we cannot act on must leave the caller's
+    fixed gap in place rather than collapse the wait to zero.
+    """
+    if not isinstance(body, dict):
+        return None
+    candidates: list[Any] = [body.get(key) for key in _RETRY_AFTER_KEYS]
+    for envelope_key in _RETRY_AFTER_ENVELOPE_KEYS:
+        envelope = body.get(envelope_key)
+        if isinstance(envelope, dict):
+            candidates.extend(envelope.get(key) for key in _RETRY_AFTER_KEYS)
+    for value in candidates:
+        # bool is an int subclass — `retryable: true` must not read as 1 s.
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            continue
+        try:
+            seconds = math.ceil(float(value))
+        except (ValueError, OverflowError):
+            # Non-numeric string, or inf/nan. Benign: an unreadable hint just
+            # leaves the caller's fixed gap in place, so probe the next
+            # candidate key rather than failing the retry.
+            logger.debug(
+                "ignoring unusable retry_after value %r in response body",
+                value,
+                exc_info=True,
+            )
+            continue
+        if seconds > 0:
+            return seconds
+    return None
+
+
+@dataclass(frozen=True)
+class _RetryGap:
+    """How long to wait before the next attempt, and what the origin asked for."""
+
+    seconds: int
+    # What the body requested, before capping. ``None`` when it carried no
+    # hint, in which case ``seconds`` is the caller's fixed gap.
+    requested: int | None
+
+    @property
+    def origin_note(self) -> str:
+        """Log fragment naming the origin's request, empty when it made none."""
+        if self.requested is None:
+            return ""
+        if self.requested == self.seconds:
+            return " (origin asked for this)"
+        return f" (origin asked for {self.requested}s, capped)"
+
+
+def _retry_gap(
+    requested: float | None,
+    *,
+    default_seconds: int,
+    budget_left: int,
+) -> _RetryGap:
+    """Pick the wait before the next attempt, honouring the origin's request.
+
+    Returns the caller's ``default_seconds`` when the origin asked for nothing
+    usable. Otherwise returns the requested wait clamped to
+    ``_MAX_RETRY_AFTER_SECONDS`` and to ``budget_left`` — and never below
+    ``default_seconds``, so honouring a hint can only ever lengthen the gap,
+    never shorten it below what the loop already guaranteed.
+
+    Args:
+        requested: Seconds the origin asked for, from
+            :func:`_requested_retry_after` or an error's
+            ``retry_after_seconds``. ``None`` / non-positive means no request.
+        default_seconds: The loop's own fixed gap — the floor, and the answer
+            when there is no request.
+        budget_left: Seconds of above-the-floor waiting still permitted in
+            this loop. Zero (or less) degrades cleanly to ``default_seconds``.
+    """
+    if requested is None or requested <= 0:
+        return _RetryGap(seconds=default_seconds, requested=None)
+    wanted = math.ceil(requested)
+    allowed = min(wanted, _MAX_RETRY_AFTER_SECONDS, max(budget_left, 0))
+    return _RetryGap(seconds=max(default_seconds, allowed), requested=wanted)
 
 
 def _is_credential_name_conflict(status: int, body: dict[str, Any] | str) -> bool:
@@ -462,7 +578,12 @@ class AEWorkflowClient:
             path: URL path relative to ``self.tenant_url``.
             body: Optional JSON-serialisable request body.
             total_attempts: Maximum number of calls (1 initial + N retries).
-            sleep_seconds: Seconds to sleep between attempts.
+            sleep_seconds: Seconds to sleep between attempts. A response that
+                asks for a longer wait via ``retry_after`` overrides it for
+                that attempt, bounded by ``_MAX_RETRY_AFTER_SECONDS`` and the
+                per-call ``_RETRY_AFTER_BUDGET_SECONDS`` (see
+                :func:`_retry_gap`). A timeout has no body to read, so it
+                always uses the fixed gap.
             retryable: Called with ``(status, body)`` after each response.
                 Return True to retry — works for both non-2xx status codes
                 and 2xx responses with an unexpected body shape.  Return
@@ -478,6 +599,9 @@ class AEWorkflowClient:
                 server already accepted the request spawns a duplicate run.
         """
         last: tuple[int, dict[str, Any] | str] = (0, {})
+        # Seconds spent waiting *beyond* the fixed gap because the origin asked
+        # for longer. Bounds the total honoured backoff across the whole call.
+        honoured_seconds = 0
         for attempt in range(1, total_attempts + 1):
             try:
                 status, resp_body = self._request(
@@ -522,18 +646,25 @@ class AEWorkflowClient:
                     )
                 return last
             if is_retry and attempt < total_attempts:
+                gap = _retry_gap(
+                    _requested_retry_after(resp_body),
+                    default_seconds=sleep_seconds,
+                    budget_left=_RETRY_AFTER_BUDGET_SECONDS - honoured_seconds,
+                )
+                honoured_seconds += gap.seconds - sleep_seconds
                 logger.warning(
-                    "%s attempt %d/%d: HTTP %d — retrying in %ds  body=%r",
+                    "%s attempt %d/%d: HTTP %d — retrying in %ds%s  body=%r",
                     op_name,
                     attempt,
                     total_attempts,
                     status,
-                    sleep_seconds,
+                    gap.seconds,
+                    gap.origin_note,
                     resp_body,
                 )
                 if mutate_before_retry is not None:
                     mutate_before_retry(body)
-                time.sleep(sleep_seconds)
+                time.sleep(gap.seconds)
                 continue
             break
         return last
@@ -556,7 +687,10 @@ class AEWorkflowClient:
         existing workflow's slug.
 
         Retries on HTTP 5xx and timeout. 4 retries at 5s intervals covers
-        the typical AE recovery window without sitting on a hard failure.
+        the typical AE recovery window without sitting on a hard failure —
+        and when an overloaded origin names its own window via
+        ``retry_after``, the gap stretches to match it (see
+        :func:`_retry_gap`) instead of expiring the whole budget inside it.
 
         Returns:
             The workflow slug (used by subsequent version + submit calls).
@@ -581,6 +715,7 @@ class AEWorkflowClient:
         raise AtlanApiHttpError(
             message=f"create_workflow failed: HTTP {status}\nresponse={body!r}",
             target=f"POST /automation/api/v1/workflows HTTP {status}",
+            retry_after_seconds=_requested_retry_after(body),
         )
 
     def create_version(
@@ -621,6 +756,7 @@ class AEWorkflowClient:
         raise AtlanApiHttpError(
             message=f"create_version failed: HTTP {status}\nresponse={body!r}",
             target=f"POST /automation/api/v1/workflows/.../versions HTTP {status}",
+            retry_after_seconds=_requested_retry_after(body),
         )
 
     def publish_version(
@@ -651,6 +787,7 @@ class AEWorkflowClient:
         raise AtlanApiHttpError(
             message=f"publish_version failed after {retries} attempts: {body!r}",
             target="POST /automation/api/v1/workflows/.../versions/.../publish",
+            retry_after_seconds=_requested_retry_after(body),
         )
 
     def submit_workflow(
@@ -729,6 +866,7 @@ class AEWorkflowClient:
         raise AtlanApiHttpError(
             message=f"AE submit failed: HTTP {status}\nresponse={body!r}",
             target=f"POST /api/service/package-workflows?submit=true HTTP {status}",
+            retry_after_seconds=_requested_retry_after(body),
         )
 
     def get_native_status(self, run_id: str) -> DAGRunResult:
@@ -746,6 +884,9 @@ class AEWorkflowClient:
             raise AtlanApiHttpError(
                 message=f"native-status failed: HTTP {status}\nresponse={body!r}",
                 target=f"GET /api/service/package-workflows/native-status HTTP {status}",
+                # Carried so poll_native_status can back off for as long as the
+                # origin asked instead of its fixed poll cadence.
+                retry_after_seconds=_requested_retry_after(body),
             )
         nodes_raw = body.get("dag_nodes") or {}
         nodes = [
@@ -790,6 +931,11 @@ class AEWorkflowClient:
         on a single bad response. After ``max_transient_failures``
         consecutive errors we give up and re-raise — that's a
         sustained outage, not a blip, and there's no point waiting.
+        When the failing response names a ``retry_after``, the next poll
+        waits that long instead of ``interval_seconds``, so an origin asking
+        for a 2-minute backoff doesn't consume the whole failure streak
+        inside its own wait window. ``timeout_seconds`` still bounds the
+        loop — the longer sleeps count against it.
 
         Fail-fast stall guard: when ``stall_grace_seconds`` is a positive int
         (``None`` or any value ``<= 0`` disables it) and NO DAG node has left the
@@ -837,16 +983,28 @@ class AEWorkflowClient:
                         exc_info=True,
                     )
                     raise
+                # Back off for as long as the origin asked when it said so,
+                # rather than the poll cadence: an overloaded tenant answering
+                # "retry_after: 120" would otherwise burn the whole
+                # max_transient_failures streak inside its own wait window.
+                # ``elapsed`` advances by the real wait, so timeout_seconds
+                # still bounds the loop.
+                gap = _retry_gap(
+                    e.retry_after_seconds if isinstance(e, AtlanApiHttpError) else None,
+                    default_seconds=interval_seconds,
+                    budget_left=_RETRY_AFTER_BUDGET_SECONDS,
+                )
                 logger.warning(
-                    "native-status transient error (streak %d/%d): %s — sleeping %ds and retrying",
+                    "native-status transient error (streak %d/%d): %s — sleeping %ds%s and retrying",
                     transient_streak,
                     max_transient_failures,
                     e,
-                    interval_seconds,
+                    gap.seconds,
+                    gap.origin_note,
                     exc_info=True,
                 )
-                time.sleep(interval_seconds)
-                elapsed += interval_seconds
+                time.sleep(gap.seconds)
+                elapsed += gap.seconds
                 continue
             transient_streak = 0
             last_result = result
