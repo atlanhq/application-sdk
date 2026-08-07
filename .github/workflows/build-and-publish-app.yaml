@@ -87,6 +87,11 @@ on:
         required: false
         type: boolean
         default: false
+      use_ghcr_base:
+        description: "Resolve the SDK base image from GHCR instead of Harbor during the image build. Opt-in while the GHCR path is being rolled out; the default will flip to true once canary apps have soaked, and the flag will then be removed. See the 'Build and push arch image' step for the mechanics and docs/standards/build-security.md for why the mirror exists. Default false — every caller builds from Harbor exactly as before."
+        required: false
+        type: boolean
+        default: false
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -1133,7 +1138,9 @@ jobs:
           file: ${{ needs.prepare.outputs.dockerfile }}
           platforms: ${{ matrix.platform }}
           push: true
-          # Resolve the SDK base image from GHCR instead of Harbor.
+          # Resolve the SDK base image from GHCR instead of Harbor, when the
+          # caller opts in via use_ghcr_base. Empty (the default) leaves the
+          # build resolving from Harbor exactly as before.
           #
           # Harbor is S3-backed and 307-redirects blobs to presigned S3 URLs, so
           # the bytes go S3 -> runner and bill as S3 DataTransfer-Out. GHCR pulls
@@ -1148,8 +1155,19 @@ jobs:
           # against, while retrieval is an internal detail we can repoint. When
           # the public base moves off Harbor, update the left-hand side here --
           # a rate-limited public registry makes this more necessary, not less.
-          build-contexts: |
-            registry.atlan.com/public/app-runtime-base:3=docker-image://ghcr.io/atlanhq/app-runtime-base:3
+          #
+          # Rollout: every app repo pins this workflow at @main, so an ungated
+          # redirect would switch ~96 builds in one merge with no way back other
+          # than a revert that each app picks up on its next build. The flag
+          # inverts that -- canaries opt in per repo, and flipping the default
+          # later is a one-line change here rather than a fleet-wide event.
+          #
+          # A tag the substitution does not match is a silent no-op: the build
+          # succeeds and simply pulls from Harbor. So a green canary build is NOT
+          # evidence the redirect fired -- confirm `ghcr.io/atlanhq/app-runtime-base`
+          # appears in BuildKit's resolved contexts in the run log, and watch S3
+          # egress on the apps account for the actual signal.
+          build-contexts: ${{ inputs.use_ghcr_base && 'registry.atlan.com/public/app-runtime-base:3=docker-image://ghcr.io/atlanhq/app-runtime-base:3' || '' }}
           tags: ${{ needs.prepare.outputs.ghcr_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.image_tag }}-${{ matrix.arch }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
