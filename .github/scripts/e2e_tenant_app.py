@@ -900,8 +900,14 @@ def _image_repository(reference: str) -> str:
     last colon only counts when a tag follows it.
     """
     reference = reference.strip().split("@", 1)[0]
-    head, sep, tag = reference.rpartition(":")
-    return head if sep and tag else reference
+    # The last colon is a tag separator only when it sits in the FINAL
+    # slash-segment (the heuristic `_repo_from_image` already uses): in
+    # ``ghcr.io:5000/org/repo`` the colon is the registry's port, and cutting
+    # there reads the repository as bare ``ghcr.io`` — which can read OUR
+    # failing image as foreign, the misread this module must never make.
+    if ":" not in reference.rsplit("/", 1)[-1]:
+        return reference
+    return reference.rpartition(":")[0]
 
 
 def _image_tag(reference: str) -> str:
@@ -913,6 +919,11 @@ def _image_tag(reference: str) -> str:
     back the whole string, which would read the repository AS the tag.
     """
     reference = _PINNED_IMAGE_RE.sub("", reference.strip())
+    # Same final-segment rule as `_image_repository`: a colon left of the last
+    # slash is a registry port (``ghcr.io:5000/org/repo``), not a tag, and
+    # reading ``5000/org/repo`` as the tag breaks the same-repository compare.
+    if ":" not in reference.rsplit("/", 1)[-1]:
+        return ""
     head, sep, tag = reference.rpartition(":")
     return tag if sep and head else ""
 

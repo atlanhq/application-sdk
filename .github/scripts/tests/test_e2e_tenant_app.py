@@ -1496,6 +1496,31 @@ def test_image_tag_extraction() -> None:
     assert app._image_tag(f"{repo}@{_DIGEST}") == ""
 
 
+def test_a_registry_port_is_never_read_as_a_tag() -> None:
+    """``ghcr.io:5000/org/repo`` carries its colon left of the final slash.
+
+    Reading that port colon as the tag separator parses the repository as bare
+    ``ghcr.io`` — which compares unequal to our own ported reference and reads
+    OUR failing image as foreign, the one misread the override must never make.
+    """
+    ported = "ghcr.io:5000/atlanhq/atlan-openapi-app"
+    assert app._image_repository(f"{ported}:sdr-test-abc123") == ported
+    assert app._image_repository(f"{ported}@{_DIGEST}") == ported
+    assert app._image_repository(f"{ported}:sdr-test-abc123@{_DIGEST}") == ported
+    assert app._image_repository(ported) == ported
+    assert app._image_tag(f"{ported}:sdr-test-abc123") == "sdr-test-abc123"
+    assert app._image_tag(f"{ported}@{_DIGEST}") == ""
+    assert app._image_tag(f"{ported}:sdr-test-abc123@{_DIGEST}") == "sdr-test-abc123"
+    assert app._image_tag(ported) == ""
+
+
+def test_our_ported_image_failing_by_digest_is_never_foreign() -> None:
+    """The ported-registry misread, end to end: tag-form --image, digest-form failure."""
+    ported = "ghcr.io:5000/atlanhq/atlan-openapi-app"
+    events = f'Failed to pull image "{ported}@{_DIGEST}": manifest unknown'
+    assert app.foreign_failure(events, f"{ported}:sdr-test-abc123") == []
+
+
 def test_a_mix_of_ours_and_an_orphan_is_never_foreign() -> None:
     events = (
         f'Back-off pulling image "{_ORPHAN}"\n'
