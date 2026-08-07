@@ -362,6 +362,11 @@ class Widget {
   /// Whether to prevent the Test Authentication button from showing.
   isTestAuthenticationDisabled: Boolean?
 
+  /// Whether to show the Test Authentication action on the agent widget (true),
+  /// in both create and edit flows. The agent widget reads this positive flag;
+  /// unset leaves the agent widget test-auth-free.
+  showTestAuthentication: Boolean?
+
   /// Whether to flatten values retrieved via API.
   flattenValue: Boolean?
 
@@ -1232,10 +1237,17 @@ class AgentSelector extends UIElement {
 
   hidden placeholderText: String?
 
+  /// (Optional) Show the interactive "Test authentication" action on the agent
+  /// widget (button + auto-fire on validate), in both the create and edit flows.
+  hidden allowTestAuthentication: Boolean?
+
   fixed ui {
     widget = "agent"
     agentConfigs = agentConfigEntries
     placeholder = placeholderText
+    when (allowTestAuthentication != null) {
+      showTestAuthentication = allowTestAuthentication
+    }
   }
 }
 

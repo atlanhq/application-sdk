@@ -45,6 +45,7 @@ import asyncio
 import hashlib
 import re
 import traceback
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
@@ -57,6 +58,7 @@ from application_sdk.credentials.errors import (
     CredentialParseError,
 )
 from application_sdk.errors import ColdStartRaceError, redact_secrets
+from application_sdk.errors.leaves import DependencyUnavailableError
 from application_sdk.infrastructure import (
     DAPR_SECRET_STORE_COMPONENT,
     retry_past_dapr_cold_start,
@@ -153,10 +155,10 @@ async def resolve_agent_credential(
 
     if spec.key_type == "single-key":
         bundle = await _fetch_per_key_bundle(secret_store, raw)
-        resolved_flat = _substitute(raw, bundle)
+        resolved_flat, _ = _substitute(raw, bundle)
     elif spec.secret_path:
         bundle = await _fetch_bundle(secret_store, spec.secret_path)
-        resolved_flat = _substitute(raw, bundle)
+        resolved_flat, _ = _substitute(raw, bundle)
     else:
         resolved_flat = raw
 
@@ -207,13 +209,24 @@ async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str
         )
     except SecretNotFoundError as exc:
         raise CredentialNotFoundError(secret_path) from exc
-    # conformance: ignore[E004] re-raises immediately as typed CredentialError with chained cause; logging deferred to caller boundary
-    except Exception as exc:
+    except Exception as exc:  # conformance: ignore[E004] scrubbed traceback logged here at the boundary; a clean-message CredentialError is raised for the caller/UI
+        # The secret store returned an error or is unreachable (distinct from a
+        # missing bundle, handled above). Log the scrubbed underlying cause for
+        # diagnosis, then raise a clean-message CredentialError WITHOUT chaining
+        # the raw exception: Temporal surfaces the *innermost* ApplicationError to
+        # the UI, so a chained httpx error would leak a raw
+        # "HTTPStatusError: 500 ... http://localhost:3500/v1.0/secrets/..." string
+        # (exactly the unfriendly message seen in preflight). ``from None`` keeps
+        # the customer-facing message clean while the log preserves the detail.
+        logger.warning(  # conformance: ignore[L009,L004] the raise below drops the raw exception (`from None`), so this scrubbed redact_secrets() dump is the only record of the underlying cause — context the caller does not have; exc_info=True would re-log the unscrubbed traceback
+            "Agent secret-bundle fetch failed — secret store unreachable:\n%s",
+            redact_secrets("".join(traceback.format_exception(exc))),
+        )
         raise CredentialError(
-            f"Failed to fetch agent secret bundle at '{secret_path}': {exc}",
+            "Secret store is not reachable. Check that your secret store is "
+            "running and reachable, and that the configured secret-path exists.",
             credential_name=secret_path,
-            cause=exc,
-        ) from exc
+        ) from None
 
     if isinstance(raw, dict):
         # Some SecretStore backends may return a dict directly; accept it.
@@ -448,8 +461,14 @@ async def _probe_one(secret_store: SecretStore, value: str) -> tuple[str, str, A
     return (_PROBE_RESOLVED, value, secret)
 
 
-def _substitute(agent: dict[str, Any], bundle: dict[str, Any]) -> dict[str, Any]:
+def _substitute(
+    agent: dict[str, Any], bundle: dict[str, Any]
+) -> tuple[dict[str, Any], int]:
     """Replace ref-key string values in ``agent`` with values from ``bundle``.
+
+    Returns the substituted dict and the number of fields that were actually
+    replaced from the bundle (0 means nothing resolved — every field kept its
+    literal placeholder).
 
     Mirrors v2's
     :meth:`application_sdk.services.secretstore.SecretStore.resolve_credentials`:
@@ -466,20 +485,176 @@ def _substitute(agent: dict[str, Any], bundle: dict[str, Any]) -> dict[str, Any]
     Missing ref-keys are left as-is (same as v2). Downstream code is
     expected to error cleanly if a required field is still a placeholder.
     """
+    substituted = 0
+
+    def _sub(container: dict[str, Any], key: str, value: Any) -> bool:
+        nonlocal substituted
+        if not isinstance(value, str):
+            return False
+        if value in bundle:
+            container[key] = bundle[value]
+            substituted += 1
+            return True
+        # Agent mode kept the field's literal value because the secret store had
+        # no matching key. Logged at INFO (no secret value, only the field name)
+        # so a customer debugging "why did auth fail" can see which field never
+        # resolved and is being sent as its literal placeholder.
+        logger.info(
+            "agent mode: field '%s' not found in secret store; using literal value",
+            key,
+        )
+        return False
+
     out: dict[str, Any] = dict(agent)
     for key, value in list(out.items()):
         if key in _LITERAL_KEYS:
             continue
-        if isinstance(value, str) and value in bundle:
-            out[key] = bundle[value]
+        _sub(out, key, value)
 
     # v2-compat: descend into a nested ``extra`` dict if present.
     extra = out.get("extra")
     if isinstance(extra, dict):
         new_extra = dict(extra)
         for key, value in list(new_extra.items()):
-            if isinstance(value, str) and value in bundle:
-                new_extra[key] = bundle[value]
+            _sub(new_extra, key, value)
         out["extra"] = new_extra
 
-    return out
+    return out, substituted
+
+
+@dataclass
+class SecretStoreCheckResult:
+    """Outcome of the SDR secret-store preflight probe.
+
+    ``passed`` is the UI verdict. The two failure axes are tracked separately
+    because a single flag conflated them:
+
+    * ``store_down`` — the secret store *itself* is the failure (unreachable /
+      erroring). The caller renders this as ``DEPENDENCY_UNAVAILABLE``; every
+      other failure is a ``PRECONDITION`` config gap. A multi-key spec with no
+      ``secret-path`` is a config gap, not an outage, so it is **not**
+      ``store_down`` even though the store is never contacted.
+    * ``fatal`` — the preflight cannot proceed past this: credentials can't be
+      resolved, so connectivity has nothing to try. The caller short-circuits.
+      A reachable-but-nothing-resolved result is *not* fatal (fields fall back to
+      literals and connectivity still runs).
+
+    ``substituted`` is the resolved-key count (for the message). ``resolved`` is
+    the fully-substituted credential dict — returned so the caller reuses it
+    instead of re-fetching the bundle from the store a second time; ``None``
+    whenever nothing was successfully fetched (every fatal case)."""
+
+    passed: bool
+    store_down: bool
+    fatal: bool
+    substituted: int
+    message: str
+    resolved: dict[str, Any] | None = None
+
+
+async def check_secret_store_access(
+    spec: "AgentCredentialSpec",
+    secret_store: "SecretStore | None",
+) -> SecretStoreCheckResult:
+    """Probe the customer secret store for the SDR interactive preflight.
+
+    Never raises — returns a structured result the preflight renders as a check
+    row. Failure modes, and how they map onto ``store_down`` / ``fatal``:
+
+    1. **Store down** (``store_down``, ``fatal``) — no secret store configured, or
+       the store errors / is unreachable. The store itself is the blocker.
+    2. **Unresolvable config** (``fatal`` only) — a multi-key (non single-key) spec
+       with no ``secret-path``: the ref-keys have nowhere to resolve from. The
+       store may be perfectly healthy — this is a *config* gap, so it is a
+       ``PRECONDITION``, not a store outage; the store is never contacted.
+    3. **Secret-path not found** (``fatal`` only) — the store is reachable but the
+       configured ``secret-path`` doesn't exist, so credentials can't resolve.
+    4. **Nothing resolved** (neither flag) — the store is reachable but not a
+       single ref-key was substituted, so every credential field falls back to
+       its literal value. A likely misconfiguration (surfaced as a failed row),
+       but NOT fatal: a customer who put raw secrets directly in the config can
+       still connect, so the preflight keeps running the connectivity checks.
+
+    On any non-fatal outcome ``resolved`` carries the substituted credential dict
+    so the caller can build credentials without a second store fetch.
+    """
+    if secret_store is None:
+        return SecretStoreCheckResult(
+            passed=False,
+            store_down=True,
+            fatal=True,
+            substituted=0,
+            message="No secret store is configured on the SDR deployment.",
+        )
+
+    raw = spec.to_raw_dict()
+    if spec.key_type != "single-key" and not spec.secret_path:
+        # Multi-key (non single-key) resolution fetches the bundle from a
+        # secret-path. With neither single-key probing nor a secret-path, the
+        # ref-keys can never be resolved, so the credentials can't be used — fail
+        # the check and short-circuit (nothing for connectivity to try). The
+        # store is never contacted, so this is a config gap, NOT store_down.
+        return SecretStoreCheckResult(
+            passed=False,
+            store_down=False,
+            fatal=True,
+            substituted=0,
+            message=(
+                "Multi-key credentials require a secret-path, but none is "
+                "configured — the secret keys cannot be resolved."
+            ),
+        )
+
+    try:
+        if spec.key_type == "single-key":
+            bundle = await _fetch_per_key_bundle(secret_store, raw)
+        else:
+            bundle = await _fetch_bundle(secret_store, spec.secret_path)
+    except CredentialNotFoundError:
+        # Store reachable, but the configured path is absent: credentials can't
+        # resolve, so short-circuit (fatal) with a clean row — it's a config
+        # problem (PRECONDITION), not a store outage.
+        return SecretStoreCheckResult(
+            passed=False,
+            store_down=False,
+            fatal=True,
+            substituted=0,
+            message="Secret store is reachable, but the configured secret-path was not found.",
+        )
+    except (
+        DependencyUnavailableError,
+        SecretStoreUnavailableError,
+        CredentialError,
+    ):
+        return SecretStoreCheckResult(
+            passed=False,
+            store_down=True,
+            fatal=True,
+            substituted=0,
+            message="Secret store is not reachable.",
+        )
+
+    resolved_flat, substituted = _substitute(raw, bundle)
+    # Same substitution the resolver runs (resolve_agent_credential): return the
+    # transformed dict so the caller reuses it instead of re-fetching the bundle.
+    resolved = transform_agent_credentials(resolved_flat)
+    if substituted == 0:
+        return SecretStoreCheckResult(
+            passed=False,
+            store_down=False,
+            fatal=False,
+            substituted=0,
+            message=(
+                "Secret store is reachable, but no secret was resolved. Check "
+                "that the configured secret keys / secret-path exist in the store."
+            ),
+            resolved=resolved,
+        )
+    return SecretStoreCheckResult(
+        passed=True,
+        store_down=False,
+        fatal=False,
+        substituted=substituted,
+        message=f"Secret store reachable; {substituted} secret(s) resolved.",
+        resolved=resolved,
+    )

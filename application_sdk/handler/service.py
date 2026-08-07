@@ -150,6 +150,104 @@ _CREDENTIAL_KEYS = frozenset(
 )
 
 
+_AGENT_JSON_KEYS = ("agent_json", "agentJson", "agent-json")
+
+
+def _coerce_agent_json(value: Any) -> dict[str, Any] | None:
+    """Return *value* as an agent-json dict, or ``None`` if it isn't one.
+
+    Form fields cross the wire as JSON strings, so an agent-json binding may
+    arrive either already-parsed (``dict``) or as a serialized string."""
+    if isinstance(value, dict):
+        return value if value else None
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) and parsed else None
+    return None
+
+
+def _rank_agent_json(raw: Any, key: str) -> int:
+    """Preference score for competing agent-json bindings (higher wins).
+
+    A request can carry several agent-json copies at once, and they are *not*
+    interchangeable. The FE normalizes its form into duplicate keys: the live
+    ``agent-json`` (hyphen) holds the current form object, while ``agent_json``
+    (underscore) is a serialized string snapshot that lags behind edits. Picking
+    the wrong one silently runs the check against stale credentials. So prefer a
+    parsed object over a serialized string (freshness), and the canonical hyphen
+    ``agent-json`` over the underscore/camel aliases (tie-break)."""
+    return (2 if isinstance(raw, dict) else 0) + (1 if key == "agent-json" else 0)
+
+
+def _lift_agent_json(body: dict[str, Any]) -> dict[str, Any]:
+    """Surface the freshest agent-json binding to the top level for SDR detection.
+
+    The three endpoints detect SDR (customer-infra) runs by reading a *top-level*
+    ``agent_json`` off the typed input. Heracles, however, forwards the FE payload
+    verbatim: the agent-json arrives nested inside ``metadata``/``connection_config``
+    (the form's ``agent-json`` field → app ``metadata``) or inside ``credentials``
+    (the credential object), and the FE may include *several* copies at once (a
+    live object plus a stale serialized string, under hyphen and underscore keys).
+
+    Pick the highest-ranked copy (see :func:`_rank_agent_json`) across the top
+    level and every container, surface it as top-level ``agent_json`` (overriding
+    any stale top-level alias Pydantic would otherwise resolve first), and strip
+    every agent-json key from the containers so credential flattening never turns
+    one into a bogus pair. No-op when none is found (direct-mode requests)."""
+    best_rank = -1
+    best_aj: dict[str, Any] | None = None
+
+    for key in _AGENT_JSON_KEYS:
+        if key in body:
+            aj = _coerce_agent_json(body[key])
+            rank = _rank_agent_json(body[key], key)
+            if aj is not None and rank > best_rank:
+                best_rank, best_aj = rank, aj
+
+    for container in ("metadata", "connection_config", "credentials"):
+        c = body.get(container)
+        if isinstance(c, dict):
+            for key in _AGENT_JSON_KEYS:
+                if key in c:
+                    aj = _coerce_agent_json(c[key])
+                    rank = _rank_agent_json(c[key], key)
+                    if aj is not None and rank > best_rank:
+                        best_rank, best_aj = rank, aj
+        elif isinstance(c, list):  # v3 credentials: list[{key, value}]
+            for item in c:
+                if isinstance(item, dict) and item.get("key") in _AGENT_JSON_KEYS:
+                    raw = item.get("value")
+                    aj = _coerce_agent_json(raw)
+                    rank = _rank_agent_json(raw, item["key"])
+                    if aj is not None and rank > best_rank:
+                        best_rank, best_aj = rank, aj
+
+    if best_aj is None:
+        return body
+
+    result: dict[str, Any] = {}
+    for k, v in body.items():
+        if k in _AGENT_JSON_KEYS:
+            continue  # drop stale top-level aliases; re-added canonically below
+        if k in ("metadata", "connection_config") and isinstance(v, dict):
+            result[k] = {kk: vv for kk, vv in v.items() if kk not in _AGENT_JSON_KEYS}
+        elif k == "credentials" and isinstance(v, list):
+            result[k] = [
+                i
+                for i in v
+                if not (isinstance(i, dict) and i.get("key") in _AGENT_JSON_KEYS)
+            ]
+        elif k == "credentials" and isinstance(v, dict):
+            result[k] = {kk: vv for kk, vv in v.items() if kk not in _AGENT_JSON_KEYS}
+        else:
+            result[k] = v
+    result["agent_json"] = best_aj
+    return result
+
+
 # v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
 def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     """Normalize v2 credential formats to v3 list[{key, value}] format.
@@ -195,7 +293,7 @@ def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
     """Normalize preflight-specific compatibility fields before validation."""
-    normalized = _normalize_credentials(body)
+    normalized = _normalize_credentials(_lift_agent_json(body))
     has_metadata = "metadata" in normalized and normalized["metadata"] is not None
     has_connection_config = (
         "connection_config" in normalized
@@ -2407,7 +2505,7 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/auth")
     async def test_auth(request: Request) -> JSONResponse:
-        body = _normalize_credentials(await request.json())
+        body = _normalize_credentials(_lift_agent_json(await request.json()))
         auth_input = AuthInput.model_validate(body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
@@ -2635,7 +2733,7 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/metadata")
     async def fetch_metadata(request: Request) -> JSONResponse:
-        body = _normalize_credentials(await request.json())
+        body = _normalize_credentials(_lift_agent_json(await request.json()))
         metadata_input = MetadataInput.model_validate(body)
         # The widget routing key (``metadataTemplateKey`` / ``type`` on the
         # wire) now lands in its documented home, ``metadata_template_key``,
@@ -2674,7 +2772,10 @@ def create_app_handler_service(
                 # Both SqlMetadataOutput and ApiMetadataOutput expose
                 # .objects — model_dump() produces the correct shape for
                 # the corresponding frontend widget (sqltree / apitree).
-                data = [obj.model_dump() for obj in result.objects]
+                data = [
+                    obj.model_dump() if hasattr(obj, "model_dump") else obj
+                    for obj in result.objects
+                ]
                 count = len(result.objects)
                 logger.info(
                     "Metadata fetch completed: app=%s request=%s type=%s objects=%d",

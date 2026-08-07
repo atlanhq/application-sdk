@@ -8,6 +8,7 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import AppContextError
+from application_sdk.credentials.agent import SecretStoreCheckResult
 from application_sdk.execution._temporal.sdr import (
     SDR_FETCH_METADATA_ACTIVITY,
     SDR_PREFLIGHT_ACTIVITY,
@@ -16,6 +17,7 @@ from application_sdk.execution._temporal.sdr import (
     SdrFetchMetadataWorkflow,
     SdrPreflightCheckWorkflow,
     SdrTestAuthWorkflow,
+    _secret_store_check_row,
     build_sdr_activities,
 )
 from application_sdk.handler.base import Handler
@@ -57,6 +59,18 @@ class _StubHandler(Handler):
         return SqlMetadataOutput(objects=[])
 
 
+# resolved=None (the default) so the preflight activity falls back to the
+# resolver mock these tests assert on; the resolved-reuse path is covered
+# separately in test_preflight_reuses_resolved_credentials.
+_PASS_SECRET_STORE = SecretStoreCheckResult(
+    passed=True,
+    store_down=False,
+    fatal=False,
+    substituted=1,
+    message="Secret store reachable",
+)
+
+
 class TestSdrWorkflows:
     """SDR workflow classes themselves are static — verify naming and membership."""
 
@@ -89,20 +103,23 @@ class TestSdrTimeoutsAndRetries:
 
         from application_sdk.execution._temporal import sdr
 
-        # Bumped defaults (env-tunable) — generous enough for a slow customer
-        # secret store. See the module-level comment.
-        assert sdr._AUTH_SCHEDULE_TO_CLOSE == timedelta(seconds=60)
-        assert sdr._PREFLIGHT_SCHEDULE_TO_CLOSE == timedelta(seconds=120)
-        assert sdr._METADATA_SCHEDULE_TO_CLOSE == timedelta(seconds=150)
+        # Flat 300s cap per activity (env-tunable) — generous enough for a slow
+        # customer secret store + source check. See the module-level comment.
+        assert sdr._AUTH_SCHEDULE_TO_CLOSE == timedelta(seconds=300)
+        assert sdr._PREFLIGHT_SCHEDULE_TO_CLOSE == timedelta(seconds=300)
+        assert sdr._METADATA_SCHEDULE_TO_CLOSE == timedelta(seconds=300)
+        assert sdr._AUTH_START_TO_CLOSE == timedelta(seconds=300)
+        assert sdr._PREFLIGHT_START_TO_CLOSE == timedelta(seconds=300)
+        assert sdr._METADATA_START_TO_CLOSE == timedelta(seconds=300)
 
-    def test_start_to_close_below_schedule_to_close(self) -> None:
+    def test_start_to_close_not_above_schedule_to_close(self) -> None:
         from application_sdk.execution._temporal import sdr
 
-        # Invariant: start_to_close < schedule_to_close in each pair so a retry
-        # attempt can fit inside the schedule cap.
-        assert sdr._AUTH_START_TO_CLOSE < sdr._AUTH_SCHEDULE_TO_CLOSE
-        assert sdr._PREFLIGHT_START_TO_CLOSE < sdr._PREFLIGHT_SCHEDULE_TO_CLOSE
-        assert sdr._METADATA_START_TO_CLOSE < sdr._METADATA_SCHEDULE_TO_CLOSE
+        # Invariant: start_to_close <= schedule_to_close in each pair (Temporal
+        # rejects a larger start_to_close). Equal is the deliberate flat cap.
+        assert sdr._AUTH_START_TO_CLOSE <= sdr._AUTH_SCHEDULE_TO_CLOSE
+        assert sdr._PREFLIGHT_START_TO_CLOSE <= sdr._PREFLIGHT_SCHEDULE_TO_CLOSE
+        assert sdr._METADATA_START_TO_CLOSE <= sdr._METADATA_SCHEDULE_TO_CLOSE
 
     def test_inverted_timeout_pair_warns_at_module_load(self, monkeypatch) -> None:
         import importlib
@@ -146,9 +163,10 @@ class TestSdrTimeoutsAndRetries:
 
             assert reloaded._PREFLIGHT_SCHEDULE_TO_CLOSE == timedelta(seconds=200)
             assert reloaded._PREFLIGHT_START_TO_CLOSE == timedelta(seconds=190)
-            assert reloaded._AUTH_SCHEDULE_TO_CLOSE == timedelta(seconds=60)
-            assert reloaded._METADATA_SCHEDULE_TO_CLOSE == timedelta(seconds=150)
-            assert reloaded._METADATA_START_TO_CLOSE == timedelta(seconds=140)
+            # bad/non-positive overrides fall back to the flat 300s default
+            assert reloaded._AUTH_SCHEDULE_TO_CLOSE == timedelta(seconds=300)
+            assert reloaded._METADATA_SCHEDULE_TO_CLOSE == timedelta(seconds=300)
+            assert reloaded._METADATA_START_TO_CLOSE == timedelta(seconds=300)
         finally:
             # Restore module-level defaults for the rest of the suite.
             monkeypatch.undo()
@@ -393,6 +411,10 @@ class TestSdrAgentJsonResolution:
                 "application_sdk.execution._temporal.sdr.CredentialResolver",
                 return_value=resolver,
             ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.check_secret_store_access",
+                new=mock.AsyncMock(return_value=_PASS_SECRET_STORE),
+            ),
         ):
             result = await preflight(
                 PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
@@ -431,6 +453,10 @@ class TestSdrAgentJsonResolution:
                 mock.patch(
                     "application_sdk.execution._temporal.sdr.CredentialResolver",
                     return_value=resolver,
+                ),
+                mock.patch(
+                    "application_sdk.execution._temporal.sdr.check_secret_store_access",
+                    new=mock.AsyncMock(return_value=_PASS_SECRET_STORE),
                 ),
             ):
                 await activity(input_obj)
@@ -478,9 +504,9 @@ class TestSdrAgentJsonResolution:
         assert handler.preflight_input is not None
         assert handler.preflight_input.credentials == creds
 
-    async def test_raises_when_secret_store_unavailable(self) -> None:
-        from application_sdk.errors.leaves import DependencyUnavailableError
-
+    async def test_preflight_no_secret_store_yields_not_ready(self) -> None:
+        # Preflight surfaces "no secret store" as a failed check row (NOT_READY),
+        # not a raised error — the interactive UI shows the reason cleanly.
         handler = _StubHandler()
         preflight = self._by_name(handler)[SDR_PREFLIGHT_ACTIVITY]
 
@@ -490,14 +516,91 @@ class TestSdrAgentJsonResolution:
             "application_sdk.execution._temporal.sdr.get_infrastructure",
             return_value=fake_infra,
         ):
+            result = await preflight(
+                PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
+            )
+        assert result.status == PreflightStatus.NOT_READY
+        assert handler.preflight_input is None  # handler never ran
+        secret_check = next(c for c in result.checks if c.name == "Secret store")
+        assert secret_check.passed is False
+
+    async def test_preflight_reachable_but_nothing_resolved_still_runs_checks(
+        self,
+    ) -> None:
+        # A reachable store that resolved nothing is NOT fatal: every field falls
+        # back to its literal value, so a customer who put raw secrets directly in
+        # the config can still connect. Preflight keeps the failed secret-store row
+        # but still runs the handler's connectivity/schema/tables checks (unlike an
+        # unreachable store, which short-circuits).
+        handler = _StubHandler()
+        preflight = self._by_name(handler)[SDR_PREFLIGHT_ACTIVITY]
+
+        resolver = mock.MagicMock()
+        resolver.resolve_raw = mock.AsyncMock(return_value={"username": "literal-user"})
+        fake_infra = mock.MagicMock()
+        fake_infra.secret_store = mock.MagicMock(name="SecretStore")
+        # Non-fatal: the probe already substituted (falling back to literals), so
+        # ``resolved`` carries those credentials and the activity reuses them
+        # rather than re-fetching from the store.
+        zero_resolved = SecretStoreCheckResult(
+            passed=False,
+            store_down=False,
+            fatal=False,
+            substituted=0,
+            message="Secret store is reachable, but no secret was resolved.",
+            resolved={"username": "literal-user"},
+        )
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.get_infrastructure",
+                return_value=fake_infra,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.CredentialResolver",
+                return_value=resolver,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.check_secret_store_access",
+                new=mock.AsyncMock(return_value=zero_resolved),
+            ),
+        ):
+            result = await preflight(
+                PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
+            )
+
+        # Handler ran (connectivity attempted with literal values) — NOT short-circuited.
+        assert handler.preflight_input is not None
+        # Credentials came from the reused ``resolved`` dict, so the probe's
+        # already-fetched bundle was NOT re-resolved from the store.
+        resolver.resolve_raw.assert_not_awaited()
+        assert {c.key: c.value for c in handler.preflight_input.credentials} == {
+            "username": "literal-user"
+        }
+        # The failed secret-store row is still surfaced for visibility...
+        secret_check = next(c for c in result.checks if c.name == "Secret store")
+        assert secret_check.passed is False
+        # ...but it does not force the gate: the handler's verdict stands.
+        assert result.status == PreflightStatus.READY
+
+    async def test_auth_raises_when_secret_store_unavailable(self) -> None:
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        # test_auth (unlike preflight) has no check-row path, so a missing secret
+        # store still raises — surfaced as a classified error by the dispatcher.
+        handler = _StubHandler()
+        auth = self._by_name(handler)[SDR_TEST_AUTH_ACTIVITY]
+
+        fake_infra = mock.MagicMock()
+        fake_infra.secret_store = None
+        with mock.patch(
+            "application_sdk.execution._temporal.sdr.get_infrastructure",
+            return_value=fake_infra,
+        ):
             with pytest.raises(DependencyUnavailableError):
-                await preflight(
-                    PreflightInput(
-                        agent_json={"agent-name": "acme", "secret-path": "p"}
-                    )
+                await auth(
+                    AuthInput(agent_json={"agent-name": "acme", "secret-path": "p"})
                 )
-        # Bailed before ever calling the handler.
-        assert handler.preflight_input is None
+        assert handler.auth_input is None
 
     async def test_resolver_returning_none_yields_empty_credentials(self) -> None:
         """``resolve_raw`` → ``None`` (nothing at the secret path) resolves to an
@@ -519,6 +622,10 @@ class TestSdrAgentJsonResolution:
             mock.patch(
                 "application_sdk.execution._temporal.sdr.CredentialResolver",
                 return_value=resolver,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.check_secret_store_access",
+                new=mock.AsyncMock(return_value=_PASS_SECRET_STORE),
             ),
         ):
             result = await preflight(
@@ -582,8 +689,18 @@ class TestSdrPreflightObjectStoreChecks:
         assert result.status == PreflightStatus.READY
         names = [c.name for c in result.checks]
         assert names == [
-            "Object store access (deployment)",
-            "Object store access (Atlan upload)",
+            "Deployment reachability",
+            "Object store",
+            "Metadata / egress connectivity",
+        ]
+        # Names avoid the "SDR" acronym so the frontend title-caser doesn't
+        # render it as "S D R"; the SDR context lives in the messages.
+        assert not any("SDR" in n for n in names)
+        messages = [c.message for c in result.checks]
+        assert messages == [
+            "SDR Deployment is reachable.",
+            "Object Store configuration for SDR deployment successful",
+            "Metadata/Egress connectivity from SDR to Atlan SaaS tenant successful",
         ]
         assert all(c.passed for c in result.checks)
         # The probe's elapsed time is folded into the output's duration
@@ -617,15 +734,19 @@ class TestSdrPreflightObjectStoreChecks:
             result = await preflight(PreflightInput(credentials=[]))
 
         assert result.status == PreflightStatus.NOT_READY
-        assert len(result.checks) == 1
-        check = result.checks[0]
+        # Row 0 is the "SDR deployment reachable" marker; row 1 is the failed probe.
+        assert len(result.checks) == 2
+        assert result.checks[0].passed is True
+        assert result.checks[0].message == "SDR Deployment is reachable."
+        check = result.checks[1]
         assert check.passed is False
         assert check.error is not None
         assert check.error.category == FailureCategory.DEPENDENCY_UNAVAILABLE
         assert check.error.code == "OBJECT_STORE_ACCESS"
         assert check.error.retryable is False
-        assert check.resolved_suggested_action == "grant get/put"
-        assert "access check failed" in check.resolved_message
+        # Simple, non-technical failure copy (no probe internals in the UI).
+        assert "not reachable" in check.resolved_message
+        assert "403" not in check.resolved_message
 
     async def test_failed_check_does_not_upgrade_partial(self) -> None:
         """A handler PARTIAL/NOT_READY verdict is left untouched on failure."""
@@ -658,7 +779,8 @@ class TestSdrPreflightObjectStoreChecks:
 
         # PARTIAL is preserved — the downgrade only fires from READY.
         assert result.status == PreflightStatus.PARTIAL
-        assert len(result.checks) == 1
+        # Reachable marker + the failed probe row.
+        assert len(result.checks) == 2
 
     async def test_augmentation_never_breaks_handler_result(self) -> None:
         """An unexpected error in the object-store check is a no-op."""
@@ -674,3 +796,61 @@ class TestSdrPreflightObjectStoreChecks:
         # Handler's own result stands; no crash, no extra checks.
         assert result.status == PreflightStatus.READY
         assert result.checks == []
+
+
+class TestSecretStoreCheckRow:
+    """``_secret_store_check_row`` maps a probe result onto the UI check row —
+    the failure category must come from ``store_down`` (is the store the
+    blocker?), not from whether a fetch happened."""
+
+    def test_store_down_is_dependency_unavailable(self) -> None:
+        from application_sdk.credentials.agent import SecretStoreCheckResult
+        from application_sdk.errors.categories import FailureCategory
+
+        row = _secret_store_check_row(
+            SecretStoreCheckResult(
+                passed=False,
+                store_down=True,
+                fatal=True,
+                substituted=0,
+                message="Secret store is not reachable.",
+            )
+        )
+        assert row.passed is False
+        assert row.error is not None
+        assert row.error.category == FailureCategory.DEPENDENCY_UNAVAILABLE
+
+    def test_config_gap_is_precondition_not_dependency_unavailable(self) -> None:
+        # A multi-key spec with no secret-path is fatal (creds can't resolve) but
+        # the store is never contacted — it is a PRECONDITION config gap, and must
+        # NOT be miscategorised as a store outage.
+        from application_sdk.credentials.agent import SecretStoreCheckResult
+        from application_sdk.errors.categories import FailureCategory
+
+        row = _secret_store_check_row(
+            SecretStoreCheckResult(
+                passed=False,
+                store_down=False,
+                fatal=True,
+                substituted=0,
+                message="Multi-key credentials require a secret-path...",
+            )
+        )
+        assert row.passed is False
+        assert row.error is not None
+        assert row.error.category == FailureCategory.PRECONDITION
+
+    def test_passed_row_has_no_error(self) -> None:
+        from application_sdk.credentials.agent import SecretStoreCheckResult
+
+        row = _secret_store_check_row(
+            SecretStoreCheckResult(
+                passed=True,
+                store_down=False,
+                fatal=False,
+                substituted=2,
+                message="Secret store reachable; 2 secret(s) resolved.",
+            )
+        )
+        assert row.passed is True
+        assert row.error is None

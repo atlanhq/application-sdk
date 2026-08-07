@@ -26,6 +26,10 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from application_sdk.credentials.agent import (
+        SecretStoreCheckResult,
+        check_secret_store_access,
+    )
     from application_sdk.credentials.ref import CredentialRef
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.spec import AgentCredentialSpec
@@ -56,10 +60,37 @@ logger = get_logger(__name__)
 # UI-facing check-row names for the object-store access probes appended to the
 # SDR interactive preflight output.  "deployment" is the customer's own store;
 # "upstream" is the Atlan upload proxy.
+# Check *names* deliberately avoid the "SDR" acronym: the frontend title-cases
+# the name by inserting a space before every capital, so "SDR" would render as
+# "S D R". The SDR context lives in the (verbatim) messages below instead.
 _OBJECT_STORE_CHECK_NAMES: dict[str, str] = {
-    "deployment": "Object store access (deployment)",
-    "upstream": "Object store access (Atlan upload)",
+    "deployment": "Object store",
+    "upstream": "Metadata / egress connectivity",
 }
+
+# User-facing success copy per object-store role. Keeps the interactive
+# preflight rows readable; the technical ObjectStoreCheckResult.message is still
+# used for the *failure* case so the operator sees the real diagnostic + hint.
+_OBJECT_STORE_SUCCESS_MESSAGES: dict[str, str] = {
+    "deployment": "Object Store configuration for SDR deployment successful",
+    "upstream": (
+        "Metadata/Egress connectivity from SDR to Atlan SaaS tenant successful"
+    ),
+}
+
+# Deliberately simple failure copy — the preflight row just states the store is
+# down, without the technical probe error (endpoint/permission internals stay in
+# the worker log, not the UI).
+_OBJECT_STORE_FAILURE_MESSAGES: dict[str, str] = {
+    "deployment": "Object store for the SDR deployment is not reachable.",
+    "upstream": "Metadata/Egress object store (SDR → Atlan) is not reachable.",
+}
+
+# Leading row asserting the SDR deployment itself is reachable: if this activity
+# is executing, a worker on the customer's task queue picked it up. Name avoids
+# the "SDR" acronym (frontend spaces out capitals → "S D R"); the message keeps it.
+_SDR_REACHABLE_CHECK_NAME = "Deployment reachability"
+_SDR_REACHABLE_MESSAGE = "SDR Deployment is reachable."
 
 
 SDR_TEST_AUTH_ACTIVITY = "sdr:test_auth"
@@ -116,9 +147,11 @@ def _env_seconds(name: str, default: int) -> int:
 # network. Each cap is env-tunable (ATLAN_SDR_{AUTH,PREFLIGHT,METADATA}_{SCHEDULE,
 # START}_TO_CLOSE_SECONDS — ATLAN_ prefixed per ADR-0009, matching the sibling
 # ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS) so a deployment fronting an especially slow
-# store can raise them without an SDK release. Invariant: start_to_close <
-# schedule_to_close in each pair, so at least one retry attempt fits inside the
-# schedule cap; an inverted override is warned about at module load (below).
+# store can raise them without an SDK release. Defaults are a flat 300s per
+# activity (schedule_to_close == start_to_close): a single generous attempt,
+# deliberately no in-schedule retry room. Invariant: start_to_close <=
+# schedule_to_close in each pair; only a truly *inverted* override
+# (start_to_close > schedule_to_close) is warned about at module load (below).
 # Computed once at module load; the LM proxy's own WorkflowExecutionTimeout
 # backstops sit just above these schedule_to_close values.
 #
@@ -128,30 +161,29 @@ def _env_seconds(name: str, default: int) -> int:
 # that interval and fail any real source check that runs longer than it —
 # start_to_close is the correct in-flight bound here.
 _AUTH_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", 60)
+    seconds=_env_seconds("ATLAN_SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", 300)
 )
 _PREFLIGHT_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_PREFLIGHT_SCHEDULE_TO_CLOSE_SECONDS", 120)
+    seconds=_env_seconds("ATLAN_SDR_PREFLIGHT_SCHEDULE_TO_CLOSE_SECONDS", 300)
 )
 _METADATA_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_METADATA_SCHEDULE_TO_CLOSE_SECONDS", 150)
+    seconds=_env_seconds("ATLAN_SDR_METADATA_SCHEDULE_TO_CLOSE_SECONDS", 300)
 )
 
 _AUTH_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_AUTH_START_TO_CLOSE_SECONDS", 55)
+    seconds=_env_seconds("ATLAN_SDR_AUTH_START_TO_CLOSE_SECONDS", 300)
 )
 _PREFLIGHT_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_PREFLIGHT_START_TO_CLOSE_SECONDS", 110)
+    seconds=_env_seconds("ATLAN_SDR_PREFLIGHT_START_TO_CLOSE_SECONDS", 300)
 )
 _METADATA_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_METADATA_START_TO_CLOSE_SECONDS", 140)
+    seconds=_env_seconds("ATLAN_SDR_METADATA_START_TO_CLOSE_SECONDS", 300)
 )
 
-# The start_to_close < schedule_to_close invariant holds for the defaults, but an
-# operator can override either half independently. Warn (don't raise) at module
-# load if any resolved pair is inverted: start_to_close >= schedule_to_close
-# leaves no room for a retry attempt inside the schedule cap, so a misconfig is
-# visible before the worker accepts work rather than surfacing as silent no-retry.
+# The default pairs are equal (flat 300s cap), but an operator can override
+# either half independently. Warn (don't raise) at module load only if a pair is
+# truly *inverted* — start_to_close > schedule_to_close — which Temporal rejects
+# at schedule time; equal pairs are a valid flat cap and stay silent.
 for _op, _env_label, _start, _schedule in (
     ("test_auth", "AUTH", _AUTH_START_TO_CLOSE, _AUTH_SCHEDULE_TO_CLOSE),
     (
@@ -167,10 +199,10 @@ for _op, _env_label, _start, _schedule in (
         _METADATA_SCHEDULE_TO_CLOSE,
     ),
 ):
-    if _start >= _schedule:
+    if _start > _schedule:
         logger.warning(
-            "SDR %s: start_to_close (%.0fs) >= schedule_to_close (%.0fs); the "
-            "schedule cap leaves no room for a retry attempt. Check the "
+            "SDR %s: start_to_close (%.0fs) > schedule_to_close (%.0fs); Temporal "
+            "rejects a start_to_close larger than schedule_to_close. Check the "
             "ATLAN_SDR_%s_{START,SCHEDULE}_TO_CLOSE_SECONDS overrides.",
             _op,
             _start.total_seconds(),
@@ -192,9 +224,12 @@ class SdrTestAuthWorkflow:
 
     @workflow.run
     async def run(self, input: AuthInput) -> AuthOutput:
+        # Returns the typed AuthOutput; heracles normalizes it into the frontend
+        # envelope at the API boundary (it owns the FE contract).
         return await workflow.execute_activity(
             SDR_TEST_AUTH_ACTIVITY,
             input,
+            result_type=AuthOutput,
             retry_policy=_AUTH_RETRY,
             schedule_to_close_timeout=_AUTH_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_AUTH_START_TO_CLOSE,
@@ -207,9 +242,12 @@ class SdrPreflightCheckWorkflow:
 
     @workflow.run
     async def run(self, input: PreflightInput) -> PreflightOutput:
+        # Returns the typed PreflightOutput; heracles normalizes it into the
+        # SageV2 envelope at the API boundary (it owns the FE contract).
         return await workflow.execute_activity(
             SDR_PREFLIGHT_ACTIVITY,
             input,
+            result_type=PreflightOutput,
             retry_policy=_DEFAULT_RETRY,
             schedule_to_close_timeout=_PREFLIGHT_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_PREFLIGHT_START_TO_CLOSE,
@@ -222,9 +260,12 @@ class SdrFetchMetadataWorkflow:
 
     @workflow.run
     async def run(self, input: MetadataInput) -> MetadataOutput:
+        # Returns the typed MetadataOutput; heracles unwraps its objects into the
+        # filter-tree `results` shape at the API boundary (it owns the FE contract).
         return await workflow.execute_activity(
             SDR_FETCH_METADATA_ACTIVITY,
             input,
+            result_type=MetadataOutput,
             retry_policy=_DEFAULT_RETRY,
             schedule_to_close_timeout=_METADATA_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=_METADATA_START_TO_CLOSE,
@@ -305,26 +346,50 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
         if not results:
             return
 
+        # SDR mode confirmed (a worker is executing this activity), so the
+        # deployment is reachable — surface that as the first check row.
+        output.checks.insert(
+            0,
+            PreflightCheck(
+                name=_SDR_REACHABLE_CHECK_NAME,
+                passed=True,
+                message=_SDR_REACHABLE_MESSAGE,
+            ),
+        )
+
         any_failed = False
         for result in results:
             name = _OBJECT_STORE_CHECK_NAMES.get(
                 result.label, f"Object store access ({result.label})"
             )
             error: FailureDetails | None = None
-            if not result.passed:
+            if result.passed:
+                message = _OBJECT_STORE_SUCCESS_MESSAGES.get(
+                    result.label, result.message
+                )
+            else:
                 any_failed = True
+                # Simple, non-technical failure copy for the UI; the detailed
+                # probe error/hint is logged worker-side, not surfaced here.
+                message = _OBJECT_STORE_FAILURE_MESSAGES.get(
+                    result.label, f"{result.label} object store is not reachable."
+                )
+                logger.info(
+                    "SDR object-store check failed (%s): %s",
+                    result.label,
+                    result.message,
+                )
                 error = FailureDetails(
                     category=FailureCategory.DEPENDENCY_UNAVAILABLE,
                     code="OBJECT_STORE_ACCESS",
                     retryable=False,
-                    message=result.message,
-                    suggested_action=result.hint,
+                    message=message,
                 )
             output.checks.append(
                 PreflightCheck(
                     name=name,
                     passed=result.passed,
-                    message=result.message,
+                    message=message,
                     error=error,
                 )
             )
@@ -339,6 +404,34 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
             "leaving handler result unchanged",
             exc_info=True,
         )
+
+
+def _secret_store_check_row(result: SecretStoreCheckResult) -> PreflightCheck:
+    """Build the secret-store preflight check row from a probe result.
+
+    Name avoids the "SDR" acronym (the frontend spaces out capitals). Failure
+    category distinguishes a store outage (DEPENDENCY_UNAVAILABLE) from a config
+    gap (PRECONDITION) — a multi-key spec with no secret-path is the latter even
+    though the store is never contacted, so it keys off ``store_down``, not
+    whether a fetch happened."""
+    error: FailureDetails | None = None
+    if not result.passed:
+        error = FailureDetails(
+            category=(
+                FailureCategory.DEPENDENCY_UNAVAILABLE
+                if result.store_down
+                else FailureCategory.PRECONDITION
+            ),
+            code="SECRET_STORE_ACCESS",
+            retryable=False,
+            message=result.message,
+        )
+    return PreflightCheck(
+        name="Secret store",
+        passed=result.passed,
+        message=result.message,
+        error=error,
+    )
 
 
 def build_sdr_activities(
@@ -376,12 +469,50 @@ def build_sdr_activities(
 
     @activity.defn(name=SDR_PREFLIGHT_ACTIVITY)
     async def preflight_check(input: PreflightInput) -> PreflightOutput:
+        secret_row: PreflightCheck | None = None
         if input.agent_json is not None and input.agent_json.is_populated():
-            input.credentials = await _resolve_agent_credentials(input.agent_json)
+            # SDR-only: verify the customer secret store first. A failure is
+            # either FATAL (credentials can't resolve — the store is down, or the
+            # config can't reach a bundle) or not.
+            #
+            # A FATAL result short-circuits to NOT_READY with a clear reason:
+            # resolving credentials would itself raise (or has nothing to
+            # resolve), so there is nothing for the connectivity checks to try.
+            #
+            # A non-fatal result (reachable store that resolved nothing) is kept
+            # as a failed row for visibility, but the run continues: every field
+            # falls back to its literal value (see _substitute), so a customer who
+            # put raw secrets directly in the workflow config can still connect.
+            #
+            # On the non-fatal path check_secret_store_access already fetched and
+            # substituted the bundle, so reuse ``secret_result.resolved`` instead
+            # of resolving again — one store round-trip per preflight, not two.
+            infra = get_infrastructure()
+            secret_store = infra.secret_store if infra is not None else None
+            secret_result = await check_secret_store_access(
+                input.agent_json, secret_store
+            )
+            secret_row = _secret_store_check_row(secret_result)
+            if secret_result.fatal:
+                output = PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    message=secret_result.message,
+                    checks=[secret_row],
+                )
+                await _append_object_store_checks(output)
+                return output
+            if secret_result.resolved is not None:
+                input.credentials = HandlerCredential.list_from_raw(
+                    secret_result.resolved
+                )
+            else:
+                input.credentials = await _resolve_agent_credentials(input.agent_json)
         with bind_invocation_context(binding.app_name, input.credentials):
             output = await binding.handler.preflight_check(input)
-        # SDR-only: fold the customer object-store access check into the
-        # interactive preflight so it shows up as a UI check row. Non-raising.
+        # SDR-only: fold the secret-store + object-store access checks into the
+        # interactive preflight so they show up as UI check rows. Non-raising.
+        if secret_row is not None:
+            output.checks.insert(0, secret_row)
         await _append_object_store_checks(output)
         return output
 
