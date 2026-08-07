@@ -21,7 +21,9 @@ from application_sdk.testing.e2e._errors import (
     NoWorkerOnTaskQueueError,
 )
 from application_sdk.testing.e2e.client import (
+    _MAX_RETRY_AFTER_SECONDS,
     _REQUEST_MAX_ATTEMPTS,
+    _RETRY_AFTER_BUDGET_SECONDS,
     AEWorkflowClient,
     DAGNodeResult,
     DAGNodeStatus,
@@ -29,6 +31,8 @@ from application_sdk.testing.e2e.client import (
     DAGRunStatus,
     _is_already_active_run,
     _is_credential_name_conflict,
+    _requested_retry_after,
+    _retry_gap,
     _rotate_submit_credential_name,
     _safe_node_status,
     _safe_run_status,
@@ -497,6 +501,318 @@ class TestPostWithRetry:
         assert status == 200
         assert isinstance(body, dict) and body.get("status") == "success"
         mock_sleep.assert_called_once()
+
+
+# The exact body an overloaded tenant returned behind the 504s in the incident
+# this behaviour was written for: five attempts 5s apart spent the whole retry
+# budget ~20s into the 120s window the origin had asked for.
+_OVERLOADED_504_BODY = {
+    "retryable": True,
+    "retry_after": 120,
+    "what_you_should_do": "**Wait and retry.** Back off for at least 120 seconds.",
+}
+
+
+class TestRequestedRetryAfter:
+    """_requested_retry_after: what counts as the origin asking us to wait."""
+
+    @pytest.mark.parametrize(
+        ("body", "expected"),
+        [
+            (_OVERLOADED_504_BODY, 120),
+            ({"retryAfter": 30}, 30),
+            ({"retry_after": "45"}, 45),
+            # Fractional hints round up — 0.5s means "at least half a second",
+            # so truncating to 0 would drop the hint entirely.
+            ({"retry_after": 0.5}, 1),
+            ({"retry_after": 1.2}, 2),
+            # One level of envelope nesting, as AE's generic error shape uses.
+            ({"data": {"retry_after": 60}}, 60),
+            ({"error": {"retryAfter": 15}}, 15),
+            ({"detail": {"retry_after": 7}}, 7),
+        ],
+    )
+    def test_extracts_hint(self, body, expected):
+        assert _requested_retry_after(body) == expected
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {},
+            {"retryable": True},
+            {"retry_after": 0},
+            {"retry_after": -5},
+            {"retry_after": None},
+            {"retry_after": "soon"},
+            # bool is an int subclass — `retry_after: true` must not read as 1s.
+            {"retry_after": True},
+            # Nested more than one level deep: not a shape we've seen, and
+            # guessing at arbitrary depth risks reading an unrelated field.
+            {"data": {"error": {"retry_after": 60}}},
+            "504 Gateway Timeout",
+            None,
+        ],
+    )
+    def test_no_usable_hint(self, body):
+        assert _requested_retry_after(body) is None
+
+
+class TestRetryGap:
+    """_retry_gap: honour the origin's wait, bounded so it can't hang a leg."""
+
+    def test_no_request_uses_the_fixed_gap(self):
+        gap = _retry_gap(None, default_seconds=5, budget_left=300)
+        assert gap.seconds == 5
+        assert gap.requested is None
+        assert gap.origin_note == ""
+
+    def test_honours_the_requested_wait(self):
+        gap = _retry_gap(120, default_seconds=5, budget_left=300)
+        assert gap.seconds == 120
+        assert gap.requested == 120
+
+    def test_fixed_gap_is_a_floor_not_a_ceiling(self):
+        """A request shorter than the loop's own gap doesn't shorten it."""
+        gap = _retry_gap(1, default_seconds=10, budget_left=300)
+        assert gap.seconds == 10
+        assert gap.requested == 1
+        # The wait is the floor, not a cap — the note must not say "capped".
+        assert "floored" in gap.origin_note
+        assert "capped" not in gap.origin_note
+
+    def test_caps_a_pathological_request(self):
+        gap = _retry_gap(86400, default_seconds=5, budget_left=100_000)
+        assert gap.seconds == _MAX_RETRY_AFTER_SECONDS
+        assert gap.requested == 86400
+        assert "capped" in gap.origin_note
+
+    def test_clamps_to_remaining_budget(self):
+        gap = _retry_gap(120, default_seconds=5, budget_left=70)
+        assert gap.seconds == 70
+
+    @pytest.mark.parametrize("budget_left", [0, -30])
+    def test_exhausted_budget_degrades_to_the_fixed_gap(self, budget_left):
+        gap = _retry_gap(120, default_seconds=5, budget_left=budget_left)
+        assert gap.seconds == 5
+
+
+class TestPostWithRetryHonoursRetryAfter:
+    """The regression this behaviour exists for: a 5xx that names its own window.
+
+    Before, ``_post_with_retry`` slept its fixed gap regardless, so the whole
+    attempt budget expired inside the window the origin had asked us to wait
+    out — the retry could not succeed by construction.
+    """
+
+    def test_sleeps_for_the_window_the_origin_asked_for(self):
+        client = _make_client()
+        with (
+            patch.object(
+                client,
+                "_request",
+                side_effect=[(504, _OVERLOADED_504_BODY), (200, {"ok": True})],
+            ),
+            patch("time.sleep") as mock_sleep,
+        ):
+            status, _ = client._post_with_retry(
+                "/some/path",
+                total_attempts=2,
+                sleep_seconds=5,
+                retryable=lambda s, b: s >= 500,
+                op_name="test_op",
+            )
+        assert status == 200
+        mock_sleep.assert_called_once_with(120)
+
+    def test_5xx_without_a_hint_still_uses_the_fixed_gap(self):
+        client = _make_client()
+        with (
+            patch.object(
+                client,
+                "_request",
+                side_effect=[(503, {"err": "overloaded"}), (200, {"ok": True})],
+            ),
+            patch("time.sleep") as mock_sleep,
+        ):
+            client._post_with_retry(
+                "/some/path",
+                total_attempts=2,
+                sleep_seconds=5,
+                retryable=lambda s, b: s >= 500,
+                op_name="test_op",
+            )
+        mock_sleep.assert_called_once_with(5)
+
+    def test_honoured_waiting_is_capped_per_call(self):
+        """A tenant asking for 120s on every attempt can't stall a leg forever.
+
+        The first attempts honour the request; once the per-call honoured
+        budget is spent the remaining attempts fall back to the fixed gap, so
+        total honoured-above-the-gap waiting stays at
+        ``_RETRY_AFTER_BUDGET_SECONDS``.
+        """
+        client = _make_client()
+        attempts = 5
+        fixed_gap = 5
+        with (
+            patch.object(client, "_request", return_value=(504, _OVERLOADED_504_BODY)),
+            patch("time.sleep") as mock_sleep,
+        ):
+            status, _ = client._post_with_retry(
+                "/some/path",
+                total_attempts=attempts,
+                sleep_seconds=fixed_gap,
+                retryable=lambda s, b: s >= 500,
+                op_name="test_op",
+            )
+        assert status == 504
+        slept = [call.args[0] for call in mock_sleep.call_args_list]
+        # One sleep per attempt except the last — the attempt count is
+        # unchanged by honouring the hint; only the gaps are.
+        assert len(slept) == attempts - 1
+        assert max(slept) == _MAX_RETRY_AFTER_SECONDS
+        honoured = sum(gap - fixed_gap for gap in slept)
+        assert honoured <= _RETRY_AFTER_BUDGET_SECONDS
+        # Two full 120s waits, a third clipped to what's left of the budget,
+        # then back on the fixed gap for the rest.
+        assert slept == [120, 120, 70, fixed_gap]
+
+    def test_terminal_error_carries_the_requested_wait(self):
+        """create_workflow's raise keeps the hint for the operator to see."""
+        client = _make_client()
+        with (
+            patch.object(client, "_request", return_value=(504, _OVERLOADED_504_BODY)),
+            patch("time.sleep"),
+            pytest.raises(AtlanApiHttpError) as excinfo,
+        ):
+            client.create_workflow("wf-name", retries=1, retry_sleep_seconds=1)
+        assert excinfo.value.retry_after_seconds == 120
+
+
+class TestPollNativeStatusHonoursRetryAfter:
+    """The same fixed-gap bug in the poll loop: a 120s hint must not burn the
+    transient-failure streak inside the origin's own wait window."""
+
+    def test_backs_off_for_the_requested_window(self):
+        client = _make_client()
+        err = AtlanApiHttpError(
+            message="native-status failed: HTTP 504",
+            target="GET /api/service/package-workflows/native-status HTTP 504",
+            retry_after_seconds=120,
+        )
+        with (
+            patch.object(
+                client, "get_native_status", side_effect=[err, _succeeded_result()]
+            ),
+            patch("time.sleep") as mock_sleep,
+        ):
+            result = client.poll_native_status(
+                _RUN_ID,
+                interval_seconds=10,
+                timeout_seconds=600,
+                max_transient_failures=5,
+            )
+        assert result.status == DAGRunStatus.SUCCEEDED
+        mock_sleep.assert_called_once_with(120)
+
+    def test_hintless_error_keeps_the_poll_cadence(self):
+        client = _make_client()
+        with (
+            patch.object(
+                client,
+                "get_native_status",
+                side_effect=[_http_error(), _succeeded_result()],
+            ),
+            patch("time.sleep") as mock_sleep,
+        ):
+            client.poll_native_status(
+                _RUN_ID,
+                interval_seconds=10,
+                timeout_seconds=600,
+                max_transient_failures=5,
+            )
+        mock_sleep.assert_called_once_with(10)
+
+    def test_long_backoff_counts_against_the_poll_timeout(self):
+        """Honouring a long wait must not let the loop outlive timeout_seconds."""
+        client = _make_client()
+        err = AtlanApiHttpError(
+            message="native-status failed: HTTP 504",
+            target="GET /api/service/package-workflows/native-status HTTP 504",
+            retry_after_seconds=120,
+        )
+        with (
+            patch.object(client, "get_native_status", side_effect=[err] * 10),
+            patch("time.sleep") as mock_sleep,
+            pytest.raises(AtlanApiTimeoutError),
+        ):
+            client.poll_native_status(
+                _RUN_ID,
+                interval_seconds=10,
+                timeout_seconds=200,
+                max_transient_failures=5,
+            )
+        # Each honoured sleep is clamped to the remaining timeout budget:
+        # 120s requested against a 200s deadline sleeps 120s, then only 80s,
+        # so the loop exits exactly at the deadline rather than overshooting.
+        assert [call.args[0] for call in mock_sleep.call_args_list] == [120, 80]
+
+    def test_honoured_wait_is_clamped_to_the_remaining_timeout(self):
+        """timeout_seconds < retry_after: the first sleep stops at the deadline."""
+        client = _make_client()
+        err = AtlanApiHttpError(
+            message="native-status failed: HTTP 504",
+            target="GET /api/service/package-workflows/native-status HTTP 504",
+            retry_after_seconds=120,
+        )
+        with (
+            patch.object(client, "get_native_status", side_effect=[err] * 10),
+            patch("time.sleep") as mock_sleep,
+            pytest.raises(AtlanApiTimeoutError),
+        ):
+            client.poll_native_status(
+                _RUN_ID,
+                interval_seconds=10,
+                timeout_seconds=50,
+                max_transient_failures=5,
+            )
+        # 50s remain and the origin asked for 120s: one clamped 50s sleep
+        # reaches the deadline exactly; the loop never sleeps past it.
+        assert [call.args[0] for call in mock_sleep.call_args_list] == [50]
+
+    def test_honoured_backoff_is_budgeted_across_the_poll_loop(self):
+        """A tenant repeating retry_after: 120 exhausts the shared budget, then
+        the loop falls back to the poll cadence — same accounting as
+        _post_with_retry."""
+        client = _make_client()
+        err = AtlanApiHttpError(
+            message="native-status failed: HTTP 504",
+            target="GET /api/service/package-workflows/native-status HTTP 504",
+            retry_after_seconds=120,
+        )
+        with (
+            patch.object(client, "get_native_status", side_effect=[err] * 10),
+            patch("time.sleep") as mock_sleep,
+            pytest.raises(AtlanApiHttpError),
+        ):
+            client.poll_native_status(
+                _RUN_ID,
+                interval_seconds=10,
+                timeout_seconds=10000,
+                max_transient_failures=5,
+            )
+        # 110s honoured per wait against the 300s budget: two full 120s waits
+        # (110 + 110 honoured), a third clamped to the 80s of budget left
+        # (the budget caps the whole wait, not just the above-floor part, so
+        # 110 + 110 + 80 = 300), then the fixed 10s cadence once the budget
+        # is spent — no unbounded 120s waits. The fifth error hits the
+        # transient-failure cap and re-raises.
+        assert [call.args[0] for call in mock_sleep.call_args_list] == [
+            120,
+            120,
+            80,
+            10,
+        ]
 
 
 class _FakeResponse:
