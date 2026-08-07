@@ -21,8 +21,8 @@ class PrintMixin(_MixinBase):
 
         Test files and ``if __name__ == '__main__':`` blocks are already
         excluded by the discovery walk and the checker's ``_in_main_block``
-        flag respectively.  Standalone scripts/CLIs (shebang, ``__main__``
-        guard, or argparse import — see ``is_script_file``) are exempt
+        flag respectively.  Standalone scripts/CLIs (shebang or ``__main__``
+        guard — see ``is_script_file``) are exempt
         entirely: stdout is their user interface, not a logging bypass.
         """
         if self._is_script_file:

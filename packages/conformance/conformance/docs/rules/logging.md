@@ -155,9 +155,8 @@ services, output may go to stdout unformatted, be lost, or interleave with struc
 log lines.  Acceptable in CLI scripts, test/debug scripts, and `if __name__ ==
 "__main__":` blocks.
 
-Exempt: standalone scripts/CLIs — files with a shebang, an if __name__ == '__main__'
-guard, or an argparse import. For those, stdout is the user interface, not a logging
-bypass.
+Exempt: standalone scripts/CLIs — files with a shebang or an if __name__ == '__main__'
+guard. For those, stdout is the user interface, not a logging bypass.
 
 ---
 

@@ -29,8 +29,8 @@ class _MixinBase:
     _loop_stack: list[ast.For | ast.AsyncFor | ast.While]
     _except_stack: list[ast.ExceptHandler]
     _in_main_block: int
-    # True when the module is a standalone script/CLI (shebang / __main__ /
-    # argparse) — stdout is its interface, so L005 is exempt.
+    # True when the module is a standalone script/CLI (shebang / __main__
+    # guard) — stdout is its interface, so L005 is exempt.
     _is_script_file: bool
     # Names assigned a redaction placeholder ("[REDACTED]" etc.) — logging
     # them is a presence indicator, so L010 is exempt.
