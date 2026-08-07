@@ -2411,9 +2411,30 @@ local builtinWorkflowAppNames: Mapping<String, String> = new {
   ["NotificationWorkflow"] = "notification-app"
 }
 
-/// The node's log identity, after the two corrections below. Every `app_name`
-/// a node renders (top-level, `inputs.app_name`, `inputs.args.app_name`) and
-/// the task queue derived from it use this, so the four stay in agreement.
+/// The built-in-workflow correction on its own — see `builtinWorkflowAppNames`.
+///
+/// This, and not `resolveNodeAppName`, is what a *derived* `task_queue` uses.
+/// The difference matters only for a node whose `appName` is `"{app_name}"` and
+/// that pins no `taskQueue`: the derived queue keeps rendering
+/// `atlan-{app_name}-{deployment_name}`, exactly as before this function
+/// existed. A task queue is a routing decision resolved downstream by Heracles,
+/// and whether it substitutes `{app_name}` there is not established here — so
+/// the queue string is left byte-identical rather than rewritten on an
+/// assumption. Getting that wrong points a node at a queue nothing polls
+/// (SHA-1242). Log identity has no such coupling, so it is corrected freely.
+///
+/// The built-in correction *is* applied to the derived queue: a
+/// `LineageWorkflow` node deriving `atlan-automation-engine-{deployment_name}`
+/// is unambiguously wrong, since AE does not host that workflow at all.
+local function resolveNodeQueueAppName(node: DAGNode): String =
+  if (node.appName == defaultDagNodeAppName && builtinWorkflowAppNames.containsKey(node.workflowType))
+    builtinWorkflowAppNames[node.workflowType]
+  else node.appName
+
+/// The node's log identity, after the two corrections below. Every `app_name` a
+/// node renders — top-level, `inputs.app_name`, `inputs.args.app_name` — uses
+/// this, so the three can never disagree (a split identity is what makes a
+/// node's logs unreachable rather than merely mislabelled; CNCT-129).
 ///
 /// 1. `"{app_name}"` — a dead scaffold placeholder. The SDK stopped
 ///    substituting it at serve time (#2271), so it survives into the DAG
@@ -2434,9 +2455,7 @@ local function resolveNodeAppName(node: DAGNode): String =
         + "filed under that literal string. Set `appName` to the app that runs this node "
         + "(the contract `name` for this app's own nodes), or use the matching built-in node "
         + "class. See contract-toolkit/docs/reference.md → Per-node `app_name` in `inputs.args`.")
-  else if (node.appName == defaultDagNodeAppName && builtinWorkflowAppNames.containsKey(node.workflowType))
-    builtinWorkflowAppNames[node.workflowType]
-  else node.appName
+  else resolveNodeQueueAppName(node)
 
 local function renderNode(node: DAGNode): Mapping<String, Any> =
   let (_nodeCheck = node._errorHandlingCheck)
@@ -2452,7 +2471,7 @@ local function renderNode(node: DAGNode): Mapping<String, Any> =
   ["inputs"] = new Mapping {
     ["workflow_type"] = node.workflowType
     ["app_name"] = resolveNodeAppName(node)
-    ["task_queue"] = node.taskQueue ?? "atlan-\(resolveNodeAppName(node))-{deployment_name}"
+    ["task_queue"] = node.taskQueue ?? "atlan-\(resolveNodeQueueAppName(node))-{deployment_name}"
     ["args"] = renderNodeArgs(node)
   }
   when (node.dependsOn != null && node.dependsOn.length == 1) {

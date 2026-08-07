@@ -190,6 +190,19 @@ def test_app_name_only_at_the_inputs_position_is_still_flagged(
     assert "publish" in findings[0].message
 
 
+def test_app_name_only_inside_inputs_args_is_still_flagged(tmp_path: Path) -> None:
+    """A pre-CNCT-93 manifest may carry the value only in ``inputs.args``."""
+    node = _node("LineageWorkflow", "automation-engine")
+    del node["app_name"]
+    del node["inputs"]["app_name"]
+    _write_manifest(tmp_path, "app/generated/manifest.json", {"lineage": node})
+
+    findings = _run(tmp_path)
+
+    assert len(findings) == 1
+    assert "lineage" in findings[0].message
+
+
 # ---------------------------------------------------------------------------
 # Negative cases — no finding
 # ---------------------------------------------------------------------------

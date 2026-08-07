@@ -71,8 +71,13 @@ facts {
     placeholder["inputs"]["args"]["app_name"] == "appname-resolution"
   }
 
-  ["a resolved placeholder also feeds the derived taskQueue"] {
-    placeholder["inputs"]["task_queue"] == "atlan-appname-resolution-{deployment_name}"
+  // ...but a *derived* task queue is left byte-identical. Every fleet contract
+  // using "{app_name}" pins its queue, so this path is unexercised today —
+  // and whether Heracles substitutes "{app_name}" inside a queue name is not
+  // established, so rewriting it could point the node at a queue nothing polls
+  // (SHA-1242). Log identity is corrected; routing is not touched on a guess.
+  ["a resolved placeholder does NOT rewrite the derived taskQueue"] {
+    placeholder["inputs"]["task_queue"] == "atlan-{app_name}-{deployment_name}"
   }
 
   // ── What must NOT change ──────────────────────────────────────────────────

@@ -596,11 +596,23 @@ same value the extract node bakes and `ATLAN_APPLICATION_NAME` carries. Any
 *other* `{…}` in `appName` has nothing to resolve against and **fails
 generation** rather than shipping a literal brace.
 
-Resolution applies uniformly to all four places the value lands — the node's
-top-level `app_name`, `inputs.app_name`, `inputs.args.app_name`, and a `taskQueue`
-derived from `appName` — so they cannot disagree. A **pinned** `taskQueue` is
-never rewritten: dispatch is governed by the queue, and changing it would move
-where the node runs.
+Both corrections apply uniformly to all three places the log identity lands —
+the node's top-level `app_name`, `inputs.app_name`, and `inputs.args.app_name` —
+so they cannot disagree.
+
+**Task queues are treated more conservatively**, because a queue is a routing
+decision and a wrong one points the node at a queue nothing polls:
+
+- A **pinned** `taskQueue` is never rewritten, under either correction.
+- A **derived** `taskQueue` follows the *built-in-workflow* correction — a
+  `LineageWorkflow` node must not derive `atlan-automation-engine-…`, since AE
+  does not host that workflow at all.
+- A **derived** `taskQueue` on an `appName = "{app_name}"` node is left
+  byte-identical (`atlan-{app_name}-{deployment_name}`). Only the node's log
+  identity is resolved. Every contract in the fleet using `"{app_name}"` pins its
+  queue, so this path is unexercised — and it is not established whether the
+  token is substituted inside a queue name downstream, so the string is not
+  rewritten on an assumption.
 
 Conformance rule **K013 `ManifestNodeAppNameMisattributed`** flags the first case
 in a committed manifest, for apps that have not yet regenerated onto a toolkit

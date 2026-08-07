@@ -75,12 +75,19 @@ def _node_app_name(node: dict[str, Any]) -> str | None:
     ``inputs.app_name``, ``inputs.args.app_name``); K013 reports on the node's
     identity, so any position carrying the AE default counts. Cross-position
     disagreement within one node is a different concern and not this rule's.
+
+    All three are consulted because older manifests do not carry all of them:
+    ``inputs.args.app_name`` only appeared with CNCT-93, and a pre-CNCT-93
+    manifest that stamped it *only* there would otherwise be a blind spot.
     """
+    raw_inputs = node.get("inputs")
+    inputs: dict[str, Any] = raw_inputs if isinstance(raw_inputs, dict) else {}
+    raw_args = inputs.get("args")
+    args: dict[str, Any] = raw_args if isinstance(raw_args, dict) else {}
     for candidate in (
         node.get("app_name"),
-        (node.get("inputs") or {}).get("app_name")
-        if isinstance(node.get("inputs"), dict)
-        else None,
+        inputs.get("app_name"),
+        args.get("app_name"),
     ):
         if isinstance(candidate, str) and candidate:
             return candidate
@@ -171,7 +178,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:  # noqa: ARG001
                         f"'{_AE_DEFAULT_APP_NAME}' default. Replace it with the "
                         f"built-in '{node_class}' in 'contract/app.pkl' (which sets "
                         f"both appName and taskQueue), or set "
-                        f"appName = \"{expected}\" on the node, then regenerate with "
+                        f'appName = "{expected}" on the node, then regenerate with '
                         f"'pkl eval -m . contract/app.pkl'. Upgrading "
                         f"app-contract-toolkit also corrects a defaulted appName at "
                         f"render time. Never hand-edit the generated manifest — "
