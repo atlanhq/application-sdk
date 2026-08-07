@@ -297,6 +297,28 @@ def _env(*names: str) -> str:
     return ""
 
 
+#: A TOP-LEVEL ``app_id:`` line. Column-anchored deliberately: an indented
+#: ``app_id`` belongs to some nested block (a per-entrypoint or per-package
+#: stanza), and picking one of those up would install against the wrong app while
+#: looking entirely successful. Optional quotes are stripped and a trailing
+#: comment ignored.
+_APP_ID_LINE_RE = re.compile(r"^app_id[ \t]*:[ \t]*[\"']?([^\"'#\s]+)", re.MULTILINE)
+
+
+def _scan_app_id(text: str) -> str:
+    """Read a top-level ``app_id`` without a YAML parser.
+
+    Not a YAML implementation and not trying to be — it recognises exactly one
+    scalar key at column zero, which is the shape ``atlan.yaml`` uses (the same
+    field ``parse_atlan_yaml.py`` and the ``atlan`` CLI read). Anything it gets
+    wrong is caught immediately: every caller passes the result through
+    ``validate_app_id``, which requires a UUID, so a mis-scan is a loud error
+    rather than a wrong-app install.
+    """
+    match = _APP_ID_LINE_RE.search(text)
+    return match.group(1) if match else ""
+
+
 def resolve_app_id(explicit: str) -> str:
     """Return *explicit* if set, else read ``app_id`` from ``atlan.yaml`` in cwd.
 
@@ -304,10 +326,14 @@ def resolve_app_id(explicit: str) -> str:
     workflow step does not have to scrape another script's stdout to pass an id
     this one can read itself.
 
-    ``yaml`` is imported lazily: the module is otherwise stdlib-only so it can run
-    before the SDK is installed, and this fallback is the only path that needs a
-    parser. A missing PyYAML is reported as such rather than as an ImportError
-    traceback.
+    PyYAML is used when importable and a one-line scan when it is not, because
+    this module must not depend on the environment it happens to run in. It is
+    otherwise stdlib-only, and the two call sites do not share an interpreter: the
+    prepare-tenant job runs on the runner's system Python (PyYAML present), while
+    the per-leg verify runs after ``uv sync`` has put a project venv on PATH
+    (PyYAML absent unless the connector happens to depend on it). Requiring the
+    package meant the version check — the last gate before pytest — died on an
+    import in every e2e leg while working perfectly in the job before it.
     """
     if explicit.strip():
         return explicit.strip()
@@ -318,16 +344,14 @@ def resolve_app_id(explicit: str) -> str:
             "no --app-id given and no atlan.yaml in the working directory "
             f"({Path.cwd()}). Pass --app-id, or run from the app repo root."
         )
+    text = path.read_text(encoding="utf-8")
     try:
-        import yaml  # noqa: PLC0415 — lazy: only this fallback path needs it
-    except ModuleNotFoundError as exc:  # pragma: no cover - present on CI runners
-        raise TenantAppError(
-            "reading app_id from atlan.yaml needs PyYAML, which is not importable. "
-            "Pass --app-id explicitly instead."
-        ) from exc
-
-    parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
-    app_id = parsed.get("app_id", "") if isinstance(parsed, dict) else ""
+        import yaml  # noqa: PLC0415 — lazy: preferred when the env happens to have it
+    except ModuleNotFoundError:
+        app_id = _scan_app_id(text)
+    else:
+        parsed = yaml.safe_load(text)
+        app_id = parsed.get("app_id", "") if isinstance(parsed, dict) else ""
     if not str(app_id).strip():
         raise TenantAppError(
             "atlan.yaml has no app_id. The app has not been registered in the "
