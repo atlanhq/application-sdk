@@ -103,6 +103,12 @@ def _cmd_renovate_scan(argv: list[str]) -> int:
     return main(argv)
 
 
+def _cmd_integration_ledger(argv: list[str]) -> int:
+    from conformance.ledger.cli import main
+
+    return main(argv)
+
+
 def _cmd_scorecard(argv: list[str]) -> int:
     from conformance.scorecard.cli import main
 
@@ -121,6 +127,7 @@ _COMMANDS = {
     "bootstrap": _cmd_bootstrap,
     "renovate-scan": _cmd_renovate_scan,
     "scorecard": _cmd_scorecard,
+    "integration-ledger": _cmd_integration_ledger,
 }
 
 _USAGE = """\
@@ -129,6 +136,11 @@ usage: atlan-application-sdk-conformance <command> [args]
 commands:
   detect         Run the conformance suite and emit SARIF
   programs-dir   Print the absolute path to the bundled .prose.md programs
+  integration-ledger  Report Integration Readiness Ratio (IRR) from the lane ledger
+                       --repo-root DIR  connector checkouts; verifies the denominator
+                       --github         verify cadence via the GitHub Actions API
+                       --json           machine-readable output
+                       --fail-under N   exit 1 if fleet IRR is below N
   gen-rule-docs  Regenerate rule docs from Python rule definitions
   gen-deprecations  Regenerate the deprecated-symbol manifest from SDK source
   gen-contract-ledger  Regenerate the entrypoint-contract ledger (contract_schema.lock.json)
