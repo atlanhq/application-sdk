@@ -76,6 +76,10 @@ def _step(action_yaml: Path, name: str) -> dict:  # type: ignore[type-arg]
             r"\$\{\{ github\.action_path \}\}/(\S*?container_python_version\.py)",
             "interpreter-assert script",
         ),
+        (
+            r"\$\{\{ github\.action_path \}\}/(\S*?assert_image_platforms\.py)",
+            "platform-assert script",
+        ),
     ],
 )
 def test_build_action_asset_paths_resolve(pattern: str, description: str) -> None:
@@ -163,6 +167,161 @@ def test_resolver_prefers_prebuilt_over_built() -> None:
     )
 
 
+# ── 4. Multi-arch on the install path ────────────────────────────────────────
+# The image is pulled by two machines of different architectures: the runner
+# (per-leg worker under docker compose) and the tenant's cluster node (the pod
+# Heracles fetches the DAG from at submit). A single-arch image satisfies one and
+# fails the other ~2 minutes after a successful install, as ImagePullBackOff —
+# which is how FND-31's first live install ended.
+
+
+def test_platforms_defaults_to_empty_so_existing_callers_are_untouched() -> None:
+    parsed = yaml.safe_load(_BUILD_ACTION.read_text(encoding="utf-8"))
+    spec = parsed["inputs"]["platforms"]
+    assert spec.get("default") == "", (
+        "platforms must default to empty. 17 repos call sdr-e2e directly and "
+        "every one of them would start paying for an emulated cross-build."
+    )
+    assert spec.get("required") is False
+
+
+def test_the_platform_flag_is_only_appended_when_requested() -> None:
+    """`--platform ""` is not a no-op — buildx rejects it.
+
+    So the default path has to stay byte-identical to the pre-input command line,
+    which means a conditional append rather than an always-present flag.
+    """
+    build = _step(_BUILD_ACTION, "Build and push PR image")
+    assert 'if [ -n "${PLATFORMS}" ]' in build["run"], (
+        "the --platform flag must be appended conditionally, or every "
+        "single-arch caller's build breaks on an empty value"
+    )
+    assert (
+        build["env"].get("PLATFORMS") == "${{ inputs.platforms }}"
+    ), "the value must reach the shell via env:, not be interpolated into run:"
+
+
+def test_the_multi_platform_assert_is_gated_on_more_than_one_platform() -> None:
+    """A dropped flag must red the build, not the tenant's pull minutes later.
+
+    Gated on a comma rather than on `platforms` being non-empty: a
+    single-platform push is not an index, so gating on non-empty would fail every
+    leg of a per-architecture matrix for being exactly what it should be. Those
+    legs are covered by the merge job's assert on the combined manifest instead.
+    """
+    step = _step(
+        _BUILD_ACTION, "Assert the pushed image serves every requested platform"
+    )
+    assert step.get("if") == "contains(inputs.platforms, ',')", (
+        "the assert must fire only for a genuinely multi-platform build, "
+        f"got if={step.get('if')!r}"
+    )
+    assert "imagetools inspect --raw" in step["run"], (
+        "read the manifest from the REGISTRY: --push means that is the copy the "
+        "tenant will pull, and the local daemon holds no multi-arch index at all"
+    )
+    assert "assert_image_platforms.py" in step["run"]
+
+    # Order matters: asserting before the push would inspect a stale tag.
+    names = [s.get("name") for s in _steps(_BUILD_ACTION)]
+    assert names.index("Build and push PR image") < names.index(step["name"])
+
+
+def _reusable() -> dict:  # type: ignore[type-arg]
+    return yaml.safe_load(
+        (_REPO_ROOT / ".github/workflows/tests-reusable.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+
+def test_each_architecture_builds_on_a_runner_native_to_it() -> None:
+    """The whole point of the split, and it fails silently if broken.
+
+    `platform: linux/arm64` on an x64 runner still succeeds — buildx emulates it
+    under QEMU, at a cost the org measured at 5-10x native. Nothing goes red; the
+    build just takes several times longer, forever, on a path that runs on every
+    install-path e2e. So the pairing is pinned rather than trusted.
+    """
+    job = _reusable()["jobs"]["build-e2e-image"]
+    assert job["runs-on"] == "${{ matrix.runner }}", (
+        "the runner must come from the matrix, or both architectures land on the "
+        "same one and one of them is emulated"
+    )
+
+    legs = {leg["arch"]: leg for leg in job["strategy"]["matrix"]["include"]}
+    assert set(legs) == {"amd64", "arm64"}, (
+        f"the install path builds {sorted(legs)}. It needs BOTH: arm64 for the "
+        "tenant's node, amd64 for the per-leg worker on the runner. Retargeting "
+        "to the tenant's architecture moves the breakage rather than fixing it."
+    )
+    for arch, leg in legs.items():
+        assert leg["platform"] == f"linux/{arch}", (
+            f"the {arch} leg builds {leg['platform']!r} — the arch label and the "
+            "platform have drifted, so one architecture is built twice and the "
+            "other not at all"
+        )
+    assert "arm" in legs["arm64"]["runner"], (
+        f"the arm64 leg runs on {legs['arm64']['runner']!r}, which is not an ARM "
+        "runner — that build would be emulated. `ubuntu-24.04-arm` is available "
+        "on this plan and already used elsewhere in the org."
+    )
+    assert "arm" not in legs["amd64"]["runner"]
+
+
+def test_the_per_arch_legs_do_not_collide_in_the_tag_or_the_cache() -> None:
+    job = _reusable()["jobs"]["build-e2e-image"]
+    step = next(s for s in job["steps"] if "build-app-image" in str(s.get("uses", "")))
+    assert step["with"]["tag-suffix"] == "-${{ matrix.arch }}", (
+        "each leg needs its own tag (the merge step combines two references) and "
+        "its own buildx cache scope. A shared scope is the silent half: two "
+        "concurrent builds overwrite each other's cache manifest and both go "
+        "cold on every later run."
+    )
+    assert step["with"]["platforms"] == "${{ matrix.platform }}"
+
+
+def test_the_merge_job_asserts_the_reference_the_tenant_pulls() -> None:
+    """The per-arch legs cannot assert themselves — only the merged tag can be.
+
+    A leg that quietly built the wrong architecture produces an index with two of
+    the same, and nothing downstream notices: GM accepts the version, LM accepts
+    the install.
+    """
+    job = _reusable()["jobs"]["merge-e2e-image"]
+    scripts = " ".join(str(s.get("run", "")) for s in job["steps"])
+    assert "imagetools create" in scripts
+    assert "assert_image_platforms.py" in scripts, (
+        "the merged manifest must be asserted; it is the reference "
+        "prepare-tenant publishes and the tenant pulls"
+    )
+    assert "linux/amd64,linux/arm64" in scripts
+
+    # Reads image-base, never a per-arch reference: base is identical from every
+    # matrix leg, which is what makes last-writer-wins outputs safe here.
+    assert "outputs.image-base" in yaml.safe_dump(job)
+
+
+def test_pkl_is_downloaded_for_the_runners_architecture() -> None:
+    """`build-app-image` puts `regenerate-contract` on an arm64 runner.
+
+    The pkl asset was hardcoded `pkl-linux-amd64`, which on an ARM runner fetches
+    a binary that cannot execute — `cannot execute binary file`, several steps
+    before anything mentions architecture. Derived from `runner.arch` in the
+    expression layer so there is no inlined conditional shell (ci.md).
+    """
+    action = (_ACTIONS / "regenerate-contract" / "action.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "pkl-linux-amd64" not in action, (
+        "the pkl download is hardcoded to amd64 again. build-app-image now runs "
+        "this action on ubuntu-24.04-arm for the e2e install path's arm64 leg."
+    )
+    assert (
+        "runner.arch" in action and "aarch64" in action
+    ), "the pkl asset must be selected from runner.arch, with aarch64 for ARM"
+
+
 # ── 3. The buildx cache scope ────────────────────────────────────────────────
 
 
@@ -171,21 +330,30 @@ def test_buildx_cache_scope_is_unchanged() -> None:
     # `[^"]` rather than `\S`: the scope interpolates `${{ inputs.app-name }}`,
     # which contains spaces.
     scopes = set(re.findall(r"scope=([^\"]+)\"", text))
-    assert scopes == {"sdr-${{ inputs.app-name }}"}, (
+    expected = "sdr-${{ inputs.app-name }}${{ inputs.tag-suffix }}"
+    assert scopes == {expected}, (
         f"buildx cache scope changed to {scopes}. The scope was `sdr-<app-name>` "
         "before the build was extracted from sdr-e2e; changing it silently "
         "discards every connector's warm `uv sync` layer."
+    )
+    # `tag-suffix` defaults to empty, so for every caller that does not build
+    # per-architecture the scope resolves to the byte-identical string it always
+    # was — the suffix buys per-arch isolation without costing anyone a cold build.
+    parsed = yaml.safe_load(text)
+    assert parsed["inputs"]["tag-suffix"].get("default") == "", (
+        "tag-suffix must default to empty, or the 17 repos calling sdr-e2e "
+        "directly all lose their warm `uv sync` layer on the next run"
     )
     # The set comparison above catches a *changed* scope string but not a
     # *deleted* cache direction — removing `--cache-from` entirely still leaves
     # the `--cache-to` match, so the set stays a singleton and the test passes
     # while every build goes cold-read. Pin both directions explicitly.
-    assert '--cache-from "type=gha,scope=sdr-${{ inputs.app-name }}"' in text, (
+    assert f'--cache-from "type=gha,scope={expected}"' in text, (
         "the `--cache-from` line was removed. Builds would go cold-read on "
         "every run, a ~2 minute regression per leg that no assertion would "
         "otherwise catch."
     )
-    assert '--cache-to "type=gha,mode=max,scope=sdr-${{ inputs.app-name }}"' in text, (
+    assert f'--cache-to "type=gha,mode=max,scope={expected}"' in text, (
         "the `--cache-to` line was removed (or `mode=max` was dropped). Builds "
         "would never write the cache, so every leg goes cold on the next run."
     )

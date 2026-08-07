@@ -73,13 +73,24 @@ runs:
       shell: bash
       env:
         PKL_VERSION: ${{ inputs.pkl-version }}
+        # Chosen from `runner.arch` in the expression layer rather than from
+        # `uname -m` in the shell, so there is no inlined conditional
+        # (docs/standards/ci.md) — same shape as the token fallbacks elsewhere.
+        #
+        # This used to name the x86 asset unconditionally, which is invisible
+        # until a job runs on an arm64 runner and gets `cannot execute binary
+        # file` several steps before anything mentions architecture. The
+        # e2e install path builds its image natively per architecture (FND-31),
+        # which puts this action on an `ubuntu-24.04-arm` runner for the first
+        # time. pkl publishes `pkl-linux-aarch64` for exactly this.
+        PKL_ASSET: pkl-linux-${{ runner.arch == 'ARM64' && 'aarch64' || 'amd64' }}
       run: |
         set -euo pipefail
         # with-retry wraps the download: this step is on the always-on
         # integration job (and the merge-queue gate), so a transient
         # github.com hiccup must not fail the job over a flaky fetch.
         "${{ github.action_path }}/../../scripts/with-retry.sh" \
-          curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
+          curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/${PKL_ASSET}"
         chmod +x /tmp/pkl
         sudo mv /tmp/pkl /usr/local/bin/pkl
         pkl --version

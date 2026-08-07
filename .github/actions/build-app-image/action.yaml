@@ -80,6 +80,38 @@ inputs:
       identity. Empty (default) falls back to `github.token`.
     required: false
     default: ""
+  platforms:
+    description: |
+      Comma-separated buildx platforms, e.g. `linux/arm64`. Empty (the default)
+      passes no `--platform` flag at all, so the build targets the runner's own
+      architecture exactly as it did before this input existed — every caller
+      that does not set it is unaffected.
+
+      Prefer ONE platform per invocation, on a runner native to it, and merge
+      the results with `docker buildx imagetools create` (which is what the
+      install path does — see tests-reusable.yaml's build-e2e-image). Naming
+      two platforms here works, but the non-native one then builds under QEMU
+      emulation inside buildx's container driver, which the org measured at
+      5-10x native (atlanhq/mothership's infrastructure notes). Two native jobs
+      in parallel cost roughly one build; one job emulating costs several.
+    required: false
+    default: ""
+  tag-suffix:
+    description: |
+      Appended to the image tag AND to the buildx cache scope. Empty (the
+      default) leaves both byte-identical to what they were before this input
+      existed, so no existing caller loses its warm `uv sync` layer.
+
+      One input for both deliberately: they always co-vary. A per-architecture
+      build needs a per-architecture tag (the merge step needs two references
+      to combine) and a per-architecture cache scope — and the scope is the
+      half that fails silently. Two concurrent builds sharing one `type=gha`
+      scope overwrite each other's cache manifest, so each subsequent run finds
+      the other platform's manifest and misses. Nothing fails; every build just
+      goes cold forever. Coupling them here makes that combination
+      unrepresentable.
+    required: false
+    default: ""
   expected-python-version:
     description: |
       The Python major.minor the built image is expected to ship — the
@@ -92,8 +124,18 @@ inputs:
 
 outputs:
   image:
-    description: The full image reference built and pushed for this run.
+    description: |
+      The full image reference built and pushed, including `tag-suffix`. This is
+      the per-architecture reference when a suffix was passed, so it differs
+      between matrix legs — a merge job wants `image-base` instead.
     value: ${{ steps.build.outputs.image }}
+  image-base:
+    description: |
+      The same reference WITHOUT `tag-suffix` — the tag a merge step should
+      create. Identical from every leg of an architecture matrix, which is what
+      makes it safe to read off a matrix job whose outputs are last-writer-wins:
+      every writer writes the same string, so there is no wrong winner.
+    value: ${{ steps.build.outputs.image_base }}
 
 runs:
   using: composite
@@ -177,6 +219,7 @@ runs:
       shell: bash
       env:
         BASE_IMAGE_REF: ${{ inputs.base-image-ref }}
+        PLATFORMS: ${{ inputs.platforms }}
         # Read by --secret id=git_token,env=GIT_TOKEN below. The env-var
         # form (vs --secret-file) keeps the token out of the buildx
         # command line and out of any tmpfile on the runner — buildx
@@ -184,7 +227,10 @@ runs:
         GIT_TOKEN: ${{ inputs.git-token }}
       run: |
         SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
-        IMAGE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:sdr-test-${SHORT_SHA}"
+        IMAGE_BASE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:sdr-test-${SHORT_SHA}"
+        # Suffix is empty for every caller that does not build per-architecture,
+        # so IMAGE is unchanged for them.
+        IMAGE="${IMAGE_BASE}${{ inputs.tag-suffix }}"
         # When a base-image-ref is supplied (apps-sdk cross-repo dispatch),
         # build the connector FROM that image via the BASE_IMAGE build-arg
         # so the SDK PR's rebuilt runtime base is exercised. Append the flag
@@ -204,6 +250,14 @@ runs:
           echo "Forwarding git-token to docker build as 'git_token' secret"
           BUILD_ARGS+=(--secret "id=git_token,env=GIT_TOKEN")
         fi
+        # Multi-arch only when asked. Appended ONLY when non-empty: passing
+        # `--platform ""` is not a no-op, buildx rejects it — and the default
+        # path must stay byte-identical to the pre-input command line, because
+        # every existing sdr-e2e caller is on it.
+        if [ -n "${PLATFORMS}" ]; then
+          echo "Building for platforms: ${PLATFORMS}"
+          BUILD_ARGS+=(--platform "${PLATFORMS}")
+        fi
         # --push pushes to GHCR; compose pulls from there at run-time
         # (atlan-configurator wires app_image into the generated
         # compose file as a pull target). --load would conflict with
@@ -213,10 +267,41 @@ runs:
           --tag "${IMAGE}" \
           --push \
           "${BUILD_ARGS[@]}" \
-          --cache-from "type=gha,scope=sdr-${{ inputs.app-name }}" \
-          --cache-to "type=gha,mode=max,scope=sdr-${{ inputs.app-name }}" \
+          --cache-from "type=gha,scope=sdr-${{ inputs.app-name }}${{ inputs.tag-suffix }}" \
+          --cache-to "type=gha,mode=max,scope=sdr-${{ inputs.app-name }}${{ inputs.tag-suffix }}" \
           .
         echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+        echo "image_base=${IMAGE_BASE}" >> "$GITHUB_OUTPUT"
+
+    # Prove the pushed manifest carries every requested platform, at the point
+    # the image is produced. Nothing downstream catches a missing architecture:
+    # GM accepts the version, LM accepts the install, and the TENANT'S cluster
+    # node fails the pull ~2 minutes later with `no matching manifest for
+    # linux/arm64` — one live FND-31 run was spent there and three more
+    # misreading it. A dropped flag or a build that fell back to the runner's own
+    # arch becomes a red step naming the missing platform instead.
+    #
+    # Gated on MORE THAN ONE platform, not on `platforms` being set: a
+    # single-platform push is not an index, so this would fail every leg of a
+    # per-architecture matrix for being exactly what it should be. Those legs are
+    # covered where it counts — the merge step asserts the combined manifest, and
+    # a leg that built the wrong architecture shows up there as a missing one.
+    #
+    # `imagetools inspect` reads the registry rather than the local daemon,
+    # which is the right source: --push means the manifest we care about is the
+    # one that landed there, and the local daemon has no multi-arch index at all.
+    # The parsing lives in a tested script per docs/standards/ci.md.
+    - name: Assert the pushed image serves every requested platform
+      if: contains(inputs.platforms, ',')
+      shell: bash
+      env:
+        IMAGE: ${{ steps.build.outputs.image }}
+        PLATFORMS: ${{ inputs.platforms }}
+      run: |
+        set -euo pipefail
+        docker buildx imagetools inspect --raw "$IMAGE" \
+          | python3 "${{ github.action_path }}/../../scripts/assert_image_platforms.py" \
+              --expected "$PLATFORMS"
 
     # The built worker image is what actually runs the connector; its Python is
     # fixed by the Dockerfile's golden base, not by anything this runner
@@ -227,6 +312,13 @@ runs:
     # major.minor is the golden tag we assert (venv shares it). The comparison
     # logic lives in the tested script per docs/standards/ci.md (no branching in
     # inline shell).
+    #
+    # On a multi-arch build this pulls and asserts the RUNNER's variant only —
+    # `docker run` resolves the index to the host architecture. That is deliberate
+    # rather than a gap: the interpreter comes from the same Dockerfile and golden
+    # base tag for every platform, so a per-arch difference would be a base-image
+    # bug, and emulating the other arch here would cost a QEMU round-trip to
+    # re-assert a constant.
     - name: Assert worker image Python matches expected
       if: inputs.expected-python-version != ''
       shell: bash
