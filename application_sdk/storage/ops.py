@@ -519,16 +519,15 @@ async def upload_file(
         key = normalize_key(key)
 
     from application_sdk.constants import (  # noqa: PLC0415
-        STORAGE_UPLOAD_MAX_CONCURRENCY as _max_concurrency,
-    )
-    from application_sdk.constants import (
-        STORAGE_UPLOAD_PART_SIZE_BYTES as _default_part_size,
+        STORAGE_UPLOAD_MAX_CONCURRENCY,
+        STORAGE_UPLOAD_PART_SIZE_BYTES,
     )
 
     path = Path(local_path)
     file_size = path.stat().st_size
     effective_chunk = _compute_part_size(
-        file_size, _default_part_size if chunk_size is None else chunk_size
+        file_size,
+        STORAGE_UPLOAD_PART_SIZE_BYTES if chunk_size is None else chunk_size,
     )
 
     if file_size == 0:
@@ -552,7 +551,7 @@ async def upload_file(
             resolved,
             key,
             buffer_size=effective_chunk,
-            max_concurrency=_max_concurrency,
+            max_concurrency=STORAGE_UPLOAD_MAX_CONCURRENCY,
             attributes=put_attributes,
         ) as writer:
             with path.open("rb") as fh:
