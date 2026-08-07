@@ -1172,3 +1172,26 @@ class TestWriteChunkNullColumns:
         assert combined.num_rows == 4
         extra_col = combined.column("extra").to_pylist()
         assert extra_col == [None, None, "foo", "bar"]
+
+    async def test_write_chunk_offloaded_to_thread(self, tmp_path) -> None:
+        """pq.write_table() must not run inline on the event loop.
+
+        A large chunk's disk write can take long enough to stall every other
+        coroutine — including the enclosing @task's auto-heartbeat — for the
+        write's full duration.
+        """
+        df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
+        file_name = str(tmp_path / "offloaded.parquet")
+        writer = ParquetFileWriter(str(tmp_path / "output"))
+
+        with patch(
+            "application_sdk.storage.formats.parquet.run_in_thread",
+            new_callable=AsyncMock,
+            side_effect=lambda func, *a, **kw: func(*a, **kw),
+        ) as mock_offload:
+            await writer._write_chunk(df, file_name)
+
+        assert mock_offload.await_args_list, "pq.write_table was not offloaded"
+        assert mock_offload.await_args_list[0].args[0] is pq.write_table
+        table = pq.read_table(file_name)
+        assert table.num_rows == 3
