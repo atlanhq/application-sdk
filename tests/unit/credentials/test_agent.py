@@ -196,6 +196,14 @@ class TestAgentCredentialSpec:
         )
         assert not spec.is_populated()
 
+    def test_multi_key_spec_without_secret_path_not_populated(self) -> None:
+        # Only single-key is a fetch anchor on its own; multi-key still
+        # needs secret_path to fetch the bundle from.
+        spec = AgentCredentialSpec.model_validate(
+            {"agent-name": "acme-prod-agent", "key-type": "multi-key"}
+        )
+        assert not spec.is_populated()
+
     def test_invalid_json_raises_parse_error(self) -> None:
         import pytest
 
