@@ -302,6 +302,90 @@ def test_the_merge_job_asserts_the_reference_the_tenant_pulls() -> None:
     assert "outputs.image-base" in yaml.safe_dump(job)
 
 
+# ── 5. Reading back a just-pushed tag is a race ──────────────────────────────
+# buildx's container driver (required for the gha layer cache) exports only to
+# the registry, so anything wanting to run the image it just built had to fetch
+# it back — 22.7s on a measured amd64 leg, and a read of a tag GHCR does not
+# always serve yet (`manifest unknown` 0.7s after a successful push, on a live
+# arm64 leg). `--load` removes the read; where a read is unavoidable, it retries.
+
+
+def test_a_single_platform_build_is_loaded_locally() -> None:
+    build = _step(_BUILD_ACTION, "Build and push PR image")
+    # The flag itself, not the substring: the comment above it explains --load at
+    # length, so `"--load" in run` stays true even after the flag is deleted.
+    assert "BUILD_ARGS+=(--load)" in build["run"], (
+        "the build must also export into the local daemon, or the interpreter "
+        "assert pays a registry round-trip for an image this step just built"
+    )
+    # Gated: the docker exporter cannot express a manifest list, so a caller
+    # naming two platforms in one build would fail outright.
+    assert "*,*)" in build["run"], (
+        "--load must be skipped for a multi-platform build, which cannot be "
+        "represented in the local daemon"
+    )
+
+
+def test_the_interpreter_assert_does_not_pull() -> None:
+    """The whole point of --load is that this step touches no registry."""
+    run = _step(_BUILD_ACTION, "Assert worker image Python matches expected")["run"]
+    assert "docker pull" not in run, (
+        "a docker pull here defeats --load: the image is already local, and "
+        "pulling reintroduces both the latency and the read-after-write race"
+    )
+    assert "docker run --rm --entrypoint python" in run
+
+
+def test_both_architectures_are_asserted_not_just_one() -> None:
+    """Neither leg may opt out of the interpreter check.
+
+    A multi-arch base is a manifest list whose arm64 entry is a SEPARATELY BUILT
+    image; nothing guarantees its interpreter matches amd64's unless something
+    checks. Each leg runs on a runner native to what it built, so each asserts its
+    own variant — and the legs are parallel, so the second check is free.
+    """
+    job = _reusable()["jobs"]["build-e2e-image"]
+    step = next(s for s in job["steps"] if "build-app-image" in str(s.get("uses", "")))
+    assert "expected-python-version" not in step.get("with", {}), (
+        "the install path pins expected-python-version per leg. Leave it at the "
+        "action's default so BOTH architectures are asserted — passing '' on one "
+        "leg silently skips that architecture's interpreter check."
+    )
+
+
+def test_the_merge_job_retries_its_manifest_read() -> None:
+    """The one read that --load cannot remove.
+
+    `imagetools create` is purely registry-side: the manifest list exists only in
+    the registry, so there is no local copy to inspect and reading it back a step
+    later is the same race that failed a build leg.
+    """
+    job = _reusable()["jobs"]["merge-e2e-image"]
+    inspect = next(
+        s for s in job["steps"] if "imagetools inspect" in str(s.get("run", ""))
+    )
+    run = inspect["run"]
+    assert "with-retry.sh" in run, (
+        "the merge job reads back a manifest it created one step earlier, and "
+        "unlike the build legs it has no local copy to fall back on"
+    )
+    # Captured into a variable, never piped straight into the assertion. Piping a
+    # RETRIED command concatenates every attempt's output into the reader's stdin
+    # — the second attempt's JSON lands appended to the first's, and the parse
+    # fails on valid data. Capturing completes all retries before anything reads.
+    assert "RAW=$(" in run and "printf " in run, (
+        "the retried inspect must be captured before it is parsed: piping "
+        "with-retry directly into the assertion concatenates the output of every "
+        "attempt, so a retry produces malformed JSON from a healthy registry"
+    )
+    for line in run.splitlines():
+        if "with-retry.sh" in line:
+            assert "assert_image_platforms.py" not in line, (
+                "retry the inspect, not the assertion: a genuinely single-arch "
+                "manifest must fail once rather than three times"
+            )
+
+
 def test_pkl_is_downloaded_for_the_runners_architecture() -> None:
     """`build-app-image` puts `regenerate-contract` on an arm64 runner.
 

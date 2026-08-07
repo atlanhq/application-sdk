@@ -1396,3 +1396,370 @@ def test_a_section_within_budget_is_printed_whole(
 def test_an_empty_section_prints_no_header(capsys: pytest.CaptureFixture[str]) -> None:
     app._print_block("pod_logs", "   \n\n", 10)
     assert capsys.readouterr().out == ""
+
+
+# ── Whose pod is actually failing ────────────────────────────────────────────
+# LM's health check is namespace-scoped: it reports "Pods failed in namespace
+# <ns>: <pod>" for ANY unhealthy pod in the app's namespace, so an orphan left by
+# an earlier version fails every later install to that tenant. Observed on the
+# first green multi-arch install — our pods pulled the image in 12.4s and were
+# scaled to zero by KEDA, while a pod from an earlier attempt sat in
+# ImagePullBackOff on a different tag (x1048 over 3h59m) and took the verdict with
+# it.
+#
+# The direction that matters is the SAFE one: our own image among the failures, or
+# a read-back that disagrees, must still fail. The override is narrow.
+
+_ORPHAN = "ghcr.io/atlanhq/atlan-openapi-app:sdr-test-1c232889"
+_ORPHAN_EVENTS = (
+    f'9s Normal BackOff pod/openapi-d4849884b-7cwdp Back-off pulling image "{_ORPHAN}"\n'
+    f"20s Warning Failed pod/openapi-d4849884b-7cwdp Error: ImagePullBackOff\n"
+    f'75s Normal Pulled pod/openapi-worker-abc Successfully pulled image "{_IMAGE}" in 12.4s'
+)
+
+
+def test_a_successfully_pulled_image_is_not_read_as_failing() -> None:
+    """The inverting mistake: our image appears in the same event stream.
+
+    It is there on a `Successfully pulled` line. Counting that as a failure would
+    make every namespace look like ours is broken, which turns the override off
+    exactly when it is needed.
+    """
+    assert app.failing_images(_ORPHAN_EVENTS) == [_ORPHAN]
+    assert app.foreign_failure(_ORPHAN_EVENTS, _IMAGE) == [_ORPHAN]
+
+
+def test_our_own_image_failing_is_never_foreign() -> None:
+    events = f'Failed to pull image "{_IMAGE}": manifest unknown'
+    assert app.foreign_failure(events, _IMAGE) == [], (
+        "when our own image is among the failures the verdict IS about us, and "
+        "downgrading it would turn a real broken install into a green run"
+    )
+
+
+_DIGEST = "sha256:" + "a1" * 32
+
+
+def test_our_image_failing_by_digest_is_never_foreign() -> None:
+    """Kubelet can report the failure pinned while --image arrives as a tag.
+
+    Exact string equality reads that as foreign — the one misread this override
+    must never make, since it turns a broken install of OUR image green.
+    """
+    repo = _IMAGE.rpartition(":")[0]
+    for pinned in (f"{repo}@{_DIGEST}", f"{_IMAGE}@{_DIGEST}"):
+        events = f'Failed to pull image "{pinned}": manifest unknown'
+        assert app.foreign_failure(events, _IMAGE) == []
+
+
+def test_our_image_failing_by_tag_is_never_foreign_when_we_pass_a_digest() -> None:
+    """The same ambiguity, mirrored: we hand over a digest, kubelet names the tag."""
+    repo, _, tag = _IMAGE.rpartition(":")
+    ours = f"{repo}@{_DIGEST}"
+    events = f'Back-off pulling image "{repo}:{tag}"'
+    assert app.foreign_failure(events, ours) == []
+
+
+def test_a_mix_of_our_digest_and_an_orphan_is_never_foreign() -> None:
+    """One ambiguous own failure keeps the whole verdict ours, orphans or not."""
+    repo = _IMAGE.rpartition(":")[0]
+    events = (
+        f'Back-off pulling image "{_ORPHAN}"\n'
+        f'Failed to pull image "{repo}@{_DIGEST}": manifest unknown'
+    )
+    assert app.foreign_failure(events, _IMAGE) == []
+
+
+def test_another_tag_of_our_own_repository_is_foreign() -> None:
+    """The override's whole point is distinguishing tags of the SAME repository."""
+    other_tag = _IMAGE.rpartition(":")[0] + ":sdr-test-older999"
+    events = f'Back-off pulling image "{other_tag}"'
+    assert app.foreign_failure(events, _IMAGE) == [other_tag]
+
+
+def test_image_repository_identity() -> None:
+    repo = _IMAGE.rpartition(":")[0]
+    assert app._image_repository(_IMAGE) == repo
+    assert app._image_repository(f"{repo}@{_DIGEST}") == repo
+    assert app._image_repository(f"{_IMAGE}@{_DIGEST}") == repo
+    # An untagged reference must not lose its final segment to the tag rule.
+    assert app._image_repository(repo) == repo
+
+
+def test_image_tag_extraction() -> None:
+    repo, _, tag = _IMAGE.rpartition(":")
+    assert app._image_tag(_IMAGE) == tag
+    assert app._image_tag(f"{_IMAGE}@{_DIGEST}") == tag
+    # A colon-free or digest-only reference has NO tag — rpartition on one hands
+    # back the whole string, which must not be read as a tag.
+    assert app._image_tag(repo) == ""
+    assert app._image_tag(f"{repo}@{_DIGEST}") == ""
+
+
+def test_a_registry_port_is_never_read_as_a_tag() -> None:
+    """``ghcr.io:5000/org/repo`` carries its colon left of the final slash.
+
+    Reading that port colon as the tag separator parses the repository as bare
+    ``ghcr.io`` — which compares unequal to our own ported reference and reads
+    OUR failing image as foreign, the one misread the override must never make.
+    """
+    ported = "ghcr.io:5000/atlanhq/atlan-openapi-app"
+    assert app._image_repository(f"{ported}:sdr-test-abc123") == ported
+    assert app._image_repository(f"{ported}@{_DIGEST}") == ported
+    assert app._image_repository(f"{ported}:sdr-test-abc123@{_DIGEST}") == ported
+    assert app._image_repository(ported) == ported
+    assert app._image_tag(f"{ported}:sdr-test-abc123") == "sdr-test-abc123"
+    assert app._image_tag(f"{ported}@{_DIGEST}") == ""
+    assert app._image_tag(f"{ported}:sdr-test-abc123@{_DIGEST}") == "sdr-test-abc123"
+    assert app._image_tag(ported) == ""
+
+
+def test_our_ported_image_failing_by_digest_is_never_foreign() -> None:
+    """The ported-registry misread, end to end: tag-form --image, digest-form failure."""
+    ported = "ghcr.io:5000/atlanhq/atlan-openapi-app"
+    events = f'Failed to pull image "{ported}@{_DIGEST}": manifest unknown'
+    assert app.foreign_failure(events, f"{ported}:sdr-test-abc123") == []
+
+
+def test_a_mix_of_ours_and_an_orphan_is_never_foreign() -> None:
+    events = (
+        f'Back-off pulling image "{_ORPHAN}"\n'
+        f'Failed to pull image "{_IMAGE}": manifest unknown'
+    )
+    assert app.foreign_failure(events, _IMAGE) == []
+
+
+def test_unreadable_diagnostics_are_never_foreign() -> None:
+    # Nothing identifiable failing means no evidence to override LM with.
+    for text in ("", "deployment failed", "Pods failed in namespace openapi-app"):
+        assert app.foreign_failure(text, _IMAGE) == []
+
+
+def test_an_orphan_failure_passes_when_the_readback_agrees(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The workaround, and it still rests on direct evidence."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", Response(404, {})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET",
+                    "/deployments/",
+                    _ok(
+                        {
+                            "deployment_status": "FAILED",
+                            "message": "Pods failed in namespace openapi-app: openapi-d4849884b-7cwdp",
+                        }
+                    ),
+                ),
+                StubRoute("GET", "/failure", Response(404, {})),
+                StubRoute("GET", "/events", _ok({"events": _ORPHAN_EVENTS})),
+                # The authority: the tenant really does serve what we installed.
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(404, {}))],
+        ),
+    )
+    outcome = app.install(_install_args())
+    assert outcome.installed_version == _VERSION
+    out = capsys.readouterr().out
+    # The orphan must be named on the WARNING line itself: `_ORPHAN` also shows
+    # up in the echoed diagnostic events, so a whole-output `in` check passes
+    # even if the ::warning:: never mentioned the foreign image.
+    assert any("::warning::" in line and _ORPHAN in line for line in out.splitlines())
+    assert "cleaned up" in out, (
+        "a tolerated orphan must still be reported — it fails this check on "
+        "every future install until someone deletes it"
+    )
+
+
+def test_an_orphan_failure_still_fails_when_the_readback_disagrees(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The override moves the decision to the read-back; it does not skip it."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", Response(404, {})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute("GET", "/deployments/", _ok({"deployment_status": "FAILED"})),
+                StubRoute("GET", "/failure", Response(404, {})),
+                StubRoute("GET", "/events", _ok({"events": _ORPHAN_EVENTS})),
+                # Tenant still on the old version: the install did NOT take.
+                StubRoute("GET", "/info", _ok({"version": "older"})),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(404, {}))],
+        ),
+    )
+    with pytest.raises(app.TenantAppError, match="did not take effect"):
+        app.install(_install_args())
+
+
+def test_a_timeout_is_never_downgraded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only LM's FAILED verdict is namespace-scoped. A timeout is our problem.
+
+    `DeploymentFailed` exists to keep these apart: catching the base error here
+    would let an accepted-but-never-reconciled deploy pass whenever the namespace
+    happened to contain an orphan.
+    """
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", Response(404, {})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+            ],
+            sticky=[
+                StubRoute("GET", "/releases/", Response(404, {})),
+                StubRoute("GET", "/failure", Response(404, {})),
+                StubRoute("GET", "/events", _ok({"events": _ORPHAN_EVENTS})),
+            ],
+        ),
+    )
+    with pytest.raises(app.TenantAppError, match="terminal state"):
+        app.install(_install_args(timeout_seconds=0))
+
+
+def test_deployment_failed_is_a_tenant_app_error() -> None:
+    # Callers catching TenantAppError (main(), the workflows) must keep working.
+    assert issubclass(app.DeploymentFailed, app.TenantAppError)
+
+
+# ── "unknown" is not a version ───────────────────────────────────────────────
+# LM's own code: `version_text = attributes.get("atlanAppCurrentVersion",
+# "unknown")` (tenant_apps_manager/store/tenant_app_store.py), commented
+# "Semantic version (if available)". The Atlas attribute is optional, so a
+# perfectly reconciled install can still report the placeholder — a live azure
+# tenant did exactly that after a SUCCEEDED deployment.
+
+
+@pytest.mark.parametrize("placeholder", ["unknown", "UNKNOWN", " unknown ", "n/a"])
+def test_a_placeholder_reads_as_no_version(placeholder: str) -> None:
+    payload = {"installed": {"version_text": placeholder}}
+    assert app._extract_version(payload) == "", (
+        "a placeholder must read as absent. Returning it turns 'the tenant "
+        "cannot tell us what it runs' into 'the tenant runs something called "
+        "unknown', which reads like a mismatch and hides the real problem"
+    )
+
+
+def test_a_real_version_alongside_a_placeholder_still_wins() -> None:
+    # Order matters: version_text is checked first and is the placeholder here.
+    payload = {"installed": {"version_text": "unknown", "version": _VERSION}}
+    assert app._extract_version(payload) == _VERSION
+
+
+def test_the_info_shape_is_dumped_when_no_version_can_be_read(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The whole point: decide the next step from the payload, not a guess."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute(
+                    "GET",
+                    "/info",
+                    _ok(
+                        {
+                            "app_id": _APP_ID,
+                            "catalog": {
+                                "app_name": "openapi",
+                                "app_version": {
+                                    "version_id": "019fdc06-dbe3-7992",
+                                    "version": _VERSION,
+                                    "image_url": _IMAGE,
+                                    "config": "a: 1\nb: 2\n",
+                                },
+                            },
+                            "installed": {
+                                "version_id": "019fdc06-dbe3-7992",
+                                "version_text": "unknown",
+                                "deployment_name": "production",
+                            },
+                        }
+                    ),
+                )
+            ]
+        ),
+    )
+    assert (
+        app._installed_version(TenantClient(base_url=_TENANT, bearer="t"), _APP_ID)
+        == ""
+    )
+    out = capsys.readouterr().out
+    assert "app info (no version could be read)" in out
+    # The identifiers that would let us resolve the version.
+    assert "installed.version_id = '019fdc06-dbe3-7992'" in out
+    assert f"catalog.app_version.version = '{_VERSION}'" in out
+    assert f"catalog.app_version.image_url = '{_IMAGE}'" in out
+    # NOT the config blob: burying the identifiers is how the last diagnostic
+    # gap happened.
+    assert "a: 1" not in out
+
+
+def test_no_dump_when_the_version_reads_fine(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute(
+                    "GET", "/info", _ok({"installed": {"version_text": _VERSION}})
+                )
+            ]
+        ),
+    )
+    app._installed_version(TenantClient(base_url=_TENANT, bearer="t"), _APP_ID)
+    assert "no version could be read" not in capsys.readouterr().out
+
+
+def test_verify_distinguishes_unreadable_from_wrong(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unverifiable tenant and a wrong-version tenant need different hunts."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute(
+                    "GET", "/info", _ok({"installed": {"version_text": "unknown"}})
+                )
+            ]
+        ),
+    )
+    with pytest.raises(app.TenantAppError) as excinfo:
+        app.verify(
+            argparse.Namespace(base_url=_TENANT, app_id=_APP_ID, expected=_VERSION)
+        )
+    message = str(excinfo.value)
+    assert "did not report a version at all" in message
+    assert "concurrent e2e run" not in message, (
+        "the concurrent-run hint is for a genuine mismatch; offering it here "
+        "sends the reader after a race that did not happen"
+    )
+
+
+def test_verify_still_names_the_race_on_a_real_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({"installed": {"version_text": "older"}}))
+            ]
+        ),
+    )
+    with pytest.raises(app.TenantAppError, match="concurrent e2e run"):
+        app.verify(
+            argparse.Namespace(base_url=_TENANT, app_id=_APP_ID, expected=_VERSION)
+        )
