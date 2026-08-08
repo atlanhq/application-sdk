@@ -2,6 +2,84 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.18.0] - 2026-08-08
+
+### Features
+
+- K013 flags DAG nodes whose app_name disagrees with the app that runs them (#3056) ([9426832](https://github.com/atlanhq/application-sdk/commit/9426832))
+- run every e2e suite against an AWS/Azure/GCP tenant matrix (#2997) ([338595e](https://github.com/atlanhq/application-sdk/commit/338595e))
+- extend P023 to tree-scale filesystem work in async defs (#2988) ([a828e22](https://github.com/atlanhq/application-sdk/commit/a828e22))
+- let bootstrap carry an app's pre-commit system deps (#2904) ([1beb7df](https://github.com/atlanhq/application-sdk/commit/1beb7df))
+- promote L002 to block for app production code (#2902) ([6c16247](https://github.com/atlanhq/application-sdk/commit/6c16247))
+
+### Bug fixes
+
+- only re-run e2e when the e2e label is the one just added (#3065) ([5f6c52f](https://github.com/atlanhq/application-sdk/commit/5f6c52f))
+- exempt redaction-boundary log calls from L004/E005 (#3032) ([2eeaa5e](https://github.com/atlanhq/application-sdk/commit/2eeaa5e))
+- split conformance package bumps into a dedicated auto-merged Renovate PR (#3041) ([c4cec09](https://github.com/atlanhq/application-sdk/commit/c4cec09))
+- update github/codeql-action digest to 5595cca (#2993) ([13a49e1](https://github.com/atlanhq/application-sdk/commit/13a49e1))
+- update github/codeql-action digest to d1ba80a (#2967) ([aa5d5cf](https://github.com/atlanhq/application-sdk/commit/aa5d5cf))
+- mirror Input.app_name in SDK contract base registry (#2964) ([e07ea56](https://github.com/atlanhq/application-sdk/commit/e07ea56))
+- resolve log app_name per-entrypoint from workflow input (#2951) ([1f2b24c](https://github.com/atlanhq/application-sdk/commit/1f2b24c))
+- update github/codeql-action digest to f205ea1 (#2944) ([907626f](https://github.com/atlanhq/application-sdk/commit/907626f))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#3079) ([b159b33](https://github.com/atlanhq/application-sdk/commit/b159b33))
+- chore(deps): lock file maintenance (#3078) ([9963651](https://github.com/atlanhq/application-sdk/commit/9963651))
+- chore(deps): lock file maintenance (#3072) ([2793593](https://github.com/atlanhq/application-sdk/commit/2793593))
+- chore(deps): lock file maintenance (#3071) ([5d02621](https://github.com/atlanhq/application-sdk/commit/5d02621))
+- chore(deps): lock file maintenance (#3070) ([ac5927d](https://github.com/atlanhq/application-sdk/commit/ac5927d))
+- chore(deps): lock file maintenance (#3064) ([e744981](https://github.com/atlanhq/application-sdk/commit/e744981))
+- chore(deps): lock file maintenance (#3058) ([958f152](https://github.com/atlanhq/application-sdk/commit/958f152))
+- chore(deps): lock file maintenance (#3052) ([6f4ae28](https://github.com/atlanhq/application-sdk/commit/6f4ae28))
+- chore(contract-toolkit): release v0.20.0 (#3046) ([ba7e46c](https://github.com/atlanhq/application-sdk/commit/ba7e46c))
+- chore(deps): lock file maintenance (#3043) ([20fdbd3](https://github.com/atlanhq/application-sdk/commit/20fdbd3))
+- chore(deps): lock file maintenance (#3030) ([04232a0](https://github.com/atlanhq/application-sdk/commit/04232a0))
+- chore(deps): lock file maintenance (#3021) ([68fa5ac](https://github.com/atlanhq/application-sdk/commit/68fa5ac))
+- chore(deps): lock file maintenance (#3010) ([ffb4125](https://github.com/atlanhq/application-sdk/commit/ffb4125))
+- chore(deps): lock file maintenance (#3003) ([8791055](https://github.com/atlanhq/application-sdk/commit/8791055))
+- chore(deps): lock file maintenance (#3002) ([8944a7b](https://github.com/atlanhq/application-sdk/commit/8944a7b))
+- chore(deps): lock file maintenance (#2999) ([5784d2d](https://github.com/atlanhq/application-sdk/commit/5784d2d))
+- chore(deps): lock file maintenance (#2996) ([9bbe0a7](https://github.com/atlanhq/application-sdk/commit/9bbe0a7))
+- chore(deps): lock file maintenance (#2983) ([e069d19](https://github.com/atlanhq/application-sdk/commit/e069d19))
+- chore(deps): lock file maintenance (#2980) ([1156b3c](https://github.com/atlanhq/application-sdk/commit/1156b3c))
+- chore(deps): lock file maintenance (#2976) ([5cfb263](https://github.com/atlanhq/application-sdk/commit/5cfb263))
+- chore(deps): lock file maintenance (#2975) ([4ffdad3](https://github.com/atlanhq/application-sdk/commit/4ffdad3))
+- chore(deps): lock file maintenance (#2970) ([f928151](https://github.com/atlanhq/application-sdk/commit/f928151))
+- chore(deps): lock file maintenance (#2969) ([a954441](https://github.com/atlanhq/application-sdk/commit/a954441))
+- chore(deps): lock file maintenance (#2968) ([4bf4921](https://github.com/atlanhq/application-sdk/commit/4bf4921))
+- chore(deps): lock file maintenance (#2961) ([d89fc2d](https://github.com/atlanhq/application-sdk/commit/d89fc2d))
+- chore(contract-toolkit): release v0.19.2 (#2959) ([7ddd1fa](https://github.com/atlanhq/application-sdk/commit/7ddd1fa))
+- chore(deps): lock file maintenance (#2958) ([0df9623](https://github.com/atlanhq/application-sdk/commit/0df9623))
+- chore(deps): lock file maintenance (#2957) ([5584f50](https://github.com/atlanhq/application-sdk/commit/5584f50))
+- chore(deps): lock file maintenance (#2954) ([1884fcc](https://github.com/atlanhq/application-sdk/commit/1884fcc))
+- chore(deps): lock file maintenance (#2949) ([f02a316](https://github.com/atlanhq/application-sdk/commit/f02a316))
+- chore(deps): lock file maintenance (#2936) ([8a130c2](https://github.com/atlanhq/application-sdk/commit/8a130c2))
+- chore(deps): lock file maintenance (#2935) ([afed263](https://github.com/atlanhq/application-sdk/commit/afed263))
+- chore(deps): lock file maintenance (#2934) ([fa1bd97](https://github.com/atlanhq/application-sdk/commit/fa1bd97))
+- chore(deps): lock file maintenance (#2929) ([289361d](https://github.com/atlanhq/application-sdk/commit/289361d))
+- chore(deps): lock file maintenance (#2927) ([5ba4c16](https://github.com/atlanhq/application-sdk/commit/5ba4c16))
+- chore(deps): lock file maintenance (#2924) ([cfb5b1e](https://github.com/atlanhq/application-sdk/commit/cfb5b1e))
+- chore(deps): lock file maintenance (#2919) ([27e891c](https://github.com/atlanhq/application-sdk/commit/27e891c))
+- chore(deps): lock file maintenance (#2915) ([2433b90](https://github.com/atlanhq/application-sdk/commit/2433b90))
+- chore(deps): lock file maintenance (#2910) ([41ab5f1](https://github.com/atlanhq/application-sdk/commit/41ab5f1))
+- chore(deps): lock file maintenance (#2909) ([ac97c1e](https://github.com/atlanhq/application-sdk/commit/ac97c1e))
+- chore(deps): lock file maintenance (#2905) ([65b0f5a](https://github.com/atlanhq/application-sdk/commit/65b0f5a))
+- chore(deps): lock file maintenance (#2899) ([deff0c9](https://github.com/atlanhq/application-sdk/commit/deff0c9))
+- chore(deps): lock file maintenance (#2898) ([e5515ff](https://github.com/atlanhq/application-sdk/commit/e5515ff))
+- chore(deps): lock file maintenance (#2893) ([59cae47](https://github.com/atlanhq/application-sdk/commit/59cae47))
+- chore(deps): lock file maintenance (#2892) ([62d2c30](https://github.com/atlanhq/application-sdk/commit/62d2c30))
+- chore(deps): lock file maintenance (#2890) ([c7362e9](https://github.com/atlanhq/application-sdk/commit/c7362e9))
+- chore(deps): lock file maintenance (#2887) ([25e8a97](https://github.com/atlanhq/application-sdk/commit/25e8a97))
+- chore(deps): lock file maintenance (#2885) ([ebd493c](https://github.com/atlanhq/application-sdk/commit/ebd493c))
+- chore(deps): lock file maintenance (#2881) ([3840cb0](https://github.com/atlanhq/application-sdk/commit/3840cb0))
+- chore(deps): lock file maintenance (#2875) ([0538e9a](https://github.com/atlanhq/application-sdk/commit/0538e9a))
+- chore(deps): lock file maintenance (#2872) ([95f0d39](https://github.com/atlanhq/application-sdk/commit/95f0d39))
+- chore(contract-toolkit): release v0.19.1 (#2864) ([bf33c1c](https://github.com/atlanhq/application-sdk/commit/bf33c1c))
+- chore(deps): lock file maintenance (#2862) ([2be1af3](https://github.com/atlanhq/application-sdk/commit/2be1af3))
+- chore(deps): lock file maintenance (#2860) ([edbdfb5](https://github.com/atlanhq/application-sdk/commit/edbdfb5))
+
 ## [0.17.0] - 2026-07-23
 
 ### Features
