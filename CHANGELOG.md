@@ -1,5 +1,10 @@
 # Changelog
 
+## v3.27.1 (August 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.27.0...v3.27.1
+
+
 ## v3.27.0 (August 07, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.26.1...v3.27.0
