@@ -41,6 +41,7 @@ from application_sdk.app._ep_registration import (
 from application_sdk.app.base_errors import (
     AbstractRunNotImplementedError,
     ObjectStoreNotConfiguredError,
+    UpstreamObjectStoreNotConfiguredError,
 )
 from application_sdk.app.context import (
     AppContext,
@@ -1159,6 +1160,7 @@ class App(ABC):
         from application_sdk.constants import (  # noqa: PLC0415 — import here to avoid module-level circular import (same pattern as normalize_key)
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED,
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED,
+            ENABLE_ATLAN_UPLOAD,
         )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: app.base is imported by execution which imports storage
             normalize_key,
@@ -1167,14 +1169,21 @@ class App(ABC):
             upload as _upload,
         )
 
+        deployment = self.context.storage
+        upstream = self.context.upstream_storage
+
+        # BLDX-1619: a deployment that set ENABLE_ATLAN_UPLOAD expects artifacts
+        # in Atlan's bucket. Falling back to the deployment store here returns a
+        # positive file count for a write publish will never see, so fail before
+        # doing any work rather than after.
+        if ENABLE_ATLAN_UPLOAD and upstream is None:
+            raise UpstreamObjectStoreNotConfiguredError()
+
         # BLDX-1555 defense-in-depth: validate transformed assets against the
         # pyatlan_v9 backbone before the handoff. Warn-only, best-effort, and
         # run in an isolated child process (CNCT-85) so a native decode fault
         # kills only the child and never blocks or crashes the event loop.
         await _warn_on_invalid_transformed_assets(input.local_path, self._app_name)
-
-        deployment = self.context.storage
-        upstream = self.context.upstream_storage
 
         # Build the ordered list of (store, label, fatal) upload targets.
         # See ADR-0014 §"BLDX-1464 dual-write" for the full routing decision.

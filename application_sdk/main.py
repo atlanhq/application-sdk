@@ -558,6 +558,53 @@ async def _log_dapr_components(
     return set(registered)
 
 
+async def _fetch_binding_secrets(
+    dapr_client: AsyncDaprClient,
+    name: str,
+    *,
+    components_dir: Path | str,
+) -> dict[str, dict[str, str]]:
+    """Fetch the secrets a Dapr component's ``secretKeyRef`` entries point at.
+
+    The obstore resolver is synchronous and public, so it cannot call the Dapr
+    secret API itself.  This runs after ``wait_for_dapr_sidecar()``, where the
+    sidecar is known ready, and hands the result to the resolver as ``secrets=``.
+
+    Returns ``{}`` when the component declares no ``auth.secretStore`` — that
+    is the Docker Compose / ``secretstores.local.env`` shape, which the
+    resolver already covers through environment variables.
+
+    A secret that cannot be read is logged and skipped rather than raised: the
+    resolver reports the resulting broken fields by name, which says far more
+    than a lookup failure would.
+    """
+    from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: startup wiring only
+        read_binding_secret_refs,
+    )
+
+    declared = read_binding_secret_refs(name, components_dir=components_dir)
+    if declared.secret_store is None:
+        return {}
+
+    secrets: dict[str, dict[str, str]] = {}
+    for secret_name in declared.secret_names:
+        try:
+            secrets[secret_name] = await dapr_client.get_secret(
+                declared.secret_store, secret_name
+            )
+        # conformance: ignore[E004] one unreadable secret must not mask the rest; the resolver names the broken fields
+        except Exception:
+            logger.warning(
+                "Could not read secret '%s' from secret store '%s' for Dapr "
+                "component '%s' — the binding may resolve as broken",
+                secret_name,
+                declared.secret_store,
+                name,
+                exc_info=True,
+            )
+    return secrets
+
+
 async def _create_infrastructure(
     credential_stores: Mapping[str, SecretStore] | None = None,
 ) -> InfrastructureContext:
@@ -616,11 +663,19 @@ async def _create_infrastructure(
         registered_components = await _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
 
+        # BLDX-1619: on the k8s SDR secure path the upstream component resolves
+        # its credentials through auth.secretStore, and the matching env vars are
+        # deliberately absent. Fetch those secrets here — the sidecar is up — so
+        # the resolver sees the same values the sidecar does.
+        upstream_secrets = await _fetch_binding_secrets(
+            dapr_client, UPSTREAM_OBJECT_STORE_NAME, components_dir=components_dir
+        )
         upstream_storage, upstream_put_attrs = (
             _create_store_from_binding_optional_with_put_attrs(
                 UPSTREAM_OBJECT_STORE_NAME,
                 components_dir=components_dir,
                 required=ENABLE_ATLAN_UPLOAD,
+                secrets=upstream_secrets,
             )
         )
 
@@ -628,6 +683,11 @@ async def _create_infrastructure(
             create_store_from_binding_with_put_attrs(
                 DEPLOYMENT_OBJECT_STORE_NAME,
                 components_dir=components_dir,
+                secrets=await _fetch_binding_secrets(
+                    dapr_client,
+                    DEPLOYMENT_OBJECT_STORE_NAME,
+                    components_dir=components_dir,
+                ),
             )
         )
         return InfrastructureContext(
