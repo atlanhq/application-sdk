@@ -105,7 +105,7 @@ def test_get_sql_column_expressions(
     )
     assert len(columns) == 4
     assert len(literal_columns) == 1
-    assert 'table_name AS "attributes.name"' in columns
+    assert '"table_name" AS "attributes.name"' in columns
     assert (
         "concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name) AS \"attributes.qualifiedName\""
         in columns
@@ -140,7 +140,7 @@ def test_generate_sql_query(
     } == literal_columns[0]
 
     expected_result = textwrap.dedent(
-        """\n            SELECT\n                table_name AS "attributes.name",concat(connection_qualified_name, \'/\', table_catalog, \'/\', table_schema, \'/\', table_name) AS "attributes.qualifiedName",case when table_type = \'TABLE\' then \'table\' when table_type = \'VIEW\' then \'view\' else table_type end AS "attributes.type","attributes.literal" AS "attributes.literal"\n            FROM dataframe\n            """
+        """\n            SELECT\n                "table_name" AS "attributes.name",concat(connection_qualified_name, \'/\', table_catalog, \'/\', table_schema, \'/\', table_name) AS "attributes.qualifiedName",case when table_type = \'TABLE\' then \'table\' when table_type = \'VIEW\' then \'view\' else table_type end AS "attributes.type","attributes.literal" AS "attributes.literal"\n            FROM dataframe\n            """
     )
     assert result == expected_result
 
@@ -181,7 +181,7 @@ def test_quoted_sql_keyword_source_query_is_dropped_with_a_warning(
             template, sample_dataframe, {}, yaml_path="tag_attachment.yaml"
         )
 
-    assert columns == ['table_name AS "attributes.name"']
+    assert columns == ['"table_name" AS "attributes.name"']
     assert literal_columns is None
 
     assert _dropped_field_names(mock_logger.warning) == [
@@ -603,7 +603,7 @@ def test_diagnostics_are_reported_once_not_once_per_batch(
             )
 
     # Every batch still gets the same SQL — only the reporting is deduplicated.
-    assert columns == ['table_name AS "attributes.name"']
+    assert columns == ['"table_name" AS "attributes.name"']
 
     assert mock_logger.info.call_count == 1
     assert _dropped_field_names(mock_logger.warning) == ["attributes.propagate"]
@@ -1252,3 +1252,196 @@ def test_transform_metadata(
     assert result is not None
     mock_prepare.assert_called_once()
     mock_group.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Reserved keywords in the SELECT expression slot (FND-51)
+# ---------------------------------------------------------------------------
+#
+# DuckDB restricts the expression slot but not the alias slot -- verified on the
+# pinned 1.5.5: ``SELECT column AS column`` raises ParserException while
+# ``SELECT x AS column`` parses.  ``source_query`` lands in the expression slot,
+# so a template whose source column is named after a reserved keyword failed
+# every transform of that entity type at runtime.  These tests execute the
+# generated SQL rather than only asserting on its text, so they fail if DuckDB's
+# behaviour ever diverges from the assumption the fix rests on.
+
+
+@pytest.fixture
+def keyword_dataframe():
+    """A table whose columns are DuckDB reserved keywords."""
+    return pa.Table.from_pydict(
+        {
+            "column": ["c1", "c2"],
+            "order": [1, 2],
+            "qualify": ["q1", "q2"],
+            "normal": ["n1", "n2"],
+        }
+    )
+
+
+def _execute(sql, table):
+    """Run *sql* against *table* registered as ``dataframe``, returning the rows."""
+    duckdb = pytest.importorskip("duckdb")
+    connection = duckdb.connect()
+    try:
+        connection.register("dataframe", table)
+        return connection.sql(sql).fetchall()
+    finally:
+        connection.close()
+
+
+def test_reserved_keyword_source_query_renders_valid_sql(
+    sql_transformer, keyword_dataframe
+):
+    """A bare reserved keyword resolved as a column reference is quoted."""
+    template = {
+        "columns": flatten_yaml_columns(
+            {"attributes": {"name": {"source_query": "column"}}}
+        )
+    }
+
+    columns, _ = sql_transformer.get_sql_column_expressions(
+        template, keyword_dataframe, {}
+    )
+
+    assert columns == ['"column" AS "attributes.name"']
+    assert _execute(f"SELECT {columns[0]} FROM dataframe", keyword_dataframe) == [
+        ("c1",),
+        ("c2",),
+    ]
+
+
+def test_reserved_keyword_source_query_is_a_parse_error_unquoted(keyword_dataframe):
+    """The premise: the same expression unquoted does not parse.
+
+    Pins the behaviour the fix exists for, so this suite fails loudly rather than
+    quietly over-quoting if DuckDB ever starts accepting the bare form.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    with pytest.raises(duckdb.ParserException):
+        _execute('SELECT column AS "attributes.name" FROM dataframe', keyword_dataframe)
+
+
+def test_already_quoted_source_query_is_not_double_wrapped(
+    sql_transformer, keyword_dataframe
+):
+    """Templates remediated by hand against P040 now resolve, and are not re-wrapped.
+
+    ``source_query: '"order"'`` carries the quotes in the value.  Two things have
+    to hold for that spelling:
+
+    * it must match the column ``order`` -- matching the raw quoted text instead
+      is why such a template resolved to nothing and had its attribute dropped
+      from published output entirely, trading a loud ParserException for a
+      silent missing attribute;
+    * it must not be re-wrapped -- that emits a quoted identifier literally named
+      ``"order"``, which DuckDB rejects with a BinderException.
+
+    Both spellings therefore render the same SQL.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {"attributes": {"name": {"source_query": '"order"'}}}
+        )
+    }
+
+    columns, _ = sql_transformer.get_sql_column_expressions(
+        template, keyword_dataframe, {}
+    )
+
+    assert columns == ['"order" AS "attributes.name"']
+    assert _execute(f"SELECT {columns[0]} FROM dataframe", keyword_dataframe) == [
+        (1,),
+        (2,),
+    ]
+
+
+def test_source_columns_expression_is_never_quoted(sql_transformer, keyword_dataframe):
+    """The source_columns route passes arbitrary SQL and must not be touched.
+
+    A bare identifier is legal there too -- ``current_date`` is a zero-argument
+    SQL keyword, and quoting it would turn a working expression into a lookup for
+    a column that does not exist.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {
+                "attributes": {
+                    "asOf": {
+                        "source_query": "current_date",
+                        "source_columns": ["normal"],
+                    },
+                    "combined": {
+                        "source_query": "concat(\"column\", '/', normal)",
+                        "source_columns": ["column", "normal"],
+                    },
+                }
+            }
+        )
+    }
+
+    columns, _ = sql_transformer.get_sql_column_expressions(
+        template, keyword_dataframe, {}
+    )
+
+    assert columns == [
+        'current_date AS "attributes.asOf"',
+        'concat("column", \'/\', normal) AS "attributes.combined"',
+    ]
+    assert _execute(f"SELECT {','.join(columns)} FROM dataframe", keyword_dataframe)
+
+
+def test_literal_column_named_after_a_keyword_renders_valid_sql(
+    sql_transformer, keyword_dataframe
+):
+    """The literal branch puts ``name`` in the expression slot, so it is quoted too.
+
+    ``prepare_template_and_attributes`` appends a real column for each literal, so
+    that expression is a reference to the appended column -- and a
+    reserved-keyword name breaks it in exactly the same way.
+    """
+    template = {
+        "columns": flatten_yaml_columns({"select": {"source_query": "'Database'"}})
+    }
+
+    columns, literal_columns = sql_transformer.get_sql_column_expressions(
+        template, keyword_dataframe, {}
+    )
+
+    assert columns == ['"select" AS select']
+    assert literal_columns == [{"name": "select", "source_query": "'Database'"}]
+    # The literal's own column is appended before the SQL runs; emulate that.
+    with_literal = keyword_dataframe.append_column(
+        "select", pa.array(["Database"] * len(keyword_dataframe))
+    )
+    assert _execute(f"SELECT {columns[0]} FROM dataframe", with_literal) == [
+        ("Database",),
+        ("Database",),
+    ]
+
+
+def test_plain_column_reference_quoting_is_behaviour_neutral(
+    sql_transformer, keyword_dataframe
+):
+    """An ordinary column name is quoted too, and resolves identically.
+
+    DuckDB keeps quoted identifiers case-insensitive, so quoting every plain
+    reference -- rather than only the ones matching a keyword list -- needs no
+    list to stay current with DuckDB's grammar.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {"attributes": {"name": {"source_query": "normal"}}}
+        )
+    }
+
+    columns, _ = sql_transformer.get_sql_column_expressions(
+        template, keyword_dataframe, {}
+    )
+
+    assert columns == ['"normal" AS "attributes.name"']
+    assert _execute(f"SELECT {columns[0]} FROM dataframe", keyword_dataframe) == [
+        ("n1",),
+        ("n2",),
+    ]

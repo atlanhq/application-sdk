@@ -17,6 +17,7 @@ Rule ID namespaces:
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from conformance.suite.schema.disposition import (
@@ -25,6 +26,13 @@ from conformance.suite.schema.disposition import (
     RuleScope,
 )
 from pydantic import BaseModel, Field, model_validator
+
+#: The two accepted spellings of :attr:`RuleDefinition.superseded_by` — a rule ID
+#: (another rule takes the surface over) or an ``sdk>=X.Y.Z`` marker (an SDK fix
+#: removes the condition).  An exhaustive pattern rather than free text so a typo
+#: (``"sdk >= 3.27"``, ``"P42"``) is caught at rule-definition time, the same way
+#: ``orthogonal_gate``'s ``Literal`` catches a mistyped gate name.
+_SUPERSEDED_BY_RE = re.compile(r"^(?:[A-Z]\d{3}|sdk>=\d+(?:\.\d+)*)$")
 
 # ---------------------------------------------------------------------------
 # Typed rule definition
@@ -79,6 +87,31 @@ class RuleDefinition(BaseModel):
     Tracks the behavioural appearance, not when a specific rule ID was assigned —
     so a renumbered rule retains the original ``since`` of the behaviour it
     describes, e.g. ``"0.2.0"``."""
+    until: str | None = None
+    """Conformance suite version at which this rule retires — the first version
+    that must no longer ship it.  ``None`` means indefinite enforcement.
+
+    The counterpart to ``since``, and the reason it exists: a rule landed as an
+    *interim net* for a defect fixed elsewhere (an SDK fix, a platform change)
+    otherwise has no retirement path and becomes permanent by construction.
+    Naming the version here is a forcing function, not a comment —
+    ``test_catalog_retired_rules_are_removed`` fails once the package version
+    reaches ``until`` and the rule is still in the catalog, the same way the
+    deprecation drift gate fails on a stale manifest."""
+    superseded_by: str | None = None
+    """What makes this rule unnecessary, if anything does.  Two forms:
+
+    * a **rule ID** (``"P042"``) — another rule takes the surface over, e.g.
+      when one rule is split in two;
+    * an **``sdk>=X.Y.Z`` marker** — an SDK fix removes the condition at its
+      root, so the rule only describes apps pinned below that version.
+
+    Recording it separately from ``until`` is deliberate: the *trigger* for
+    retirement is usually known long before the conformance version that will
+    carry it out (an SDK fix ships on the SDK's cadence, and the rule must keep
+    firing until the fleet floor crosses it).  A ``superseded_by`` with no
+    ``until`` is the normal steady state for such a rule; ``until`` is filled in
+    once the retirement version is actually decided."""
     forces_external_influence: bool = False
     """``True`` if every fix for this rule must be treated as having consulted
     untrusted external content, regardless of what an individual remediation
@@ -107,6 +140,28 @@ class RuleDefinition(BaseModel):
                 data["scope"] = RuleScope(data["scope"].lower())
         return data
 
+    @model_validator(mode="after")
+    def _validate_superseded_by(self) -> RuleDefinition:
+        """Reject a supersession marker that nothing can act on.
+
+        A free-text ``superseded_by`` would be silently ignored by every reader,
+        so a typo (``"sdk >= 3.27"``, ``"P42"``) is rejected at rule-definition
+        time.  The ordering invariant between ``since`` and ``until``, and the
+        retirement gate itself, live in ``tests/test_catalog.py`` — version
+        comparison belongs to the check layer, and the schema layer stays free
+        of upward imports.
+        """
+        if self.superseded_by is None:
+            return self
+        if not _SUPERSEDED_BY_RE.match(self.superseded_by):
+            raise ValueError(
+                f"{self.id}: superseded_by must be a rule ID (e.g. 'P042') or an "
+                f"'sdk>=X.Y.Z' marker, got {self.superseded_by!r}"
+            )
+        if self.superseded_by == self.id:
+            raise ValueError(f"{self.id}: superseded_by cannot name the rule itself")
+        return self
+
     def to_reporting_descriptor(self) -> ReportingDescriptor:  # type: ignore[name-defined]  # noqa: F821
         """Return the SARIF ``ReportingDescriptor`` wire form for this rule."""
         from conformance.suite.schema.extensions import AtlanRuleProperties
@@ -123,6 +178,8 @@ class RuleDefinition(BaseModel):
             autofixable=self.autofixable,
             orthogonal_gate=self.orthogonal_gate,
             since=self.since,
+            until=self.until,
+            superseded_by=self.superseded_by,
             rationale=self.rationale or None,
             forces_external_influence=self.forces_external_influence,
         )

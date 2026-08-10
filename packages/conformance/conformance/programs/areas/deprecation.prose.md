@@ -75,9 +75,13 @@ with `recheck-narrowest` + the test orthogonal gate, then routes to residue for
 human audit):
 
 - **B001 DeprecatedSdkSymbolUsage** (app source) — the app imports, subclasses,
-  or calls a symbol the SDK has deprecated.  Apply the migration named in the
-  finding message — **never a blind name swap**: the replacement usually changes
-  the call shape (signature, return type, import path).  Examples:
+  calls, or reads a symbol the SDK has deprecated.  Apply the migration named in
+  the finding message — **never a blind name swap**: the replacement usually
+  changes the call shape (signature, return type, import path).  Examples:
+  - `DataframeType.daft` → `DataframeType.pandas` — a deprecated **enum member**
+    (removal in v4.0.0), marked via the SDK's `__deprecated_members__`
+    convention and carried in the generated manifest like any other symbol.
+    This one *is* a safe swap: daft already routes to the pandas/pyarrow path.
   - `upload_to_atlan(input)` → `App.upload(UploadInput(local_path=...,
     tier=StorageTier.RETAINED))` — different argument and return types; read the
     call site and adapt both.
@@ -157,17 +161,20 @@ human audit):
   breaks behaviour, the gate reverts and routes to residue.
 
 - **B007 DaftOnlyDataframeApiUsage** (app source) — a daft-only DataFrame API is
-  used on frames the SDK hands the app; on SDK >= 3.22 the `[daft]` extra is
-  empty and readers return **pandas**, so the call raises `AttributeError` at
-  runtime while imports and mocked tests stay green (latent-on-main breakage
-  found in the fleet SDR sweep).  Apply the pandas migration named in the
-  finding message:
+  used on frames the SDK hands the app; the daft-less SDK runtime returns
+  **pandas**, so the call raises `AttributeError` at runtime while imports and
+  mocked tests stay green (latent-on-main breakage found in the fleet SDR
+  sweep).  Apply the pandas migration named in the finding message:
   - `frame.count_rows()` → `len(frame)`;
   - `frame.to_pylist()` → `frame.to_dict("records")` (pyarrow-Table receivers
     are already exempted by the checker — `pa.Table.to_pylist()` is real);
-  - `frame.names` → `frame.columns`;
-  - `DataframeType.daft` → `DataframeType.pandas` (daft is a deprecated no-op
-    alias, removal in v4.0).
+  - `frame.names` → `frame.columns`.
+
+  `DataframeType.daft` is **not** a B007 finding — it is an SDK symbol and
+  arrives as **B001** from the generated deprecation manifest.  The migration
+  is the same (`DataframeType.pandas`), but read it off the B001 finding, whose
+  message carries the SDK's own notice text.
+
   Do NOT fix these one CI cycle at a time: run the app's transforms locally
   against synthetic raw data and migrate every call in one pass.  Matching is
   attribute-name-anchored, so when the receiver is genuinely not an SDK reader

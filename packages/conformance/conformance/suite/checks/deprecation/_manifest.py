@@ -56,7 +56,11 @@ class DeprecatedSymbol:
     """One marked deprecated symbol, as recorded in the manifest."""
 
     symbol: str
+    """Bare name for a class/function/method; qualified (``"DataframeType.daft"``)
+    for an ``enum_member``, which is not importable on its own."""
+
     kind: str
+    """``"class"`` | ``"function"`` | ``"method"`` | ``"enum_member"``."""
     module: str
     marker_via: str
     message: str

@@ -21,9 +21,15 @@ a repo that never touches the SDK is not consuming SDK reader frames):
 * ``frame.names`` — daft-only; pandas: ``frame.columns``.  Only
   simple-variable receivers are matched: ``df.schema.names`` (pyarrow) and
   ``df.index.names`` (pandas) are legitimate attribute chains and never flag.
-* ``DataframeType.daft`` — the deprecated no-op enum alias (routes to the
-  pandas/pyarrow path; removal in v4.0).  Matched only when ``DataframeType``
-  is imported from ``application_sdk``.
+
+``DataframeType.daft`` is deliberately **not** here.  It is the SDK's own
+symbol, and it was only ever hand-coded in this checker because nothing marked
+it — a comment is invisible to ``gen-deprecations``.  It now carries a
+``__deprecated_members__`` entry (see ``application_sdk/common/types.py``), so
+it rides the generated manifest and B001 reports it module-aware, like every
+other SDK deprecation.  Keeping a second hand-written copy here would put two
+findings on one line and reopen the drift the manifest's byte-gate exists to
+prevent.
 
 Matching is attribute-name-anchored (the accepted B001 posture at WARN);
 suppress with ``# conformance: ignore[B007] <reason>`` where the receiver is
@@ -80,19 +86,6 @@ def _imports_sdk(tree: ast.Module) -> bool:
             ):
                 return True
     return False
-
-
-def _dataframe_type_binding(tree: ast.Module) -> str | None:
-    """Local name bound to the SDK ``DataframeType`` enum, if imported."""
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            mod = node.module or ""
-            if node.level != 0 or not mod.startswith(_SDK_IMPORT_ROOT):
-                continue
-            for alias in node.names:
-                if alias.name == "DataframeType":
-                    return alias.asname or alias.name
-    return None
 
 
 def _is_pyarrow_producer_call(node: ast.expr) -> bool:
@@ -349,7 +342,6 @@ def scan_daft_runtime(
 
     scopes = _ScopeMap(tree)
     pyarrow_by_scope = _pyarrow_bindings_by_scope(tree, scopes)
-    dataframe_type_name = _dataframe_type_binding(tree)
     findings: list[Finding] = []
 
     def _flag(node: ast.AST, surface: str, migration: str) -> None:
@@ -395,18 +387,5 @@ def scan_daft_runtime(
                 and not _is_pyarrow_bound(receiver.id, node, scopes, pyarrow_by_scope)
             ):
                 _flag(node, ".names", "use frame.columns on the pandas frame")
-        elif (
-            isinstance(node, ast.Attribute)
-            and node.attr == "daft"
-            and isinstance(node.value, ast.Name)
-            and dataframe_type_name is not None
-            and node.value.id == dataframe_type_name
-        ):
-            _flag(
-                node,
-                "DataframeType.daft",
-                "use DataframeType.pandas (daft is a deprecated no-op alias, "
-                "removal in v4.0)",
-            )
 
     return findings

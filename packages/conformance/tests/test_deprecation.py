@@ -61,6 +61,18 @@ _MANIFEST = Manifest(
             migration_target=True,
             removal_version=None,
         ),
+        DeprecatedSymbol(
+            symbol="DataframeType.daft",
+            kind="enum_member",
+            module="application_sdk.common.types",
+            marker_via="enum-member",
+            message=(
+                "DataframeType.daft is deprecated; use DataframeType.pandas "
+                "instead — will be removed in v4.0.0."
+            ),
+            migration_target=True,
+            removal_version="4.0.0",
+        ),
     ),
 )
 
@@ -114,6 +126,69 @@ def test_b001_fires_on_deprecated_method_call() -> None:
     findings = _b001(src)
     assert [f.rule_id for f in findings] == ["B001"]
     assert "upload_to_atlan" in findings[0].message
+
+
+def test_b001_fires_on_deprecated_enum_member() -> None:
+    src = (
+        "from application_sdk.common.types import DataframeType\n"
+        "t = DataframeType.daft\n"
+    )
+    findings = _b001(src)
+    assert [f.rule_id for f in findings] == ["B001"]
+    assert "DataframeType.daft" in findings[0].message
+    assert "DataframeType.pandas" in findings[0].message
+
+
+def test_b001_enum_member_respects_import_alias() -> None:
+    src = (
+        "from application_sdk.common.types import DataframeType as DfType\n"
+        "t = DfType.daft\n"
+    )
+    assert [f.rule_id for f in _b001(src)] == ["B001"]
+
+
+def test_b001_enum_member_matches_through_a_parent_package_reexport() -> None:
+    # The manifest records application_sdk.common.types; importing from the
+    # re-exporting parent must still match, as it does for classes.
+    src = "from application_sdk.common import DataframeType\nt = DataframeType.daft\n"
+    assert [f.rule_id for f in _b001(src)] == ["B001"]
+
+
+def test_b001_enum_member_matches_module_qualified_access() -> None:
+    src = (
+        "import application_sdk.common.types as types\n"
+        "t = types.DataframeType.daft\n"
+    )
+    assert [f.rule_id for f in _b001(src)] == ["B001"]
+
+
+def test_b001_silent_on_non_deprecated_enum_member() -> None:
+    src = (
+        "from application_sdk.common.types import DataframeType\n"
+        "t = DataframeType.pandas\n"
+    )
+    assert _b001(src) == []
+
+
+def test_b001_enum_member_is_module_aware() -> None:
+    """An app's own same-named enum must not pick up the SDK's deprecated members.
+
+    The member name alone (``daft``) is meaningless out of context, which is why
+    the manifest stores the qualified name and matching goes through the enum
+    class's import.
+    """
+    src = "from app.types import DataframeType\nt = DataframeType.daft\n"
+    assert _b001(src) == []
+
+
+def test_b001_enum_member_suppressed_inline() -> None:
+    src = (
+        "from application_sdk.common.types import DataframeType\n"
+        "t = DataframeType.daft  # conformance: ignore[B001] pinned to old reader\n"
+    )
+    findings = _b001(src)
+    assert len(findings) == 1
+    assert findings[0].suppressed is True
 
 
 def test_b001_suppressed_inline() -> None:
@@ -483,6 +558,90 @@ def test_extract_notices_walks_method_bodies() -> None:
     assert len(notices) == 1
 
 
+# ── __deprecated_members__ (the enum-member convention) ────────────────────────
+
+
+_ENUM_SRC = (
+    "from enum import Enum\n\n"
+    "class Codec(Enum):\n"
+    "    __deprecated_members__ = {\n"
+    '        "legacy": "Codec.legacy is deprecated; use Codec.modern — will be '
+    'removed in v5.0.0.",\n'
+    "    }\n\n"
+    '    modern = "modern"\n'
+    '    legacy = "legacy"\n'
+)
+
+
+def test_extractor_finds_deprecated_enum_member() -> None:
+    site = next(
+        s for s in extract_sites(ast.parse(_ENUM_SRC)) if s.kind == "enum_member"
+    )
+    assert site.symbol == "Codec.legacy"
+    assert site.marker_via == "enum-member"
+    assert site.removal_version_raw == "5.0.0"
+    assert site.has_migration_target is True
+
+
+def test_deprecated_members_mapping_is_not_itself_a_symbol() -> None:
+    # The dunder is class metadata, not a member: EnumMeta skips it and so must
+    # the extractor, or the manifest would carry a phantom symbol.
+    symbols = {s.symbol for s in extract_sites(ast.parse(_ENUM_SRC))}
+    assert "__deprecated_members__" not in symbols
+    assert "Codec.modern" not in symbols
+
+
+def test_enum_member_notice_is_subject_to_authoring_hygiene() -> None:
+    # The convention buys B002/B003 for free: an entry that names no removal
+    # version is malformed the same way a @deprecated message would be.
+    src = (
+        "from enum import Enum\n\n"
+        "class Codec(Enum):\n"
+        '    __deprecated_members__ = {"legacy": "Codec.legacy is deprecated."}\n\n'
+        '    legacy = "legacy"\n'
+    )
+    assert "B002" in _authoring_ids(src)
+
+
+def test_enum_member_notice_removal_can_fall_overdue() -> None:
+    src = (
+        "from enum import Enum\n\n"
+        "class Codec(Enum):\n"
+        "    __deprecated_members__ = {\n"
+        '        "legacy": "Codec.legacy is deprecated; use Codec.modern — will '
+        'be removed in v2.0.",\n'
+        "    }\n\n"
+        '    legacy = "legacy"\n'
+    )
+    assert "B003" in _authoring_ids(src, version="3.18.0")
+
+
+def test_extractor_ignores_non_literal_deprecated_members_entries() -> None:
+    # A computed key names no member we could report and a computed message has
+    # no notice text to grade, so neither is recorded.
+    src = (
+        "from enum import Enum\n\n"
+        "KEY = 'legacy'\n"
+        "class Codec(Enum):\n"
+        "    __deprecated_members__ = {KEY: 'gone', 'other': SOME_CONST}\n\n"
+        '    legacy = "legacy"\n'
+    )
+    assert [s for s in extract_sites(ast.parse(src)) if s.kind == "enum_member"] == []
+
+
+def test_sdk_manifest_carries_the_dataframe_type_member() -> None:
+    # End-to-end: the committed manifest is what B001 reads fleet-wide, so the
+    # convention is only real if the generated artifact carries the entry.
+    from conformance.suite.checks.deprecation._manifest import load_manifest
+
+    record = next(
+        s for s in load_manifest().symbols if s.symbol == "DataframeType.daft"
+    )
+    assert record.kind == "enum_member"
+    assert record.module == "application_sdk.common.types"
+    assert record.removal_version == "4.0.0"
+
+
 def test_load_manifest_warns_on_malformed_json(tmp_path, capsys) -> None:
     # A corrupted committed manifest must degrade to empty *and* surface a
     # stderr warning, so a packaging bug isn't silently invisible fleet-wide.
@@ -569,22 +728,17 @@ def test_b007_exempts_attribute_chain_names() -> None:
     assert _b007(src) == []
 
 
-def test_b007_fires_on_dataframetype_daft() -> None:
+def test_b007_no_longer_owns_dataframetype_daft() -> None:
+    """The enum member moved to the generated manifest, so B007 must stay silent.
+
+    Leaving the hand-coded copy in place would double-report the one line
+    alongside B001 and reopen the drift the manifest's byte-gate prevents.
+    """
     src = (
         "from application_sdk.common.types import DataframeType\n"
         "t = DataframeType.daft\n"
     )
-    findings = _b007(src)
-    assert [f.rule_id for f in findings] == ["B007"]
-    assert "DataframeType.pandas" in findings[0].message
-
-
-def test_b007_dataframetype_daft_respects_alias() -> None:
-    src = (
-        "from application_sdk.common.types import DataframeType as DfType\n"
-        "t = DfType.daft\n"
-    )
-    assert [f.rule_id for f in _b007(src)] == ["B007"]
+    assert _b007(src) == []
 
 
 def test_b007_silent_without_sdk_import() -> None:
@@ -594,7 +748,8 @@ def test_b007_silent_without_sdk_import() -> None:
 
 
 def test_b007_silent_on_unrelated_daft_attribute() -> None:
-    # .daft on a non-DataframeType receiver is not the enum alias.
+    # .daft on a non-DataframeType receiver was never the enum alias, and is
+    # not one now that B001 owns the member.
     src = _SDK_IMPORT + "x = config.daft\n"
     assert _b007(src) == []
 

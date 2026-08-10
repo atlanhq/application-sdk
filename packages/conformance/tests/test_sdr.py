@@ -200,6 +200,27 @@ def test_p030_rule_metadata() -> None:
     assert rule.category == "sdr-readiness"
 
 
+def test_p030_prose_no_longer_calls_a_working_bridge_a_false_positive() -> None:
+    """P030 must not document the shape P042 now reports as a false positive."""
+    rule = get_rule("P030")
+    assert "documented false positive" not in rule.full_description.lower()
+    assert "P042" in rule.full_description
+
+
+def test_p042_rule_metadata() -> None:
+    rule = get_rule("P042")
+    assert rule.name == "SdrHandRolledUploadBridge"
+    assert rule.tier == EnforcementTier.WARN
+    assert rule.scope == RuleScope.APP
+    assert rule.autofixable is False
+    assert rule.rationale.strip()
+    assert rule.since == "0.18.0"
+    assert rule.category == "sdr-readiness"
+    # The rule exists as an interim net for a shim the SDK removes in v4.0, so
+    # it carries a retirement path rather than becoming permanent by default.
+    assert rule.superseded_by == "sdk>=4.0.0"
+
+
 # ── P029: manifest missing agent_json ───────────────────────────────────────
 
 
@@ -1054,10 +1075,13 @@ def test_p030_flags_noop_upload_bridge_stub(tmp_path: Path) -> None:
     assert "full-DAG e2e" in p030[0].message
 
 
-def test_p030_real_bridge_not_flagged_as_absent(tmp_path: Path) -> None:
-    """A bridge that performs a real storage transfer is not flagged — the
-    key-preserving custom-upload shape (documented false-positive path,
-    arbitrated by the live e2e)."""
+def test_p030_real_bridge_is_p042_not_a_p030_absence(tmp_path: Path) -> None:
+    """A transferring bridge is P042's shape, not P030's — and never silence.
+
+    Bytes do move, so P030's silent-zero-asset message would be wrong. But the
+    app has reimplemented an SDK contract on a symbol deprecated for removal in
+    v4.0, so it stays visible under its own rule.
+    """
     _write(
         tmp_path,
         {
@@ -1065,7 +1089,117 @@ def test_p030_real_bridge_not_flagged_as_absent(tmp_path: Path) -> None:
             "app/connector.py": _REAL_BRIDGE,
         },
     )
-    assert not any(f.rule_id == "P030" for f in _run(tmp_path))
+    findings = _run(tmp_path)
+    assert not any(f.rule_id == "P030" for f in findings)
+    p042 = [f for f in findings if f.rule_id == "P042"]
+    assert len(p042) == 1
+    assert p042[0].file == "app/connector.py"
+    assert p042[0].line == 2
+    assert "self.upload" in p042[0].message
+    assert "v4.0.0" in p042[0].message
+
+
+def test_p042_silent_when_self_upload_is_present(tmp_path: Path) -> None:
+    """A bridge alongside a real self.upload() is redundant, not a substitution.
+
+    P042 is about a bridge standing *in place of* the SDK path; with the SDK
+    path present there is nothing being stood in for.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _REAL_BRIDGE,
+            "app/main.py": (
+                "class App:\n"
+                "    async def run(self):\n"
+                "        await self.upload('output')\n"
+            ),
+        },
+    )
+    findings = _run(tmp_path)
+    assert not any(f.rule_id in ("P030", "P042") for f in findings)
+
+
+def test_p042_does_not_double_report_a_noop_stub(tmp_path: Path) -> None:
+    """A no-op stub carries exactly one finding — the sharper P030 one.
+
+    It is not a working bridge, so P042 must not add a second finding on the
+    same method, and the app-level absence finding must not fire either.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _NOOP_BRIDGE,
+        },
+    )
+    findings = [f for f in _run(tmp_path) if f.rule_id in ("P030", "P042")]
+    assert [f.rule_id for f in findings] == ["P030"]
+    assert "no-op stub" in findings[0].message
+
+
+def test_p042_reports_a_working_bridge_beside_a_noop_stub(tmp_path: Path) -> None:
+    """Mixed shapes are graded per method, each under the rule that fits it."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/stub.py": _NOOP_BRIDGE,
+            "app/connector.py": _REAL_BRIDGE,
+        },
+    )
+    findings = [f for f in _run(tmp_path) if f.rule_id in ("P030", "P042")]
+    assert {(f.rule_id, f.file) for f in findings} == {
+        ("P030", "app/stub.py"),
+        ("P042", "app/connector.py"),
+    }
+
+
+def test_p042_silent_on_non_sdr_app(tmp_path: Path) -> None:
+    """Gated on self_deployed_runtime, like the rest of the P-series SDR rules."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": "self_deployed_runtime: false\n",
+            "app/connector.py": _REAL_BRIDGE,
+        },
+    )
+    assert not any(f.rule_id == "P042" for f in _run(tmp_path))
+
+
+def test_p042_silent_when_app_has_no_publish_stage(tmp_path: Path) -> None:
+    """Shares P030's exemption: an extract-only app hands assets off to nothing."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/manifest.json": _MANIFEST_NO_PUBLISH,
+            "app/connector.py": _REAL_BRIDGE,
+        },
+    )
+    assert not any(f.rule_id == "P042" for f in _run(tmp_path))
+
+
+def test_p030_absence_message_no_longer_offers_a_bridge_as_a_fix(
+    tmp_path: Path,
+) -> None:
+    """The absence remediation points at self.upload() only.
+
+    Naming a hand-rolled bridge as an alternative fix would prescribe the very
+    shape P042 now reports.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": "class App:\n    pass\n",
+        },
+    )
+    p030 = [f for f in _run(tmp_path) if f.rule_id == "P030"]
+    assert len(p030) == 1
+    assert "upload_to_atlan bridge into" not in p030[0].message
+    assert "await self.upload(...)" in p030[0].message
 
 
 def test_p030_noop_stub_flagged_even_with_self_upload_elsewhere(

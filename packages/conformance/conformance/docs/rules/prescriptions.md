@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**41 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P041), `suite.checks.transform_templates` (P040, scans template YAML) (all AST-based / cross-artifact)
+**42 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P041), `suite.checks.transform_templates` (P040, scans template YAML) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -64,6 +64,7 @@ reassigned.
 | [P039](#p039) | `SdrAgentJsonDroppedByInputContract` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
 | [P040](#p040) | `TransformTemplateReservedKeyword` | `warn` | `app` | `transform-templates` | — | 0.18.0 |
 | [P041](#p041) | `SdrHardPreflightGate` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
+| [P042](#p042) | `SdrHandRolledUploadBridge` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
 
 ---
 
@@ -1037,6 +1038,10 @@ the app runs in a local-only mode.  If `self.upload()` is never called anywhere 
 app source, the gate is structurally unreachable — the workflow completes with status
 'success' regardless of the flag value, and no assets move to the bucket in production.
 
+A *working* hand-rolled `upload_to_atlan` bridge is reported by **P042**, not here:
+bytes do move, so it is not this rule's silent-zero-asset shape.  It is not silence
+either — see P042 for why a working bridge still has to change.
+
 **What does NOT satisfy this rule** (patterns fleet remediation found behind real
 silent-zero-asset publishes):
 
@@ -1066,18 +1071,13 @@ every failure mode above reports 'success'.  The live e2e's asset-count floor is
 arbiter.
 
 This is a WARN (not BLOCK): some apps are legitimately preflight-only or delegate upload
-to a base-class method defined in the SDK template, and apps with a *working* custom
-key-preserving deployment-to-upstream bridge (an `upload_to_atlan` that performs real
-storage transfers and preserves the `workflows/{workflow_id}/{run_id}/` key layout) are
-documented false positives once a green full-DAG e2e proves assets land.  Review the
-finding before suppressing — if the app genuinely performs an extract-and-upload cycle
-with no working bridge, add `await self.upload(...)` to the `run()` method or the
-relevant `@entrypoint` method, or wire a key-preserving `upload_to_atlan` bridge into
-every entrypoint (crawler AND miner).
+to a base-class method defined in the SDK template. Review the finding before
+suppressing — if the app genuinely performs an extract-and-upload cycle, add `await
+self.upload(...)` to the `run()` method or the relevant `@entrypoint` method.
 
 Note: P008 flags `self.upload()` *inside* `@task` methods (the wrong location); P030
-flags the *absence* of any upload call.  They are complementary: both should be clean
-for a correctly-wired SDR app.
+flags the *absence* of any upload call; P042 flags a hand-rolled bridge standing in for
+it.  All three should be clean for a correctly-wired SDR app.
 
 Exemption: this rule is skipped for apps whose `contract/app.pkl` sets `pipeline.publish
 = null` (no publish stage), which compiles to a generated manifest with no `dag.publish`
@@ -1445,8 +1445,28 @@ already quoted, or an expression rather than a bare reference).  YAML scalar lit
 
 This is a WARN (new-rule tier policy) and the scan is text-based (dependency-free),
 keyed on files that carry both a `columns:` key and a `source_query:` key — ordinary
-CI/Helm YAML never matches. Review before suppressing: on a daft-less SDK the finding is
-a guaranteed runtime parse failure, not a style preference.
+CI/Helm YAML never matches. Review before suppressing: on a daft-less SDK below the
+fixed version the finding is a guaranteed runtime parse failure, not a style preference.
+
+**Version scope — fixed at the root from SDK 3.27.0.**  The transformer now quotes a
+`source_query` that resolved as a plain column reference, so a reserved keyword renders
+as valid SQL with no template change at all; the `source_columns`-driven route, which
+carries arbitrary SQL, is left unquoted.  This rule therefore describes only apps pinned
+**below** that version and is marked `superseded_by: sdk>=3.27.0` rather than dropped —
+an app on an older SDK still fails at runtime, and dropping the rule would take the only
+static signal away from exactly that population.
+
+The marker names the next SDK *minor* rather than the exact patch: the patch number is
+assigned by release CI at merge time, and erring late only keeps the rule firing on some
+already-fixed apps, never the reverse.  Retire the rule (set `until`) once the fleet
+floor has crossed it.
+
+**Do not hand-remediate templates that the version bump fixes.** Embedding quotes in the
+value was the interim advice and it is worse than it looks on an unfixed SDK: below
+3.27.0 the transformer matched `'"order"'` against the available columns as raw text,
+found nothing, and dropped the attribute from published output — a silent missing
+attribute in place of a loud `ParserException`. From 3.27.0 both spellings resolve and
+render identically, so the upgrade is the fix and the template edit is unnecessary.
 
 ---
 
@@ -1522,5 +1542,69 @@ that body is a string literal; the last one wins (so   `MODE = "soft"` followed 
 Known limit: a condition written with inverted polarity (`"hard" if not
 ENABLE_ATLAN_UPLOAD else "soft"`) reads as the true-arm shape and is flagged — suppress
 it inline with the reason.
+
+---
+
+## P042 — `SdrHandRolledUploadBridge` {#p042}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.18.0
+
+> SDR app performs the tenant-bucket transfer through a hand-rolled upload_to_atlan bridge instead of App.upload()
+
+**Rationale:** An app that moves extracted assets to the tenant bucket through its own upload_to_atlan
+method, with no self.upload() anywhere, has reimplemented a contract the SDK owns — on a
+symbol the SDK has marked @deprecated with removal_version 4.0.0. Bytes do move, so this
+is not P030's silent-zero-asset shape and it should not carry P030's message; but it is
+not a false positive either. App.upload() does ADR-0014 dual-write routing,
+transformed-asset validation in a child process, the canonical
+artifacts/apps/{app}/workflows/{wf}/{run} prefix and @task retry/replay, and the
+transfer beneath it adds the cross-pod deployment-store fallback (a KEDA-scaled SDR
+worker where local_path does not exist on this pod), partial-local reconcile, and
+SHA-256 sidecar dedup for idempotent replay. A hand-rolled bridge has none of those, and
+a green full-DAG e2e proves only that bytes moved on that run, not that the app tracks
+the contract. Reporting it separately also settles a contradiction: B001 already flags
+.upload_to_atlan(...) call sites from the generated deprecation manifest, so the same
+repo would otherwise get a B001 finding alongside P-series silence.
+
+For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, this rule fires when a
+custom `upload_to_atlan` method **does** perform a real storage/store transfer (in its
+own body or via same-class delegation) and no `self.upload(` call exists anywhere in the
+app source.
+
+It is the counterpart to P030, which owns the shapes where nothing moves at all: no
+upload path, or an `upload_to_atlan` stub whose body performs no transfer.  Here the
+transfer works — which is exactly why it needs a different message.  Treating it as a
+P030 false positive moved these repos from WARN to silent, and silence is wrong for
+three reasons:
+
+* **It is the SDK's own deprecated symbol.**  `upload_to_atlan` is   `@deprecated` in
+`application_sdk.templates.base_metadata_extractor`   with `removal_version: 4.0.0`.
+Going quiet on a locally   reimplemented version of a name scheduled for deletion is the
+opposite of what the deprecation lifecycle is for. * **The suite would contradict
+itself.**  B001 matches   `.upload_to_atlan(...)` call sites receiver-agnostically from
+the   generated manifest.  Where the bridge is invoked explicitly rather   than only
+dispatched as a DAG task, the repo already gets a B001   finding — alongside P-series
+silence. * **A bridge cannot be equivalent, and the gap is silent-data-loss   shaped.**
+`App.upload()` carries ADR-0014 dual-write routing,   transformed-asset validation in a
+child process, the canonical   `artifacts/apps/{app}/workflows/{workflow_id}/{run_id}`
+prefix, and   `@task` retry/replay semantics; the transfer underneath adds the
+cross-pod deployment-store fallback (a KEDA-scaled SDR worker where   `local_path` does
+not exist on this pod), partial-local reconcile,   and SHA-256 sidecar dedup for
+idempotent replay.
+
+**A green full-DAG e2e is not a clearance.**  It shows bytes moved on that run.  It does
+not show the bridge preserves the key layout under replay, survives a pod that never
+held the local files, or reconciles a partial local state — and it says nothing about
+v4.0.
+
+**Remediation:** replace the bridge body with `await self.upload(...)` in the `run()`
+method or the relevant `@entrypoint` method (crawler AND miner), and delete the bridge.
+If the bridge exists because `App.upload()` genuinely cannot express something the app
+needs, that is an SDK gap worth filing rather than a reason to suppress.
+
+This is a WARN, and deliberately a *lower*-urgency one than P030: the app is working
+today.  The deadline is v4.0, not the next run — which is why the rule carries
+`superseded_by: sdk>=4.0.0`.  It retires when that removal lands and the shape stops
+being expressible.
 
 ---

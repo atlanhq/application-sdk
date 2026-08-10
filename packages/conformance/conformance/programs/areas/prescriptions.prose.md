@@ -388,7 +388,7 @@ drafting.
   — route to residue with the proposed shape; do not mechanically rename the
   class.  Leave `AsyncAtlanClient` usage untouched.
 
-**SDR-readiness rules (P029/P030, P037/P038/P039, P041)** — all suggest-only,
+**SDR-readiness rules (P029/P030, P037/P038/P039, P041, P042)** — all suggest-only,
 scope=app; `classification` is always `"judgment"`.  All gate on
 `self_deployed_runtime: true` in `atlan.yaml`.
 
@@ -436,16 +436,37 @@ scope=app; `classification` is always `"judgment"`.  All gate on
   **Never mark a P030 finding a false positive without a green full-DAG e2e
   (extract → publish) proving assets land in Atlas** — workflow status is not
   evidence (every trap above reports "success").  A *working* key-preserving
-  `upload_to_atlan` bridge (glue/postgres shape, preserving the
-  `workflows/{workflow_id}/{run_id}/` key layout) is the documented
-  false-positive case once the e2e is green — do not force a risky rewrite to
-  `self.upload(local_path)` on v3 connectors whose transform outputs live in
-  the deployment store at handoff (it passes single-container e2e but
-  regresses distributed production).  Otherwise draft a proposal that adds
+  `upload_to_atlan` bridge is **not** a P030 finding at all: bytes move, so it
+  is reported under **P042** instead, with its own (lower-urgency) framing.  Do
+  not propose a P030 remedy for it.  Draft a proposal that adds
   `await self.upload(output_key)` in the appropriate `@entrypoint`-decorated
-  method or `run()` method (or wires the key-preserving bridge into every
-  entrypoint — crawler AND miner), after extraction completes.  Route to
-  residue for human confirmation.
+  method or `run()` method, after extraction completes.  Route to residue for
+  human confirmation.
+
+- **P042 SdrHandRolledUploadBridge** (WARN) — a custom `upload_to_atlan` that
+  **does** perform a real storage transfer, with no `self.upload(` anywhere in
+  the app.  Anchored at the bridge definition.  Distinguish it from P030
+  carefully: nothing is silently dropped here, so P030's silent-zero-asset
+  language is wrong and the urgency is lower — the app works today.  What is
+  wrong is that an SDK-owned contract has been reimplemented on a symbol the
+  SDK marks `@deprecated` with `removal_version: 4.0.0`, so B001 already flags
+  the call sites and the deadline is the v4.0 removal.
+
+  `App.upload()` additionally carries ADR-0014 dual-write routing,
+  transformed-asset validation in a child process, the canonical
+  `artifacts/apps/{app}/workflows/{workflow_id}/{run_id}` prefix, `@task`
+  retry/replay, and beneath it the cross-pod deployment-store fallback (a
+  KEDA-scaled SDR worker where `local_path` does not exist on this pod),
+  partial-local reconcile, and SHA-256 sidecar dedup.  A green full-DAG e2e
+  shows the bridge worked on that run; it does not show it tracks the contract.
+
+  Do **not** force a rewrite in the remediation loop: on v3 connectors whose
+  transform outputs live in the deployment store at handoff, a naive swap to
+  `self.upload(local_path)` passes single-container e2e and regresses
+  distributed production.  Draft the migration to `await self.upload(...)` and
+  route to residue for a human to sequence against a distributed e2e.  If the
+  bridge exists because `App.upload()` cannot express something the app needs,
+  record that in the residue as an SDK gap rather than a suppression.
 
 - **P037 SdrAgentJsonNotConsumed** (WARN) — the app performs custom credential
   resolution (a bare `CredentialRef(credential_guid=...)` construction or a
@@ -534,11 +555,23 @@ which scans template YAML, not Python.
   so the keyword lands in the *expression* slot as a column reference and
   reaches DuckDB unquoted → `ParserException` at runtime for every transform of
   that entity type on the daft-less SDK >= 3.22 runtime — latent until the
-  first real pipeline run.  YAML-level quotes do not survive parsing; the fix
-  embeds SQL quotes in the value (`source_query: '"order"'`).  Draft that
-  quoting edit and route to residue; verify locally with a template harness
-  (synthetic raw parquet through the real `DuckDBConnectionManager`) rather
-  than one CI cycle at a time.
+  first real pipeline run.
+
+  **The fix is the SDK bump, not the template.**  From SDK 3.27.0 the
+  transformer quotes a `source_query` that resolved as a plain column
+  reference, so the keyword renders as valid SQL with no template change; the
+  rule carries `superseded_by: sdk>=3.27.0` and describes only apps pinned
+  below it.  Propose raising the `atlan-application-sdk` floor to `>=3.27.0`
+  and relocking.
+
+  Only when the app genuinely cannot move off an older SDK, fall back to
+  embedding SQL quotes in the value (`source_query: '"order"'`; YAML-level
+  quotes do not survive parsing).  Say so explicitly in the residue — that
+  edit is worse than it looks below 3.27.0, where the transformer matches the
+  quoted text as raw text, resolves nothing, and drops the attribute from
+  published output instead of raising.  Either way, verify locally with a
+  template harness (synthetic raw parquet through the real
+  `DuckDBConnectionManager`) rather than one CI cycle at a time.
 
   **Scope note — the alias position is deliberately not graded.**  The column
   identifier reaches only the `AS` alias slot, which DuckDB does not restrict
