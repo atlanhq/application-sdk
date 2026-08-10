@@ -413,6 +413,16 @@ jobs:
             --branch "${{ github.event.repository.default_branch || 'main' }}" \
             --dir /tmp/sarif
 
+      # `has_artifacts == 'false'` is ambiguous on its own: it covers both
+      # "this repo genuinely has no conformance data yet" (benign) and "the
+      # `gh run list` / artifact probe itself errored" (the dashboard silently
+      # goes stale). The script separates the two via `discovery_error`; surface
+      # only the second so a stale panel is attributable.
+      - name: Warn on conformance discovery failure
+        if: steps.download.outputs.discovery_error == 'true'
+        run: |
+          echo "::warning::Conformance SARIF discovery failed (gh run list / artifact probe error) — dashboard may be stale."
+
       - name: Parse SARIF and generate per-repo summary
         if: steps.download.outputs.has_artifacts == 'true'
         env:
