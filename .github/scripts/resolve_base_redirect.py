@@ -62,6 +62,11 @@ from typing import Callable, Optional
 HARBOR_REPO = "registry.atlan.com/public/app-runtime-base"
 GHCR_REPO = "ghcr.io/atlanhq/app-runtime-base"
 
+# Registry host that gets a credential. Compared against the parsed host, never
+# matched as a URL substring or prefix — `ghcr.io.example.com/x` must not read as
+# GHCR just because the string starts the same way.
+GHCR_HOST = "ghcr.io"
+
 # Tags the redirect supports. Deliberately narrow: `refactor-v3-latest` is a
 # workflow_dispatch branch build, so redirecting it would change *which* image a
 # repo resolves to, not just where the layers come from. Widening this set means
@@ -235,6 +240,17 @@ def split_ref(ref: str) -> tuple[str, str]:
 # ── Registry digest resolution ────────────────────────────────────────────────
 
 
+def registry_host(repo: str) -> str:
+    """Return the registry host of a repository reference.
+
+    ``ghcr.io/atlanhq/app-runtime-base`` -> ``ghcr.io``. Callers compare the
+    result for equality; deciding "is this GHCR?" from a substring or prefix
+    test on the whole reference would also accept lookalikes such as
+    ``ghcr.io.example.com/x``.
+    """
+    return repo.partition("/")[0].lower()
+
+
 def _basic_auth(user: str, token: str) -> str:
     raw = f"{user}:{token}".encode()
     return "Basic " + base64.b64encode(raw).decode()
@@ -247,10 +263,36 @@ def _parse_challenge(header: str) -> dict[str, str]:
     return dict(re.findall(r'(\w+)="([^"]*)"', header))
 
 
-def _bearer_token(challenge: dict[str, str], user: str, token: str) -> Optional[str]:
-    """Exchange registry credentials for a pull-scoped bearer token."""
+def _bearer_token(
+    challenge: dict[str, str],
+    user: str,
+    token: str,
+    *,
+    expected_host: str,
+) -> Optional[str]:
+    """Exchange registry credentials for a pull-scoped bearer token.
+
+    The realm is attacker-influenced in principle — it arrives in the registry's
+    ``WWW-Authenticate`` response header — and this request is the only place a
+    credential leaves the runner. So the realm must be HTTPS, and when a
+    credential would be attached, its host must match the registry we set out to
+    query (true for both registries here: ``ghcr.io/token`` and
+    ``registry.atlan.com/service/token``). A redirected realm therefore costs a
+    digest lookup, never the token.
+    """
     realm = challenge.get("realm")
     if not realm:
+        return None
+    parsed = urllib.parse.urlsplit(realm)
+    if parsed.scheme != "https":
+        print(f"  refusing non-HTTPS token realm: {parsed.scheme}://…", flush=True)
+        return None
+    if token and parsed.hostname != expected_host:
+        print(
+            f"  refusing to send credentials to token realm {parsed.hostname} "
+            f"(expected {expected_host})",
+            flush=True,
+        )
         return None
     params = {k: v for k, v in challenge.items() if k in ("service", "scope") and v}
     url = f"{realm}?{urllib.parse.urlencode(params)}" if params else realm
@@ -285,7 +327,8 @@ def registry_digest(
         be reached (missing tag, auth failure, network error). Callers treat
         ``None`` as *unknown*, never as *skew*.
     """
-    host, _, path = repo.partition("/")
+    host = registry_host(repo)
+    path = repo.partition("/")[2]
     url = f"https://{host}/v2/{path}/manifests/{urllib.parse.quote(tag)}"
 
     def fetch(auth: Optional[str]) -> Optional[str]:
@@ -312,7 +355,9 @@ def registry_digest(
         return None
 
     try:
-        bearer = _bearer_token(challenge, user or "x-access-token", token)
+        bearer = _bearer_token(
+            challenge, user or "x-access-token", token, expected_host=host
+        )
         if not bearer:
             print(f"  {repo}:{tag} -> no token from registry challenge", flush=True)
             return None
@@ -471,8 +516,15 @@ def main(argv: list[str] | None = None) -> int:
     user = os.environ.get("GHCR_USER", "x-access-token")
 
     def resolve_digest(repo: str, tag: str) -> Optional[str]:
-        creds = (user, token) if repo.startswith("ghcr.io/") else ("", "")
-        digest = registry_digest(repo, tag, user=creds[0], token=creds[1])
+        # Host equality, not a prefix test on the reference: only the real GHCR
+        # gets the credential. Harbor's public project is pulled anonymously.
+        is_ghcr = registry_host(repo) == GHCR_HOST
+        digest = registry_digest(
+            repo,
+            tag,
+            user=user if is_ghcr else "",
+            token=token if is_ghcr else "",
+        )
         print(f"  {repo}:{tag} -> {digest or 'unresolved'}", flush=True)
         return digest
 

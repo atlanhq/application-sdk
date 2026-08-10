@@ -247,6 +247,98 @@ def test_registry_digest_performs_token_dance(monkeypatch):
     assert calls[2][1] == "Bearer tok"
 
 
+@pytest.mark.parametrize(
+    ("repo", "expected"),
+    [
+        (GHCR, "ghcr.io"),
+        ("GHCR.IO/atlanhq/app-runtime-base", "ghcr.io"),
+        (HARBOR, "registry.atlan.com"),
+        # Lookalikes a prefix/substring test on the reference would wave through.
+        ("ghcr.io.example.com/atlanhq/app-runtime-base", "ghcr.io.example.com"),
+        ("evil.example.com/ghcr.io/app-runtime-base", "evil.example.com"),
+    ],
+)
+def test_registry_host_parses_rather_than_matches_substrings(repo, expected):
+    assert rbr.registry_host(repo) == expected
+    assert (rbr.registry_host(repo) == rbr.GHCR_HOST) is (expected == "ghcr.io")
+
+
+def test_credentials_are_withheld_from_a_ghcr_lookalike_host(tmp_path, monkeypatch):
+    lookalike = "ghcr.io.example.com/atlanhq/app-runtime-base"
+    dockerfile = _write_dockerfile(tmp_path, f"FROM {HARBOR}:3\n")
+    monkeypatch.setenv("GHCR_TOKEN", "pat-value")
+    monkeypatch.setenv("GHCR_USER", "actor")
+    seen: list[tuple[str, str]] = []
+
+    def fake_digest(repo, tag, *, user="", token=""):
+        seen.append((repo, token))
+        return DIGEST_A
+
+    monkeypatch.setattr(rbr, "registry_digest", fake_digest)
+    rbr.main(["--dockerfile", str(dockerfile), "--ghcr-repo", lookalike])
+
+    assert dict(seen)[lookalike] == ""
+
+
+def test_token_realm_on_another_host_does_not_receive_credentials(monkeypatch):
+    sent: list[Optional[str]] = []
+
+    def fake_urlopen(request, timeout=None):
+        if "/v2/" in request.full_url:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                401,
+                "unauthorized",
+                {
+                    "WWW-Authenticate": 'Bearer realm="https://evil.example.com/token",service="ghcr.io"'
+                },
+                io.BytesIO(b""),
+            )
+        sent.append(request.get_header("Authorization"))
+        return _Response(body=b'{"token": "tok"}')
+
+    monkeypatch.setattr(rbr, "_urlopen", fake_urlopen)
+    assert rbr.registry_digest(GHCR, "3", user="u", token="pat") is None
+    # The off-host realm was never contacted at all, so the PAT never left.
+    assert sent == []
+
+
+def test_non_https_token_realm_is_refused(monkeypatch):
+    def fake_urlopen(request, timeout=None):
+        if "/v2/" in request.full_url:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                401,
+                "unauthorized",
+                {"WWW-Authenticate": 'Bearer realm="http://ghcr.io/token"'},
+                io.BytesIO(b""),
+            )
+        raise AssertionError("plaintext realm must not be contacted")
+
+    monkeypatch.setattr(rbr, "_urlopen", fake_urlopen)
+    assert rbr.registry_digest(GHCR, "3", user="u", token="pat") is None
+
+
+def test_anonymous_lookup_tolerates_a_delegated_realm(monkeypatch):
+    # With no credential to protect, a realm on another host is fine — some
+    # registries genuinely delegate their token service.
+    def fake_urlopen(request, timeout=None):
+        if "/v2/" in request.full_url and not request.get_header("Authorization"):
+            raise urllib.error.HTTPError(
+                request.full_url,
+                401,
+                "unauthorized",
+                {"WWW-Authenticate": 'Bearer realm="https://auth.example.com/token"'},
+                io.BytesIO(b""),
+            )
+        if "auth.example.com" in request.full_url:
+            return _Response(body=b'{"token": "tok"}')
+        return _Response({"Docker-Content-Digest": DIGEST_A})
+
+    monkeypatch.setattr(rbr, "_urlopen", fake_urlopen)
+    assert rbr.registry_digest(HARBOR, "3") == DIGEST_A
+
+
 def test_registry_digest_returns_none_on_missing_tag(monkeypatch):
     def fake_urlopen(request, timeout=None):
         raise urllib.error.HTTPError(
