@@ -66,9 +66,22 @@ LOCAL_ENVIRONMENT = "local"
 LOCAL_WORKFLOW_ID = "local-no-temporal"
 
 # Application Constants
-#: Name of the application, used for identification
+#: Name of the application, used for identification.
+#:
+#: The ``"default"`` fallback is for *identity* uses that need some segment to
+#: exist — object-store prefixes like ``persistent-artifacts/apps/<name>/``,
+#: log tagging. It must **never** feed Temporal task-queue derivation: a
+#: manufactured name yields ``atlan-default-<deployment>``, which reads as a
+#: legitimate queue, is polled by no worker, and hangs the run silently
+#: (FND-195 / CONNECT-183). Queue naming goes through
+#: :mod:`application_sdk.common.task_queue`, which reports an unset app name as
+#: ``None`` instead of inventing one.
 APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
-#: Name of the deployment, used to distinguish between different deployments of the same application
+#: Name of the deployment, used to distinguish between different deployments of
+#: the same application. Same caveat as :data:`APPLICATION_NAME`: the
+#: ``LOCAL_ENVIRONMENT`` fallback is an identity default, and the worker treats an
+#: unset deployment name as "drop the ``atlan-`` prefix entirely", so queue
+#: derivation must read the raw env via :mod:`application_sdk.common.task_queue`.
 DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
 # REMOVED: APP_HOST, APP_PORT — use AppConfig.handler_host / handler_port
 #: Tenant ID for multi-tenant applications
