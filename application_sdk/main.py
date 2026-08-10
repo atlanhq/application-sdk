@@ -390,12 +390,13 @@ def _parse_all_component_yamls(components_dir: Path) -> dict[str, dict[str, str]
     Returns a mapping of component name → dict of allowlisted metadata values.
     Non-allowlisted keys (secrets, connection strings, credentials) are never included.
     Silently returns an empty dict on any parse error.
+
+    Values sourced from a ``secretKeyRef`` are redacted to ``"(from secret)"``:
+    they resolve to secret-store contents on the secure k8s path, so emitting
+    them would leak to startup INFO logs even when the key itself is on the
+    allowlist (``endpoint``, ``accountName``).
     """
     import yaml  # noqa: PLC0415 — cold path: yaml only when reading dapr binding YAML
-
-    from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
-        _parse_dapr_metadata,
-    )
 
     result: dict[str, dict[str, str]] = {}
     try:
@@ -408,8 +409,15 @@ def _parse_all_component_yamls(components_dir: Path) -> dict[str, dict[str, str]
             if not name:
                 continue
             spec = doc.get("spec", {})
-            all_meta = _parse_dapr_metadata(spec.get("metadata", []))
-            safe = {k: v for k, v in all_meta.items() if k in _SAFE_METADATA_KEYS}
+            safe: dict[str, str] = {}
+            for item in spec.get("metadata", []) or []:
+                key = item.get("name")
+                if not key or key not in _SAFE_METADATA_KEYS:
+                    continue
+                if "secretKeyRef" in item:
+                    safe[key] = "(from secret)"
+                elif "value" in item:
+                    safe[key] = str(item["value"])
             result[name] = safe
     except Exception:
         logger.warning("Could not parse component YAMLs for diagnostics", exc_info=True)
@@ -702,15 +710,17 @@ async def _create_infrastructure(
             )
         )
 
+        deployment_secrets = await _fetch_binding_secrets(
+            dapr_client,
+            DEPLOYMENT_OBJECT_STORE_NAME,
+            components_dir=components_dir,
+        )
+        set_fetched_binding_secrets(DEPLOYMENT_OBJECT_STORE_NAME, deployment_secrets)
         deployment_store, deployment_put_attrs = (
             create_store_from_binding_with_put_attrs(
                 DEPLOYMENT_OBJECT_STORE_NAME,
                 components_dir=components_dir,
-                secrets=await _fetch_binding_secrets(
-                    dapr_client,
-                    DEPLOYMENT_OBJECT_STORE_NAME,
-                    components_dir=components_dir,
-                ),
+                secrets=deployment_secrets,
             )
         )
         return InfrastructureContext(

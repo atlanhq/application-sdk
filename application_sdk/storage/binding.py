@@ -51,9 +51,14 @@ _TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{\{[^}]+\}\}")
 #: cache that second call would fall back to env-only resolution and reach a
 #: different "is the upstream store usable" verdict than the one main.py made
 #: with the sidecar-fetched secrets — the exact broken-vs-absent divergence
-#: BLDX-1619 fixes at the resolver layer.  Populated once at startup via
-#: :func:`set_fetched_binding_secrets`; read by :func:`is_binding_configured`
-#: when its explicit ``secrets`` argument is ``None``.
+#: BLDX-1619 fixes at the resolver layer.
+#:
+#: Lifecycle: entries are written once per process by ``_create_infrastructure``
+#: (via :func:`set_fetched_binding_secrets`) before any sync consumer runs, and
+#: are never evicted — the values are the process's startup-fetched secrets and
+#: stay valid for the process's lifetime.  Tests that exercise the startup
+#: wiring in isolation should call :func:`_reset_fetched_binding_secrets` in
+#: teardown so one test's publishes do not leak into the next.
 _FETCHED_BINDING_SECRETS: dict[str, SecretMap] = {}
 
 
@@ -74,6 +79,16 @@ def set_fetched_binding_secrets(name: str, secrets: SecretMap) -> None:
 def _get_fetched_binding_secrets(name: str) -> SecretMap | None:
     """Return the startup-fetched secrets for *name*, or ``None`` if none."""
     return _FETCHED_BINDING_SECRETS.get(name)
+
+
+def _reset_fetched_binding_secrets() -> None:
+    """Clear the startup-fetched secrets cache.
+
+    Test-only: production code writes entries once at process startup and
+    never needs to clear them.  Tests that exercise the startup wiring call
+    this in teardown so one test's publishes do not leak into the next.
+    """
+    _FETCHED_BINDING_SECRETS.clear()
 
 
 # GCP service account JSON fields injected from Kubernetes secret via Helm.
@@ -399,15 +414,18 @@ def _build_s3_config(
     # obstore sends x-amz-tagging by default; many S3-compatible stores (B2,
     # R2, GCS-S3-interop) hard-reject the header.  Auto-disable it for any
     # non-AWS endpoint.  An explicit disableTagging field always takes precedence.
+    # Never log the resolved endpoint: on the secure k8s path it can come from
+    # the secret store, and emitting it would leak the value to WARNING logs.
     if _nonempty(meta, "disableTagging"):
         if _coerce_bool(meta["disableTagging"]):
             config["aws_disable_tagging"] = "true"
         elif not _endpoint_is_aws(endpoint):
             _get_logger().warning(
-                "disableTagging=false on non-AWS endpoint '%s' — obstore will send "
-                "x-amz-tagging which many S3-compatible stores (B2, R2, GCS-interop) "
-                "reject; set disableTagging=true to suppress the header",
-                endpoint or "(none)",
+                "disableTagging=false on a non-AWS endpoint (endpoint_configured=%s) "
+                "— obstore will send x-amz-tagging which many S3-compatible stores "
+                "(B2, R2, GCS-interop) reject; set disableTagging=true to suppress "
+                "the header",
+                bool(endpoint),
             )
     elif not _endpoint_is_aws(endpoint):
         config["aws_disable_tagging"] = "true"
@@ -732,6 +750,14 @@ def _create_store_core(
     Returns *(store, put_attributes)* where *put_attributes* is a dict of
     obstore put-option overrides (e.g. ``{"Storage-Class": "STANDARD_IA"}``)
     to apply on every write, or ``None`` when no overrides are needed.
+
+    When *secrets* is ``None`` the resolver falls back to the startup-fetched
+    cache populated by ``main._create_infrastructure`` (see
+    :func:`set_fetched_binding_secrets`), so a sync caller that runs after
+    startup — for example the observability exporter or
+    ``credentials/utils.py`` — resolves against the same secret values the
+    startup resolver used, rather than re-deriving a different result
+    env-only.  Mirrors :func:`is_binding_configured`.
     """
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         StorageBindingBrokenError,
@@ -757,9 +783,13 @@ def _create_store_core(
             f"Unsupported binding type: {binding_type!r} (component={name})"
         )
 
+    effective_secrets = (
+        secrets if secrets is not None else _get_fetched_binding_secrets(name)
+    )
+
     raw_metadata = spec.get("metadata", [])
     if store_kind != "local":
-        broken_fields = _find_broken_metadata_fields(raw_metadata, secrets)
+        broken_fields = _find_broken_metadata_fields(raw_metadata, effective_secrets)
         if broken_fields:
             raise StorageBindingBrokenError(
                 "Dapr component '%s' has unresolvable metadata "
@@ -770,7 +800,7 @@ def _create_store_core(
                 broken_fields=broken_fields,
             )
 
-    meta = _parse_dapr_metadata(raw_metadata, secrets)
+    meta = _parse_dapr_metadata(raw_metadata, effective_secrets)
     # Log binding resolution so objectstore routing can be verified in CI logs.
     # Never log the resolved endpoint/accountName: on the secure k8s path that
     # value comes from the secret store and would leak to INFO logs.
