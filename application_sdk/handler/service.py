@@ -2225,20 +2225,6 @@ def _register_workflow_routes(
                 for ep in sorted(app_meta.entry_points.values(), key=lambda e: e.name)
                 if not ep.implicit and ep.name not in candidates
             )
-        # Marketplace (bundle) entry points exist only as generated contract
-        # dirs — none of the registry-derived candidates above can serve them
-        # (a bundle's registry entrypoints are its DAG-node workflows, which
-        # have no manifest dirs). Append the on-disk entry points so a bare
-        # call on a bundle app serves a manifest deterministically
-        # (alphabetically) instead of 404-ing "No manifest available".
-        candidates.extend(
-            sorted(
-                p.parent.name
-                for p in CONTRACT_GENERATED_DIR.glob("*/manifest.json")
-                if p.parent.name not in candidates
-            )
-        )
-
         for cand in candidates:
             try:
                 return await _serve_entrypoint_manifest(cand, fe_inputs, deployment)

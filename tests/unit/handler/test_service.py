@@ -7261,11 +7261,12 @@ class TestBundleMarketplaceEntrypoints:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
-    def test_bare_manifest_falls_back_to_disk_entrypoints(self, tmp_path: Path) -> None:
-        """A bare /manifest call on a bundle app serves the first on-disk
-        marketplace entry point (alphabetical) instead of 404 'No manifest
-        available' — the registry candidates (DAG-node workflows) have no
-        manifest dirs of their own."""
+    def test_bare_manifest_on_bundle_still_404s(self, tmp_path: Path) -> None:
+        """A bare /manifest call on a bundle app keeps 404-ing even when
+        marketplace entry-point dirs exist on disk. Serving one of N
+        marketplace manifests picked arbitrarily would be confidently wrong —
+        callers must name the entry point. (The declarative resolver that can
+        answer this properly is FND-180.)"""
         from application_sdk.handler import service as svc_module
 
         for name in ("beta-export", "alpha-export"):
@@ -7276,7 +7277,7 @@ class TestBundleMarketplaceEntrypoints:
         svc_module.CONTRACT_GENERATED_DIR = tmp_path
         try:
             resp = self._client(self._bundle_app()).get("/workflows/v1/manifest")
-            assert resp.status_code == 200
-            assert resp.json() == {"name": "alpha-export"}
+            assert resp.status_code == 404
+            assert resp.json()["detail"] == "No manifest available"
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
