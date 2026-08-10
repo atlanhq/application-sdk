@@ -986,8 +986,11 @@ jobs:
         # On parity it pins the immutable digest, so a base release landing
         # mid-build cannot change what this build resolves to.
         #
-        # A registry it cannot reach is *unknown*, not skew: the script warns and
-        # emits an empty mapping, degrading to the pre-redirect Harbor pull.
+        # A registry it cannot reach is *unknown*, not skew: if GHCR cannot be
+        # resolved the script warns and emits an empty mapping, degrading to the
+        # pre-redirect Harbor pull. Harbor is the one exception — with the
+        # redirect's source unreachable there is no baseline to verify parity
+        # against, so it fails closed rather than ride the redirect unproven.
         id: base_redirect
         if: ${{ inputs.use_ghcr_base }}
         env:
