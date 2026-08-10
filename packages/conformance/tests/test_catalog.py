@@ -162,7 +162,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # O002/O003/O004: asset-mapper usage — connectors build assets with pyatlan_v9,
     # serialize with to_nested_bytes, and type their mapper returns (BLDX-1492); the
     # SDK is the framework, not a connector.
-    # O005: direct rocksdict import — application_sdk.common.spillable_dict and
+    # O006: direct rocksdict import — application_sdk.common.spillable_dict and
     # application_sdk.common.incremental.storage.rocksdb_utils are themselves the
     # intended callers of rocksdict; the SDK is the publisher of this seam, not a
     # consumer of it (CNCT-80, CNCT-191).
@@ -271,7 +271,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "O002",
         "O003",
         "O004",
-        "O005",
+        "O006",
         "I001",
         "I002",
         "I003",
@@ -477,7 +477,7 @@ def test_catalog_o_series_present() -> None:
     """The O-series optimisation rules are all present."""
     rules = load_catalog()
     o_ids = {r.id for r in rules if r.id.startswith("O")}
-    expected = {"O001", "O002", "O003", "O004", "O005"}
+    expected = {"O001", "O002", "O003", "O004", "O006"}
     missing = expected - o_ids
     assert not missing, f"Missing O-series rules: {missing}"
 

@@ -27,7 +27,7 @@ reassigned.
 | [O002](#o002) | `LegacyAssetSerialization` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 | [O003](#o003) | `UntypedAssetMapperReturn` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 | [O004](#o004) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
-| [O005](#o005) | `DirectRocksdictImport` | `warn` | `app` | `canonical-dependency` | — | 0.18.0 |
+| [O006](#o006) | `DirectRocksdictImport` | `warn` | `app` | `canonical-dependency` | — | 0.18.0 |
 
 ---
 
@@ -145,7 +145,7 @@ when a connector is intentionally pinned to the legacy `AtlasTransformer` surfac
 
 ---
 
-## O005 — `DirectRocksdictImport` {#o005}
+## O006 — `DirectRocksdictImport` {#o006}
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.18.0
 
@@ -181,7 +181,7 @@ signal going forward.
 
 NOT autofixable: `SpillableDict`'s key type is restricted to `str | int | float | bool |
 bytes` and it has no equivalent to a custom `rocksdict.Options` tuning surface, so each
-call site needs review before migrating.  Suppress with `# conformance: ignore[O005]
+call site needs review before migrating.  Suppress with `# conformance: ignore[O006]
 <reason>` when a from-scratch wrapper is deliberate (e.g. custom RocksDB tuning, or
 association-list output like `rocks_backed_dict.py`'s `append_to_key` that
 `SpillableDict` does not provide).

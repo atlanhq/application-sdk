@@ -1,4 +1,4 @@
-"""O005 DirectRocksdictImport — flag app code importing ``rocksdict`` directly.
+"""O006 DirectRocksdictImport — flag app code importing ``rocksdict`` directly.
 
 The SDK ships ``application_sdk.common.spillable_dict.SpillableDict`` — a
 ``MutableMapping``-compatible, disk-backed dict built on ``rocksdict.Rdict``
@@ -56,12 +56,12 @@ def _is_rocksdict_module(module: str | None) -> bool:
     )
 
 
-def check_o005(
+def check_o006(
     tree: ast.AST,
     filename: str,
     directives: dict[int, _IgnoreDirective],
 ) -> list[Finding]:
-    """Emit O005 for any direct import of ``rocksdict`` in app code."""
+    """Emit O006 for any direct import of ``rocksdict`` in app code."""
     findings: list[Finding] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -70,7 +70,7 @@ def check_o005(
                 findings.append(
                     make_finding(
                         filename=filename,
-                        rule_id="O005",
+                        rule_id="O006",
                         node=node,
                         message=_MESSAGE,
                         directives=directives,
@@ -83,7 +83,7 @@ def check_o005(
                     findings.append(
                         make_finding(
                             filename=filename,
-                            rule_id="O005",
+                            rule_id="O006",
                             node=node,
                             message=_MESSAGE,
                             directives=directives,

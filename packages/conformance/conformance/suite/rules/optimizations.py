@@ -181,7 +181,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o004",
     ),
     RuleDefinition(
-        id="O005",
+        id="O006",
         scope=RuleScope.APP,
         name="DirectRocksdictImport",
         tier=EnforcementTier.WARN,
@@ -234,11 +234,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "``str | int | float | bool | bytes`` and it has no equivalent to a "
             "custom ``rocksdict.Options`` tuning surface, so each call site needs "
             "review before migrating.  Suppress with ``# conformance: "
-            "ignore[O005] <reason>`` when a from-scratch wrapper is deliberate "
+            "ignore[O006] <reason>`` when a from-scratch wrapper is deliberate "
             "(e.g. custom RocksDB tuning, or association-list output like "
             "``rocks_backed_dict.py``'s ``append_to_key`` that ``SpillableDict`` "
             "does not provide).\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o005",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o006",
     ),
 )
