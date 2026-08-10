@@ -393,11 +393,17 @@ jobs:
       # `uvx` env and never install caller dependencies, so the
       # `matrix.needs_env == 'true'` clause keeps this step off them.  That
       # condition stays in `if:`, never in the shell (docs/standards/ci.md).
+      # The leg is scheduled on every PR but only does work when its
+      # `**/pyproject.toml` filter matches, so the install follows the same
+      # relevance gate as `Set up uv` and the detect step — otherwise it
+      # installs packages for a leg that then no-ops.
       # The value is routed through env, never interpolated into the script,
       # and matched WHOLE against the same strict Debian package-name allowlist
       # as tests-reusable.yaml before it is used.
       - name: Install system packages (apt-packages)
-        if: inputs.apt-packages != '' && matrix.needs_env == 'true'
+        if: >-
+          inputs.apt-packages != '' && matrix.needs_env == 'true'
+          && (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all)
         env:
           APT_PACKAGES: ${{ inputs.apt-packages }}
         run: |

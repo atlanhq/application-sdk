@@ -89,10 +89,12 @@ def test_apt_step_precedes_the_run_series_checks_step(suite: dict) -> None:  # t
 
 
 def test_apt_step_is_gated_on_input_and_matrix(suite: dict) -> None:  # type: ignore[type-arg]
-    """Both guards must live in `if:`, never in the shell
-    (docs/standards/ci.md).  The `matrix.needs_env == 'true'` clause is what
-    keeps the 10 isolated legs from running a pointless apt-get update +
-    install."""
+    """The guards must live in `if:`, never in the shell
+    (docs/standards/ci.md).  The `matrix.needs_env == 'true'` clause keeps
+    the 10 isolated legs from running a pointless apt-get update + install;
+    the relevance disjunction keeps the D leg from installing packages on a
+    PR that does not touch its `**/pyproject.toml` filter (when it would then
+    no-op)."""
     step = _apt_step(suite)
     cond = step.get("if", "")
     assert (
@@ -101,6 +103,32 @@ def test_apt_step_is_gated_on_input_and_matrix(suite: dict) -> None:  # type: ig
     assert (
         "matrix.needs_env == 'true'" in cond
     ), "apt step must be a no-op on the isolated (non-D) legs"
+    for clause in (
+        "steps.changes.outputs.relevant == 'true'",
+        "inputs.event_name == 'push'",
+        "inputs.force-all",
+    ):
+        assert (
+            clause in cond
+        ), f"apt step must self-skip when the leg is not relevant ({clause})"
+
+
+def test_apt_step_shares_the_run_series_relevance_gate(suite: dict) -> None:  # type: ignore[type-arg]
+    """The apt step fires under exactly the legs the detect step fires under,
+    so its relevance condition is derived from — and must contain — the one on
+    `Run ${{ matrix.series }}-series checks`.  A hardcoded copy would keep
+    passing while the two drifted, so this normalises whitespace and asserts
+    containment instead."""
+    run_step = next(s for s in suite["steps"] if s.get("name") == RUN_SERIES_STEP_NAME)
+
+    def _normalise(cond: str) -> str:
+        return " ".join(cond.split())
+
+    run_cond = _normalise(run_step.get("if", ""))
+    assert run_cond in _normalise(_apt_step(suite).get("if", "")), (
+        "apt step's relevance gate must contain the detect step's condition — "
+        "the install would otherwise fire for legs that then no-op"
+    )
 
 
 def test_apt_step_routes_the_value_through_env(suite: dict) -> None:  # type: ignore[type-arg]
