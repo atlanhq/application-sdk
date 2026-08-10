@@ -1,12 +1,16 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Atlan fleet upgrade policy for atlan-*-app repos. Extend via: {\"extends\": [\"github>atlanhq/application-sdk//renovate-config/default.json\"]}",
+  "description": [
+    "Atlan fleet upgrade policy for atlan-*-app repos. Extend via: {\"extends\": [\"github>atlanhq/application-sdk//renovate-config/default.json\"]}",
+    "rebaseWhen is pinned to behind-base-branch rather than left at the `auto` default. `auto` resolves to behind-base-branch ONLY when a rule requires the branch to be up to date (branch protection, or automerge on that branch). Fleet repos have neither: branch protection is absent org-wide (GET /branches/main/protection 404s), and soft-mode repos set automerge:false. So `auto` silently degraded to `conflicted` on every repo — the runner log reads `Converting rebaseWhen=auto to rebaseWhen=conflicted because no rule for behind-base-branch applies`. A non-conflicted stale branch was then reused as-is (`reuseExistingBranch: true`), recomputed to `No package files need updating`, produced no commit, and PR creation 422'd with 'no commits between main and branch' — leaving the branch in place to repeat the cycle forever. Open PRs hit the same wall from the other side: never rebased, so never re-resolved, frozen on whatever version was latest when they were opened. Set at the TOP LEVEL deliberately: the degradation is a repo-level decision affecting every branch (observed on renovate/app-contract-toolkit as well as renovate/lock-file-maintenance), so scoping it under lockFileMaintenance would leave the other managers broken. Cost is extra rebases/CI on branches that fall behind main; that is the price of having no branch protection to make `auto` work unaided."
+  ],
   "extends": [
     "config:recommended"
   ],
   "schedule": [
     "at any time"
   ],
+  "rebaseWhen": "behind-base-branch",
   "prHourlyLimit": 0,
   "prConcurrentLimit": 5,
   "labels": [
