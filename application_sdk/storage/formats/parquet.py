@@ -827,50 +827,27 @@ class ParquetFileWriter(Writer):
         return FileReference.from_local(self.path)
 
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
-        """Write a chunk to a Parquet file, casting null-typed columns to string.
+        """Write a chunk to a Parquet file.
 
-        When a pandas DataFrame has an all-null column, pyarrow infers the parquet
-        type as ``null``. This causes silent data loss when daft reads multiple
-        parquet files with mixed null/string column types — daft resolves the
-        conflict by using ``null`` for ALL rows, dropping actual data from files
-        that had the column typed as ``string``. See BLDX-837.
+        An all-null column is written with its natural pyarrow-inferred
+        ``null`` type rather than cast to ``large_string``. The cast was a
+        workaround for a daft merge bug (BLDX-837) that no longer applies —
+        daft was removed entirely in #2300. Leaving the column typed ``null``
+        lets the reader's ``pa.concat_tables(..., promote_options="permissive")``
+        promote it against a sibling shard's real type at merge time; casting
+        it to ``large_string`` instead made that promotion impossible whenever
+        a sibling shard was typed e.g. ``double`` (CNCT-80).
         """
         import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
         import pyarrow.parquet as pq  # noqa: PLC0415 — optional dep: pyarrow.parquet
 
         table = pa.Table.from_pandas(chunk, preserve_index=False)
-
-        # Fast path: no null-typed columns → write directly (O(cols) check)
-        if not any(pa.types.is_null(f.type) for f in table.schema):
-            row_group_size = max(
-                1,
-                min(
-                    len(table), 16_000_000 // max(1, table.nbytes // max(1, len(table)))
-                ),
-            )
-            # Offloaded: pq.write_table() is blocking disk I/O; running it
-            # inline stalls the event loop — including the auto-heartbeat —
-            # for the write's full duration on large chunks.
-            await run_in_thread(
-                pq.write_table,
-                table,
-                file_name,
-                compression="snappy",
-                row_group_size=row_group_size,
-            )
-            return
-
-        # Slow path: cast null-typed columns to large_string before writing
-        new_schema = pa.schema(
-            [
-                pa.field(f.name, pa.large_string()) if pa.types.is_null(f.type) else f
-                for f in table.schema
-            ]
-        )
-        table = table.cast(new_schema)
         row_group_size = max(
             1, min(len(table), 16_000_000 // max(1, table.nbytes // max(1, len(table))))
         )
+        # Offloaded: pq.write_table() is blocking disk I/O; running it
+        # inline stalls the event loop — including the auto-heartbeat —
+        # for the write's full duration on large chunks.
         await run_in_thread(
             pq.write_table,
             table,
