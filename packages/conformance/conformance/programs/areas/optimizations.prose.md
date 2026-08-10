@@ -180,6 +180,39 @@ lines around `finding.line` in `finding.file` before proposing a fix.
   serialize/deserialize helpers.  Classification is `"judgment"` (the
   key-type / `Options` / merge-semantics call requires reading the call site),
   so the edit is routed to residue for human confirmation.
+- **O005 UnresolvedAppNamePlaceholder** (dag-write-path, CONNECT-183) — a plain
+  string literal (or an escaped-brace f-string, `f"atlan-{{app_name}}-prod"`,
+  whose braces are *not* interpolated) still carries an unsubstituted
+  `{app_name}` token, so the literal token freezes into whatever it is assigned
+  to instead of the real app name.  This is never a mechanical fix — the right
+  resolution depends on where `app_name` is actually available, so
+  classification is always `"judgment"`:
+  - If the app name is already in scope at the literal's site (a variable, a
+    parameter, a manifest field), draft the smallest resolution: an f-string
+    (`f"atlan-{app_name}-prod"`) or `"atlan-{app_name}-prod".format(app_name=...)`.
+    Keep every other placeholder in the template untouched — a second
+    unresolved token (e.g. `{dep}`) is out of O005's scope and must not be
+    "fixed" by binding it to something wrong.
+  - If the name is *not* in scope, the value must be threaded in from the
+    caller that has it — draft that threading, or note in residue that the
+    call graph needs a human (the rule is WARN-tier precisely because this
+    judgment cannot be automated).
+  - **Shared helper (FND-195):** `application_sdk.common.task_queue`
+    (`derive_task_queue` / `resolve_manifest_tokens`) is the canonical
+    remediation target, but it ships only with the SDK release that carries
+    FND-195 — do **not** draft an import of it into a repo pinned to an
+    earlier SDK (the import would not exist).  Prefer the in-scope f-string /
+    `.format(app_name=...)` fix there, and note the helper as the follow-up
+    once the SDK is bumped.
+  - **Legitimate cross-file resolution:** if the template is deliberately
+    resolved by a caller in a *different* file than the one scanned (the
+    rule's known blind spot), propose an inline
+    `# conformance: ignore[O005] <reason naming the resolving caller>` instead
+    of an edit, and route it to residue for human audit — an escaped-brace
+    f-string (`f"{{app_name}}"`) is almost never legitimate, since nothing
+    downstream can interpolate it either.
+  - Never "resolve" the token by hardcoding a concrete app name: that hides
+    the finding while freezing the wrong value into every other tenant.
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
