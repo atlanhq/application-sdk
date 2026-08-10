@@ -707,6 +707,82 @@ class TestReadNonBatchedSchemaUnification:
         assert set(df["id"].tolist()) == {1, 2, 3, 4}
         assert set(df["tag"].tolist()) == {None, "a", "b"}
 
+    @pytest.mark.asyncio
+    async def test_read_merges_legacy_all_null_large_string_with_numeric(
+        self, tmp_path
+    ) -> None:
+        """CNCT-80: a legacy all-null ``large_string`` shard must merge with a new numeric shard.
+
+        Before CNCT-80 the writer persisted an all-null column as
+        ``large_string``. ``promote_options="permissive"`` cannot reconcile
+        ``large_string`` against a numeric sibling, so an upgraded prefix that
+        mixes an old all-null shard with a new numeric shard raised
+        ``ArrowTypeError`` on read. The reader now normalizes such columns to
+        Arrow ``null`` before concatenating.
+        """
+        f1 = _write_parquet(
+            tmp_path / "legacy.parquet",
+            pa.schema([("id", pa.int64()), ("extra", pa.large_string())]),
+            {"id": [1, 2], "extra": [None, None]},
+        )
+        f2 = _write_parquet(
+            tmp_path / "new.parquet",
+            pa.schema([("id", pa.int64()), ("extra", pa.int64())]),
+            {"id": [3, 4], "extra": [10, 18]},
+        )
+
+        async def _download(_path, _ext, _names=None):
+            return [f1, f2]
+
+        with patch(
+            "application_sdk.storage.formats.parquet._download_files",
+            side_effect=_download,
+        ):
+            reader = ParquetFileReader(path=str(tmp_path))
+            df = await reader.read()
+
+        assert len(df) == 4
+        assert set(df["id"].tolist()) == {1, 2, 3, 4}
+        # int64 + null promotes to double, so missing values round-trip as NaN.
+        assert df["extra"].isna().tolist() == [True, True, False, False]
+        assert df["extra"].dropna().tolist() == [10.0, 18.0]
+
+    @pytest.mark.asyncio
+    async def test_read_merges_zero_row_legacy_all_null_large_string_with_numeric(
+        self, tmp_path
+    ) -> None:
+        """CNCT-80: a 0-row legacy all-null ``large_string`` shard must merge too.
+
+        Filtered partitions / incremental windows / partial extracts can leave
+        a 0-row shard whose all-null column the pre-fix writer still cast to
+        ``large_string``. The reader must normalize it to Arrow ``null`` just
+        like a non-empty legacy shard, or the same ``ArrowTypeError`` fires.
+        """
+        f1 = _write_parquet(
+            tmp_path / "legacy-empty.parquet",
+            pa.schema([("id", pa.int64()), ("extra", pa.large_string())]),
+            {"id": [], "extra": []},
+        )
+        f2 = _write_parquet(
+            tmp_path / "new.parquet",
+            pa.schema([("id", pa.int64()), ("extra", pa.int64())]),
+            {"id": [3, 4], "extra": [10, 18]},
+        )
+
+        async def _download(_path, _ext, _names=None):
+            return [f1, f2]
+
+        with patch(
+            "application_sdk.storage.formats.parquet._download_files",
+            side_effect=_download,
+        ):
+            reader = ParquetFileReader(path=str(tmp_path))
+            df = await reader.read()
+
+        assert len(df) == 2
+        assert set(df["id"].tolist()) == {3, 4}
+        assert df["extra"].tolist() == [10.0, 18.0]
+
 
 @pytest.mark.asyncio
 async def test_read_with_file_names(tmp_path: Path) -> None:

@@ -1109,7 +1109,16 @@ class TestParquetFileWriterConsolidation:
 
 
 class TestWriteChunkNullColumns:
-    """Tests for _write_chunk handling of null-typed columns (BLDX-837)."""
+    """Tests for _write_chunk handling of null-typed columns (CNCT-80).
+
+    The old behavior (see git history, BLDX-837) cast an all-null column to
+    large_string on write — a workaround for a daft merge bug. daft was
+    removed entirely in #2300, but the cast stayed, which broke merging an
+    all-null shard against a sibling shard typed e.g. double (CNCT-80): a
+    permissive pa.concat_tables can promote null -> double directly, but
+    can't reconcile large_string against double. Leaving the column typed
+    null lets that promotion happen.
+    """
 
     async def test_write_chunk_no_nulls_uses_fast_path(self, tmp_path) -> None:
         """Normal DataFrame without all-null columns uses pandas fast path."""
@@ -1123,10 +1132,8 @@ class TestWriteChunkNullColumns:
         assert table.num_rows == 3
         assert table.column("b").type == pa.string()
 
-    async def test_write_chunk_all_null_column_cast_to_large_string(
-        self, tmp_path
-    ) -> None:
-        """All-null column should be written as large_string, not null type."""
+    async def test_write_chunk_all_null_column_stays_null_typed(self, tmp_path) -> None:
+        """All-null column is written with its natural null type, uncast."""
         df = pd.DataFrame({"a": [1, 2], "b": [None, None]})
         file_name = str(tmp_path / "with_nulls.parquet")
 
@@ -1135,7 +1142,7 @@ class TestWriteChunkNullColumns:
 
         schema = pq.read_schema(file_name)
         b_type = schema.field("b").type
-        assert b_type == pa.large_string(), f"Expected large_string, got {b_type}"
+        assert b_type == pa.null(), f"Expected null, got {b_type}"
 
     async def test_write_chunk_mixed_null_and_data_columns(self, tmp_path) -> None:
         """DataFrame with both null and non-null columns handles both correctly."""
@@ -1149,10 +1156,10 @@ class TestWriteChunkNullColumns:
 
         schema = pq.read_schema(file_name)
         assert schema.field("name").type == pa.string()
-        assert schema.field("notes").type == pa.large_string()
+        assert schema.field("notes").type == pa.null()
 
     async def test_multi_file_roundtrip_no_data_loss(self, tmp_path) -> None:
-        """Write two files (one with null col, one with data) — reading both back preserves data."""
+        """Write two files (one with null col, one with string data) — reading both back preserves data."""
         writer = ParquetFileWriter(str(tmp_path / "output"))
 
         # File 1: column 'extra' is all-null
@@ -1172,6 +1179,36 @@ class TestWriteChunkNullColumns:
         assert combined.num_rows == 4
         extra_col = combined.column("extra").to_pylist()
         assert extra_col == [None, None, "foo", "bar"]
+
+    async def test_multi_file_roundtrip_null_vs_numeric_no_longer_crashes(
+        self, tmp_path
+    ) -> None:
+        """CNCT-80 regression: all-null shard merged against a numeric shard.
+
+        This is the production failure signature: 'Unable to merge: Field X
+        has incompatible types: double vs large_string'. Before this fix, the
+        writer cast the all-null 'extra' column to large_string, which a
+        permissive concat cannot reconcile against the sibling shard's
+        double. Leaving it null-typed lets permissive promote null -> double.
+        """
+        writer = ParquetFileWriter(str(tmp_path / "output"))
+
+        # File 1: numeric metadata column entirely NULL (e.g. a batch of only
+        # non-numeric source columns).
+        df1 = pd.DataFrame({"id": [1, 2], "extra": [None, None]})
+        f1 = str(tmp_path / "chunk1.parquet")
+        await writer._write_chunk(df1, f1)
+
+        # File 2: same column populated with real numeric values.
+        df2 = pd.DataFrame({"id": [3, 4], "extra": [10, 18]})
+        f2 = str(tmp_path / "chunk2.parquet")
+        await writer._write_chunk(df2, f2)
+
+        t1 = pq.read_table(f1)
+        t2 = pq.read_table(f2)
+        combined = pa.concat_tables([t1, t2], promote_options="permissive")
+        assert combined.num_rows == 4
+        assert combined.column("extra").to_pylist() == [None, None, 10, 18]
 
     async def test_write_chunk_offloaded_to_thread(self, tmp_path) -> None:
         """pq.write_table() must not run inline on the event loop.
