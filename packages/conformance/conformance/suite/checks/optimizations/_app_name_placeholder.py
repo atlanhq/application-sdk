@@ -163,8 +163,8 @@ def _diagnostic_constants(tree: ast.AST) -> set[int]:
     Code that reports an unresolved token has to quote it; that text is never
     dispatched as an identifier. Without this, the SDK's own WARNING/ERROR logs
     naming the token they could not resolve are flagged. An f-string *inside*
-    one of these sinks still needs its pieces exempted here — the line-based
-    waiver in ``check_o005`` would otherwise re-flag its escaped braces.
+    one of these sinks still needs its pieces exempted here — the re-flag pass
+    in ``check_o005`` would otherwise re-flag its escaped braces.
     """
     found: set[int] = set()
     subtrees: list[ast.AST] = []
