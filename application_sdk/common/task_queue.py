@@ -341,8 +341,10 @@ def resolve_manifest_tokens(
 
     try:
         manifest = json.loads(raw)
+        parse_error = False
     except (ValueError, UnicodeDecodeError):
         manifest = None
+        parse_error = True
 
     if isinstance(manifest, (dict, list)):
         # Field-aware path: stamp own-queue fields, fill the residual tokens in
@@ -359,18 +361,26 @@ def resolve_manifest_tokens(
         # own json.dumps output, so the reserialize is a no-op save the stamp.
         raw = json.dumps(manifest, ensure_ascii=True).encode()
     else:
-        # A manifest too malformed to parse is served back unstamped and logged
-        # at ERROR. The pre-FND-195 byte substitutor this replaces could not
-        # scope the residual fills away from a stamped queue carrying literal
-        # token text, so it re-imported the defect this module removes. Such a
-        # manifest is one the build-time validation never saw — already broken,
-        # and better failed loud than served with a silently wrong queue.
+        # A manifest whose task_queue fields cannot be located is served back
+        # unstamped and logged at ERROR. That is either a parse failure (the
+        # bytes are not JSON at all) or valid JSON with a scalar root (``null``,
+        # a number, a string) that carries no object to walk. The pre-FND-195
+        # byte substitutor this replaces could not scope the residual fills away
+        # from a stamped queue carrying literal token text, so it re-imported the
+        # defect this module removes. Such a manifest is one the build-time
+        # validation never saw — already broken, and better failed loud than
+        # served with a silently wrong queue.
+        if parse_error:
+            reason = "does not parse as JSON"
+        else:
+            reason = "parses as JSON but has a scalar root (no object to walk)"
         logger.error(
-            "Served manifest does not parse as JSON, so its task_queue cannot "
-            "be stamped field-aware; serving it unstamped rather than applying "
-            "byte substitution, which cannot scope the residual token fills "
-            "away from a stamped queue that carries literal token text. This "
+            "Served manifest %s, so its task_queue cannot be stamped "
+            "field-aware; serving it unstamped rather than applying byte "
+            "substitution, which cannot scope the residual token fills away "
+            "from a stamped queue that carries literal token text. This "
             "manifest is malformed on disk — regenerate or restore it.",
+            reason,
         )
 
     return ManifestTokenResolution(

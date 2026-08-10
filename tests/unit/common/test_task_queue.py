@@ -504,7 +504,25 @@ class TestQueueStampIsFieldAware:
         assert resolution.raw == malformed
         assert resolution.task_queue == "atlan-dbt-prod"
         mock_error.assert_called_once()
-        assert "does not parse as JSON" in mock_error.call_args.args[0]
+        message = mock_error.call_args.args[0] % mock_error.call_args.args[1:]
+        assert "does not parse as JSON" in message
+
+    def test_scalar_root_manifest_is_served_unstamped_with_accurate_log(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Valid JSON with a scalar root (``null``, a number, a string) has no
+        object to walk, so it takes the same unstamped path — but the log must
+        not claim a syntax error that isn't there. The message distinguishes
+        \"scalar root\" from \"does not parse\" so an operator is not sent
+        hunting a malformed manifest that is in fact well-formed JSON."""
+        DeploymentEnv("dbt", "prod").apply(monkeypatch)
+        with patch("application_sdk.common.task_queue.logger.error") as mock_error:
+            resolution = resolve_manifest_tokens(b"null")
+        assert resolution.raw == b"null"
+        mock_error.assert_called_once()
+        message = mock_error.call_args.args[0] % mock_error.call_args.args[1:]
+        assert "scalar root" in message
+        assert "does not parse as JSON" not in message
 
     def test_unparseable_manifest_with_token_carrying_override_is_not_mutated(
         self, monkeypatch: pytest.MonkeyPatch
