@@ -259,6 +259,31 @@ on:
           otherwise fails (or wastes minutes) during `uv sync`.  Leave false
           for connectors that genuinely need their LFS content at test time
           (the same reason build-and-publish takes an explicit `lfs` input).
+      apt-packages:
+        required: false
+        type: string
+        default: ""
+        description: |
+          Space-separated Ubuntu packages apt-installed in the Unit,
+          Integration and e2e jobs BEFORE dependency sync.  For connectors
+          whose Python dependencies build a native extension the runner image
+          lacks headers for — hive's pykerberos ships only an sdist and needs
+          libkrb5-dev for gssapi/gssapi.h, so its `uv sync` fails on a cold
+          cache in every tier (FND-110).  The retired bespoke workflows ran
+          their own apt-get step for this; a reusable-workflow caller cannot
+          inject steps, hence this input.  The e2e IMAGE build is not covered:
+          the connector's Dockerfile owns its own system deps.  Empty (the
+          default) skips the step entirely.
+
+          Accepted form is deliberately narrow — plain package NAMES only,
+          separated by whitespace, each matching Debian's own
+          `[a-z0-9][a-z0-9+.-]*` (so `g++`, `libstdc++6`, `python3.11-dev` are
+          fine).  Anything else fails the job before apt runs, including
+          arch-qualified (`libkrb5-dev:amd64`) and version-pinned
+          (`libkrb5-dev=1.2.3`) forms, apt flags, local `.deb` paths, and
+          globs.  If a connector genuinely needs one of those, widen the
+          allowlist in this workflow deliberately rather than working around it
+          from the caller.
       container-health-timeout-seconds:
         required: false
         type: string
@@ -400,6 +425,36 @@ jobs:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
+
+      # Must precede the deps action's `uv sync`: a native sdist build (hive's
+      # pykerberos → gssapi/gssapi.h) fails during sync, not at test time.
+      #
+      # Routed through env, never interpolated into the script
+      # (docs/standards/ci.md). That routing is the control that matters: a
+      # `${{ }}` in the script text would splice a caller-supplied value into
+      # the shell, which is why a test pins the env form.
+      #
+      # The value is then matched WHOLE against a strict Debian package-name
+      # allowlist before it is used. It has to reach apt-get unquoted — that is
+      # how a list of packages is passed — and while word splitting does not
+      # re-parse `;`/`|`/`$(…)` as operators (they arrive as literal argv
+      # words), it does still glob-expand, and a leading `-o …` or `./x.deb`
+      # would reach apt-get as a flag or a local package path instead of a name.
+      # The allowlist closes both, and fails closed: a straight-line `grep`
+      # rather than an `if`, so the check stays inside the
+      # no-inline-conditionals rule, with `set -e` explicit so a later
+      # `defaults: run: shell:` cannot silently turn it into a fail-open.
+      - name: Install system packages (apt-packages)
+        if: inputs.apt-packages != ''
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          set -euo pipefail
+          echo "Validating and installing apt packages: $APT_PACKAGES"
+          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
+            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
       # The flag promises a token. With ORG_PAT_GITHUB absent, GIT_TOKEN expands
       # empty and the rewrite below would still install a global redirect of
@@ -579,6 +634,19 @@ jobs:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
+
+      # See the unit job: must precede the deps action's `uv sync`.
+      - name: Install system packages (apt-packages)
+        if: inputs.apt-packages != ''
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          set -euo pipefail
+          echo "Validating and installing apt packages: $APT_PACKAGES"
+          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
+            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
       # See the unit job for why this gates on the token, not just the flag.
       - name: Require ORG_PAT_GITHUB when private-git-deps is set
@@ -1267,6 +1335,22 @@ jobs:
         if: inputs.distinct-id != ''
         shell: bash
         run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
+
+      # See the unit job: the sdr-e2e action runs `uv sync` on the RUNNER as
+      # well as in the image, so a native sdist build needs its headers here
+      # too. The IMAGE build is not covered — the Dockerfile owns its own
+      # system deps.
+      - name: Install system packages (apt-packages)
+        if: inputs.apt-packages != ''
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          set -euo pipefail
+          echo "Validating and installing apt packages: $APT_PACKAGES"
+          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
+            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

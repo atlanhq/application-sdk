@@ -59,6 +59,13 @@ description: |
   no app server — this action handles those). The connector ships its own
   native-deps action; this action handles all the connector-agnostic setup.
 
+  This pre-step pattern only works when the caller invokes THIS ACTION
+  directly. A connector on `tests-reusable.yaml` cannot inject a step into a
+  reusable workflow's jobs, so it passes the package names to that workflow's
+  `apt-packages` input instead and the reusable runs the install itself, in
+  every job that syncs on the runner (FND-110). Package NAMES only there — the
+  input is allowlisted; see its description in tests-reusable.yaml.
+
 outputs:
   summary:
     description: |
@@ -177,8 +184,9 @@ inputs:
       It is NOT the right place for OS-level build deps (ODBC drivers, SAP
       JCo, etc.) that must be apt-installed *before* uv sync compiles native
       Python extensions.  Those require a PRE-STEP in the caller's own
-      tests.yaml before invoking this action (see the "Connectors with native
-      dependencies" section above).
+      tests.yaml before invoking this action — or, on the tests-reusable.yaml
+      path where a caller cannot inject one, that workflow's `apt-packages`
+      input (see the "Connectors with native dependencies" section above).
 
       ## Cross-repo safety
 
@@ -426,8 +434,13 @@ runs:
           2>&1 | tee results/test-output.txt
         TEST_EXIT_CODE=${PIPESTATUS[0]}
         set -e
-        # Extract the pytest summary line for caller PR comments.
-        SUMMARY=$(grep -E "^=+ .* =+$" results/test-output.txt | tail -1 | sed -E 's/^=+ *//; s/ *=+$//')
+        # Extract the pytest summary line for caller PR comments. ANSI-stripped
+        # and never fatal — a repo that forces `--color=yes` in its own pytest
+        # config wraps the summary in escapes and the anchored grep misses it;
+        # under `set -e` that would fail the step independently of the tests
+        # (the unit composite hit exactly this on dataplex, FND-110).
+        ESC=$(printf '\033')
+        SUMMARY=$(sed "s/${ESC}\[[0-9;]*m//g" results/test-output.txt | grep -E "^=+ .* =+$" | tail -1 | sed -E 's/^=+ *//; s/ *=+$//' || true)
         echo "summary=${SUMMARY:-no summary parsed}" >> "$GITHUB_OUTPUT"
         echo "exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
         exit "$TEST_EXIT_CODE"
