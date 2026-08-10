@@ -477,7 +477,7 @@ def test_catalog_o_series_present() -> None:
     """The O-series optimisation rules are all present."""
     rules = load_catalog()
     o_ids = {r.id for r in rules if r.id.startswith("O")}
-    expected = {"O001", "O002", "O003", "O004", "O006"}
+    expected = {"O001", "O002", "O003", "O004", "O005", "O006"}
     missing = expected - o_ids
     assert not missing, f"Missing O-series rules: {missing}"
 
