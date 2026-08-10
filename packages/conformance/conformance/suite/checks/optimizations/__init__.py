@@ -18,6 +18,8 @@ Currently implemented:
   returns it but has no return annotation.
 * ``O004`` LegacyPyatlanAssetImport — app code importing the legacy
   ``pyatlan.model.assets`` package (rather than ``pyatlan_v9.model.assets``).
+* ``O006`` DirectRocksdictImport — app code importing ``rocksdict`` directly
+  (rather than the SDK's ``SpillableDict``).
 
 Inline suppression
 ------------------
@@ -55,6 +57,7 @@ from conformance.suite.schema.findings import Finding
 
 from ._asset_mapper import check_o002, check_o003
 from ._pyatlan_v9 import check_o004
+from ._rocksdict import check_o006
 from ._stdlib_json import OrjsonOverStdlibJsonChecker, _collect_json_bindings
 
 SERIES = "O"
@@ -90,6 +93,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
         + check_o002(tree, file, directives)
         + check_o003(tree, file, directives)
         + check_o004(tree, file, directives)
+        + check_o006(tree, file, directives)
     )
 
 

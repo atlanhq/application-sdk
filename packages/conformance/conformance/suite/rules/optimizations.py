@@ -180,4 +180,65 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o004",
     ),
+    RuleDefinition(
+        id="O006",
+        scope=RuleScope.APP,
+        name="DirectRocksdictImport",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="canonical-dependency",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.18.0",
+        rationale=(
+            "SpillableDict (application_sdk.common.spillable_dict) already wraps "
+            "rocksdict.Rdict as a MutableMapping and pickles values directly, so it "
+            "carries none of the hand-rolled-serialization risk a from-scratch "
+            "wrapper does. Two connectors (atlan-thoughtspot-app, "
+            "atlan-aws-smus-app) independently hand-rolled the same RocksDB-backed "
+            "DiskLookup with an asymmetric JSON serialize/deserialize step — put() "
+            "special-cased str, get() unconditionally ran json.loads() — so a "
+            "stored string that was also valid bare JSON (a numeric-looking name, "
+            "'true', 'null') silently came back as int/bool/None instead of str "
+            "(CNCT-80, CNCT-191). WARN (not block) because a from-scratch wrapper "
+            "may have a deliberate reason (custom RocksDB Options, a key type "
+            "outside str/int/float/bool/bytes) that needs a human glance before "
+            "migrating."
+        ),
+        short_description=(
+            "Imports rocksdict directly — prefer the SDK's SpillableDict "
+            "(pickles values, no hand-rolled serialize/deserialize step)"
+        ),
+        full_description=(
+            "Flags app code that imports the ``rocksdict`` package directly, in "
+            "either import form: ``from rocksdict import Rdict`` or ``import "
+            "rocksdict``.  Detection is import-anchored (a direct ``rocksdict`` "
+            "import is the unambiguous signal — nothing else pulls that dependency "
+            "in).\n"
+            "\n"
+            "The SDK ships ``application_sdk.common.spillable_dict.SpillableDict`` "
+            "— a ``MutableMapping``-compatible, disk-backed dict built on the same "
+            "``rocksdict.Rdict``, which pickles values directly rather than "
+            "hand-rolling a serialize/deserialize step.  It exists specifically so "
+            "connector apps stop reinventing this wrapper.\n"
+            "\n"
+            "Motivating incident: ``atlan-thoughtspot-app`` and "
+            "``atlan-aws-smus-app`` each independently wrote a ``DiskLookup`` class "
+            "directly on ``rocksdict.Rdict`` with the identical bug — a value's "
+            "``str`` type was silently lost on a round-trip through JSON when the "
+            "string happened to also be valid bare JSON.  Neither connector's "
+            "hand-rolled wrapper was calling anything the SDK had a fleet-wide "
+            "signal for at the time; this rule is that signal going forward.\n"
+            "\n"
+            "NOT autofixable: ``SpillableDict``'s key type is restricted to "
+            "``str | int | float | bool | bytes`` and it has no equivalent to a "
+            "custom ``rocksdict.Options`` tuning surface, so each call site needs "
+            "review before migrating.  Suppress with ``# conformance: "
+            "ignore[O006] <reason>`` when a from-scratch wrapper is deliberate "
+            "(e.g. custom RocksDB tuning, or association-list output like "
+            "``rocks_backed_dict.py``'s ``append_to_key`` that ``SpillableDict`` "
+            "does not provide).\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o006",
+    ),
 )
