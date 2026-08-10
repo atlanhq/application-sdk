@@ -915,6 +915,7 @@ jobs:
       dockerhub_image:  ${{ steps.tags.outputs.dockerhub_image }}
       release_tags:     ${{ steps.tags.outputs.release_tags }}
       created_by:       ${{ steps.actor.outputs.created_by }}
+      authored_by:      ${{ steps.actor.outputs.authored_by }}
 
     steps:
       - name: Checkout
@@ -970,6 +971,10 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.actor-token.outputs.token || github.token }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          # Present only on semver releases. When set, contributors are the
+          # authors of everything merged since the previous tag; when absent
+          # (CD publish) the range collapses to the single PR being published.
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: python3 .sdk-entrypoint/.github/scripts/resolve_release_actor.py
 
       - name: Read atlan.yaml
@@ -1426,6 +1431,10 @@ jobs:
           # when no human could be attributed; the body builder then omits
           # created_by, which GM renders as an un-mentioned plain-text line.
           CREATED_BY: ${{ needs.prepare.outputs.created_by }}
+          # Comma-separated logins of the humans whose work ships in this
+          # release, excluding the merger (already named by CREATED_BY).
+          # Display-only on GM: never consulted by the approval gate.
+          AUTHORED_BY: ${{ needs.prepare.outputs.authored_by }}
         run: |
           set -euo pipefail
 
@@ -1522,6 +1531,16 @@ jobs:
           created_by = os.environ.get("CREATED_BY", "").strip()
           if created_by:
               body["created_by"] = created_by
+
+          # Contributors credited alongside created_by in the GM Slack approval
+          # message. Sent as a list (mirrors allowed_tenants) so GM validates
+          # each login separately; omitted when empty, since GM distinguishes
+          # absent from empty here as it does on every other optional field.
+          authored_by = [
+              a.strip() for a in os.environ.get("AUTHORED_BY", "").split(",") if a.strip()
+          ]
+          if authored_by:
+              body["authored_by"] = authored_by
 
           if release_model:
               body["release_model"] = release_model

@@ -84,6 +84,7 @@ def test_channel_used_when_no_tenants() -> None:
         ("app_configs", "app_configs"),
         ("release_model", "release_model"),
         ("created_by", "created_by"),
+        ("authored_by", "authored_by"),
         ("entrypoints", "entrypoints"),
     ],
 )
@@ -161,6 +162,7 @@ def test_field_set_matches_the_release_workflow() -> None:
                 app_configs="e30=",
                 release_model="semver",
                 created_by="someone",
+                authored_by=("someone-else",),
             )
         )
     )

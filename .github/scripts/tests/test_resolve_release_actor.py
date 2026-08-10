@@ -59,6 +59,23 @@ def pr_path(number: int) -> str:
     return f"repos/{REPO}/pulls/{number}"
 
 
+def tags_path() -> str:
+    return f"repos/{REPO}/tags?per_page=100"
+
+
+def compare_path(base: str = "v1.0.0", head: str = SHA) -> str:
+    return f"repos/{REPO}/compare/{base}...{head}"
+
+
+def commits(*logins: str, total: int | None = None) -> dict:
+    """A /compare payload authored by the given logins, in order."""
+    cs = [
+        {"author": {"login": lg, "type": "Bot" if lg.endswith("[bot]") else "User"}}
+        for lg in logins
+    ]
+    return {"total_commits": len(cs) if total is None else total, "commits": cs}
+
+
 # ── is_bot ──────────────────────────────────────────────────────────────────
 
 
@@ -323,7 +340,7 @@ def test_main_writes_login_when_email_is_private(monkeypatch, tmp_path):
         }
     )
     assert rra.main(runner) == 0
-    assert out.read_text().strip() == "created_by=example-merger"
+    assert "created_by=example-merger\n" in out.read_text()
 
 
 def test_main_prefers_public_email_over_login(monkeypatch, tmp_path):
@@ -336,7 +353,7 @@ def test_main_prefers_public_email_over_login(monkeypatch, tmp_path):
         }
     )
     assert rra.main(runner) == 0
-    assert out.read_text().strip() == "created_by=dev@example.com"
+    assert "created_by=dev@example.com\n" in out.read_text()
 
 
 def test_main_emits_empty_and_exits_zero_when_unresolvable(monkeypatch, tmp_path):
@@ -344,15 +361,215 @@ def test_main_emits_empty_and_exits_zero_when_unresolvable(monkeypatch, tmp_path
     out = _set_env(monkeypatch, tmp_path)
     runner = make_runner({pulls_path(): None})
     assert rra.main(runner) == 0
-    assert out.read_text().strip() == "created_by="
+    assert out.read_text() == "created_by=\nauthored_by=\n"
 
 
 def test_main_exits_zero_when_resolution_raises(monkeypatch, tmp_path):
     out = _set_env(monkeypatch, tmp_path)
+    runner = make_runner({pulls_path(): []})
 
     def boom(*_a, **_k):
         raise RuntimeError("unexpected")
 
     monkeypatch.setattr(rra, "resolve_actor", boom)
-    assert rra.main() == 0
-    assert out.read_text().strip() == "created_by="
+    assert rra.main(runner) == 0
+    assert "created_by=" in out.read_text()
+
+
+# ── parse_semver / previous_tag ─────────────────────────────────────────────
+
+
+def test_parse_semver_accepts_v_prefix_and_bare():
+    assert rra.parse_semver("v1.2.3")[:3] == (1, 2, 3)
+    assert rra.parse_semver("1.2.3")[:3] == (1, 2, 3)
+
+
+@pytest.mark.parametrize("tag", ["", "latest", "v1.2", "release-1", "v1.2.3.4"])
+def test_parse_semver_rejects_non_semver(tag):
+    assert rra.parse_semver(tag) is None
+
+
+def test_prerelease_sorts_below_its_final_release():
+    assert rra.parse_semver("v1.2.3-rc1") < rra.parse_semver("v1.2.3")
+
+
+def test_previous_tag_sorts_by_semver_not_list_order():
+    """v0.10.0 > v0.9.0 numerically but sorts lower lexically."""
+    runner = make_runner(
+        {
+            tags_path(): [
+                {"name": "v0.9.0"},
+                {"name": "v0.11.0"},
+                {"name": "v0.10.0"},
+                {"name": "not-a-tag"},
+            ]
+        }
+    )
+    assert rra.previous_tag(REPO, "v0.11.0", runner) == "v0.10.0"
+
+
+def test_previous_tag_none_when_nothing_older():
+    runner = make_runner({tags_path(): [{"name": "v1.0.0"}]})
+    assert rra.previous_tag(REPO, "v1.0.0", runner) is None
+
+
+def test_previous_tag_none_for_unparseable_current_tag():
+    def runner(*_a, **_k):
+        raise AssertionError("should not call the API")
+
+    assert rra.previous_tag(REPO, "latest", runner) is None
+
+
+def test_previous_tag_none_when_tags_call_fails():
+    runner = make_runner({tags_path(): None})
+    assert rra.previous_tag(REPO, "v1.0.0", runner) is None
+
+
+# ── resolve_contributors ────────────────────────────────────────────────────
+
+
+def test_contributors_dedupe_preserving_first_appearance():
+    runner = make_runner({compare_path(): commits("dev-a", "dev-b", "dev-a")})
+    assert rra.resolve_contributors(REPO, "v1.0.0", SHA, set(), runner) == [
+        "dev-a",
+        "dev-b",
+    ]
+
+
+def test_contributors_exclude_the_merger():
+    """The merger is already named as created_by — don't credit them twice."""
+    runner = make_runner({compare_path(): commits("dev-a", "example-merger")})
+    got = rra.resolve_contributors(REPO, "v1.0.0", SHA, {"example-merger"}, runner)
+    assert got == ["dev-a"]
+
+
+def test_contributors_drop_automation_and_bots():
+    """atlan-ci authors the bump commit in every release range."""
+    runner = make_runner(
+        {
+            compare_path(): commits(
+                "atlan-ci", "atlan-app-fleet[bot]", "dev-a", "web-flow"
+            )
+        }
+    )
+    assert rra.resolve_contributors(REPO, "v1.0.0", SHA, set(), runner) == ["dev-a"]
+
+
+def test_contributors_capped():
+    many = [f"dev-{i}" for i in range(rra.MAX_CONTRIBUTORS + 4)]
+    runner = make_runner({compare_path(): commits(*many)})
+    got = rra.resolve_contributors(REPO, "v1.0.0", SHA, set(), runner)
+    assert got == many[: rra.MAX_CONTRIBUTORS]
+
+
+def test_contributors_empty_when_range_is_implausibly_large():
+    """A huge range means the base tag is wrong — don't credit a year of history."""
+    runner = make_runner(
+        {compare_path(): commits("dev-a", total=rra.COMPARE_COMMIT_LIMIT + 1)}
+    )
+    assert rra.resolve_contributors(REPO, "v1.0.0", SHA, set(), runner) == []
+
+
+def test_contributors_empty_when_compare_fails():
+    runner = make_runner({compare_path(): None})
+    assert rra.resolve_contributors(REPO, "v1.0.0", SHA, set(), runner) == []
+
+
+def test_contributors_skip_commits_with_no_github_author():
+    """A commit from an unlinked email address has author: null."""
+    payload = {
+        "total_commits": 2,
+        "commits": [{"author": None}, {"author": {"login": "dev-a", "type": "User"}}],
+    }
+    runner = make_runner({compare_path(): payload})
+    assert rra.resolve_contributors(REPO, "v1.0.0", SHA, set(), runner) == ["dev-a"]
+
+
+# ── contributors_for_event ──────────────────────────────────────────────────
+
+
+def test_release_event_credits_everyone_since_the_previous_tag():
+    runner = make_runner(
+        {
+            tags_path(): [{"name": "v1.1.0"}, {"name": "v1.0.0"}],
+            compare_path("v1.0.0"): commits("dev-a", "atlan-ci", "example-merger"),
+        }
+    )
+    got = rra.contributors_for_event(REPO, SHA, "v1.1.0", "example-merger", runner)
+    assert got == ["dev-a"]
+
+
+def test_release_event_with_no_previous_tag_credits_nobody():
+    runner = make_runner({tags_path(): [{"name": "v1.0.0"}]})
+    got = rra.contributors_for_event(REPO, SHA, "v1.0.0", "example-merger", runner)
+    assert got == []
+
+
+def test_cd_push_credits_the_pr_author():
+    """An untagged publish ships one merge — the range collapses to its author."""
+    runner = make_runner(
+        {
+            pulls_path(): [{"number": 8, "user": HUMAN_AUTHOR}],
+            pr_path(8): {"number": 8, "user": HUMAN_AUTHOR, "merged_by": HUMAN_MERGER},
+        }
+    )
+    got = rra.contributors_for_event(REPO, SHA, "", "example-merger", runner)
+    assert got == ["example-author"]
+
+
+def test_cd_push_credits_nobody_when_the_pr_is_bot_authored():
+    """The bump PR on the CD path — bot author, nothing to credit."""
+    runner = make_runner(
+        {
+            pulls_path(): [{"number": 8, "user": FLEET_BOT}],
+            pr_path(8): {"number": 8, "user": FLEET_BOT, "merged_by": HUMAN_MERGER},
+        }
+    )
+    assert rra.contributors_for_event(REPO, SHA, "", "example-merger", runner) == []
+
+
+def test_cd_push_does_not_credit_the_merger_twice():
+    runner = make_runner(
+        {
+            pulls_path(): [{"number": 8, "user": HUMAN_MERGER}],
+            pr_path(8): {"number": 8, "user": HUMAN_MERGER, "merged_by": HUMAN_MERGER},
+        }
+    )
+    assert rra.contributors_for_event(REPO, SHA, "", "example-merger", runner) == []
+
+
+# ── main: authored_by output ────────────────────────────────────────────────
+
+
+def test_main_writes_authored_by(monkeypatch, tmp_path):
+    out = _set_env(monkeypatch, tmp_path, RELEASE_TAG="v1.1.0")
+    runner = make_runner(
+        {
+            pulls_path(): [{"number": 500, "user": FLEET_BOT}],
+            pr_path(500): {"number": 500, "user": FLEET_BOT, "merged_by": HUMAN_MERGER},
+            "users/example-merger": {"email": None},
+            tags_path(): [{"name": "v1.1.0"}, {"name": "v1.0.0"}],
+            compare_path("v1.0.0"): commits("dev-a", "dev-b", "example-merger"),
+        }
+    )
+    assert rra.main(runner) == 0
+    written = out.read_text()
+    assert "created_by=example-merger" in written
+    assert "authored_by=dev-a,dev-b" in written
+
+
+def test_main_still_emits_created_by_when_contributors_fail(monkeypatch, tmp_path):
+    """Contributors are a nicety — their failure must not lose the merger."""
+    out = _set_env(monkeypatch, tmp_path, RELEASE_TAG="v1.1.0")
+    runner = make_runner(
+        {
+            pulls_path(): [{"number": 500, "user": FLEET_BOT}],
+            pr_path(500): {"number": 500, "user": FLEET_BOT, "merged_by": HUMAN_MERGER},
+            "users/example-merger": {"email": None},
+            tags_path(): None,
+        }
+    )
+    assert rra.main(runner) == 0
+    written = out.read_text()
+    assert "created_by=example-merger" in written
+    assert "authored_by=\n" in written

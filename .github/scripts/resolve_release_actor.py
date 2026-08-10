@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -63,6 +64,26 @@ Runner = Callable[..., subprocess.CompletedProcess]
 #: Events where the run was started by a person doing something on purpose, so
 #: the triggering actor outranks anything inferred from git history.
 DELIBERATE_EVENTS = frozenset({"workflow_dispatch", "schedule", "repository_dispatch"})
+
+#: Machine accounts that commit as ordinary users — no ``[bot]`` suffix and
+#: ``type: "User"`` — so ``is_bot`` cannot see them. Only the *contributor* list
+#: filters on this: `atlan-ci` authors the version-bump commit in every release
+#: range, and crediting it as a contributor is pure noise.
+#:
+#: Deliberately NOT applied to the merger chain. GM maps `atlan-ci` to a real
+#: Slack ID, and if a release genuinely was cut by it, naming it beats naming
+#: nobody. Keeping the two filters separate also means this list cannot change
+#: who `created_by` resolves to.
+AUTOMATION_LOGINS = frozenset({"atlan-ci", "atlan-bot", "web-flow"})
+
+#: Slack renders a long mention list as an unreadable wall, and Block Kit caps
+#: `section.fields` at 10 entries. Truncation is reported, never silent.
+MAX_CONTRIBUTORS = 8
+
+#: `compare` returns at most 250 commits. A range that large means the tag
+#: walk found the wrong base, so treat it as unusable rather than crediting
+#: a year of history to one release.
+COMPARE_COMMIT_LIMIT = 250
 
 
 def is_bot(user: dict[str, Any] | None) -> bool:
@@ -142,6 +163,115 @@ def find_pull_request(
     return full if isinstance(full, dict) else chosen
 
 
+_SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(.+))?$")
+
+
+def parse_semver(tag: str) -> tuple[int, int, int, int, str] | None:
+    """Parse ``v1.2.3`` / ``v1.2.3-rc1`` into a sortable key, or None.
+
+    The prerelease slot sorts *below* the same version's final release (0 vs 1),
+    matching semver — so ``v1.2.3-rc1`` is a valid predecessor of ``v1.2.3``.
+    """
+    m = _SEMVER.match((tag or "").strip())
+    if not m:
+        return None
+    major, minor, patch, pre = m.groups()
+    return (int(major), int(minor), int(patch), 0 if pre else 1, pre or "")
+
+
+def previous_tag(
+    repo: str, current_tag: str, runner: Runner = subprocess.run
+) -> str | None:
+    """Return the semver tag immediately preceding ``current_tag``.
+
+    Sorts by parsed semver rather than trusting list order: the tags endpoint
+    is not semver-ordered (``v0.10.0`` would sort before ``v0.9.0``
+    lexically), and the releases endpoint reorders on re-cut because
+    ``tag-and-release.yaml`` deletes and recreates a release of the same
+    version.
+
+    Bounded to the first 100 tags — enough to find the immediate predecessor
+    of the newest tag. Returns None if the current tag isn't in that window,
+    so the caller degrades instead of comparing against a wrong base.
+    """
+    current = parse_semver(current_tag)
+    if not repo or not current:
+        return None
+    tags = gh_api(f"repos/{repo}/tags?per_page=100", runner)
+    if not isinstance(tags, list):
+        return None
+
+    parsed = []
+    for t in tags:
+        if not isinstance(t, dict):
+            continue
+        name = str(t.get("name") or "")
+        key = parse_semver(name)
+        if key:
+            parsed.append((key, name))
+
+    earlier = sorted({p for p in parsed if p[0] < current})
+    if not earlier:
+        print(
+            f"::warning::No tag older than {current_tag} found — skipping contributors."
+        )
+        return None
+    return earlier[-1][1]
+
+
+def resolve_contributors(
+    repo: str,
+    base_tag: str,
+    head_sha: str,
+    exclude: set[str],
+    runner: Runner = subprocess.run,
+) -> list[str]:
+    """Human logins who authored commits in ``base_tag..head_sha``.
+
+    One ``compare`` call, the same endpoint ``update_changelog.py`` walks to
+    build the release's CHANGELOG section — so the people credited in Slack and
+    the people credited in the release notes are derived from the same range by
+    construction.
+
+    ``exclude`` drops the merger, who is already named as ``created_by`` and
+    almost always also authored commits in the range.
+    """
+    if not repo or not base_tag or not head_sha:
+        return []
+    data = gh_api(f"repos/{repo}/compare/{base_tag}...{head_sha}", runner)
+    if not isinstance(data, dict):
+        return []
+
+    total = data.get("total_commits")
+    if isinstance(total, int) and total > COMPARE_COMMIT_LIMIT:
+        print(
+            f"::warning::{base_tag}...{head_sha} spans {total} commits — "
+            "base tag looks wrong, skipping contributors."
+        )
+        return []
+
+    ordered: list[str] = []
+    for commit in data.get("commits") or []:
+        if not isinstance(commit, dict):
+            continue
+        author = commit.get("author")
+        if not isinstance(author, dict) or is_bot(author):
+            continue
+        login = str(author.get("login") or "").strip()
+        if not login or login in AUTOMATION_LOGINS or login in exclude:
+            continue
+        if login not in ordered:
+            ordered.append(login)
+
+    if len(ordered) > MAX_CONTRIBUTORS:
+        print(
+            f"::warning::{len(ordered)} contributors in {base_tag}...{head_sha} — "
+            f"crediting the first {MAX_CONTRIBUTORS}."
+        )
+        ordered = ordered[:MAX_CONTRIBUTORS]
+    return ordered
+
+
 def public_email(login: str, runner: Runner = subprocess.run) -> str:
     """Return the user's public GitHub email, or "" when they publish none.
 
@@ -185,18 +315,56 @@ def resolve_actor(
     return ""
 
 
+def contributors_for_event(
+    repo: str,
+    sha: str,
+    release_tag: str,
+    merger_login: str,
+    runner: Runner = subprocess.run,
+) -> list[str]:
+    """Humans whose work ships in this release, excluding the merger.
+
+    Semver releases carry a tag, so the range is the previous tag to this
+    commit — every PR merged since the last release. A CD (untagged) publish
+    ships exactly one merge, so the range collapses to that PR's author.
+    """
+    exclude = {merger_login} if merger_login else set()
+
+    if release_tag:
+        base = previous_tag(repo, release_tag, runner)
+        if base:
+            return resolve_contributors(repo, base, sha, exclude, runner)
+        return []
+
+    pr = find_pull_request(repo, sha, runner)
+    author = pr.get("user") if isinstance(pr, dict) else None
+    if isinstance(author, dict) and not is_bot(author):
+        login = str(author.get("login") or "").strip()
+        if login and login not in exclude and login not in AUTOMATION_LOGINS:
+            return [login]
+    return []
+
+
 def main(runner: Runner = subprocess.run) -> int:
     repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
     sha = os.environ.get("GITHUB_SHA", "").strip()
     event_name = os.environ.get("GITHUB_EVENT_NAME", "").strip()
     triggering_actor = os.environ.get("TRIGGERING_ACTOR", "").strip()
+    release_tag = os.environ.get("RELEASE_TAG", "").strip()
 
+    login = ""
     try:
         login = resolve_actor(repo, sha, event_name, triggering_actor, runner)
         created_by = public_email(login, runner) or login if login else ""
     except Exception as e:  # never block a release on attribution
         print(f"::warning::release actor resolution failed: {e}")
         created_by = ""
+
+    try:
+        contributors = contributors_for_event(repo, sha, release_tag, login, runner)
+    except Exception as e:  # contributors are a nicety; the merger is the point
+        print(f"::warning::contributor resolution failed: {e}")
+        contributors = []
 
     if created_by:
         print(f"Attributing release to {created_by}")
@@ -205,13 +373,17 @@ def main(runner: Runner = subprocess.run) -> int:
             "::warning::No human could be attributed to this release — the Slack "
             "approval message will show no @-mention."
         )
+    if contributors:
+        print(f"Crediting contributors: {', '.join(contributors)}")
 
     out = os.environ.get("GITHUB_OUTPUT")
     if out:
         with open(out, "a", encoding="utf-8") as fh:
             fh.write(f"created_by={created_by}\n")
+            fh.write(f"authored_by={','.join(contributors)}\n")
     else:
         print(created_by)
+        print(",".join(contributors))
     return 0
 
 

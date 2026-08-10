@@ -71,7 +71,11 @@ class PublishRequest:
         app_configs: base64-encoded JSON of the connector form files under
             ``app/generated/``. LM materialises each entry as a ConfigMap.
         release_model: ``semver`` or empty.
-        created_by: Actor attribution.
+        created_by: Actor attribution — the human who merged the release.
+        authored_by: Contributors credited alongside ``created_by`` in GM's
+            Slack approval message. Display-only: GM must never consult it for
+            approval rights, or a release with five contributors becomes
+            unapprovable by five people.
     """
 
     app_id: str
@@ -88,6 +92,7 @@ class PublishRequest:
     app_configs: str = ""
     release_model: str = ""
     created_by: str = ""
+    authored_by: tuple[str, ...] = ()
 
 
 class PublishBodyError(ValueError):
@@ -161,6 +166,10 @@ def build(request: PublishRequest) -> dict[str, object]:
     if request.created_by.strip():
         body["created_by"] = request.created_by.strip()
 
+    authored_by = [a.strip() for a in request.authored_by if a.strip()]
+    if authored_by:
+        body["authored_by"] = authored_by
+
     return body
 
 
@@ -186,6 +195,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--app-configs", default="")
     parser.add_argument("--release-model", default="")
     parser.add_argument("--created-by", default="")
+    parser.add_argument(
+        "--authored-by",
+        default="",
+        help="Comma-separated contributor logins credited alongside --created-by.",
+    )
     args = parser.parse_args(argv)
 
     request = PublishRequest(
@@ -203,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         app_configs=args.app_configs,
         release_model=args.release_model,
         created_by=args.created_by,
+        authored_by=tuple(a for a in args.authored_by.split(",") if a.strip()),
     )
     try:
         print(json.dumps(build(request), indent=2, sort_keys=True))
