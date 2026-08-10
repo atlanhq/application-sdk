@@ -135,6 +135,50 @@ lines around `finding.line` in `finding.file` before proposing a fix.
   B001 deprecation nudge will steer the larger migration.  Classification is
   `"judgment"`.
 
+- **O006 DirectRocksdictImport** (canonical-dependency) — app code imports the
+  `rocksdict` package directly (`from rocksdict import Rdict`, `import
+  rocksdict`, or an aliased/submodule form) and hand-rolls its own RocksDB
+  wrapper.  The SDK already ships
+  `application_sdk.common.spillable_dict.SpillableDict` — a
+  `MutableMapping`-compatible dict built on the same `rocksdict.Rdict` — so the
+  finding is a nudge to stop reinventing the wrapper.  `SpillableDict` is **not**
+  a drop-in import swap, so this is never mechanical — judge the site first:
+
+  - **Values** — `SpillableDict` pickles values on write and unpickles on read,
+    so a hand-rolled JSON serialize/deserialize step (the shape that bit
+    CNCT-80/CNCT-191: `put()` special-cases `str`, `get()` unconditionally runs
+    `json.loads()`, and a stored string that is also valid bare JSON round-trips
+    as `int`/`bool`/`None`) is simply deleted, not translated.  If the wrapper's
+    only serialization is that hand-rolled JSON step, migrating to
+    `SpillableDict` removes the bug class outright.
+  - **Keys** — `SpillableDict` restricts keys to `str | int | float | bool |
+    bytes` and raises `TypeError` on anything else.  If the flagged wrapper keys
+    on a tuple, a `None`, or a custom object, a plain migration will not type —
+    either reshape the key into a supported primitive or suppress (below).
+  - **Options surface** — `SpillableDict` builds its own `rocksdict.Options`
+    internally and exposes no tuning surface.  A wrapper that passes a custom
+    `Options`/`BlockBasedOptions` (block cache, compaction style, prefix
+    extractors) has no equivalent knob — that is a deliberate-`Options` case,
+    so propose an inline `# conformance: ignore[O006] <reason>` naming the
+    tuning it depends on rather than migrating.
+  - **Association-list / merge semantics** — `SpillableDict.append_to_key` is a
+    read-modify-write list append (unpickle the whole list, append, repickle),
+    **not** RocksDB's atomic merge operator: it is not thread-safe and costs
+    O(K²) for K repeated appends to one key.  If the flagged wrapper relies on
+    a native `Rdict` merge/`append_to_key` for atomicity or for high-frequency
+    append throughput, that is a justified suppression —
+    `# conformance: ignore[O006] <reason>` naming the merge semantics
+    `SpillableDict` does not provide.
+
+  When none of those carve-outs applies (picklable values, keys already in
+  `str | int | float | bool | bytes`, no custom `Options`), draft the migration:
+  replace the `rocksdict` import and the hand-rolled wrapper class with
+  `from application_sdk.common.spillable_dict import SpillableDict`, route the
+  call sites through the `MutableMapping` API, and drop the now-dead
+  serialize/deserialize helpers.  Classification is `"judgment"` (the
+  key-type / `Options` / merge-semantics call requires reading the call site),
+  so the edit is routed to residue for human confirmation.
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
 When `mode == "strict"` and the site legitimately needs stdlib `json` (e.g.
