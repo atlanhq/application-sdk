@@ -165,8 +165,10 @@ def test_discover_falls_back_to_an_older_run_when_newest_has_no_live_sarif():
             98: _artifacts([("conformance-ci-sarif", False)]),
         },
     )
-    run_id, series = fcs.discover("atlanhq/x", "conformance.yaml", "main", 20, gh=gh)
-    assert (run_id, series) == (98, ["ci"])
+    run_id, series, error = fcs.discover(
+        "atlanhq/x", "conformance.yaml", "main", 20, gh=gh
+    )
+    assert (run_id, series, error) == (98, ["ci"], False)
 
 
 def test_discover_returns_nothing_when_no_run_has_live_sarif():
@@ -177,6 +179,7 @@ def test_discover_returns_nothing_when_no_run_has_live_sarif():
     assert fcs.discover("atlanhq/x", "conformance.yaml", "main", 20, gh=gh) == (
         None,
         [],
+        False,
     )
 
 
@@ -189,10 +192,80 @@ def test_discover_survives_an_unlistable_run():
             ]
         ),
         artifacts_by_run={98: _artifacts([("conformance-tests-sarif", False)])},
-    )  # 99 missing -> rc 1
+    )  # 99 missing -> rc 1, but 98 lists fine -> not an error
     assert fcs.discover("atlanhq/x", "conformance.yaml", "main", 20, gh=gh) == (
         98,
         ["tests"],
+        False,
+    )
+
+
+# --------------------------------------------------------------------------
+# discover: error signal
+# --------------------------------------------------------------------------
+
+
+class _FailingGh:
+    """Every gh call fails — simulates a transport/auth outage."""
+
+    def __call__(self, args: list[str]):
+        return 1, ""
+
+
+def test_discover_flags_error_when_run_list_fails():
+    assert fcs.discover(
+        "atlanhq/x", "conformance.yaml", "main", 20, gh=_FailingGh()
+    ) == (
+        None,
+        [],
+        True,
+    )
+
+
+def test_discover_flags_error_when_run_list_is_unparseable():
+    gh = FakeGh(runs="not json")
+    assert fcs.discover("atlanhq/x", "conformance.yaml", "main", 20, gh=gh) == (
+        None,
+        [],
+        True,
+    )
+
+
+def test_discover_flags_error_when_every_probe_fails():
+    # Two candidates, neither has a retrievable artifact listing -> operational
+    # fault, not "nothing to publish".
+    gh = FakeGh(
+        runs=json.dumps(
+            [
+                {"databaseId": 99, "conclusion": "success"},
+                {"databaseId": 98, "conclusion": "success"},
+            ]
+        ),
+        artifacts_by_run={},  # both runs unlistable -> rc 1 each
+    )
+    assert fcs.discover("atlanhq/x", "conformance.yaml", "main", 20, gh=gh) == (
+        None,
+        [],
+        True,
+    )
+
+
+def test_discover_no_error_when_a_probe_succeeds_with_zero_live_sarif():
+    # Newest run unlistable, older run lists fine but has no SARIF -> the API is
+    # healthy; this is the routine empty case, not an error.
+    gh = FakeGh(
+        runs=json.dumps(
+            [
+                {"databaseId": 99, "conclusion": "success"},
+                {"databaseId": 98, "conclusion": "success"},
+            ]
+        ),
+        artifacts_by_run={98: _artifacts([("conformance-ci-sarif", True)])},  # expired
+    )
+    assert fcs.discover("atlanhq/x", "conformance.yaml", "main", 20, gh=gh) == (
+        None,
+        [],
+        False,
     )
 
 
@@ -266,7 +339,22 @@ def test_no_run_is_a_clean_skip_not_a_failure(tmp_path, monkeypatch):
     gh = FakeGh(runs="[]")
     rc, out = _run_main(gh, tmp_path, monkeypatch)
     assert rc == 0
-    assert out == {"has_run": "false", "has_artifacts": "false"}
+    assert out == {
+        "has_run": "false",
+        "has_artifacts": "false",
+        "discovery_error": "false",
+    }
+
+
+def test_discovery_failure_sets_discovery_error_output(tmp_path, monkeypatch):
+    """An operational fault (run list fails) must surface as discovery_error=true
+    while still exiting 0 — the workflow warns loudly without failing the
+    best-effort publish red."""
+    rc, out = _run_main(_FailingGh(), tmp_path, monkeypatch)
+    assert rc == 0
+    assert out["has_run"] == "false"
+    assert out["has_artifacts"] == "false"
+    assert out["discovery_error"] == "true"
 
 
 def test_all_downloads_failing_is_a_clean_skip(tmp_path, monkeypatch):
