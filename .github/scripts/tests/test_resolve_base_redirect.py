@@ -17,6 +17,7 @@ import importlib.util
 import io
 import sys
 import urllib.error
+import urllib.parse
 from pathlib import Path
 from typing import Optional
 
@@ -204,6 +205,18 @@ class _Response:
         return False
 
 
+def route(request) -> tuple[str, str]:
+    """Split a fake request into ``(host, path)``.
+
+    The fake registries below dispatch on this rather than on ``in`` tests
+    against the whole URL: a substring match would let ``/v2/`` or a host name
+    appearing anywhere in the URL pick the branch, which is the same defect
+    these tests exist to pin down in the code under test.
+    """
+    parts = urllib.parse.urlsplit(request.full_url)
+    return parts.hostname or "", parts.path
+
+
 def test_registry_digest_reads_content_digest_header(monkeypatch):
     seen = {}
 
@@ -236,7 +249,7 @@ def test_registry_digest_performs_token_dance(monkeypatch):
                 },
                 io.BytesIO(b""),
             )
-        if "token" in request.full_url:
+        if route(request) == ("ghcr.io", "/token"):
             return _Response(body=b'{"token": "tok"}')
         return _Response({"Docker-Content-Digest": DIGEST_B})
 
@@ -281,10 +294,11 @@ def test_credentials_are_withheld_from_a_ghcr_lookalike_host(tmp_path, monkeypat
 
 
 def test_token_realm_on_another_host_does_not_receive_credentials(monkeypatch):
-    sent: list[Optional[str]] = []
+    sent: list[tuple[str, Optional[str]]] = []
 
     def fake_urlopen(request, timeout=None):
-        if "/v2/" in request.full_url:
+        host, path = route(request)
+        if path.startswith("/v2/"):
             raise urllib.error.HTTPError(
                 request.full_url,
                 401,
@@ -294,7 +308,7 @@ def test_token_realm_on_another_host_does_not_receive_credentials(monkeypatch):
                 },
                 io.BytesIO(b""),
             )
-        sent.append(request.get_header("Authorization"))
+        sent.append((host, request.get_header("Authorization")))
         return _Response(body=b'{"token": "tok"}')
 
     monkeypatch.setattr(rbr, "_urlopen", fake_urlopen)
@@ -305,7 +319,7 @@ def test_token_realm_on_another_host_does_not_receive_credentials(monkeypatch):
 
 def test_non_https_token_realm_is_refused(monkeypatch):
     def fake_urlopen(request, timeout=None):
-        if "/v2/" in request.full_url:
+        if route(request)[1].startswith("/v2/"):
             raise urllib.error.HTTPError(
                 request.full_url,
                 401,
@@ -323,7 +337,8 @@ def test_anonymous_lookup_tolerates_a_delegated_realm(monkeypatch):
     # With no credential to protect, a realm on another host is fine — some
     # registries genuinely delegate their token service.
     def fake_urlopen(request, timeout=None):
-        if "/v2/" in request.full_url and not request.get_header("Authorization"):
+        host, path = route(request)
+        if path.startswith("/v2/") and not request.get_header("Authorization"):
             raise urllib.error.HTTPError(
                 request.full_url,
                 401,
@@ -331,7 +346,7 @@ def test_anonymous_lookup_tolerates_a_delegated_realm(monkeypatch):
                 {"WWW-Authenticate": 'Bearer realm="https://auth.example.com/token"'},
                 io.BytesIO(b""),
             )
-        if "auth.example.com" in request.full_url:
+        if host == "auth.example.com":
             return _Response(body=b'{"token": "tok"}')
         return _Response({"Docker-Content-Digest": DIGEST_A})
 
