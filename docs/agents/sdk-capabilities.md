@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.25.0
-source-sha:    5eb4071168018c34fe35ab3af23cdecfff09c40c
-source-date:   2026-07-31T12:34:50+05:30
+sdk-version:   3.27.0
+source-sha:    6703e9578f94acf695469bdcc1f6c8ec6632578a
+source-date:   2026-08-11T02:17:28+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2119,21 +2119,21 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `create_store_from_binding`
 
 - **Import:** `from application_sdk.storage import create_store_from_binding`
-- **Signature:** `create_store_from_binding(name: str, *, components_dir: Path | str = Path('./components'))`
+- **Signature:** `create_store_from_binding(name: str, ...)`
 - **Summary:** Create an obstore store from a Dapr component binding YAML file.
 - **Defined in:** `application_sdk/storage/binding.py`
 
 #### `create_store_from_binding_optional`
 
 - **Import:** `from application_sdk.storage import create_store_from_binding_optional`
-- **Signature:** `create_store_from_binding_optional(name: str, *, components_dir: Path | str = Path('./components'))`
+- **Signature:** `create_store_from_binding_optional(name: str, ...)`
 - **Summary:** Create an obstore store from a Dapr component binding, or ``None`` if absent.
 - **Defined in:** `application_sdk/storage/binding.py`
 
 #### `create_store_from_binding_with_put_attrs`
 
 - **Import:** `from application_sdk.storage import create_store_from_binding_with_put_attrs`
-- **Signature:** `create_store_from_binding_with_put_attrs(name: str, *, components_dir: Path | str = Path('./components'))`
+- **Signature:** `create_store_from_binding_with_put_attrs(name: str, ...)`
 - **Summary:** Create an obstore store and any associated put attributes from a Dapr binding.
 - **Defined in:** `application_sdk/storage/binding.py`
 
