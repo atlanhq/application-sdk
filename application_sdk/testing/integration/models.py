@@ -143,6 +143,13 @@ class Scenario:
             ``asset_validation_strict``. ``None`` (default) inherits the class
             setting (warn-first: failures are logged, not raised). Set ``True`` to
             fail the scenario on any invalid or orphaned asset.
+        invariants: Optional list of ``Invariant`` objects (see
+            ``application_sdk.testing.integration.invariants``) asserted against
+            the workflow's transformed output — e.g. ``UniqueQualifiedName()``,
+            ``NonEmptyOutput()``, ``RequiredAttributes()``. Tenant-independent
+            contract checks that need no golden or schema file. Only meaningful
+            for ``api="workflow"`` scenarios; a declared invariant that is
+            violated fails the scenario.
     """
 
     name: str
@@ -173,6 +180,7 @@ class Scenario:
     validate_assets: bool | None = None
     asset_validation_strict: bool | None = None
     entrypoint: str | None = None
+    invariants: list[Any] | None = None
 
     def __post_init__(self):
         """Validate the scenario after initialization."""
@@ -203,6 +211,12 @@ class Scenario:
             raise FileNotFoundError(
                 f"Scenario '{self.name}': expected_data file not found: "
                 f"{self.expected_data}"
+            )
+
+        if self.invariants and self.api.lower() != "workflow":
+            raise ValueError(
+                "invariants can only be set for workflow scenarios, "
+                f"but api is '{self.api}'"
             )
 
         if self.api.lower() == "config":

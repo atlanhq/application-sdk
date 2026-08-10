@@ -44,6 +44,7 @@ from application_sdk.validation import validate_transformed_dir
 
 from .client import IntegrationTestClient
 from .comparison import compare_metadata, load_actual_output, load_expected_data
+from .invariants import check_invariants
 from .lazy import evaluate_if_lazy
 from .models import APIType, Scenario, ScenarioResult
 from .validation import format_validation_report, validate_with_pandera
@@ -647,7 +648,17 @@ class BaseIntegrationTest:
                 asset_base_path=asset_base_path,
             )
 
-            if needs_metadata or needs_pandera or needs_asset_validation:
+            # Declared transform-output invariants (contract checks).
+            needs_invariants = (
+                bool(scenario.invariants) and scenario.api_type == APIType.WORKFLOW
+            )
+
+            if (
+                needs_metadata
+                or needs_pandera
+                or needs_asset_validation
+                or needs_invariants
+            ):
                 self._ensure_workflow_completed(scenario, response)
 
             # Step 5: Validate metadata output if expected_data is set
@@ -661,6 +672,10 @@ class BaseIntegrationTest:
             # Step 7: Validate transformed assets against the pyatlan_v9 backbone
             if needs_asset_validation:
                 self._validate_assets(scenario, response, asset_base_path)
+
+            # Step 8: Enforce declared transform-output invariants
+            if needs_invariants:
+                self._validate_invariants(scenario, response, asset_base_path)
 
             logger.info("Scenario %s passed", scenario.name)
 
@@ -977,6 +992,66 @@ class BaseIntegrationTest:
         if strict:
             raise AssertionError(message)
         logger.warning("%s", message)
+
+    def _validate_invariants(
+        self,
+        scenario: Scenario,
+        response: dict[str, Any],
+        base_path: str,
+    ) -> None:
+        """Enforce the scenario's declared transform-output invariants.
+
+        Loads the completed workflow's transformed output and runs every declared
+        invariant against it. Unlike the warn-first asset backbone, a violated
+        invariant always raises: it was declared because it must hold.
+
+        Args:
+            scenario: The scenario with a non-empty ``invariants`` list.
+            response: The workflow start API response containing workflow_id/run_id.
+            base_path: Resolved extracted-output base directory.
+
+        Raises:
+            AssertionError: If any declared invariant is violated, or the output
+                path cannot be resolved.
+        """
+        data = response.get("data", {})
+        workflow_id = data.get("workflow_id")
+        run_id = data.get("run_id")
+        if not workflow_id or not run_id:
+            raise AssertionError(
+                f"Cannot check invariants for scenario '{scenario.name}': "
+                f"response missing workflow_id or run_id"
+            )
+        if not base_path:
+            raise AssertionError(
+                f"Cannot check invariants for scenario '{scenario.name}': "
+                f"extracted_output_base_path not set on scenario or test class"
+            )
+
+        transformed_path = os.path.join(
+            base_path, workflow_id, run_id, scenario.output_subdirectory
+        )
+        logger.info(
+            "Checking %d invariant(s) for scenario '%s' at %s",
+            len(scenario.invariants or []),
+            scenario.name,
+            transformed_path,
+        )
+        report = check_invariants(transformed_path, scenario.invariants or [])
+
+        if report.ok:
+            logger.info(
+                "Invariants passed for scenario '%s': %d entities, %d invariant(s)",
+                scenario.name,
+                report.total_entities,
+                len(scenario.invariants or []),
+            )
+            return
+
+        raise AssertionError(
+            f"Invariant check failed for scenario '{scenario.name}':\n\n"
+            + report.format_report()
+        )
 
     def _poll_workflow_completion(
         self,

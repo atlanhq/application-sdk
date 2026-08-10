@@ -44,7 +44,8 @@ class Depth(str, Enum):
     """Golden / record-level comparison against a committed expectation."""
 
     VALIDATED = "V"
-    """Schema or contract validation (Pandera, schema-file expectations)."""
+    """Schema or contract validation (Pandera schema files, or declared
+    transform-output invariants the runner enforces)."""
 
     COUNTS = "C"
     """Counts and qualifiedName-shaped assertions."""

@@ -97,7 +97,11 @@ def test_workflows_carry_their_declaration_site(tmp_path):
     ("connector", "workflow_type", "expected"),
     [
         ("atlan-connector-alpha-app", "connector-alpha:crawler", "crawler"),
-        ("atlan-connector-golf-app", "connector-golf:process-metadata", "process_metadata"),
+        (
+            "atlan-connector-golf-app",
+            "connector-golf:process-metadata",
+            "process_metadata",
+        ),
         # bare connector name = a single-workflow app, whose workflow is run()
         ("atlan-connector-delta-app", "connector-delta", "run"),
         ("atlan-connector-alpha-app", "PublishWorkflow", None),
@@ -165,7 +169,11 @@ def test_connector_stem_variants_are_accepted(tmp_path):
     _manifest(
         tmp_path,
         "app/generated/manifest.json",
-        {"extract": {"inputs": {"workflow_type": "connector-juliet-app:extract-metadata"}}},
+        {
+            "extract": {
+                "inputs": {"workflow_type": "connector-juliet-app:extract-metadata"}
+            }
+        },
     )
     mapping = _dag_nodes_to_workflow(tmp_path, "atlan-connector-juliet-app")
     assert mapping["generated/extract"] == "extract_metadata"
@@ -210,6 +218,40 @@ def test_scenario_without_validation_declares_only_counts_depth(tmp_path):
         'Scenario(name="a", api="workflow", assert_that={}, entrypoint="miner")\n',
     )
     assert discover_declared_coverage(tmp_path).depth["miner"] is Depth.COUNTS
+
+
+def test_declared_invariants_count_as_contract_validation(tmp_path):
+    _write(
+        tmp_path,
+        "tests/integration/test_x.py",
+        """
+        Scenario(name="crawl", api="workflow", assert_that={}, entrypoint="crawler",
+                 invariants=[UniqueQualifiedName(), NonEmptyOutput()])
+        """,
+    )
+    assert discover_declared_coverage(tmp_path).depth["crawler"] is Depth.VALIDATED
+
+
+def test_empty_invariants_list_earns_no_credit(tmp_path):
+    _write(
+        tmp_path,
+        "tests/integration/test_x.py",
+        'Scenario(name="a", api="workflow", assert_that={}, entrypoint="crawler",\n'
+        "         invariants=[])\n",
+    )
+    assert discover_declared_coverage(tmp_path).depth["crawler"] is Depth.COUNTS
+
+
+def test_golden_still_outranks_declared_invariants(tmp_path):
+    _write(
+        tmp_path,
+        "tests/integration/test_x.py",
+        """
+        Scenario(name="a", api="workflow", assert_that={}, entrypoint="crawler",
+                 invariants=[UniqueQualifiedName()], expected_data="golden/x.json")
+        """,
+    )
+    assert discover_declared_coverage(tmp_path).depth["crawler"] is Depth.GOLDEN
 
 
 def test_class_level_entrypoint_is_honoured(tmp_path):

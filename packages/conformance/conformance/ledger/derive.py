@@ -21,9 +21,9 @@ Four things are read:
     their own nodes through ``automation-engine`` and some ship an unresolved
     ``{app_name}`` placeholder.
 
-``Scenario(entrypoint=..., schema_base_path=..., expected_data=...)``
-    Which workflow a suite covers, and how deeply it validates the output. Both
-    are declared fields (see T020), so both are a static read.
+``Scenario(entrypoint=..., schema_base_path=..., expected_data=..., invariants=...)``
+    Which workflow a suite covers, and how deeply it validates the output. All
+    are declared fields (see T020), so each is a static read.
 
 GitHub Actions
     Whether the job that runs a suite fires on an automatic trigger, and whether
@@ -48,10 +48,13 @@ _APP_BASE_CLASSES = frozenset(
 )
 
 #: Scenario keywords that declare how deeply a suite validates its output.
-#: Ordered strongest first; the first present wins.
+#: Ordered strongest first; the first present wins. ``invariants`` is
+#: contract validation (transform-output invariants the runner enforces), so it
+#: sits at the same tier as a schema.
 _DEPTH_KEYWORDS: tuple[tuple[str, Depth], ...] = (
     ("expected_data", Depth.GOLDEN),
     ("schema_base_path", Depth.VALIDATED),
+    ("invariants", Depth.VALIDATED),
 )
 
 _SKIP_DIRS = frozenset({"__pycache__", ".venv", "node_modules", ".git"})
@@ -279,8 +282,14 @@ def _kw(call: ast.Call, name: str) -> ast.AST | None:
 
 def _scenario_depth(call: ast.Call) -> Depth:
     for name, depth in _DEPTH_KEYWORDS:
-        if _kw(call, name) is not None:
-            return depth
+        value = _kw(call, name)
+        if value is None:
+            continue
+        # ``invariants`` only counts when it is a non-empty list literal:
+        # ``invariants=[]`` declares no check and must not earn credit.
+        if name == "invariants" and not (isinstance(value, ast.List) and value.elts):
+            continue
+        return depth
     return Depth.COUNTS
 
 
@@ -313,8 +322,9 @@ def discover_declared_coverage(repo: Path) -> DeclaredCoverage:
 
     Depth comes from the same declaration: ``expected_data`` means the runner
     byte-compares against a committed expectation, ``schema_base_path`` means it
-    validates the transformed output against a schema. Neither is inferred from
-    assertion source — both are fields the SDK runner acts on.
+    validates the transformed output against a schema, and a non-empty
+    ``invariants`` list means it enforces contract checks on that output. Depth is
+    not inferred from assertion source — each is a field the SDK runner acts on.
     """
     tests_dir = repo / "tests"
     coverage = DeclaredCoverage()

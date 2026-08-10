@@ -109,8 +109,8 @@ def evaluate_repo(
         if depth not in QUALIFYING_DEPTH:
             reason = (
                 f"covered at depth {depth.value} - the lane starts the workflow "
-                f"but declares no output validation (set schema_base_path or "
-                f"expected_data)"
+                f"but declares no output validation (set schema_base_path, "
+                f"expected_data, or a non-empty invariants=[...])"
             )
             report.workflows.append(
                 WorkflowVerdict(name, declared_at, False, depth, reason)
