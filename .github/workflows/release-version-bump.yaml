@@ -41,6 +41,11 @@ on:
         required: false
         type: string
         default: "main"
+      private_git_auth:
+        description: "Set true if the app has a private-org (atlanhq) git dependency that `uv lock` must resolve during the version bump. When true, atlanhq GitHub remotes are rewritten to token auth (via ORG_PAT_GITHUB) before `uv lock` runs, so resolution of the private git source succeeds. Default false — apps with only PyPI deps are unaffected. Mirrors the `private_git_auth` input in build-and-publish-app.yaml."
+        required: false
+        type: boolean
+        default: false
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -100,6 +105,21 @@ jobs:
         run: |
           CURRENT=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
           echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+
+      # `uv lock` (in "Bump version" below) re-resolves the full dependency
+      # graph after the version bump, which for a private-org git source
+      # (e.g. query-redaction in atlan-query-intelligence-app) requires cloning
+      # that repo. The default checkout has no auth for other atlanhq repos, so
+      # rewrite atlanhq remotes to token auth first. ORG_PAT_GITHUB (not the
+      # repo-scoped fleet App token minted above) is used because the dependency
+      # lives in a *different* repo. Mirrors build-and-publish-app.yaml.
+      - name: Configure git auth for private dependencies
+        if: ${{ inputs.private_git_auth }}
+        env:
+          GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
 
       - name: Bump version
         id: bump
