@@ -12,18 +12,20 @@ real app name, e.g.::
 That exact shape shipped a queue no worker polls, hanging every child workflow
 routed through it until the 24h heartbeat backstop killed it (CONNECT-183).
 
-**Canonical fix.** ``application_sdk.common.task_queue`` is now the single
-source of truth for queue naming (FND-195): ``derive_task_queue`` applies the
-rule, and ``resolve_manifest_tokens`` reconciles a served manifest against the
-queue the worker actually polls. Prefer those over re-implementing the
-substitution — the helper this rule's earlier revisions described as missing has
-been independently hand-rolled at least four times across separate codebases
-(Heracles in Go, native-migration-app, atlan-local-marketplace-app per
-CONNECT-191, atlan-hightouch-app per ARUN-1039), and one of those shipped a
-double prefix (DISTR-834). This check still flags the *unresolved shape*
-directly rather than the absence of that import, because the writers that most
-need catching are hand-authored templates outside the SDK, where nothing is
-imported at all.
+**Canonical fix.** Resolve the token where the value is built: an f-string or
+``.format(app_name=...)`` when the app name is already in scope, or the shared
+substitution helper (``application_sdk.common.task_queue`` —
+``derive_task_queue`` applies the naming rule, ``resolve_manifest_tokens``
+reconciles a served manifest against the queue the worker actually polls) once
+the SDK release that ships FND-195 is available. Prefer those over
+re-implementing the substitution — the helper this rule's earliest revisions
+described as missing has been independently hand-rolled at least four times
+across separate codebases (Heracles in Go, native-migration-app,
+atlan-local-marketplace-app per CONNECT-191, atlan-hightouch-app per
+ARUN-1039), and one of those shipped a double prefix (DISTR-834). This check
+still flags the *unresolved shape* directly rather than the absence of that
+import, because the writers that most need catching are hand-authored templates
+outside the SDK, where nothing is imported at all.
 
 Detection anchors on the token **reaching a value**, not merely appearing in the
 source. A ``{app_name}`` that only ever appears in prose or in a diagnostic
@@ -31,8 +33,11 @@ cannot freeze into an identifier, and flagging it trains people to suppress the
 rule. Concretely, a string ``ast.Constant`` containing ``{app_name}`` is flagged
 unless it is:
 
-* part of an ``ast.JoinedStr`` (an f-string already interpolates at parse time,
-  so ``f"...{app_name}..."`` is never flagged);
+* part of an ``ast.JoinedStr`` whose **runtime value cannot carry the token** —
+  an f-string interpolates at parse time, so ``f"...{app_name}..."`` is never
+  flagged. ``f"...{{app_name}}..."`` is: the escaped braces evaluate to the
+  literal runtime text ``{app_name}``, which freezes into the identifier
+  exactly like a plain literal;
 * the receiver of a ``.format(...)`` call whose keywords include ``app_name=``
   (a proper, already-resolving substitution site);
 * **documentation** — the value of any bare string expression statement. This
@@ -46,9 +51,12 @@ unless it is:
 * **a declared token sentinel or message constant** — bound to an ``ALL_CAPS``
   name where either the literal is exactly the token (i.e. the definition of
   the token itself, such as ``APP_NAME_TOKEN = "{app_name}"``) or the name
-  reads as prose rather than an identifier (``_MESSAGE``, ``RATIONALE``, …).
-  An ``ALL_CAPS`` constant holding a genuine queue *template*
-  (``TASK_QUEUE = "atlan-{app_name}-prod"``) is still flagged.
+  reads as prose — one delimited segment *is* a prose word
+  (``START_MESSAGE``, ``VALIDATION_RATIONALE``). An ``ALL_CAPS`` constant
+  holding a genuine queue *template* (``TASK_QUEUE = "atlan-{app_name}-prod"``)
+  is still flagged, and so is one whose name merely *contains* a prose fragment
+  without a delimited boundary (``MESSAGE_QUEUE``, ``HELP_QUEUE`` — queue
+  templates, not message text).
 
 The last three exclusions exist because without them the rule fires on the very
 module that implements the correct behaviour: ``common/task_queue.py`` defines
@@ -70,13 +78,20 @@ _TOKEN = "{app_name}"
 # would make this module trip its own rule (the string is neither a docstring
 # nor a diagnostic argument, and _MESSAGE's exclusion should not have to carry
 # the checker's own source).
+#
+# The runtime SARIF message leads with fixes that work on any SDK version and
+# names the shared helper as upcoming: application_sdk.common.task_queue ships
+# with FND-195, which is not yet on main, so the message must not send users to
+# an import that does not exist in their release.
 _MESSAGE = (
     f"Hardcoded '{_TOKEN}' left unsubstituted in a plain string literal — this "
     "freezes the literal token into whatever it's assigned to instead of the real "
     "app name (the exact shape that hung dbt:process on a dead task queue for 24h, "
-    "CONNECT-183). Resolve it via application_sdk.common.task_queue "
-    "(derive_task_queue / resolve_manifest_tokens), or an f-string / "
-    ".format(app_name=...) if the value is already in scope."
+    "CONNECT-183). Resolve it with an f-string or .format(app_name=...) if the "
+    "value is already in scope; a shared substitution helper "
+    "(application_sdk.common.task_queue — derive_task_queue / "
+    "resolve_manifest_tokens) lands in the SDK release that ships FND-195 and is "
+    "the canonical target once available."
 )
 
 #: Attribute names that mean "this call is reporting, not dispatching".
@@ -84,9 +99,12 @@ _LOG_METHODS = frozenset(
     {"debug", "info", "warning", "warn", "error", "critical", "exception", "log"}
 )
 
-#: ``ALL_CAPS`` constants whose name reads as prose. A queue template assigned
-#: to an ALL_CAPS name is still flagged — only message-shaped names are exempt.
-_PROSE_NAME_PARTS = (
+#: Trailing identifier segments that make an ``ALL_CAPS`` name read as prose. A
+#: name is message-shaped only when it *ends* in one of these segments
+#: (``_MESSAGE``, ``START_MESSAGE``, ``VALIDATION_RATIONALE``), so a queue
+#: template whose name merely contains a prose fragment
+#: (``MESSAGE_QUEUE``, ``HELP_QUEUE``, ``DOC_QUEUE``) stays flagged.
+_PROSE_NAME_SUFFIXES = (
     "MESSAGE",
     "MSG",
     "RATIONALE",
@@ -136,7 +154,9 @@ def _diagnostic_constants(tree: ast.AST) -> set[int]:
 
     Code that reports an unresolved token has to quote it; that text is never
     dispatched as an identifier. Without this, the SDK's own WARNING/ERROR logs
-    naming the token they could not resolve are flagged.
+    naming the token they could not resolve are flagged. An f-string *inside*
+    one of these sinks still needs its pieces exempted here — the line-based
+    waiver in ``check_o005`` would otherwise re-flag its escaped braces.
     """
     found: set[int] = set()
     subtrees: list[ast.AST] = []
@@ -153,6 +173,64 @@ def _diagnostic_constants(tree: ast.AST) -> set[int]:
     return found
 
 
+def _diagnostic_joined_str_lines(tree: ast.AST) -> set[int]:
+    """Lines hosting a ``JoinedStr`` inside a logging/warning call or ``raise``.
+
+    Code that reports an unresolved token has to quote it; that text is never
+    dispatched as an identifier — and that holds for a *resolving* f-string
+    (``logger.info(f"queue atlan-{app_name}-prod")``) just as much as for a
+    plain literal. Without this, ``_unresolved_joined_str_lines`` would flag
+    every interpolated f-string that merely mentions the token in a log
+    message.
+
+    Line-keyed (not node-id-keyed) for the same reason as
+    ``_unresolved_joined_str_lines``: the SARIF emitter re-parses the source,
+    so only positions survive.
+    """
+    lines: set[int] = set()
+    subtrees: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _is_diagnostic_call(node):
+            subtrees.extend(node.args)
+            subtrees.extend(kw.value for kw in node.keywords)
+        elif isinstance(node, ast.Raise):
+            subtrees.append(node)
+    for subtree in subtrees:
+        for inner in ast.walk(subtree):
+            if isinstance(inner, ast.JoinedStr):
+                lines.add(inner.lineno)
+    return lines
+
+
+def _unresolved_joined_str_lines(tree: ast.AST) -> set[int]:
+    """Lines hosting a ``JoinedStr`` whose runtime value still carries the token.
+
+    Python parses ``f"atlan-{{app_name}}-production"`` as a ``JoinedStr``, but
+    the escaped braces are *not* interpolated — the runtime string is the
+    literal ``atlan-{app_name}-production``, the exact frozen-token shape this
+    rule exists to catch (a real f-string, ``f"...{app_name}..."``, contains no
+    ``{app_name}`` substring anywhere in its ``ast.Constant`` pieces — the token
+    lives in the ``ast.FormattedValue`` — so it never lands here).
+
+    A ``JoinedStr`` containing an escaped-brace token inside a diagnostic call
+    or a docstring stays exempt (``check_o005`` subtracts both line-sets):
+    reporting on the token still is not dispatching it, and double-brace-
+    quoting it is a normal way to make the literal render inside an f-string.
+    """
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        if any(
+            isinstance(value, ast.Constant)
+            and isinstance(value.value, str)
+            and _TOKEN in value.value
+            for value in node.values
+        ):
+            lines.add(node.lineno)
+    return lines
+
+
 def _sentinel_or_prose_constants(tree: ast.AST) -> set[int]:
     """Token definitions and message constants bound to an ``ALL_CAPS`` name.
 
@@ -161,7 +239,10 @@ def _sentinel_or_prose_constants(tree: ast.AST) -> set[int]:
     * the literal is *exactly* the token — this is the declaration of the token
       being hunted (``APP_NAME_TOKEN = "{app_name}"``), not a frozen identifier;
     * the name reads as prose (``_MESSAGE``, ``RATIONALE``) — the string is
-      human-facing text that happens to quote the token.
+      human-facing text that happens to quote the token. Prose is matched on
+      the *trailing* delimited segment, not substrings: ``START_MESSAGE`` is
+      prose, while ``MESSAGE_QUEUE`` is a queue template that merely contains
+      the fragment.
 
     Deliberately narrow: ``TASK_QUEUE = "atlan-{app_name}-prod"`` is an
     ``ALL_CAPS`` name that is *not* prose-shaped and whose literal is *not* bare,
@@ -188,7 +269,7 @@ def _sentinel_or_prose_constants(tree: ast.AST) -> set[int]:
                 continue
             if value.value.strip() == _TOKEN:
                 found.add(id(value))
-            elif any(part in bare for part in _PROSE_NAME_PARTS):
+            elif any(bare.split("_")[-1] == part for part in _PROSE_NAME_SUFFIXES):
                 found.add(id(value))
     return found
 
@@ -235,13 +316,35 @@ def check_o005(
         | _diagnostic_constants(tree)
         | _sentinel_or_prose_constants(tree)
     )
+    # An f-string piece still carrying the token is the escaped-brace shape:
+    # ``f"{{app_name}}"`` is *not* interpolated — the runtime value freezes the
+    # token exactly like a plain literal, so exempting every JoinedStr child
+    # (above) must not cover it. The waiver is line-keyed (a JoinedStr and its
+    # Constant children share the f-string's line, and positions are the only
+    # handle that survives the SARIF emitter's re-parse); a docstring or a
+    # diagnostic f-string on that line stays exempt.
+    # A bare string *or f-string* expression statement is documentation — a
+    # docstring quoting the token with escaped braces (``f"...{{app_name}}..."``)
+    # parses as ``Expr(JoinedStr)``, not ``Expr(Constant)``, so both shapes
+    # contribute their line here.
+    doc_lines = {
+        node.value.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, (ast.Constant, ast.JoinedStr))
+    }
+    flagged_fstring_lines = (
+        _unresolved_joined_str_lines(tree)
+        - _diagnostic_joined_str_lines(tree)
+        - doc_lines
+    )
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
             continue
         if _TOKEN not in node.value:
             continue
-        if id(node) in exempt:
+        if id(node) in exempt and node.lineno not in flagged_fstring_lines:
             continue
         findings.append(
             make_finding(

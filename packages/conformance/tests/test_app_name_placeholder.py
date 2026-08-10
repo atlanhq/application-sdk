@@ -107,6 +107,13 @@ def test_o005_silent_on_prose_named_constant() -> None:
     )
 
 
+def test_o005_silent_on_prefixed_prose_constant() -> None:
+    """A prose *suffix* reads as message text even with a qualifier prefix."""
+    assert "O005" not in _o_ids(
+        'START_MESSAGE = "the {app_name} token was left unresolved"\n'
+    )
+
+
 # ── ...but the exclusions must stay narrow ───────────────────────────────────
 
 
@@ -115,6 +122,51 @@ def test_o005_fires_on_all_caps_queue_template() -> None:
     neither bare-token nor prose-named, so the sentinel exclusion must not
     swallow it."""
     assert "O005" in _o_ids('TASK_QUEUE = "atlan-{app_name}-prod"\n')
+
+
+def test_o005_fires_on_prose_fragment_queue_templates() -> None:
+    """A queue template whose name merely *contains* a prose fragment is a
+    dispatch template, not message text: the prose exclusion matches the
+    trailing delimited segment, never a substring."""
+    for name in ("MESSAGE_QUEUE", "HELP_QUEUE", "DOC_QUEUE"):
+        assert "O005" in _o_ids(f'{name} = "atlan-{{app_name}}-prod"\n'), name
+
+
+def test_o005_fires_on_escaped_brace_fstring() -> None:
+    """``f"{{app_name}}"`` is *not* interpolated: the escaped braces evaluate to
+    the literal runtime text ``{app_name}``, which freezes into the identifier
+    exactly like a plain literal — the precise dangerous shape."""
+    src = 'task_queue = f"atlan-{{app_name}}-production"\n'
+    assert "O005" in _o_ids(src)
+
+
+def test_o005_fires_on_escaped_brace_fstring_call_argument() -> None:
+    assert "O005" in _o_ids('register_queue(f"atlan-{{app_name}}-production")\n')
+
+
+def test_o005_silent_on_interpolated_fstring_in_diagnostic() -> None:
+    """A *resolving* f-string quoting the token inside a log call is still a
+    diagnostic, not a dispatch — the f-string waiver must not re-flag it."""
+    assert "O005" not in _o_ids('logger.info(f"queue atlan-{app_name}-prod")\n')
+
+
+def test_o005_silent_on_escaped_brace_fstring_in_diagnostic() -> None:
+    """Double-brace-quoting the token is a normal way to make it render
+    literally inside an f-string log message; still not a dispatch."""
+    assert "O005" not in _o_ids('logger.info(f"queue atlan-{{app_name}}-prod")\n')
+
+
+def test_o005_silent_on_escaped_brace_fstring_docstring() -> None:
+    """An f-string docstring quoting the token with escaped braces is
+    documentation (``Expr(JoinedStr)``), not a value that can dispatch."""
+    assert "O005" not in _o_ids(
+        'f"""Queue names look like atlan-{{app_name}}-prod."""\n'
+    )
+
+
+def test_o005_escaped_brace_fstring_suppressed_inline() -> None:
+    src = 'task_queue = f"atlan-{{app_name}}-prod"  # conformance: ignore[O005] resolved by caller\n'
+    assert "O005" not in _o_ids(src)
 
 
 def test_o005_fires_on_bare_token_bound_to_identifier() -> None:
