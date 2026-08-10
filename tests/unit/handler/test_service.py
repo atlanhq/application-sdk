@@ -7143,3 +7143,140 @@ class TestManifestPostTransport:
             assert response.json()["app_name"] == "static"
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
+
+
+class TestBundleMarketplaceEntrypoints:
+    """Bundle ("uber") apps expose *marketplace* entry points only as generated
+    contract dirs (``app/generated/<ep>/manifest.json``); their registry
+    entrypoints are the DAG-node workflows (e.g. ``export-post``). The
+    input-contract route and the bare-manifest fallback must resolve the
+    marketplace names from disk instead of 404-ing (production RCA: /v1/app
+    creation failed for every bundle entry point with
+    'No input contract for entrypoint' → 'No manifest available')."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @staticmethod
+    def _bundle_app() -> type:
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _BundleApp(App):
+            # Registry knows only the DAG-node workflows, never the
+            # marketplace entry point ("export") itself.
+            @entrypoint
+            async def export_post(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def export_build_raw_sql(
+                self, input: _RoutingInput
+            ) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        return _BundleApp
+
+    def _client(self, app_cls: type) -> TestClient:
+        svc = create_app_handler_service(
+            _TestHandler(), app_name="bundle-test", app_class=app_cls
+        )
+        return TestClient(svc, raise_server_exceptions=False)
+
+    def test_input_contract_resolves_marketplace_entrypoint_from_disk(
+        self, tmp_path: Path
+    ) -> None:
+        """?entrypoint=<marketplace-name> misses the registry but has a
+        generated dir + relocated AppInputContract → 200 with its schema."""
+        import sys
+        import types
+
+        from pydantic import BaseModel
+
+        from application_sdk.handler import service as svc_module
+
+        (tmp_path / "export").mkdir()
+        (tmp_path / "export" / "manifest.json").write_text("{}")
+
+        class AppInputContract(BaseModel):
+            delivery_type: str = "DIRECT"
+
+        module = types.ModuleType("app.export._input")
+        module.AppInputContract = AppInputContract  # type: ignore[attr-defined]
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        sys.modules["app.export._input"] = module
+        try:
+            resp = self._client(self._bundle_app()).get(
+                "/workflows/v1/input-contract?entrypoint=export"
+            )
+            assert resp.status_code == 200
+            assert resp.json() == AppInputContract.model_json_schema()
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+            del sys.modules["app.export._input"]
+
+    def test_input_contract_404_when_no_generated_dir(self, tmp_path: Path) -> None:
+        """A name with neither a registry entry nor a generated dir keeps the
+        existing 404 contract."""
+        from application_sdk.handler import service as svc_module
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            resp = self._client(self._bundle_app()).get(
+                "/workflows/v1/input-contract?entrypoint=export"
+            )
+            assert resp.status_code == 404
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_input_contract_404_when_dir_has_no_contract_module(
+        self, tmp_path: Path
+    ) -> None:
+        """A generated dir without an importable AppInputContract still 404s
+        (never a 500, never a wrong sibling's schema)."""
+        from application_sdk.handler import service as svc_module
+
+        (tmp_path / "export").mkdir()
+        (tmp_path / "export" / "manifest.json").write_text("{}")
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            resp = self._client(self._bundle_app()).get(
+                "/workflows/v1/input-contract?entrypoint=export"
+            )
+            assert resp.status_code == 404
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_bare_manifest_falls_back_to_disk_entrypoints(self, tmp_path: Path) -> None:
+        """A bare /manifest call on a bundle app serves the first on-disk
+        marketplace entry point (alphabetical) instead of 404 'No manifest
+        available' — the registry candidates (DAG-node workflows) have no
+        manifest dirs of their own."""
+        from application_sdk.handler import service as svc_module
+
+        for name in ("beta-export", "alpha-export"):
+            (tmp_path / name).mkdir()
+            (tmp_path / name / "manifest.json").write_text(json.dumps({"name": name}))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            resp = self._client(self._bundle_app()).get("/workflows/v1/manifest")
+            assert resp.status_code == 200
+            assert resp.json() == {"name": "alpha-export"}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
