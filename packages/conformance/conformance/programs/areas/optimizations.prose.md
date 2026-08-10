@@ -154,7 +154,9 @@ lines around `finding.line` in `finding.file` before proposing a fix.
   - **Keys** — `SpillableDict` restricts keys to `str | int | float | bool |
     bytes` and raises `TypeError` on anything else.  If the flagged wrapper keys
     on a tuple, a `None`, or a custom object, a plain migration will not type —
-    either reshape the key into a supported primitive or suppress (below).
+    either reshape the key into a supported primitive, or suppress with
+    `# conformance: ignore[O006] <reason naming the non-primitive key type>`
+    (routed to residue).
   - **Options surface** — `SpillableDict` builds its own `rocksdict.Options`
     internally and exposes no tuning surface.  A wrapper that passes a custom
     `Options`/`BlockBasedOptions` (block cache, compaction style, prefix
