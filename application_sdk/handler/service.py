@@ -2123,7 +2123,26 @@ def _register_workflow_routes(
                     type(computed).__name__,
                 )
                 raise HTTPException(status_code=500, detail="Internal server error")
-            raw = orjson.dumps(computed)
+            # Reconcile the hook's output, not just the static file. The hook
+            # *replaces* the manifest wholesale, so without this second pass
+            # everything it emits — a task_queue, a freshly generated node, a
+            # token it re-introduced — is served unreconciled, and FND-195's
+            # guarantee silently does not hold for exactly the apps that need it
+            # most: a bundle's marketplace entry points have their DAG computed
+            # per submission by this hook.
+            #
+            # Idempotent, so the pre-hook pass above stays (the hook should see
+            # resolved values it may key on): after that pass no template
+            # remains, so this one is a no-op unless the hook introduced
+            # something new. Note it catches unresolved *tokens*, not a hook
+            # that hardcodes a concrete-but-wrong queue — that string has no
+            # token to match, and normalising every `atlan-*` queue would
+            # rewrite the legitimate cross-app dispatch nodes this deliberately
+            # leaves alone. Conformance O005 is the guard for that shape.
+            raw = _resolve_manifest_placeholders(
+                orjson.dumps(computed),
+                f"entrypoint {entrypoint_name!r} (compute_manifest output)",
+            )
 
         return Response(content=raw, media_type="application/json")
 

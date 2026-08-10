@@ -5879,6 +5879,107 @@ class TestComputeManifestHook:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_hook_output_is_reconciled_not_served_verbatim(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FND-195: the hook *replaces* the manifest, so its output needs the same
+        queue reconciliation as the static file — otherwise the guarantee is void
+        for precisely the apps that need it, since a bundle's marketplace entry
+        points have their DAG computed per submission by this hook.
+
+        The static file here carries no queue at all; the template appears only
+        in what the hook emits, so a pre-hook-only substitution cannot catch it.
+        """
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "hook-ep"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            # A per-submission DAG built at request time, carrying the un-baked
+            # template — nothing baked this, the hook just wrote it.
+            return {
+                "dag": {
+                    "extract": {
+                        "app_name": "{app_name}",
+                        "inputs": {"task_queue": "atlan-{app_name}-{deployment_name}"},
+                    }
+                }
+            }
+
+        self._install_fake_core(monkeypatch, "hook-ep", compute_manifest)
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "dbt-v3")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        worker_queue = "atlan-dbt-v3-prod"
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            app = create_app_handler_service(
+                _TestHandler(), app_name="dbt-v3", task_queue=worker_queue
+            )
+            response = TestClient(app).get(
+                "/workflows/v1/manifest", params={"entrypoint": "hook-ep"}
+            )
+            assert response.status_code == 200
+            node = response.json()["dag"]["extract"]
+            assert node["inputs"]["task_queue"] == worker_queue
+            assert node["app_name"] == "dbt-v3"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_hook_output_unresolvable_app_name_keeps_the_token_visible(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no app name available the hook's output must not have one
+        manufactured for it either — same contract as the static paths.
+
+        Asserts the *graded* outcome, not just the surviving token: the
+        deployment token is filled (proving the reconciliation pass ran on the
+        hook's output at all) while ``{app_name}`` is left visible. Checking only
+        for the surviving token would pass against a build that never reconciles
+        the hook output, since serving it verbatim also leaves the token in.
+        """
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "hook-ep"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {
+                "dag": {
+                    "extract": {
+                        "inputs": {"task_queue": "atlan-{app_name}-{deployment_name}"}
+                    }
+                }
+            }
+
+        self._install_fake_core(monkeypatch, "hook-ep", compute_manifest)
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            app = create_app_handler_service(_TestHandler(), app_name="")
+            response = TestClient(app).get(
+                "/workflows/v1/manifest", params={"entrypoint": "hook-ep"}
+            )
+            assert response.status_code == 200
+            served = response.json()["dag"]["extract"]["inputs"]["task_queue"]
+            # The pass ran: the deployment token resolved.
+            assert "{deployment_name}" not in served
+            assert "prod" in served
+            # ...but nothing was invented for the app name.
+            assert "{app_name}" in served
+            assert "default" not in served
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_async_hook_is_awaited(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
