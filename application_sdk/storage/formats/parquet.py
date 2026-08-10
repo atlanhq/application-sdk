@@ -28,6 +28,43 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     import pandas as pd
+    import pyarrow as pa
+
+
+def _normalize_all_null_string_columns(table: "pa.Table") -> "pa.Table":
+    """Rewrite all-null ``string``/``large_string`` columns as Arrow ``null``.
+
+    A shard written before CNCT-80 persisted an all-null column as
+    ``large_string``. ``pa.concat_tables(..., promote_options="permissive")``
+    can promote ``null`` to any concrete sibling type, but cannot reconcile
+    ``large_string`` against a numeric sibling — so a prefix that mixes a
+    legacy all-null shard with a new numeric shard still fails to merge.
+    Rewriting the all-null string column as ``null`` restores that promotion
+    without touching columns that actually hold string data.
+    """
+    import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+
+    if not isinstance(table, pa.Table) or table.num_rows == 0:
+        return table
+
+    fields = []
+    columns = []
+    changed = False
+    for i, field in enumerate(table.schema):
+        column = table.column(i)
+        if (
+            pa.types.is_string(field.type) or pa.types.is_large_string(field.type)
+        ) and column.null_count == table.num_rows:
+            fields.append(pa.field(field.name, pa.null()))
+            columns.append(pa.chunked_array([pa.nulls(table.num_rows, type=pa.null())]))
+            changed = True
+        else:
+            fields.append(field)
+            columns.append(column)
+
+    if not changed:
+        return table
+    return pa.Table.from_arrays(columns, schema=pa.schema(fields))
 
 
 class ParquetFileReader(Reader):
@@ -238,6 +275,10 @@ class ParquetFileReader(Reader):
                 import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
                 return pd.DataFrame()
+            # Normalize legacy all-null large_string shards (pre-CNCT-80
+            # writes) so permissive promotion can merge them against a
+            # sibling shard's concrete numeric type.
+            tables = [_normalize_all_null_string_columns(t) for t in tables]
             combined = pa.concat_tables(tables, promote_options="permissive")
             return combined.to_pandas()
         # An already-typed AppError carries its own category/audience/evidence
