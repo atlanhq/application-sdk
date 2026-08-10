@@ -123,7 +123,11 @@ def _documentation_constants(tree: ast.AST) -> set[int]:
     Generalises the original module/class/function-docstring exclusion to any
     bare string expression, which is what a PEP 257 attribute docstring is. A
     string that is never bound to anything cannot be dispatched as an
-    identifier, so it is documentation by construction.
+    identifier, so it is documentation by construction — and a docstring
+    quoting the token with escaped braces parses as ``Expr(JoinedStr)``, so an
+    f-string docstring's pieces are exempt here too. Node-keyed (not
+    line-keyed) so a *separate* literal that merely shares the docstring's
+    physical line is not exempted by collision.
     """
     found: set[int] = set()
     for node in ast.walk(tree):
@@ -132,6 +136,10 @@ def _documentation_constants(tree: ast.AST) -> set[int]:
         value = node.value
         if isinstance(value, ast.Constant) and isinstance(value.value, str):
             found.add(id(value))
+        elif isinstance(value, ast.JoinedStr):
+            for piece in value.values:
+                if isinstance(piece, ast.Constant) and isinstance(piece.value, str):
+                    found.add(id(piece))
     return found
 
 
@@ -173,21 +181,16 @@ def _diagnostic_constants(tree: ast.AST) -> set[int]:
     return found
 
 
-def _diagnostic_joined_str_lines(tree: ast.AST) -> set[int]:
-    """Lines hosting a ``JoinedStr`` inside a logging/warning call or ``raise``.
+def _diagnostic_joined_strs(tree: ast.AST) -> set[int]:
+    """``JoinedStr`` nodes inside a logging/warning call or ``raise``.
 
     Code that reports an unresolved token has to quote it; that text is never
     dispatched as an identifier — and that holds for a *resolving* f-string
     (``logger.info(f"queue atlan-{app_name}-prod")``) just as much as for a
-    plain literal. Without this, ``_unresolved_joined_str_lines`` would flag
-    every interpolated f-string that merely mentions the token in a log
-    message.
-
-    Line-keyed (not node-id-keyed) for the same reason as
-    ``_unresolved_joined_str_lines``: the SARIF emitter re-parses the source,
-    so only positions survive.
+    plain literal. Without this, ``_unresolved_joined_strs`` would flag every
+    interpolated f-string that merely mentions the token in a log message.
     """
-    lines: set[int] = set()
+    found: set[int] = set()
     subtrees: list[ast.AST] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and _is_diagnostic_call(node):
@@ -198,12 +201,29 @@ def _diagnostic_joined_str_lines(tree: ast.AST) -> set[int]:
     for subtree in subtrees:
         for inner in ast.walk(subtree):
             if isinstance(inner, ast.JoinedStr):
-                lines.add(inner.lineno)
-    return lines
+                found.add(id(inner))
+    return found
 
 
-def _unresolved_joined_str_lines(tree: ast.AST) -> set[int]:
-    """Lines hosting a ``JoinedStr`` whose runtime value still carries the token.
+def _doc_joined_strs(tree: ast.AST) -> set[int]:
+    """``JoinedStr`` nodes that are the value of a bare expression statement.
+
+    A docstring quoting the token with escaped braces
+    (``f"...{{app_name}}..."``) parses as ``Expr(JoinedStr)``, so it never
+    reaches ``_documentation_constants`` — documentation is documentation in
+    either parse shape. (Its *pieces* are also exempt via
+    ``_documentation_constants``, which covers the same ``Expr(JoinedStr)``
+    node.)
+    """
+    found: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.JoinedStr):
+            found.add(id(node.value))
+    return found
+
+
+def _unresolved_joined_strs(tree: ast.AST) -> set[int]:
+    """``JoinedStr`` nodes whose runtime value still carries the token.
 
     Python parses ``f"atlan-{{app_name}}-production"`` as a ``JoinedStr``, but
     the escaped braces are *not* interpolated — the runtime string is the
@@ -213,11 +233,11 @@ def _unresolved_joined_str_lines(tree: ast.AST) -> set[int]:
     lives in the ``ast.FormattedValue`` — so it never lands here).
 
     A ``JoinedStr`` containing an escaped-brace token inside a diagnostic call
-    or a docstring stays exempt (``check_o005`` subtracts both line-sets):
-    reporting on the token still is not dispatching it, and double-brace-
-    quoting it is a normal way to make the literal render inside an f-string.
+    or a docstring is filtered out by the caller: reporting on the token still
+    is not dispatching it, and double-brace-quoting it is a normal way to make
+    the literal render inside an f-string.
     """
-    lines: set[int] = set()
+    found: set[int] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.JoinedStr):
             continue
@@ -227,8 +247,8 @@ def _unresolved_joined_str_lines(tree: ast.AST) -> set[int]:
             and _TOKEN in value.value
             for value in node.values
         ):
-            lines.add(node.lineno)
-    return lines
+            found.add(id(node))
+    return found
 
 
 def _sentinel_or_prose_constants(tree: ast.AST) -> set[int]:
@@ -275,7 +295,14 @@ def _sentinel_or_prose_constants(tree: ast.AST) -> set[int]:
 
 
 def _resolving_format_receivers(tree: ast.AST) -> set[int]:
-    """String-literal receivers of a ``.format(...)`` call that keyword-binds ``app_name``."""
+    """String-literal receivers of a ``.format(...)`` call that keyword-binds ``app_name``.
+
+    An f-string receiver whose pieces still carry the token
+    (``f"atlan-{{app_name}}".format(app_name=a)``) resolves at runtime just like
+    a plain literal receiver, so its token-bearing pieces are exempted here too
+    — that keeps the escaped-brace waiver in ``check_o005`` from re-flagging a
+    site that *does* substitute the token.
+    """
     receivers: set[int] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -288,6 +315,14 @@ def _resolving_format_receivers(tree: ast.AST) -> set[int]:
         receiver = func.value
         if isinstance(receiver, ast.Constant) and isinstance(receiver.value, str):
             receivers.add(id(receiver))
+        elif isinstance(receiver, ast.JoinedStr):
+            for piece in receiver.values:
+                if (
+                    isinstance(piece, ast.Constant)
+                    and isinstance(piece.value, str)
+                    and _TOKEN in piece.value
+                ):
+                    receivers.add(id(piece))
     return receivers
 
 
@@ -319,32 +354,53 @@ def check_o005(
     # An f-string piece still carrying the token is the escaped-brace shape:
     # ``f"{{app_name}}"`` is *not* interpolated — the runtime value freezes the
     # token exactly like a plain literal, so exempting every JoinedStr child
-    # (above) must not cover it. The waiver is line-keyed (a JoinedStr and its
-    # Constant children share the f-string's line, and positions are the only
-    # handle that survives the SARIF emitter's re-parse); a docstring or a
-    # diagnostic f-string on that line stays exempt.
-    # A bare string *or f-string* expression statement is documentation — a
-    # docstring quoting the token with escaped braces (``f"...{{app_name}}..."``)
-    # parses as ``Expr(JoinedStr)``, not ``Expr(Constant)``, so both shapes
-    # contribute their line here.
-    doc_lines = {
-        node.value.lineno
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Expr)
-        and isinstance(node.value, (ast.Constant, ast.JoinedStr))
-    }
-    flagged_fstring_lines = (
-        _unresolved_joined_str_lines(tree)
-        - _diagnostic_joined_str_lines(tree)
-        - doc_lines
+    # (above) must not cover it. The waiver re-flags only that f-string's own
+    # token-bearing Constant pieces, and only those no *other* exclusion
+    # independently covers: a docstring/diagnostic f-string stays exempt, an
+    # unrelated exempt literal sharing the physical line is not re-flagged, and
+    # ``f"{{app_name}}".format(app_name=...)`` — a receiver the runtime still
+    # resolves — keeps its exclusion too.
+    #
+    # The pieces are collected by object *identity*, not id-keyed sets: an AST
+    # node's id is only stable while the object is alive, and sequential
+    # comprehensions let CPython recycle freed node ids onto fresh nodes —
+    # silently corrupting any id-set built in a second walk.
+    unresolved_ids = _unresolved_joined_strs(tree)
+    diagnostic_ids = _diagnostic_joined_strs(tree)
+    doc_ids = _doc_joined_strs(tree)
+    independent_ids = (
+        _documentation_constants(tree)
+        | _diagnostic_constants(tree)
+        | _resolving_format_receivers(tree)
     )
+    flagged_pieces: list[ast.Constant] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        if id(node) not in unresolved_ids:
+            continue
+        if id(node) in diagnostic_ids or id(node) in doc_ids:
+            continue
+        for piece in node.values:
+            if (
+                isinstance(piece, ast.Constant)
+                and isinstance(piece.value, str)
+                and _TOKEN in piece.value
+                and id(piece) not in independent_ids
+            ):
+                flagged_pieces.append(piece)
+    # Every id-set membership above is resolved while the walked nodes are
+    # still alive inside their own pass, and the surviving piece *objects* are
+    # what this loop holds — the ids taken here cannot be recycled before the
+    # main loop reads them.
+    flagged_piece_ids = {id(p) for p in flagged_pieces}
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
             continue
         if _TOKEN not in node.value:
             continue
-        if id(node) in exempt and node.lineno not in flagged_fstring_lines:
+        if id(node) in exempt and id(node) not in flagged_piece_ids:
             continue
         findings.append(
             make_finding(

@@ -169,6 +169,42 @@ def test_o005_escaped_brace_fstring_suppressed_inline() -> None:
     assert "O005" not in _o_ids(src)
 
 
+# ── The escaped-brace waiver must not re-flag an already-resolved sibling ────
+#
+# The waiver re-flags only the escaped-brace f-string's own token-bearing
+# pieces — never an unrelated exempt literal that happens to share the
+# physical line (round-2 review nit).
+
+
+def _o_count(src: str) -> int:
+    return sum(
+        1 for f in o_scan(src, "app/x.py") if f.rule_id == "O005" and not f.suppressed
+    )
+
+
+def test_o005_sibling_resolved_format_receiver_not_reflagged() -> None:
+    """The `.format(app_name=...)` receiver on the same line as an escaped-brace
+    f-string is already resolved — only the f-string may be flagged."""
+    src = 'x = "atlan-{app_name}".format(app_name=a); y = f"{{app_name}}"\n'
+    assert _o_count(src) == 1
+
+
+def test_o005_sibling_diagnostic_literal_not_reflagged() -> None:
+    """A diagnostic message sharing a line with an escaped-brace f-string keeps
+    its diagnostic exemption — only the f-string may be flagged."""
+    src = 'logger.error("unresolved {app_name}"); y = f"{{app_name}}"\n'
+    assert _o_count(src) == 1
+
+
+def test_o005_silent_on_format_call_on_fstring_receiver() -> None:
+    """``f"{{app_name}}".format(app_name=a)`` resolves at runtime exactly like a
+    plain-literal receiver — the f-string parse shape is not a reason to flag
+    a site that *does* substitute the token."""
+    assert "O005" not in _o_ids(
+        'task_queue = f"atlan-{{app_name}}".format(app_name=a)\n'
+    )
+
+
 def test_o005_fires_on_bare_token_bound_to_identifier() -> None:
     """Only an ALL_CAPS binding reads as a token declaration; a lowercase one is
     a value that will be dispatched."""
