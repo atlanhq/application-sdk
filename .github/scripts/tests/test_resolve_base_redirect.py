@@ -188,6 +188,11 @@ def test_unresolvable_harbor_fails_closed():
     assert not decision.ok
     assert decision.build_contexts == ""
     assert "parity cannot be verified" in decision.errors[0]
+    # The remedy is a re-run, and the message must say so without offering the
+    # flag as a way out: with Harbor down, building without the redirect just
+    # moves the failure to the base-image pull.
+    assert "re-run once Harbor recovers" in decision.errors[0]
+    assert "does not help" in decision.errors[0]
 
 
 # ── Registry client ───────────────────────────────────────────────────────────

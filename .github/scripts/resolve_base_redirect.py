@@ -457,8 +457,9 @@ def decide(
             f"{harbor_repo}:{tag} could not be resolved, so cross-registry "
             "parity cannot be verified — this build would ride the GHCR "
             "redirect on an unproven base. Harbor unreachable is treated like "
-            "skew: re-run once Harbor recovers, or unset use_ghcr_base to build "
-            "without the redirect — see docs/standards/build-security.md."
+            "skew: re-run once Harbor recovers. Unsetting use_ghcr_base does "
+            "not help while Harbor is down — it moves the failure from this "
+            "check to the base-image pull. See docs/standards/build-security.md."
         )
         return decision
 

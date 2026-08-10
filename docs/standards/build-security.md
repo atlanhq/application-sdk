@@ -67,7 +67,8 @@ A registry that cannot be reached is *unknown*, not skew. GHCR-unreachable degra
 pre-redirect Harbor pull instead of blocking an app release. Harbor-unreachable is the one
 exception: with the redirect's source down there is no baseline to verify the GHCR tag
 against, so an unverified redirect is indistinguishable from a stale one and the build fails
-closed. Re-run once Harbor recovers, or unset `use_ghcr_base` to build without the redirect.
+closed. Re-run once Harbor recovers — unsetting `use_ghcr_base` does not route around a
+Harbor outage, it just moves the failure from the preflight to the base-image pull.
 
 ## Consuming Dapr components in an app repo
 
