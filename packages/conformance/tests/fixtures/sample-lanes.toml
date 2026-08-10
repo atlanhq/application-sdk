@@ -1,0 +1,376 @@
+# VERIFICATION FIXTURE - not an input to scoring.
+#
+# A hand-classification of ten connectors, surveyed 2026-08-05/06 against their
+# main branches. It exists to check the deriver against human judgment: the
+# workflow lists and integration/e2e boundaries here were worked out by reading
+# the repos, and conformance/ledger/derive.py must reproduce them from generated
+# artifacts alone.
+#
+# Do not add rows to make a connector score better - scoring never reads this
+# file. If the deriver disagrees with a row here, one of the two is wrong and
+# that is the finding.
+#
+# One row per PRODUCT WORKFLOW per connector, recording the best integration
+# lane that exercises it. See README.md for the rationale and for why this is
+# a hand-maintained inventory rather than runtime tracing.
+#
+# Axes:
+#   realism  L live source | R replay of captured real data | S synthetic | - none
+#   depth    G golden/record comparison | V schema-or-contract validation
+#            | C counts + qualifiedName | E envelope only | - none
+#   cadence  A automatic (push/PR/cron) | g label/env/dispatch gated | - not in CI
+#
+# `cadence` is ADVISORY. compute.py re-derives it from the GitHub Actions API
+# using ci_workflow / ci_job; writing `A` here earns nothing if the job does
+# not actually run on an automatic trigger. The denominator is likewise
+# re-derived by AST-scanning each repo for product-workflow declarations.
+#
+# TOML, not YAML: the conformance package deliberately ships only pydantic,
+# jsonschema and jinja2 - tomllib is stdlib on the supported Python floor.
+#
+# Surveyed 2026-08-05/06 against each repo's main branch.
+
+version = 1
+
+# --------------------------------------------------------------------------
+[[connectors]]
+name = "atlan-connector-alpha-app"
+
+  [[connectors.workflows]]
+  id = "crawler"
+  declared_at = "app/connector_alpha.py:140"
+  realism = "L"
+  depth = "V"
+  cadence = "A"
+  boundary = "transformed"
+  test = "tests/e2e/test_connector_alpha_workflow_smoke/"
+  ci_workflow = ".github/workflows/tests.yaml"
+  ci_job = "local-e2e"
+  gate = ""
+  notes = """
+  Live source via WorkflowEnvironment; structural assertions
+  (assert_column_types, assert_tags_present,
+  assert_drift_attribute_contract) plus golden shape-signature benchmark in
+  tests/support/shape_signature.py
+  """
+
+  [[connectors.workflows]]
+  id = "miner"
+  declared_at = "app/connector_alpha.py:151"
+  realism = "L"
+  depth = "V"
+  cadence = "A"
+  boundary = "transformed"
+  test = "tests/e2e/test_connector_alpha_workflow_miner_extraction/"
+  ci_workflow = ".github/workflows/tests.yaml"
+  ci_job = "local-e2e"
+  gate = ""
+
+  [[connectors.workflows]]
+  id = "clean"
+  declared_at = "app/connector_alpha.py:159"
+  realism = "L"
+  depth = "V"
+  cadence = "A"
+  boundary = "transformed"
+  test = "tests/e2e/test_connector_alpha_workflow_clean_extraction/"
+  ci_workflow = ".github/workflows/tests.yaml"
+  ci_job = "local-e2e"
+  gate = ""
+
+  [[connectors.excluded]]
+  id = "migrate_publish_crawler_assets"
+  reason = "one-time cache migration task, not a product workflow"
+  ticket = "INTERNAL-REF"
+
+# --------------------------------------------------------------------------
+[[connectors]]
+name = "atlan-connector-bravo-app"
+
+  [[connectors.workflows]]
+  id = "run"
+  declared_at = "app/app.py:663"
+  realism = "L"
+  depth = "V"
+  cadence = "A"
+  boundary = "transformed"
+  test = "tests/e2e/test_connector_bravo_workflow/"
+  ci_workflow = ".github/workflows/e2e-integration-test.yaml"
+  ci_job = "e2e"
+  gate = ""
+  notes = """
+  Live source API; contract assertions on transformed output.
+  Nightly cron plus push-to-main.
+  """
+
+# --------------------------------------------------------------------------
+[[connectors]]
+name = "atlan-connector-charlie-app"
+notes = """
+test_parity_golden is not CI-runnable at all - class-level
+skipUnless(PARITY_GOLDEN_RUN), and it needs elevated privileges plus frozen
+golden databases the CI_QA_BUILDER role cannot reach.
+"""
+
+  [[connectors.workflows]]
+  id = "crawler"
+  declared_at = "app/connector_charlie.py:196"
+  realism = "L"
+  depth = "V"
+  cadence = "g"
+  boundary = "transformed"
+  test = "tests/integration/test_au_p0/"
+  ci_workflow = ".github/workflows/integration-tests.yaml"
+  ci_job = "integration"
+  gate = "PR label: e2e-test (else fast mode; workflow steps self-skip)"
+  notes = """
+  Six live config.yaml-driven suites (test_au_p0, test_is_p0,
+  test_tags_extended, test_is_grouped_regex, test_is_case_collision)
+  validating transformed NDJSON against schema/transformed/*.yaml (12+
+  expectation files in test_au_p0 alone). VERIFIED 2026-08-06: the
+  workflow-run + data-validation steps are gated on E2E_RUN_WORKFLOW=1, set
+  only when mode==full (integration-tests.yaml:172). Mode resolves to full
+  only via the e2e-test PR label or manual dispatch; tests.yaml's
+  unit-integration job never sets it. No automatic trigger reaches full
+  mode.
+  """
+
+  [[connectors.workflows]]
+  id = "miner"
+  declared_at = "app/connector_charlie.py:209"
+  realism = "-"
+  depth = "-"
+  cadence = "-"
+  boundary = "transformed"
+  test = ""
+  ci_workflow = ""
+  ci_job = ""
+  gate = ""
+  notes = """
+  No integration lane found exercising the miner entrypoint.
+  """
+
+# --------------------------------------------------------------------------
+[[connectors]]
+name = "atlan-connector-delta-app"
+
+  [[connectors.workflows]]
+  id = "run"
+  declared_at = "app/connector_delta.py:819"
+  realism = "L"
+  depth = "V"
+  cadence = "g"
+  boundary = "transformed"
+  test = "tests/integration/test_connector_delta_integration.py"
+  ci_workflow = ".github/workflows/tests.yaml"
+  ci_job = "unit-integration"
+  gate = "env: E2E_RUN_WORKFLOW=1"
+  notes = """
+  Six *_validates_output scenarios with Pandera schemas on transformed
+  output (tests/integration/schema/*/transformed/). Gated behind
+  E2E_RUN_WORKFLOW=1. Golden path is wired but dormant - no golden/ fixtures
+  committed.
+  """
+
+# --------------------------------------------------------------------------
+[[connectors]]
+name = "atlan-connector-echo-app"
+
+  [[connectors.workflows]]
+  id = "crawler"
+  declared_at = "app/connector_echo.py:69"
+  realism = "L"
+  depth = "V"
+  cadence = "g"
+  boundary = "transformed"
+  test = "tests/e2e/test_connector_echo_workflow_smoke/"
+  ci_workflow = ".github/workflows/e2e-integration-test.yaml"
+  ci_job = "e2e"
+  gate = "workflow_dispatch only"
+  notes = """
+  17 live config.yaml suites; four carry Pandera schemas (smoke,
+  complex_types, tags, incremental) validated via
+  pandera.io.pandas_io.from_yaml in tests/e2e/connector_echo_e2e_base.py.
+  VERIFIED 2026-08-06: tests.yaml's unit-integration job runs only
+  "tests/unit tests/integration" and never invokes tests/e2e/.
+  e2e-integration-test.yaml is workflow_dispatch ONLY - no push, PR or cron
+  trigger exists.
+  """
+
+  [[connectors.workflows]]
+  id = "miner"
+  declared_at = "app/connector_echo.py:80"
+  realism = "L"
+  depth = "C"
+  cadence = "g"
+  boundary = "transformed"
+  test = "tests/e2e/test_connector_echo_workflow_miner/"
+  ci_workflow = ".github/workflows/e2e-integration-test.yaml"
+  ci_job = "e2e"
+  gate = "workflow_dispatch only"
+  notes = """
+  Config-driven live lane, but no schema/ directory - hand-asserted counts
+  only, so depth is C not V. Same dispatch-only cadence.
+  """
+
+  [[connectors.excluded]]
+  id = "miner_qh"
+  reason = "query-history split of the miner entrypoint, not separately shipped"
+  ticket = "TBD"
+
+  [[connectors.excluded]]
+  id = "promote_marker"
+  reason = "internal marker-promotion entrypoint, not a user-triggerable workflow"
+  ticket = "TBD"
+
+  [[connectors.excluded]]
+  id = "promote_miner_lineage_marker"
+  reason = "internal marker-promotion entrypoint, not a user-triggerable workflow"
+  ticket = "TBD"
+
+# --------------------------------------------------------------------------
+[[connectors]]
+name = "atlan-connector-foxtrot-app"
+
+  [[connectors.workflows]]
+  id = "extract_metadata"
+  declared_at = "app/connector_foxtrot.py:929"
+  realism = "L"
+  depth = "C"
+  cadence = "g"
+  boundary = "transformed"
+  test = "tests/integration/test_connector_foxtrot_cloud_api/"
+  ci_workflow = ".github/workflows/integration-tests.yaml"
+  ci_job = "integration"
+  gate = "PR label: int-test / e2e-test"
+  notes = """
+  Live cloud service plus Azure/GCP object stores, but assertions are
+  count/qualifiedName level. The byte-diff golden lane
+  (tests/integration/test_e2e_golden.py, 18 byte-categories) deliberately
+  bypasses the Temporal/Dapr stack, so it is a component lane rather than a
+  pipeline lane and does not qualify.
+  """
+
+# --------------------------------------------------------------------------
+[[connectors]]
+name = "atlan-connector-golf-app"
+
+  [[connectors.workflows]]
+  id = "extract_metadata"
+  declared_at = "app/connector_golf.py:915"
+  realism = "L"
+  depth = "C"
+  cadence = "-"
+  boundary = "transformed"
+  test = "tests/e2e/test_t01_full_extraction.py"
+  ci_workflow = ""
+  ci_job = ""
+  gate = "not wired into CI"
+  notes = """
+  14 live suites (t01-t15, filter_flow) against the live source, but
+  tests.yaml points only at tests/e2e/sdr - the t-suites are not wired into
+  any CI job. The nightly replay (.github/workflows/replay-nightly.yml)
+  currently runs a synthetic micro smoke because tests/replay/registry.yaml
+  is empty by default. The t-suites assert on the transformed artifact via
+  output_validator (assert_transformed_output_exists,
+  assert_field_dirs_have_records). Cited at file rather than directory level:
+  tests/e2e/ also contains sdr/test_connector_golf_full_dag.py, a post-publish e2e
+  lane.
+  """
+
+  [[connectors.workflows]]
+  id = "process_metadata"
+  declared_at = "app/connector_golf.py:1162"
+  realism = "L"
+  depth = "C"
+  cadence = "-"
+  boundary = "transformed"
+  test = "tests/e2e/test_t01_full_extraction.py"
+  ci_workflow = ""
+  ci_job = ""
+  gate = "not wired into CI"
+
+  [[connectors.excluded]]
+  id = "generate_lineage"
+  reason = "lineage generation, downstream of the transformed handoff"
+  ticket = "TBD"
+
+  [[connectors.excluded]]
+  id = "post_publish"
+  reason = "marker write after publish, outside the integration scope"
+  ticket = "TBD"
+
+# --------------------------------------------------------------------------
+[[connectors]]
+name = "atlan-connector-hotel-app"
+
+  [[connectors.workflows]]
+  id = "extract"
+  declared_at = "app/connector_hotel.py:1364"
+  realism = "S"
+  depth = "C"
+  cadence = "A"
+  boundary = "transformed"
+  test = "tests/integration/"
+  ci_workflow = ".github/workflows/tests.yaml"
+  ci_job = "unit-integration"
+  gate = ""
+  notes = """
+  Integration suite runs unconditionally on every PR but against a mocked
+  client with LocalStore - realism S. The live real-tenant lane
+  (sdr-full-dag.yaml) is label-gated and asserts minimum asset counts only.
+  """
+
+  [[connectors.workflows]]
+  id = "miner"
+  declared_at = "app/connector_hotel.py:1542"
+  realism = "S"
+  depth = "C"
+  cadence = "A"
+  boundary = "transformed"
+  test = "tests/integration/test_miner_pipeline.py"
+  ci_workflow = ".github/workflows/tests.yaml"
+  ci_job = "unit-integration"
+  gate = ""
+
+# --------------------------------------------------------------------------
+[[connectors]]
+name = "atlan-connector-india-app"
+
+  [[connectors.workflows]]
+  id = "run"
+  declared_at = "app/connector_india_app.py:313"
+  realism = "L"
+  depth = "E"
+  cadence = "g"
+  boundary = "transformed"
+  test = "tests/integration/test_connector_india_integration.py"
+  ci_workflow = ".github/workflows/integration-tests.yaml"
+  ci_job = "integration"
+  gate = "PR label: int-test"
+  notes = """
+  8 scenarios against a live upstream account, all envelope-shape
+  assertions. The single output-baseline workflow scenario is SKIPPED.
+  """
+
+# --------------------------------------------------------------------------
+[[connectors]]
+name = "atlan-connector-juliet-app"
+
+  [[connectors.workflows]]
+  id = "extract_metadata"
+  declared_at = "app/connector_juliet_app.py:929"
+  realism = "L"
+  depth = "E"
+  cadence = "A"
+  boundary = "transformed"
+  test = "tests/integration/test_connector_juliet.py"
+  ci_workflow = ".github/workflows/tests.yaml"
+  ci_job = "unit-integration"
+  gate = ""
+  notes = """
+  16 scenarios against a live upstream org, asserting only {"success":
+  is_true(), "data": is_list()}. Zero api="workflow" scenarios - the
+  transformed output is never inspected. The real e2e lane lives externally
+  in atlanhq/marketplace-releases and is comment-triggered.
+  """
