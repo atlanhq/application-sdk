@@ -14,6 +14,7 @@ class Category(str, Enum):
     LOCK_MAINTENANCE = "lock-maintenance"
     GITHUB_ACTIONS = "github-actions"
     CONTRACT_TOOLKIT = "contract-toolkit"
+    CONFORMANCE_PACKAGE = "conformance-package"
     PYTHON_DEP = "python-dep"
     UNKNOWN = "unknown"
 

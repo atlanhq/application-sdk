@@ -54,6 +54,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 from temporalio.client import WorkflowFailureError
 
+from application_sdk.common.task_queue import (
+    resolve_manifest_tokens,
+    task_queue_from_env,
+)
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.errors import AppError
@@ -150,6 +154,104 @@ _CREDENTIAL_KEYS = frozenset(
 )
 
 
+_AGENT_JSON_KEYS = ("agent_json", "agentJson", "agent-json")
+
+
+def _coerce_agent_json(value: Any) -> dict[str, Any] | None:
+    """Return *value* as an agent-json dict, or ``None`` if it isn't one.
+
+    Form fields cross the wire as JSON strings, so an agent-json binding may
+    arrive either already-parsed (``dict``) or as a serialized string."""
+    if isinstance(value, dict):
+        return value if value else None
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) and parsed else None
+    return None
+
+
+def _rank_agent_json(raw: Any, key: str) -> int:
+    """Preference score for competing agent-json bindings (higher wins).
+
+    A request can carry several agent-json copies at once, and they are *not*
+    interchangeable. The FE normalizes its form into duplicate keys: the live
+    ``agent-json`` (hyphen) holds the current form object, while ``agent_json``
+    (underscore) is a serialized string snapshot that lags behind edits. Picking
+    the wrong one silently runs the check against stale credentials. So prefer a
+    parsed object over a serialized string (freshness), and the canonical hyphen
+    ``agent-json`` over the underscore/camel aliases (tie-break)."""
+    return (2 if isinstance(raw, dict) else 0) + (1 if key == "agent-json" else 0)
+
+
+def _lift_agent_json(body: dict[str, Any]) -> dict[str, Any]:
+    """Surface the freshest agent-json binding to the top level for SDR detection.
+
+    The three endpoints detect SDR (customer-infra) runs by reading a *top-level*
+    ``agent_json`` off the typed input. Heracles, however, forwards the FE payload
+    verbatim: the agent-json arrives nested inside ``metadata``/``connection_config``
+    (the form's ``agent-json`` field → app ``metadata``) or inside ``credentials``
+    (the credential object), and the FE may include *several* copies at once (a
+    live object plus a stale serialized string, under hyphen and underscore keys).
+
+    Pick the highest-ranked copy (see :func:`_rank_agent_json`) across the top
+    level and every container, surface it as top-level ``agent_json`` (overriding
+    any stale top-level alias Pydantic would otherwise resolve first), and strip
+    every agent-json key from the containers so credential flattening never turns
+    one into a bogus pair. No-op when none is found (direct-mode requests)."""
+    best_rank = -1
+    best_aj: dict[str, Any] | None = None
+
+    for key in _AGENT_JSON_KEYS:
+        if key in body:
+            aj = _coerce_agent_json(body[key])
+            rank = _rank_agent_json(body[key], key)
+            if aj is not None and rank > best_rank:
+                best_rank, best_aj = rank, aj
+
+    for container in ("metadata", "connection_config", "credentials"):
+        c = body.get(container)
+        if isinstance(c, dict):
+            for key in _AGENT_JSON_KEYS:
+                if key in c:
+                    aj = _coerce_agent_json(c[key])
+                    rank = _rank_agent_json(c[key], key)
+                    if aj is not None and rank > best_rank:
+                        best_rank, best_aj = rank, aj
+        elif isinstance(c, list):  # v3 credentials: list[{key, value}]
+            for item in c:
+                if isinstance(item, dict) and item.get("key") in _AGENT_JSON_KEYS:
+                    raw = item.get("value")
+                    aj = _coerce_agent_json(raw)
+                    rank = _rank_agent_json(raw, item["key"])
+                    if aj is not None and rank > best_rank:
+                        best_rank, best_aj = rank, aj
+
+    if best_aj is None:
+        return body
+
+    result: dict[str, Any] = {}
+    for k, v in body.items():
+        if k in _AGENT_JSON_KEYS:
+            continue  # drop stale top-level aliases; re-added canonically below
+        if k in ("metadata", "connection_config") and isinstance(v, dict):
+            result[k] = {kk: vv for kk, vv in v.items() if kk not in _AGENT_JSON_KEYS}
+        elif k == "credentials" and isinstance(v, list):
+            result[k] = [
+                i
+                for i in v
+                if not (isinstance(i, dict) and i.get("key") in _AGENT_JSON_KEYS)
+            ]
+        elif k == "credentials" and isinstance(v, dict):
+            result[k] = {kk: vv for kk, vv in v.items() if kk not in _AGENT_JSON_KEYS}
+        else:
+            result[k] = v
+    result["agent_json"] = best_aj
+    return result
+
+
 # v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
 def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     """Normalize v2 credential formats to v3 list[{key, value}] format.
@@ -195,7 +297,7 @@ def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
     """Normalize preflight-specific compatibility fields before validation."""
-    normalized = _normalize_credentials(body)
+    normalized = _normalize_credentials(_lift_agent_json(body))
     has_metadata = "metadata" in normalized and normalized["metadata"] is not None
     has_connection_config = (
         "connection_config" in normalized
@@ -859,6 +961,70 @@ def _published_input_contract(ep: Any) -> Any:
         getattr(ep.input_type, "__name__", ep.input_type),
     )
     return ep.input_type
+
+
+def _marketplace_entrypoint_contract(entrypoint_name: str) -> Any | None:
+    """Resolve a *marketplace* entry point's published input contract from disk.
+
+    Bundle ("uber") apps expose marketplace entry points as generated contract
+    directories — ``CONTRACT_GENERATED_DIR/<entrypoint>/manifest.json`` — whose
+    DAGs are computed per submission by ``compute_manifest``. Those entry
+    points are **not** ``@entrypoint`` workflow registrations (the registry
+    holds the DAG-node workflows, e.g. ``<entrypoint>-post``), so registry
+    resolution 404s on them and ``/v1/app`` creation breaks even though the
+    manifest and configmap routes — which are filesystem-first — serve them
+    fine. This gives the input-contract route the same filesystem authority.
+
+    The contract toolkit emits each bundle entry point's ``AppInputContract``
+    as ``_input.py``; because the kebab-named generated dir is not a Python
+    package, the bundle regen convention relocates it to
+    ``app/<entrypoint_snake>/_input.py``. Check the in-place generated path
+    first (parity with ``_published_input_contract``), then the relocation
+    path.
+
+    Returns ``None`` when the entry point has no generated contract dir or no
+    importable ``AppInputContract`` — callers fall back to their existing
+    behavior.
+    """
+    import importlib  # noqa: PLC0415 — cold path: only on /input-contract
+
+    from application_sdk.app.entrypoint import (  # noqa: PLC0415 — circular at module import time
+        entrypoint_module_segment,
+    )
+
+    # The route already validates the name, but this helper must be safe on
+    # its own: the name reaches both a filesystem path and an import path.
+    # The regex forbids path separators and dots; the containment check makes
+    # the no-traversal property locally provable (py/path-injection).
+    if not _ENTRYPOINT_NAME_RE.match(entrypoint_name):
+        return None
+    generated_root = os.path.realpath(CONTRACT_GENERATED_DIR)
+    ep_manifest = os.path.realpath(
+        os.path.join(generated_root, entrypoint_name, "manifest.json")
+    )
+    if not ep_manifest.startswith(generated_root + os.sep):
+        return None
+    if not os.path.isfile(ep_manifest):
+        return None
+    ep_module = entrypoint_module_segment(entrypoint_name)
+    for module_path in (
+        f"app.generated.{ep_module}._input",
+        f"app.{ep_module}._input",
+    ):
+        try:
+            module = importlib.import_module(module_path)
+        except ImportError:  # conformance: ignore[E008,E014] optional generated module; continue to next candidate
+            continue
+        contract = getattr(module, "AppInputContract", None)
+        if contract is not None and hasattr(contract, "model_json_schema"):
+            logger.debug(
+                "input-contract: using marketplace AppInputContract from %s "
+                "for entrypoint %s (filesystem-resolved bundle entry point)",
+                module_path,
+                entrypoint_name,
+            )
+            return contract
+    return None
 
 
 _WORKFLOW_SENSITIVE_FIELDS = {
@@ -1872,10 +2038,64 @@ def _register_workflow_routes(
     # Manifest endpoint
     # ------------------------------------------------------------------
 
+    def _resolve_manifest_placeholders(raw: bytes, source: str) -> bytes:
+        """Substitute the manifest's ``{app_name}`` / ``{deployment_name}`` tokens.
+
+        Delegates to :func:`application_sdk.common.task_queue.resolve_manifest_tokens`,
+        handing it the queue this process was configured with — the same value
+        ``create_worker`` receives, in every mode. The served ``task_queue`` is
+        therefore *stamped from* what the worker polls rather than independently
+        re-derived from the same env and hoped to match. Re-deriving is what let
+        AE submit to a queue nothing polled (FND-195 / CONNECT-183).
+
+        An ``{app_name}`` token means the app's committed manifest predates the
+        toolkit's bake (#2271 / #2478) — worth a WARNING even when this fills it,
+        because any other writer of that DAG gets no such backstop. With nothing
+        to fill it from, the token is served as-is and logged at ERROR:
+        deliberately not papered over with ``constants.APPLICATION_NAME``'s
+        ``"default"``, since ``atlan-default-<deployment>`` reads as a legitimate
+        queue and hangs the run silently, whereas a literal ``{app_name}`` in the
+        DAG is greppable and immediately diagnosable.
+        """
+        resolution = resolve_manifest_tokens(
+            raw,
+            task_queue=_workflow_config.task_queue or None,
+            # _workflow_config.app_name is populated from app_class._app_name and
+            # is empty for a handler served without an app class; the app_name
+            # argument carries the same value in that case.
+            app_name=_workflow_config.app_name or app_name or None,
+            deployment_fallback=DEPLOYMENT_NAME or "default",
+        )
+        if resolution.unresolved_app_name:
+            # conformance: ignore[L009] not a request-boundary handler — the manifest is
+            # still served (the token is the diagnostic); this log is the operator's signal.
+            logger.error(
+                "Manifest for %s carries an unresolved {app_name} token and no app "
+                "name is available (neither a registered app class nor "
+                "ATLAN_APPLICATION_NAME), so the SDK is serving the literal token "
+                "rather than inventing a name that would look legitimate and be "
+                "polled by nobody. Failure attribution for runs started from this "
+                "manifest will be blank, and any task_queue the SDK could not stamp "
+                "(stamped queue: %r) targets no worker. Set ATLAN_APPLICATION_NAME "
+                "on the deployment, or regenerate the contract so the toolkit bakes "
+                "the app name.",
+                source,
+                resolution.task_queue,
+            )
+        elif resolution.had_app_name_token:
+            logger.warning(
+                "Manifest for %s shipped an unbaked {app_name} token; filled with "
+                "%r for this response. The committed manifest is stale — bump the "
+                "contract toolkit and regenerate contracts, since any writer of "
+                "this DAG that does not go through this route gets no such fallback.",
+                source,
+                resolution.app_name,
+            )
+        return resolution.raw
+
     async def _serve_entrypoint_manifest(
         entrypoint_name: str,
         fe_inputs: str | dict[str, Any] | None,
-        deployment: bytes,
     ) -> Response:
         """Read <entrypoint>/manifest.json, substitute placeholders, run the
         optional ``compute_manifest`` hook, and return the Response.
@@ -1916,10 +2136,9 @@ def _register_workflow_routes(
                     status_code=404,
                     detail=f"No manifest found for entrypoint {entrypoint_name!r}",
                 )
-        raw = ep_manifest.read_bytes()
-        # app_name is baked into the generated manifest by the contract toolkit
-        # (from the contract `name`); only the per-deployment token is substituted here.
-        raw = raw.replace(b"{deployment_name}", deployment)
+        raw = _resolve_manifest_placeholders(
+            ep_manifest.read_bytes(), f"entrypoint {entrypoint_name!r}"
+        )
 
         # Dynamic-manifest hook: if the app defines
         # `app.<entrypoint_snake>.core.compute_manifest`, hand the
@@ -1968,7 +2187,26 @@ def _register_workflow_routes(
                     type(computed).__name__,
                 )
                 raise HTTPException(status_code=500, detail="Internal server error")
-            raw = orjson.dumps(computed)
+            # Reconcile the hook's output, not just the static file. The hook
+            # *replaces* the manifest wholesale, so without this second pass
+            # everything it emits — a task_queue, a freshly generated node, a
+            # token it re-introduced — is served unreconciled, and FND-195's
+            # guarantee silently does not hold for exactly the apps that need it
+            # most: a bundle's marketplace entry points have their DAG computed
+            # per submission by this hook.
+            #
+            # Idempotent, so the pre-hook pass above stays (the hook should see
+            # resolved values it may key on): after that pass no template
+            # remains, so this one is a no-op unless the hook introduced
+            # something new. Note it catches unresolved *tokens*, not a hook
+            # that hardcodes a concrete-but-wrong queue — that string has no
+            # token to match, and normalising every `atlan-*` queue would
+            # rewrite the legitimate cross-app dispatch nodes this deliberately
+            # leaves alone. Conformance O005 is the guard for that shape.
+            raw = _resolve_manifest_placeholders(
+                orjson.dumps(computed),
+                f"entrypoint {entrypoint_name!r} (compute_manifest output)",
+            )
 
         return Response(content=raw, media_type="application/json")
 
@@ -1982,28 +2220,34 @@ def _register_workflow_routes(
         body dict. Everything downstream is identical and lives here once so the
         two methods cannot drift.
         """
-        deployment = (DEPLOYMENT_NAME or "default").encode()
-
         if entrypoint:
             # Guard 1 (400): reject obviously-malformed names before touching disk.
             if not _ENTRYPOINT_NAME_RE.match(entrypoint):
                 raise HTTPException(status_code=400, detail="Invalid entrypoint name")
-            return await _serve_entrypoint_manifest(entrypoint, fe_inputs, deployment)
+            return await _serve_entrypoint_manifest(entrypoint, fe_inputs)
 
         # No entrypoint param: single-entrypoint path
         if manifest is not None:
-            return Response(
-                content=manifest.model_dump_json(), media_type="application/json"
+            # Same reconciliation as the disk branches. A programmatic
+            # AppManifest is the one shape with no contract-toolkit bake behind
+            # it — the DAG was hand-built in Python — so every argument for
+            # "the toolkit already resolved this" is inapplicable here, and it
+            # is the branch most likely to carry an unresolved template rather
+            # than the least. Serving it verbatim also left this route with two
+            # behaviours across three manifest sources, which is the drift this
+            # module exists to remove (FND-195).
+            raw = _resolve_manifest_placeholders(
+                manifest.model_dump_json().encode(), "programmatic manifest"
             )
+            return Response(content=raw, media_type="application/json")
         manifest_path = CONTRACT_GENERATED_DIR / "manifest.json"
         if manifest_path.exists():
             # Disk: contract-generated file — serve raw bytes with placeholder
             # substitution. No parse/reserialize: the file is already valid JSON,
             # validated at build time by the contract tooling.
-            raw = manifest_path.read_bytes()
-            # app_name is baked into the manifest by the toolkit; only the
-            # per-deployment token is substituted here (see note above).
-            raw = raw.replace(b"{deployment_name}", deployment)
+            raw = _resolve_manifest_placeholders(
+                manifest_path.read_bytes(), "root manifest"
+            )
             return Response(content=raw, media_type="application/json")
 
         # Default-entrypoint fallback (aligns with PR #1965 semantics used
@@ -2063,10 +2307,9 @@ def _register_workflow_routes(
                 for ep in sorted(app_meta.entry_points.values(), key=lambda e: e.name)
                 if not ep.implicit and ep.name not in candidates
             )
-
         for cand in candidates:
             try:
-                return await _serve_entrypoint_manifest(cand, fe_inputs, deployment)
+                return await _serve_entrypoint_manifest(cand, fe_inputs)
             except HTTPException as exc:
                 if exc.status_code != 404:
                     raise
@@ -2198,9 +2441,25 @@ def _register_workflow_routes(
         if entrypoint is not None and not _ENTRYPOINT_NAME_RE.match(entrypoint):
             raise HTTPException(status_code=400, detail="Invalid entrypoint name")
 
-        _, ep = _resolve_app_entrypoint(
-            _workflow_config.app_name, entrypoint, unknown_ep_status=404
-        )
+        try:
+            _, ep = _resolve_app_entrypoint(
+                _workflow_config.app_name, entrypoint, unknown_ep_status=404
+            )
+        except HTTPException as exc:
+            # Registry miss — the entry point may be a *marketplace* (bundle)
+            # entry point that exists only as a generated contract dir on disk
+            # (its registry entrypoints are the DAG-node workflows, not the
+            # marketplace name). Filesystem-resolve it like the manifest and
+            # configmap routes already do; re-raise when it isn't one.
+            if exc.status_code != 404 or not entrypoint:
+                raise
+            contract = _marketplace_entrypoint_contract(entrypoint)
+            if contract is None:
+                raise
+            return Response(
+                content=orjson.dumps(contract.model_json_schema()),
+                media_type="application/json",
+            )
 
         # Prefer the generated AppInputContract (rich, validatable, credential
         # refs) over the entry point's thin runtime input_type. See
@@ -2278,7 +2537,10 @@ def create_app_handler_service(
         app_class: App class for workflow execution (enables /start, /stop, etc.).
         temporal_host: Temporal server address (e.g., "localhost:7233").
         temporal_namespace: Temporal namespace.
-        task_queue: Task queue name (default: "{app_name}-queue").
+        task_queue: Task queue name. Defaults to the deployment's canonical queue
+            (``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}``, see
+            :func:`application_sdk.common.task_queue.derive_task_queue`), falling
+            back to ``"{app_name}-queue"`` when that env is absent.
         data_converter: Optional custom Temporal DataConverter.
         secret_store: Optional secret store for credential resolution.
         storage: Optional obstore store for file uploads.
@@ -2320,7 +2582,16 @@ def create_app_handler_service(
     _workflow_config = WorkflowClientConfig(
         host=temporal_host,
         namespace=temporal_namespace,
-        task_queue=task_queue or f"{app_name}-queue",
+        # Env derivation before the {app_name}-queue default: this value is what
+        # the manifest route stamps into the DAG, so a handler constructed
+        # directly (without main.py passing the worker's queue through) must still
+        # land on the queue a worker started from the same env would poll — not on
+        # a fifth, locally-invented shape (FND-195).
+        task_queue=task_queue
+        or task_queue_from_env()
+        # Guarded on app_name: an unnamed handler would otherwise manufacture a
+        # bare "-queue", and the manifest route would stamp that into the DAG.
+        or (f"{app_name}-queue" if app_name else ""),
         app_name=getattr(app_class, "_app_name", "") if app_class is not None else "",
         app_class=app_class,
         data_converter=data_converter,
@@ -2407,7 +2678,7 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/auth")
     async def test_auth(request: Request) -> JSONResponse:
-        body = _normalize_credentials(await request.json())
+        body = _normalize_credentials(_lift_agent_json(await request.json()))
         auth_input = AuthInput.model_validate(body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
@@ -2635,7 +2906,7 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/metadata")
     async def fetch_metadata(request: Request) -> JSONResponse:
-        body = _normalize_credentials(await request.json())
+        body = _normalize_credentials(_lift_agent_json(await request.json()))
         metadata_input = MetadataInput.model_validate(body)
         # The widget routing key (``metadataTemplateKey`` / ``type`` on the
         # wire) now lands in its documented home, ``metadata_template_key``,
@@ -2674,7 +2945,10 @@ def create_app_handler_service(
                 # Both SqlMetadataOutput and ApiMetadataOutput expose
                 # .objects — model_dump() produces the correct shape for
                 # the corresponding frontend widget (sqltree / apitree).
-                data = [obj.model_dump() for obj in result.objects]
+                data = [
+                    obj.model_dump() if hasattr(obj, "model_dump") else obj
+                    for obj in result.objects
+                ]
                 count = len(result.objects)
                 logger.info(
                     "Metadata fetch completed: app=%s request=%s type=%s objects=%d",

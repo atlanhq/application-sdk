@@ -12,8 +12,9 @@ bugs are caught at CI time rather than under production orchestration.
 * ``P022`` UnawaitedCoroutine — a bare ``self.<async-method>()`` statement that is
   never awaited (the call silently does nothing).
 * ``P023`` BlockingCallInAsyncDef — an event-loop re-entry bridge
-  (``asyncio.run`` / ``run_until_complete``) or a blocking sync I/O call inside an
-  ``async def``.
+  (``asyncio.run`` / ``run_until_complete``), a blocking sync I/O call, or
+  tree-scale filesystem work (``shutil.rmtree`` / ``copytree`` / ``move``) inside
+  an ``async def``.
 * ``P024`` SyncAtlanClientInApp — pyatlan's synchronous ``AtlanClient`` used where
   the async ``AsyncAtlanClient`` (via the SDK credentials seam) is required.
 * ``P031`` SharedDefaultExecutorOffload — ``asyncio.to_thread(...)`` or

@@ -32,7 +32,9 @@ from application_sdk.handler.contracts import (
 )
 from application_sdk.handler.service import (
     _flatten_to_pairs,
+    _lift_agent_json,
     _normalize_credentials,
+    _rank_agent_json,
     _wrap_response,
     create_app_handler_service,
 )
@@ -2525,6 +2527,164 @@ class TestManifestEndpoint:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
             svc_module.DEPLOYMENT_NAME = original_dep
+
+    def test_manifest_queue_matches_the_configured_worker_queue(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FND-195: the served queue is stamped from the queue this process was
+        configured with, not re-derived from env and hoped to match.
+
+        The baked name here (``dbt``) disagrees with the deployment's app name
+        (``dbt-v3``) — the shape that used to serve a plausible ``atlan-dbt-prod``
+        that no worker polled, hanging the run to its 24h backstop (CONNECT-183).
+        """
+        from application_sdk.handler import service as svc_module
+
+        manifest_data = {
+            "execution_mode": "dag",
+            "dag": {
+                "extract": {
+                    "activity_name": "execute_workflow",
+                    "app_name": "dbt",
+                    "inputs": {"task_queue": "atlan-dbt-{deployment_name}"},
+                }
+            },
+        }
+        (tmp_path / "manifest.json").write_text(json.dumps(manifest_data))
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "dbt-v3")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            app = create_app_handler_service(
+                _TestHandler(), app_name="dbt", task_queue="atlan-dbt-v3-prod"
+            )
+            response = TestClient(app).get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            served = response.json()["dag"]["extract"]["inputs"]["task_queue"]
+            assert served == "atlan-dbt-v3-prod"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_manifest_unresolvable_app_name_keeps_the_token_visible(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no app name anywhere the route must not manufacture one: a literal
+        ``{app_name}`` is greppable, whereas ``atlan-default-prod`` reads as a real
+        queue and reproduces the original silent hang."""
+        from application_sdk.handler import service as svc_module
+
+        manifest_data = {
+            "execution_mode": "dag",
+            "dag": {
+                "extract": {
+                    "activity_name": "execute_workflow",
+                    "app_name": "{app_name}",
+                    "inputs": {"task_queue": "atlan-{app_name}-{deployment_name}"},
+                }
+            },
+        }
+        (tmp_path / "manifest.json").write_text(json.dumps(manifest_data))
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name="" so nothing is registered to fall back to either.
+            app = create_app_handler_service(_TestHandler(), app_name="")
+            response = TestClient(app).get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            served = response.json()["dag"]["extract"]["inputs"]["task_queue"]
+            assert "{app_name}" in served
+            assert "default" not in served
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_manifest_programmatic_queue_matches_the_configured_worker_queue(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A programmatic ``AppManifest`` gets the same reconciliation as the disk
+        branches — it is the shape with no toolkit bake behind it at all, so it is
+        the *most* likely to carry an unresolved template, not the least.
+
+        Asserted as equality with the configured worker queue rather than a
+        hard-coded string, so the programmatic path cannot drift from the disk
+        paths the way it did before FND-195.
+        """
+        from application_sdk.handler.manifest import (
+            AppManifest,
+            DagNode,
+            ExecuteWorkflowInputs,
+        )
+
+        worker_queue = "atlan-dbt-v3-prod"
+        manifest = AppManifest(
+            execution_mode="dag",
+            dag={
+                "extract": DagNode(
+                    activity_name="execute_workflow",
+                    activity_display_name="Extract",
+                    app_name="{app_name}",
+                    inputs=ExecuteWorkflowInputs(
+                        workflow_type="extraction",
+                        # Un-baked template: the toolkit never ran on this one.
+                        task_queue="atlan-{app_name}-{deployment_name}",
+                    ),
+                ),
+            },
+        )
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "dbt-v3")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        app = create_app_handler_service(
+            _TestHandler(),
+            app_name="dbt-v3",
+            task_queue=worker_queue,
+            manifest=manifest,
+        )
+        response = TestClient(app).get("/workflows/v1/manifest")
+        assert response.status_code == 200
+        node = response.json()["dag"]["extract"]
+        assert node["inputs"]["task_queue"] == worker_queue
+        # Residual {app_name} is per-node log identity (HYP-1954), filled too.
+        assert node["app_name"] == "dbt-v3"
+
+    def test_manifest_programmatic_unresolvable_app_name_keeps_the_token_visible(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no app name available the programmatic path must not manufacture
+        one either — same contract as the disk branches."""
+        from application_sdk.handler.manifest import (
+            AppManifest,
+            DagNode,
+            ExecuteWorkflowInputs,
+        )
+
+        manifest = AppManifest(
+            execution_mode="dag",
+            dag={
+                "extract": DagNode(
+                    activity_name="execute_workflow",
+                    activity_display_name="Extract",
+                    app_name="{app_name}",
+                    inputs=ExecuteWorkflowInputs(
+                        workflow_type="extraction",
+                        task_queue="atlan-{app_name}-{deployment_name}",
+                    ),
+                ),
+            },
+        )
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        app = create_app_handler_service(_TestHandler(), app_name="", manifest=manifest)
+        response = TestClient(app).get("/workflows/v1/manifest")
+        assert response.status_code == 200
+        served = response.json()["dag"]["extract"]["inputs"]["task_queue"]
+        assert "{app_name}" in served
+        assert "default" not in served
 
     def test_manifest_programmatic_takes_priority(self, tmp_path: Path) -> None:
         """When both programmatic and disk manifest exist, programmatic wins."""
@@ -5719,6 +5879,107 @@ class TestComputeManifestHook:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_hook_output_is_reconciled_not_served_verbatim(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FND-195: the hook *replaces* the manifest, so its output needs the same
+        queue reconciliation as the static file — otherwise the guarantee is void
+        for precisely the apps that need it, since a bundle's marketplace entry
+        points have their DAG computed per submission by this hook.
+
+        The static file here carries no queue at all; the template appears only
+        in what the hook emits, so a pre-hook-only substitution cannot catch it.
+        """
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "hook-ep"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            # A per-submission DAG built at request time, carrying the un-baked
+            # template — nothing baked this, the hook just wrote it.
+            return {
+                "dag": {
+                    "extract": {
+                        "app_name": "{app_name}",
+                        "inputs": {"task_queue": "atlan-{app_name}-{deployment_name}"},
+                    }
+                }
+            }
+
+        self._install_fake_core(monkeypatch, "hook-ep", compute_manifest)
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "dbt-v3")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        worker_queue = "atlan-dbt-v3-prod"
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            app = create_app_handler_service(
+                _TestHandler(), app_name="dbt-v3", task_queue=worker_queue
+            )
+            response = TestClient(app).get(
+                "/workflows/v1/manifest", params={"entrypoint": "hook-ep"}
+            )
+            assert response.status_code == 200
+            node = response.json()["dag"]["extract"]
+            assert node["inputs"]["task_queue"] == worker_queue
+            assert node["app_name"] == "dbt-v3"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_hook_output_unresolvable_app_name_keeps_the_token_visible(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no app name available the hook's output must not have one
+        manufactured for it either — same contract as the static paths.
+
+        Asserts the *graded* outcome, not just the surviving token: the
+        deployment token is filled (proving the reconciliation pass ran on the
+        hook's output at all) while ``{app_name}`` is left visible. Checking only
+        for the surviving token would pass against a build that never reconciles
+        the hook output, since serving it verbatim also leaves the token in.
+        """
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "hook-ep"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {
+                "dag": {
+                    "extract": {
+                        "inputs": {"task_queue": "atlan-{app_name}-{deployment_name}"}
+                    }
+                }
+            }
+
+        self._install_fake_core(monkeypatch, "hook-ep", compute_manifest)
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            app = create_app_handler_service(_TestHandler(), app_name="")
+            response = TestClient(app).get(
+                "/workflows/v1/manifest", params={"entrypoint": "hook-ep"}
+            )
+            assert response.status_code == 200
+            served = response.json()["dag"]["extract"]["inputs"]["task_queue"]
+            # The pass ran: the deployment token resolved.
+            assert "{deployment_name}" not in served
+            assert "prod" in served
+            # ...but nothing was invented for the app name.
+            assert "{app_name}" in served
+            assert "default" not in served
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_async_hook_is_awaited(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -6739,6 +7000,85 @@ class TestDefaultEntrypoint:
             patcher.stop()
 
 
+class TestAgentJsonLift:
+    """`_lift_agent_json` / `_rank_agent_json`: surface the freshest agent-json.
+
+    Heracles forwards the FE payload verbatim, so the agent-json binding can
+    arrive nested (metadata / connection_config / credentials) and in several
+    competing copies at once — a live hyphen `agent-json` object next to a stale
+    underscore `agent_json` serialized string. The lift must surface the freshest
+    copy at the canonical top-level ``agent_json`` key for downstream consumers.
+    """
+
+    _FRESH = {"agent-name": "acme", "basic.username": "USERNAME", "host": "h"}
+    _STALE = '{"agent-name": "acme", "basic.username": "username", "host": "h"}'
+
+    def test_rank_prefers_object_over_string_and_hyphen_over_underscore(self) -> None:
+        assert _rank_agent_json({}, "agent-json") > _rank_agent_json({}, "agent_json")
+        assert _rank_agent_json({}, "agent_json") > _rank_agent_json("{}", "agent-json")
+        # object beats string even when the string uses the canonical hyphen key
+        assert _rank_agent_json({}, "agent_json") > _rank_agent_json("{}", "agent_json")
+
+    def test_sage_shape_picks_fresh_object_over_stale_string(self) -> None:
+        # /sage: heracles forwards formData -> metadata carrying BOTH copies.
+        body = {
+            "credentials": {"connectorConfigName": "atlan-connectors-mssql"},
+            "metadata": {
+                "agent_json": self._STALE,
+                "agent-json": self._FRESH,
+                "extraction-method": "agent",
+            },
+        }
+        out = _lift_agent_json(body)
+        assert out["agent_json"] == self._FRESH
+        assert out["agent_json"]["basic.username"] == "USERNAME"
+        # both agent-json keys stripped from the container
+        assert "agent_json" not in out["metadata"]
+        assert "agent-json" not in out["metadata"]
+        assert out["metadata"]["extraction-method"] == "agent"
+
+    def test_serialized_string_used_as_fallback_when_no_object(self) -> None:
+        out = _lift_agent_json({"metadata": {"agent_json": self._STALE}})
+        assert out["agent_json"]["basic.username"] == "username"
+
+    def test_top_level_fresh_hyphen_overrides_stale_underscore(self) -> None:
+        out = _lift_agent_json({"agent_json": self._STALE, "agent-json": self._FRESH})
+        assert out["agent_json"] == self._FRESH
+        # stale aliases are dropped; only the canonical top-level key remains
+        assert "agent-json" not in out
+
+    def test_agent_json_inside_credentials_dict(self) -> None:
+        out = _lift_agent_json(
+            {"credentials": {"agent-json": self._FRESH, "connectorConfigName": "x"}}
+        )
+        assert out["agent_json"] == self._FRESH
+        assert "agent-json" not in out["credentials"]
+        assert out["credentials"]["connectorConfigName"] == "x"
+
+    def test_agent_json_inside_v3_credentials_list(self) -> None:
+        out = _lift_agent_json(
+            {
+                "credentials": [
+                    {"key": "agent-json", "value": self._FRESH},
+                    {"key": "connectorConfigName", "value": "x"},
+                ]
+            }
+        )
+        assert out["agent_json"] == self._FRESH
+        assert all(c["key"] != "agent-json" for c in out["credentials"])
+
+    def test_direct_mode_body_unchanged(self) -> None:
+        body = {"credentials": {"host": "h", "username": "u"}}
+        assert _lift_agent_json(body) == body
+
+    def test_empty_agent_json_ignored(self) -> None:
+        assert "agent_json" not in _lift_agent_json({"metadata": {"agent-json": {}}})
+        assert "agent_json" not in _lift_agent_json({"metadata": {"agent_json": ""}})
+
+    def test_unparseable_string_ignored(self) -> None:
+        assert "agent_json" not in _lift_agent_json({"metadata": {"agent_json": "{"}})
+
+
 class TestManifestPostTransport:
     """``POST /manifest`` — the body transport for ``fe_inputs`` (CSA-539).
 
@@ -7060,5 +7400,143 @@ class TestManifestPostTransport:
             )
             assert response.status_code == 200
             assert response.json()["app_name"] == "static"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+
+class TestBundleMarketplaceEntrypoints:
+    """Bundle ("uber") apps expose *marketplace* entry points only as generated
+    contract dirs (``app/generated/<ep>/manifest.json``); their registry
+    entrypoints are the DAG-node workflows (e.g. ``export-post``). The
+    input-contract route resolves the marketplace names from disk instead of
+    404-ing (production RCA: /v1/app creation failed for every bundle entry
+    point with 'No input contract for entrypoint'). Bare /manifest stays 404
+    by design until the declarative resolver (FND-180) can pick correctly."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @staticmethod
+    def _bundle_app() -> type:
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _BundleApp(App):
+            # Registry knows only the DAG-node workflows, never the
+            # marketplace entry point ("export") itself.
+            @entrypoint
+            async def export_post(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def export_build_raw_sql(
+                self, input: _RoutingInput
+            ) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        return _BundleApp
+
+    def _client(self, app_cls: type) -> TestClient:
+        svc = create_app_handler_service(
+            _TestHandler(), app_name="bundle-test", app_class=app_cls
+        )
+        return TestClient(svc, raise_server_exceptions=False)
+
+    def test_input_contract_resolves_marketplace_entrypoint_from_disk(
+        self, tmp_path: Path
+    ) -> None:
+        """?entrypoint=<marketplace-name> misses the registry but has a
+        generated dir + relocated AppInputContract → 200 with its schema."""
+        import sys
+        import types
+
+        from pydantic import BaseModel
+
+        from application_sdk.handler import service as svc_module
+
+        (tmp_path / "export").mkdir()
+        (tmp_path / "export" / "manifest.json").write_text("{}")
+
+        class AppInputContract(BaseModel):
+            delivery_type: str = "DIRECT"
+
+        module = types.ModuleType("app.export._input")
+        module.AppInputContract = AppInputContract  # type: ignore[attr-defined]
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        sys.modules["app.export._input"] = module
+        try:
+            resp = self._client(self._bundle_app()).get(
+                "/workflows/v1/input-contract?entrypoint=export"
+            )
+            assert resp.status_code == 200
+            assert resp.json() == AppInputContract.model_json_schema()
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+            del sys.modules["app.export._input"]
+
+    def test_input_contract_404_when_no_generated_dir(self, tmp_path: Path) -> None:
+        """A name with neither a registry entry nor a generated dir keeps the
+        existing 404 contract."""
+        from application_sdk.handler import service as svc_module
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            resp = self._client(self._bundle_app()).get(
+                "/workflows/v1/input-contract?entrypoint=export"
+            )
+            assert resp.status_code == 404
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_input_contract_404_when_dir_has_no_contract_module(
+        self, tmp_path: Path
+    ) -> None:
+        """A generated dir without an importable AppInputContract still 404s
+        (never a 500, never a wrong sibling's schema)."""
+        from application_sdk.handler import service as svc_module
+
+        (tmp_path / "export").mkdir()
+        (tmp_path / "export" / "manifest.json").write_text("{}")
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            resp = self._client(self._bundle_app()).get(
+                "/workflows/v1/input-contract?entrypoint=export"
+            )
+            assert resp.status_code == 404
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_bare_manifest_on_bundle_still_404s(self, tmp_path: Path) -> None:
+        """A bare /manifest call on a bundle app keeps 404-ing even when
+        marketplace entry-point dirs exist on disk. Serving one of N
+        marketplace manifests picked arbitrarily would be confidently wrong —
+        callers must name the entry point. (The declarative resolver that can
+        answer this properly is FND-180.)"""
+        from application_sdk.handler import service as svc_module
+
+        for name in ("beta-export", "alpha-export"):
+            (tmp_path / name).mkdir()
+            (tmp_path / name / "manifest.json").write_text(json.dumps({"name": name}))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            resp = self._client(self._bundle_app()).get("/workflows/v1/manifest")
+            assert resp.status_code == 404
+            assert resp.json()["detail"] == "No manifest available"
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original

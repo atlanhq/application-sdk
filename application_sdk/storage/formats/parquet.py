@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.contracts.types import FileReference
+from application_sdk.errors import AppError
 from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
@@ -27,6 +28,47 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     import pandas as pd
+    import pyarrow as pa
+
+
+def _normalize_all_null_string_columns(table: "pa.Table") -> "pa.Table":
+    """Rewrite all-null ``string``/``large_string`` columns as Arrow ``null``.
+
+    A shard written before CNCT-80 persisted an all-null column as
+    ``large_string``. ``pa.concat_tables(..., promote_options="permissive")``
+    can promote ``null`` to any concrete sibling type, but cannot reconcile
+    ``large_string`` against a numeric sibling — so a prefix that mixes a
+    legacy all-null shard with a new numeric shard still fails to merge.
+    Rewriting the all-null string column as ``null`` restores that promotion
+    without touching columns that actually hold string data.
+    """
+    import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+
+    if not isinstance(table, pa.Table):
+        return table
+
+    fields = []
+    columns = []
+    changed = False
+    for i, field in enumerate(table.schema):
+        column = table.column(i)
+        if (
+            pa.types.is_string(field.type) or pa.types.is_large_string(field.type)
+        ) and column.null_count == table.num_rows:
+            # null_count == num_rows already holds for an empty (0-row) string
+            # column, so legacy 0-row shards normalize here as well.
+            fields.append(field.with_type(pa.null()))
+            columns.append(pa.chunked_array([pa.nulls(table.num_rows, type=pa.null())]))
+            changed = True
+        else:
+            fields.append(field)
+            columns.append(column)
+
+    if not changed:
+        return table
+    return pa.Table.from_arrays(
+        columns, schema=pa.schema(fields, metadata=table.schema.metadata)
+    )
 
 
 class ParquetFileReader(Reader):
@@ -237,8 +279,20 @@ class ParquetFileReader(Reader):
                 import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
                 return pd.DataFrame()
+            # Normalize legacy all-null large_string shards (pre-CNCT-80
+            # writes) so permissive promotion can merge them against a
+            # sibling shard's concrete numeric type.
+            tables = [_normalize_all_null_string_columns(t) for t in tables]
             combined = pa.concat_tables(tables, promote_options="permissive")
             return combined.to_pandas()
+        # An already-typed AppError carries its own category/audience/evidence
+        # (e.g. ObjectStoreReadError -> DEPENDENCY_UNAVAILABLE + the searched
+        # prefix). Re-wrapping it as FormatReadError would downgrade that to
+        # INTERNAL/APP_OWNER and drop the evidence fields, so let it through
+        # unchanged — the same guard `_download_files` already applies one
+        # frame down for exactly this reason.
+        except AppError:
+            raise
         # conformance: ignore[E004] exception is re-raised as FormatReadError; traceback preserved in cause chain
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
@@ -309,6 +363,9 @@ class ParquetFileReader(Reader):
                         yield batch.to_pandas()
                 finally:
                     pf.close()
+        # See _get_dataframe: preserve an already-typed AppError.
+        except AppError:
+            raise
         # conformance: ignore[E004] exception is re-raised as FormatReadError; traceback preserved in cause chain
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
@@ -815,43 +872,31 @@ class ParquetFileWriter(Writer):
         return FileReference.from_local(self.path)
 
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
-        """Write a chunk to a Parquet file, casting null-typed columns to string.
+        """Write a chunk to a Parquet file.
 
-        When a pandas DataFrame has an all-null column, pyarrow infers the parquet
-        type as ``null``. This causes silent data loss when daft reads multiple
-        parquet files with mixed null/string column types — daft resolves the
-        conflict by using ``null`` for ALL rows, dropping actual data from files
-        that had the column typed as ``string``. See BLDX-837.
+        An all-null column is written with its natural pyarrow-inferred
+        ``null`` type rather than cast to ``large_string``. The cast was a
+        workaround for a daft merge bug (BLDX-837) that no longer applies —
+        daft was removed entirely in #2300. Leaving the column typed ``null``
+        lets the reader's ``pa.concat_tables(..., promote_options="permissive")``
+        promote it against a sibling shard's real type at merge time; casting
+        it to ``large_string`` instead made that promotion impossible whenever
+        a sibling shard was typed e.g. ``double`` (CNCT-80).
         """
         import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
         import pyarrow.parquet as pq  # noqa: PLC0415 — optional dep: pyarrow.parquet
 
         table = pa.Table.from_pandas(chunk, preserve_index=False)
-
-        # Fast path: no null-typed columns → write directly (O(cols) check)
-        if not any(pa.types.is_null(f.type) for f in table.schema):
-            row_group_size = max(
-                1,
-                min(
-                    len(table), 16_000_000 // max(1, table.nbytes // max(1, len(table)))
-                ),
-            )
-            pq.write_table(
-                table, file_name, compression="snappy", row_group_size=row_group_size
-            )
-            return
-
-        # Slow path: cast null-typed columns to large_string before writing
-        new_schema = pa.schema(
-            [
-                pa.field(f.name, pa.large_string()) if pa.types.is_null(f.type) else f
-                for f in table.schema
-            ]
-        )
-        table = table.cast(new_schema)
         row_group_size = max(
             1, min(len(table), 16_000_000 // max(1, table.nbytes // max(1, len(table))))
         )
-        pq.write_table(
-            table, file_name, compression="snappy", row_group_size=row_group_size
+        # Offloaded: pq.write_table() is blocking disk I/O; running it
+        # inline stalls the event loop — including the auto-heartbeat —
+        # for the write's full duration on large chunks.
+        await run_in_thread(
+            pq.write_table,
+            table,
+            file_name,
+            compression="snappy",
+            row_group_size=row_group_size,
         )

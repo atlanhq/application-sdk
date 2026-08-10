@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from collections import deque
 
+from .._ast_common._sanitizers import call_uses_sanitizer
 from ._base import _MixinBase
 from ._constants import LOG_METHODS_WITH_TRACEBACK
 from ._helpers import has_exc_info_true, is_logger_call
@@ -51,8 +52,12 @@ class TracebackMixin(_MixinBase):
 
         A log call without exc_info=True in an except block produces a message
         with no stack trace — the root cause is invisible.  Exempt: calls to
-        ``logger.exception()`` (which implicitly sets exc_info) and any call
-        that already carries ``exc_info=True``.
+        ``logger.exception()`` (which implicitly sets exc_info), any call
+        that already carries ``exc_info=True``, and calls whose arguments flow
+        through a recognised redaction helper (``redact*``/``sanitiz*``/
+        ``safe_traceback``/…) — those mark a deliberate no-traceback boundary
+        where ``exc_info`` would bypass the redaction and can leak credentials
+        (see _ast_common/_sanitizers.py).
         """
         for node in _walk_no_scope(handler):
             if not isinstance(node, ast.Call):
@@ -68,6 +73,10 @@ class TracebackMixin(_MixinBase):
             if method not in LOG_METHODS_WITH_TRACEBACK:
                 continue
             if has_exc_info_true(node):
+                continue
+            if call_uses_sanitizer(node):
+                # Deliberate redaction boundary — exc_info would serialize the
+                # raw exception past the sanitizer and can leak credentials.
                 continue
             self._add(
                 "L004",

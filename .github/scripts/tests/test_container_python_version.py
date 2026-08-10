@@ -137,16 +137,25 @@ def test_print_version_reads_repo_dockerfile(
     assert out.count(".") == 1
 
 
-def test_sdr_e2e_default_matches_dockerfile() -> None:
-    # The sdr-e2e action's `expected-python-version` default is the E2E source
-    # of truth for connectors (which don't ship this SoT script). It must track
+@pytest.mark.parametrize("action", ["sdr-e2e", "build-app-image"])
+def test_action_python_default_matches_dockerfile(action: str) -> None:
+    # These actions' `expected-python-version` defaults are the E2E source of
+    # truth for connectors (which don't ship this SoT script). They must track
     # the SDK Dockerfile so a golden-image bump can't leave connector E2E
     # asserting — and pinning the host harness to — a stale version.
+    #
+    # Parametrised because the value is now declared in TWO places:
+    # build-app-image performs the assertion, and sdr-e2e both forwards it and
+    # pins the host harness to it. Two defaults are two chances to drift, so
+    # both are pinned to the Dockerfile here rather than only the one that
+    # happens to do the comparing.
     root = cpv._repo_root()
     dockerfile_version = cpv.parse_dockerfile_version(root / "Dockerfile")
-    action = (root / ".github/actions/sdr-e2e/action.yaml").read_text(encoding="utf-8")
-    match = re.search(
-        r"expected-python-version:.*?default:\s*\"([0-9.]+)\"", action, re.DOTALL
+    action_yaml = (root / ".github/actions" / action / "action.yaml").read_text(
+        encoding="utf-8"
     )
-    assert match, "expected-python-version default not found in sdr-e2e action.yaml"
+    match = re.search(
+        r"expected-python-version:.*?default:\s*\"([0-9.]+)\"", action_yaml, re.DOTALL
+    )
+    assert match, f"expected-python-version default not found in {action}/action.yaml"
     assert match.group(1) == dockerfile_version

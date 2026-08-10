@@ -21,9 +21,12 @@ class PrintMixin(_MixinBase):
 
         Test files and ``if __name__ == '__main__':`` blocks are already
         excluded by the discovery walk and the checker's ``_in_main_block``
-        flag respectively.  CLI-script print() can be suppressed with a
-        ``# conformance: ignore[L005] CLI output`` directive.
+        flag respectively.  Standalone scripts/CLIs (shebang or ``__main__``
+        guard — see ``is_script_file``) are exempt
+        entirely: stdout is their user interface, not a logging bypass.
         """
+        if self._is_script_file:
+            return  # standalone script/CLI — stdout is its user interface
         func = node.func
         if not isinstance(func, ast.Name):
             return

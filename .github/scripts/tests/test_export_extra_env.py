@@ -573,15 +573,40 @@ _CALL_SITE_SUFFIXES = ("*.y*ml", "*.sh", "*.py")
 # a named exclusion rather than encoded into the predicate, and validated below:
 # if a mention here ever appears outside a comment, the exclusion stops applying
 # and the file is audited like any other caller.
-_PROSE_ONLY_FILES = {".github/workflows/scripts-tests.yaml"}
+_PROSE_ONLY_FILES = {
+    ".github/workflows/scripts-tests.yaml",
+    # FND-31. Names this script in a comment only, pointing at it as the
+    # explanation for why its own tenant-resolution step is two passes. It never
+    # invokes it. The "no live mention" assertion below is what keeps that true:
+    # if it ever starts invoking the script, it stops being excluded.
+    ".github/workflows/e2e-tenant-install.yaml",
+}
 
 # The script and its own tests are the implementation, not callers of it. Both
 # contain literal `>> "$GITHUB_ENV"` invocations — in the module docstring's usage
 # example and in this file's parametrized fixtures — which are not comments and so
 # would be audited as unmasked call sites once the glob reaches .py files.
+#
+# resolve_e2e_tenant.py is the third: it `import`s this module in-process to reuse
+# `render`/`render_masks` rather than shelling out to it, so the ordering guarantee
+# for its own callers is enforced by its own two-mode CLI — audited by the twin
+# guard in test_resolve_e2e_tenant.py, which discovers *its* call sites the same
+# way this one does. Auditing it here would look for a shell invocation that does
+# not exist, and the `>> "$GITHUB_ENV"` lines in its docstring and its tests would
+# read as unmasked writes.
+#
 # Computed rather than spelled out: the paths cannot drift, and the exclusion
-# cannot quietly widen to cover some third file.
-_NOT_A_CALLER = frozenset({_MODULE_PATH.resolve(), Path(__file__).resolve()})
+# cannot quietly widen to cover some fourth file.
+_RESOLVE_TENANT_MODULE = _MODULE_PATH.parent / "resolve_e2e_tenant.py"
+_RESOLVE_TENANT_TESTS = Path(__file__).parent / "test_resolve_e2e_tenant.py"
+_NOT_A_CALLER = frozenset(
+    {
+        _MODULE_PATH.resolve(),
+        Path(__file__).resolve(),
+        _RESOLVE_TENANT_MODULE.resolve(),
+        _RESOLVE_TENANT_TESTS.resolve(),
+    }
+)
 
 
 def _live_mentions(text: str) -> list[str]:

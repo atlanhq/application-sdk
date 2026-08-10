@@ -158,9 +158,15 @@ BUDGET
     carried forward, downgraded, or re-checked given the current HEAD.
 
     ```bash
+    # S5: use --paginate --slurp and pipe into standalone jq. The naive
+    # --paginate --jq idiom runs the jq filter once PER PAGE, so `last`
+    # picks the last match on the FIRST page, not the last match across all
+    # pages. On PRs with many comments spanning multiple API pages this
+    # would silently load an older review. --slurp collapses pages into one
+    # outer array; `.[][]` flattens into a single stream before `last`.
     PRIOR_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-      --paginate \
-      --jq '[.[] | select(.body | contains("<!-- SDK_REVIEW -->"))] | last | .body // ""')
+      --paginate --slurp 2>/dev/null \
+      | jq -r '[.[][] | select(.body | contains("<!-- SDK_REVIEW -->"))] | last | .body // ""')
 
     if [ -n "$PRIOR_REVIEW" ]; then
       printf '%s\n' "$PRIOR_REVIEW" > /tmp/PRIOR_REVIEW.md
@@ -171,11 +177,15 @@ BUDGET
     fi
     ```
 
-    **CRITICAL — jq idiom:** wrap the selection in `[ ... ] | last`
-    and take `.body` from the array element. A naive
-    `--jq '.[] | select(...) | .body' | head -1` collapses the raw
-    multiline body to its first line (the `<!-- SDK_REVIEW -->`
-    HTML marker) and silently drops the entire review content.
+    **CRITICAL — jq idiom:** two mistakes to avoid:
+    - `--jq '.[] | select(...) | .body' | head -1` collapses the raw
+      multiline body to its first line (the `<!-- SDK_REVIEW -->`
+      HTML marker) and silently drops the entire review content.
+    - `--paginate --jq '[.[] | select(...)] | last'` runs the jq filter
+      ONCE PER PAGE, so `last` picks the final match on page 1, not
+      across all pages. On a PR with enough comments to span pages,
+      this returns a stale older review. Always use `--paginate --slurp`
+      and pipe into standalone `jq -r '[.[][] | select(...)] | last'`.
 
     Every subsequent phase that reasons about the PR (Phase 2 agents,
     cross-model debias, verdict determination) should treat
@@ -184,6 +194,93 @@ BUDGET
     prior bot's reasoning and (often, in author replies on inline
     threads) the human's response, which materially changes what
     counts as a "new" finding vs a known-and-discussed one.
+
+    **Same-run replay guard — run this immediately after loading
+    `/tmp/PRIOR_REVIEW.md`, before anything else.** When the Claude
+    stream drops mid-run (sandbox VPN reconnect, container eviction,
+    transient API error), mothership recovers by re-running this prompt
+    **from the top in the same sandbox** — a fresh run, not a `--resume`.
+    If the first pass had already posted its summary, that retry loads
+    its own summary as `PRIOR_REVIEW`, sees an empty delta, and posts a
+    SECOND summary for the same HEAD. The PR then shows two reviews with
+    different wording from a single `@sdk-review` trigger, and the
+    workflow's soft-success check passes because *a* summary exists.
+
+    Every summary's footer carries the run URL that produced it (§3e),
+    and §3f posts the summary **last**, after the inline comments and the
+    commit status — so a summary bearing this run's URL means this run's
+    submission completed in full. Check *every* summary on the PR, not
+    just the one 6b loaded: that one is only the latest, and an unrelated
+    review landing between the first pass and the replay would hide this
+    run's footer behind it.
+
+    ```bash
+    # GHA_RUN_URL is given in the session prompt — substitute it literally,
+    # shell variables do not persist between Bash calls.
+    gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate --slurp 2>/dev/null \
+      | jq -r '[.[][] | select(.body | contains("<!-- SDK_REVIEW -->")) | .body] | join("\n")' \
+      | grep -qF '<GHA_RUN_URL>' \
+      && echo "REPLAY: this run already posted its review summary"
+    ```
+
+    If that prints `REPLAY`, **stop the entire run here**: post nothing,
+    set no commit status, resolve no threads, do not continue to Phase 1.
+    The review was already delivered by the pass that died.
+
+    Key the guard on the run URL, never on `HEAD_SHA` alone — a genuine
+    re-trigger against an unchanged HEAD comes from a *different* run and
+    must still produce a review.
+
+    **Bot-trigger dedupe guard — run immediately after the replay guard.**
+    The `gate` job in `sdk-review.yml` is an *optimization*, not the
+    authority: it runs outside the per-PR concurrency group, so two
+    automated triggers can both pass it concurrently ("no review for this
+    HEAD yet") and both reach the sandbox. The sandbox runs inside the
+    concurrency lock and is the only place that sees true comment state.
+
+    Check: if `COMMENTER` is an automated trigger (`mothership-ai[bot]`
+    or `atlan-ci`) **and** the newest summary's `<!-- REVIEWED_HEAD -->`
+    equals `HEAD_SHA`, this run is a duplicate. Stop without posting.
+    Humans (`COMMENTER` is any other login) are never stopped by this
+    guard — re-reading the same diff is a legitimate human request.
+
+    Use "newest summary" (the body already in `/tmp/PRIOR_REVIEW.md`),
+    never the oldest.
+
+    ```bash
+    # COMMENTER and HEAD_SHA are from the prompt header.
+    BOT_TRIGGERS="mothership-ai[bot] atlan-ci"
+    if echo "$BOT_TRIGGERS" | grep -qF "$COMMENTER"; then
+      NEWEST_REVIEWED_HEAD=$(grep -oE '<!-- REVIEWED_HEAD: [0-9a-f]{40} -->' /tmp/PRIOR_REVIEW.md \
+        | grep -oE '[0-9a-f]{40}' || true)
+      if [ -n "$NEWEST_REVIEWED_HEAD" ] && [ "$NEWEST_REVIEWED_HEAD" = "$HEAD_SHA" ]; then
+        echo "SKIP: bot-trigger dedupe — @${COMMENTER} re-triggered on HEAD ${HEAD_SHA} which the newest summary already reviewed. Gate was not authoritative (runs outside the concurrency lock). Stopping without posting."
+        # S4: Restore the commit status so the dispatch run's pending state
+        # does not linger after this no-op. The dispatch run always sets
+        # sdk-review to "pending" before the sandbox starts. If the sandbox
+        # exits here without posting a new verdict comment, the fast-path
+        # approve workflow never fires, and the pending status persists —
+        # which is misleading (the review was already delivered). Re-apply
+        # the status implied by the prior verdict.
+        PRIOR_VERDICT=$(grep -oE '<!-- VERDICT: [A-Z_]+ -->' /tmp/PRIOR_REVIEW.md \
+          | grep -oE '[A-Z_]+' | head -1 || true)
+        case "$PRIOR_VERDICT" in
+          "READY_TO_MERGE")
+            gh api "repos/${REPO}/statuses/${HEAD_SHA}" -X POST \
+              -f state=success -f context=sdk-review \
+              -f description="Approved (bot-retrigger skipped: already reviewed this HEAD)" 2>/dev/null || true;;
+          "")
+            : # No prior verdict found — leave status as-is to avoid stomping
+            ;;
+          *)
+            gh api "repos/${REPO}/statuses/${HEAD_SHA}" -X POST \
+              -f state=failure -f context=sdk-review \
+              -f description="Verdict: ${PRIOR_VERDICT} (bot-retrigger skipped: already reviewed this HEAD)" 2>/dev/null || true;;
+        esac
+        exit 0
+      fi
+    fi
+    ```
 
 6c. **Compute the re-review delta (scope-cutter).** Each review summary
     stamps the HEAD it reviewed as `<!-- REVIEWED_HEAD: <sha> -->` (§3e).
@@ -1173,7 +1270,12 @@ after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
 `<!-- REVIEWED_HEAD: <sha> -->` records the 40-char HEAD this review
 ran against — step 6c reads it on the next round to compute the
 re-review delta; omitting it forces the next round back to a full
-review. For toolkit scopes, the fourth marker
+review. **Substitute `<HEAD_SHA>` with the verbatim 40-character hex
+SHA from the prompt header — write the raw hex characters, never the
+literal placeholder text `<HEAD_SHA>`.** The §3f submit step adds a
+shell-level safety net (`sed`) in case the LLM writes the placeholder,
+but the correct value must come from the reviewed HEAD, not a live
+re-fetch. For toolkit scopes, the fourth marker
 `<!-- TOOLKIT_ARTIFACT_HASH: <sha256> -->` records the PR-generated
 artifact hash from Phase 1b-toolkit so the next round can carry
 consumer validation forward; omit the line entirely for non-toolkit
@@ -1304,9 +1406,17 @@ if [ "$review_scope" = "contract-toolkit" ] || [ "$review_scope" = "mixed-sdk-to
   done
 fi
 
-# Summary comment (the body built in 3a, including the
-# <!-- SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON):
-gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
+# ORDER MATTERS — the summary comment goes LAST, after the inline
+# comments and the commit status.
+#
+# The summary is the completion signal that everything downstream keys
+# off: `sdk-review-approve-on-verdict.yml` fires on it, the workflow's
+# soft-success check treats its presence as "the review was delivered",
+# and the Phase 0 §6b replay guard reads its footer to decide whether a
+# recovered run has already done this work. Post it first and all three
+# read a partial submission — inline findings still unposted, status
+# unset — as a completed one. Posting it last makes its presence mean
+# what every consumer already assumes it means.
 
 # Inline finding comments — post one per finding via
 # `gh api repos/$REPO/pulls/$PR_NUMBER/comments` so each can target a
@@ -1324,6 +1434,20 @@ gh api "repos/$REPO/statuses/$HEAD_SHA" \
   -f state="$STATE" \
   -f description="$DESCRIPTION"
 # where STATE ∈ success|failure|pending and DESCRIPTION ≤ 140 chars
+
+# Stamp the reviewed HEAD SHA into the REVIEWED_HEAD marker — safety
+# net in case the LLM wrote the `<HEAD_SHA>` placeholder literally
+# rather than substituting the actual value. headRefOid was fetched
+# from the authoritative PR metadata in Phase 0 step 3 and has not
+# changed (the stale-SHA guard in step 5 would have exited if it had).
+# The sed is idempotent: if the LLM already wrote the real SHA the
+# pattern finds no match and the file is unchanged.
+HEAD_SHA_STAMPED=$(jq -r '.headRefOid' /tmp/PR.json)
+sed -i "s|<!-- REVIEWED_HEAD: <HEAD_SHA> -->|<!-- REVIEWED_HEAD: ${HEAD_SHA_STAMPED} -->|" /tmp/review-summary.md
+
+# Summary comment (the body built in 3a, including the
+# <!-- SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON) — LAST:
+gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
 ```
 
 Retry once on 5xx from the GitHub API. On 422 (malformed inline
@@ -1340,9 +1464,10 @@ Print: `[Phase 3 complete] Review submitted`
 
 ## If You Cannot Finish
 
-Always post the summary comment + set the commit status before
-exiting (see Phase 3f). A PR with no review comment
-and no status update is the worst outcome.
+Always set the commit status + post the summary comment before
+exiting (see Phase 3f — status first, summary last, same order as the
+happy path). A PR with no review comment and no status update is the
+worst outcome.
 
 Submit minimal:
 ```json

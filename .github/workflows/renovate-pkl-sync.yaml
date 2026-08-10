@@ -96,11 +96,17 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token || secrets.push_token || secrets.GITHUB_TOKEN }}
           ref: ${{ github.ref }}
+          # Need the bump commit's PARENT: the driver evaluates the contract at
+          # the pre-bump toolkit pin to tell app-post-processed generated files
+          # (which must be preserved) from toolkit-owned ones (which must be
+          # refreshed). The default depth-1 checkout has no parent, so detection
+          # would be unavailable and the swap would revert those overrides.
+          fetch-depth: 0
 
       # Provides `uvx ruff`, used by the driver to format generated Python.
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.1"
+          version: "0.12.3"
 
       - name: Install pkl
         run: |

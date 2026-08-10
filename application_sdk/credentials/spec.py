@@ -165,5 +165,10 @@ class AgentCredentialSpec(BaseModel):
         return d
 
     def is_populated(self) -> bool:
-        """Return True if this spec carries a real agent payload."""
-        return bool(self.agent_name)
+        """True if this spec can resolve: a name plus a fetch anchor
+        (secret_path, or key_type "single-key"). Rejects the name-only AE
+        placeholder that would otherwise resolve to empty credentials.
+        """
+        return bool(self.agent_name) and (
+            bool(self.secret_path) or self.key_type == "single-key"
+        )

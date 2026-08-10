@@ -372,11 +372,14 @@ drafting.
   residue for human confirmation.
 
 - **P023 BlockingCallInAsyncDef** — an event-loop re-entry bridge (`asyncio.run`/
-  `run_until_complete`) or a blocking sync call (`requests.*`, `time.sleep`) runs
-  inside an `async def`.  Draft: for a bridge, `await` the coroutine directly
-  instead of re-entering a loop; for blocking I/O, `await` an async equivalent or
-  offload it via `App.run_in_thread()` inside a `@task`.  Both are restructures —
-  route to residue with the proposed shape.
+  `run_until_complete`), a blocking sync call (`requests.*`, `time.sleep`), or
+  tree-scale filesystem work (`shutil.rmtree`/`copytree`/`move`, incl. the
+  `SafeFileOps.rmtree`/`SafeFileOps.move` wrappers) runs inside an `async def`.  Draft: for a bridge,
+  `await` the coroutine directly instead of re-entering a loop; for blocking I/O,
+  `await` an async equivalent or offload it via `App.run_in_thread()` inside a
+  `@task`; for a tree op, `await run_in_thread(shutil.rmtree, path)` — the
+  callable is *passed*, not called, so the offloaded form is silent.  All are
+  restructures — route to residue with the proposed shape.
 
 - **P024 SyncAtlanClientInApp** — app code constructs pyatlan's sync `AtlanClient`
   (or a factory like `AtlanClient.from_token(...)`).  Draft a swap to the async

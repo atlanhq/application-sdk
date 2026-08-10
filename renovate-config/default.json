@@ -1,12 +1,16 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Atlan fleet upgrade policy for atlan-*-app repos. Extend via: {\"extends\": [\"github>atlanhq/application-sdk//renovate-config/default.json\"]}",
+  "description": [
+    "Atlan fleet upgrade policy for atlan-*-app repos. Extend via: {\"extends\": [\"github>atlanhq/application-sdk//renovate-config/default.json\"]}",
+    "rebaseWhen is pinned to behind-base-branch rather than left at the `auto` default. `auto` resolves to behind-base-branch ONLY when a rule requires the branch to be up to date (branch protection, or automerge on that branch). Fleet repos have neither: branch protection is absent org-wide (GET /branches/main/protection 404s), and soft-mode repos set automerge:false. So `auto` silently degraded to `conflicted` on every repo — the runner log reads `Converting rebaseWhen=auto to rebaseWhen=conflicted because no rule for behind-base-branch applies`. A non-conflicted stale branch was then reused as-is (`reuseExistingBranch: true`), recomputed to `No package files need updating`, produced no commit, and PR creation 422'd with 'no commits between main and branch' — leaving the branch in place to repeat the cycle forever. Open PRs hit the same wall from the other side: never rebased, so never re-resolved, frozen on whatever version was latest when they were opened. Set at the TOP LEVEL deliberately: the degradation is a repo-level decision affecting every branch (observed on renovate/app-contract-toolkit as well as renovate/lock-file-maintenance), so scoping it under lockFileMaintenance would leave the other managers broken. Cost is extra rebases/CI on branches that fall behind main; that is the price of having no branch protection to make `auto` work unaided."
+  ],
   "extends": [
     "config:recommended"
   ],
   "schedule": [
     "at any time"
   ],
+  "rebaseWhen": "behind-base-branch",
   "prHourlyLimit": 0,
   "prConcurrentLimit": 5,
   "labels": [
@@ -85,6 +89,30 @@
         "major"
       ],
       "enabled": false
+    },
+    {
+      "description": "Conformance package: give in-range bumps their own uv.lock-only PR instead of riding the batched lockFileMaintenance refresh. Apps declare atlan-application-sdk-conformance as an in-range dev dep, so without update-lockfile a new release only reaches an app inside the full lock refresh — which soft-mode apps hold for human review. A dedicated single-package PR lets the soft-mode template carve out auto-merge for just this package while everything else keeps requiring approval. The lock refresh may still pick up the same bump; whichever PR merges first wins and the other rebases clean.",
+      "matchPackageNames": [
+        "atlan-application-sdk-conformance"
+      ],
+      "rangeStrategy": "update-lockfile",
+      "groupName": "conformance package",
+      "addLabels": [
+        "conformance-package-update"
+      ]
+    },
+    {
+      "description": "Conformance package: auto-merge minor/patch on green (the conformance suite itself gates the PR). Major bumps stay human-reviewed, mirroring the app-contract-toolkit policy.",
+      "matchPackageNames": [
+        "atlan-application-sdk-conformance"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
     },
     {
       "description": "GitHub Actions: group all update types (including major) in one PR; auto-merge on green. Major action bumps are safe to auto-merge because the auto-approval workflow gates on green CI, which validates behaviour. Unlike Python deps, action majors are frequent and low-risk compared to library API changes.",

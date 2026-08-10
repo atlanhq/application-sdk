@@ -1,0 +1,290 @@
+# Manually install a specific app image onto one e2e tenant.
+#
+# FND-31. Two jobs for this workflow:
+#
+# 1. It settles the last open spike question — will GM install a release that has
+#    not finished its Snyk scan? The e2e path deliberately does not wait for the
+#    scan (a base-image CVE must not red an unrelated PR's e2e), so this run
+#    reports the release status at install time and whether the install was
+#    accepted. `e2e_tenant_app.py` recognises a scan-gate rejection and names
+#    `--scan-wait-seconds` in the error, so either answer is self-explaining.
+#
+# 2. It stays as the manual escape hatch: re-point an e2e tenant at a known
+#    image without a full e2e run, which is what you want when a tenant has
+#    drifted or a leg failed its version check.
+#
+# WHY THIS IS workflow_dispatch AND NOT AUTOMATIC: installing an app onto a
+# tenant is a deployment. The manual trigger IS the human authorisation, and the
+# `confirm` input makes firing it at the wrong tenant a deliberate act rather
+# than a default. The automatic path (once per run per cloud, ahead of the e2e
+# matrix) lands separately in e2e-full-reusable.yaml.
+#
+# Credentials never leave CI. `resolve_e2e_tenant.py` writes the leg's tenant and
+# credentials into $GITHUB_ENV behind the two-pass mask protocol, and
+# `e2e_tenant_app.py` reads them from the environment rather than argv (argv is
+# visible in process listings and in `set -x` output). Nothing prints a token.
+name: E2E Tenant Install
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: "Which cloud's e2e tenant to install onto."
+        required: true
+        type: choice
+        options: [aws, azure, gcp]
+        default: aws
+      confirm:
+        description: "This INSTALLS an app onto a live tenant. Select yes to proceed."
+        required: true
+        type: choice
+        options: ["no", "yes"]
+        default: "no"
+      app_id:
+        description: "GM app UUID (the app_id field in the app repo's atlan.yaml)."
+        required: true
+        type: string
+      image:
+        description: "Full image reference, e.g. ghcr.io/atlanhq/atlan-openapi-app:sdr-test-abc12345"
+        required: true
+        type: string
+      version:
+        description: >-
+          GM version string. Required rather than derived from the image tag so
+          this workflow needs no conditional shell (docs/standards/ci.md) —
+          normally the image tag itself.
+        required: true
+        type: string
+      branch:
+        description: "Git ref the image was built from, recorded on the GM version."
+        required: true
+        type: string
+      tenant_id:
+        description: >-
+          The tenant's ID — its vcluster instance name (e.g. "markeznp37"), NOT
+          its hostname. GM matches `allowed_tenants` against this exactly, so a
+          hostname publishes successfully but yields a release visible to no
+          tenant, and the install then fails with "version not found". Leave
+          empty to use E2E_TENANT_ID from the tenant-matrix secret, if that
+          entry carries one.
+        required: false
+        type: string
+        default: ""
+      repo_url:
+        description: >-
+          The APP'S OWN repo, e.g. https://github.com/atlanhq/atlan-openapi-app.
+          Required: GM refuses a version-create that omits `repo` for any app
+          with a source_repo on file (every first-party app), and LM's
+          /apps/<id>/info does not expose the registered value to echo back.
+          Must be the app's repo, NOT this one — GM only blocks CROSS-ORG
+          source_repo changes, so a same-org value is silently applied and would
+          repoint the app's provenance.
+        required: true
+        type: string
+      scan_wait_seconds:
+        description: >-
+          Seconds to wait for GM's release scan before installing. 0 (default)
+          does not wait. Raise this only if a run shows GM refusing to install an
+          unscanned release.
+        required: false
+        type: string
+        default: "0"
+      install_retry_seconds:
+        description: >-
+          How long to keep retrying the install while LM's tenant-catalog
+          snapshot catches up with the fresh publish. LM excludes a release while
+          it is scan_pending and only picks it up on the next scheduled sync
+          (~5 min), so a just-published release is not immediately installable.
+          Waiting on GM's release status is NOT enough — a run that read `active`
+          from GM still had its install miss. 0 disables the retry.
+        required: false
+        type: string
+        default: "600"
+      timeout_seconds:
+        description: "Budget for the deployment to reconcile before failing."
+        required: false
+        type: string
+        default: "600"
+
+permissions:
+  contents: read
+
+concurrency:
+  # One install at a time per cloud: the installation is tenant-scoped (one per
+  # app per tenant), so two concurrent installs would race and the loser would
+  # silently be the version left running. Not cancel-in-progress — cancelling
+  # mid-install leaves the tenant in whatever state LM reached.
+  group: e2e-tenant-install-${{ inputs.cloud }}
+  cancel-in-progress: false
+
+jobs:
+  install:
+    name: Install onto ${{ inputs.cloud }}
+    # The gate is a job-level `if:` rather than a shell test so the job is
+    # visibly skipped instead of green-but-did-nothing.
+    if: inputs.confirm == 'yes'
+    runs-on: ubuntu-latest
+    # Twice the script's own waits, not a shade over them. The install retries for
+    # up to install_retry_seconds (default 600) while LM's catalog snapshot catches
+    # up, then polls the deployment for up to timeout_seconds (default 600) — ~20
+    # minutes before the script decides anything. At 30 the runner's timeout can
+    # fire first on a slow sync, and a bare "job cancelled after 30m" replaces the
+    # actionable error the script was about to print.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      # For `docker manifest inspect` on the GHCR image below when ORG_PAT_GITHUB
+      # is unset and the login falls back to github.token: without this the token
+      # carries no package scope at all and the check 401s on an image that
+      # exists, false-blocking a legitimate install.
+      #
+      # Necessary but not always sufficient: GITHUB_TOKEN package access is
+      # scoped to packages owned by or linked to THIS repo, and the images this
+      # workflow installs belong to the app repos. Cross-repo reads still need
+      # ORG_PAT_GITHUB (or the package granting this repo read access) — which is
+      # why the error below names authorisation as well as absence.
+      packages: read
+    env:
+      E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+      E2E_CLOUD: ${{ inputs.cloud }}
+      FALLBACK_SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
+      FALLBACK_SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
+      FALLBACK_SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
+      FALLBACK_ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Two invocations: the mask pass must reach the log BEFORE the write pass
+      # redirects stdout into $GITHUB_ENV, because registering the matrix blob as
+      # a secret does not redact the values inside it. Same protocol as
+      # tests-reusable.yaml and e2e-full-reusable.yaml — see
+      # .github/scripts/export_extra_env.py for why the two passes are separate.
+      - name: Resolve the target tenant
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
+            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
+            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
+            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
+            --mask-only
+          python3 .github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
+            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
+            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
+            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
+            >> "$GITHUB_ENV"
+
+      # No env: block re-exporting the credentials. The script reads
+      # SDR_CLIENT_ID / SDR_CLIENT_SECRET straight out of the environment the
+      # resolver wrote, so the secret is not interpolated through a GitHub
+      # expression again just to be renamed — every hop is a hop it can be
+      # mishandled on. Those are the OAuth client pair the marketplace publish
+      # route authorises on, NOT ATLAN_API_KEY (the harness's API key).
+      # Prove the image exists BEFORE publishing. Otherwise a stale or pruned tag
+      # publishes fine, installs fine, and only surfaces ~2 minutes later as
+      # ImagePullBackOff in the tenant's cluster — with a GM version and release
+      # left behind pointing at an image nobody can pull. That is exactly how one
+      # live run was spent.
+      #
+      # The automatic prepare-tenant path cannot hit this: it builds the image in
+      # the same run. This check exists because THIS workflow accepts an arbitrary
+      # tag from a human.
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB || github.token }}
+
+      - name: Verify the image exists
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          docker manifest inspect "$IMAGE" > /dev/null || {
+            echo "::error::$IMAGE could not be read from GHCR. Two causes, in likelihood order. (1) The tag does not exist: sdr-test-* tags are built by e2e runs and may have been pruned — take a tag from a recent e2e build log, or re-run the app's e2e to produce one. (2) This run cannot authorise it: with ORG_PAT_GITHUB unset the login falls back to github.token, whose package scope covers only packages owned by or linked to atlanhq/application-sdk, and these images belong to the app repos — set ORG_PAT_GITHUB. Either way the install is blocked here deliberately: publishing an unreadable image creates a GM version and release pointing at something the tenant cannot pull, and the failure would surface minutes later as ImagePullBackOff."
+            exit 1
+          }
+          echo "$IMAGE is pullable"
+
+      #
+      # Every dispatch input reaches the shell through env:, never through
+      # `${{ }}` inside run:. A workflow_dispatch input is attacker-influenced
+      # free text, and direct interpolation splices it into the script before
+      # bash sees a quote — so a crafted `version` would execute rather than be
+      # compared. Via env:, bash receives it as data.
+      - name: Install onto the tenant
+        id: install
+        env:
+          APP_ID: ${{ inputs.app_id }}
+          IMAGE: ${{ inputs.image }}
+          VERSION: ${{ inputs.version }}
+          BRANCH: ${{ inputs.branch }}
+          REPO_URL: ${{ inputs.repo_url }}
+          TENANT_ID_INPUT: ${{ inputs.tenant_id }}
+          SCAN_WAIT_SECONDS: ${{ inputs.scan_wait_seconds }}
+          INSTALL_RETRY_SECONDS: ${{ inputs.install_retry_seconds }}
+          TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/e2e_tenant_app.py install \
+            --base-url "$ATLAN_BASE_URL" \
+            --app-id "$APP_ID" \
+            --image "$IMAGE" \
+            --version "$VERSION" \
+            --branch "$BRANCH" \
+            --repo-url "$REPO_URL" \
+            --tenant "${TENANT_ID_INPUT:-${E2E_TENANT_ID:-}}" \
+            --scan-wait-seconds "$SCAN_WAIT_SECONDS" \
+            --install-retry-seconds "$INSTALL_RETRY_SECONDS" \
+            --timeout-seconds "$TIMEOUT_SECONDS"
+
+      # Independent read-back through the same check the e2e legs will run, so a
+      # green install that somehow left the tenant on another version still fails
+      # here rather than in a leg later.
+      - name: Verify the tenant reports the installed version
+        env:
+          APP_ID: ${{ inputs.app_id }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/e2e_tenant_app.py verify \
+            --base-url "$ATLAN_BASE_URL" \
+            --app-id "$APP_ID" \
+            --expected "$VERSION"
+
+      # The findings, in the run summary rather than buried in step logs — this
+      # workflow's first purpose is answering the scan-gate question, and the
+      # answer should be readable without opening a log.
+      - name: Summarise
+        if: always()
+        env:
+          CLOUD: ${{ inputs.cloud }}
+          APP_ID: ${{ inputs.app_id }}
+          IMAGE: ${{ inputs.image }}
+          VERSION: ${{ inputs.version }}
+          RELEASE_STATUS: ${{ steps.install.outputs.release_status }}
+          SKIPPED: ${{ steps.install.outputs.skipped }}
+          INSTALLED: ${{ steps.install.outputs.installed_version }}
+          DEPLOYMENT_ID: ${{ steps.install.outputs.deployment_id }}
+        run: |
+          {
+            echo "### E2E tenant install — ${CLOUD}"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| App | \`${APP_ID}\` |"
+            echo "| Image | \`${IMAGE}\` |"
+            echo "| Version | \`${VERSION}\` |"
+            echo "| Already current (no-op) | \`${SKIPPED:-unknown}\` |"
+            echo "| Release status at install | \`${RELEASE_STATUS:-unreadable}\` |"
+            echo "| Deployment | \`${DEPLOYMENT_ID:-none}\` |"
+            echo "| Tenant reports installed | \`${INSTALLED:-unreported}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

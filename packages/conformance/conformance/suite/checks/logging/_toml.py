@@ -117,8 +117,10 @@ def check_ruff_config(toml_path: Path, root: Path) -> list[Finding]:
                 "Add to [tool.ruff.lint] select / extend-select: "
                 + ", ".join(missing)
                 + ". These complement the L-series AST checks with editor-time "
-                "feedback. Selecting the category prefix (e.g. 'G', 'LOG') covers "
-                "all rules in that group."
+                "feedback. Pin the rules individually — do NOT select the bare "
+                "'G' category: it also enables G201, which demands "
+                ".exception(...) over .error(..., exc_info=True), the exact "
+                "inverse of conformance L017."
             ),
         )
     ]

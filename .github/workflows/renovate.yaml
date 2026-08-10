@@ -111,14 +111,25 @@ jobs:
       # commands are NOT shell-expanded by Renovate, so the preset invokes
       # `renovate-pkl-sync` directly (no ${VAR} path to expand). The script's
       # `#!/usr/bin/env python3` shebang makes it directly executable.
+      #
+      # renovate_pkl_sync.py does `sys.path.insert(0, str(Path(__file__).parent))`
+      # then `from pkl_contract_layout import ...` — so the sibling module must
+      # land in the same directory on PATH, or the bare command 404s on import at
+      # runtime (ModuleNotFoundError, every consumer repo, every run). The
+      # reusable renovate-pkl-sync.yaml workflow doesn't hit this: it sparse-checks
+      # out the whole .github/scripts/ directory instead of copying a single file.
+      # Guarded by check_renovate_pkl_sync_install.py so a future split doesn't
+      # silently regress this again.
       - name: Install pkl-sync driver on PATH
-        run: sudo install -m 0755 .github/scripts/renovate_pkl_sync.py /usr/local/bin/renovate-pkl-sync
+        run: |
+          sudo install -m 0755 .github/scripts/renovate_pkl_sync.py /usr/local/bin/renovate-pkl-sync
+          sudo install -m 0644 .github/scripts/pkl_contract_layout.py /usr/local/bin/pkl_contract_layout.py
 
       # Provides `uv`/`uvx` — used by Renovate's native uv manager to refresh
       # uv.lock AND by the driver's `uvx ruff` formatting of generated Python.
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.1"
+          version: "0.12.3"
 
       - name: Install pkl
         run: |

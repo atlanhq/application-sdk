@@ -28,6 +28,10 @@ class SecurityMixin(_MixinBase):
            e.g. ``logger.error("auth failed", password)`` where ``password``
            is passed as a format arg.
 
+        Names assigned a redaction placeholder in the module (e.g.
+        ``password = "[REDACTED]" if creds.get("password") else None``) are
+        exempt — logging them is a presence indicator, not a value leak.
+
         Logging a credential *name* (``token_name=``) is acceptable.
         Logging a credential *value* is a security vulnerability.
         Requires human review — never auto-fixed.
@@ -40,6 +44,11 @@ class SecurityMixin(_MixinBase):
             if kw.arg is None:
                 continue
             if _is_credential_value_name(kw.arg):
+                if (
+                    isinstance(kw.value, ast.Name)
+                    and kw.value.id in self._redacted_names
+                ):
+                    continue  # value is a redaction placeholder — presence indicator only
                 self._add(
                     "L010",
                     node,
@@ -58,6 +67,8 @@ class SecurityMixin(_MixinBase):
             elif isinstance(arg, ast.Attribute):
                 name = arg.attr
             if name and _is_credential_value_name(name):
+                if name in self._redacted_names:
+                    continue  # assigned "[REDACTED]"/None upstream — presence indicator only
                 self._add(
                     "L010",
                     node,

@@ -194,6 +194,42 @@ class TestSeedDagFromManifest:
         result = self.harness._seed_dag_from_manifest("atlan-openapi-agent-1")
         assert result["publish"]["inputs"]["task_queue"] == "atlan-publish-production"
 
+    def test_env_overrides_the_class_deployment_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A tenant whose system apps are not registered under "production" is a
+        # per-leg env var (from the cross-CSP tenant matrix), not a code change.
+        monkeypatch.setenv("E2E_TENANT_DEPLOYMENT_NAME", "staging")
+        dag = {
+            "publish": {
+                "node_type": "workflow",
+                "app_name": "publish",
+                "app_task_queue": "atlan-publish-{deployment_name}",
+                "inputs": {
+                    "task_queue": "atlan-publish-{deployment_name}",
+                    "args": {},
+                },
+            }
+        }
+        self.harness.manifest_path = str(_write_manifest(tmp_path, dag))  # type: ignore[attr-defined]
+        result = self.harness._seed_dag_from_manifest("atlan-openapi-agent-1")
+        assert result["publish"]["inputs"]["task_queue"] == "atlan-publish-staging"
+
+    @pytest.mark.parametrize("value", ["", "   "])
+    def test_blank_env_falls_back_to_the_class_default(
+        self, value: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An unset GitHub Actions env var arrives as "", and an empty deployment
+        # name would address `atlan-publish-` and fail far from its cause.
+        monkeypatch.setenv("E2E_TENANT_DEPLOYMENT_NAME", value)
+        assert self.harness.resolved_tenant_deployment_name() == "production"
+
+    def test_unset_env_falls_back_to_the_class_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("E2E_TENANT_DEPLOYMENT_NAME", raising=False)
+        assert self.harness.resolved_tenant_deployment_name() == "production"
+
     def test_app_name_placeholder_substituted(self, tmp_path: Path) -> None:
         dag = {
             "extract": {

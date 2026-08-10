@@ -66,9 +66,22 @@ LOCAL_ENVIRONMENT = "local"
 LOCAL_WORKFLOW_ID = "local-no-temporal"
 
 # Application Constants
-#: Name of the application, used for identification
+#: Name of the application, used for identification.
+#:
+#: The ``"default"`` fallback is for *identity* uses that need some segment to
+#: exist — object-store prefixes like ``persistent-artifacts/apps/<name>/``,
+#: log tagging. It must **never** feed Temporal task-queue derivation: a
+#: manufactured name yields ``atlan-default-<deployment>``, which reads as a
+#: legitimate queue, is polled by no worker, and hangs the run silently
+#: (FND-195 / CONNECT-183). Queue naming goes through
+#: :mod:`application_sdk.common.task_queue`, which reports an unset app name as
+#: ``None`` instead of inventing one.
 APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
-#: Name of the deployment, used to distinguish between different deployments of the same application
+#: Name of the deployment, used to distinguish between different deployments of
+#: the same application. Same caveat as :data:`APPLICATION_NAME`: the
+#: ``LOCAL_ENVIRONMENT`` fallback is an identity default, and the worker treats an
+#: unset deployment name as "drop the ``atlan-`` prefix entirely", so queue
+#: derivation must read the raw env via :mod:`application_sdk.common.task_queue`.
 DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
 # REMOVED: APP_HOST, APP_PORT — use AppConfig.handler_host / handler_port
 #: Tenant ID for multi-tenant applications
@@ -250,6 +263,43 @@ STORAGE_PROGRESS_LOG_INTERVAL_SECONDS = float(
     os.getenv("ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS", "30")
 )
 
+#: Multipart part size for uploads (default 8 MiB). Raise this per deployment
+#: when the destination makes *part count* expensive rather than part size.
+#: An S3 proxy fronting GCS is the motivating case (DISTR-899): GCS has no
+#: multipart upload on the JSON API its client libraries speak, so the proxy
+#: emulates one with ``compose``, which accepts at most 32 sources. Completing
+#: an upload therefore costs one sequential round trip per part, inside a
+#: single HTTP request that sends no response bytes while it runs. A 4.77 GiB
+#: object at 8 MiB parts is 611 parts and 65-98s of silence — long enough for
+#: a 60s gateway idle timeout to cut the connection, after which the client
+#: retries and the second completion races the first.
+#: Larger parts shorten that window roughly linearly: the same object at
+#: 32 MiB is 153 parts and ~19s. Note this is *not* free — see
+#: ``STORAGE_UPLOAD_MAX_CONCURRENCY``, since peak memory is the product of the
+#: two, not this value alone.
+STORAGE_UPLOAD_PART_SIZE_BYTES = int(
+    os.getenv("ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES", str(8 * 1024 * 1024))
+)
+
+#: True when a deployment has explicitly set the part size, in which case it
+#: overrides any ``chunk_size`` passed by calling code. The size that keeps a
+#: completion inside the destination's idle timeout depends on where the
+#: deployment writes, which the operator knows and an app — which cannot know
+#: the tenant it will land on — does not. Presence is what matters here, not
+#: value: a deployment that sets the default explicitly still means it.
+STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN = (
+    "ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES" in os.environ
+)
+
+#: Number of parts uploaded concurrently (default 12, obstore's own default).
+#: Peak upload memory is roughly ``STORAGE_UPLOAD_PART_SIZE_BYTES`` times this,
+#: so a deployment that raises the part size to 64 MiB and leaves this at 12
+#: budgets ~768 MiB of buffer. Lower it alongside a larger part size to hold
+#: peak memory steady.
+STORAGE_UPLOAD_MAX_CONCURRENCY = int(
+    os.getenv("ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY", "12")
+)
+
 #: Kill-switch for resumable chunked downloads (BLDX-1523). When enabled
 #: (default), an interrupted chunked download leaves its partial file plus a
 #: ``.transfer-state`` sidecar on disk, and a retry fetches only the missing
@@ -375,8 +425,12 @@ def _load_worker_liveness_max_idle_seconds() -> float:
 WORKER_LIVENESS_MAX_IDLE_SECONDS = _load_worker_liveness_max_idle_seconds()
 
 # SQL Client Constants
-#: Whether to use server-side cursors for SQL operations
-USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
+#: Whether to use server-side cursors for SQL operations.
+#: Enabled by default; set ATLAN_SQL_USE_SERVER_SIDE_CURSOR to any value other
+#: than "true" (e.g. "false") to opt out.
+USE_SERVER_SIDE_CURSOR = (
+    os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true").strip().lower() == "true"
+)
 
 # DAPR Constants
 #: Name of the state store component in DAPR

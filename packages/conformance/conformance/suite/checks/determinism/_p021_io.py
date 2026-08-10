@@ -35,6 +35,10 @@ _IO_PREFIXES = (
     "threading.",
     "multiprocessing.",
     "concurrent.futures.",
+    # Every public shutil entry point mutates or reads the filesystem. This is
+    # also what makes P023's workflow-context skip a real dedup rather than a
+    # hole: tree ops in workflow context are reported here, once.
+    "shutil.",
 )
 # Exact callables (builtins / specific functions) that perform I/O or env reads.
 _IO_EXACT = frozenset(

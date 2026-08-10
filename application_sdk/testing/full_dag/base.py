@@ -206,8 +206,10 @@ class BaseFullDAGE2ETest:
     # task queues of the qi / publish / lineage / lineage-publish
     # nodes (everything that's NOT the extract worker). Defaults to
     # ``production`` because the devex tenant's system apps listen on
-    # ``atlan-publish-production`` etc. Override for tenants that use
-    # a different deployment name.
+    # ``atlan-publish-production`` etc. Read via
+    # :meth:`resolved_tenant_deployment_name` rather than directly, so a
+    # tenant that uses a different deployment name is a per-leg env var
+    # rather than an override here.
     tenant_deployment_name: ClassVar[str] = "production"
 
     # Override when the connector's worker registers a non-default
@@ -387,6 +389,26 @@ class BaseFullDAGE2ETest:
             admin_roles=self.connection_admin_roles,
         )
 
+    def resolved_tenant_deployment_name(self) -> str:
+        """Deployment name to substitute for ``{deployment_name}``.
+
+        ``E2E_TENANT_DEPLOYMENT_NAME`` wins over the :attr:`tenant_deployment_name`
+        class default when set. The class attribute is a property of the *suite*,
+        but the value it needs is a property of the *tenant* — and since FND-6 one
+        suite runs against several tenants in one CI run, so it cannot be fixed in
+        the class. A tenant whose system apps are not registered under
+        "production" is then a per-leg env var (supplied by the tenant-matrix
+        secret's optional ``deployment_name`` field) rather than an edit here.
+
+        Blank is treated as unset: an unset GitHub Actions env var arrives as an
+        empty string, and an empty deployment name would address ``atlan-publish-``
+        and fail far from its cause.
+        """
+        return (
+            os.environ.get("E2E_TENANT_DEPLOYMENT_NAME", "").strip()
+            or self.tenant_deployment_name
+        )
+
     # ------------------------------------------------------------------
     # Seed DAG — loaded from the connector's manifest.json
     # ------------------------------------------------------------------
@@ -448,13 +470,15 @@ class BaseFullDAGE2ETest:
                 location=str(path),
             )
 
+        deployment_name = self.resolved_tenant_deployment_name()
+
         def _sub_queue(node_name: str, raw: str) -> str:
             if node_name == "extract":
                 # extract goes to the agent / CI worker queue; manifest's
                 # `{deployment_name}` template is irrelevant here because
                 # CI doesn't use the tenant's deployment identity.
                 return extract_task_queue
-            return raw.replace("{deployment_name}", self.tenant_deployment_name)
+            return raw.replace("{deployment_name}", deployment_name)
 
         # Pass 1: curly-brace `{...}` substitutions on the per-node
         # metadata (app_name, task_queue).

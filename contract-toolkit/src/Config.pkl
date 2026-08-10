@@ -529,6 +529,12 @@ class Widget {
   /// Whether to prevent the Test Authentication button from showing (true) or show it (false) for credential inputs.
   isTestAuthenticationDisabled: Boolean?
 
+  /// Whether to show the Test Authentication action on the agent widget
+  /// (true) in both create and edit flows. Unlike the credential-input
+  /// `isTestAuthenticationDisabled` (negative sense), the agent widget reads
+  /// this positive flag; unset leaves the agent widget test-auth-free.
+  showTestAuthentication: Boolean?
+
   /// Whether to flatten values retrieved via API (for apitree/sqltree).
   flattenValue: Boolean?
 
@@ -1854,11 +1860,19 @@ class AgentSelector extends UIElement {
   /// (Optional) Placeholder text.
   hidden placeholderText: String?
 
+  /// (Optional) Show the interactive "Test authentication" action on the agent
+  /// widget (button + auto-fire on validate), in both the create and edit
+  /// flows. Leave unset to keep the widget test-auth-free.
+  hidden allowTestAuthentication: Boolean?
+
   /// (Generated) Internal configuration for the UI's rendering.
   fixed ui {
     widget = "agent"
     agentConfigs = agentConfigEntries
     placeholder = placeholderText
+    when (allowTestAuthentication != null) {
+      showTestAuthentication = allowTestAuthentication
+    }
   }
 }
 

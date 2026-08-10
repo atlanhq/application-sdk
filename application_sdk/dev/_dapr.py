@@ -421,6 +421,7 @@ async def embedded_dapr(
         # Only clean up the temp dir we generated; a caller-supplied
         # components_dir belongs to the caller.
         if _owns_components_dir:
+            # conformance: ignore[P023] local-dev teardown of a self-generated temp dir holding a few component YAMLs — not a data-scaled tree, and an await here would be skipped on the cancellation path this finally exists to serve
             shutil.rmtree(components_path, ignore_errors=True)
         for _k, _v in _prev_env.items():
             if _v is None:

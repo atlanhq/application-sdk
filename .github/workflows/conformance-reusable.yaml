@@ -193,6 +193,27 @@ on:
         required: false
         default: false
         type: boolean
+      apt-packages:
+        required: false
+        type: string
+        default: ""
+        description: |
+          Space-separated Ubuntu packages apt-installed before the D-series
+          leg's `uv sync` (the detect action's needs-env step).  Only the
+          D-series leg materialises the caller's environment; every other
+          series runs from an isolated `uvx` env, so this step is a no-op on
+          them.  Empty (the default) skips the step entirely, so every existing
+          caller is unaffected.
+
+          Accepted form is deliberately narrow — plain package NAMES only,
+          separated by whitespace, each matching Debian's own
+          `[a-z0-9][a-z0-9+.-]*` (so `g++`, `libstdc++6`, `python3.11-dev` are
+          fine).  Anything else fails the job before apt runs, including
+          arch-qualified (`libkrb5-dev:amd64`) and version-pinned
+          (`libkrb5-dev=1.2.3`) forms, apt flags, local `.deb` paths, and
+          globs.  If a connector genuinely needs one of those, widen the
+          allowlist in this workflow deliberately rather than working around it
+          from the caller.
       private-git-deps:
         description: >
           Set true when the app's lockfile pins a PRIVATE atlanhq git dependency
@@ -355,7 +376,7 @@ jobs:
         # the leg and turn the gate red on a release. Mirrors sdk-gate.yaml,
         # which skips its own outer filter for the same reason.
         if: inputs.event_name != 'push' && !inputs.force-all
-        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         with:
           filters: |
             relevant:
@@ -365,7 +386,33 @@ jobs:
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.1"
+          version: "0.12.3"
+
+      # Only the D-series leg materialises the caller's environment (the detect
+      # action's needs-env `uv sync`); the other series run from an isolated
+      # `uvx` env and never install caller dependencies, so the
+      # `matrix.needs_env == 'true'` clause keeps this step off them.  That
+      # condition stays in `if:`, never in the shell (docs/standards/ci.md).
+      # The leg is scheduled on every PR but only does work when its
+      # `**/pyproject.toml` filter matches, so the install follows the same
+      # relevance gate as `Set up uv` and the detect step — otherwise it
+      # installs packages for a leg that then no-ops.
+      # The value is routed through env, never interpolated into the script,
+      # and matched WHOLE against the same strict Debian package-name allowlist
+      # as tests-reusable.yaml before it is used.
+      - name: Install system packages (apt-packages)
+        if: >-
+          inputs.apt-packages != '' && matrix.needs_env == 'true'
+          && (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all)
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          set -euo pipefail
+          echo "Validating and installing apt packages: $APT_PACKAGES"
+          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
+            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
       # The flag promises a token; with ORG_PAT_GITHUB absent the rewrite below
       # would redirect every atlanhq URL — including the caller checkout above —
@@ -433,7 +480,7 @@ jobs:
       - name: "Set up uv"
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.1"
+          version: "0.12.3"
 
       - name: "Guard contract_schema.lock.json (published package)"
         if: inputs.conformance-ref == ''

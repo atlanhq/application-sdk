@@ -1,5 +1,38 @@
 # Changelog
 
+## v3.27.0 (August 07, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.26.1...v3.27.0
+
+### Features
+
+- run every e2e suite against an AWS/Azure/GCP tenant matrix (#2997) (by @cmgrote in [338595e](https://github.com/atlanhq/application-sdk/commit/338595e))
+- worker-side sdr:* workflows (typed contracts) for heracles-native dispatch (#2914) (by @Lalit3716-atlan in [b3059cd](https://github.com/atlanhq/application-sdk/commit/b3059cd))
+- make upload part size and concurrency configurable (#3051) (by @Lalit3716-atlan in [f11578e](https://github.com/atlanhq/application-sdk/commit/f11578e))
+
+### Bug Fixes
+
+- preserve typed AppError classification through format readers (#3031) (by @mothership-ai[bot] in [81afe6b](https://github.com/atlanhq/application-sdk/commit/81afe6b))
+- offload pq.write_table() off the event loop in ParquetFileWriter (#3049) (by @zaman-atlan in [bdc0b13](https://github.com/atlanhq/application-sdk/commit/bdc0b13))
+- is_populated() requires a secret reference, not just a name (#3061) (by @Dexters-Hub in [eaa6daf](https://github.com/atlanhq/application-sdk/commit/eaa6daf))
+- keep unclassified SQL client read/query failures retryable at the Temporal boundary [CONAT-747] (#3054) (by @AtMrun in [e79db52](https://github.com/atlanhq/application-sdk/commit/e79db52))
+- decode transformed assets with from_atlas_json so relationships survive (#3067) (by @AtMrun in [08c855a](https://github.com/atlanhq/application-sdk/commit/08c855a))
+- ATLAN_SQL_USE_SERVER_SIDE_CURSOR opt-out was a no-op — parse the boolean properly [CONAT-747] (#3055) (by @AtMrun in [7508b59](https://github.com/atlanhq/application-sdk/commit/7508b59))
+- honour retry_after on retryable responses instead of the fixed gap [FND-130] (#3068) (by @cmgrote in [53b967e](https://github.com/atlanhq/application-sdk/commit/53b967e))
+
+
+## v3.26.1 (August 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.26.0...v3.26.1
+
+### Bug Fixes
+
+- warn on silently dropped template fields (#2977) (by @fyzanshaik-atlan in [76d5b2c](https://github.com/atlanhq/application-sdk/commit/76d5b2c))
+- offload cleanup_files fs I/O to a thread and cap its heartbeat timeout (#2986) (by @zaman-atlan in [b2b405a](https://github.com/atlanhq/application-sdk/commit/b2b405a))
+- offload tree-scale filesystem removals off the event loop (#2987) (by @cmgrote in [4a85397](https://github.com/atlanhq/application-sdk/commit/4a85397))
+- stop single-key secret probing from exhausting activity budgets (#2989) (by @vaibhavatlan in [df22e2d](https://github.com/atlanhq/application-sdk/commit/df22e2d))
+
+
 ## v3.26.0 (August 03, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.25.1...v3.26.0

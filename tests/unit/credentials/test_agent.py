@@ -23,6 +23,7 @@ from application_sdk.common.transforms import expand_dotted_keys
 from application_sdk.credentials.agent import (
     _fetch_per_key_bundle,
     _substitute,
+    check_secret_store_access,
     resolve_agent_credential,
     resolve_agent_json,
 )
@@ -152,6 +153,55 @@ class TestAgentCredentialSpec:
 
     def test_empty_dict_not_populated(self) -> None:
         spec = AgentCredentialSpec.model_validate({})
+        assert not spec.is_populated()
+
+    def test_ae_placeholder_agent_name_not_populated(self) -> None:
+        spec = AgentCredentialSpec.model_validate(
+            {
+                "agent-name": "agent-name",
+                "secret-manager": "",
+                "secret-path": "",
+                "auth-type": "",
+                "host": "",
+                "port": 0,
+            }
+        )
+        assert not spec.is_populated()
+
+    def test_agent_name_without_secret_ref_not_populated(self) -> None:
+        spec = AgentCredentialSpec.model_validate({"agent-name": "acme-prod-agent"})
+        assert not spec.is_populated()
+
+    def test_agent_spec_with_secret_ref_is_populated(self) -> None:
+        spec = AgentCredentialSpec.model_validate(
+            {"agent-name": "acme-prod-agent", "secret-path": "atlan/prod/acme"}
+        )
+        assert spec.is_populated()
+
+    def test_single_key_spec_without_secret_path_is_populated(self) -> None:
+        # single-key fetches per ref-key, so no secret_path is needed.
+        spec = AgentCredentialSpec.model_validate(
+            {
+                "agent-name": "acme-prod-agent",
+                "key-type": "single-key",
+                "basic.username": "SDR_MYSQL_USERNAME",
+            }
+        )
+        assert spec.is_populated()
+
+    def test_secret_manager_only_not_populated(self) -> None:
+        # secret_manager is not a fetch anchor.
+        spec = AgentCredentialSpec.model_validate(
+            {"agent-name": "acme-prod-agent", "secret-manager": "awssecretmanager"}
+        )
+        assert not spec.is_populated()
+
+    def test_multi_key_spec_without_secret_path_not_populated(self) -> None:
+        # Only single-key is a fetch anchor on its own; multi-key still
+        # needs secret_path to fetch the bundle from.
+        spec = AgentCredentialSpec.model_validate(
+            {"agent-name": "acme-prod-agent", "key-type": "multi-key"}
+        )
         assert not spec.is_populated()
 
     def test_invalid_json_raises_parse_error(self) -> None:
@@ -425,7 +475,9 @@ class TestResolveAgentJsonErrorPaths:
         agent_json = json.dumps(
             {"agent-name": "test", "secret-path": "p", "basic.username": "u"}
         )
-        with pytest.raises(CredentialError, match="dapr outage"):
+        # The clean, customer-facing message is raised; the raw backend detail
+        # ("dapr outage") is logged (scrubbed), not embedded in the message.
+        with pytest.raises(CredentialError, match="Secret store is not reachable"):
             await resolve_agent_json(agent_json, FlakyStore())  # type: ignore[arg-type]
 
     async def test_bundle_not_valid_json_raises_parse_error(self) -> None:
@@ -1078,7 +1130,7 @@ class TestSubstitute:
     def test_root_level_ref_keys_are_replaced(self) -> None:
         agent = {"username": "user_ref", "password": "pass_ref"}
         bundle = {"user_ref": "real_user", "pass_ref": "real_pw"}
-        assert _substitute(agent, bundle) == {
+        assert _substitute(agent, bundle)[0] == {
             "username": "real_user",
             "password": "real_pw",
         }
@@ -1086,7 +1138,7 @@ class TestSubstitute:
     def test_literal_keys_are_skipped(self) -> None:
         agent = {"host": "h.example.com", "port": 5432, "username": "user_ref"}
         bundle = {"h.example.com": "SHOULD_NOT_WIN", "user_ref": "real_user"}
-        assert _substitute(agent, bundle) == {
+        assert _substitute(agent, bundle)[0] == {
             "host": "h.example.com",
             "port": 5432,
             "username": "real_user",
@@ -1095,7 +1147,7 @@ class TestSubstitute:
     def test_non_string_values_pass_through(self) -> None:
         agent = {"port": 5432, "enabled": True, "username": "user_ref"}
         bundle = {"user_ref": "real_user"}
-        assert _substitute(agent, bundle) == {
+        assert _substitute(agent, bundle)[0] == {
             "port": 5432,
             "enabled": True,
             "username": "real_user",
@@ -1104,14 +1156,14 @@ class TestSubstitute:
     def test_nested_extra_dict_is_walked_one_level(self) -> None:
         agent = {"extra": {"database": "db_ref", "pool_size": 10}}
         bundle = {"db_ref": "real_db"}
-        assert _substitute(agent, bundle) == {
+        assert _substitute(agent, bundle)[0] == {
             "extra": {"database": "real_db", "pool_size": 10}
         }
 
     def test_unreferenced_values_remain(self) -> None:
         agent = {"username": "user_ref"}
         bundle = {"other_ref": "other"}
-        assert _substitute(agent, bundle) == {"username": "user_ref"}
+        assert _substitute(agent, bundle)[0] == {"username": "user_ref"}
 
 
 # ---------------------------------------------------------------------------
@@ -1428,3 +1480,365 @@ class TestCredentialResolverAgentBranch:
         assert isinstance(cred, BasicCredential)
         assert cred.username == "real_user"
         assert cred.password == "real_pw"
+
+
+class TestSubstituteCountAndLog:
+    """`_substitute` now reports how many fields resolved and logs literal fallbacks."""
+
+    def test_counts_substituted_fields(self) -> None:
+        out, n = _substitute(
+            {"basic.username": "USER_REF", "host": "db.example"},
+            {"USER_REF": "realuser"},
+        )
+        assert out["basic.username"] == "realuser"
+        assert out["host"] == "db.example"  # not a ref-key, unchanged
+        assert n == 1
+
+    def test_zero_when_nothing_resolved(self) -> None:
+        import unittest.mock as m
+
+        with m.patch("application_sdk.credentials.agent.logger") as lg:
+            out, n = _substitute({"basic.username": "MISSING_REF"}, {})
+        assert out["basic.username"] == "MISSING_REF"  # literal kept
+        assert n == 0
+        # Info log fired for the not-found field, naming the field (not the value).
+        joined = " ".join(str(c) for c in lg.info.call_args_list)
+        assert "not found in secret store" in joined
+        assert "basic.username" in joined
+
+
+class TestCheckSecretStoreAccess:
+    """SDR secret-store preflight probe: pass, unreachable, unresolvable-config,
+    and nothing-resolved."""
+
+    @staticmethod
+    def _spec(**over: Any) -> AgentCredentialSpec:
+        base = {"agent-name": "t", "secret-path": "p", "basic.username": "USER_REF"}
+        base.update(over)
+        return AgentCredentialSpec.model_validate(json.dumps(base))
+
+    async def test_passes_when_a_secret_resolves(self) -> None:
+        class Store:
+            async def get(self, name: str) -> str:
+                return json.dumps({"USER_REF": "realuser"})
+
+        r = await check_secret_store_access(self._spec(), Store())  # type: ignore[arg-type]
+        assert r.passed is True
+        assert r.store_down is False
+        assert r.fatal is False
+        assert r.substituted >= 1
+        # The bundle was fetched + substituted here; the caller reuses this
+        # instead of re-fetching from the store.
+        assert r.resolved is not None
+
+    async def test_fails_when_store_is_unreachable(self) -> None:
+        class DownStore:
+            async def get(self, name: str) -> str:
+                raise SecretStoreError("upstream dapr outage")
+
+        r = await check_secret_store_access(self._spec(), DownStore())  # type: ignore[arg-type]
+        assert r.passed is False
+        # The store itself is the failure: a fatal DEPENDENCY_UNAVAILABLE outage.
+        assert r.store_down is True
+        assert r.fatal is True
+        assert "not reachable" in r.message
+
+    async def test_fails_when_nothing_resolves(self) -> None:
+        class EmptyStore:
+            async def get(self, name: str) -> str:
+                return json.dumps({})  # reachable, but no matching keys
+
+        r = await check_secret_store_access(self._spec(), EmptyStore())  # type: ignore[arg-type]
+        assert r.passed is False
+        # Store is fine, nothing resolved: NOT fatal (fields fall back to
+        # literals) and NOT a store outage.
+        assert r.store_down is False
+        assert r.fatal is False
+        assert r.substituted == 0
+        assert r.resolved is not None
+
+    async def test_fails_when_no_store_configured(self) -> None:
+        r = await check_secret_store_access(self._spec(), None)
+        assert r.passed is False
+        assert r.store_down is True
+        assert r.fatal is True
+
+    async def test_fails_when_multi_key_has_no_secret_path(self) -> None:
+        # Multi-key (non single-key) with no secret-path: the ref-keys have
+        # nowhere to resolve from, so the credentials can't be used.
+        class Store:
+            async def get(self, name: str) -> str:
+                return json.dumps({})
+
+        spec = self._spec(**{"secret-path": ""})
+        assert spec.secret_path == "" and spec.key_type != "single-key"
+        r = await check_secret_store_access(spec, Store())  # type: ignore[arg-type]
+        assert r.passed is False
+        # Fatal (credentials can't resolve), but the store is never contacted —
+        # this is a config gap (PRECONDITION), NOT a store outage.
+        assert r.store_down is False
+        assert r.fatal is True
+        assert "secret-path" in r.message
+
+
+class TestSingleKeyProbeConcurrency:
+    """Single-key probes must overlap, stay bounded, and fail loudly on a
+    store-wide fault (BLDX-1594).
+
+    A missing-key probe costs a full Dapr retry ladder, because Dapr answers
+    "no such key" with a 500 that the transport retries blind. Serial probing
+    therefore made credential resolution cost *ladder x number of
+    literal-valued fields*, which exhausted the fixed ``prime_sql_auth``
+    activity budget before the source was ever contacted.
+    """
+
+    @staticmethod
+    def _spec(**fields: Any) -> AgentCredentialSpec:
+        return AgentCredentialSpec.model_validate(
+            {"agent-name": "t", "key-type": "single-key", **fields}
+        )
+
+    async def test_probes_run_concurrently_not_serially(self) -> None:
+        """The whole point of the fix: N slow probes cost ~one probe, not N.
+
+        Asserted via observed overlap rather than wall-clock, so the test
+        can't flake on a loaded runner.
+        """
+        import asyncio
+
+        state = {"in_flight": 0, "max_in_flight": 0}
+        gate = asyncio.Event()
+
+        class SlowStore:
+            async def get_optional(self, name: str) -> str | None:
+                state["in_flight"] += 1
+                state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
+                # Hold every probe open until the last one has arrived, which
+                # is only reachable if they genuinely overlap.
+                if state["in_flight"] >= 3:
+                    gate.set()
+                await gate.wait()
+                state["in_flight"] -= 1
+                return None
+
+        spec = self._spec(
+            **{"basic.username": "u-lit", "basic.password": "p-lit", "database": "db"}
+        )
+        raw = spec.to_raw_dict()
+
+        await asyncio.wait_for(_fetch_per_key_bundle(SlowStore(), raw), timeout=5)
+
+        assert state["max_in_flight"] == 3, (
+            "probes did not overlap — they are running serially, which is the "
+            "regression this test exists to catch"
+        )
+
+    async def test_concurrency_saturates_but_never_exceeds_the_cap(self) -> None:
+        """Fan-out is capped so a pathological payload can't burst a cloud
+        vault into throttling (which Dapr reports indistinguishably from 'key
+        absent'), but it must actually *reach* the cap.
+
+        Saturating exactly is what makes the cost ``ceil(candidates / cap)``
+        ladders: a probe holds its slot for its whole ladder, so a payload
+        larger than the cap runs in successive waves. Under-saturating would
+        silently add waves.
+        """
+        import asyncio
+
+        from application_sdk.credentials.agent import (
+            _MAX_CONCURRENT_SINGLE_KEY_PROBES as CAP,
+        )
+
+        state = {"in_flight": 0, "peak": 0, "total": 0}
+        wave_full = asyncio.Event()
+
+        class CountingStore:
+            async def get_optional(self, name: str) -> str | None:
+                state["in_flight"] += 1
+                state["total"] += 1
+                state["peak"] = max(state["peak"], state["in_flight"])
+                # Hold every probe until the cap is reached, so the peak
+                # reflects the real limit rather than scheduling luck.
+                if state["in_flight"] >= CAP:
+                    wave_full.set()
+                await wave_full.wait()
+                state["in_flight"] -= 1
+                return None
+
+        # Twice the cap, so both under- and over-saturation are observable.
+        fields = {f"extra.f{i}": f"lit-{i}" for i in range(CAP * 2)}
+        raw = self._spec(**fields).to_raw_dict()
+
+        await asyncio.wait_for(_fetch_per_key_bundle(CountingStore(), raw), timeout=5)
+
+        assert state["peak"] == CAP, (
+            f"expected the sweep to saturate the cap exactly, saw "
+            f"{state['peak']} concurrent probes against a cap of {CAP}"
+        )
+        assert state["total"] == CAP * 2, "every candidate must still be probed"
+
+    async def test_each_unique_ref_key_probed_exactly_once(self) -> None:
+        """De-duplication must survive the concurrent rewrite — the ``seen``
+        set used to be mutated inside the probe and relied on serial
+        execution, which would race."""
+        calls: list[str] = []
+
+        class TrackingStore:
+            async def get_optional(self, name: str) -> str | None:
+                calls.append(name)
+                return None
+
+        # Same ref-key referenced by three different fields.
+        raw = self._spec(
+            **{
+                "basic.username": "shared-key",
+                "basic.password": "shared-key",
+                "database": "shared-key",
+                "extra.role": "other-key",
+            }
+        ).to_raw_dict()
+
+        await _fetch_per_key_bundle(TrackingStore(), raw)
+
+        assert sorted(calls) == ["other-key", "shared-key"]
+
+    async def test_literal_credentials_inline_still_resolve_to_themselves(
+        self,
+    ) -> None:
+        """Zero fields resolving must NOT be an error.
+
+        Some deployments put literal usernames/passwords directly in the
+        workflow config instead of ref-keys, so nothing is ever expected back
+        from the store and every probed value is legitimately used as-is.
+        Those workflows work today and must keep working.
+        """
+
+        class EmptyStore:
+            async def get_optional(self, name: str) -> str | None:
+                return None
+
+        raw = self._spec(
+            **{
+                "basic.username": "svc_reader",
+                "basic.password": "hunter2-literal",
+                "database": "analytics",
+            }
+        ).to_raw_dict()
+
+        bundle = await _fetch_per_key_bundle(EmptyStore(), raw)
+
+        assert bundle == {}
+        # The literals survive substitution unchanged.
+        resolved, _ = _substitute(raw, bundle)
+        assert resolved["basic.password"] == "hunter2-literal"
+
+    async def test_every_probe_erroring_still_falls_through(self) -> None:
+        """Nothing resolving is not an error even when *every* probe errored.
+
+        A scope-restricted store answers a non-allowlisted key with 403
+        (``ERR_PERMISSION_DENIED``) rather than a plain "absent" 500, so a
+        config carrying literal credentials against such a store produces a
+        store error on every probe while still being a working configuration.
+        Raising here would break it.
+        """
+
+        class ScopedStore:
+            async def get_optional(self, name: str) -> str | None:
+                raise SecretStoreError("access denied by policy", secret_name=name)
+
+        raw = self._spec(
+            **{"basic.username": "u", "basic.password": "p", "database": "db"}
+        ).to_raw_dict()
+
+        assert await _fetch_per_key_bundle(ScopedStore(), raw) == {}
+
+    async def test_single_candidate_erroring_still_falls_through(self) -> None:
+        """The documented swallow-and-fall-through behaviour, single-probe."""
+
+        class BrokenStore:
+            async def get_optional(self, name: str) -> str | None:
+                raise SecretStoreError("vault denied", secret_name=name)
+
+        raw = self._spec(**{"basic.password": "only-field"}).to_raw_dict()
+
+        assert await _fetch_per_key_bundle(BrokenStore(), raw) == {}
+
+    async def test_partial_resolution_does_not_raise(self) -> None:
+        """One field erroring while another resolves is not a store fault."""
+
+        class FlakyStore:
+            async def get_optional(self, name: str) -> str | None:
+                if name == "real-key":
+                    return "real-value"
+                raise SecretStoreError("vault denied", secret_name=name)
+
+        raw = self._spec(
+            **{"basic.password": "real-key", "database": "db-literal"}
+        ).to_raw_dict()
+
+        assert await _fetch_per_key_bundle(FlakyStore(), raw) == {
+            "real-key": "real-value"
+        }
+
+    async def test_zero_resolved_is_recorded_at_info_not_warning(self) -> None:
+        """Zero resolutions is recorded, but at INFO — for a config carrying
+        literal credentials inline it is the expected steady state and would
+        otherwise warn on every run. It is also indistinguishable from a
+        throttled vault (Dapr reports both as 500/ERR_SECRET_GET), so the line
+        states the fact without asserting which case it is."""
+        from unittest.mock import patch
+
+        class EmptyStore:
+            async def get_optional(self, name: str) -> str | None:
+                return None
+
+        raw = self._spec(**{"basic.password": "p", "database": "db"}).to_raw_dict()
+
+        with patch("application_sdk.credentials.agent.logger") as mock_logger:
+            assert await _fetch_per_key_bundle(EmptyStore(), raw) == {}
+
+        mock_logger.warning.assert_not_called()
+        mock_logger.info.assert_called_once()
+        assert "resolved 0 of" in mock_logger.info.call_args.args[0]
+
+    async def test_successful_resolution_is_logged_at_info(self) -> None:
+        """Positive-resolution logging: resolution provenance was previously
+        only inferable from the absence of DEBUG lines."""
+        from unittest.mock import patch
+
+        class Store:
+            async def get_optional(self, name: str) -> str | None:
+                return "value" if name == "real-key" else None
+
+        raw = self._spec(
+            **{"basic.password": "real-key", "database": "db-literal"}
+        ).to_raw_dict()
+
+        with patch("application_sdk.credentials.agent.logger") as mock_logger:
+            await _fetch_per_key_bundle(Store(), raw)
+
+        mock_logger.info.assert_called_once()
+        assert mock_logger.info.call_args.args[1:] == (1, 2)
+
+    async def test_cold_start_outage_propagates_even_when_others_resolve(
+        self,
+    ) -> None:
+        """A probe that never got an answer must surface as an outage rather
+        than being masked by its siblings' success — and must carry a hashed
+        label, not the raw ref-key."""
+
+        class HalfDownStore:
+            async def get_optional(self, name: str) -> str | None:
+                if name == "unreachable-key":
+                    raise SecretStoreUnavailableError(name)
+                return "value"
+
+        raw = self._spec(
+            **{"basic.password": "unreachable-key", "database": "fine-key"}
+        ).to_raw_dict()
+
+        with pytest.raises(SecretStoreUnavailableError) as exc_info:
+            await _fetch_per_key_bundle(HalfDownStore(), raw)
+
+        assert "unreachable-key" not in str(exc_info.value)
+        assert "sha256:" in str(exc_info.value)

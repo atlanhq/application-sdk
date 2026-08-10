@@ -10,6 +10,7 @@ This doc covers what the SDK ships — the composite action, the reusable workfl
 | Component | Location | Purpose |
 |---|---|---|
 | `sdr-e2e` composite action | `.github/actions/sdr-e2e/action.yaml` | Build PR image, configurator + Dapr + Temporal stack-up, pytest, PR sticky comment, teardown. Used by both pipelines. |
+| `build-app-image` composite action | `.github/actions/build-app-image/action.yaml` | SDK-ref repin → manifest regeneration → buildx build/push → platform assert → interpreter assert. Extracted from `sdr-e2e` so the image can be built **once per run** ahead of the e2e matrix, and optionally multi-arch (see [Building the image once](#building-the-image-once)). |
 | `e2e-full-reusable.yaml` reusable workflow | `.github/workflows/e2e-full-reusable.yaml` | Boilerplate (120-min timeout, concurrency group, env wiring, agent-name resolution) for the full-DAG pipeline. Connector repos `uses:` it as a 5-line wrapper. |
 | `e2e-apps` cross-repo dispatcher | `.github/actions/e2e-apps/action.yaml` | Fires `workflow_dispatch` on the connector repo with the apps-sdk PR's head SHA. Polls for completion, surfaces a sticky status comment on the SDK PR. |
 | `BaseSDRIntegrationTest` | `application_sdk/testing/sdr/` | pytest base for the SDR pipeline. Connector test class declares `Scenario(...)` instances. |
@@ -20,9 +21,37 @@ This doc covers what the SDK ships — the composite action, the reusable workfl
 | Pipeline | What it validates | Stack | Wall time | Triggers |
 |---|---|---|---|---|
 | **SDR Integration Tests (testcontainer)** | Credential → secret-store → connector-client chain. Auth / preflight / extract polled to `COMPLETED` on CI tenant Temporal. | Hermetic — testcontainer DB + worker + Dapr + Temporal. | ~3 min | Auto on every connector PR push |
-| **E2E Full Tests (system apps)** | Full DAG: connector extract → publish → query-intelligence → lineage-app → lineage-publish. Asset counts + lineage assertions in Atlas. | Live — configurator-generated compose, worker on a dynamic Temporal queue against the CI tenant's full Atlan stack. | ~20–40 min | Label-gated (`e2e-full`) |
+| **E2E Full Tests (system apps)** | Full DAG: connector extract → publish → query-intelligence → lineage-app → lineage-publish. Asset counts + lineage assertions in Atlas. | Live — configurator-generated compose, worker on a dynamic Temporal queue against the CI tenant's full Atlan stack. | ~20–40 min | Label-gated (`e2e`) — see below |
 
 Both call the same composite action; difference is test target, Dapr components, compose overlay, and secret-bundle shape.
+
+### What the `e2e` label actually gates
+
+Adding the `e2e` label starts the suite; a subsequent push (`synchronize`) on a
+PR still carrying it re-runs the suite. What does **not** re-run it is an
+unrelated label add — `size/`, `area/`, dependency and review-state labels churn
+constantly on an open PR, and every one of those used to re-fire the whole
+matrix (FND-48).
+
+The `Discover e2e suites` gate in `tests-reusable.yaml` therefore asks two
+questions, not one:
+
+```yaml
+contains(github.event.pull_request.labels.*.name, 'e2e') &&
+(github.event.action != 'labeled' || github.event.label.name == 'e2e')
+```
+
+You will still see a *workflow run* appear for every label add — GitHub has no
+trigger-level label filter, so the run is created and then skips within seconds.
+That is expected; it costs no tenant time and nothing queues behind it. Do not
+"fix" it by removing `labeled` from your `tests.yaml` trigger list: that is what
+makes adding the label start a run in the first place. See
+[`docs/standards/ci.md`](ci.md#label-gates-must-be-event-aware).
+
+Note that a genuine re-trigger still **queues** behind an in-flight run rather
+than cancelling it (`cancel-in-progress: false`). That is deliberate —
+cancelling mid-run abandons a live Automation Engine run and leaves tenant state
+behind — and it is a separate decision from the gating above.
 
 ## SDR composite action inputs
 
@@ -47,6 +76,10 @@ Both call the same composite action; difference is test target, Dapr components,
                         # before the docker build AND after setup-deps (so both
                         # the image and the host pytest runtime use the dispatched
                         # SDK).
+    prebuilt-image:     # OPTIONAL. Full image reference to use INSTEAD of
+                        # building one. Skips the build + interpreter assert and
+                        # uses this everywhere the built image would have been.
+                        # See "Building the image once" below.
     components-dir:     # OPTIONAL. App-level Dapr components dir. Defaults to
                         # $SDR_CONFIG_DIR/components. Override when SDR and
                         # full-DAG share one config dir but need different
@@ -96,6 +129,8 @@ jobs:
       agent-name-override:      # OPTIONAL. Default ci-<run_id>.
       application-sdk-ref:      # OPTIONAL. Cross-repo dispatch SDK pin.
       distinct-id:              # OPTIONAL. codex-/return-dispatch correlation id.
+      clouds:                   # OPTIONAL. Default "" = the SDK's cloud list.
+                                # See Cross-CSP matrix below; "none" disables it.
     secrets: inherit
 ```
 
@@ -103,11 +138,138 @@ Threaded secrets the reusable workflow expects on the caller side:
 
 | Secret | Required | Used by |
 |---|---|---|
-| `SDR_TEST_TENANT` | yes | configurator |
-| `SDR_CLIENT_ID` / `SDR_CLIENT_SECRET` | yes | configurator OAuth |
-| `ATLAN_BASE_URL` | yes | full-DAG harness |
-| `ATLAN_API_KEY` | yes | full-DAG AE-management (`/automation/api/v1/*`). Service account must carry `realm-admin` which the OAuth client does not. |
+| `E2E_TENANT_MATRIX_JSON` | for the cross-CSP matrix | Per-leg tenant + credentials. See [Cross-CSP matrix](#cross-csp-matrix). Org-level; shared with `application-sdk` and every `atlan-*-app`. |
+| `SDR_TEST_TENANT` | fallback only | configurator |
+| `SDR_CLIENT_ID` / `SDR_CLIENT_SECRET` | fallback only | configurator OAuth |
+| `ATLAN_API_KEY` | fallback only | full-DAG AE-management (`/automation/api/v1/*`). Service account must carry `realm-admin` which the OAuth client does not. |
 | `SDR_OAUTH_CLIENT_ID` / `SDR_OAUTH_CLIENT_SECRET` | no | Dapr S3 binding + pyatlan asset queries. Falls back to API-key when absent. |
+
+`ATLAN_BASE_URL` is **not** a secret you set: it is always derived as
+`https://<resolved tenant>` so it can never name a different tenant than the rest
+of the leg's credentials do.
+
+The four `SDR_*` / `ATLAN_API_KEY` entries were the only way to name a tenant
+before the cross-CSP matrix. They are now the fallback used when
+`E2E_TENANT_MATRIX_JSON` is not available to the repo, which is what keeps a
+repo that has not been onboarded running exactly as it did before.
+
+## Cross-CSP matrix
+
+Every e2e suite runs once per cloud provider, against that cloud's tenant, so
+CSP-specific behaviour — the objectstore binding `atlan-configurator` emits, the
+tenant's blobstorage proxy, Temporal host resolution — is exercised before
+release rather than after. This is FND-6.
+
+**The secret.** One org secret, `E2E_TENANT_MATRIX_JSON`, keyed by cloud:
+
+```json
+{
+  "aws":   {"tenant": "…", "client_id": "…", "client_secret": "…", "api_key": "…", "tenant_id": "…"},
+  "azure": {"tenant": "…", "client_id": "…", "client_secret": "…", "api_key": "…", "tenant_id": "…"},
+  "gcp":   {"tenant": "…", "client_id": "…", "client_secret": "…", "api_key": "…", "tenant_id": "…"}
+}
+```
+
+One secret rather than four per cloud because a `strategy.matrix` value cannot
+index the `secrets` context, and the reusable workflows declare their
+`workflow_call` secrets explicitly — so per-cloud names would have to be
+re-declared for every cloud ever added. Adding a fourth CSP is a secret edit and
+a one-line change to `DEFAULT_CLOUDS`; no app repo changes at all.
+
+`"tenant_id"` is the tenant's **vcluster instance name** (`markeznp37`, `home-mt`)
+— *not* its hostname, which is what `"tenant"` holds. It is required only by the
+tenant-install path (`install-app-to-tenant`, FND-31): GM matches a release's
+`allowed_tenants` against this id exactly, so scoping with a hostname publishes
+successfully and produces a release visible to **no** tenant, whose symptom
+appears one call later as `version not found` on install. It reaches the drivers
+as `E2E_TENANT_ID`.
+
+There is no way to derive it client-side — Heracles reads it from the
+`atlan-defaults` ConfigMap key `instance`, and deliberately not from the JWT,
+whose Keycloak realm is `default` for every tenant. So an entry without it cannot
+use the install path, and neither can the single-tenant fallback (which has no
+entry to add the field to); the `E2E Tenant Install` workflow's `tenant_id` input
+covers one-off runs in both cases.
+
+### When the FAILED verdict is about somebody else's pod
+
+LM's deployment health check is **namespace-scoped**: it reports `Pods failed in
+namespace <ns>: <pod>` for any unhealthy pod in the app's namespace, not just the
+ones belonging to the deployment it is reconciling. So a pod orphaned by an earlier
+install — stuck in `ImagePullBackOff` on a tag that no longer resolves, say — fails
+*every* later install to that tenant, however healthy the new version is.
+
+That is not hypothetical: it is how the first successful multi-arch install
+presented. Our pods pulled the image in 12.4s and were scaled to zero by KEDA as
+designed, while a pod from an earlier attempt sat on a different tag
+(`x1048 over 3h59m`) and took the verdict down with it.
+
+`e2e_tenant_app.py install` therefore reads the pod events before accepting the
+verdict:
+
+- If **our** image is among the ones failing to pull, the failure stands. Kubelet
+  can name an image by digest (`…@sha256:…`, with or without the tag) while
+  `--image` arrives as a tag, so "ours" is decided by repository identity, not
+  string equality: a failing reference in our repository counts as ours unless it
+  carries a resolvably *different* tag, and only a different repository or a
+  different tag of ours is foreign.
+- If every failing image is provably some *other* version, the verdict is not
+  evidence about this install — so it falls through to the installed-version
+  read-back, which decides. A `::warning::` names the foreign images either way,
+  and a `::notice::` says they still need deleting, because they will fail this
+  check on every future install until someone does.
+- If the read-back **disagrees**, it still fails. The override moves the decision
+  to direct evidence; it never skips it.
+
+A timeout is never downgraded this way — an accepted-but-unreconciled deploy is
+nobody else's fault, and it is the silent wrong-version failure this whole
+mechanism exists to remove.
+
+`prepare-tenant` therefore **fails** on an unresolved `tenant_id`, immediately
+after tenant resolution and before it publishes anything — it does not skip the
+install. Skipping would leave the job green having done nothing, the tenant on
+whatever version it was already running, and every leg reding on its own version
+check instead: one confusing failure per leg in place of one clear failure. Since
+`install-app-to-tenant` is opt-in, a caller that has opted in without a
+`tenant_id` is misconfigured rather than on a supported path.
+
+Each entry may also carry `"deployment_name"` when that tenant's system apps
+(publish / quality / lineage) are not registered under `production`. It reaches
+the harness as `E2E_TENANT_DEPLOYMENT_NAME`, which
+`BaseE2ETest.resolved_tenant_deployment_name()` prefers over the class default.
+
+**Per-leg resolution.** `.github/scripts/resolve_e2e_tenant.py` extracts only the
+leg's own cloud and writes `SDR_TEST_TENANT`, `SDR_CLIENT_ID`,
+`SDR_CLIENT_SECRET`, `ATLAN_API_KEY` and the derived `ATLAN_BASE_URL` to
+`$GITHUB_ENV`. A leg therefore never holds the other tenants' credentials. It
+runs in two passes (`--mask-only`, then the env write) for the same reason
+`export_extra_env.py` does: registering the blob as a secret does not redact the
+values inside it.
+
+**Leg naming and isolation.** The cloud rides in the matrix leg `name`
+(`<suite>-<cloud>`), which is already the job name, the concurrency-group key and
+the `artifact-suffix` — and `artifact-suffix` is what `derive_deployment_name.py`
+folds into `ATLAN_DEPLOYMENT_NAME`. So queues, artifacts, concurrency and job
+names all pick up the cloud with no new machinery.
+
+**Selecting clouds.** `e2e-clouds` on `tests-reusable.yaml` (`clouds` on
+`e2e-full-reusable.yaml`), surfaced as the `e2e_clouds` `workflow_dispatch` input
+on each app's `tests.yaml`:
+
+| Value | Meaning |
+|---|---|
+| `""` (default) | The SDK's current list — `DEFAULT_CLOUDS` in `discover_e2e_suites.py`. Deliberately not "no clouds": an untouched GitHub input arrives as `""`, and that must not silently opt a repo out. |
+| `aws` (or any subset) | Just those clouds. Use this to re-run one cloud, or to keep the fleet moving while one tenant is down. |
+| `none` | No cloud dimension — one leg against the single fallback tenant. |
+
+Every cloud is a **required** leg: the matrix is `fail-fast: false` and the Tests
+Gate reads `needs.e2e.result`, the matrix aggregate, so any cloud failing reds the
+gate. Narrowing `e2e-clouds` is the escape hatch, and trimming the secret to one
+key is the org-wide one.
+
+When the secret is not available to a repo, `clouds` is forced to `none` and the
+`Discover e2e suites` job emits a `::warning::` saying so — a run that asked for
+three clouds and got one must not look identical to one that got three.
 
 ## Cross-repo dispatch
 
@@ -136,6 +298,119 @@ Since v4 the action reads the dispatched run's id straight out of the `workflow_
 
 The SDR composite renders one PR-comment body, writes it to `results/pr-comment-body.md`, and uploads it as part of the test artifact. Both posting sides (connector PR + cross-repo SDK PR) read this same file and post it as a sticky-update comment, swapping the marker line so updates don't collide.
 
+## Building the image once
+
+The test image reference is deterministic — `ghcr.io/atlanhq/<app-image-name>:sdr-test-<short-sha>`
+— so every cloud leg of a run used to rebuild the identical tag. The build
+sequence (SDK-ref repin → manifest regeneration → buildx → push → interpreter
+assert) therefore lives in its own [`build-app-image`](../../.github/actions/build-app-image/action.yaml)
+composite, and `sdr-e2e` takes a `prebuilt-image` input that skips its own build
+and uses the supplied reference everywhere the built one would have gone (the
+configurator's `app_image`, and the action's `image` output).
+
+This exists for FND-31, not just to save build minutes: the full-DAG pipeline has
+to install the app under test **onto the target tenant before any leg starts**, so
+the image must exist before the matrix fans out. Saving N−1 duplicate builds is the
+side benefit.
+
+> **Why it matters that the tenant runs the app under test.** At AE submit,
+> Heracles re-fetches the manifest from the **tenant-deployed pod** and *that* DAG
+> is what executes (`processAutomationEngineWorkflow`); the harness's local
+> `manifest_path` seed DAG establishes the workflow record, not the graph. So the
+> DAG contract a full-DAG e2e exercises is whatever version is installed on that
+> tenant. Until FND-31 lands, that is whatever was last hand-deployed there.
+
+### Multi-arch on the install path
+
+Two machines pull that image, and they are not the same architecture:
+
+| Puller | What it runs | Architecture |
+|---|---|---|
+| The GitHub runner | The per-leg worker, under docker compose | amd64 |
+| The tenant's cluster node | The app pod Heracles fetches the DAG from at submit | may be arm64 |
+
+A single-arch image satisfies whichever of the two matches the build and fails the
+other. Nothing in between catches it: GM accepts the version, LM accepts the
+install, `deployment_status` even goes green for a while, and the tenant's kubelet
+fails the pull ~2 minutes later with `no matching manifest for linux/arm64`.
+FND-31's first live install ended exactly there.
+
+It must be *both*, not retargeted to the tenant's architecture: dropping amd64
+would break the local worker instead.
+
+**One architecture per job, each on a runner native to it.** `build-e2e-image` is a
+matrix — `ubuntu-latest` builds `linux/amd64`, `ubuntu-24.04-arm` builds
+`linux/arm64` — and `merge-e2e-image` combines the two with `docker buildx
+imagetools create`, a registry-side operation on digests that takes seconds.
+
+The obvious alternative, one job with `--platform linux/amd64,linux/arm64`,
+emulates the non-native half under QEMU. That is 5-10x native — a figure this org
+has already measured and [documented](https://github.com/atlanhq/mothership), and
+`mothership`'s own `build.yml` and `lh-compute-duckdb` both use `ubuntu-24.04-arm`
+for exactly this reason. Two native jobs in parallel cost about one build; one job
+emulating costs several. On a path that runs on every install-path e2e, that is the
+whole design. arm64 runners are also ~20% cheaper per minute, so it is not a
+speed-for-money trade.
+
+Three things this shape makes load-bearing, each of which fails *silently*:
+
+- **The runner/platform pairing.** `platform: linux/arm64` on an x64 runner still
+  succeeds — just emulated. Nothing goes red; the build is simply several times
+  slower forever. `test_build_app_image_action.py` pins each leg's platform to a
+  runner native to it.
+- **The cache scope.** `tag-suffix` suffixes the buildx cache scope as well as the
+  tag, because two concurrent builds sharing one `type=gha` scope overwrite each
+  other's cache manifest — after which every run finds the other architecture's and
+  misses. One input drives both so the wrong combination can't be expressed. It
+  defaults to empty, so the 17 repos calling `sdr-e2e` directly resolve to the
+  byte-identical scope they always had.
+- **`pkl`'s architecture.** `regenerate-contract` runs inside this build and used to
+  fetch the x86 `pkl` asset unconditionally; on an ARM runner that is `cannot
+  execute binary file`, several steps before anything mentions architecture. It now
+  selects from `runner.arch`.
+
+**Reading back a just-pushed tag is a race, so the build legs don't.** buildx's
+container driver exports only to the registry, so `docker run` used to fetch back
+the image the same step had just uploaded — 22.7s on a measured amd64 leg, and a
+read the registry doesn't always serve yet (a live arm64 leg got `manifest
+unknown` 0.7s after its own push reported success). The build now also `--load`s
+into the local daemon, so the interpreter assert is a local container start: 0.17s,
+and no registry read to race. Measured end to end, the amd64 leg went 89s → 76s.
+
+`--load` is skipped for a multi-platform build, because the docker exporter can't
+express a manifest list; such a caller falls back to pulling, which still works.
+
+The one read that can't be avoided is `merge-e2e-image`'s: `imagetools create` is
+purely registry-side, so the manifest list exists *only* there and inspecting it a
+step later is inherently a fresh read. That one is wrapped in
+[`with-retry.sh`](../../.github/scripts/with-retry.sh) — around the *inspect*, and
+captured into a variable before parsing, because piping a retried command
+concatenates every attempt's output into the reader's stdin and would fail the
+parse on healthy data.
+
+`merge-e2e-image` then asserts the combined manifest serves both architectures
+(`assert_image_platforms.py`). That is the reference `prepare-tenant` publishes and
+the tenant pulls, so it is the one worth asserting: a leg that quietly built the
+wrong architecture produces an index with two of the same, and nothing downstream
+notices — GM accepts the version, LM accepts the install. Failing here, where the
+fix is obvious, replaces the diagnostic distance that cost FND-31 four runs.
+
+Two seams worth knowing about when editing either action:
+
+- **Skipped-step outputs are empty.** With `prebuilt-image` set, the build step is
+  skipped and `steps.build.outputs.image` is `""`. One resolver step
+  (`${PREBUILT:-$BUILT}`) is the single writer of the effective reference, and it
+  hard-fails when both are empty rather than letting an empty `app_image` reach the
+  configurator and surface as an opaque compose pull error. `test_build_app_image_action.py`
+  regression-guards this.
+- **Nested actions resolve at `@main`.** `sdr-e2e` invokes `build-app-image` as
+  `@main`, so on the local-action dispatch path
+  (`./.application-sdk/.github/actions/sdr-e2e`) the build steps come from main
+  rather than from the application-sdk PR under test. `regenerate-contract` and
+  `setup-deps` — both already inside this sequence — have the same property. A PR
+  editing the build steps is covered by the remote `@main` path and the merge
+  queue, not by a local-action dispatch.
+
 ## Contract regeneration before tests
 
 The e2e/integration tests consume `app/generated/manifest.json` (the Automation Engine DAG): the host-side harness reads the committed file, and the connector Docker image `COPY`s `app/generated/` at build time and serves `manifest.json` at runtime. Nothing used to regenerate that file from `contract/app.pkl`, so a Contract Toolkit change — at the app level (`contract/app.pkl`) or the SDK level (`contract-toolkit/src`) — ran against a possibly-stale committed manifest and was never actually exercised (BLDX-1493).
@@ -145,12 +420,12 @@ The shared [`regenerate-contract`](../../.github/actions/regenerate-contract/act
 | Where it runs | Placement | Drift gate |
 |---|---|---|
 | `connector-integration-tests` (always-on host harness) | after the SDK-ref repin, before the app server boots | **Warn-only** — annotates a stale committed `app/generated/`, never fails |
-| `sdr-e2e` (image-based, incl. the full-DAG path via `e2e-full-reusable`) | **before the image build** (bakes the fresh manifest into the connector image) | Off (`check-drift: "false"` — uv/ruff aren't installed yet; the integration job owns the gate) |
+| `build-app-image` (image-based; reached from `sdr-e2e`, incl. the full-DAG path via `e2e-full-reusable`) | **before the image build** (bakes the fresh manifest into the connector image) | Off (`check-drift: "false"` — uv/ruff aren't installed yet; the integration job owns the gate) |
 
 - **App-level** (default): regenerate from the app's pinned `@app-contract-toolkit` version, so a `contract/app.pkl` change is exercised even when the committed manifest was not regenerated.
 - **SDK-level** (cross-repo dispatch, `application-sdk-ref` set): the `@app-contract-toolkit` dependency is overridden to the SDK PR's `contract-toolkit/src`, so a toolkit change in the SDK PR is generated against the *real* connector contract end-to-end. Drift is expected, so the gate is skipped and a `pkl eval` failure is fatal.
 
-Because the e2e suite is matrixed one leg per test file and each leg builds its own image inside `sdr-e2e`, regeneration runs once per leg (it cannot be hoisted ahead of the matrix — the fresh `app/generated/` must exist in the workspace when each leg builds).
+Regeneration is bound to the build, so it runs wherever the build runs: once per leg while each leg builds its own image, and once per run for a caller that builds ahead of the matrix and passes `prebuilt-image` (see [Building the image once](#building-the-image-once)). The binding is the invariant — the fresh `app/generated/` must exist in the workspace at the moment the image is built — not the per-leg cardinality.
 
 ## Workspace-wipe defences (local-action mode)
 

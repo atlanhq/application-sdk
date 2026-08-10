@@ -218,6 +218,40 @@ def test_seed_dag_tenant_deployment_name_override(
     assert dag["publish"]["inputs"]["task_queue"] == "atlan-publish-staging"
 
 
+def test_seed_dag_env_overrides_tenant_deployment_name(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``E2E_TENANT_DEPLOYMENT_NAME`` wins over the class default.
+
+    One suite now runs against several tenants in a single CI run, so the value
+    has to come from the leg rather than from the class.
+    """
+    _bootstrap_env(monkeypatch)
+    monkeypatch.setenv("E2E_TENANT_DEPLOYMENT_NAME", "staging")
+    cls = _make_test(str(manifest_file))
+    instance = cls()
+    instance.setup_method()
+
+    dag = instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-test")
+
+    assert dag["qi"]["inputs"]["task_queue"] == "atlan-query-intelligence-staging"
+    assert dag["publish"]["inputs"]["task_queue"] == "atlan-publish-staging"
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_blank_deployment_name_env_falls_back_to_the_class_default(
+    value: str, manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An unset GitHub Actions env var arrives as "", and an empty deployment
+    # name would address `atlan-publish-` and fail far from its cause.
+    _bootstrap_env(monkeypatch)
+    monkeypatch.setenv("E2E_TENANT_DEPLOYMENT_NAME", value)
+    instance = _make_test(str(manifest_file))()
+    instance.setup_method()
+
+    assert instance.resolved_tenant_deployment_name() == "production"
+
+
 def test_seed_dag_substitutes_mustache_placeholders(
     manifest_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -87,6 +87,11 @@ on:
         required: false
         type: boolean
         default: false
+      use_ghcr_base:
+        description: "Resolve the SDK base image from GHCR instead of Harbor during the image build. Opt-in while the GHCR path is being rolled out; the default will flip to true once canary apps have soaked, and the flag will then be removed. Setting this runs a preflight that fails the build if the redirect cannot apply to this Dockerfile, or if the two registries have drifted apart on the base tag — see the 'Resolve GHCR base redirect' step for the mechanics and docs/standards/build-security.md for why the mirror exists. Default false — every caller builds from Harbor exactly as before."
+        required: false
+        type: boolean
+        default: false
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -385,11 +390,21 @@ jobs:
   # ── Job 0c: App certification — generic readiness checks ──────────────────────
   # Runs v3-shape, contract-drift, unit tests, and coverage against the checked-
   # out app source before publish — no per-app wiring needed. Unit test pass/fail
-  # blocks publish; other layers annotate warn-only. Only when `publish: true`.
+  # blocks publish; other layers annotate warn-only.
   # See docs/standards/app-certification.md.
+  #
+  # Runs on `publish` OR any main push, not on `publish` alone. `release_model:
+  # semver` changed which images *publish* (only a GitHub Release reaches
+  # channel='all'), but it must not change which images are *gated*: under
+  # semver a merge to main sets publish=false, and gating on publish alone made
+  # this job — the only place unit tests and contract drift run at all, since
+  # `unit-tests-gate` is permanently `if: false` — skip on every merge. The
+  # image still went to GHCR, and for SDR apps still shipped to Docker Hub via
+  # app-deployment-dispatcher below, uncertified. Main pushes ran this job under
+  # the legacy model (publish was true there); this keeps that property.
   certify:
     name: Certify app
-    if: inputs.publish
+    if: ${{ inputs.publish || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -433,7 +448,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.1"
+          version: "0.12.3"
 
       # ── 1. v3 shape ─────────────────────────────────────────────────────────
       - name: Install SDK (migration tooling)
@@ -651,11 +666,14 @@ jobs:
   #      a logged secret value from a logged non-secret field), so it does NOT
   #      block: it annotates the run summary and pings Slack when there are
   #      warnings. Honors an app-level .credential-leak-allow allowlist.
-  # Only runs when publish=true (matches validate-channel / certify).
+  # Runs on publish OR any main push — same reasoning as `certify` above. Its
+  # gitleaks (hardcoded-secret) layer is a real blocker that gates `prepare`,
+  # so leaving it publish-only let a semver merge build and SDR-ship an image
+  # with no hardcoded-secret scan at all.
   # See docs/standards/credential-leak-gate.md.
   leak-scan:
     name: Credential leak gate
-    if: inputs.publish
+    if: ${{ inputs.publish || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -881,8 +899,10 @@ jobs:
     # validate-channel stay as pre-build gates.
     needs: [validate-channel, unit-tests-gate, leak-scan]
     # `needs: [...]` only enforces ordering when those jobs run. When
-    # publish=false, all of them are skipped via their `if:` — which by default
-    # would propagate "skipped" to dependents. The condition below explicitly
+    # publish=false off main, all of them are skipped via their `if:`
+    # (`leak-scan` still runs on main pushes; `unit-tests-gate` is permanently
+    # `if: false`) — which by default would propagate "skipped" to dependents.
+    # The condition below explicitly
     # allows prepare to run when those jobs are skipped OR successful, but NOT
     # when one failed. `certify` enforces unit tests and contract drift: a
     # failing run exits non-zero, which trips `failure()` here and correctly
@@ -914,6 +934,9 @@ jobs:
       ghcr_branch_tag:  ${{ steps.tags.outputs.ghcr_branch_tag }}
       dockerhub_image:  ${{ steps.tags.outputs.dockerhub_image }}
       release_tags:     ${{ steps.tags.outputs.release_tags }}
+      # Empty unless use_ghcr_base is set AND the preflight below proved the
+      # redirect both fires and resolves the same digest Harbor serves.
+      base_build_contexts: ${{ steps.base_redirect.outputs.build_contexts }}
 
     steps:
       - name: Checkout
@@ -953,6 +976,46 @@ jobs:
           DEPLOY_CONFIG: ${{ steps.manifest.outputs.deploy_config }}
           SDK_VERSION:   ${{ steps.manifest.outputs.sdk_version }}
         run: python3 .sdk-entrypoint/.github/scripts/validate_atlan_yaml.py
+
+      - name: Resolve GHCR base redirect
+        # Preflight for the use_ghcr_base opt-in. Produces the build-contexts
+        # mapping consumed by the build job, and refuses to hand back a mapping
+        # that would be a no-op or would resolve a base other than Harbor's.
+        #
+        # It runs HERE rather than in the build job on purpose: the build job
+        # sends `context: .` to BuildKit, so checking the SDK scripts out there
+        # would add files to every opted-in app's build context and bust the
+        # layer cache this change exists to protect. prepare already has both
+        # the caller checkout and .sdk-entrypoint, and running once (instead of
+        # per-arch) also guarantees both architectures pin the same digest.
+        #
+        # Two gates, both fail-closed — see resolve_base_redirect.py, covered by
+        # tests/test_resolve_base_redirect.py in the SDK repo:
+        #   * match coverage — named-context substitution is reference-specific,
+        #     so an opted-in Dockerfile pinning another tag would silently keep
+        #     pulling from Harbor. The script expands global ARG defaults the way
+        #     BuildKit does and errors when it can prove nothing matches.
+        #   * digest parity — the cross-registry publish is not transactional
+        #     (docs/standards/build-security.md), so it compares the tag on both
+        #     registries and errors on skew rather than building on a stale base.
+        # On parity it pins the immutable digest, so a base release landing
+        # mid-build cannot change what this build resolves to.
+        #
+        # A registry it cannot reach is *unknown*, not skew: if GHCR cannot be
+        # resolved the script warns and emits an empty mapping, degrading to the
+        # pre-redirect Harbor pull. Harbor is the one exception — with the
+        # redirect's source unreachable there is no baseline to verify parity
+        # against, so it fails closed rather than ride the redirect unproven.
+        id: base_redirect
+        if: ${{ inputs.use_ghcr_base }}
+        env:
+          # Harbor's public project is pulled anonymously (this workflow never
+          # logs into Harbor); only the GHCR leg needs a credential.
+          GHCR_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          python3 .sdk-entrypoint/.github/scripts/resolve_base_redirect.py \
+            --dockerfile "${{ steps.manifest.outputs.dockerfile }}"
 
       - name: Validate SDR secrets
         if: steps.manifest.outputs.enable_sdr == 'true'
@@ -1133,6 +1196,43 @@ jobs:
           file: ${{ needs.prepare.outputs.dockerfile }}
           platforms: ${{ matrix.platform }}
           push: true
+          # Resolve the SDK base image from GHCR instead of Harbor, when the
+          # caller opts in via use_ghcr_base. Empty (the default, and any run
+          # where the preflight declined) leaves the build resolving from Harbor
+          # exactly as before.
+          #
+          # The value is computed by the 'Resolve GHCR base redirect' step in
+          # prepare, not written literally here: it pins the GHCR *digest* that
+          # step verified equal to Harbor's, and that step fails the build rather
+          # than emit a mapping that would silently no-op or straddle a
+          # cross-registry skew. Read that step's comment for the two gates.
+          #
+          # Harbor is S3-backed and 307-redirects blobs to presigned S3 URLs, so
+          # the bytes go S3 -> runner and bill as S3 DataTransfer-Out. GHCR pulls
+          # from GitHub-hosted runners are free. Both registries carry the same
+          # digest (published together in harbor-release.yaml), so this changes
+          # only where the layers are fetched from, not what is built.
+          #
+          # Apps keep `FROM registry.atlan.com/public/app-runtime-base:3` in their
+          # Dockerfiles -- BuildKit matches that reference (after ARG expansion)
+          # and substitutes the source below. That split is deliberate: the
+          # Dockerfile reference stays the public interface partners build
+          # against, while retrieval is an internal detail we can repoint. When
+          # the public base moves off Harbor, update the left-hand side here --
+          # a rate-limited public registry makes this more necessary, not less.
+          #
+          # Rollout: every app repo pins this workflow at @main, so an ungated
+          # redirect would switch ~96 builds in one merge with no way back other
+          # than a revert that each app picks up on its next build. The flag
+          # inverts that -- canaries opt in per repo, and flipping the default
+          # later is a one-line change here rather than a fleet-wide event.
+          #
+          # BuildKit treats an unmatched substitution as a silent no-op, so a
+          # green build is not on its own evidence the redirect fired. The
+          # preflight is what makes it evidence: it prints the resolved base
+          # references and the pinned digest, and fails when the mapping cannot
+          # apply. S3 egress on the apps account remains the end-to-end signal.
+          build-contexts: ${{ needs.prepare.outputs.base_build_contexts }}
           tags: ${{ needs.prepare.outputs.ghcr_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.image_tag }}-${{ matrix.arch }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
@@ -1322,12 +1422,18 @@ jobs:
   app-deployment-dispatcher:
     name: Dispatch App Deployment
     needs: [prepare, merge, security-scan, certify]
-    # certify may be SKIPPED here: it runs only on publish=true, but the
-    # dispatcher fires on any main push for SDR apps (some, e.g. mysql, publish
-    # only on release). Block on a real certify FAILURE, not on skipped — else
-    # deploy-on-merge SDR apps would stop deploying. (publish uses == 'success'
-    # safely because it also requires inputs.publish, so certify always ran.)
-    if: ${{ !failure() && !cancelled() && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result != 'failure' && github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true' }}
+    # Requires certify to have actually SUCCEEDED, not merely "not failed".
+    # This job pushes the image the public SDR manifest resolves
+    # (s3://atlan-public/apps/<app>.yaml), so it is a tenant-reachable release
+    # channel and must carry the same certification as the GM publish path.
+    #
+    # `!= 'failure'` used to be necessary because certify only ran on
+    # publish=true while this job fires on every main push, so skipped had to
+    # pass or deploy-on-merge SDR apps would stop deploying. That is no longer
+    # true: certify now also runs on main pushes (see its `if:`), which is
+    # exactly when this job can fire, so 'success' is always reachable and
+    # 'skipped' no longer means "never checked".
+    if: ${{ !failure() && !cancelled() && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result == 'success' && github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
