@@ -994,9 +994,13 @@ def _marketplace_entrypoint_contract(entrypoint_name: str) -> Any | None:
     # the no-traversal property locally provable (py/path-injection).
     if not _ENTRYPOINT_NAME_RE.match(entrypoint_name):
         return None
-    generated_root = CONTRACT_GENERATED_DIR.resolve()
-    ep_manifest = (generated_root / entrypoint_name / "manifest.json").resolve()
-    if not ep_manifest.is_relative_to(generated_root) or not ep_manifest.is_file():
+    generated_root = os.path.realpath(CONTRACT_GENERATED_DIR)
+    ep_manifest = os.path.realpath(
+        os.path.join(generated_root, entrypoint_name, "manifest.json")
+    )
+    if not ep_manifest.startswith(generated_root + os.sep):
+        return None
+    if not os.path.isfile(ep_manifest):
         return None
     ep_module = entrypoint_module_segment(entrypoint_name)
     for module_path in (
