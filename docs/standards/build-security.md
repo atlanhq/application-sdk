@@ -38,6 +38,37 @@ Do not cut a new release. Every tag is re-pushed to both registries from one bui
 re-run restores parity; the tags are mutable, so the operation is idempotent. Cutting a new
 release instead would leave the skipped version permanently absent from GHCR.
 
+App builds do not silently ride out that window. When an app opts into
+`use_ghcr_base` (see below), `build-and-publish-app.yaml` resolves the base tag on
+**both** registries before building and fails closed on skew, with this recovery in
+the error annotation — so a stale GHCR alias surfaces as a failed app build rather
+than a green build on the wrong base.
+
+### Redirecting app CI to the GHCR mirror
+
+App Dockerfiles keep `FROM registry.atlan.com/public/app-runtime-base:3` — that
+reference is the public interface, and it stays put. Callers of
+`build-and-publish-app.yaml` opt in with `use_ghcr_base: true`, and a BuildKit named
+context rewrites *where the layers come from* without changing what is built.
+
+The opt-in runs `.github/scripts/resolve_base_redirect.py` first, which fails the
+build rather than let the redirect fail quietly:
+
+| Situation | Outcome |
+|---|---|
+| Dockerfile's base reference matches, digests agree | Redirect applied, **pinned to the immutable digest** |
+| No `FROM` matches the supported reference | **Build fails** — the opt-in would be a silent no-op |
+| Harbor and GHCR serve different digests for the tag | **Build fails** — see the recovery above |
+| Base reference only resolves inside BuildKit (`ARG` with no default) | Warns, builds from Harbor |
+| GHCR unreachable | Warns, builds from Harbor |
+| Harbor unreachable | **Build fails** — parity cannot be verified without the redirect's source |
+
+A registry that cannot be reached is *unknown*, not skew. GHCR-unreachable degrades to the
+pre-redirect Harbor pull instead of blocking an app release. Harbor-unreachable is the one
+exception: with the redirect's source down there is no baseline to verify the GHCR tag
+against, so an unverified redirect is indistinguishable from a stale one and the build fails
+closed. Re-run once Harbor recovers, or unset `use_ghcr_base` to build without the redirect.
+
 ## Consuming Dapr components in an app repo
 
 App repos should **not** curl these files from `raw.githubusercontent.com` or the GitHub contents API pinned to a hardcoded SDK tag (that pattern hits GitHub's unauthenticated rate limit under CI concurrency and silently drifts from the app's actual `atlan-application-sdk` version). Instead, copy them out of the installed package, e.g. as the app's `download-components` poe task:
