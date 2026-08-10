@@ -35,8 +35,14 @@ Outputs written to ``$GITHUB_OUTPUT``:
 
 Exits 0 in the "nothing to publish" cases (no candidate run, no live SARIF) —
 those are routine and gated downstream by ``has_run`` / ``has_artifacts``. A
-download that fails *after* the artifact was confirmed live is a real error and
-propagates, matching the test-readiness path.
+download that fails *after* the artifact was confirmed live is not fatal either:
+each series is fetched independently, a failure is logged as a ``::warning::``,
+and the step publishes whatever subset landed (``has_artifacts`` stays true).
+Only when *no* series is retrievable does the step skip (``has_artifacts=false``),
+still exiting 0. The one hard failure is the ``run view`` metadata lookup on an
+already-confirmed run — a blank ``commit_sha``/``branch`` would bake empty
+provenance into the dashboard JSON, so that propagates as nonzero, matching the
+prior ``set -euo pipefail`` shell.
 """
 
 from __future__ import annotations
@@ -194,15 +200,22 @@ def download(repo: str, run_id: int, series: list[str], dest: str, gh=run_gh):
 
 
 def head_ref(repo: str, run_id: int, gh=run_gh) -> tuple[str, str]:
+    """Head ``(sha, branch)`` of an already-confirmed run.
+
+    Raises ``RuntimeError`` when the lookup of a run we *already* confirmed has
+    live SARIF fails or returns unparseable JSON. The prior shell ran under
+    ``set -euo pipefail``, so this ``gh run view`` aborted the step on error;
+    swallowing it here would publish dashboard rows with blank provenance.
+    """
     rc, out = gh(
         ["run", "view", str(run_id), "--repo", repo, "--json", "headSha,headBranch"]
     )
     if rc != 0:
-        return "", ""
+        raise RuntimeError(f"gh run view failed for run {run_id}")
     try:
         payload = json.loads(out or "{}")
-    except json.JSONDecodeError:
-        return "", ""
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"unparseable gh run view payload for run {run_id}") from exc
     return payload.get("headSha") or "", payload.get("headBranch") or ""
 
 
@@ -233,7 +246,11 @@ def main(argv: list[str] | None = None, gh=run_gh) -> int:
         )
         return 0
 
-    sha, branch = head_ref(args.repo, run_id, gh=gh)
+    try:
+        sha, branch = head_ref(args.repo, run_id, gh=gh)
+    except RuntimeError as exc:
+        print(f"::error::{exc} — cannot publish provenance for run {run_id}")
+        return 1
     print(f"Conformance run: {run_id}  sha={sha}  branch={branch}")
     write_outputs(
         {

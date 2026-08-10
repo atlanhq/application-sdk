@@ -45,11 +45,14 @@ def _artifacts(names_expired: list[tuple[str, bool]]) -> str:
 class FakeGh:
     """Records argv and replays canned (rc, stdout) per gh subcommand."""
 
-    def __init__(self, runs="[]", artifacts_by_run=None, download_rc=0, head=None):
+    def __init__(
+        self, runs="[]", artifacts_by_run=None, download_rc=0, head=None, head_rc=0
+    ):
         self.runs = runs
         self.artifacts_by_run = artifacts_by_run or {}
         self.download_rc = download_rc
         self.head = head or {"headSha": "abc123", "headBranch": "main"}
+        self.head_rc = head_rc
         self.calls: list[list[str]] = []
 
     def __call__(self, args: list[str]):
@@ -68,6 +71,8 @@ class FakeGh:
                 rc = rc(args)
             return rc, ""
         if args[:2] == ["run", "view"]:
+            if self.head_rc != 0:
+                return self.head_rc, ""
             return 0, json.dumps(self.head)
         raise AssertionError(f"unexpected gh call: {args}")
 
@@ -287,6 +292,25 @@ def test_head_sha_and_branch_are_published(tmp_path, monkeypatch):
     assert out["commit_sha"] == "0be829be"
     assert out["branch"] == "main"
     assert out["run_id"] == "5"
+
+
+def test_failed_run_view_aborts_instead_of_publishing_blank_provenance(
+    tmp_path, monkeypatch
+):
+    """Regression: the prior shell ran under ``set -euo pipefail``, so a failed
+    ``gh run view`` on an already-confirmed run aborted the step. Publishing
+    with empty ``commit_sha``/``branch`` would bake blank provenance into the
+    dashboard JSON — the lookup failure must propagate as a nonzero exit."""
+    gh = FakeGh(
+        runs=json.dumps([{"databaseId": 5, "conclusion": "success"}]),
+        artifacts_by_run={5: _artifacts([("conformance-ci-sarif", False)])},
+        head_rc=1,
+    )
+    rc, out = _run_main(gh, tmp_path, monkeypatch)
+    assert rc == 1
+    # Nothing is published: no blank commit_sha/branch rows reach the dashboard.
+    assert "commit_sha" not in out
+    assert "branch" not in out
 
 
 def test_artifacts_land_in_the_requested_dir(tmp_path, monkeypatch):
