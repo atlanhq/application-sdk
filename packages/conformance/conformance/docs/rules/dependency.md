@@ -232,13 +232,16 @@ Docker build, where `uv sync` precedes `poe download-components`). Inline suppre
 
 **Rationale:** The SDK's query transformer (application_sdk.transformers.query, the transform_metadata
 path) executes its transform SQL through DuckDBConnectionManager, and duckdb ships only
-in the SDK's [sql] and [incremental] extras — never in core. On SDK >= 3.22 the [daft]
-extra is empty, so an app that imports the query transformer without pulling one of
-those extras (or duckdb directly) hits a guaranteed runtime ImportError ('duckdb is
-required for DuckDBConnectionManager') in EVERY transform — latent until the first real
-pipeline run, because imports alone succeed (observed live on main for a document-store
-connector in fleet testing after renovate crossed the 3.22 line). Statically checkable:
-transformer-usage scan + lockfile/pyproject scan.
+in the SDK's [sql] and [incremental] extras — never in core. An app that imports the
+query transformer on a plain atlan-application-sdk pin, with no extra at all, hits a
+guaranteed runtime ImportError ('duckdb is required for DuckDBConnectionManager') in
+EVERY transform — latent until the first real pipeline run, because imports alone
+succeed and mocked unit tests pass. The population that surfaced this was a different,
+SDK-owned shape: apps pinned to the deprecated [daft] extra, which resolved empty over
+3.22–3.26 (observed live on main for a document-store connector in fleet testing after
+an automated upgrade crossed the 3.22 line). That half is fixed at the root — [daft]
+aliases [sql] again from 3.27.0 — so this rule now covers the no-extras case it always
+also covered. Statically checkable: transformer-usage scan + lockfile/pyproject scan.
 
 An app whose source imports the SDK query transformer
 (`application_sdk.transformers.query` — the `transform_metadata` /
@@ -248,10 +251,17 @@ transformer executes its transform SQL through `DuckDBConnectionManager`, which 
 absent.
 
 `duckdb` is provided by the SDK's `[sql]` and `[incremental]` extras only — never by the
-core dependency set, and (on SDK >= 3.22) no longer by the emptied `[daft]` extra.
-Locks that crossed the 3.22 line via automated upgrades broke silently: imports succeed,
-unit tests that mock the transformer pass, and the failure appears only in the first
-real end-to-end transform.
+core dependency set.  So the shape this rule describes is an app that imports the
+transformer on a **plain** `atlan-application-sdk` pin, with no extra at all: the
+failure is silent until the first real end-to-end transform, because imports succeed and
+unit tests that mock the transformer pass.
+
+**Not the `[daft]` case — that one was ours.**  Over SDK 3.22–3.26 the deprecated
+`[daft]` extra resolved to nothing, so apps that were following the SDK's own
+deprecation note were broken by an automated upgrade crossing the 3.22 line.  That is
+fixed at the root: from 3.27.0 `[daft]` aliases `[sql]` again, and a version bump alone
+resolves `duckdb` for every such app with no repo-side change.  If this rule fires on an
+app pinned to `[daft]`, upgrade the SDK rather than editing the app's extras.
 
 Resolution order of the check:
 
@@ -268,11 +278,14 @@ count: they are not installed by default.
 
 **Remediation:** change the SDK reference to `atlan-application-sdk[sql]` (or
 `[incremental]` for the incremental analytics stack) in `[project.dependencies]` and
-relock (`uv lock`).  Declaring `duckdb` directly also clears the finding but duplicates
-a pin the SDK's extras already manage.
+relock (`uv lock`).  That is the fix.
+
+Declaring `duckdb` directly is a discouraged fallback, not a co-equal option: it clears
+the finding, but it duplicates a pin the SDK's extras already manage, so the app now
+owns a version range it has to keep in step with the SDK's by hand.  Reach for it only
+where the extra genuinely cannot be used.
 
 This is a WARN (per the new-rule tier policy), but unlike most WARN findings it
-indicates a *guaranteed* runtime failure on SDK >= 3.22 — treat it as an error when the
-app's lock is at or past that line.
+indicates a *guaranteed* runtime failure — treat it as an error.
 
 ---

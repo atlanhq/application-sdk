@@ -17,6 +17,22 @@ YAML-level quoting does not protect the value — ``source_query: "order"`` and
 ``source_query: order`` parse to the same Python string.  The quotes must be
 embedded (``source_query: '"order"'``) so they survive into the generated SQL.
 
+Version scope
+-------------
+SDK 3.27.0 fixes this at the root: the transformer quotes a ``source_query``
+that resolved as a plain column reference, so a reserved keyword renders as
+valid SQL with no template change.  This check therefore describes apps pinned
+**below** that version (``superseded_by: sdk>=3.27.0`` on the rule) — an older
+SDK still fails at runtime, and that population has no other static signal.
+
+The embedded-quote remediation this check's message prescribes is interim
+advice for that population only, and it is worse than it looks: below 3.27.0
+the transformer matched the quoted text against the available columns *as raw
+text*, found nothing, and dropped the attribute from published output — a
+silent missing attribute in place of a loud ``ParserException``.  Upgrading is
+the real fix; from 3.27.0 both spellings resolve and render identically, so a
+template already edited this way keeps working and needs no revert.
+
 Scope: the ``source_query:`` (expression) position only
 -------------------------------------------------------
 The column **identifier** is deliberately NOT graded: it lands in the ``AS``
@@ -306,8 +322,14 @@ def scan_text(text: str, file: str) -> list[Finding]:
                     "auto-quotes dotted identifiers). On SDK >= 3.22 every "
                     "transform of this entity type fails at runtime with a DuckDB "
                     "ParserException — latent until the first real pipeline run. "
-                    "Embed SQL quotes in the value so they survive YAML parsing: "
-                    f"{key}: '\"{identifier}\"'."
+                    "Fix by upgrading to atlan-application-sdk >= 3.27.0, which "
+                    "quotes a source_query that resolved as a plain column "
+                    "reference and needs no template change. Only if the app is "
+                    "pinned below that version, embed SQL quotes in the value so "
+                    f"they survive YAML parsing ({key}: '\"{identifier}\"') — note "
+                    "that on an SDK below 3.27.0 the transformer matches that "
+                    "value as raw text, resolves nothing, and drops the attribute "
+                    "from published output instead of raising."
                 ),
                 suppressions=suppressions,
             )

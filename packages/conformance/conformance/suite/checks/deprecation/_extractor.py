@@ -17,7 +17,18 @@ What counts as a machine-readable marker (derived empirically from the SDK):
 1. a ``@deprecated("…")`` decorator (PEP 702 / ``typing_extensions``) on a
    function / method / class — the message is its first string argument;
 2. a class whose ``__init__`` or ``__init_subclass__`` body directly emits
-   ``warnings.warn(<msg>, DeprecationWarning, …)`` — attributed to the *class*.
+   ``warnings.warn(<msg>, DeprecationWarning, …)`` — attributed to the *class*;
+3. a ``__deprecated_members__ = {"<member>": "<notice>"}`` mapping in an enum's
+   class body — one site per entry, attributed to ``<Enum>.<member>``.
+
+Marker 3 exists because a decorator cannot reach an enum member: the member is
+an assignment in a class body, so ``@deprecated`` has nothing to attach to. Left
+unsolved, such a deprecation lives in a comment, is invisible here, and gets
+hand-coded into a checker instead — which inverts the design where this manifest
+is the single generated source of truth and the drift gate means what it says.
+The dunder name keeps ``EnumMeta`` from reading the mapping as a member. See
+``application_sdk/common/types.py`` for the authoring-side statement of the
+convention.
 
 Everything else (a bare ``warnings.warn(DeprecationWarning)`` in some other
 method, deprecated *parameters*, deprecated *modes*) is an intentional,
@@ -41,6 +52,9 @@ from dataclasses import dataclass
 # Decorator / call names we recognise.
 _DEPRECATED_DECORATORS: frozenset[str] = frozenset({"deprecated"})
 _WARN_INIT_METHODS: frozenset[str] = frozenset({"__init__", "__init_subclass__"})
+
+# Class-body mapping that marks individual enum members as deprecated.
+_DEPRECATED_MEMBERS_ATTR = "__deprecated_members__"
 
 # A migration target is named when the notice points at a replacement.  Derived
 # from every notice the SDK writes today: "use X", "Use X instead",
@@ -81,7 +95,7 @@ class DeprecationNotice:
 
     message: str
     via: str
-    """``"decorator"`` | ``"warn"``."""
+    """``"decorator"`` | ``"warn"`` | ``"enum-member"``."""
     has_migration_target: bool
     removal_version_raw: str | None
     lineno: int
@@ -98,13 +112,18 @@ class DeprecationSite:
     """
 
     symbol: str
-    """Public symbol name, e.g. ``"DiscoveryError"`` or ``"upload_to_atlan"``."""
+    """Public symbol name, e.g. ``"DiscoveryError"`` or ``"upload_to_atlan"``.
+
+    Qualified for an ``enum_member`` (``"DataframeType.daft"``): the bare member
+    name is not importable and would collide across enums, whereas the qualified
+    form is exactly the attribute access a consumer writes."""
 
     kind: str
-    """``"function"`` | ``"method"`` | ``"class"``."""
+    """``"function"`` | ``"method"`` | ``"class"`` | ``"enum_member"``."""
 
     marker_via: str | None
-    """``"decorator"`` | ``"warn"`` for a marked symbol; ``None`` if claim-only."""
+    """``"decorator"`` | ``"warn"`` | ``"enum-member"`` for a marked symbol;
+    ``None`` if claim-only."""
 
     message: str
     """The deprecation notice text (best-effort static extraction)."""
@@ -249,6 +268,44 @@ def _class_warn_message(class_node: ast.ClassDef) -> str | None:
     return None
 
 
+def _deprecated_members(class_node: ast.ClassDef) -> list[tuple[str, str, int]]:
+    """Return ``(member, notice, lineno)`` for each ``__deprecated_members__`` entry.
+
+    Reads a straight-line ``__deprecated_members__ = {...}`` assignment (plain or
+    annotated) in the class body.  Only string-literal keys with statically
+    extractable messages are returned — a computed key names no member we could
+    report, and a computed message has no notice text to grade.
+
+    ``lineno`` is the entry's own line, not the assignment's, so a finding points
+    at the member being deprecated rather than at the top of the mapping.
+    """
+    out: list[tuple[str, str, int]] = []
+    for item in class_node.body:
+        if isinstance(item, ast.Assign):
+            targets = item.targets
+            value = item.value
+        elif isinstance(item, ast.AnnAssign) and item.value is not None:
+            targets = [item.target]
+            value = item.value
+        else:
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == _DEPRECATED_MEMBERS_ATTR
+            for target in targets
+        ):
+            continue
+        if not isinstance(value, ast.Dict):
+            continue
+        for key, message_node in zip(value.keys, value.values):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                continue
+            message = _static_str(message_node)
+            if not message:
+                continue
+            out.append((key.value, message, getattr(key, "lineno", class_node.lineno)))
+    return out
+
+
 def _docstring_claims(node: ast.AST) -> bool:
     """True if *node*'s docstring opens with "Deprecated" or a ``.. deprecated::``."""
     if not isinstance(
@@ -310,6 +367,9 @@ def extract_notices(tree: ast.Module) -> list[DeprecationNotice]:
             dec_message = _deprecated_decorator_message(node)
             if dec_message is not None:
                 notices.append(_notice(dec_message, "decorator", node.lineno))
+        if isinstance(node, ast.ClassDef):
+            for _member, message, lineno in _deprecated_members(node):
+                notices.append(_notice(message, "enum-member", lineno))
         warn_message = _is_deprecation_warn_call(node)
         if warn_message is not None:
             notices.append(_notice(warn_message, "warn", node.lineno))
@@ -365,6 +425,24 @@ def extract_sites(tree: ast.Module) -> list[DeprecationSite]:
                     node=node,
                     marker_via=marker_via,
                     message=message,
+                )
+            )
+        # Deprecated enum members are their own sites, qualified by the enum they
+        # belong to: the bare member name (``daft``) is not importable and would
+        # collide across enums, while ``DataframeType.daft`` is exactly the
+        # attribute access a consumer writes.
+        for member, member_message, lineno in _deprecated_members(node):
+            sites.append(
+                DeprecationSite(
+                    symbol=f"{node.name}.{member}",
+                    kind="enum_member",
+                    marker_via="enum-member",
+                    message=member_message,
+                    has_migration_target=has_migration_target(member_message),
+                    removal_version_raw=removal_version(member_message),
+                    docstring_claim=False,
+                    emits_warning=False,
+                    lineno=lineno,
                 )
             )
 

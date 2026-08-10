@@ -15,6 +15,12 @@ The column *identifier* is deliberately not graded: it lands in the ``AS``
 alias slot, which DuckDB does not restrict (``SELECT 1 AS column`` and
 ``AS qualify`` both parse on the pinned 1.5.5).
 
+SDK 3.27.0 fixes this at the root — the transformer quotes a ``source_query``
+that resolved as a plain column reference — so P040 is scoped to apps pinned
+below it (``superseded_by: sdk>=3.27.0``) rather than dropped: an app on an
+older SDK still fails at runtime, and that population is the only one with no
+other signal.
+
 Per the P-series stability policy (see ``prescriptions.py``) a P-id is a
 permanent public contract and is never renumbered or reused.
 """
@@ -39,6 +45,7 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="0.18.0",
+        superseded_by="sdk>=3.27.0",
         rationale=(
             "The SDK query transformer renders each flattened column as "
             "'{source_query} AS {name}', so a bare DuckDB reserved keyword "
@@ -95,8 +102,34 @@ RULES: tuple[RuleDefinition, ...] = (
             "This is a WARN (new-rule tier policy) and the scan is text-based\n"
             "(dependency-free), keyed on files that carry both a ``columns:`` key\n"
             "and a ``source_query:`` key — ordinary CI/Helm YAML never matches.\n"
-            "Review before suppressing: on a daft-less SDK the finding is a\n"
-            "guaranteed runtime parse failure, not a style preference.\n"
+            "Review before suppressing: on a daft-less SDK below the fixed\n"
+            "version the finding is a guaranteed runtime parse failure, not a\n"
+            "style preference.\n"
+            "\n"
+            "**Version scope — fixed at the root from SDK 3.27.0.**  The\n"
+            "transformer now quotes a ``source_query`` that resolved as a plain\n"
+            "column reference, so a reserved keyword renders as valid SQL with no\n"
+            "template change at all; the ``source_columns``-driven route, which\n"
+            "carries arbitrary SQL, is left unquoted.  This rule therefore\n"
+            "describes only apps pinned **below** that version and is marked\n"
+            "``superseded_by: sdk>=3.27.0`` rather than dropped — an app on an\n"
+            "older SDK still fails at runtime, and dropping the rule would take\n"
+            "the only static signal away from exactly that population.\n"
+            "\n"
+            "The marker names the next SDK *minor* rather than the exact patch:\n"
+            "the patch number is assigned by release CI at merge time, and\n"
+            "erring late only keeps the rule firing on some already-fixed apps,\n"
+            "never the reverse.  Retire the rule (set ``until``) once the fleet\n"
+            "floor has crossed it.\n"
+            "\n"
+            "**Do not hand-remediate templates that the version bump fixes.**\n"
+            "Embedding quotes in the value was the interim advice and it is worse\n"
+            "than it looks on an unfixed SDK: below 3.27.0 the transformer\n"
+            "matched ``'\"order\"'`` against the available columns as raw text,\n"
+            "found nothing, and dropped the attribute from published output — a\n"
+            "silent missing attribute in place of a loud ``ParserException``.\n"
+            "From 3.27.0 both spellings resolve and render identically, so the\n"
+            "upgrade is the fix and the template edit is unnecessary.\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"

@@ -1,7 +1,7 @@
-"""SDR-readiness rule definitions (P029, P030, P037, P038, P039, P041).
+"""SDR-readiness rule definitions (P029, P030, P037, P038, P039, P041, P042).
 
 Apps that declare ``self_deployed_runtime: true`` in ``atlan.yaml`` must satisfy
-six structural invariants before they can be considered SDR-ready:
+seven structural invariants before they can be considered SDR-ready:
 
 * ``P029`` — every ``manifest.json`` under ``app/generated/`` must include an
   ``agent_json`` key inside ``dag.extract.inputs.args``.  Missing this field
@@ -18,6 +18,7 @@ six structural invariants before they can be considered SDR-ready:
   not apply to apps with no publish stage (``pipeline.publish = null`` in
   ``contract/app.pkl``, reflected as no ``dag.publish`` node in the generated
   manifest) — there is nowhere for such an app to hand extracted assets off to.
+  A *working* hand-rolled bridge is P042's, not P030's.
 
 * ``P037`` — an app that resolves source credentials with a custom, GUID-only
   path (a hand-rolled vault read + ``resolve_credential_raw`` or a bare
@@ -50,6 +51,13 @@ six structural invariants before they can be considered SDR-ready:
   mirror non-sensitive values into the secret store; a hard gate then aborts
   the whole workflow (observed for a query-engine connector in fleet testing).
   Suggest-only: prefer a run-mode-differentiated posture.
+
+* ``P042`` — an app whose custom ``upload_to_atlan`` bridge *does* transfer, with
+  no ``self.upload()`` anywhere.  Split out of P030 because the failure is
+  different in kind: nothing is silently dropped, but an SDK-owned contract has
+  been reimplemented on a symbol scheduled for removal in v4.0, so the finding
+  needs its own severity, its own remediation text, and a retirement date P030
+  does not have.
 
 All rules are APP-scoped (the SDK itself does not declare ``self_deployed_runtime``
 and is therefore always skipped) and gate on ``self_deployed_runtime: true``
@@ -184,6 +192,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "the workflow completes with status 'success' regardless of the flag\n"
             "value, and no assets move to the bucket in production.\n"
             "\n"
+            "A *working* hand-rolled ``upload_to_atlan`` bridge is reported by\n"
+            "**P042**, not here: bytes do move, so it is not this rule's\n"
+            "silent-zero-asset shape.  It is not silence either — see P042 for why\n"
+            "a working bridge still has to change.\n"
+            "\n"
             "**What does NOT satisfy this rule** (patterns fleet remediation found\n"
             "behind real silent-zero-asset publishes):\n"
             "\n"
@@ -219,20 +232,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "'success'.  The live e2e's asset-count floor is the arbiter.\n"
             "\n"
             "This is a WARN (not BLOCK): some apps are legitimately preflight-only\n"
-            "or delegate upload to a base-class method defined in the SDK template,\n"
-            "and apps with a *working* custom key-preserving deployment-to-upstream\n"
-            "bridge (an ``upload_to_atlan`` that performs real storage transfers\n"
-            "and preserves the ``workflows/{workflow_id}/{run_id}/`` key layout)\n"
-            "are documented false positives once a green full-DAG e2e proves assets\n"
-            "land.  Review the finding before suppressing — if the app genuinely\n"
-            "performs an extract-and-upload cycle with no working bridge, add\n"
-            "``await self.upload(...)`` to the ``run()`` method or the relevant\n"
-            "``@entrypoint`` method, or wire a key-preserving ``upload_to_atlan``\n"
-            "bridge into every entrypoint (crawler AND miner).\n"
+            "or delegate upload to a base-class method defined in the SDK template.\n"
+            "Review the finding before suppressing — if the app genuinely performs\n"
+            "an extract-and-upload cycle, add ``await self.upload(...)`` to the\n"
+            "``run()`` method or the relevant ``@entrypoint`` method.\n"
             "\n"
             "Note: P008 flags ``self.upload()`` *inside* ``@task`` methods (the\n"
-            "wrong location); P030 flags the *absence* of any upload call.  They\n"
-            "are complementary: both should be clean for a correctly-wired SDR app.\n"
+            "wrong location); P030 flags the *absence* of any upload call; P042\n"
+            "flags a hand-rolled bridge standing in for it.  All three should be\n"
+            "clean for a correctly-wired SDR app.\n"
             "\n"
             "Exemption: this rule is skipped for apps whose ``contract/app.pkl``\n"
             "sets ``pipeline.publish = null`` (no publish stage), which compiles\n"
@@ -543,6 +551,95 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p041"
+        ),
+    ),
+    RuleDefinition(
+        id="P042",
+        scope=RuleScope.APP,
+        name="SdrHandRolledUploadBridge",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="sdr-readiness",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.18.0",
+        superseded_by="sdk>=4.0.0",
+        rationale=(
+            "An app that moves extracted assets to the tenant bucket through its own "
+            "upload_to_atlan method, with no self.upload() anywhere, has "
+            "reimplemented a contract the SDK owns — on a symbol the SDK has marked "
+            "@deprecated with removal_version 4.0.0. Bytes do move, so this is not "
+            "P030's silent-zero-asset shape and it should not carry P030's message; "
+            "but it is not a false positive either. App.upload() does ADR-0014 "
+            "dual-write routing, transformed-asset validation in a child process, the "
+            "canonical artifacts/apps/{app}/workflows/{wf}/{run} prefix and @task "
+            "retry/replay, and the transfer beneath it adds the cross-pod "
+            "deployment-store fallback (a KEDA-scaled SDR worker where local_path "
+            "does not exist on this pod), partial-local reconcile, and SHA-256 "
+            "sidecar dedup for idempotent replay. A hand-rolled bridge has none of "
+            "those, and a green full-DAG e2e proves only that bytes moved on that "
+            "run, not that the app tracks the contract. Reporting it separately also "
+            "settles a contradiction: B001 already flags .upload_to_atlan(...) call "
+            "sites from the generated deprecation manifest, so the same repo would "
+            "otherwise get a B001 finding alongside P-series silence."
+        ),
+        short_description=(
+            "SDR app performs the tenant-bucket transfer through a hand-rolled "
+            "upload_to_atlan bridge instead of App.upload()"
+        ),
+        full_description=(
+            "For apps declaring ``self_deployed_runtime: true`` in ``atlan.yaml``,\n"
+            "this rule fires when a custom ``upload_to_atlan`` method **does**\n"
+            "perform a real storage/store transfer (in its own body or via\n"
+            "same-class delegation) and no ``self.upload(`` call exists anywhere in\n"
+            "the app source.\n"
+            "\n"
+            "It is the counterpart to P030, which owns the shapes where nothing\n"
+            "moves at all: no upload path, or an ``upload_to_atlan`` stub whose body\n"
+            "performs no transfer.  Here the transfer works — which is exactly why\n"
+            "it needs a different message.  Treating it as a P030 false positive\n"
+            "moved these repos from WARN to silent, and silence is wrong for three\n"
+            "reasons:\n"
+            "\n"
+            "* **It is the SDK's own deprecated symbol.**  ``upload_to_atlan`` is\n"
+            "  ``@deprecated`` in ``application_sdk.templates.base_metadata_extractor``\n"
+            "  with ``removal_version: 4.0.0``.  Going quiet on a locally\n"
+            "  reimplemented version of a name scheduled for deletion is the\n"
+            "  opposite of what the deprecation lifecycle is for.\n"
+            "* **The suite would contradict itself.**  B001 matches\n"
+            "  ``.upload_to_atlan(...)`` call sites receiver-agnostically from the\n"
+            "  generated manifest.  Where the bridge is invoked explicitly rather\n"
+            "  than only dispatched as a DAG task, the repo already gets a B001\n"
+            "  finding — alongside P-series silence.\n"
+            "* **A bridge cannot be equivalent, and the gap is silent-data-loss\n"
+            "  shaped.**  ``App.upload()`` carries ADR-0014 dual-write routing,\n"
+            "  transformed-asset validation in a child process, the canonical\n"
+            "  ``artifacts/apps/{app}/workflows/{workflow_id}/{run_id}`` prefix, and\n"
+            "  ``@task`` retry/replay semantics; the transfer underneath adds the\n"
+            "  cross-pod deployment-store fallback (a KEDA-scaled SDR worker where\n"
+            "  ``local_path`` does not exist on this pod), partial-local reconcile,\n"
+            "  and SHA-256 sidecar dedup for idempotent replay.\n"
+            "\n"
+            "**A green full-DAG e2e is not a clearance.**  It shows bytes moved on\n"
+            "that run.  It does not show the bridge preserves the key layout under\n"
+            "replay, survives a pod that never held the local files, or reconciles a\n"
+            "partial local state — and it says nothing about v4.0.\n"
+            "\n"
+            "**Remediation:** replace the bridge body with\n"
+            "``await self.upload(...)`` in the ``run()`` method or the relevant\n"
+            "``@entrypoint`` method (crawler AND miner), and delete the bridge.  If\n"
+            "the bridge exists because ``App.upload()`` genuinely cannot express\n"
+            "something the app needs, that is an SDK gap worth filing rather than a\n"
+            "reason to suppress.\n"
+            "\n"
+            "This is a WARN, and deliberately a *lower*-urgency one than P030: the\n"
+            "app is working today.  The deadline is v4.0, not the next run — which\n"
+            "is why the rule carries ``superseded_by: sdk>=4.0.0``.  It retires when\n"
+            "that removal lands and the shape stops being expressible.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/prescriptions.md#p042"
         ),
     ),
 )

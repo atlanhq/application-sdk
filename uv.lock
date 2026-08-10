@@ -261,6 +261,13 @@ azure = [
     { name = "azure-storage-blob" },
     { name = "azure-storage-file-datalake" },
 ]
+daft = [
+    { name = "duckdb" },
+    { name = "duckdb-engine" },
+    { name = "pandas" },
+    { name = "pyarrow" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+]
 distributed-lock = [
     { name = "redis", extra = ["hiredis"] },
 ]
@@ -347,6 +354,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.10.0,<4.0.0" },
+    { name = "atlan-application-sdk", extras = ["sql"], marker = "extra == 'daft'" },
     { name = "atlan-application-sdk", extras = ["storage"], marker = "extra == 'incremental'" },
     { name = "azure-identity", specifier = ">=1.15.0" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.15.0" },

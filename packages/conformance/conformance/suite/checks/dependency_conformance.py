@@ -28,9 +28,12 @@ Rules in this check module:
   ``duckdb`` on a *default* install: reachable from the app's own production
   dependencies in ``uv.lock`` when one exists (not merely present somewhere in
   that universal graph), else declared in ``[project] dependencies`` directly
-  or via an ``atlan-application-sdk[sql]``/``[incremental]`` extra.
-  On SDK >= 3.22 (empty ``[daft]`` extra) a missing duckdb is a guaranteed
-  runtime ``ImportError`` in every transform.
+  or via an ``atlan-application-sdk[sql]``/``[incremental]`` extra.  A missing
+  duckdb is a guaranteed runtime ``ImportError`` in every transform.  The
+  shape this describes is a plain SDK pin with no extra; the ``[daft]``
+  population that surfaced it was an SDK defect (the extra resolved empty over
+  3.22–3.26) and is fixed at the root in 3.27.0, where ``[daft]`` aliases
+  ``[sql]`` again.
 
 D004/D005 are metadata-based (need the SDK importable) like D002; D006/D007/D008/D009
 are pure-text.  D010 is cross-file (source imports + lock/pyproject) and runs in
@@ -1285,11 +1288,16 @@ def _scan_query_transformer_duckdb(
                 f"universal graph — a dev-only or unactivated-extra duckdb does "
                 f"not install by default) and no "
                 f"'{SDK_PACKAGE}[sql]'/'[incremental]' extra or direct duckdb "
-                f"dependency is declared. On SDK >= 3.22 (the [daft] extra is "
-                f"empty) every transform_metadata call fails at runtime with "
-                f"ImportError: 'duckdb is required for DuckDBConnectionManager'. "
-                f"Reference the SDK as '{SDK_PACKAGE}[sql]' (or [incremental]) "
-                f"and relock."
+                f"dependency is declared. Every transform_metadata call then "
+                f"fails at runtime with ImportError: 'duckdb is required for "
+                f"DuckDBConnectionManager'. Reference the SDK as "
+                f"'{SDK_PACKAGE}[sql]' (or [incremental]) and relock. If the app "
+                f"is pinned to the deprecated '{SDK_PACKAGE}[daft]' extra, upgrade "
+                f"to SDK >= 3.27.0 instead — that extra resolved empty over "
+                f"3.22–3.26 and aliases [sql] again from 3.27.0, so the bump is "
+                f"the whole fix. Declaring duckdb directly also clears this "
+                f"finding but duplicates a pin the SDK's extras manage; prefer "
+                f"the extra."
             ),
             suppressions=suppressions,
         )

@@ -1,7 +1,7 @@
-"""P-series SDR-readiness checks (P029, P030, P037, P038, P039, P041).
+"""P-series SDR-readiness checks (P029, P030, P037, P038, P039, P041, P042).
 
 Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
-``atlan.yaml`` and verify six structural invariants:
+``atlan.yaml`` and verify seven structural invariants:
 
 * ``P029`` — an agent extraction manifest under ``app/generated/`` must surface
   ``agent_json`` AND ``extraction_method`` at the TOP LEVEL of
@@ -17,15 +17,23 @@ Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
   Without it extraction "passes" but no assets transfer to the Atlan tenant
   bucket in SDR deployments.  Delegating to SDK ``SqlApp.run()`` does NOT
   satisfy this — ``run()`` persists to the deployment store only, while the
-  publish stage reads the tenant bucket.  A defined custom
-  ``upload_to_atlan`` bridge counts as an upload path, but a bridge whose
-  body performs no storage/store-transfer call is a **no-op stub** and is
+  publish stage reads the tenant bucket.  A custom ``upload_to_atlan`` bridge
+  whose body performs no storage/store-transfer call is a **no-op stub** and is
   flagged specifically (the shape fleet remediation found behind a real
   silent-zero-asset publish).  Only applies to apps that actually have a
   publish stage: an app whose ``contract/app.pkl`` sets
   ``pipeline.publish = null`` compiles to a ``manifest.json`` with no
   ``dag.publish`` node, and has nowhere for ``self.upload()`` to hand
   extracted assets off to — P030 is skipped for those apps.
+
+* ``P042`` — a custom ``upload_to_atlan`` bridge that DOES transfer, standing in
+  for ``self.upload()`` rather than alongside it.  Split out of P030 because the
+  two shapes are not the same failure: P030's is a silent zero-asset publish,
+  P042's is a working reimplementation of an SDK contract on a symbol the SDK
+  has deprecated for removal in v4.0.  They need separate severities and
+  separate remediation text, and P042 retires when that removal lands.  Both are
+  computed in :func:`_check_p030`, which is where the "is there any upload path"
+  question is answered once.
 
 * ``P037`` — an SDR app that resolves source credentials with a *custom*,
   GUID-only path (a hand-rolled vault read + ``resolve_credential_raw`` or a
@@ -95,6 +103,7 @@ RULE_P037 = "P037"
 RULE_P038 = "P038"
 RULE_P039 = "P039"
 RULE_P041 = "P041"
+RULE_P042 = "P042"
 
 _SDR_FLAG_RE = re.compile(
     r"^self_deployed_runtime:\s*(true|false)\b",
@@ -622,30 +631,44 @@ def _has_self_upload_call(paths: list[Path]) -> bool:
 
 
 def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
-    """P030: the tenant-bucket upload path must be structurally reachable.
+    """P030 / P042: the tenant-bucket upload path must be reachable, and be ours.
 
-    Two shapes are checked:
+    ``self.upload()`` is the one shape that clears both rules.  Everything else
+    falls into one of three findings, and the split into two rule IDs is what
+    keeps them from sharing a severity and a remediation:
 
-    * **No upload at all** — no source file makes a real ``self.upload(...)``
-      call (matched on the AST, so a comment or docstring mentioning it does
-      not count) and no custom upload-bridge method (``upload_to_atlan``) is
-      defined.  The ENABLE_ATLAN_UPLOAD path is unreachable; delegating to SDK
-      ``SqlApp.run()`` does NOT count (it persists to the deployment store
-      only — publish reads the tenant bucket).
-    * **No-op bridge stub** — an ``upload_to_atlan`` method IS defined but
+    * **P030, no upload at all** — no source file makes a real
+      ``self.upload(...)`` call (matched on the AST, so a comment or docstring
+      mentioning it does not count) and no custom upload-bridge method
+      (``upload_to_atlan``) is defined.  The ENABLE_ATLAN_UPLOAD path is
+      unreachable; delegating to SDK ``SqlApp.run()`` does NOT count (it
+      persists to the deployment store only — publish reads the tenant bucket).
+    * **P030, no-op bridge stub** — an ``upload_to_atlan`` method IS defined but
       neither its body nor a same-class method it delegates to performs a
       storage/store-transfer call.  The stub looks like a bridge at review time
       but moves no bytes; fleet remediation found one whose comment claimed the
       publish stage owned the transfer.  Abstract declarations
       (``raise NotImplementedError``/``pass``/``...``) are not stubs and are
       excluded — a subclass may well implement the real thing.
+    * **P042, hand-rolled bridge in place of ``App.upload()``** — a
+      ``upload_to_atlan`` that DOES transfer, with no ``self.upload(`` anywhere.
+      Bytes move, so this is not the silent-zero-asset shape P030 describes; it
+      is a reimplementation of an SDK contract, on a symbol the SDK has
+      deprecated for removal in v4.0.
 
-    An app with ``self.upload(`` somewhere is not flagged for absence, but a
-    no-op stub alongside it is still flagged (the stub is dead weight that
-    masks the real transfer path).  A bridge whose body DOES transfer is
-    reported with the standard absence finding only when ``self.upload(`` is
-    also missing — the message directs the reviewer to prove it with a green
-    full-DAG e2e before treating the finding as a false positive.
+    Why a working bridge does not buy silence: ``upload_to_atlan`` is the SDK's
+    own ``@deprecated`` symbol (``removal_version: 4.0.0``), so B001 already
+    flags call sites of it — leaving the P-series silent on the same repo would
+    make the suite contradict itself.  And a bridge cannot be equivalent:
+    ``App.upload()`` carries ADR-0014 dual-write routing, transformed-asset
+    validation, the canonical artifact prefix, ``@task`` retry/replay, and
+    underneath it the cross-pod deployment-store fallback, partial-local
+    reconcile, and SHA-256 sidecar dedup.  A green full-DAG e2e proves bytes
+    moved on that run, not that the app tracks the contract.
+
+    An app with ``self.upload(`` somewhere is flagged for neither absence nor
+    P042, but a no-op stub alongside it is still flagged (the stub is dead
+    weight that masks the real transfer path).
     """
     has_self_upload = _has_self_upload_call(paths)
     bridges = _find_upload_bridges(paths, root)
@@ -676,13 +699,48 @@ def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
             )
         )
 
-    if has_self_upload or bridges:
-        # With self.upload present there is no absence.  With a bridge present
-        # the story is already told: a transferring bridge is the documented
-        # false-positive shape (whether it preserves the key layout end-to-end
-        # is beyond static reach — the full-DAG e2e is the arbiter, see rule
-        # docs), and a no-op stub already carries its own, sharper finding
-        # above — a second app-level absence finding would double-report it.
+    if has_self_upload:
+        # The sanctioned path is present, so there is no absence and no
+        # hand-rolled substitution — a bridge alongside it is redundant, not a
+        # replacement.  Any no-op stub keeps its own finding above.
+        return findings
+
+    # A transferring bridge with no self.upload() is the substitution shape.
+    # Reported per bridge and at the bridge, so the finding lands on the code
+    # that has to change rather than on atlan.yaml.  A no-op stub is NOT
+    # reported here — it already carries its own, sharper P030 above, and
+    # reporting both would double-count one method.
+    for rel, lineno, name, is_noop in bridges:
+        if is_noop:
+            continue
+        findings.append(
+            Finding(
+                rule_id=RULE_P042,
+                file=rel,
+                line=lineno,
+                column=1,
+                message=(
+                    f"{rel}:{lineno}: '{name}' performs the deployment-store→tenant-"
+                    "bucket transfer by hand and no self.upload(...) call exists in "
+                    "the app. Bytes do move, so this is not the silent-zero-asset "
+                    "shape P030 reports — it is a reimplementation of a contract the "
+                    "SDK owns, on a symbol the SDK has deprecated for removal in "
+                    "v4.0.0. App.upload() additionally does dual-write routing, "
+                    "transformed-asset validation, the canonical "
+                    "artifacts/apps/{app}/workflows/{workflow_id}/{run_id} prefix, "
+                    "@task retry/replay, the cross-pod deployment-store fallback for "
+                    "KEDA-scaled workers, partial-local reconcile, and SHA-256 "
+                    "sidecar dedup for idempotent replay. Migrate to "
+                    "await self.upload(...). A green full-DAG e2e shows the bridge "
+                    "worked on that run; it does not show the bridge tracks the "
+                    "contract, and it will not survive the v4.0 removal."
+                ),
+            )
+        )
+
+    if bridges:
+        # A bridge of either kind has already been reported at its definition —
+        # a second app-level absence finding would double-report it.
         return findings
 
     findings.append(
@@ -700,9 +758,8 @@ def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
                 "the bucket. Delegating to SDK SqlApp.run() does NOT satisfy this: "
                 "run() persists to the deployment store only, while publish reads "
                 "the tenant bucket. Add await self.upload(...) to the entrypoint or "
-                "run() method (or wire a key-preserving upload_to_atlan bridge into "
-                "every entrypoint), and never mark this finding a false positive "
-                "without a green full-DAG e2e proving assets land in Atlas."
+                "run() method, and never mark this finding a false positive without "
+                "a green full-DAG e2e proving assets land in Atlas."
             ),
         )
     )
@@ -1367,13 +1424,13 @@ def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    """Check the SDR-readiness rules (P029, P030, P037–P039, P041) for the repo.
+    """Check the SDR-readiness rules (P029, P030, P037–P039, P041, P042).
 
     Parameters
     ----------
     paths:
         Python source files to inspect (as returned by :func:`discover`).
-        These are the files checked by P030 for a ``self.upload(`` call /
+        These are the files checked by P030/P042 for a ``self.upload(`` call /
         upload-bridge shape, by P037 for the credential-resolution shape, by
         P038 for the object-store prefix rooting, and by P041 for the
         preflight-gate posture.

@@ -7,8 +7,11 @@ it:
   SDK has marked deprecated.  Driven by a committed manifest generated from SDK
   source, so every future deprecation fans out as a fleet-wide signal with no
   per-app work (BLDX-1418).  B007 extends the consumer side to *third-party*
-  APIs the manifest cannot carry: daft-only DataFrame calls that are dead on
-  SDK >= 3.22, where the ``[daft]`` extra is empty and readers return pandas.
+  APIs the manifest cannot carry: daft-only DataFrame calls that are dead on the
+  daft-less SDK runtime, where readers return pandas.  The dividing line is
+  ownership — an SDK symbol belongs in the manifest (including an enum member,
+  via the ``__deprecated_members__`` convention), and only what the SDK does not
+  own gets hand-coded.
 * **Authoring side (B002/B003/B004, scope ``sdk``)** — the SDK must declare its
   deprecations correctly: each notice names a replacement and a removal version
   (B002), no deprecation outlives its promised removal version (B003), and a
@@ -64,7 +67,7 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         full_description=(
             "Flags app consumption of any symbol recorded in the deprecated-symbol\n"
-            "manifest the SDK ships with this conformance package (BLDX-1418).  Three\n"
+            "manifest the SDK ships with this conformance package (BLDX-1418).  Four\n"
             "surfaces are matched, name-anchored within an ``application_sdk`` import\n"
             "context:\n"
             "\n"
@@ -72,7 +75,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "(``from application_sdk.x import Foo``);\n"
             "* subclassing a deprecated base "
             "(``class MyExtractor(BaseMetadataExtractor)``);\n"
-            "* calling a deprecated method by attribute (``obj.upload_to_atlan(...)``).\n"
+            "* calling a deprecated method by attribute (``obj.upload_to_atlan(...)``);\n"
+            "* reading a deprecated enum member (``DataframeType.daft``), which the\n"
+            "  SDK marks with a ``__deprecated_members__`` mapping in the enum's\n"
+            "  class body — the convention that exists because ``@deprecated``\n"
+            "  cannot attach to a member.  Matching is module-aware through the enum\n"
+            "  class, so an app's own same-named enum is never flagged.\n"
             "\n"
             "The finding carries the SDK's migration guidance from the deprecation\n"
             "notice so the fix is concrete.  Complements E013 ``LegacyAtlanErrorRaise``\n"
@@ -307,23 +315,24 @@ RULES: tuple[RuleDefinition, ...] = (
         orthogonal_gate="tests",
         since="0.18.0",
         rationale=(
-            "On SDK >= 3.22 the [daft] extra is empty and SDK readers return pandas "
+            "The SDK's daft transformer engine is gone and its readers return pandas "
             "DataFrames, so daft-only DataFrame APIs — count_rows(), to_pylist(), "
             "the .names property — raise AttributeError on the frames apps actually "
-            "receive, and DataframeType.daft is a deprecated no-op alias that "
-            "routes to the pandas/pyarrow path anyway. Locks crossed the 3.22 line "
-            "via automated upgrades without anything exercising the real pipeline, "
-            "so these calls sat as latent production breakage on main (a "
-            "document-store connector hit all of them in fleet testing). These are "
-            "third-party daft APIs, not SDK symbols, so the generated "
-            "deprecated-symbol manifest (B001) cannot carry them — this rule "
-            "encodes them directly. WARN because matching is heuristic "
+            "receive. Locks crossed the 3.22 line via automated upgrades without "
+            "anything exercising the real pipeline, so these calls sat as latent "
+            "production breakage on main (a document-store connector hit all of them "
+            "in fleet testing). These are third-party daft APIs, not SDK symbols, so "
+            "the generated deprecated-symbol manifest (B001) cannot carry them — this "
+            "rule encodes them directly. DataframeType.daft is deliberately NOT here: "
+            "it is the SDK's own symbol and now carries a __deprecated_members__ "
+            "marker, so B001 reports it from the generated manifest like every other "
+            "SDK deprecation. WARN because matching is heuristic "
             "(attribute-name-anchored with pyarrow-receiver exemptions) and the "
             "pandas migration changes call shapes."
         ),
         short_description=(
-            "Calls a daft-only DataFrame API (count_rows/to_pylist/.names) or uses "
-            "the no-op DataframeType.daft alias — dead on SDK >= 3.22"
+            "Calls a daft-only DataFrame API (count_rows/to_pylist/.names) — dead on "
+            "the daft-less SDK runtime"
         ),
         full_description=(
             "Flags daft-only DataFrame API usage in apps that consume the SDK\n"
@@ -339,10 +348,14 @@ RULES: tuple[RuleDefinition, ...] = (
             "* ``frame.names`` — daft-only; pandas uses ``frame.columns``.  Only\n"
             "  simple-variable receivers are matched (``df.schema.names`` /\n"
             "  ``df.index.names`` are legitimate pyarrow/pandas chains and are\n"
-            "  not flagged);\n"
-            "* ``DataframeType.daft`` — a deprecated no-op alias (routes to the\n"
-            "  pandas/pyarrow path); will be removed in v4.0.  Use\n"
-            "  ``DataframeType.pandas``.\n"
+            "  not flagged).\n"
+            "\n"
+            "``DataframeType.daft`` is **not** matched here.  It is the SDK's own\n"
+            "symbol and was only hand-coded into this rule because nothing marked\n"
+            "it; it now carries a ``__deprecated_members__`` entry and rides the\n"
+            "generated manifest, so **B001** reports it — module-aware, and with\n"
+            "the SDK's own migration text.  A second copy here would double-report\n"
+            "one line and reopen the drift the manifest's byte-gate prevents.\n"
             "\n"
             "The failure class is latent: imports succeed and mocked unit tests\n"
             "pass; the AttributeError appears only when a real reader frame flows\n"

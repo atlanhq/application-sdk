@@ -146,7 +146,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # (BLDX-1499).
     # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
-    # P029/P030 + P037/P038/P039: SDR-readiness — only apps declare
+    # P029/P030 + P037/P038/P039/P042: SDR-readiness — only apps declare
     # self_deployed_runtime; the SDK itself never does, so these are APP-scoped.
     # P032–P035: preflight-gate authoring — only apps register @task activities,
     # define Handler.preflight_check, construct PreflightCheck results, and declare
@@ -218,12 +218,15 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # transform YAML templates consumed by the query transformer.
     # P041: hard preflight gate in an SDR app — gated on self_deployed_runtime,
     # which the SDK never declares (fleet SDR sweep).
+    # P042: hand-rolled upload_to_atlan bridge in an SDR app — same gating as
+    # P030, which it was split out of.
     assert app_scoped == {
         "B001",
         "B007",
         "D010",
         "P040",
         "P041",
+        "P042",
         "C002",
         "D001",
         "D002",
@@ -447,6 +450,10 @@ def test_catalog_p_series_present() -> None:
     P041 is SdrHardPreflightGate — an SDR app that unconditionally sets
     preflight_gate_mode = "hard", aborting agent-mode workflows on
     non-secret-config preflight failures (fleet SDR sweep).
+    P042 is SdrHandRolledUploadBridge — a working custom upload_to_atlan
+    standing in for App.upload(), split out of P030 so the "bytes move but the
+    SDK contract is reimplemented" shape carries its own severity, its own
+    remediation, and a retirement date (the v4.0 removal of upload_to_atlan).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -494,6 +501,7 @@ def test_catalog_p_series_present() -> None:
         "P039",
         "P040",
         "P041",
+        "P042",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -718,6 +726,142 @@ def test_invalid_rule_id_raises() -> None:
             scope=RuleScope.BOTH,
             category="test",
         )
+
+
+# ── Rule retirement: until / superseded_by ──────────────────────────────────
+
+
+def _rule(**overrides) -> RuleDefinition:
+    """A minimal valid rule, for exercising the retirement fields."""
+    return RuleDefinition(
+        **{
+            "id": "E001",
+            "name": "R1",
+            "tier": EnforcementTier.WARN,
+            "mechanism": RuleMechanism.STATIC,
+            "scope": RuleScope.BOTH,
+            "category": "test",
+            **overrides,
+        }
+    )
+
+
+def test_superseded_by_accepts_a_rule_id() -> None:
+    assert _rule(superseded_by="P042").superseded_by == "P042"
+
+
+def test_superseded_by_accepts_an_sdk_marker() -> None:
+    assert _rule(superseded_by="sdk>=3.27.0").superseded_by == "sdk>=3.27.0"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "P42",  # malformed rule ID
+        "sdk >= 3.27.0",  # spaces
+        "sdk>3.27.0",  # wrong operator
+        "the daft fix",  # free text
+        "4.0.0",  # bare version, ambiguous with `until`
+    ],
+)
+def test_superseded_by_rejects_unactionable_markers(value: str) -> None:
+    """Free text here would be silently ignored by every reader."""
+    with pytest.raises(ValidationError, match="superseded_by"):
+        _rule(superseded_by=value)
+
+
+def test_superseded_by_cannot_name_the_rule_itself() -> None:
+    with pytest.raises(ValidationError, match="itself"):
+        _rule(id="P042", superseded_by="P042")
+
+
+def test_retirement_fields_default_to_none() -> None:
+    """Indefinite enforcement stays the default — retirement is opt-in."""
+    rule = _rule()
+    assert rule.until is None
+    assert rule.superseded_by is None
+
+
+def test_retirement_fields_reach_sarif_properties() -> None:
+    props = _rule(
+        since="0.18.0", until="0.30.0", superseded_by="sdk>=4.0.0"
+    ).to_reporting_descriptor()
+    assert props.properties["atlan/until"] == "0.30.0"
+    assert props.properties["atlan/supersededBy"] == "sdk>=4.0.0"
+    roundtripped = AtlanRuleProperties.from_properties(props.properties)
+    assert roundtripped.until == "0.30.0"
+    assert roundtripped.superseded_by == "sdk>=4.0.0"
+
+
+def test_retirement_properties_absent_when_unset() -> None:
+    """No keys at all for the common case, so reports stay readable."""
+    props = _rule().to_reporting_descriptor().properties
+    assert "atlan/until" not in props
+    assert "atlan/supersededBy" not in props
+
+
+def test_catalog_until_never_precedes_since() -> None:
+    """A rule cannot retire before it was introduced.
+
+    Checked here rather than in the model so the schema layer stays free of
+    upward imports to the check layer's version helpers.
+    """
+    from conformance.suite.checks._version import parse_version
+
+    for rule in load_catalog():
+        if rule.until is None or rule.since is None:
+            continue
+        until, since = parse_version(rule.until), parse_version(rule.since)
+        assert (
+            until is not None and since is not None
+        ), f"{rule.id}: since/until must be parseable versions"
+        assert (
+            until >= since
+        ), f"{rule.id}: until {rule.until} precedes since {rule.since}"
+
+
+def test_catalog_retired_rules_are_removed() -> None:
+    """The forcing function: a rule past its ``until`` must no longer ship.
+
+    ``since`` alone gives an interim net no way out — it becomes permanent by
+    construction. This is what makes ``until`` a commitment rather than a
+    comment: once the package version reaches it, this test fails until the
+    rule is actually deleted, the same way the deprecation drift gate fails on
+    a stale manifest.
+    """
+    from conformance.suite.checks._version import parse_version, version_reached
+
+    from conformance import __version__
+
+    current = parse_version(__version__)
+    assert current is not None, f"unparseable package version {__version__!r}"
+
+    overdue = [
+        f"{rule.id} (until {rule.until})"
+        for rule in load_catalog()
+        if rule.until is not None
+        and (parsed := parse_version(rule.until)) is not None
+        and version_reached(parsed, current)
+    ]
+    assert not overdue, (
+        f"Rules past their retirement version at {__version__}: {overdue}. "
+        "Delete the rule and its checker, or move `until` out with a recorded "
+        "reason."
+    )
+
+
+def test_catalog_superseding_rule_ids_exist() -> None:
+    """A ``superseded_by`` rule ID must name a rule that is actually in the catalog."""
+    rules = load_catalog()
+    known = {rule.id for rule in rules}
+    dangling = [
+        f"{rule.id} -> {rule.superseded_by}"
+        for rule in rules
+        if rule.superseded_by is not None
+        and not rule.superseded_by.startswith("sdk>=")
+        and rule.superseded_by not in known
+    ]
+    assert not dangling, f"superseded_by names an unknown rule: {dangling}"
 
 
 def test_validate_catalog_raises_on_duplicate() -> None:
