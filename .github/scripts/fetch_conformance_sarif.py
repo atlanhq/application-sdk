@@ -26,12 +26,17 @@ tests.
 
 Outputs written to ``$GITHUB_OUTPUT``:
 
-  * ``has_run``       — a run with live SARIF was found
-  * ``run_id``        — that run's id
-  * ``commit_sha``    — its head SHA
-  * ``branch``        — its head branch
-  * ``has_artifacts`` — at least one series actually downloaded
-  * ``series``        — space-separated series names that downloaded
+  * ``has_run``         — a run with live SARIF was found
+  * ``run_id``          — that run's id
+  * ``commit_sha``      — its head SHA
+  * ``branch``          — its head branch
+  * ``has_artifacts``   — at least one series actually downloaded
+  * ``series``          — space-separated series names that downloaded
+  * ``discovery_error`` — ``true`` when discovery *itself* failed (the
+    ``run list``/artifact-listing call errored or returned unparseable JSON),
+    as opposed to the routine "no qualifying run" case. Always ``false`` when a
+    run was found. Lets the workflow warn loudly on an operational fault
+    (auth/transport/API) without failing the best-effort publish red.
 
 Exits 0 in the "nothing to publish" cases (no candidate run, no live SARIF) —
 those are routine and gated downstream by ``has_run`` / ``has_artifacts``. A
@@ -118,11 +123,18 @@ def write_outputs(pairs: dict[str, str]) -> None:
 
 
 def discover(repo: str, workflow: str, branch: str, limit: int, gh=run_gh):
-    """Newest completed run carrying live SARIF -> ``(run_id, series)``.
+    """Newest completed run carrying live SARIF -> ``(run_id, series, error)``.
 
-    Returns ``(None, [])`` when no run in the window has any. Probing newest
-    first — rather than trusting ``.[0]`` — keeps a repo publishable off an
-    older run when the newest one expired or died before uploading.
+    Returns ``(None, [], False)`` when no run in the window has any — the
+    routine case. Probing newest first — rather than trusting ``.[0]`` — keeps
+    a repo publishable off an older run when the newest one expired or died
+    before uploading.
+
+    The third element flags an *operational* fault in discovery itself: the
+    ``run list`` call failing or returning unparseable JSON, or every probe of a
+    candidate run erroring. Those are auth/transport/API problems, not
+    "nothing to publish", so they surface separately (``discovery_error``) for
+    the workflow to warn on loudly, without turning the best-effort publish red.
     """
     rc, out = gh(
         [
@@ -140,34 +152,46 @@ def discover(repo: str, workflow: str, branch: str, limit: int, gh=run_gh):
     )
     if rc != 0:
         print(f"::warning::could not list {workflow} runs for {repo}")
-        return None, []
+        return None, [], True
 
     try:
         payload = json.loads(out or "[]")
     except json.JSONDecodeError:
         print(f"::warning::unparseable run list for {repo}")
-        return None, []
+        return None, [], True
 
-    for run_id in candidate_runs(payload):
+    candidates = candidate_runs(payload)
+    probed = 0
+    probe_errors = 0
+    for run_id in candidates:
         rc, out = gh(["api", f"repos/{repo}/actions/runs/{run_id}/artifacts"])
         if rc != 0:
             print(f"Run {run_id}: artifact listing failed — trying older")
+            probed += 1
+            probe_errors += 1
             continue
         try:
             artifacts = json.loads(out or "{}")
         except json.JSONDecodeError:
             print(f"Run {run_id}: unparseable artifact listing — trying older")
+            probed += 1
+            probe_errors += 1
             continue
+        probed += 1
         series = live_sarif_series(artifacts)
         if series:
             print(
                 f"Run {run_id} has {len(series)} live SARIF artifact(s) "
                 f"({', '.join(series)}) — using it"
             )
-            return run_id, series
+            return run_id, series, False
         print(f"Run {run_id} has no live SARIF artifacts — trying older")
 
-    return None, []
+    # Discovery errored only if EVERY candidate probe failed; at least one
+    # listing that parsed (even with zero live SARIF) means the API is healthy
+    # and this is the routine "nothing to publish" case.
+    error = probed > 0 and probe_errors == probed
+    return None, [], error
 
 
 def download(repo: str, run_id: int, series: list[str], dest: str, gh=run_gh):
@@ -233,13 +257,21 @@ def main(argv: list[str] | None = None, gh=run_gh) -> int:
     ap.add_argument("--dir", default="/tmp/sarif")
     args = ap.parse_args(argv)
 
-    run_id, series = discover(args.repo, args.workflow, args.branch, args.limit, gh=gh)
+    run_id, series, discovery_error = discover(
+        args.repo, args.workflow, args.branch, args.limit, gh=gh
+    )
     if run_id is None:
         print(
             f"::warning::No {args.workflow} run with live SARIF artifacts in the "
             f"last {args.limit} completed runs — skipping conformance dashboard update"
         )
-        write_outputs({"has_run": "false", "has_artifacts": "false"})
+        write_outputs(
+            {
+                "has_run": "false",
+                "has_artifacts": "false",
+                "discovery_error": "true" if discovery_error else "false",
+            }
+        )
         return 0
 
     got = download(args.repo, run_id, series, args.dir, gh=gh)

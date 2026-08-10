@@ -959,6 +959,70 @@ def _published_input_contract(ep: Any) -> Any:
     return ep.input_type
 
 
+def _marketplace_entrypoint_contract(entrypoint_name: str) -> Any | None:
+    """Resolve a *marketplace* entry point's published input contract from disk.
+
+    Bundle ("uber") apps expose marketplace entry points as generated contract
+    directories — ``CONTRACT_GENERATED_DIR/<entrypoint>/manifest.json`` — whose
+    DAGs are computed per submission by ``compute_manifest``. Those entry
+    points are **not** ``@entrypoint`` workflow registrations (the registry
+    holds the DAG-node workflows, e.g. ``<entrypoint>-post``), so registry
+    resolution 404s on them and ``/v1/app`` creation breaks even though the
+    manifest and configmap routes — which are filesystem-first — serve them
+    fine. This gives the input-contract route the same filesystem authority.
+
+    The contract toolkit emits each bundle entry point's ``AppInputContract``
+    as ``_input.py``; because the kebab-named generated dir is not a Python
+    package, the bundle regen convention relocates it to
+    ``app/<entrypoint_snake>/_input.py``. Check the in-place generated path
+    first (parity with ``_published_input_contract``), then the relocation
+    path.
+
+    Returns ``None`` when the entry point has no generated contract dir or no
+    importable ``AppInputContract`` — callers fall back to their existing
+    behavior.
+    """
+    import importlib  # noqa: PLC0415 — cold path: only on /input-contract
+
+    from application_sdk.app.entrypoint import (  # noqa: PLC0415 — circular at module import time
+        entrypoint_module_segment,
+    )
+
+    # The route already validates the name, but this helper must be safe on
+    # its own: the name reaches both a filesystem path and an import path.
+    # The regex forbids path separators and dots; the containment check makes
+    # the no-traversal property locally provable (py/path-injection).
+    if not _ENTRYPOINT_NAME_RE.match(entrypoint_name):
+        return None
+    generated_root = os.path.realpath(CONTRACT_GENERATED_DIR)
+    ep_manifest = os.path.realpath(
+        os.path.join(generated_root, entrypoint_name, "manifest.json")
+    )
+    if not ep_manifest.startswith(generated_root + os.sep):
+        return None
+    if not os.path.isfile(ep_manifest):
+        return None
+    ep_module = entrypoint_module_segment(entrypoint_name)
+    for module_path in (
+        f"app.generated.{ep_module}._input",
+        f"app.{ep_module}._input",
+    ):
+        try:
+            module = importlib.import_module(module_path)
+        except ImportError:  # conformance: ignore[E008,E014] optional generated module; continue to next candidate
+            continue
+        contract = getattr(module, "AppInputContract", None)
+        if contract is not None and hasattr(contract, "model_json_schema"):
+            logger.debug(
+                "input-contract: using marketplace AppInputContract from %s "
+                "for entrypoint %s (filesystem-resolved bundle entry point)",
+                module_path,
+                entrypoint_name,
+            )
+            return contract
+    return None
+
+
 _WORKFLOW_SENSITIVE_FIELDS = {
     "username",
     "password",
@@ -2161,7 +2225,6 @@ def _register_workflow_routes(
                 for ep in sorted(app_meta.entry_points.values(), key=lambda e: e.name)
                 if not ep.implicit and ep.name not in candidates
             )
-
         for cand in candidates:
             try:
                 return await _serve_entrypoint_manifest(cand, fe_inputs, deployment)
@@ -2296,9 +2359,25 @@ def _register_workflow_routes(
         if entrypoint is not None and not _ENTRYPOINT_NAME_RE.match(entrypoint):
             raise HTTPException(status_code=400, detail="Invalid entrypoint name")
 
-        _, ep = _resolve_app_entrypoint(
-            _workflow_config.app_name, entrypoint, unknown_ep_status=404
-        )
+        try:
+            _, ep = _resolve_app_entrypoint(
+                _workflow_config.app_name, entrypoint, unknown_ep_status=404
+            )
+        except HTTPException as exc:
+            # Registry miss — the entry point may be a *marketplace* (bundle)
+            # entry point that exists only as a generated contract dir on disk
+            # (its registry entrypoints are the DAG-node workflows, not the
+            # marketplace name). Filesystem-resolve it like the manifest and
+            # configmap routes already do; re-raise when it isn't one.
+            if exc.status_code != 404 or not entrypoint:
+                raise
+            contract = _marketplace_entrypoint_contract(entrypoint)
+            if contract is None:
+                raise
+            return Response(
+                content=orjson.dumps(contract.model_json_schema()),
+                media_type="application/json",
+            )
 
         # Prefer the generated AppInputContract (rich, validatable, credential
         # refs) over the entry point's thin runtime input_type. See
