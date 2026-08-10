@@ -255,7 +255,7 @@ platformdirs==4.11.2
 pluggy==1.6.0
     # via pytest
 poethepoet==0.48.0
-pre-commit==4.6.1
+pre-commit==4.6.2
 prometheus-client==0.26.0
     # via
     #   atlan-application-sdk
