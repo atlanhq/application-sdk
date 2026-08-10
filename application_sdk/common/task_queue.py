@@ -29,7 +29,9 @@ drops the prefix entirely and polls a bare ``<app>``, while token-filling
 produces ``atlan-<app>-local``; and a baked ``<app>`` that no longer matches the
 deployment's ``ATLAN_APPLICATION_NAME`` is never corrected at all.
 :func:`resolve_manifest_tokens` therefore matches the whole template and
-replaces it outright.
+replaces it outright — and does so field-aware, rewriting only values the
+manifest itself labels ``task_queue`` rather than substituting bytes anywhere
+the template text happens to appear.
 
 **The unset case must stay loud.** ``constants.APPLICATION_NAME`` and
 ``constants.DEPLOYMENT_NAME`` manufacture ``"default"`` / ``"local"`` when the
@@ -69,8 +71,11 @@ second mechanism competing with it. Retire it when those writers are retired.
 
 from __future__ import annotations
 
+import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 #: Prefix the platform expects on a fully-qualified app queue. Callers pass the
 #: *bare* app name to :func:`derive_task_queue` and let it add the prefix —
@@ -83,6 +88,77 @@ DEPLOYMENT_NAME_TOKEN = "{deployment_name}"
 
 _APP_NAME_TOKEN_BYTES = APP_NAME_TOKEN.encode()
 _DEPLOYMENT_NAME_TOKEN_BYTES = DEPLOYMENT_NAME_TOKEN.encode()
+
+#: The manifest field the queue rewrite owns. DAG nodes carry their dispatch
+#: queue under this key at any depth (``dag.<node>.task_queue``,
+#: ``dag.<node>.inputs.task_queue``, top-level on single-node manifests); only
+#: string values under this exact key are this app's queue and may be stamped.
+#: Every other byte in the manifest — foreign-app queues, descriptions,
+#: metadata — is out of scope no matter how closely it matches the template.
+_TASK_QUEUE_KEY = "task_queue"
+
+
+def _rewrite_task_queue_fields(
+    node: Any,
+    rewrite: Callable[[str], str | None],
+    app_name_fill: str,
+    deployment_fill: str,
+) -> bool:
+    """Rewrite a parsed manifest in place: stamp own queues, fill the rest.
+
+    Walks every string value. A ``task_queue`` value is handed to ``rewrite``,
+    which returns the stamped queue, or ``None`` when the value is not this
+    app's template and must be left alone. Every *other* string — log-identity
+    ``app_name``, descriptions, foreign-app queue text, metadata — gets the
+    residual ``{app_name}`` / ``{deployment_name}`` tokens filled.
+
+    Field-aware stamping is the whole point: a queue name is only ever rewritten
+    where the manifest *says* it is a queue, so a foreign-app DAG node whose
+    baked queue matches the template, or a description string containing the
+    template text, is never re-pointed at this app's worker (the byte
+    substitutor did both). Splitting the residual fill by field also means the
+    deployment/app fills can no longer mutate an already-stamped queue — the
+    stamped field never sees them.
+
+    Returns ``True`` when at least one ``task_queue`` value was visited, so the
+    caller can fall back to byte substitution on a manifest too malformed to
+    parse — the pre-FND-195 behaviour, preserved rather than silently dropping
+    the stamp.
+    """
+    visited = False
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(value, str):
+                if key == _TASK_QUEUE_KEY:
+                    stamped = rewrite(value)
+                    visited = True
+                    if stamped is not None:
+                        # Own queue, stamped verbatim — the residual fills must
+                        # not touch it, even when it carries literal token text.
+                        node[key] = stamped
+                        continue
+                    # Not this app's template (``{deployment_name}-queue``,
+                    # ``atlan-publish-{deployment_name}``): a residual field in
+                    # all but key, so fall through and token-fill it.
+                node[key] = value.replace(APP_NAME_TOKEN, app_name_fill).replace(
+                    DEPLOYMENT_NAME_TOKEN, deployment_fill
+                )
+            else:
+                visited = (
+                    _rewrite_task_queue_fields(
+                        value, rewrite, app_name_fill, deployment_fill
+                    )
+                    or visited
+                )
+    elif isinstance(node, list):
+        for item in node:
+            visited = (
+                _rewrite_task_queue_fields(
+                    item, rewrite, app_name_fill, deployment_fill
+                )
+                or visited
+            )
+    return visited
 
 
 def derive_task_queue(app_name: str | None, deployment_name: str | None) -> str | None:
@@ -188,42 +264,63 @@ def resolve_manifest_tokens(
 ) -> ManifestTokenResolution:
     """Resolve ``{app_name}`` / ``{deployment_name}`` tokens in a served manifest.
 
-    Ordering matters, and the queue rewrite must come first:
+    Three jobs, done in one field-aware walk over the parsed manifest:
 
-    1. **This app's queue template, matched whole and stamped with the queue the
-       worker actually polls.** Both the un-baked
-       ``atlan-{app_name}-{deployment_name}`` (a contract-toolkit miss, or a
-       hand-authored manifest) and the baked ``atlan-<name>-{deployment_name}``
-       are replaced outright. Filling the two tokens in place instead is what
-       diverged: with no deployment name the worker drops the prefix and polls a
-       bare ``<app>``, and a baked name that no longer matches the deployment's
-       ``ATLAN_APPLICATION_NAME`` is never corrected at all.
+    1. **This app's queue, stamped with the queue the worker actually polls.**
+       Every string ``task_queue`` value whose text matches the whole template —
+       the un-baked ``atlan-{app_name}-{deployment_name}`` (a contract-toolkit
+       miss, or a hand-authored manifest) or the baked
+       ``atlan-<name>-{deployment_name}`` — is replaced outright. Filling the two
+       tokens in place instead is what diverged: with no deployment name the
+       worker drops the prefix and polls a bare ``<app>``, and a baked name that
+       no longer matches the deployment's ``ATLAN_APPLICATION_NAME`` is never
+       corrected at all.
     2. **Residual** ``{app_name}``, which is per-node log identity rather than a
        queue (``inputs.args.app_name``; a literal token reaching observability
-       here is HYP-1954).
+       here is HYP-1954). Filled in every string that is not a ``task_queue``.
     3. **Residual** ``{deployment_name}``, e.g. on DAG nodes that dispatch to
        *another* app's queue (``atlan-publish-{deployment_name}`` and friends).
        Those are legitimately not this app's queue, so they are token-filled and
        otherwise left alone — neither normalised nor warned about.
 
+    Two properties are load-bearing, and both come from the stamp owning the
+    ``task_queue`` field rather than substituting bytes across the manifest:
+
+    * *Field-aware.* Only a value the manifest itself labels ``task_queue`` is
+      this app's queue. Whole-manifest byte substitution could not tell that
+      from a foreign-app DAG node whose baked queue matches the template, or a
+      description string containing the template text — it re-pointed both at
+      this app's worker.
+    * *The stamped queue is never re-filled.* A configured queue that itself
+      contains literal token text (e.g. ``custom-{deployment_name}-queue`` via
+      ``ATLAN_TASK_QUEUE``) is stamped verbatim: the residual fills skip
+      ``task_queue`` values, so they can no longer mutate the stamped queue into
+      one no worker polls while :attr:`ManifestTokenResolution.task_queue`
+      reports the original.
+
     Args:
-        raw: Raw manifest bytes. Not parsed — the contract tooling already
-            validated the JSON at build time, and byte substitution keeps the
-            serve path free of a parse/reserialize round-trip.
+        raw: Raw manifest bytes. Parsed as JSON so the stamp can find the
+            ``task_queue`` fields; a manifest too malformed to parse falls back
+            to byte substitution (the pre-FND-195 behaviour, with the stamp
+            ordered before the residual fills) so the queue is degraded, never
+            dropped.
         task_queue: The queue the app's worker polls, when the caller knows it
             (the handler does: it is handed the same value ``create_worker`` gets).
             Preferred over re-deriving from env because it also carries an
             explicit ``ATLAN_TASK_QUEUE`` / ``--task-queue`` override, which no
             amount of re-derivation can reproduce. Falls back to
-            :func:`task_queue_from_env`.
+            :func:`task_queue_from_env`. Stamped verbatim, even when it contains
+            literal token text.
         app_name: The app's registered name — what the toolkit *would* have baked.
-            Used both as a template candidate in step 1 and to fill step 2's
-            token. Preferred over ``ATLAN_APPLICATION_NAME`` there because it is
-            the value the Workflow Center's log filter matches (HYP-1678).
-        deployment_fallback: Value for step 3 when ``ATLAN_DEPLOYMENT_NAME`` is
-            unset. Defaults to ``"default"``, preserving the pre-FND-195
-            behaviour of that token. Never used for step 1: manufacturing a
-            deployment segment there is the divergence itself.
+            Used both as a template candidate in the stamp and to fill the
+            residual ``{app_name}`` token. Preferred over
+            ``ATLAN_APPLICATION_NAME`` there because it is the value the Workflow
+            Center's log filter matches (HYP-1678).
+        deployment_fallback: Value for the residual ``{deployment_name}`` fill
+            when ``ATLAN_DEPLOYMENT_NAME`` is unset. Defaults to ``"default"``,
+            preserving the pre-FND-195 behaviour of that token. Never used for
+            the queue stamp: manufacturing a deployment segment there is the
+            divergence itself.
 
     Returns:
         A :class:`ManifestTokenResolution`.
@@ -236,23 +333,38 @@ def resolve_manifest_tokens(
     resolved_app_name = registered_app_name or env_app_name or None
     had_app_name_token = _APP_NAME_TOKEN_BYTES in raw
 
-    if resolved_queue is not None:
-        encoded_queue = resolved_queue.encode()
-        # Ordered so the un-baked token form is tried first and duplicates (the
-        # common case where the registered name *is* ATLAN_APPLICATION_NAME)
-        # collapse to one replace.
-        candidates = [APP_NAME_TOKEN, registered_app_name, env_app_name]
-        for candidate in dict.fromkeys(c for c in candidates if c):
-            raw = raw.replace(
-                f"{QUEUE_PREFIX}{candidate}-{DEPLOYMENT_NAME_TOKEN}".encode(),
-                encoded_queue,
-            )
+    app_name_fill = resolved_app_name or APP_NAME_TOKEN
+    deployment_fill = deployment_name or (deployment_fallback or "default")
 
-    if resolved_app_name:
-        raw = raw.replace(_APP_NAME_TOKEN_BYTES, resolved_app_name.encode())
+    try:
+        manifest = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        manifest = None
 
-    residual_deployment = deployment_name or (deployment_fallback or "default")
-    raw = raw.replace(_DEPLOYMENT_NAME_TOKEN_BYTES, residual_deployment.encode())
+    if isinstance(manifest, (dict, list)):
+        # Field-aware path: stamp own-queue fields, fill the residual tokens in
+        # every other string, in one walk — so the deployment/app fills never
+        # touch an already-stamped queue, and the stamp never touches a
+        # foreign-app queue or a description string.
+        _rewrite_task_queue_fields(
+            manifest,
+            _queue_stamper(resolved_queue, registered_app_name, env_app_name),
+            app_name_fill,
+            deployment_fill,
+        )
+        # ensure_ascii preserves the byte-for-byte ASCII shape of the toolkit's
+        # own json.dumps output, so the reserialize is a no-op save the stamp.
+        raw = json.dumps(manifest, ensure_ascii=True).encode()
+    else:
+        # Fallback for a manifest too malformed to parse: the pre-FND-195 byte
+        # behaviour, with the stamp ordered before the residual fills so they
+        # cannot corrupt a stamped queue that carries literal token text.
+        raw = _stamp_task_queue_bytes(
+            raw, resolved_queue, registered_app_name, env_app_name
+        )
+        if resolved_app_name:
+            raw = raw.replace(_APP_NAME_TOKEN_BYTES, resolved_app_name.encode())
+        raw = raw.replace(_DEPLOYMENT_NAME_TOKEN_BYTES, deployment_fill.encode())
 
     return ManifestTokenResolution(
         raw=raw,
@@ -260,3 +372,57 @@ def resolve_manifest_tokens(
         app_name=resolved_app_name,
         had_app_name_token=had_app_name_token,
     )
+
+
+def _queue_stamper(
+    resolved_queue: str | None,
+    registered_app_name: str,
+    env_app_name: str,
+) -> Callable[[str], str | None]:
+    """Build the field-aware ``task_queue`` rewrite for a parsed manifest.
+
+    Returns a function mapping a ``task_queue`` value to the stamped queue when
+    the value matches this app's whole ``atlan-{candidate}-{deployment_name}``
+    template, else ``None`` (leave the value alone). When no queue is
+    determinable every value is left alone, so the un-baked template stays
+    visible rather than being filled with a manufactured name.
+    """
+    if resolved_queue is None:
+        return lambda value: None
+
+    # Ordered so the un-baked token form is tried first and duplicates (the
+    # common case where the registered name *is* ATLAN_APPLICATION_NAME)
+    # collapse to one entry.
+    candidates = [APP_NAME_TOKEN, registered_app_name, env_app_name]
+    templates = {
+        f"{QUEUE_PREFIX}{candidate}-{DEPLOYMENT_NAME_TOKEN}"
+        for candidate in dict.fromkeys(c for c in candidates if c)
+    }
+    return lambda value: resolved_queue if value in templates else None
+
+
+def _stamp_task_queue_bytes(
+    raw: bytes,
+    resolved_queue: str | None,
+    registered_app_name: str,
+    env_app_name: str,
+) -> bytes:
+    """Byte-substitute the queue template on a manifest too malformed to parse.
+
+    The degraded path behind :func:`resolve_manifest_tokens`'s field-aware
+    stamp. Matches the whole ``atlan-{candidate}-{deployment_name}`` template
+    and replaces it outright, exactly as the pre-FND-195 substitutor did — a
+    stamped queue is better than none on a manifest the build-time validation
+    never saw. The caller orders it before the residual fills so they cannot
+    corrupt a stamped queue that carries literal token text.
+    """
+    if resolved_queue is None:
+        return raw
+    candidates = [APP_NAME_TOKEN, registered_app_name, env_app_name]
+    encoded_queue = resolved_queue.encode()
+    for candidate in dict.fromkeys(c for c in candidates if c):
+        raw = raw.replace(
+            f"{QUEUE_PREFIX}{candidate}-{DEPLOYMENT_NAME_TOKEN}".encode(),
+            encoded_queue,
+        )
+    return raw

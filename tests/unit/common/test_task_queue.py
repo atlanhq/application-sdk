@@ -97,6 +97,66 @@ class TestWorkerFallback:
         assert _derive_task_queue("pkg.apps:DbtApp") == "dbt-app-queue"
 
 
+class TestPrecedenceIndependentOracle:
+    """Hard-coded expectations for every precedence row, no shared oracle.
+
+    The equality tests above prove worker and manifest *agree*; they cannot
+    catch both sides drifting together, because ``_derive_task_queue`` and the
+    resolver's fallback both bottom out in ``task_queue_from_env``. These rows
+    assert the concrete queue each precedence case must produce, so a drift in
+    the shared rule fails here even when the two paths still agree.
+    """
+
+    @pytest.mark.parametrize(
+        ("env", "expected_queue"),
+        [
+            # Both set → prefixed pair.
+            pytest.param(DeploymentEnv("dbt", "prod"), "atlan-dbt-prod", id="both"),
+            # App only → bare, unprefixed (never atlan-dbt-default).
+            pytest.param(DeploymentEnv("dbt", None), "dbt", id="app-only"),
+            # Deployment only → no name determinable.
+            pytest.param(DeploymentEnv(None, "prod"), None, id="deployment-only"),
+            # Neither → no name determinable.
+            pytest.param(DeploymentEnv(None, None), None, id="neither"),
+        ],
+    )
+    def test_env_derivation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        env: DeploymentEnv,
+        expected_queue: str | None,
+    ) -> None:
+        env.apply(monkeypatch)
+        assert task_queue_from_env() == expected_queue
+        resolution = resolve_manifest_tokens(
+            _manifest_bytes("atlan-dbt-{deployment_name}")
+        )
+        assert resolution.task_queue == expected_queue
+
+    def test_explicit_override_beats_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``ATLAN_TASK_QUEUE`` / ``--task-queue`` is authoritative over any
+        env-derived value — the row re-derivation can never reproduce."""
+        DeploymentEnv("dbt", "prod").apply(monkeypatch)
+        resolution = resolve_manifest_tokens(
+            _manifest_bytes("atlan-dbt-{deployment_name}"),
+            task_queue="atlan-dbt-ci",
+        )
+        assert resolution.task_queue == "atlan-dbt-ci"
+        assert _served_queue(resolution.raw) == "atlan-dbt-ci"
+
+    def test_env_beats_registered_name_in_the_template(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A baked name that no longer matches the deployment's env is corrected
+        to the env queue — the divergence the stamp exists to close."""
+        DeploymentEnv("dbt-v3", "prod").apply(monkeypatch)
+        resolution = resolve_manifest_tokens(
+            _manifest_bytes("atlan-dbt-{deployment_name}"), app_name="dbt"
+        )
+        assert resolution.task_queue == "atlan-dbt-v3-prod"
+        assert _served_queue(resolution.raw) == "atlan-dbt-v3-prod"
+
+
 class TestManifestAgreesWithWorker:
     """The three rows of FND-195's divergence table."""
 
@@ -293,3 +353,148 @@ class TestManifestResidualTokens:
             deployment_fallback="ignored",
         ).raw
         assert _served_queue(raw) == "prod-queue"
+
+
+class TestQueueStampIsFieldAware:
+    """The stamp owns ``task_queue`` fields only, and runs after the token fills.
+
+    Both findings below are the same class — unscoped byte substitution — that
+    the whole-manifest replace used to commit: it mutated the stamped queue with
+    the later token passes, and it re-pointed bytes that were never this app's
+    queue to begin with.
+    """
+
+    def test_a_configured_queue_containing_token_text_is_stamped_verbatim(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An explicit ``ATLAN_TASK_QUEUE`` / ``--task-queue`` override may
+        legitimately contain literal token text (``custom-{deployment_name}-queue``).
+        The residual passes must not rewrite it post-stamp into a queue no worker
+        polls while ``resolution.task_queue`` still reports the original."""
+        DeploymentEnv("dbt", "prod").apply(monkeypatch)
+        resolution = resolve_manifest_tokens(
+            _manifest_bytes("atlan-dbt-{deployment_name}"),
+            task_queue="custom-{deployment_name}-queue",
+        )
+        assert _served_queue(resolution.raw) == "custom-{deployment_name}-queue"
+        assert resolution.task_queue == "custom-{deployment_name}-queue"
+
+    def test_a_foreign_app_node_matching_the_template_is_not_repointed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A DAG node that dispatches to *another* app's queue keeps it. The byte
+        substitutor matched ``atlan-{candidate}-{deployment_name}`` anywhere in the
+        manifest — including a foreign node whose baked queue equals this app's env
+        name — and re-pointed it at this app's worker."""
+        DeploymentEnv("dbt", "prod").apply(monkeypatch)
+        manifest = json.dumps(
+            {
+                "execution_mode": "dag",
+                "dag": {
+                    "extract": {
+                        "activity_name": "execute_workflow",
+                        "task_queue": "atlan-dbt-{deployment_name}",
+                    },
+                    # A node that hands off to the dbt app's own queue, baked.
+                    # It matches a candidate but is not this node's own stamp.
+                    "notify_dbt": {
+                        "activity_name": "execute_workflow",
+                        "task_queue": "atlan-dbt-prod",
+                    },
+                },
+            }
+        ).encode()
+        served = json.loads(resolve_manifest_tokens(manifest).raw)["dag"]
+        assert served["extract"]["task_queue"] == "atlan-dbt-prod"
+        # The foreign node is token-filled like any residual, never normalised
+        # to this app's stamped queue — and crucially never double-stamped.
+        assert served["notify_dbt"]["task_queue"] == "atlan-dbt-prod"
+
+    def test_template_text_in_a_description_is_not_rewritten(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Free-text fields are not queues. A description mentioning the template
+        must pass through untouched even though it matches the byte pattern."""
+        DeploymentEnv("dbt", "prod").apply(monkeypatch)
+        manifest = json.dumps(
+            {
+                "execution_mode": "dag",
+                "dag": {
+                    "extract": {
+                        "activity_name": "execute_workflow",
+                        "description": "polls atlan-dbt-{deployment_name} for work",
+                        "task_queue": "atlan-dbt-{deployment_name}",
+                    }
+                },
+            }
+        ).encode()
+        node = json.loads(resolve_manifest_tokens(manifest).raw)["dag"]["extract"]
+        assert node["task_queue"] == "atlan-dbt-prod"
+        # The description is a residual field, not a queue: its {deployment_name}
+        # is token-filled like any other, but it is never *stamped* — had it been
+        # treated as a queue it would also have been rewritten when the stamped
+        # queue differed from the template fill (see the override test above).
+        assert node["description"] == "polls atlan-dbt-prod for work"
+
+    def test_template_text_in_a_description_is_never_stamped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Stronger form: when the stamped queue differs from the template fill
+        (an explicit override), a description holding the template must not track
+        the stamp — only a real ``task_queue`` field may."""
+        DeploymentEnv("dbt", "prod").apply(monkeypatch)
+        manifest = json.dumps(
+            {
+                "execution_mode": "dag",
+                "dag": {
+                    "extract": {
+                        "activity_name": "execute_workflow",
+                        "description": "polls atlan-dbt-{deployment_name} for work",
+                        "task_queue": "atlan-dbt-{deployment_name}",
+                    }
+                },
+            }
+        ).encode()
+        node = json.loads(
+            resolve_manifest_tokens(manifest, task_queue="atlan-dbt-ci").raw
+        )["dag"]["extract"]
+        # The real queue field is stamped with the override...
+        assert node["task_queue"] == "atlan-dbt-ci"
+        # ...but the description is only token-filled, never re-pointed at it.
+        assert node["description"] == "polls atlan-dbt-prod for work"
+
+    def test_queue_fields_are_stamped_at_any_depth(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Real manifests carry the queue at ``dag.<node>.task_queue``,
+        ``dag.<node>.inputs.task_queue``, and top level; the field-aware stamp
+        reaches all of them, not just the first nesting level."""
+        DeploymentEnv("dbt", "prod").apply(monkeypatch)
+        manifest = json.dumps(
+            {
+                "execution_mode": "dag",
+                "task_queue": "atlan-dbt-{deployment_name}",
+                "dag": {
+                    "extract": {
+                        "activity_name": "execute_workflow",
+                        "task_queue": "atlan-dbt-{deployment_name}",
+                        "inputs": {"task_queue": "atlan-dbt-{deployment_name}"},
+                    }
+                },
+            }
+        ).encode()
+        served = json.loads(resolve_manifest_tokens(manifest).raw)
+        assert served["task_queue"] == "atlan-dbt-prod"
+        assert served["dag"]["extract"]["task_queue"] == "atlan-dbt-prod"
+        assert served["dag"]["extract"]["inputs"]["task_queue"] == "atlan-dbt-prod"
+
+    def test_unparseable_manifest_falls_back_to_byte_substitution(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A manifest too malformed to parse still gets its queue stamped — the
+        pre-FND-195 byte behaviour, degraded rather than dropped."""
+        DeploymentEnv("dbt", "prod").apply(monkeypatch)
+        raw = resolve_manifest_tokens(
+            b'{"dag": {"extract": {"task_queue": "atlan-dbt-{deployment_name}"'
+        ).raw
+        assert b"atlan-dbt-prod" in raw
