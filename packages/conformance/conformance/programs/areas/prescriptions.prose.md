@@ -560,17 +560,17 @@ which scans template YAML, not Python.
   that entity type on the daft-less SDK >= 3.22 runtime — latent until the
   first real pipeline run.
 
-  **The fix is the SDK bump, not the template.**  From SDK 3.27.0 the
+  **The fix is the SDK bump, not the template.**  From SDK 3.28.0 the
   transformer quotes a `source_query` that resolved as a plain column
   reference, so the keyword renders as valid SQL with no template change; the
-  rule carries `superseded_by: sdk>=3.27.0` and describes only apps pinned
-  below it.  Propose raising the `atlan-application-sdk` floor to `>=3.27.0`
+  rule carries `superseded_by: sdk>=3.28.0` and describes only apps pinned
+  below it.  Propose raising the `atlan-application-sdk` floor to `>=3.28.0`
   and relocking.
 
   Only when the app genuinely cannot move off an older SDK, fall back to
   embedding SQL quotes in the value (`source_query: '"order"'`; YAML-level
   quotes do not survive parsing).  Say so explicitly in the residue — that
-  edit is worse than it looks below 3.27.0, where the transformer matches the
+  edit is worse than it looks below 3.28.0, where the transformer matches the
   quoted text as raw text, resolves nothing, and drops the attribute from
   published output instead of raising.  Either way, verify locally with a
   template harness (synthetic raw parquet through the real

@@ -238,9 +238,9 @@ guaranteed runtime ImportError ('duckdb is required for DuckDBConnectionManager'
 EVERY transform — latent until the first real pipeline run, because imports alone
 succeed and mocked unit tests pass. The population that surfaced this was a different,
 SDK-owned shape: apps pinned to the deprecated [daft] extra, which resolved empty over
-3.22–3.26 (observed live on main for a document-store connector in fleet testing after
+3.22–3.27 (observed live on main for a document-store connector in fleet testing after
 an automated upgrade crossed the 3.22 line). That half is fixed at the root — [daft]
-aliases [sql] again from 3.27.0 — so this rule now covers the no-extras case it always
+aliases [sql] again from 3.28.0 — so this rule now covers the no-extras case it always
 also covered. Statically checkable: transformer-usage scan + lockfile/pyproject scan.
 
 An app whose source imports the SDK query transformer
@@ -256,10 +256,10 @@ transformer on a **plain** `atlan-application-sdk` pin, with no extra at all: th
 failure is silent until the first real end-to-end transform, because imports succeed and
 unit tests that mock the transformer pass.
 
-**Not the `[daft]` case — that one was ours.**  Over SDK 3.22–3.26 the deprecated
+**Not the `[daft]` case — that one was ours.**  Over SDK 3.22–3.27 the deprecated
 `[daft]` extra resolved to nothing, so apps that were following the SDK's own
 deprecation note were broken by an automated upgrade crossing the 3.22 line.  That is
-fixed at the root: from 3.27.0 `[daft]` aliases `[sql]` again, and a version bump alone
+fixed at the root: from 3.28.0 `[daft]` aliases `[sql]` again, and a version bump alone
 resolves `duckdb` for every such app with no repo-side change.  If this rule fires on an
 app pinned to `[daft]`, upgrade the SDK rather than editing the app's extras.
 

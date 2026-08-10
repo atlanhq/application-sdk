@@ -32,7 +32,7 @@ Rules in this check module:
   duckdb is a guaranteed runtime ``ImportError`` in every transform.  The
   shape this describes is a plain SDK pin with no extra; the ``[daft]``
   population that surfaced it was an SDK defect (the extra resolved empty over
-  3.22–3.26) and is fixed at the root in 3.27.0, where ``[daft]`` aliases
+  3.22–3.27) and is fixed at the root in 3.28.0, where ``[daft]`` aliases
   ``[sql]`` again.
 
 D004/D005 are metadata-based (need the SDK importable) like D002; D006/D007/D008/D009
@@ -1293,8 +1293,8 @@ def _scan_query_transformer_duckdb(
                 f"DuckDBConnectionManager'. Reference the SDK as "
                 f"'{SDK_PACKAGE}[sql]' (or [incremental]) and relock. If the app "
                 f"is pinned to the deprecated '{SDK_PACKAGE}[daft]' extra, upgrade "
-                f"to SDK >= 3.27.0 instead — that extra resolved empty over "
-                f"3.22–3.26 and aliases [sql] again from 3.27.0, so the bump is "
+                f"to SDK >= 3.28.0 instead — that extra resolved empty over "
+                f"3.22–3.27 and aliases [sql] again from 3.28.0, so the bump is "
                 f"the whole fix. Declaring duckdb directly also clears this "
                 f"finding but duplicates a pin the SDK's extras manage; prefer "
                 f"the extra."

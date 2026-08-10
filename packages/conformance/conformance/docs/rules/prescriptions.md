@@ -1459,11 +1459,11 @@ keyed on files that carry both a `columns:` key and a `source_query:` key — or
 CI/Helm YAML never matches. Review before suppressing: on a daft-less SDK below the
 fixed version the finding is a guaranteed runtime parse failure, not a style preference.
 
-**Version scope — fixed at the root from SDK 3.27.0.**  The transformer now quotes a
+**Version scope — fixed at the root from SDK 3.28.0.**  The transformer now quotes a
 `source_query` that resolved as a plain column reference, so a reserved keyword renders
 as valid SQL with no template change at all; the `source_columns`-driven route, which
 carries arbitrary SQL, is left unquoted.  This rule therefore describes only apps pinned
-**below** that version and is marked `superseded_by: sdk>=3.27.0` rather than dropped —
+**below** that version and is marked `superseded_by: sdk>=3.28.0` rather than dropped —
 an app on an older SDK still fails at runtime, and dropping the rule would take the only
 static signal away from exactly that population.
 
@@ -1474,9 +1474,9 @@ floor has crossed it.
 
 **Do not hand-remediate templates that the version bump fixes.** Embedding quotes in the
 value was the interim advice and it is worse than it looks on an unfixed SDK: below
-3.27.0 the transformer matched `'"order"'` against the available columns as raw text,
+3.28.0 the transformer matched `'"order"'` against the available columns as raw text,
 found nothing, and dropped the attribute from published output — a silent missing
-attribute in place of a loud `ParserException`. From 3.27.0 both spellings resolve and
+attribute in place of a loud `ParserException`. From 3.28.0 both spellings resolve and
 render identically, so the upgrade is the fix and the template edit is unnecessary.
 
 ---

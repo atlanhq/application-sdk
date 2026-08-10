@@ -191,8 +191,8 @@ WARN-tier — route to residue for human decision):
 
   **Check the extra on that line before proposing anything.**  If the app pins
   `atlan-application-sdk[daft]`, the defect is the SDK's, not the app's: that
-  extra resolved to nothing over SDK 3.22–3.26 and aliases `[sql]` again from
-  3.27.0.  Propose raising the SDK floor to `>=3.27.0` and leave the extra
+  extra resolved to nothing over SDK 3.22–3.27 and aliases `[sql]` again from
+  3.28.0.  Propose raising the SDK floor to `>=3.28.0` and leave the extra
   alone — the bump is the whole fix, and rewriting the app's extras instead
   pays per repo for a defect fixed once upstream.
 

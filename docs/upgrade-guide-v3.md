@@ -58,7 +58,7 @@ The `[workflows]` extra is a backwards-compatibility shim — the packages it pi
 It is an alias for `[sql]`, so a pin on `atlan-application-sdk[daft]` resolves
 the same packages it did before v3.22 and nothing breaks while you migrate.
 
-If you are on **v3.22 through v3.26**, upgrade: over that range the extra
+If you are on **v3.22 through v3.27**, upgrade: over that range the extra
 resolved to nothing. That is a silent break rather than a loud one — imports
 still succeed and mocked unit tests still pass, so the first symptom is
 `ImportError: duckdb is required for DuckDBConnectionManager` on the first real
