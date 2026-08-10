@@ -2528,6 +2528,80 @@ class TestManifestEndpoint:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
             svc_module.DEPLOYMENT_NAME = original_dep
 
+    def test_manifest_queue_matches_the_configured_worker_queue(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FND-195: the served queue is stamped from the queue this process was
+        configured with, not re-derived from env and hoped to match.
+
+        The baked name here (``dbt``) disagrees with the deployment's app name
+        (``dbt-v3``) — the shape that used to serve a plausible ``atlan-dbt-prod``
+        that no worker polled, hanging the run to its 24h backstop (CONNECT-183).
+        """
+        from application_sdk.handler import service as svc_module
+
+        manifest_data = {
+            "execution_mode": "dag",
+            "dag": {
+                "extract": {
+                    "activity_name": "execute_workflow",
+                    "app_name": "dbt",
+                    "inputs": {"task_queue": "atlan-dbt-{deployment_name}"},
+                }
+            },
+        }
+        (tmp_path / "manifest.json").write_text(json.dumps(manifest_data))
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "dbt-v3")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            app = create_app_handler_service(
+                _TestHandler(), app_name="dbt", task_queue="atlan-dbt-v3-prod"
+            )
+            response = TestClient(app).get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            served = response.json()["dag"]["extract"]["inputs"]["task_queue"]
+            assert served == "atlan-dbt-v3-prod"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_manifest_unresolvable_app_name_keeps_the_token_visible(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no app name anywhere the route must not manufacture one: a literal
+        ``{app_name}`` is greppable, whereas ``atlan-default-prod`` reads as a real
+        queue and reproduces the original silent hang."""
+        from application_sdk.handler import service as svc_module
+
+        manifest_data = {
+            "execution_mode": "dag",
+            "dag": {
+                "extract": {
+                    "activity_name": "execute_workflow",
+                    "app_name": "{app_name}",
+                    "inputs": {"task_queue": "atlan-{app_name}-{deployment_name}"},
+                }
+            },
+        }
+        (tmp_path / "manifest.json").write_text(json.dumps(manifest_data))
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name="" so nothing is registered to fall back to either.
+            app = create_app_handler_service(_TestHandler(), app_name="")
+            response = TestClient(app).get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            served = response.json()["dag"]["extract"]["inputs"]["task_queue"]
+            assert "{app_name}" in served
+            assert "default" not in served
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
     def test_manifest_programmatic_takes_priority(self, tmp_path: Path) -> None:
         """When both programmatic and disk manifest exist, programmatic wins."""
         from application_sdk.handler import service as svc_module

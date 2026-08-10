@@ -12,8 +12,8 @@ Set variables in your shell environment, a `.env` file at the project root, or D
 |----------|---------|-------------|
 | `ATLAN_APP_MODULE` | _(required)_ | App class to load: `module.path:ClassName` (e.g. `app.app:MyExtractor`). Startup fails without it. Set in your `Dockerfile` as `ENV ATLAN_APP_MODULE=…` or pass via `--app` CLI flag. |
 | `ATLAN_APP_MODE` | `combined` | Run mode: `worker`, `handler`, or `combined`. Determines which subsystems start; override via `--mode` CLI flag. **v2-compat fallback:** `APPLICATION_MODE` (deprecated; mapped at startup to the equivalent v3 mode). |
-| `ATLAN_APPLICATION_NAME` | `default` | Application name. Used in object-store paths, logging, and workflow identification. |
-| `ATLAN_DEPLOYMENT_NAME` | `local` | Deployment name. Distinguishes dev / staging / prod deployments of the same app. |
+| `ATLAN_APPLICATION_NAME` | `default` | Application name. Used in object-store paths, logging, and workflow identification. The `default` fallback applies to those *identity* uses only — task-queue derivation treats the variable as genuinely unset (see [Task-queue naming](#task-queue-naming)). Set it as the **bare** name, with no `atlan-` prefix; the SDK adds the prefix. |
+| `ATLAN_DEPLOYMENT_NAME` | `local` | Deployment name. Distinguishes dev / staging / prod deployments of the same app. As with `ATLAN_APPLICATION_NAME`, the `local` fallback is an identity default and does not apply to task-queue derivation. |
 | `ATLAN_TENANT_ID` | `default` | Tenant identifier for multi-tenant deployments. |
 | `ATLAN_DOMAIN_NAME` | `atlan.com` | Tenant domain name. |
 | `ATLAN_TEMPORARY_PATH` | `./local/tmp/` | Path for intermediate files during processing. |
@@ -42,9 +42,30 @@ Injected by the Local Marketplace into the Helm release at deploy time, and expo
 |----------|---------|-------------|
 | `ATLAN_TEMPORAL_HOST` | `localhost:7233` | Temporal server address (`host:port`). **v2-compat fallback:** if unset, the SDK constructs the address from `ATLAN_WORKFLOW_HOST` + `ATLAN_WORKFLOW_PORT` (deprecated; remove when all deployments set `ATLAN_TEMPORAL_HOST`). |
 | `ATLAN_TEMPORAL_NAMESPACE` | `default` | Temporal namespace. **v2-compat fallback:** `ATLAN_WORKFLOW_NAMESPACE`. |
-| `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when both are set, or just the app name when only `ATLAN_APPLICATION_NAME` is set, or `{ClassName}-queue` (kebab-case) when neither is set. |
+| `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when both are set, or just the bare app name (**no** `atlan-` prefix) when only `ATLAN_APPLICATION_NAME` is set, or `{ClassName}-queue` (kebab-case) when neither is set. Setting this explicitly also changes the queue the served manifest advertises, so a worker on an overridden queue and the Automation Engine stay in step. See [Task-queue naming](#task-queue-naming). |
 | `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `127.0.0.1:9464` | Bind address for the Temporal SDK Prometheus endpoint (~40 built-in metrics). Loopback-only by default — operators should not scrape this port directly; combined-mode FastAPI `/metrics` proxies it in-process. See [Monitoring](concepts/monitoring.md). |
 | `ATLAN_PREFLIGHT_GATE_MODE` | _(unset)_ | Deploy-time preflight gate posture override, read once at worker build. Only the literal `hard` enforces (blocks a `NOT_READY` run); any other set value resolves to soft. Empty or unset defers to the app's declared `App.preflight_gate_mode`. Set on the worker deployment; no app release needed. See [Apps](concepts/apps.md#preflight-gate-posture). |
+
+### Task-queue naming
+
+The queue name has to be agreed on by two things that never talk to each other: the **worker**, which polls it, and the **served manifest**, whose resolved `task_queue` the Automation Engine writes into the DAG and submits work to. When they disagree nothing fails loudly — AE submits to one queue, the worker polls another, and the run sits unclaimed until its 24h heartbeat backstop.
+
+There is now one derivation, `application_sdk.common.task_queue.derive_task_queue`, and the manifest route does not re-run it — it stamps the queue the handler was configured with, which is the same value the worker was started on. Two paths deriving the same answer is a convention; one path copying the other's answer is structural.
+
+The rule itself:
+
+| `ATLAN_APPLICATION_NAME` | `ATLAN_DEPLOYMENT_NAME` | Queue |
+|---|---|---|
+| `dbt` | `prod` | `atlan-dbt-prod` |
+| `dbt` | _(unset)_ | `dbt` — bare, **no** prefix |
+| _(unset)_ | anything | no queue name exists; the worker falls back to `{ClassName}-queue` for local dev, and the manifest stamps that same queue. With no app name available anywhere, the served manifest leaves the literal `{app_name}` token in place and logs at ERROR |
+
+Two consequences worth internalising when writing or rewriting an AE DAG outside the toolkit:
+
+- **Pass the bare app name.** `derive_task_queue` adds the `atlan-` prefix. Prefixing a value that is already prefixed produces `atlan-atlan-dbt-production`, a queue nothing polls.
+- **Never invent a name for the unset case.** `atlan-default-prod` reads as a legitimate queue and reproduces the original silent hang; a literal `{app_name}` in the DAG is greppable and diagnosable in one step. That is why `ATLAN_APPLICATION_NAME`'s `default` fallback is scoped to identity uses and excluded here.
+
+Nodes that dispatch to a *different* app's queue (`atlan-publish-{deployment_name}` and friends) are legitimately not this app's queue: their `{deployment_name}` token is filled and the value is otherwise left alone.
 
 ### Worker Versioning
 
