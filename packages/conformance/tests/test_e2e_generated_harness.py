@@ -181,6 +181,86 @@ def test_t023_fires_on_handwritten_substitutions(tmp_path: Path) -> None:
     assert "_e2e_substitutions.py" in subs[0].message
 
 
+def test_t023_fires_through_an_intermediate_model_subclass(tmp_path: Path) -> None:
+    """A hand-written model hides behind one hop of repo-local indirection.
+
+    Matching direct base names only let
+    ``class CustomCredential(BaseCredential)`` — where
+    ``BaseCredential(CredentialBody)`` lives in a neighbouring module — evade
+    the rule entirely, though the model is exactly the hand-written scaffold
+    T023 exists to catch.  Ancestry now resolves transitively through the same
+    resolver the harness branches use.
+    """
+    base = """\
+from application_sdk.testing.e2e.credential import CredentialBody
+
+
+class BaseCredential(CredentialBody):
+    pass
+"""
+    leaf = """\
+from pydantic import Field
+
+from .cred_base import BaseCredential
+
+
+class CustomCredential(BaseCredential):
+    name: str = Field(alias="name")
+"""
+    root = _repo(tmp_path, tests={"e2e/cred_base.py": base, "e2e/test_cred.py": leaf})
+    cred = [
+        f
+        for f in _scan(root)
+        if f.rule_id == "T023" and "CredentialBody subclass" in f.message
+    ]
+    # Both fire: the intermediate base is itself a hand-written CredentialBody
+    # subclass under tests/ (caught on its direct base, as before), and the
+    # leaf is now caught through the transitive resolution the direct-bases
+    # match missed.
+    assert {f.file for f in cred} == {
+        "tests/e2e/cred_base.py",
+        "tests/e2e/test_cred.py",
+    }
+    assert any("CustomCredential" in f.message for f in cred)
+
+
+def test_t023_fires_through_an_aliased_model_import(tmp_path: Path) -> None:
+    """`from ... import CredentialBody as Body` names the referent, not the spelling."""
+    leaf = """\
+from application_sdk.testing.e2e.credential import CredentialBody as Body
+from pydantic import Field
+
+
+class CustomCredential(Body):
+    name: str = Field(alias="name")
+"""
+    root = _repo(tmp_path, tests={"e2e/test_cred.py": leaf})
+    cred = [
+        f
+        for f in _scan(root)
+        if f.rule_id == "T023" and "CredentialBody subclass" in f.message
+    ]
+    assert len(cred) == 1
+    assert "CustomCredential" in cred[0].message
+
+
+def test_t023_ignores_an_unrelated_same_named_base(tmp_path: Path) -> None:
+    """An in-repo ``Body`` that is no generated model must not be graded as one."""
+    base = """\
+class Body:
+    pass
+"""
+    leaf = """\
+from .things import Body
+
+
+class CustomCredential(Body):
+    pass
+"""
+    root = _repo(tmp_path, tests={"e2e/things.py": base, "e2e/test_cred.py": leaf})
+    assert "T023" not in _ids(_scan(root))
+
+
 def test_t023_clean_on_canonical_generated_shape(tmp_path: Path) -> None:
     root = _repo(
         tmp_path,

@@ -367,7 +367,12 @@ def test_absent_quoting_required_column_name_is_debug_not_warning(
 def test_quoting_required_column_name_resolves_when_the_run_supplies_it(
     sql_transformer,
 ):
-    """The other half of that claim: such a name really does resolve when present."""
+    """The other half of that claim: such a name really does resolve when present.
+
+    It resolves *and* renders quoted -- unquoted, ``my-col`` is a syntax error
+    (subtraction), so the resolution gate's "is a column name" answer and the
+    renderer's quoting must agree on every shape, not just bare identifiers.
+    """
     template = {
         "columns": flatten_yaml_columns(
             {"attributes": {"tagValue": {"source_query": "my-col"}}}
@@ -379,9 +384,13 @@ def test_quoting_required_column_name_resolves_when_the_run_supplies_it(
             template, pa.Table.from_pydict({"my-col": ["v1"]}), {}
         )
 
-    assert columns == ['my-col AS "attributes.tagValue"']
+    assert columns == ['"my-col" AS "attributes.tagValue"']
     mock_logger.warning.assert_not_called()
     mock_logger.debug.assert_not_called()
+    assert _execute(
+        f"SELECT {columns[0]} FROM dataframe",
+        pa.Table.from_pydict({"my-col": ["v1"]}),
+    ) == [("v1",)]
 
 
 def test_non_string_source_query_is_dropped_with_a_warning(
@@ -1445,3 +1454,105 @@ def test_plain_column_reference_quoting_is_behaviour_neutral(
         ("n1",),
         ("n2",),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Non-bare-identifier column names (digit-prefixed, hyphenated, Unicode)
+# ---------------------------------------------------------------------------
+#
+# A resolved column reference is quoted for the expression slot whatever its
+# shape: ``_resolution_key`` matching accepts *any* string equal to an available
+# column name, and pyarrow places no grammar on names.  Gating the quoting on an
+# ASCII identifier shape left exactly the names SQL cannot parse bare -- a
+# digit-prefixed name reads as arithmetic (``2024_total`` -> ``2024 - total``),
+# a hyphenated name as subtraction, a Unicode name as a syntax error -- broken
+# at runtime on every transform of that entity type.
+
+
+@pytest.fixture
+def awkward_dataframe():
+    """A table whose column names SQL cannot parse as bare identifiers."""
+    return pa.Table.from_pydict(
+        {
+            "2024_total": [10, 20],
+            "a-b": ["h1", "h2"],
+            "café": ["u1", "u2"],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "column_name, expected_rows",
+    [
+        ("2024_total", [(10,), (20,)]),
+        ("a-b", [("h1",), ("h2",)]),
+        ("café", [("u1",), ("u2",)]),
+    ],
+)
+def test_non_bare_identifier_source_query_is_quoted(
+    sql_transformer, awkward_dataframe, column_name, expected_rows
+):
+    """A digit-prefixed, hyphenated, or Unicode column resolves and is quoted.
+
+    Unquoted, DuckDB parses ``SELECT 2024_total FROM t`` as the literal
+    expression ``2024 - total`` rather than the column -- verified live: the
+    unquoted form returns ``(2024,)`` for every row instead of the column
+    values.
+    """
+    template = {
+        "columns": flatten_yaml_columns(
+            {"attributes": {"name": {"source_query": column_name}}}
+        )
+    }
+
+    columns, _ = sql_transformer.get_sql_column_expressions(
+        template, awkward_dataframe, {}
+    )
+
+    assert columns == [f'"{column_name}" AS "attributes.name"']
+    assert _execute(f"SELECT {columns[0]} FROM dataframe", awkward_dataframe) == (
+        expected_rows
+    )
+
+
+def test_digit_prefixed_source_query_is_not_a_column_unquoted(awkward_dataframe):
+    """The premise: unquoted, a digit-prefixed name never resolves the column.
+
+    In the full rendered shape the bare form is a hard ``ParserException``
+    (``2024_total AS ...`` parses ``2024_total`` as the arithmetic expression
+    ``2024 - total``, after which ``AS`` is a syntax error); without the alias,
+    DuckDB accepts it and silently returns the literal ``2024`` for every row.
+    Either way the column value is unreachable, which is what the quoting
+    exists to prevent -- and if DuckDB's grammar ever changes here, this test
+    says so.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    with pytest.raises(duckdb.ParserException):
+        _execute(
+            'SELECT 2024_total AS "attributes.name" FROM dataframe',
+            awkward_dataframe,
+        )
+    assert _execute("SELECT 2024_total FROM dataframe", awkward_dataframe) == [
+        (2024,),
+        (2024,),
+    ]
+
+
+def test_column_name_with_embedded_quote_is_escaped(sql_transformer):
+    """A column name containing ``"`` resolves with the quote doubled.
+
+    The SQL escaping rule denotes a literal quote inside a quoted identifier by
+    doubling it (``"a""b"`` is the column ``a"b``); wrapping without escaping
+    would render a syntax error.
+    """
+    table = pa.Table.from_pydict({'a"b': [1]})
+    template = {
+        "columns": flatten_yaml_columns(
+            {"attributes": {"name": {"source_query": 'a"b'}}}
+        )
+    }
+
+    columns, _ = sql_transformer.get_sql_column_expressions(template, table, {})
+
+    assert columns == ['"a""b" AS "attributes.name"']
+    assert _execute(f"SELECT {columns[0]} FROM dataframe", table) == [(1,)]

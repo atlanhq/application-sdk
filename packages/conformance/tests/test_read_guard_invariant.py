@@ -122,6 +122,28 @@ def _exempt_lines(path: Path) -> set[int]:
     }
 
 
+#: Positional string constants that mark a decode-shaped ``read_text`` call —
+#: ``Path.read_text("utf-8")`` passes its encoding positionally, and the
+#: exemption must not clear it just because no ``encoding`` *keyword* is
+#: present.  The decode-free lookalike takes a *filename* positionally, and no
+#: real filename is an encoding name.
+_KNOWN_ENCODINGS = frozenset(
+    {
+        "ascii",
+        "latin-1",
+        "latin1",
+        "utf-8",
+        "utf8",
+        "utf-16",
+        "utf16",
+        "utf-32",
+        "utf32",
+        "cp1252",
+        "iso-8859-1",
+    }
+)
+
+
 def _is_exemptable_lookalike(node: ast.AST) -> bool:
     """Whether *node* is the decode-free lookalike the exemption exists for.
 
@@ -129,13 +151,21 @@ def _is_exemptable_lookalike(node: ast.AST) -> bool:
     positionally and returns ``None`` when absent — no decode step.  A
     ``Path.read_text`` decodes and must never be exempted, so the marker only
     honours a ``.read_text(<positional>)`` call with no ``encoding`` keyword —
-    the lookalike's signature — and refuses a keyword/decode-shaped call.
+    the lookalike's signature — and refuses a keyword/decode-shaped call.  A
+    *positional* known-encoding string (``p.read_text("utf-8")``) is equally
+    decode-shaped, so it refuses the exemption too.
     """
     return (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "read_text"
         and not any(kw.arg == "encoding" for kw in node.keywords)
+        and not any(
+            isinstance(arg, ast.Constant)
+            and isinstance(arg.value, str)
+            and arg.value.lower() in _KNOWN_ENCODINGS
+            for arg in node.args
+        )
     )
 
 
@@ -299,3 +329,40 @@ def test_exemption_refuses_a_decode_risky_read(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert _decode_blind_sites(src) == [5]
+
+
+def test_exemption_refuses_a_positional_encoding(tmp_path: Path) -> None:
+    """A positional-encoding `read_text("utf-8")` is decode-shaped too.
+
+    `Path.read_text` takes the encoding as its first positional argument, so a
+    call spelled without the `encoding` keyword decodes exactly like the
+    keyword form — the exemption matched only on the keyword's absence and
+    cleared it. Any positional known-encoding constant now refuses the marker,
+    while the lookalike's filename positional (no encoding name is a real
+    filename) still clears.
+    """
+    src = tmp_path / "abuse_positional.py"
+    src.write_text(
+        "from pathlib import Path\n"
+        "\n"
+        "def read(p: Path) -> str:\n"
+        "    try:\n"
+        '        return p.read_text("utf-8")  # read-guard: exempt\n'
+        "    except OSError:\n"
+        '        return ""\n',
+        encoding="utf-8",
+    )
+    assert _decode_blind_sites(src) == [5]
+
+    lookalike = tmp_path / "lookalike.py"
+    lookalike.write_text(
+        "import importlib.metadata\n"
+        "\n"
+        "def top_level(dist: importlib.metadata.Distribution) -> str:\n"
+        "    try:\n"
+        '        return dist.read_text("top_level.txt") or ""  # read-guard: exempt\n'
+        "    except OSError:\n"
+        '        return ""\n',
+        encoding="utf-8",
+    )
+    assert _decode_blind_sites(lookalike) == []

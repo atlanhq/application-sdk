@@ -542,9 +542,11 @@ def test_catalog_b_series_present() -> None:
     """The B-series backwards-compatibility / deprecation rules are all present.
 
     B007 is DaftOnlyDataframeApiUsage — daft-only DataFrame APIs
-    (count_rows/to_pylist/.names, DataframeType.daft) that are dead on the
-    daft-less SDK >= 3.22 runtime; third-party surfaces the generated
-    deprecated-symbol manifest cannot carry (fleet SDR sweep).
+    (count_rows/to_pylist/.names) that are dead on the daft-less SDK >= 3.22
+    runtime; third-party surfaces the generated deprecated-symbol manifest
+    cannot carry (fleet SDR sweep).  ``DataframeType.daft`` is the SDK's own
+    symbol, so it rides the generated manifest and B001 reports it — the
+    ownership split the B007 rule definition and remediation prose describe.
     """
     rules = load_catalog()
     b_ids = {r.id for r in rules if r.id.startswith("B")}

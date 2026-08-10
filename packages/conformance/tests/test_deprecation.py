@@ -948,6 +948,47 @@ def test_b007_comprehension_over_reader_frames_still_fires() -> None:
     assert [f.rule_id for f in _b007(src)] == ["B007"]
 
 
+def test_b007_pyarrow_iterable_in_a_sibling_scope_does_not_exempt() -> None:
+    """A pyarrow ``tables`` binding in one function exempts nothing in another.
+
+    The iterable-name lookup scanned every scope's bindings, so
+    ``tables = [pa.table({}) ...]`` in ``g`` cleared
+    ``[t.to_pylist() for t in tables]`` in ``f`` — where ``tables`` is an SDK
+    reader frame and the call is a real B007 violation. Bindings are collected
+    per scope precisely so generic names cannot leak exemptions across
+    functions; the lookup now walks only the comprehension's own scope chain.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def g():\n"
+        + "    tables = [pa.table({}) for _ in range(3)]\n"
+        + "    return tables\n"
+        + "\n"
+        + "def f(tables):\n"
+        + "    return [t.to_pylist() for t in tables]\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_pyarrow_iterable_in_an_enclosing_scope_still_exempts() -> None:
+    """The enclosing chain is still honoured — only sibling scopes are cut off."""
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def outer():\n"
+        + "    tables = [pa.table({}) for _ in range(3)]\n"
+        + "\n"
+        + "    def inner():\n"
+        + "        return [t.to_pylist() for t in tables]\n"
+        + "\n"
+        + "    return inner\n"
+    )
+    assert _b007(src) == []
+
+
 def test_b007_loop_over_a_pyarrow_iterable_is_exempt() -> None:
     """`for t in [pa.table({})]` binds a real Table — same shape as a comprehension.
 

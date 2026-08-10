@@ -44,10 +44,6 @@ logger = get_logger(__name__)
 
 _SQL_KEYWORD_LITERALS = frozenset({"FALSE", "TRUE", "NULL"})
 
-# A plain, unqualified SQL identifier -- the only shape safe to wrap in quotes.
-# Anything dotted, parenthesised, or otherwise expression-shaped is left alone.
-_BARE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
 # A whole value that is one double-quoted SQL identifier, interior quotes doubled
 # per the SQL escaping rule (``"a""b"`` denotes the column ``a"b``).  Anchored at
 # both ends so an *expression* that merely contains a quoted identifier
@@ -81,7 +77,17 @@ def _resolution_key(value: Any) -> Any:
 
 
 def _quote_bare_identifier(value: Any) -> Any:
-    """Quote *value* for the SELECT expression slot if it is a bare identifier.
+    """Quote *value* for the SELECT expression slot when it denotes a column.
+
+    Both call sites only pass a value that already resolved as a column *name*
+    (``source_query`` matched against the available columns, or the literal
+    branch's appended column), so every string that reaches here is an
+    identifier reference -- including names SQL cannot parse bare, such as
+    ``2024_total`` (which DuckDB reads as the expression ``2024 - total``),
+    hyphenated names, and Unicode names.  Gating quoting on an ASCII ``[A-Za-z_]``
+    shape left exactly those columns unquoted and broken, so any non-quoted
+    string is wrapped unconditionally, with interior quotes doubled per the SQL
+    escaping rule.
 
     Idempotent, and that is the point: an already-quoted value re-wrapped emits
     ``\"\"\"order\"\"\"`` -- a quoted identifier whose name is literally
@@ -89,15 +95,11 @@ def _quote_bare_identifier(value: Any) -> Any:
     \"\"order\"\" not found``.  So a quoted value passes through untouched and both
     spellings render the same SQL.
 
-    Non-identifier shapes (dotted names, function calls, multi-token
-    expressions) and non-string values are returned unchanged: quoting them
-    would either change their meaning or be a syntax error.
+    Non-string values are returned unchanged.
     """
     if not isinstance(value, str) or _is_quoted_identifier(value):
         return value
-    if _BARE_IDENTIFIER_RE.match(value):
-        return f'"{value}"'
-    return value
+    return f'"{value.replace(chr(34), chr(34) * 2)}"'
 
 
 _REMEDY_NON_STRING = (

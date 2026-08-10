@@ -176,6 +176,8 @@ def _yields_pyarrow(value: ast.expr | None) -> bool:
 
 def _iterable_element(
     iterable: ast.expr,
+    node: ast.AST,
+    scopes: _ScopeMap,
     by_scope: dict[ast.AST, dict[str, list[tuple[int, bool]]]],
 ) -> ast.expr | None:
     """A stand-in producer node when *iterable* yields pyarrow Tables.
@@ -186,6 +188,13 @@ def _iterable_element(
     alone. Recognises the two reachable shapes: a comprehension whose element
     expression is a producer call, and a name already bound to such a
     comprehension.
+
+    The name lookup resolves only within *node*'s scope and its enclosing
+    chain — never a sibling scope: a ``tables = [pa.table({}) ...]`` binding in
+    one function must not exempt ``[t.to_pylist() for t in tables]`` in a
+    different function whose ``tables`` is an SDK reader frame. Bindings are
+    collected per scope precisely so generic names cannot leak exemptions
+    across functions; scanning every scope here would re-open that hole.
     """
     if _yields_pyarrow(iterable):
         return ast.Call(
@@ -194,14 +203,16 @@ def _iterable_element(
             keywords=[],
         )
     if isinstance(iterable, ast.Name):
-        for names in by_scope.values():
-            for lineno_flag in names.get(iterable.id, []):
+        scope: ast.AST | None = scopes.scope_of(node)
+        while scope is not None:
+            for lineno_flag in by_scope.get(scope, {}).get(iterable.id, []):
                 if lineno_flag[1]:
                     return ast.Call(
                         func=ast.Attribute(value=ast.Name(id="pa"), attr="table"),
                         args=[],
                         keywords=[],
                     )
+            scope = scopes.parent_of(scope)
         return None
     return None
 
@@ -284,10 +295,16 @@ def _pyarrow_bindings_by_scope(
     # assignment later in the walk order, and `ast.walk` is breadth-first.
     for node in deferred:
         if isinstance(node, (ast.For, ast.AsyncFor)):
-            record(node, node.target, _iterable_element(node.iter, by_scope))
+            record(
+                node, node.target, _iterable_element(node.iter, node, scopes, by_scope)
+            )
         else:
             for gen in node.generators:
-                record(node, gen.target, _iterable_element(gen.iter, by_scope))
+                record(
+                    node,
+                    gen.target,
+                    _iterable_element(gen.iter, node, scopes, by_scope),
+                )
 
     return by_scope
 

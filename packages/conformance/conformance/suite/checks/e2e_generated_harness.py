@@ -370,6 +370,60 @@ def _is_harness_class(
     return walk(info)
 
 
+def _generated_model_base_reached(
+    info: _ClassInfo,
+    index: _ClassIndex,
+    by_name: _NameIndex,
+    aliases: _AliasIndex | None = None,
+) -> str | None:
+    """The generated-model base *info*'s class transitively inherits, if any.
+
+    The hand-written model the rule exists to catch hides behind one hop of
+    indirection as easily as it declares the base directly — an intermediate
+    ``class BaseCredential(CredentialBody)`` defined elsewhere in the repo, or
+    an aliased import (``from ... import CredentialBody as Body``) — so
+    matching direct base names alone under-reports exactly the shape the rule
+    targets.  This walks the same alias-aware transitive resolver the harness
+    branches use and returns the matched model base for the message.
+
+    Unlike the harness walk, ambiguity does not force a verdict: an ambiguous
+    model-base name is an ordinary class that merely shares a name with a
+    generated model, not this rule's business — and ``CredentialBody`` /
+    ``MustacheSubstitutions`` are SDK classes no repo index can disambiguate,
+    so the walk simply continues through resolvable bases.
+    """
+    seen: set[tuple[str, str]] = set()
+
+    def walk(current: _ClassInfo) -> str | None:
+        key = (current.file, current.node.name)
+        if key in seen:
+            return None
+        seen.add(key)
+        direct = current.bases & _GENERATED_MODEL_BASES.keys()
+        if direct:
+            return sorted(direct)[0]
+        for base in current.bases:
+            # An aliased import of a generated model base
+            # (``from ... import CredentialBody as Body``) never enters the
+            # class index — CredentialBody is an SDK class — so resolve the
+            # spelling to its referent before walking the index.
+            if aliases is not None:
+                imported = aliases.get(current.file, {}).get(base)
+                if imported in _GENERATED_MODEL_BASES:
+                    return imported
+            resolved, ambiguous = _resolve_base(
+                base, current.file, index, by_name, aliases
+            )
+            if ambiguous or resolved is None:
+                continue
+            reached = walk(resolved)
+            if reached is not None:
+                return reached
+        return None
+
+    return walk(info)
+
+
 def _declares_mode(
     info: _ClassInfo,
     index: _ClassIndex,
@@ -520,16 +574,18 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             # bare-name lookup that could resolve to a different file's class.
             info = _ClassInfo(rel, node)
             assignments = info.assignments
-            bases = info.bases
 
-            # T023(b/c) — a hand-written generated-model subclass.
-            for base in sorted(bases & _GENERATED_MODEL_BASES.keys()):
+            # T023(b/c) — a hand-written generated-model subclass, resolved
+            # transitively and alias-aware so an intermediate repo base or an
+            # aliased import of the generated model cannot hide the match.
+            model_base = _generated_model_base_reached(info, index, by_name, aliases)
+            if model_base is not None:
                 findings.append(
                     make_finding(
                         filename=rel,
                         rule_id=RULE_T023,
                         node=node,
-                        message=_t023_model_message(node.name, base),
+                        message=_t023_model_message(node.name, model_base),
                         directives=directives,
                     )
                 )
