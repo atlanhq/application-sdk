@@ -2528,6 +2528,51 @@ class TestManifestEndpoint:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
             svc_module.DEPLOYMENT_NAME = original_dep
 
+    def test_manifest_disk_substitutes_unresolved_app_name_placeholder(
+        self, tmp_path: Path
+    ) -> None:
+        """A hand-authored/toolkit-miss manifest that left a literal '{app_name}'
+        token is defensively resolved, not served verbatim. A leftover token
+        reaching an AE write freezes into task_queue = "atlan-{app_name}-<deploy>",
+        a queue no worker polls (CONNECT-183: hung dbt:process to its 24h
+        heartbeat backstop)."""
+        from application_sdk.handler import service as svc_module
+
+        manifest_data = {
+            "execution_mode": "dag",
+            "dag": {
+                "extract": {
+                    "activity_name": "execute_workflow",
+                    "activity_display_name": "Extract",
+                    "inputs": {
+                        "workflow_type": "extraction",
+                        "task_queue": "atlan-{app_name}-{deployment_name}",
+                    },
+                }
+            },
+        }
+        (tmp_path / "manifest.json").write_text(__import__("json").dumps(manifest_data))
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        original_dep = svc_module.DEPLOYMENT_NAME
+        original_app = svc_module.APPLICATION_NAME
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        svc_module.DEPLOYMENT_NAME = "prod-deploy"
+        svc_module.APPLICATION_NAME = "dbt"
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            body = response.json()
+            assert (
+                body["dag"]["extract"]["inputs"]["task_queue"]
+                == "atlan-dbt-prod-deploy"
+            )
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+            svc_module.DEPLOYMENT_NAME = original_dep
+            svc_module.APPLICATION_NAME = original_app
+
     def test_manifest_programmatic_takes_priority(self, tmp_path: Path) -> None:
         """When both programmatic and disk manifest exist, programmatic wins."""
         from application_sdk.handler import service as svc_module
@@ -3370,6 +3415,36 @@ class TestEntrypointManifestResolution:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
             svc_module.DEPLOYMENT_NAME = original_dep
+
+    def test_manifest_substitutes_unresolved_app_name_for_entrypoint(
+        self, tmp_path: Path
+    ) -> None:
+        """Entrypoint manifest with a leftover literal '{app_name}' token is
+        defensively resolved, matching the root-manifest behavior."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "ep1"
+        ep_dir.mkdir(parents=True)
+        manifest_data = {"task_queue": "atlan-{app_name}-{deployment_name}"}
+        (ep_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        original_dep = svc_module.DEPLOYMENT_NAME
+        original_app = svc_module.APPLICATION_NAME
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        svc_module.DEPLOYMENT_NAME = "prod-deploy"
+        svc_module.APPLICATION_NAME = "dbt"
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=ep1")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["task_queue"] == "atlan-dbt-prod-deploy"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+            svc_module.DEPLOYMENT_NAME = original_dep
+            svc_module.APPLICATION_NAME = original_app
 
     def test_valid_but_unknown_entrypoint_returns_404(self, tmp_path: Path) -> None:
         """Well-formed name with no matching subdir on disk returns 404."""

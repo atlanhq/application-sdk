@@ -54,6 +54,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 from temporalio.client import WorkflowFailureError
 
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.errors import AppError
@@ -2015,9 +2016,18 @@ def _register_workflow_routes(
                     detail=f"No manifest found for entrypoint {entrypoint_name!r}",
                 )
         raw = ep_manifest.read_bytes()
-        # app_name is baked into the generated manifest by the contract toolkit
-        # (from the contract `name`); only the per-deployment token is substituted here.
+        # app_name is normally baked into the generated manifest by the contract
+        # toolkit (from the contract `name`) — this is a defensive fallback for a
+        # contract-toolkit miss or a hand-authored template that left the token
+        # unresolved. A literal "{app_name}" reaching a downstream AE write freezes
+        # into task_queue = "atlan-{app_name}-<deployment>", a queue no worker
+        # polls (CONNECT-183: hung dbt:process to its 24h heartbeat backstop).
+        # APPLICATION_NAME is the bare name (no "atlan-" prefix) — the same
+        # convention _derive_task_queue() uses to build "atlan-{app}-{deployment}"
+        # in main.py; substituting a pre-prefixed value here would double it
+        # (the exact bug Heracles shipped once, DISTR-834).
         raw = raw.replace(b"{deployment_name}", deployment)
+        raw = raw.replace(b"{app_name}", (APPLICATION_NAME or "default").encode())
 
         # Dynamic-manifest hook: if the app defines
         # `app.<entrypoint_snake>.core.compute_manifest`, hand the
@@ -2099,9 +2109,10 @@ def _register_workflow_routes(
             # substitution. No parse/reserialize: the file is already valid JSON,
             # validated at build time by the contract tooling.
             raw = manifest_path.read_bytes()
-            # app_name is baked into the manifest by the toolkit; only the
-            # per-deployment token is substituted here (see note above).
+            # app_name is normally baked into the manifest by the toolkit; this is
+            # a defensive fallback for an unresolved token (see note above).
             raw = raw.replace(b"{deployment_name}", deployment)
+            raw = raw.replace(b"{app_name}", (APPLICATION_NAME or "default").encode())
             return Response(content=raw, media_type="application/json")
 
         # Default-entrypoint fallback (aligns with PR #1965 semantics used
