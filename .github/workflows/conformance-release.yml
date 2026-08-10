@@ -6,6 +6,10 @@ name: Release Conformance Package
 # the last conformance-v* tag), bumps pyproject.toml + __init__.py, prepends a
 # new entry to packages/conformance/CHANGELOG.md, and creates or updates the
 # bump-version-conformance PR labeled release:conformance.
+# The script excludes lock files from that walk (see PATHSPEC), so a Renovate
+# lockFileMaintenance merge still fires this workflow — the paths filter below
+# can't express the exclusion — but the script no-ops with skip=true instead of
+# minting a release whose only content is lock churn.
 # Merging that PR triggers Publish Conformance Package (conformance-publish.yml),
 # which handles the PyPI publish and tag.
 
