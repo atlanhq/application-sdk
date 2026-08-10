@@ -2145,9 +2145,18 @@ def _register_workflow_routes(
 
         # No entrypoint param: single-entrypoint path
         if manifest is not None:
-            return Response(
-                content=manifest.model_dump_json(), media_type="application/json"
+            # Same reconciliation as the disk branches. A programmatic
+            # AppManifest is the one shape with no contract-toolkit bake behind
+            # it — the DAG was hand-built in Python — so every argument for
+            # "the toolkit already resolved this" is inapplicable here, and it
+            # is the branch most likely to carry an unresolved template rather
+            # than the least. Serving it verbatim also left this route with two
+            # behaviours across three manifest sources, which is the drift this
+            # module exists to remove (FND-195).
+            raw = _resolve_manifest_placeholders(
+                manifest.model_dump_json().encode(), "programmatic manifest"
             )
+            return Response(content=raw, media_type="application/json")
         manifest_path = CONTRACT_GENERATED_DIR / "manifest.json"
         if manifest_path.exists():
             # Disk: contract-generated file — serve raw bytes with placeholder

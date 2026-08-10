@@ -39,6 +39,32 @@ entirely legitimate and reproduces the original hang. This module reads
 ``os.environ`` directly and reports "no name" as ``None`` so callers can fail or
 leave the literal token visible; a literal ``{app_name}`` in a served manifest is
 greppable and diagnosable in one step.
+
+**Why a runtime fill exists at all, given the toolkit bakes these values.** This
+looks like duplicated responsibility and is worth not re-litigating. The original
+runtime substitution was proposed as #2270 and never merged; #2271 superseded it
+by moving the fix into the toolkit (``App.pkl`` bakes ``app_name`` from the
+contract ``name``), and #2478 extended that bake to the legacy ``NativeApp.pkl``
+template. Those bakes are correct and this module does not second-guess them —
+:func:`resolve_manifest_tokens` treats a baked name as the expected case.
+
+What generation-time baking cannot reach, and what this module is for:
+
+* **Adoption lag.** #2478's own rollout note is explicit that it does not touch
+  already-committed ``manifest.json`` files — apps must bump the toolkit and
+  regenerate. Until then their manifests ship a literal token, and #2271 removed
+  the only fallback. #2271's own text anticipated this ("until they migrate, the
+  runtime fill remains their path"); that fill never actually shipped, because
+  #2270 was never merged.
+* **Non-toolkit write paths.** Heracles, native-migration-app, and the
+  install-time ``manifest_upgrade`` / ``schedule_reconciler`` in
+  ``atlan-local-marketplace-app`` (CONNECT-191) *mutate or re-write* an AE DAG
+  outside the toolkit's generation step, so the bake's guarantee never applied
+  to them. Each hand-patched this gap independently; one of them shipped a
+  double prefix (DISTR-834) by pre-prefixing an already-prefixed value.
+
+So this is a reconciliation point for writers the toolkit does not own, not a
+second mechanism competing with it. Retire it when those writers are retired.
 """
 
 from __future__ import annotations

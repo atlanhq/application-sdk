@@ -2602,6 +2602,90 @@ class TestManifestEndpoint:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
 
+    def test_manifest_programmatic_queue_matches_the_configured_worker_queue(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A programmatic ``AppManifest`` gets the same reconciliation as the disk
+        branches — it is the shape with no toolkit bake behind it at all, so it is
+        the *most* likely to carry an unresolved template, not the least.
+
+        Asserted as equality with the configured worker queue rather than a
+        hard-coded string, so the programmatic path cannot drift from the disk
+        paths the way it did before FND-195.
+        """
+        from application_sdk.handler.manifest import (
+            AppManifest,
+            DagNode,
+            ExecuteWorkflowInputs,
+        )
+
+        worker_queue = "atlan-dbt-v3-prod"
+        manifest = AppManifest(
+            execution_mode="dag",
+            dag={
+                "extract": DagNode(
+                    activity_name="execute_workflow",
+                    activity_display_name="Extract",
+                    app_name="{app_name}",
+                    inputs=ExecuteWorkflowInputs(
+                        workflow_type="extraction",
+                        # Un-baked template: the toolkit never ran on this one.
+                        task_queue="atlan-{app_name}-{deployment_name}",
+                    ),
+                ),
+            },
+        )
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "dbt-v3")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        app = create_app_handler_service(
+            _TestHandler(),
+            app_name="dbt-v3",
+            task_queue=worker_queue,
+            manifest=manifest,
+        )
+        response = TestClient(app).get("/workflows/v1/manifest")
+        assert response.status_code == 200
+        node = response.json()["dag"]["extract"]
+        assert node["inputs"]["task_queue"] == worker_queue
+        # Residual {app_name} is per-node log identity (HYP-1954), filled too.
+        assert node["app_name"] == "dbt-v3"
+
+    def test_manifest_programmatic_unresolvable_app_name_keeps_the_token_visible(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no app name available the programmatic path must not manufacture
+        one either — same contract as the disk branches."""
+        from application_sdk.handler.manifest import (
+            AppManifest,
+            DagNode,
+            ExecuteWorkflowInputs,
+        )
+
+        manifest = AppManifest(
+            execution_mode="dag",
+            dag={
+                "extract": DagNode(
+                    activity_name="execute_workflow",
+                    activity_display_name="Extract",
+                    app_name="{app_name}",
+                    inputs=ExecuteWorkflowInputs(
+                        workflow_type="extraction",
+                        task_queue="atlan-{app_name}-{deployment_name}",
+                    ),
+                ),
+            },
+        )
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        app = create_app_handler_service(_TestHandler(), app_name="", manifest=manifest)
+        response = TestClient(app).get("/workflows/v1/manifest")
+        assert response.status_code == 200
+        served = response.json()["dag"]["extract"]["inputs"]["task_queue"]
+        assert "{app_name}" in served
+        assert "default" not in served
+
     def test_manifest_programmatic_takes_priority(self, tmp_path: Path) -> None:
         """When both programmatic and disk manifest exist, programmatic wins."""
         from application_sdk.handler import service as svc_module
