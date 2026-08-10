@@ -988,7 +988,15 @@ def _marketplace_entrypoint_contract(entrypoint_name: str) -> Any | None:
         entrypoint_module_segment,
     )
 
-    if not (CONTRACT_GENERATED_DIR / entrypoint_name / "manifest.json").is_file():
+    # The route already validates the name, but this helper must be safe on
+    # its own: the name reaches both a filesystem path and an import path.
+    # The regex forbids path separators and dots; the containment check makes
+    # the no-traversal property locally provable (py/path-injection).
+    if not _ENTRYPOINT_NAME_RE.match(entrypoint_name):
+        return None
+    generated_root = CONTRACT_GENERATED_DIR.resolve()
+    ep_manifest = (generated_root / entrypoint_name / "manifest.json").resolve()
+    if not ep_manifest.is_relative_to(generated_root) or not ep_manifest.is_file():
         return None
     ep_module = entrypoint_module_segment(entrypoint_name)
     for module_path in (
