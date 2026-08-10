@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -563,3 +564,153 @@ class TestUpdateVersionPy:
         monkeypatch.setattr(conformance_release, "VERSION_PY", str(p))
         with pytest.raises(SystemExit):
             conformance_release.update_version_py("1.0.0", "2.0.0")
+
+
+# ---------------------------------------------------------------------------
+# PATHSPEC — integration via a real temp git repo
+#
+# The lock-file exclusion depends on git pathspec magic (`:(exclude,glob)`), so
+# it can only be verified against real git — a stubbed _run would just assert
+# that we pass the strings we wrote.
+# ---------------------------------------------------------------------------
+
+BASE_TAG = "conformance-v0.1.0"
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.check_call(
+        ["git", *args],
+        cwd=repo,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _commit(repo: Path, subject: str, files: dict[str, str]) -> None:
+    for rel, content in files.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", subject)
+
+
+@pytest.fixture
+def git_repo(tmp_path: Path) -> Path:
+    """A temp repo with commits after conformance-v0.1.0 covering every case.
+
+    Included (real package content):
+      - feat(conformance): add O007 rule       — rule source
+      - chore(deps): bump ruff                 — package pyproject.toml
+      - fix(conformance): tighten O007         — rule source *and* uv.lock (mixed)
+
+    Excluded (noise):
+      - chore(deps): lock file maintenance     — packages/conformance/uv.lock only
+      - chore(deps): refresh npm lock          — nested package-lock.json only
+      - chore(deps): root lock                 — outside packages/conformance
+    """
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    _git(tmp_path, "config", "commit.gpgsign", "false")
+
+    _commit(tmp_path, "chore: initial commit", {"README.md": "init\n"})
+    _git(tmp_path, "tag", BASE_TAG)
+
+    _commit(
+        tmp_path,
+        "feat(conformance): add O007 rule",
+        {"packages/conformance/conformance/rules/o007.py": "rule\n"},
+    )
+    _commit(
+        tmp_path,
+        "chore(deps): lock file maintenance",
+        {"packages/conformance/uv.lock": "lock-1\n"},
+    )
+    _commit(
+        tmp_path,
+        "chore(deps): refresh npm lock",
+        {"packages/conformance/conformance/package-lock.json": "{}\n"},
+    )
+    _commit(
+        tmp_path,
+        "chore(deps): root lock",
+        {"uv.lock": "root-lock\n"},
+    )
+    _commit(
+        tmp_path,
+        "chore(deps): bump ruff",
+        {"packages/conformance/pyproject.toml": 'version = "0.1.0"\n'},
+    )
+    _commit(
+        tmp_path,
+        "fix(conformance): tighten O007",
+        {
+            "packages/conformance/conformance/rules/o007.py": "rule-2\n",
+            "packages/conformance/uv.lock": "lock-2\n",
+        },
+    )
+    return tmp_path
+
+
+class TestPathspecExclusions:
+    def test_lock_only_commits_are_excluded(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(git_repo)
+        subjects, _bodies = conformance_release.commits_since_tag(BASE_TAG)
+        assert "lock file maintenance" not in subjects
+        assert "refresh npm lock" not in subjects
+        assert "root lock" not in subjects
+
+    def test_package_content_commits_are_kept(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(git_repo)
+        subjects, _bodies = conformance_release.commits_since_tag(BASE_TAG)
+        assert "feat(conformance): add O007 rule" in subjects
+        assert "chore(deps): bump ruff" in subjects
+
+    def test_mixed_commit_touching_a_lock_file_is_kept(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A commit that changes real files *and* a lock file must still appear."""
+        monkeypatch.chdir(git_repo)
+        subjects, _bodies = conformance_release.commits_since_tag(BASE_TAG)
+        assert "fix(conformance): tighten O007" in subjects
+
+    def test_get_commits_applies_the_same_exclusions(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The changelog walk and the bump walk must agree on what counts."""
+        monkeypatch.chdir(git_repo)
+        subjects = [
+            subject
+            for _sha, subject, _body in conformance_release.get_commits(BASE_TAG)
+        ]
+        assert subjects == [
+            "fix(conformance): tighten O007",
+            "chore(deps): bump ruff",
+            "feat(conformance): add O007 rule",
+        ]
+
+    def test_lock_only_history_yields_no_release(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pure lock churn must not count as an unreleased commit (skip=true)."""
+        _git(tmp_path, "init")
+        _git(tmp_path, "config", "user.email", "test@example.com")
+        _git(tmp_path, "config", "user.name", "Test")
+        _git(tmp_path, "config", "commit.gpgsign", "false")
+        _commit(tmp_path, "chore: initial commit", {"README.md": "init\n"})
+        _git(tmp_path, "tag", BASE_TAG)
+        _commit(
+            tmp_path,
+            "chore(deps): lock file maintenance",
+            {"packages/conformance/uv.lock": "lock\n"},
+        )
+
+        monkeypatch.chdir(tmp_path)
+        subjects, bodies = conformance_release.commits_since_tag(BASE_TAG)
+        assert not subjects.strip()
+        assert not bodies.strip()
