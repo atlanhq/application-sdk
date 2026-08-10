@@ -44,7 +44,7 @@ def _normalize_all_null_string_columns(table: "pa.Table") -> "pa.Table":
     """
     import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
 
-    if not isinstance(table, pa.Table) or table.num_rows == 0:
+    if not isinstance(table, pa.Table):
         return table
 
     fields = []
@@ -55,7 +55,9 @@ def _normalize_all_null_string_columns(table: "pa.Table") -> "pa.Table":
         if (
             pa.types.is_string(field.type) or pa.types.is_large_string(field.type)
         ) and column.null_count == table.num_rows:
-            fields.append(pa.field(field.name, pa.null()))
+            # null_count == num_rows already holds for an empty (0-row) string
+            # column, so legacy 0-row shards normalize here as well.
+            fields.append(field.with_type(pa.null()))
             columns.append(pa.chunked_array([pa.nulls(table.num_rows, type=pa.null())]))
             changed = True
         else:
@@ -64,7 +66,9 @@ def _normalize_all_null_string_columns(table: "pa.Table") -> "pa.Table":
 
     if not changed:
         return table
-    return pa.Table.from_arrays(columns, schema=pa.schema(fields))
+    return pa.Table.from_arrays(
+        columns, schema=pa.schema(fields, metadata=table.schema.metadata)
+    )
 
 
 class ParquetFileReader(Reader):
