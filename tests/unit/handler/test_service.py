@@ -7149,10 +7149,10 @@ class TestBundleMarketplaceEntrypoints:
     """Bundle ("uber") apps expose *marketplace* entry points only as generated
     contract dirs (``app/generated/<ep>/manifest.json``); their registry
     entrypoints are the DAG-node workflows (e.g. ``export-post``). The
-    input-contract route and the bare-manifest fallback must resolve the
-    marketplace names from disk instead of 404-ing (production RCA: /v1/app
-    creation failed for every bundle entry point with
-    'No input contract for entrypoint' → 'No manifest available')."""
+    input-contract route resolves the marketplace names from disk instead of
+    404-ing (production RCA: /v1/app creation failed for every bundle entry
+    point with 'No input contract for entrypoint'). Bare /manifest stays 404
+    by design until the declarative resolver (FND-180) can pick correctly."""
 
     def setup_method(self) -> None:
         from application_sdk.app.registry import AppRegistry, TaskRegistry
