@@ -66,6 +66,15 @@ jobs:
     name: Update version and changelog
     runs-on: ubuntu-latest
 
+    env:
+      # Referenced from step-level `if:` guards below, which cannot read
+      # `secrets` directly. Deliberately ORG_PAT_GITHUB and never the fleet App
+      # token minted below: that token is scoped to `repositories:
+      # <caller repo>`, so it cannot clone a *different* private atlanhq repo
+      # (e.g. a query-redaction dep living in another repo) and would fail the
+      # same way the unauthenticated runner does today.
+      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+
     steps:
       - name: Mint fleet App token
         # No workflow auto-merges the bump PR this opens (GitHub blocks
@@ -106,17 +115,30 @@ jobs:
           CURRENT=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
           echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
 
+      # The flag promises a token, but `secrets: inherit` resolves an unset org
+      # secret to an empty string rather than failing — so without this guard
+      # the rewrite below installs a redirect of every atlanhq URL to an
+      # *unauthenticated* token URL, and the job dies far from the cause.
+      # Condition stays in `if:`, never in the shell (docs/standards/ci.md).
+      - name: Require ORG_PAT_GITHUB when private_git_auth is set
+        if: inputs.private_git_auth && env.GIT_TOKEN == ''
+        run: |
+          echo "::error::private_git_auth is true but ORG_PAT_GITHUB is unset"
+          exit 1
+
       # `uv lock` (in "Bump version" below) re-resolves the full dependency
       # graph after the version bump, which for a private-org git source
-      # (e.g. query-redaction in atlan-query-intelligence-app) requires cloning
-      # that repo. The default checkout has no auth for other atlanhq repos, so
-      # rewrite atlanhq remotes to token auth first. ORG_PAT_GITHUB (not the
-      # repo-scoped fleet App token minted above) is used because the dependency
-      # lives in a *different* repo. Mirrors build-and-publish-app.yaml.
+      # requires cloning that repo. The default checkout has no auth for other
+      # atlanhq repos, so rewrite atlanhq remotes to token auth first.
+      # ORG_PAT_GITHUB (not the repo-scoped fleet App token minted above) is
+      # used because the dependency lives in a *different* repo. Mirrors
+      # build-and-publish-app.yaml.
+      #
+      # Torn down again after the changelog step, before the push: the checkout
+      # above authenticates via git's `extraheader`, and leaving a userinfo
+      # rewrite in place would hand the push a second, different credential.
       - name: Configure git auth for private dependencies
-        if: ${{ inputs.private_git_auth }}
-        env:
-          GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        if: inputs.private_git_auth && env.GIT_TOKEN != ''
         run: |
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
@@ -136,6 +158,12 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: python3 .sdk-scripts/.github/scripts/update_changelog.py "${{ steps.versions.outputs.current }}" "${{ steps.bump.outputs.new }}"
+
+      # Restore the pristine push path — see the rewrite step above. Runs on the
+      # same guard so it is a no-op for every caller that did not opt in.
+      - name: Drop private-dependency git rewrite before push
+        if: inputs.private_git_auth && env.GIT_TOKEN != ''
+        run: git config --global --unset-all url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf
 
       - name: Commit and open PR
         env:
