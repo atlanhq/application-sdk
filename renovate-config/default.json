@@ -48,7 +48,7 @@
       "enabled": false
     },
     {
-      "description": "app-contract-toolkit (Pkl): minor+patch in one PR; auto-merge on green. Matched by the regex customManager below. postUpgradeTasks re-resolves contract/PklProject.deps.json and regenerates app/generated/** (+ atlan.yaml/app.yaml) in-branch via the shared renovate-pkl-sync driver, so the bump lands as a self-contained PR with no follow-up glue workflow. Runs ONLY under self-hosted Renovate: postUpgradeTasks commands are gated by the allowedCommands admin allowlist (set in application-sdk's central renovate workflow), so this block is an inert no-op under the Mend-hosted app. The driver is installed as a bare PATH command by that workflow (Renovate does NOT shell-expand the command, so it must not contain ${VARS}); --no-commit leaves the fileFilters commit to Renovate.",
+      "description": "app-contract-toolkit (Pkl): minor+patch in one PR; auto-merge on green. Matched by the regex customManager below. postUpgradeTasks re-resolves contract/PklProject.deps.json and regenerates app/generated/** (+ atlan.yaml/app.yaml) in-branch via the shared renovate-pkl-sync driver, so the bump lands as a self-contained PR with no follow-up glue workflow. Runs ONLY under self-hosted Renovate: postUpgradeTasks commands are gated by the allowedCommands admin allowlist (set in application-sdk's central renovate workflow), so this block is an inert no-op under the Mend-hosted app. The driver is installed as a bare PATH command by that workflow (Renovate does NOT shell-expand the command, so it must not contain ${VARS}); --no-commit leaves the fileFilters commit to Renovate. platformAutomerge is deliberately FALSE here: GitHub's native auto-merge only waits for checks that branch protection marks required, and fleet app repos have no branch protection at all (`GET /branches/main/protection` returns 404), so native auto-merge merges on approval alone no matter how many checks are red. Renovate's own docs make this a precondition — 'You must select at least one status check in the Require status checks to pass before merging section of your branch protection rules on GitHub, if you match all three conditions: automerge=true, platformAutomerge=true'. That precondition is unmet fleet-wide. With platformAutomerge false, Renovate performs the merge itself and 'will not automerge until it sees passing status checks / check runs for the branch', which covers the freshness check run and the renovate/artifacts status — the two signals that went red, and were merged over, when a stale-lockfile bump reached main and later blocked a release publish. Re-enable only once branch protection with required checks exists.",
       "matchManagers": [
         "custom.regex"
       ],
@@ -59,7 +59,7 @@
       "groupName": "app-contract-toolkit",
       "automerge": true,
       "automergeType": "pr",
-      "platformAutomerge": true,
+      "platformAutomerge": false,
       "addLabels": [
         "contract-toolkit-update"
       ],
