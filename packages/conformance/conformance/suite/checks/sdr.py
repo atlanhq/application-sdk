@@ -1221,6 +1221,29 @@ def _check_p039(manifests: list[Path], root: Path) -> list[Finding]:
 _PREFLIGHT_GATE_MODE_ATTR = "preflight_gate_mode"
 
 
+def _is_env_lookup_call(node: ast.Call) -> bool:
+    """Whether *node* calls a known environment-variable lookup.
+
+    Matches ``os.environ.get(...)``, ``os.getenv(...)``, and
+    ``os.environ.setdefault(...)`` — the shapes through which a deployment can
+    override the gate mode, per the rule's documentation.  Anything else
+    (``resolve_gate(...)``, ``config.get(...)``, …) returns a value this check
+    cannot see, so its arguments are not evidence of the runtime mode.
+    """
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        if func.attr == "getenv" and isinstance(func.value, ast.Name):
+            return func.value.id == "os"
+        if (
+            func.attr in {"get", "setdefault"}
+            and isinstance(func.value, ast.Attribute)
+            and func.value.attr == "environ"
+            and isinstance(func.value.value, ast.Name)
+        ):
+            return func.value.value.id == "os"
+    return False
+
+
 def _is_unconditional_hard(
     value: ast.AST, constants: dict[str, object] | None = None
 ) -> bool:
@@ -1245,6 +1268,12 @@ def _is_unconditional_hard(
     if isinstance(value, ast.Call):
         # An env-var override: `os.environ.get("ATLAN_PREFLIGHT_GATE_MODE",
         # "hard")` is hard on every deployment that does not set the var.
+        # Only the known env-lookup callees are read this way — for any other
+        # call the returned value is opaque to a static check, so a constant
+        # argument (a helper's `default="hard"`, say) proves nothing about the
+        # mode the app actually runs with.
+        if not _is_env_lookup_call(value):
+            return False
         return any(
             _is_unconditional_hard(arg, constants)
             for arg in [*value.args[1:], *(kw.value for kw in value.keywords)]

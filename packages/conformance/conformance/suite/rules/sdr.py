@@ -534,7 +534,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "  clothing);\n"
             '* ``os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", "hard")`` and\n'
             '  ``os.environ.get("ATLAN_PREFLIGHT_GATE_MODE") or "hard"`` — hard on\n'
-            "  every deployment that leaves the variable unset;\n"
+            "  every deployment that leaves the variable unset.  Only the known\n"
+            "  env-lookup callees (``os.environ.get`` / ``os.getenv`` /\n"
+            "  ``os.environ.setdefault``) have their default read this way; an\n"
+            "  arbitrary helper call (``resolve_gate(env, default='hard')``) is\n"
+            "  opaque to a static check — its constant default says nothing about\n"
+            "  the value it returns, so it is *not* flagged;\n"
             '* one hop of constant indirection (``MODE = "hard"`` /\n'
             "  ``preflight_gate_mode = MODE``), at module level **or** in the\n"
             "  same class body — ``preflight_gate_mode`` is conventionally a\n"

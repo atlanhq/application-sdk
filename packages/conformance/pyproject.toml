@@ -31,7 +31,10 @@ dependencies = [
     # D010 evaluates PEP 508 markers on uv.lock edges. Without this the
     # import silently falls back to "every marker contributes", which
     # reinstates the bug the marker check exists to fix, undetectably.
-    "packaging>=24.0,<26.0",
+    # Uncapped above: Marker(text).evaluate() is stable across packaging 26.x,
+    # and capping here downgrades the shared repo environment for every
+    # consumer.
+    "packaging>=24.0",
 ]
 
 [project.optional-dependencies]

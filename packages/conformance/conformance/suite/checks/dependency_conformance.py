@@ -1099,10 +1099,12 @@ def _marker_can_hold(marker: object) -> bool:
     scan host's Python differs from the app's declared target — the mirror image
     of the bug this function exists to fix.
 
-    ``packaging`` is not a declared dependency of this package (it is
-    deliberately dependency-light), so when it is unavailable — or the marker
-    does not parse — the edge is treated as contributing, matching the prior
-    behaviour rather than inventing a false positive.
+    ``packaging`` is a declared dependency of this package; the defensive
+    ``ImportError`` fallback remains so that a hand-run copy of the suite (or a
+    broken environment) degrades to the prior "every marker contributes"
+    behaviour rather than crashing the scan — and when the marker does not
+    parse the edge is likewise treated as contributing rather than inventing a
+    false positive.
     """
     if marker is None:
         return True

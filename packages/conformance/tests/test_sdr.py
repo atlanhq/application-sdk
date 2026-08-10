@@ -1687,6 +1687,34 @@ def test_p041_silent_on_or_default_soft(tmp_path: Path) -> None:
     assert not any(f.rule_id == "P041" for f in _run(tmp_path))
 
 
+def test_p041_silent_on_helper_call_with_hard_default(tmp_path: Path) -> None:
+    """An arbitrary helper call is opaque — its `default="hard"` proves nothing.
+
+    Only the documented env-lookup callees (`os.environ.get` / `os.getenv`)
+    have their default read as the deployment mode; for any other callable the
+    returned value is invisible to a static check, so a constant keyword must
+    not fire the rule.
+    """
+    cases = {
+        "helper_kw_default": (
+            "class Connector:\n"
+            "    preflight_gate_mode = resolve_gate(env_mode, default='hard')\n"
+        ),
+        "helper_positional_default": (
+            "class Connector:\n"
+            "    preflight_gate_mode = resolve_gate(env_mode, 'hard')\n"
+        ),
+        "config_getter": (
+            "class Connector:\n"
+            "    preflight_gate_mode = self.config.get('gate_mode', 'hard')\n"
+        ),
+    }
+    for label, src in cases.items():
+        root = tmp_path / label
+        _write(root, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+        assert not any(f.rule_id == "P041" for f in _run(root)), label
+
+
 def test_p030_compound_upload_names_still_need_a_store(tmp_path: Path) -> None:
     """`upload` as one token of a compound name proves nothing on its own.
 

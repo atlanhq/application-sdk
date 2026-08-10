@@ -242,7 +242,7 @@ opentelemetry-util-http==0.62b1
     #   opentelemetry-instrumentation-fastapi
 orjson==3.11.9
     # via atlan-application-sdk
-packaging==25.0
+packaging==26.3
     # via
     #   atlan-application-sdk-conformance
     #   lazy-loader
