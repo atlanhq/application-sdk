@@ -216,7 +216,12 @@ def head_ref(repo: str, run_id: int, gh=run_gh) -> tuple[str, str]:
         payload = json.loads(out or "{}")
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"unparseable gh run view payload for run {run_id}") from exc
-    return payload.get("headSha") or "", payload.get("headBranch") or ""
+    sha, branch = payload.get("headSha") or "", payload.get("headBranch") or ""
+    if not sha or not branch:
+        raise RuntimeError(
+            f"gh run view returned blank headSha/headBranch for run {run_id}"
+        )
+    return sha, branch
 
 
 def main(argv: list[str] | None = None, gh=run_gh) -> int:

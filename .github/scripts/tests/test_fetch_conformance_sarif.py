@@ -313,6 +313,31 @@ def test_failed_run_view_aborts_instead_of_publishing_blank_provenance(
     assert "branch" not in out
 
 
+@pytest.mark.parametrize(
+    "head",
+    [
+        {"headSha": None, "headBranch": None},  # null fields
+        {"headSha": "", "headBranch": ""},  # empty strings
+        {"headSha": "0be829be"},  # headBranch missing entirely
+    ],
+)
+def test_blank_run_view_fields_abort_instead_of_publishing_blank_provenance(
+    head, tmp_path, monkeypatch
+):
+    """Regression: a ``gh run view`` that exits 0 with valid JSON but missing/
+    null/empty ``headSha``/``headBranch`` must also abort — returning ``("", "")``
+    here would publish the same blank provenance the rc!=0 guard rejects."""
+    gh = FakeGh(
+        runs=json.dumps([{"databaseId": 5, "conclusion": "success"}]),
+        artifacts_by_run={5: _artifacts([("conformance-ci-sarif", False)])},
+        head=head,
+    )
+    rc, out = _run_main(gh, tmp_path, monkeypatch)
+    assert rc == 1
+    assert "commit_sha" not in out
+    assert "branch" not in out
+
+
 def test_artifacts_land_in_the_requested_dir(tmp_path, monkeypatch):
     gh = FakeGh(
         runs=json.dumps([{"databaseId": 5, "conclusion": "success"}]),
