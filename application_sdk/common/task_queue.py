@@ -77,6 +77,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
+
 #: Prefix the platform expects on a fully-qualified app queue. Callers pass the
 #: *bare* app name to :func:`derive_task_queue` and let it add the prefix —
 #: prefixing an already-prefixed value is how DISTR-834 shipped
@@ -87,7 +91,6 @@ APP_NAME_TOKEN = "{app_name}"
 DEPLOYMENT_NAME_TOKEN = "{deployment_name}"
 
 _APP_NAME_TOKEN_BYTES = APP_NAME_TOKEN.encode()
-_DEPLOYMENT_NAME_TOKEN_BYTES = DEPLOYMENT_NAME_TOKEN.encode()
 
 #: The manifest field the queue rewrite owns. DAG nodes carry their dispatch
 #: queue under this key at any depth (``dag.<node>.task_queue``,
@@ -120,10 +123,7 @@ def _rewrite_task_queue_fields(
     deployment/app fills can no longer mutate an already-stamped queue — the
     stamped field never sees them.
 
-    Returns ``True`` when at least one ``task_queue`` value was visited, so the
-    caller can fall back to byte substitution on a manifest too malformed to
-    parse — the pre-FND-195 behaviour, preserved rather than silently dropping
-    the stamp.
+    Returns ``True`` when at least one ``task_queue`` value was visited.
     """
     visited = False
     if isinstance(node, dict):
@@ -300,10 +300,13 @@ def resolve_manifest_tokens(
 
     Args:
         raw: Raw manifest bytes. Parsed as JSON so the stamp can find the
-            ``task_queue`` fields; a manifest too malformed to parse falls back
-            to byte substitution (the pre-FND-195 behaviour, with the stamp
-            ordered before the residual fills) so the queue is degraded, never
-            dropped.
+            ``task_queue`` fields. A manifest too malformed to parse is served
+            back unstamped and logged at ERROR rather than byte-substituted:
+            byte substitution cannot scope the residual fills away from a
+            stamped queue that carries literal token text, so it re-imports the
+            very defect this module removes. A manifest that does not parse is
+            one the build-time validation never saw — already broken, and better
+            failed loud than served with a silently wrong queue.
         task_queue: The queue the app's worker polls, when the caller knows it
             (the handler does: it is handed the same value ``create_worker`` gets).
             Preferred over re-deriving from env because it also carries an
@@ -356,15 +359,19 @@ def resolve_manifest_tokens(
         # own json.dumps output, so the reserialize is a no-op save the stamp.
         raw = json.dumps(manifest, ensure_ascii=True).encode()
     else:
-        # Fallback for a manifest too malformed to parse: the pre-FND-195 byte
-        # behaviour, with the stamp ordered before the residual fills so they
-        # cannot corrupt a stamped queue that carries literal token text.
-        raw = _stamp_task_queue_bytes(
-            raw, resolved_queue, registered_app_name, env_app_name
+        # A manifest too malformed to parse is served back unstamped and logged
+        # at ERROR. The pre-FND-195 byte substitutor this replaces could not
+        # scope the residual fills away from a stamped queue carrying literal
+        # token text, so it re-imported the defect this module removes. Such a
+        # manifest is one the build-time validation never saw — already broken,
+        # and better failed loud than served with a silently wrong queue.
+        logger.error(
+            "Served manifest does not parse as JSON, so its task_queue cannot "
+            "be stamped field-aware; serving it unstamped rather than applying "
+            "byte substitution, which cannot scope the residual token fills "
+            "away from a stamped queue that carries literal token text. This "
+            "manifest is malformed on disk — regenerate or restore it.",
         )
-        if resolved_app_name:
-            raw = raw.replace(_APP_NAME_TOKEN_BYTES, resolved_app_name.encode())
-        raw = raw.replace(_DEPLOYMENT_NAME_TOKEN_BYTES, deployment_fill.encode())
 
     return ManifestTokenResolution(
         raw=raw,
@@ -399,30 +406,3 @@ def _queue_stamper(
         for candidate in dict.fromkeys(c for c in candidates if c)
     }
     return lambda value: resolved_queue if value in templates else None
-
-
-def _stamp_task_queue_bytes(
-    raw: bytes,
-    resolved_queue: str | None,
-    registered_app_name: str,
-    env_app_name: str,
-) -> bytes:
-    """Byte-substitute the queue template on a manifest too malformed to parse.
-
-    The degraded path behind :func:`resolve_manifest_tokens`'s field-aware
-    stamp. Matches the whole ``atlan-{candidate}-{deployment_name}`` template
-    and replaces it outright, exactly as the pre-FND-195 substitutor did — a
-    stamped queue is better than none on a manifest the build-time validation
-    never saw. The caller orders it before the residual fills so they cannot
-    corrupt a stamped queue that carries literal token text.
-    """
-    if resolved_queue is None:
-        return raw
-    candidates = [APP_NAME_TOKEN, registered_app_name, env_app_name]
-    encoded_queue = resolved_queue.encode()
-    for candidate in dict.fromkeys(c for c in candidates if c):
-        raw = raw.replace(
-            f"{QUEUE_PREFIX}{candidate}-{DEPLOYMENT_NAME_TOKEN}".encode(),
-            encoded_queue,
-        )
-    return raw

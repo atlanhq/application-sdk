@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from unittest.mock import patch
 
 import pytest
 
@@ -488,13 +489,38 @@ class TestQueueStampIsFieldAware:
         assert served["dag"]["extract"]["task_queue"] == "atlan-dbt-prod"
         assert served["dag"]["extract"]["inputs"]["task_queue"] == "atlan-dbt-prod"
 
-    def test_unparseable_manifest_falls_back_to_byte_substitution(
+    def test_unparseable_manifest_is_served_unstamped_and_logged(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A manifest too malformed to parse still gets its queue stamped — the
-        pre-FND-195 byte behaviour, degraded rather than dropped."""
+        """A manifest too malformed to parse is served back byte-for-byte and
+        logged at ERROR, not byte-substituted. Byte substitution cannot scope the
+        residual fills away from a stamped queue carrying literal token text, so
+        it re-imports the defect this module removes — a loud failure beats a
+        silently wrong queue."""
         DeploymentEnv("dbt", "prod").apply(monkeypatch)
-        raw = resolve_manifest_tokens(
-            b'{"dag": {"extract": {"task_queue": "atlan-dbt-{deployment_name}"'
-        ).raw
-        assert b"atlan-dbt-prod" in raw
+        malformed = b'{"dag": {"extract": {"task_queue": "atlan-dbt-{deployment_name}"'
+        with patch("application_sdk.common.task_queue.logger.error") as mock_error:
+            resolution = resolve_manifest_tokens(malformed)
+        assert resolution.raw == malformed
+        assert resolution.task_queue == "atlan-dbt-prod"
+        mock_error.assert_called_once()
+        assert "does not parse as JSON" in mock_error.call_args.args[0]
+
+    def test_unparseable_manifest_with_token_carrying_override_is_not_mutated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: an override carrying literal token text through the
+        malformed path must survive untouched. The old byte fallback stamped the
+        template and then ran the residual fills over the result, rewriting the
+        stamped ``custom-{deployment_name}-queue`` to ``custom-prod-queue`` while
+        ``resolution.task_queue`` still reported the original — the served
+        manifest and the worker disagreed on the queue. Serving unstamped removes
+        the divergence: the bytes never change, so there is no second answer."""
+        DeploymentEnv("dbt", "prod").apply(monkeypatch)
+        malformed = b'{"task_queue": "atlan-dbt-{deployment_name}"'
+        resolution = resolve_manifest_tokens(
+            malformed, task_queue="custom-{deployment_name}-queue"
+        )
+        assert resolution.raw == malformed
+        assert b"custom-prod-queue" not in resolution.raw
+        assert resolution.task_queue == "custom-{deployment_name}-queue"
