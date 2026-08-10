@@ -563,6 +563,7 @@ async def _fetch_binding_secrets(
     name: str,
     *,
     components_dir: Path | str,
+    required: bool = False,
 ) -> dict[str, dict[str, str]]:
     """Fetch the secrets a Dapr component's ``secretKeyRef`` entries point at.
 
@@ -574,9 +575,13 @@ async def _fetch_binding_secrets(
     is the Docker Compose / ``secretstores.local.env`` shape, which the
     resolver already covers through environment variables.
 
-    A secret that cannot be read is logged and skipped rather than raised: the
-    resolver reports the resulting broken fields by name, which says far more
-    than a lookup failure would.
+    When ``required`` is true (e.g. the upstream store under
+    ``ENABLE_ATLAN_UPLOAD=true``), a secret that cannot be read is re-raised
+    with ``from exc`` so a secret-store outage surfaces as the real failure
+    instead of being misreported downstream as ``StorageBindingBrokenError``.
+    When ``required`` is false the failure is logged and skipped: the resolver
+    reports the resulting broken fields by name, which says far more than a
+    lookup failure would.
     """
     from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: startup wiring only
         read_binding_secret_refs,
@@ -593,7 +598,14 @@ async def _fetch_binding_secrets(
                 declared.secret_store, secret_name
             )
         # conformance: ignore[E004] one unreadable secret must not mask the rest; the resolver names the broken fields
-        except Exception:
+        except Exception as exc:
+            if required:
+                raise RuntimeError(
+                    f"Could not read secret '{secret_name}' from secret store "
+                    f"'{declared.secret_store}' for Dapr component '{name}' — "
+                    f"the binding is required, so the secret-store failure is "
+                    f"fatal"
+                ) from exc
             logger.warning(
                 "Could not read secret '%s' from secret store '%s' for Dapr "
                 "component '%s' — the binding may resolve as broken",
@@ -666,10 +678,21 @@ async def _create_infrastructure(
         # BLDX-1619: on the k8s SDR secure path the upstream component resolves
         # its credentials through auth.secretStore, and the matching env vars are
         # deliberately absent. Fetch those secrets here — the sidecar is up — so
-        # the resolver sees the same values the sidecar does.
-        upstream_secrets = await _fetch_binding_secrets(
-            dapr_client, UPSTREAM_OBJECT_STORE_NAME, components_dir=components_dir
+        # the resolver sees the same values the sidecar does.  Publish them to
+        # the binding-layer cache so later sync consumers (notably
+        # ``DaprCredentialVault.__init__``) reach the same upstream-vs-deployment
+        # verdict instead of re-deriving a different one env-only.
+        from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: startup wiring only
+            set_fetched_binding_secrets,
         )
+
+        upstream_secrets = await _fetch_binding_secrets(
+            dapr_client,
+            UPSTREAM_OBJECT_STORE_NAME,
+            components_dir=components_dir,
+            required=ENABLE_ATLAN_UPLOAD,
+        )
+        set_fetched_binding_secrets(UPSTREAM_OBJECT_STORE_NAME, upstream_secrets)
         upstream_storage, upstream_put_attrs = (
             _create_store_from_binding_optional_with_put_attrs(
                 UPSTREAM_OBJECT_STORE_NAME,

@@ -6,6 +6,9 @@ Public API:
     create_store_from_binding(...)                     → ObjectStore parsed from Dapr component YAML
     create_store_from_binding_optional(...)            → ObjectStore | None (None if component absent)
     create_store_from_binding_with_put_attrs(...)      → (ObjectStore, put_attrs | None)
+    read_binding_secret_refs(name)                     → BindingSecretRefs  (secretKeyRef + auth.secretStore)
+    set_fetched_binding_secrets(name, secrets)         → publish startup-fetched secrets for sync callers
+    SecretMap / BindingSecretRefs                      → public shapes for the above
     normalize_key(key)                                 → str  (path normalisation)
     upload_file(key, local_path)      → str  (streaming upload, returns sha256)
     download_file(key, local_path)    → str | None  (streaming download)
@@ -47,9 +50,13 @@ from application_sdk.storage.batch import (
     upload_prefix,
 )
 from application_sdk.storage.binding import (
+    BindingSecretRefs,
+    SecretMap,
     create_store_from_binding,
     create_store_from_binding_optional,
     create_store_from_binding_with_put_attrs,
+    read_binding_secret_refs,
+    set_fetched_binding_secrets,
 )
 from application_sdk.storage.cloud import CloudStore
 from application_sdk.storage.errors import (
@@ -117,6 +124,11 @@ __all__ = [
     "StorageBindingBrokenError",
     "ObjectStorePreflightError",
     "create_store_from_binding_with_put_attrs",
+    # Binding secret refs (SDR startup wiring)
+    "BindingSecretRefs",
+    "SecretMap",
+    "read_binding_secret_refs",
+    "set_fetched_binding_secrets",
     # SDR preflight
     "verify_object_store_access",
     "check_object_store_access",

@@ -43,6 +43,39 @@ SecretMap = Mapping[str, Mapping[str, str]]
 # Matches un-substituted Helm / Mustache template placeholders (e.g. {{tenant}}).
 _TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{\{[^}]+\}\}")
 
+#: Process-wide cache of the secrets ``main._create_infrastructure`` fetched
+#: from the Dapr sidecar at startup, keyed by binding component name.  Sync
+#: consumers constructed after startup — ``DaprCredentialVault.__init__`` is
+#: the canonical case — cannot call the sidecar themselves, so they re-run
+#: ``is_binding_configured`` without a ``secrets`` argument.  Without this
+#: cache that second call would fall back to env-only resolution and reach a
+#: different "is the upstream store usable" verdict than the one main.py made
+#: with the sidecar-fetched secrets — the exact broken-vs-absent divergence
+#: BLDX-1619 fixes at the resolver layer.  Populated once at startup via
+#: :func:`set_fetched_binding_secrets`; read by :func:`is_binding_configured`
+#: when its explicit ``secrets`` argument is ``None``.
+_FETCHED_BINDING_SECRETS: dict[str, SecretMap] = {}
+
+
+def set_fetched_binding_secrets(name: str, secrets: SecretMap) -> None:
+    """Publish the secrets startup fetched for *name* to later sync callers.
+
+    Called by ``main._create_infrastructure`` after ``_fetch_binding_secrets``
+    so sync consumers that run later (and therefore cannot call the Dapr secret
+    API themselves) resolve the binding against the same secret values the
+    startup resolver used.  Without this, ``DaprCredentialVault.__init__``
+    re-runs ``is_binding_configured`` env-only and, on the secure k8s path
+    (``secretKeyRef`` + ``auth.secretStore``, env vars deliberately absent),
+    concludes the upstream store is unusable while main.py resolved it fine.
+    """
+    _FETCHED_BINDING_SECRETS[name] = secrets
+
+
+def _get_fetched_binding_secrets(name: str) -> SecretMap | None:
+    """Return the startup-fetched secrets for *name*, or ``None`` if none."""
+    return _FETCHED_BINDING_SECRETS.get(name)
+
+
 # GCP service account JSON fields injected from Kubernetes secret via Helm.
 GCS_SERVICE_ACCOUNT_FIELDS: tuple[str, ...] = (
     "type",
@@ -278,6 +311,13 @@ def is_binding_configured(
     you only need to detect binding presence without the cost of initialising
     cloud SDK clients.
 
+    When *secrets* is ``None`` the resolver falls back to the startup-fetched
+    cache populated by ``main._create_infrastructure`` (see
+    :func:`set_fetched_binding_secrets`), so a sync consumer that runs after
+    startup — for example ``DaprCredentialVault.__init__`` — reaches the same
+    verdict the startup resolver reached with the sidecar-fetched secrets,
+    rather than re-deriving a different one env-only.
+
     Returns False when the component is absent, has an unsupported binding
     type, or has unresolvable metadata (template placeholders, or
     ``secretKeyRef`` entries that neither *secrets* nor the environment holds).
@@ -292,7 +332,10 @@ def is_binding_configured(
         return False
     if store_kind == "local":
         return True
-    return not _find_broken_metadata_fields(spec.get("metadata", []), secrets)
+    effective_secrets = (
+        secrets if secrets is not None else _get_fetched_binding_secrets(name)
+    )
+    return not _find_broken_metadata_fields(spec.get("metadata", []), effective_secrets)
 
 
 def _build_s3_config(
@@ -729,13 +772,15 @@ def _create_store_core(
 
     meta = _parse_dapr_metadata(raw_metadata, secrets)
     # Log binding resolution so objectstore routing can be verified in CI logs.
+    # Never log the resolved endpoint/accountName: on the secure k8s path that
+    # value comes from the secret store and would leak to INFO logs.
     endpoint = meta.get("endpoint", meta.get("accountName", ""))
     logger.info(
-        "create_store_from_binding: name=%r type=%r store_kind=%r endpoint=%r",
+        "create_store_from_binding: name=%r type=%r store_kind=%r endpoint_configured=%s",
         name,
         binding_type,
         store_kind,
-        endpoint or "(none)",
+        bool(endpoint),
     )
 
     if store_kind == "local":
