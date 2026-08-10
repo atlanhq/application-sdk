@@ -179,12 +179,15 @@ def test_unresolvable_ghcr_degrades_to_harbor():
     assert decision.warnings
 
 
-def test_unresolvable_harbor_proceeds_unverified():
+def test_unresolvable_harbor_fails_closed():
+    # Harbor is the redirect's source: with it unreachable there is no parity
+    # baseline, so an unverified redirect is treated like a stale one. Only
+    # GHCR-unreachable degrades.
     refs = rbr.parse_base_refs(f"FROM {HARBOR}:3\n")
     decision = rbr.decide(refs, resolve_digest=digests(None, DIGEST_A))
-    assert decision.ok
-    assert decision.build_contexts.endswith(f"@{DIGEST_A}")
-    assert "UNVERIFIED" in decision.warnings[0]
+    assert not decision.ok
+    assert decision.build_contexts == ""
+    assert "parity cannot be verified" in decision.errors[0]
 
 
 # ── Registry client ───────────────────────────────────────────────────────────

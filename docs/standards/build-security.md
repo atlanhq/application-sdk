@@ -61,9 +61,13 @@ build rather than let the redirect fail quietly:
 | Harbor and GHCR serve different digests for the tag | **Build fails** — see the recovery above |
 | Base reference only resolves inside BuildKit (`ARG` with no default) | Warns, builds from Harbor |
 | GHCR unreachable | Warns, builds from Harbor |
+| Harbor unreachable | **Build fails** — parity cannot be verified without the redirect's source |
 
-A registry that cannot be reached is *unknown*, not skew — those cases degrade to the
-pre-redirect Harbor pull instead of blocking an app release.
+A registry that cannot be reached is *unknown*, not skew. GHCR-unreachable degrades to the
+pre-redirect Harbor pull instead of blocking an app release. Harbor-unreachable is the one
+exception: with the redirect's source down there is no baseline to verify the GHCR tag
+against, so an unverified redirect is indistinguishable from a stale one and the build fails
+closed. Re-run once Harbor recovers, or unset `use_ghcr_base` to build without the redirect.
 
 ## Consuming Dapr components in an app repo
 

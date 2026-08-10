@@ -22,9 +22,12 @@ Harbor to GHCR, after proving the redirect is both *applicable* and *safe*:
    pins the named context to the **immutable digest** rather than the mutable
    tag, so the build cannot race a concurrent base release.
 
-Registry unavailability is not skew: if GHCR cannot be resolved the script
-warns and emits an empty mapping, degrading to the pre-redirect behaviour
-(pull from Harbor) instead of failing the app build.
+Registry unavailability is not skew — but it is not always a degrade either.
+If GHCR cannot be resolved the script warns and emits an empty mapping,
+degrading to the pre-redirect behaviour (pull from Harbor) instead of failing
+the app build. If *Harbor* cannot be resolved there is no working baseline to
+verify parity against, so the script fails closed — an unverified redirect is
+indistinguishable from a stale one.
 
 Environment:
     GHCR_TOKEN     Token for ghcr.io registry auth (optional; anonymous when unset)
@@ -444,12 +447,22 @@ def decide(
         return decision
 
     if harbor_digest is None:
-        decision.warnings.append(
-            f"{harbor_repo}:{tag} could not be resolved, so cross-registry parity "
-            f"is UNVERIFIED for this build. Proceeding with the pinned GHCR digest "
-            f"{ghcr_digest}."
+        # Harbor is the redirect's *source*: when it cannot be resolved there is
+        # nothing to verify the GHCR tag against, so parity is unknowable and
+        # the pinned GHCR digest could be the stale leg of a partial publish.
+        # Degrading to a Harbor pull is not an option either — Harbor is the
+        # unreachable side — so the parity gate fails closed here, exactly as it
+        # does on proven skew. Only GHCR-unresolvable degrades (above).
+        decision.errors.append(
+            f"{harbor_repo}:{tag} could not be resolved, so cross-registry "
+            "parity cannot be verified — this build would ride the GHCR "
+            "redirect on an unproven base. Harbor unreachable is treated like "
+            "skew: re-run once Harbor recovers, or unset use_ghcr_base to build "
+            "without the redirect — see docs/standards/build-security.md."
         )
-    elif harbor_digest != ghcr_digest:
+        return decision
+
+    if harbor_digest != ghcr_digest:
         decision.errors.append(
             f"Cross-registry digest skew on :{tag} — {harbor_repo} serves "
             f"{harbor_digest} but {ghcr_repo} serves {ghcr_digest}. The base "
