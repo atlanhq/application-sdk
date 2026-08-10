@@ -1132,9 +1132,7 @@ class TestWriteChunkNullColumns:
         assert table.num_rows == 3
         assert table.column("b").type == pa.string()
 
-    async def test_write_chunk_all_null_column_stays_null_typed(
-        self, tmp_path
-    ) -> None:
+    async def test_write_chunk_all_null_column_stays_null_typed(self, tmp_path) -> None:
         """All-null column is written with its natural null type, uncast."""
         df = pd.DataFrame({"a": [1, 2], "b": [None, None]})
         file_name = str(tmp_path / "with_nulls.parquet")
