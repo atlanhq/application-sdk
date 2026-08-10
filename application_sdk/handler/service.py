@@ -2100,9 +2100,14 @@ def _register_workflow_routes(
 
         # No entrypoint param: single-entrypoint path
         if manifest is not None:
-            return Response(
-                content=manifest.model_dump_json(), media_type="application/json"
-            )
+            # Programmatic manifest — apply the same defensive placeholder
+            # substitution as the disk branches below so a caller-passed
+            # AppManifest carrying a literal "{app_name}"/"{deployment_name}"
+            # token is not served verbatim (CONNECT-183 / DISTR-834).
+            raw = manifest.model_dump_json().encode()
+            raw = raw.replace(b"{deployment_name}", deployment)
+            raw = raw.replace(b"{app_name}", (APPLICATION_NAME or "default").encode())
+            return Response(content=raw, media_type="application/json")
         manifest_path = CONTRACT_GENERATED_DIR / "manifest.json"
         if manifest_path.exists():
             # Disk: contract-generated file — serve raw bytes with placeholder

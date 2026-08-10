@@ -2608,6 +2608,52 @@ class TestManifestEndpoint:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_manifest_programmatic_substitutes_unresolved_placeholders(self) -> None:
+        """A programmatic AppManifest carrying literal '{app_name}'/
+        '{deployment_name}' tokens gets the same defensive substitution as the
+        disk branches — not served verbatim."""
+        from application_sdk.handler import service as svc_module
+        from application_sdk.handler.manifest import (
+            AppManifest,
+            DagNode,
+            ExecuteWorkflowInputs,
+        )
+
+        manifest = AppManifest(
+            execution_mode="dag",
+            dag={
+                "extract": DagNode(
+                    activity_name="execute_workflow",
+                    activity_display_name="Extract",
+                    app_name="{app_name}",
+                    inputs=ExecuteWorkflowInputs(
+                        workflow_type="extraction",
+                        task_queue="atlan-{app_name}-{deployment_name}",
+                    ),
+                ),
+            },
+        )
+        app = create_app_handler_service(
+            _TestHandler(), app_name="test-app", manifest=manifest
+        )
+        client = TestClient(app)
+
+        original_dep = svc_module.DEPLOYMENT_NAME
+        original_app = svc_module.APPLICATION_NAME
+        svc_module.DEPLOYMENT_NAME = "prod-deploy"
+        svc_module.APPLICATION_NAME = "dbt"
+        try:
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            body = response.json()
+            assert (
+                body["dag"]["extract"]["inputs"]["task_queue"]
+                == "atlan-dbt-prod-deploy"
+            )
+        finally:
+            svc_module.DEPLOYMENT_NAME = original_dep
+            svc_module.APPLICATION_NAME = original_app
+
     def test_manifest_404_when_none(self, tmp_path: Path) -> None:
         """Returns 404 when no manifest param and no manifest.json on disk."""
         from application_sdk.handler import service as svc_module
