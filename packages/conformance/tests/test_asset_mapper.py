@@ -1,6 +1,7 @@
-"""Tests for the asset-mapper usage rules (O002, O003, O004 — BLDX-1492).
+"""Tests for the asset-mapper usage rules (O002, O003, O004 — BLDX-1492) and the
+adjacent import-anchored canonical-dependency rule O005 (CNCT-80, CNCT-191).
 
-All three live in the optimizations check package.  Each is exercised through the
+All four live in the optimizations check package.  Each is exercised through the
 package ``scan_text`` so the real wiring (import collection, suppression handling)
 is covered, not just the bare detector.
 """
@@ -44,6 +45,47 @@ def test_o004_suppressed_inline() -> None:
         "# conformance: ignore[O004] legacy AtlasTransformer connector\n"
     )
     findings = [f for f in o_scan(src, "app/x.py") if f.rule_id == "O004"]
+    assert len(findings) == 1
+    assert findings[0].suppressed is True
+
+
+# ── O005 DirectRocksdictImport ──────────────────────────────────────────────────
+
+
+def test_o005_fires_on_from_import() -> None:
+    assert "O005" in _o_ids("from rocksdict import Rdict\n")
+
+
+def test_o005_fires_on_aliased_from_import() -> None:
+    assert "O005" in _o_ids("from rocksdict import Rdict as RD\n")
+
+
+def test_o005_fires_on_module_import() -> None:
+    assert "O005" in _o_ids("import rocksdict\n")
+
+
+def test_o005_fires_on_submodule_from_import() -> None:
+    # A hypothetical rocksdict.options submodule import must still match —
+    # the whole rocksdict namespace is the signal, not just the top-level Rdict.
+    assert "O005" in _o_ids("from rocksdict.options import Options\n")
+
+
+def test_o005_silent_on_spillable_dict_import() -> None:
+    assert "O005" not in _o_ids(
+        "from application_sdk.common.spillable_dict import SpillableDict\n"
+    )
+
+
+def test_o005_silent_on_unrelated_import() -> None:
+    assert "O005" not in _o_ids("import sqlite3\n")
+
+
+def test_o005_suppressed_inline() -> None:
+    src = (
+        "from rocksdict import Rdict  "
+        "# conformance: ignore[O005] custom Options tuning, reviewed\n"
+    )
+    findings = [f for f in o_scan(src, "app/x.py") if f.rule_id == "O005"]
     assert len(findings) == 1
     assert findings[0].suppressed is True
 
