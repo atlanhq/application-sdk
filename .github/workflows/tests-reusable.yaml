@@ -406,7 +406,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: tests-unit-${{ github.ref }}
+      # See the integration job below for why the group is run-unique off the
+      # PR path. Same hazard, same fix — this job was cancelled alongside it.
+      group: tests-unit-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
       cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
     permissions:
       pull-requests: write  # connector-unit-tests comments the coverage delta
@@ -616,7 +618,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
-      group: tests-integration-${{ github.ref }}
+      # On a PR ref the group is deliberately SHARED across the PR's commits —
+      # that is what makes cancel-in-progress supersede the previous run.
+      #
+      # Off the PR path there is nothing to serialise: this job is self-contained
+      # (testcontainers / services-script on its own runner, no tenant, no shared
+      # external resource). A shared group there is not merely useless, it is
+      # actively harmful, because GitHub keeps only ONE pending run per group —
+      # a third arrival evicts the queued one with conclusion `cancelled`.
+      #
+      # That is precisely what a cross-repo dispatch delivers: on the
+      # workflow_dispatch path github.ref is the CONNECTOR's ref (always
+      # refs/heads/main), never the application-sdk commit under test, so N
+      # concurrent SDK runs all landed in one group. application-sdk's merge queue
+      # builds several entries speculatively at once and each dispatches into every
+      # connector, so a batch of queued PRs reliably evicted each other's runs —
+      # Tests Gate then failed, report-to-sdk reported failure on the SDK SHA, and
+      # the merge-queue entry was ejected with no test having actually run.
+      #
+      # Keying on run_id off the PR path gives every run its own group.
+      group: tests-integration-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
       cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
     permissions:
       pull-requests: write
