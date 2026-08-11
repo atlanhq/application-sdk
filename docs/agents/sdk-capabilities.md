@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.27.1
-source-sha:    b6e756091f012a5e5e7db9309f99e5e9655c931b
-source-date:   2026-08-11T10:10:51+00:00
+source-sha:    bf6096e844bdd66ebcdfcc592b709cee5768f7c1
+source-date:   2026-08-12T00:40:27+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -881,8 +881,8 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `parse_credentials_extra`
 
 - **Import:** `from application_sdk.credentials import parse_credentials_extra`
-- **Signature:** `parse_credentials_extra(credentials: dict[str, Any])`
-- **Summary:** Parse the 'extra' field from credentials, handling both string and dict inputs.
+- **Signature:** `parse_credentials_extra(credentials: dict[str, Any], *, strict: bool = True)`
+- **Summary:** Decode the ``extra`` field of a credential dict.
 - **Defined in:** `application_sdk/credentials/utils.py`
 
 #### `register_credential_type`
