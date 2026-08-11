@@ -60,7 +60,7 @@ def test_install_is_off_by_default(workflow: dict) -> None:  # type: ignore[type
     assert spec["type"] == "boolean"
 
 
-@pytest.mark.parametrize("job", ["build-e2e-image", "prepare-tenant"])
+@pytest.mark.parametrize("job", ["build-e2e-image", "lease-tenant", "prepare-tenant"])
 def test_new_jobs_are_gated_on_the_input(jobs: dict, job: str) -> None:  # type: ignore[type-arg]
     assert "inputs.install-app-to-tenant" in jobs[job]["if"], (
         f"{job} must not run when install-app-to-tenant is off — otherwise every "
@@ -166,22 +166,208 @@ def _sdr_step(jobs: dict) -> dict:  # type: ignore[type-arg]
 # ── Tenant-scoped concurrency ────────────────────────────────────────────────
 
 
-def test_prepare_tenant_serialises_per_tenant_not_per_ref(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_prepare_tenant_leaves_tenant_exclusion_to_the_lease(jobs: dict) -> None:  # type: ignore[type-arg]
+    """Tenant exclusion moved from this group to the (app, cloud) lease (FND-250).
+
+    A tenant-keyed group here would now be actively harmful, not merely
+    redundant: it holds ONE pending run, so a third run whose lease has not come
+    up yet would be evicted before it ever got a runner — reintroducing FND-218
+    inside the fix for it. Run-unique is the requirement, and it is only safe
+    *because* lease-tenant serialises the tenant properly.
+    """
     concurrency = jobs["prepare-tenant"]["concurrency"]
     group = concurrency["group"]
 
-    # The installation is tenant-scoped, so the group has to identify the TENANT
-    # (app + cloud). Keying on github.ref would let two PRs install different
-    # versions to the same tenant concurrently, and the loser is silently what
-    # the tenant ends up running.
-    assert "inputs.app-name" in group and "matrix.cloud" in group
-    assert "github.ref" not in group, (
-        "keying on the ref permits concurrent installs to the same tenant from "
-        "different refs, which is the race this group exists to narrow"
+    assert "github.run_id" in group, (
+        "prepare-tenant's group must be run-unique; anything shared across runs "
+        "queues one-deep and evicts the rest (FND-218)"
     )
+    assert "inputs.app-name" not in group, (
+        "a tenant-keyed group here re-adds a one-pending-slot waiting room in "
+        "front of the lease; serialisation belongs to lease-tenant"
+    )
+    assert "github.ref" not in group
     # Cancelling mid-install abandons the deployment and leaves the tenant in
     # whatever state LM reached.
     assert concurrency["cancel-in-progress"] is False
+
+
+# ── The (app, cloud) tenant lease (FND-250) ──────────────────────────────────
+
+_LEASE_ACTION = "atlanhq/application-sdk/.github/actions/e2e-tenant-lease@main"
+
+
+def _lease_step(jobs: dict, job: str) -> dict:  # type: ignore[type-arg]
+    for step in jobs[job]["steps"]:
+        if "e2e-tenant-lease" in str(step.get("uses", "")):
+            return step
+    raise AssertionError(f"{job} no longer invokes the e2e-tenant-lease action")
+
+
+@pytest.mark.parametrize(
+    ("job", "mode"), [("lease-tenant", "acquire"), ("release-tenant", "release")]
+)
+def test_the_lease_jobs_use_the_shared_action_at_main(
+    jobs: dict,  # type: ignore[type-arg]
+    job: str,
+    mode: str,
+) -> None:
+    """Pinned @main on purpose: every contender has to agree on the ref layout
+    and the ordering rule, so the protocol must not vary by checked-out ref."""
+    step = _lease_step(jobs, job)
+    assert step["uses"] == _LEASE_ACTION
+    assert step["with"]["mode"] == mode
+
+
+@pytest.mark.parametrize("job", ["lease-tenant", "release-tenant"])
+def test_the_lease_jobs_key_on_app_and_cloud(jobs: dict, job: str) -> None:  # type: ignore[type-arg]
+    """Acquire and release must name the same tenant, or every run leaks its
+    ticket and the next contender waits for a holder that has already gone."""
+    with_ = _lease_step(jobs, job)["with"]
+    assert with_["app"] == "${{ inputs.app-name }}"
+    assert with_["cloud"] == "${{ matrix.cloud }}"
+
+
+@pytest.mark.parametrize("job", ["lease-tenant", "release-tenant"])
+def test_the_lease_jobs_can_write_refs_and_read_runs(jobs: dict, job: str) -> None:  # type: ignore[type-arg]
+    # contents: write creates and deletes the ticket; actions: read tells a live
+    # holder from a dead one. Scoped to these two jobs so the long-running legs
+    # that execute test code keep read-only contents.
+    permissions = jobs[job]["permissions"]
+    assert permissions["contents"] == "write"
+    assert permissions["actions"] == "read"
+
+
+def test_the_legs_do_not_get_ref_write(jobs: dict) -> None:  # type: ignore[type-arg]
+    # Least privilege: the lease's write capability must not leak into the job
+    # that runs connector test code.
+    assert jobs["e2e"]["permissions"]["contents"] == "read"
+
+
+def test_prepare_tenant_is_gated_on_the_lease(jobs: dict) -> None:  # type: ignore[type-arg]
+    # Installing without the lease is precisely the race the lease closes, so
+    # this is a gate and not merely an ordering edge.
+    assert "lease-tenant" in jobs["prepare-tenant"]["needs"]
+    assert "needs.lease-tenant.result == 'success'" in jobs["prepare-tenant"]["if"]
+
+
+def test_the_legs_refuse_to_run_on_a_failed_lease(jobs: dict) -> None:  # type: ignore[type-arg]
+    """A failed lease leaves prepare-tenant SKIPPED, and 'skipped' is benign in
+    the legs' gate — so without lease-tenant named here the legs would run
+    against a tenant nobody installed onto, with expected-app-version empty so
+    the version check self-skips. A silently passing wrong-version run, from the
+    machinery added to prevent them."""
+    assert "lease-tenant" in jobs["e2e"]["needs"]
+    gate = jobs["e2e"]["if"]
+    assert "needs.lease-tenant.result == 'success'" in gate
+    assert "needs.lease-tenant.result == 'skipped'" in gate
+
+
+def test_the_lease_is_released_even_when_the_legs_fail(jobs: dict) -> None:  # type: ignore[type-arg]
+    # A failed leg must still hand the tenant back, so the release is gated on
+    # having taken the lease — not on the outcome of anything after it.
+    gate = jobs["release-tenant"]["if"]
+    assert "always()" in gate
+    assert "needs.lease-tenant.result == 'success'" in gate
+    assert "e2e" in jobs["release-tenant"]["needs"]
+
+
+def test_the_lease_wait_fits_inside_the_job_timeout(jobs: dict) -> None:  # type: ignore[type-arg]
+    """If the runner's timeout fires first, a bare "job cancelled after Nm"
+    replaces the script's error — which is the one place the holding run is
+    named, and therefore the only actionable output this job produces."""
+    action = yaml.safe_load(
+        (_REPO_ROOT / ".github/actions/e2e-tenant-lease/action.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    wait_seconds = int(action["inputs"]["wait-seconds"]["default"])
+    timeout_seconds = int(jobs["lease-tenant"]["timeout-minutes"]) * 60
+    assert timeout_seconds > wait_seconds
+
+
+#: Every job on the path from run creation to the last leg finishing. The TTL is
+#: measured from run CREATION, so all of it counts — not just the part after the
+#: lease is acquired. Sizing the TTL against install-plus-legs alone was an
+#: actual latent bug, not a theoretical one: that pair is 160 min against a chain
+#: of 325, so a healthy run that queued for runners could cross a 4h TTL partway
+#: through its own install and have a contender reap it mid-flight.
+_PRE_RELEASE_CHAIN = (
+    "discover-e2e",
+    "build-e2e-image",
+    "merge-e2e-image",
+    "lease-tenant",
+    "prepare-tenant",
+    "e2e",
+)
+
+
+def test_the_lease_ttl_cannot_fire_on_a_healthy_holder(jobs: dict) -> None:  # type: ignore[type-arg]
+    """The TTL breaking a LIVE holder's lease puts a second installer on the
+    tenant — the exact race the lease exists to close — so it must clear the
+    whole chain, with room left for runner queue time, which has no timeout.
+
+    Derived from the workflow's own timeouts rather than hard-coded, so adding a
+    job to the chain or raising a timeout forces the TTL up instead of quietly
+    eating the margin.
+    """
+    action = yaml.safe_load(
+        (_REPO_ROOT / ".github/actions/e2e-tenant-lease/action.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    ttl_seconds = int(action["inputs"]["ttl-seconds"]["default"])
+    chain_seconds = (
+        sum(int(jobs[job]["timeout-minutes"]) for job in _PRE_RELEASE_CHAIN) * 60
+    )
+
+    assert ttl_seconds > chain_seconds, (
+        f"ttl-seconds ({ttl_seconds}s) does not clear the "
+        f"{'+'.join(_PRE_RELEASE_CHAIN)} chain ({chain_seconds}s). A healthy "
+        "holder that queued for runners would have its lease broken mid-install."
+    )
+    # Queue time between those jobs is unbounded, so clearing the chain exactly is
+    # not enough; require real headroom rather than a one-second pass.
+    assert ttl_seconds >= 2 * chain_seconds, (
+        f"ttl-seconds ({ttl_seconds}s) clears the chain ({chain_seconds}s) but "
+        "leaves no room for runner queue time, which has no timeout"
+    )
+
+
+def test_the_lease_wait_budget_is_the_operator_facing_signal(jobs: dict) -> None:  # type: ignore[type-arg]
+    """The TTL is deliberately generous, so it must not be what tells a human the
+    tenant is stuck — the wait budget has to fail long before it, or a blocked run
+    sits silently for hours instead of reporting who holds the tenant."""
+    action = yaml.safe_load(
+        (_REPO_ROOT / ".github/actions/e2e-tenant-lease/action.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    wait_seconds = int(action["inputs"]["wait-seconds"]["default"])
+    ttl_seconds = int(action["inputs"]["ttl-seconds"]["default"])
+    assert wait_seconds < ttl_seconds
+
+
+def test_the_lease_and_install_fan_out_over_the_same_clouds(jobs: dict) -> None:  # type: ignore[type-arg]
+    # A lease leg that missed a cloud the install then ran against is an
+    # unserialised install, not a visible failure.
+    assert (
+        jobs["lease-tenant"]["strategy"]["matrix"]
+        == (jobs["prepare-tenant"]["strategy"]["matrix"])
+    )
+    assert (
+        jobs["release-tenant"]["strategy"]["matrix"]
+        == (jobs["prepare-tenant"]["strategy"]["matrix"])
+    )
+
+
+def test_the_gate_is_told_about_the_lease() -> None:
+    """Otherwise a lease failure reaches the gate only as the downstream "matrix
+    skipped" anomaly, which reads as a workflow misconfiguration rather than
+    "the tenant was busy"."""
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    # Both gate call sites: the required check and the cross-repo callback.
+    assert text.count("lease-tenant-result:") == 2
 
 
 # ── The two cloud fan-outs must agree ────────────────────────────────────────

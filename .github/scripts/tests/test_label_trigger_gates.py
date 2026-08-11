@@ -338,6 +338,13 @@ def test_the_e2e_concurrency_groups_still_refuse_to_cancel_in_progress() -> None
     Automation Engine run has a cleanup path — cancelling mid-run today leaves
     tenant state behind. If this assertion is what fails, that decision is being
     made implicitly.
+
+    Tracked as FND-252, which is where a deliberate flip belongs: it carries the
+    cleanup-path prerequisite and the group-keying constraint that has to survive
+    the change (run-unique off the PR path, or a cross-repo dispatch collapses
+    every run into one group — FND-218). This guard has already caught one
+    incidental attempt, in the FND-250 lease work, where turning it on had been
+    added as a runner-time win rather than as the decision it is.
     """
     workflow = _load(_WORKFLOW_DIR / "tests-reusable.yaml")
     e2e_jobs = [
