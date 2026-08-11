@@ -1172,6 +1172,7 @@ class AdvancedJDBCUrlGroup {
   urlAddonBefore: String                     // Prefix on the URL text input
   connectByDefault: "host"|"url" = "host"    // Initial radio value
   urlLabel: String = "SQLAlchemy Connection URL"
+  isDelimitedBySemicolons: Boolean = false   // For `;`-delimited JDBC URLs (e.g. Hive `jdbc:hive2://host:port/db;k=v`); emits `ui.isDelimitedBySemicolons` on the base block + every condition. Omitted (not `false`) when unset.
   urlHelp: String?
   urlPlaceholder: String?
   hostField: FieldSpec                       // Shared host row (FieldSpec re-used across auth-types)

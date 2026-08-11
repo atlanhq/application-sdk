@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from conformance.suite.checks.release_contract import discover, scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
@@ -238,3 +239,110 @@ def test_clean_setup_produces_no_findings(tmp_path: Path) -> None:
         tmp_path, atlan=_ATLAN_WITH_APP_ID, pyproject=_PYPROJECT_WITH_GENERATE
     )
     assert _ids(findings) == []
+
+
+# ---------------------------------------------------------------------------
+# K014 — release_model must be a declared, valid choice
+# ---------------------------------------------------------------------------
+
+
+def test_k014_rule_metadata() -> None:
+    rule = get_rule("K014")
+    assert rule.name == "ReleaseModelUndeclared"
+    assert rule.tier is EnforcementTier.WARN
+    assert rule.scope is RuleScope.APP
+    assert rule.category == "contract-toolkit"
+
+
+def test_k014_fires_when_release_model_absent(tmp_path: Path) -> None:
+    """The fleet-wide default case: no key at all, so the app inherits 'cd'."""
+    findings = _app_repo(tmp_path, atlan="name: openapi\napp_id: abc\n")
+    assert "K014" in _ids(findings)
+
+
+def test_k014_silent_on_explicit_semver(tmp_path: Path) -> None:
+    findings = _app_repo(tmp_path, atlan=_ATLAN_WITH_APP_ID)
+    assert "K014" not in _ids(findings)
+
+
+def test_k014_silent_on_explicit_cd(tmp_path: Path) -> None:
+    """The rule wants a *declared* choice, not a particular one."""
+    findings = _app_repo(
+        tmp_path, atlan="name: openapi\napp_id: abc\nrelease_model: cd\n"
+    )
+    assert "K014" not in _ids(findings)
+
+
+def test_k014_fires_on_bare_key(tmp_path: Path) -> None:
+    findings = _app_repo(tmp_path, atlan="name: openapi\napp_id: abc\nrelease_model:\n")
+    assert "K014" in _ids(findings)
+
+
+@pytest.mark.parametrize("null", ["null", "Null", "NULL", "~", '""', "''"])
+def test_k014_fires_on_null_value(tmp_path: Path, null: str) -> None:
+    findings = _app_repo(
+        tmp_path, atlan=f"name: openapi\napp_id: abc\nrelease_model: {null}\n"
+    )
+    assert "K014" in _ids(findings)
+
+
+def test_k014_fires_on_invalid_value(tmp_path: Path) -> None:
+    findings = _app_repo(
+        tmp_path, atlan="name: openapi\napp_id: abc\nrelease_model: rolling\n"
+    )
+    k014 = [f for f in findings if f.rule_id == "K014"]
+    assert k014
+    # The fix hint must not advertise the deprecated alias.
+    assert "versioned" not in k014[0].message
+
+
+def test_k014_fires_on_deprecated_versioned_alias(tmp_path: Path) -> None:
+    findings = _app_repo(
+        tmp_path, atlan="name: openapi\napp_id: abc\nrelease_model: versioned\n"
+    )
+    k014 = [f for f in findings if f.rule_id == "K014"]
+    assert k014
+    assert "deprecated" in k014[0].message
+
+
+def test_k014_accepts_quoted_and_commented_value(tmp_path: Path) -> None:
+    findings = _app_repo(
+        tmp_path,
+        atlan='name: openapi\napp_id: abc\nrelease_model: "semver"  # deliberate\n',
+    )
+    assert "K014" not in _ids(findings)
+
+
+def test_k014_nested_release_model_does_not_satisfy(tmp_path: Path) -> None:
+    """An indented key is not the manifest-level value the publish step reads.
+
+    An indentation-blind match would report this app as compliant while the
+    publish step still falls back to 'cd'.
+    """
+    findings = _app_repo(
+        tmp_path,
+        atlan="name: openapi\napp_id: abc\ndeploy:\n  release_model: semver\n",
+    )
+    assert "K014" in _ids(findings)
+
+
+def test_k014_anchored_in_atlan_yaml(tmp_path: Path) -> None:
+    findings = _app_repo(tmp_path, atlan="name: openapi\napp_id: abc\n")
+    k014 = [f for f in findings if f.rule_id == "K014"]
+    assert k014
+    assert k014[0].file == "atlan.yaml"
+
+
+def test_k014_silent_when_no_atlan_yaml(tmp_path: Path) -> None:
+    """A missing atlan.yaml is K004's regeneration concern, not this rule's."""
+    findings = _app_repo(tmp_path, atlan=None)
+    assert "K014" not in _ids(findings)
+
+
+def test_k014_suppressed_by_directive(tmp_path: Path) -> None:
+    body = "# conformance: ignore[K014] not published\nname: openapi\napp_id: abc\n"
+    findings = _app_repo(tmp_path, atlan=body)
+    k014 = [f for f in findings if f.rule_id == "K014"]
+    assert k014
+    assert k014[0].suppressed is True
+    assert "K014" not in _ids(findings)

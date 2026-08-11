@@ -348,6 +348,7 @@ async def create_current_state_snapshot(
     run_id: str,
     application_name: str = "",
     copy_workers: int = 4,
+    upload_concurrency: int = 4,
     get_backfill_tables_fn: Callable[[Path, Path | None], set[str] | None]
     | None = None,
 ) -> CurrentStateResult:
@@ -373,6 +374,10 @@ async def create_current_state_snapshot(
         run_id: Workflow run ID for diff naming
         application_name: Optional application name override.
         copy_workers: Number of parallel workers for file operations
+        upload_concurrency: Max concurrent object-store requests for the
+            current-state and incremental-diff uploads (step 5-6). Fixed at
+            this value regardless of scale, so large column counts otherwise
+            upload at the same concurrency as a small connection.
         get_backfill_tables_fn: Optional function to detect backfill tables
 
     Returns:
@@ -484,6 +489,7 @@ async def create_current_state_snapshot(
                 await upload_prefix(
                     local_dir=str(incremental_diff_dir),
                     prefix=incremental_diff_s3_prefix,
+                    max_concurrency=upload_concurrency,
                 )
                 logger.info(
                     "Incremental-diff uploaded to S3: %s",
@@ -504,6 +510,7 @@ async def create_current_state_snapshot(
     await upload_prefix(
         local_dir=str(current_state_dir),
         prefix=current_state_s3_prefix,
+        max_concurrency=upload_concurrency,
     )
     logger.info("Current-state uploaded to S3: %s", current_state_s3_prefix)
 

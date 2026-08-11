@@ -2,6 +2,37 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.18.0] - 2026-08-11
+
+### Features
+
+- add K014 requiring an explicit release_model in atlan.yaml (#3119) ([b831330](https://github.com/atlanhq/application-sdk/commit/b831330))
+- add D010/P040/P041/B007/T020-T024 from the SDR fleet sweep (#2894) ([ff1d8d1](https://github.com/atlanhq/application-sdk/commit/ff1d8d1))
+- add O005 UnresolvedAppNamePlaceholder (#3094) ([d4ff03d](https://github.com/atlanhq/application-sdk/commit/d4ff03d))
+- add O006 DirectRocksdictImport rule (#3089) ([70fe46e](https://github.com/atlanhq/application-sdk/commit/70fe46e))
+- K013 flags DAG nodes whose app_name disagrees with the app that runs them (#3056) ([9426832](https://github.com/atlanhq/application-sdk/commit/9426832))
+- run every e2e suite against an AWS/Azure/GCP tenant matrix (#2997) ([338595e](https://github.com/atlanhq/application-sdk/commit/338595e))
+- extend P023 to tree-scale filesystem work in async defs (#2988) ([a828e22](https://github.com/atlanhq/application-sdk/commit/a828e22))
+- let bootstrap carry an app's pre-commit system deps (#2904) ([1beb7df](https://github.com/atlanhq/application-sdk/commit/1beb7df))
+- promote L002 to block for app production code (#2902) ([6c16247](https://github.com/atlanhq/application-sdk/commit/6c16247))
+
+### Bug fixes
+
+- only re-run e2e when the e2e label is the one just added (#3065) ([5f6c52f](https://github.com/atlanhq/application-sdk/commit/5f6c52f))
+- exempt redaction-boundary log calls from L004/E005 (#3032) ([2eeaa5e](https://github.com/atlanhq/application-sdk/commit/2eeaa5e))
+- split conformance package bumps into a dedicated auto-merged Renovate PR (#3041) ([c4cec09](https://github.com/atlanhq/application-sdk/commit/c4cec09))
+- update github/codeql-action digest to 5595cca (#2993) ([13a49e1](https://github.com/atlanhq/application-sdk/commit/13a49e1))
+- update github/codeql-action digest to d1ba80a (#2967) ([aa5d5cf](https://github.com/atlanhq/application-sdk/commit/aa5d5cf))
+- mirror Input.app_name in SDK contract base registry (#2964) ([e07ea56](https://github.com/atlanhq/application-sdk/commit/e07ea56))
+- resolve log app_name per-entrypoint from workflow input (#2951) ([1f2b24c](https://github.com/atlanhq/application-sdk/commit/1f2b24c))
+- update github/codeql-action digest to f205ea1 (#2944) ([907626f](https://github.com/atlanhq/application-sdk/commit/907626f))
+
+### Other changes
+
+- chore(contract-toolkit): release v0.20.0 (#3046) ([ba7e46c](https://github.com/atlanhq/application-sdk/commit/ba7e46c))
+- chore(contract-toolkit): release v0.19.2 (#2959) ([7ddd1fa](https://github.com/atlanhq/application-sdk/commit/7ddd1fa))
+- chore(contract-toolkit): release v0.19.1 (#2864) ([bf33c1c](https://github.com/atlanhq/application-sdk/commit/bf33c1c))
+
 ## [0.17.0] - 2026-07-23
 
 ### Features

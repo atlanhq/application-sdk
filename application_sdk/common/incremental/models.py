@@ -41,6 +41,8 @@ class WorkflowMetadata(BaseModel):
         column_batch_size: Number of tables per batch for column extraction
         column_chunk_size: Number of column records per output chunk
         copy_workers: Number of parallel workers for file copy operations (default: 3)
+        upload_concurrency: Max concurrent object-store requests for the
+            current-state and incremental-diff uploads (default: 4)
         prepone_marker_timestamp: Whether to move marker back by prepone_marker_hours
         prepone_marker_hours: Hours to move marker back when prepone_marker_timestamp is True
         marker_timestamp: Timestamp from previous successful run (for incremental)
@@ -68,6 +70,10 @@ class WorkflowMetadata(BaseModel):
 
     # Copy workers - number of parallel workers for file copy operations
     copy_workers: int = Field(default=3, alias="copy-workers", gt=0)
+
+    # Upload concurrency - max concurrent object-store requests for the
+    # current-state and incremental-diff uploads
+    upload_concurrency: int = Field(default=4, alias="upload-concurrency", gt=0)
 
     # Filters (kept with hyphens as they come from Argo)
     include_filter: Optional[Union[Dict[str, Any], str]] = Field(
