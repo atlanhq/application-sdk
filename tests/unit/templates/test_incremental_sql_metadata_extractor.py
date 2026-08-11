@@ -746,6 +746,45 @@ class TestPrepareColumnExtractionQueriesInlineImports:
 class TestWriteCurrentStateInlineImports:
     """Exercises inline imports in write_current_state (lines 694-703)."""
 
+    def test_upload_concurrency_rejects_zero_and_negative(self) -> None:
+        """WriteCurrentStateInput.upload_concurrency is Field(gt=0): 0/-1 would
+        build asyncio.Semaphore(0)/Semaphore(-1) in upload_prefix, hanging or
+        crashing the upload step — so they must fail at validation."""
+        from pydantic import ValidationError
+
+        base = dict(
+            workflow_id="wf",
+            connection=ConnectionRef(
+                attributes=ConnectionAttributes(
+                    qualified_name="default/test/c", name="c"
+                )
+            ),
+            output_path="/tmp/out",
+        )
+        with pytest.raises(ValidationError):
+            WriteCurrentStateInput(**base, upload_concurrency=0)
+        with pytest.raises(ValidationError):
+            WriteCurrentStateInput(**base, upload_concurrency=-1)
+
+    def test_input_level_upload_concurrency_rejects_zero_and_negative(self) -> None:
+        """IncrementalExtractionInput.upload_concurrency carries the same
+        gt=0 bound so a bad operator value fails before any task runs."""
+        from pydantic import ValidationError
+
+        base = dict(
+            workflow_id="wf",
+            connection=ConnectionRef(
+                attributes=ConnectionAttributes(
+                    qualified_name="default/test/c", name="c"
+                )
+            ),
+            output_path="/tmp/out",
+        )
+        with pytest.raises(ValidationError):
+            IncrementalExtractionInput(**base, upload_concurrency=0)
+        with pytest.raises(ValidationError):
+            IncrementalExtractionInput(**base, upload_concurrency=-3)
+
     def _make_input(self, **overrides) -> WriteCurrentStateInput:
         defaults = dict(
             workflow_id="wf",
@@ -1293,3 +1332,28 @@ class TestRunOrchestration:
         assert out.column_batches_executed == 0
         # Falls back to fetch_columns total
         assert out.columns_extracted == 42
+
+    async def test_run_propagates_upload_concurrency_to_write_current_state(
+        self,
+    ) -> None:
+        """A non-default upload_concurrency on the top-level input must reach
+        the WriteCurrentStateInput built inside run() — the operator-facing
+        knob is only real if it survives the run() hop."""
+        ext = self._build_extractor()
+        with self._patch_workflow_info():
+            await IncrementalSqlMetadataExtractor.run(
+                ext, self._input(upload_concurrency=16)
+            )
+        ext.write_current_state.assert_awaited_once()
+        ws_input = ext.write_current_state.await_args.args[0]
+        assert ws_input.upload_concurrency == 16
+
+    async def test_run_defaults_upload_concurrency_to_four(self) -> None:
+        """No override on the input → write_current_state receives the
+        backward-compatible default of 4."""
+        ext = self._build_extractor()
+        with self._patch_workflow_info():
+            await IncrementalSqlMetadataExtractor.run(ext, self._input())
+        ext.write_current_state.assert_awaited_once()
+        ws_input = ext.write_current_state.await_args.args[0]
+        assert ws_input.upload_concurrency == 4

@@ -125,6 +125,28 @@ class TestIncrementalWorkflowArgs:
         assert args.metadata.incremental_extraction is True
         assert args.metadata.column_batch_size == 30000
 
+    def test_parses_upload_concurrency_alias(self):
+        """Argo-style ``upload-concurrency`` key maps to upload_concurrency."""
+        args = IncrementalWorkflowArgs.model_validate(
+            {"metadata": {"upload-concurrency": 16}}
+        )
+        assert args.metadata.upload_concurrency == 16
+
+    def test_upload_concurrency_rejects_zero_and_negative(self):
+        """upload_concurrency is gt=0: 0/-1 would hang or crash the upload
+        step's semaphore, so they fail at validation."""
+        import pytest
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            IncrementalWorkflowArgs.model_validate(
+                {"metadata": {"upload-concurrency": 0}}
+            )
+        with pytest.raises(ValidationError):
+            IncrementalWorkflowArgs.model_validate(
+                {"metadata": {"upload-concurrency": -2}}
+            )
+
     def test_extra_fields_allowed(self):
         """Extra fields are allowed for forward compatibility."""
         # Should not raise - extras are accepted
@@ -145,6 +167,7 @@ class TestIncrementalWorkflowArgs:
         assert args.metadata.prepone_marker_timestamp is True
         assert args.metadata.prepone_marker_hours == 3
         assert args.metadata.copy_workers == 3
+        assert args.metadata.upload_concurrency == 4
         assert args.metadata.marker_timestamp is None
         assert args.metadata.current_state_available is False
 

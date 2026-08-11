@@ -10,7 +10,7 @@ from __future__ import annotations
 import dataclasses
 import re
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.templates.contracts.sql_metadata import (
@@ -93,6 +93,7 @@ class IncrementalRunContext:
     column_batch_size: int = 25000
     column_chunk_size: int = 100000
     copy_workers: int = 3
+    upload_concurrency: int = 4
     prepone_marker_timestamp: bool = True
     prepone_marker_hours: int = 3
     # Set by fetch_incremental_marker
@@ -150,6 +151,11 @@ class IncrementalExtractionInput(ExtractionInput):
 
     copy_workers: int = 3
     """Parallel workers for file copy operations during state snapshot."""
+
+    upload_concurrency: int = Field(default=4, gt=0)
+    """Max concurrent object-store requests for the current-state and
+    incremental-diff uploads. Connections with very large column counts
+    (100K+) can raise this to shrink wall-clock time on the upload step."""
 
     prepone_marker_timestamp: bool = True
     """Whether to move the marker back by ``prepone_marker_hours``."""
@@ -389,7 +395,7 @@ class WriteCurrentStateInput(IncrementalTaskInput):
     copy_workers: int = 3
     """Parallel workers for file copy operations."""
 
-    upload_concurrency: int = 4
+    upload_concurrency: int = Field(default=4, gt=0)
     """Max concurrent object-store requests when uploading the current-state
     snapshot and incremental diff. Connections with very large column counts
     (100K+) can raise this to shrink wall-clock time on the upload step,
