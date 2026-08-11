@@ -304,10 +304,23 @@ jobs:
           # comment used to make ("the connector build is single-platform too")
           # went stale when that matrix landed.
           #
-          # Matches build-image.yaml's released-base build, which has published
-          # this same Dockerfile for both arches through this same action for as
-          # long as it has existed. secure-build-push-apps scans on the runner's
-          # native arch and then builds the full platform list for the push.
+          # One job with both platforms — i.e. arm64 under QEMU — even though
+          # connector-ci-e2e.md argues hard for the native-split shape that
+          # build-e2e-image uses. That argument is about the APP image, whose
+          # build is dominated by `uv sync` compiling Python deps; emulating
+          # that is the measured 5-10x. THIS Dockerfile has no compile step at
+          # all: it is `FROM` a golden image plus addgroup / mkdir / apk del /
+          # chmod / COPY. Emulation costs almost nothing when there is nothing
+          # to emulate — build-image.yaml builds this same file for both arches
+          # this same way in 1m55s-3m34s, against 1m13s for the amd64-only PR
+          # base job it replaces.
+          #
+          # Splitting it natively would also mean fixing secure-build-push-apps
+          # first: its scan step hardcodes `platforms: linux/amd64` under a
+          # comment claiming it builds "the runner's native platform", so on an
+          # ubuntu-24.04-arm runner the split would quietly move the emulation
+          # into the Trivy scan rather than remove it. Not worth it for ~90s on
+          # a label-gated path; revisit if this Dockerfile ever grows a build.
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.ref.outputs.image }}
           github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}

@@ -380,6 +380,19 @@ Four things this shape makes load-bearing:
   `test_build_app_image_action.py` derives the required set from the matrix
   itself, so a third architecture cannot leave the base behind.
 
+  **That base is built as one multi-platform job, not a native split, and the
+  distinction matters.** The 5-10x emulation figure below is about *this* image
+  — the app image, whose build time is `uv sync` compiling Python dependencies.
+  The SDK runtime base compiles nothing: it is `FROM` a golden image plus
+  `addgroup` / `mkdir` / `apk del` / `chmod` / `COPY`. Emulation is close to free
+  when there is nothing to emulate, and it is measured — `build-image.yaml`
+  builds that same Dockerfile for both arches in one QEMU job in 1m55s-3m34s.
+  Splitting it natively would also require fixing `secure-build-push-apps`,
+  whose scan step hardcodes `platforms: linux/amd64` beneath a comment claiming
+  it uses the runner's native platform: on an `ubuntu-24.04-arm` runner that
+  moves the emulation into the Trivy scan instead of removing it. Read the rule
+  as "don't emulate a *compile*", not "never emulate".
+
 The other three fail *silently*:
 
 - **The runner/platform pairing.** `platform: linux/arm64` on an x64 runner still
