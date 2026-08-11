@@ -117,14 +117,23 @@ def _release_model_problem(text: str) -> str | None:
     message. Three failure shapes, all of which leave the app on a release model
     nobody chose or one the publish step rejects:
 
-    * key absent, or present with no value — read as the ``cd`` default
-      (``parse_atlan_yaml.py``), i.e. publish-to-all-tenants on every merge
+    * key absent — read as the ``cd`` default (``parse_atlan_yaml.py``), i.e.
+      publish-to-all-tenants on every merge
+    * key present with no value (bare ``release_model:`` or a YAML null) — the
+      key exists, so ``d.get("release_model", "cd")`` returns ``None`` and the
+      publish step *rejects* it (``None not in _ALLOWED_RELEASE_MODELS``)
     * value outside the allowed set — the publish step errors out
     * ``versioned`` — a deprecated alias for ``semver``; honoured, but worth
       migrating before the alias is dropped
 
     An explicit ``cd`` is accepted: the rule requires a declared choice, not a
     particular one.
+
+    ``_RELEASE_MODEL_RE.search`` takes the *first* top-level ``release_model:``,
+    while ``yaml.safe_load`` keeps the *last* of a duplicated key — a duplicated
+    key can pass conformance while the publish step reads the later value. That
+    is pathological (a duplicate top-level key is its own bug), so the first
+    match is treated as the declared value.
     """
     match = _RELEASE_MODEL_RE.search(text)
     if match is None:
@@ -138,8 +147,9 @@ def _release_model_problem(text: str) -> str | None:
     value = match.group(1).split("#", 1)[0].strip().strip("\"'")
     if not value or value in {"null", "Null", "NULL", "~"}:
         return (
-            "declares 'release_model' with no value, which is read as the 'cd' "
-            "default, so every merge to main publishes to channel='all'"
+            "declares 'release_model' with no value. The key exists, so the "
+            "publish step reads it as None and rejects it (None is not an "
+            "allowed value) — give it an explicit model"
         )
     if value not in _VALID_RELEASE_MODELS:
         # Advertise only the non-deprecated values — pointing a fix at
