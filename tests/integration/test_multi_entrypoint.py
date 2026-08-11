@@ -8,6 +8,8 @@ Verifies that Apps with multiple @entrypoint methods:
 Requires a running Temporal dev server (see conftest.py).
 """
 
+from uuid import uuid4
+
 import pytest
 
 from application_sdk.app.base import App, NonRetryableError
@@ -102,6 +104,31 @@ class LifecycleMultiApp(App):
     @entrypoint
     async def run_fail(self, input: LifecycleInput) -> LifecycleOutput:
         raise ValueError("intentional failure in run_fail")
+
+
+# --- workflow_type override (CNCT-199) ---
+
+
+class OverrideInput(Input):
+    value: str = ""
+
+
+class OverrideOutput(Output):
+    length: int = 0
+
+
+class OverrideApp(App):
+    """Multi-entry-point app preserving a bare legacy type on one entry point."""
+
+    name = "override-app"
+
+    @entrypoint(default=True, workflow_type="LegacyBareWorkflow")
+    async def modern_name(self, input: OverrideInput) -> OverrideOutput:
+        return OverrideOutput(length=len(input.value))
+
+    @entrypoint
+    async def other(self, input: OverrideInput) -> OverrideOutput:
+        return OverrideOutput(length=-1)
 
 
 # ---------------------------------------------------------------------------
@@ -234,3 +261,48 @@ async def test_on_complete_called_after_entrypoint_failure(
                 entry_point="run-fail",
             )
     assert _lifecycle_log == ["called"]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "workflow_type",
+    ["LegacyBareWorkflow", "override-app:modern-name"],
+    ids=["override", "canonical-alias"],
+)
+async def test_override_and_alias_both_dispatch(
+    run_worker, temporal_client, task_queue, reregister_app, workflow_type
+):
+    """M4.1: both registered types reach the entry point and return its Output.
+
+    Dispatches by raw Temporal type rather than through the executor, because
+    the point is that a caller holding either name finds a handler. A type no
+    worker registered would not error — the run would sit open until timeout.
+    """
+    reregister_app(OverrideApp)
+    async with run_worker():
+        result = await temporal_client.execute_workflow(
+            workflow_type,
+            OverrideInput(value="abcd"),
+            id=f"ovr-{uuid4().hex[:8]}",
+            task_queue=task_queue,
+            result_type=OverrideOutput,
+        )
+    assert isinstance(result, OverrideOutput)
+    assert result.length == 4
+
+
+@pytest.mark.integration
+async def test_entry_point_without_override_keeps_canonical_type(
+    run_worker, temporal_client, task_queue, reregister_app
+):
+    """M4.2: an override on one entry point does not move its siblings."""
+    reregister_app(OverrideApp)
+    async with run_worker():
+        result = await temporal_client.execute_workflow(
+            "override-app:other",
+            OverrideInput(value="abcd"),
+            id=f"ovr-other-{uuid4().hex[:8]}",
+            task_queue=task_queue,
+            result_type=OverrideOutput,
+        )
+    assert result.length == -1

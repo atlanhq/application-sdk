@@ -121,6 +121,13 @@ class EntryPointMetadata:
     apps, at most one entry point may set ``default=True`` (validated at
     registration)."""
 
+    workflow_type: str | None = None
+    """Temporal workflow type to register instead of the ``{app-name}:{name}``
+    convention. Moves Temporal registration only — the entry point is still
+    selected by ``name`` on ``?entrypoint=``, and task activity names are
+    unaffected. The canonical name stays registered as an alias, so callers on
+    either name reach this entry point. See :func:`workflow_types_for`."""
+
 
 def _method_name_to_kebab(name: str) -> str:
     """Convert 'extract_metadata' to 'extract-metadata'."""
@@ -143,6 +150,79 @@ def entrypoint_module_segment(name: str) -> str:
         entrypoint_module_segment("asset-export-advanced") → "asset_export_advanced"
     """
     return name.replace("-", "_")
+
+
+def workflow_type_class_segment(workflow_type: str) -> str:
+    """Convert a Temporal workflow type into its generated-class name segment.
+
+    Each registered type produces a dynamically generated ``_Workflow_<segment>``
+    class, so the type must survive this conversion as a valid identifier. Both
+    hyphens and colons are legal in a Temporal type but not in an identifier.
+
+    Example::
+
+        workflow_type_class_segment("query-intelligence:keifu") → "query_intelligence_keifu"
+    """
+    return workflow_type.replace("-", "_").replace(":", "_")
+
+
+def canonical_workflow_type(app_name: str, ep: EntryPointMetadata) -> str:
+    """The convention-derived Temporal workflow type for *ep*.
+
+    ``{app-name}`` for the implicit (run()-derived) entry point, and
+    ``{app-name}:{entry-point-name}`` for every explicit ``@entrypoint``.
+    """
+    return app_name if ep.implicit else f"{app_name}:{ep.name}"
+
+
+def workflow_types_for(app_name: str, ep: EntryPointMetadata) -> tuple[str, ...]:
+    """Every Temporal workflow type *ep* registers, primary first.
+
+    Without an override this is just the canonical name. With one, the override
+    is primary — new runs start on it — and the canonical name stays registered
+    as an alias so a caller already using it still reaches this entry point.
+    An override that merely restates the canonical name registers once.
+    """
+    canonical = canonical_workflow_type(app_name, ep)
+    if ep.workflow_type is None or ep.workflow_type == canonical:
+        return (canonical,)
+    return (ep.workflow_type, canonical)
+
+
+def primary_workflow_type(app_name: str, ep: EntryPointMetadata) -> str:
+    """The Temporal workflow type new runs of *ep* should start on."""
+    return workflow_types_for(app_name, ep)[0]
+
+
+def build_workflow_type_index(
+    app_name: str, entry_points: Mapping[str, EntryPointMetadata]
+) -> dict[str, EntryPointMetadata]:
+    """Map every registered Temporal workflow type back to its entry point.
+
+    The worker registers one generated class per key, and result-type resolution
+    reads the same index — so what is registered and what can be resolved cannot
+    drift apart.
+
+    Raises:
+        EntryPointContractError: If two entry points claim the same type. This
+            one rule also covers an override colliding with another entry
+            point's canonical name or with the implicit bare app name, since
+            every such name is a key here.
+    """
+    index: dict[str, EntryPointMetadata] = {}
+    for ep in entry_points.values():
+        for workflow_type in workflow_types_for(app_name, ep):
+            claimed = index.get(workflow_type)
+            if claimed is not None and claimed is not ep:
+                raise EntryPointContractError(
+                    f"App '{app_name}': entry points '{claimed.name}' and "
+                    f"'{ep.name}' both register Temporal workflow type "
+                    f"'{workflow_type}'. Each registered type must resolve to "
+                    f"exactly one entry point — change one @entrypoint's "
+                    f"workflow_type."
+                )
+            index[workflow_type] = ep
+    return index
 
 
 def _validate_entrypoint_signature(
@@ -222,11 +302,39 @@ def _validate_entrypoint_signature(
     return input_type, output_type
 
 
+def _validate_workflow_type_override(ep_name: str, workflow_type: str) -> None:
+    """Reject a workflow_type override that cannot be registered.
+
+    Deliberately looser than the entry-point name check: a colon is legal in a
+    Temporal type and is a real shape (``teradata-app:crawler``). The binding
+    constraint is that the type becomes a generated class name.
+    """
+    if not isinstance(workflow_type, str):
+        raise EntryPointContractError(
+            f"Entry point '{ep_name}': workflow_type must be a string, got "
+            f"{type(workflow_type).__name__}."
+        )
+    if not workflow_type or workflow_type != workflow_type.strip():
+        raise EntryPointContractError(
+            f"Entry point '{ep_name}': workflow_type must be a non-empty string "
+            f"with no surrounding whitespace, got {workflow_type!r}."
+        )
+    if not any(char.isalnum() for char in workflow_type) or not (
+        workflow_type_class_segment(workflow_type).isidentifier()
+    ):
+        raise EntryPointContractError(
+            f"Entry point '{ep_name}': workflow_type {workflow_type!r} is not a "
+            f"usable Temporal workflow type. Use letters, digits, hyphens, "
+            f"underscores and colons, and do not start with a digit."
+        )
+
+
 def entrypoint(
     func: F | None = None,
     *,
     name: str | None = None,
     default: bool = False,
+    workflow_type: str | None = None,
 ) -> F | Callable[[F], F]:
     """Decorator to mark a method as an independently-triggerable entry point.
 
@@ -268,6 +376,18 @@ def entrypoint(
             caller omits ``?entrypoint=``. At most one entry point per app may set
             this (validated at registration). A single-entry-point app does not
             need it; its only entry point is the default implicitly.
+        workflow_type: Register this Temporal workflow type instead of the
+            ``{app-name}:{name}`` convention. Use it only to preserve a workflow
+            type external callers already dispatch — a multi-entry-point app
+            otherwise has no way to keep an established bare type. The canonical
+            name stays registered as an alias, so adopting this cannot break a
+            caller already on it. Registration is all that moves: ``?entrypoint=``
+            still selects by ``name``, and task activity names are unaffected.
+
+            Example::
+
+                @entrypoint(name="keifu", workflow_type="KeifuWorkflow")
+                async def keifu(self, input: KeifuInput) -> KeifuOutput: ...
 
     Raises:
         EntryPointContractError: If the method doesn't follow the contract pattern.
@@ -283,6 +403,8 @@ def entrypoint(
                 f"Entry point name '{ep_name}' is not a valid identifier. "
                 "Use only letters, digits, hyphens, and underscores."
             )
+        if workflow_type is not None:
+            _validate_workflow_type_override(ep_name, workflow_type)
         input_type, output_type = _validate_entrypoint_signature(fn)
         fn._entrypoint_metadata = EntryPointMetadata(  # type: ignore[attr-defined]
             name=ep_name,
@@ -290,6 +412,7 @@ def entrypoint(
             output_type=output_type,
             method_name=fn_name,
             default=default,
+            workflow_type=workflow_type,
         )
         return fn
 

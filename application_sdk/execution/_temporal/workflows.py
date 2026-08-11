@@ -8,16 +8,18 @@ with workflow.unsafe.imports_passed_through():
 
 
 def get_all_app_workflows() -> list[type]:
-    """Get generated workflow classes for all registered app entry points.
+    """Get generated workflow classes for all registered Temporal workflow types.
 
-    For each registered App, generates one Temporal workflow class per entry
-    point. Multi-entry-point apps produce multiple workflow classes.
+    One class per key in each App's ``workflow_types`` index — normally one per
+    entry point, and two for an entry point carrying a ``workflow_type``
+    override (the override plus its canonical alias), so callers on either name
+    reach the same entry point.
     """
     workflows: list[type] = []
     app_registry = AppRegistry.get_instance()
     for app_name in app_registry.list_apps():
         app_metadata = app_registry.get(app_name)
-        for ep in app_metadata.entry_points.values():
-            wf_cls = generate_workflow_class(app_metadata.app_cls, ep)
+        for workflow_type, ep in app_metadata.workflow_types.items():
+            wf_cls = generate_workflow_class(app_metadata.app_cls, ep, workflow_type)
             workflows.append(wf_cls)
     return workflows

@@ -47,7 +47,11 @@ from application_sdk.app.context import (
     TaskExecutionContext,
     _is_atlan_logger,
 )
-from application_sdk.app.entrypoint import EntryPointMetadata
+from application_sdk.app.entrypoint import (
+    EntryPointMetadata,
+    primary_workflow_type,
+    workflow_type_class_segment,
+)
 from application_sdk.app.registry import AppMetadata, resolve_pool_queue
 from application_sdk.app.task import get_task_metadata, is_task, task
 from application_sdk.constants import (
@@ -2007,7 +2011,11 @@ def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
         ) from e
 
 
-def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:
+def generate_workflow_class(
+    app_cls: "type[App]",
+    ep: "EntryPointMetadata",
+    workflow_name: str | None = None,
+) -> type:
     """Generate a Temporal workflow class for one entry point.
 
     Creates a @workflow.defn-decorated class whose run() sets up App context,
@@ -2016,17 +2024,20 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
     Args:
         app_cls: The App subclass.
         ep: The entry point to generate a workflow class for.
+        workflow_name: The Temporal workflow type to register this class under.
+            An entry point with a ``workflow_type`` override registers under
+            more than one name, so the caller picks; defaults to the primary.
 
     Returns:
         A Temporal workflow class decorated with @workflow.defn.
     """
-    cache_key = (app_cls, ep.name)
+    if workflow_name is None:
+        workflow_name = primary_workflow_type(app_cls._app_name, ep)
+
+    cache_key = (app_cls, ep.name, workflow_name)
     if cache_key in _workflow_class_cache:
         return _workflow_class_cache[cache_key]
 
-    workflow_name = (
-        app_cls._app_name if ep.implicit else f"{app_cls._app_name}:{ep.name}"
-    )
     entry_method_name = ep.method_name
     entrypoint_name = ep.name
     input_type = ep.input_type
@@ -2257,8 +2268,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             # BLDX-878: inter-app calls deactivated pending review.
             # app_instance._client = None
 
-    safe_name = workflow_name.replace("-", "_").replace(":", "_")
-    cls_name = f"_Workflow_{safe_name}"
+    cls_name = f"_Workflow_{workflow_type_class_segment(workflow_name)}"
 
     # Temporal's _is_unbound_method_on_cls checks:
     #   fn.__qualname__.rsplit(".", 1)[0] == cls.__name__

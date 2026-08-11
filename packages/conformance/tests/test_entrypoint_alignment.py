@@ -629,3 +629,108 @@ def test_p016_single_mode_workflow_type_outside_dag_ignored(tmp_path: Path) -> N
     findings = scan_all(paths, tmp_path)
     msgs = [f.message for f in findings if f.rule_id == "P016"]
     assert len(msgs) == 1 and "rogue" in msgs[0]
+
+
+# ---------------------------------------------------------------------------
+# workflow_type overrides (CNCT-199)
+# ---------------------------------------------------------------------------
+
+
+def test_p016_single_mode_bare_override_is_recognised_as_a_route(
+    tmp_path: Path,
+) -> None:
+    """A bare workflow_type override is routed by that verbatim string.
+
+    Without resolving the override, the colon-free DAG node reads as a foreign
+    platform node, the entry point looks unrouted, and P016 fires a false
+    positive on an app that is correctly wired.
+    """
+    _write_single_manifest_with_routes(
+        tmp_path, ["app:extract-metadata", "KeifuWorkflow"]
+    )
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                class MyApp(App):
+                    @entrypoint(name="extract-metadata")
+                    async def extract_metadata(self, input: Input) -> Output: ...
+                    @entrypoint(name="keifu", workflow_type="KeifuWorkflow")
+                    async def keifu(self, input: Input) -> Output: ...
+            """)
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    assert _p016_ids(findings) == []
+
+
+def test_p016_single_mode_override_absent_from_manifest_still_flags(
+    tmp_path: Path,
+) -> None:
+    """An override the DAG never declares is genuine drift and still fires."""
+    _write_single_manifest_with_routes(
+        tmp_path, ["app:extract-metadata", "SomeOtherWorkflow"]
+    )
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                class MyApp(App):
+                    @entrypoint(name="extract-metadata")
+                    async def extract_metadata(self, input: Input) -> Output: ...
+                    @entrypoint(name="keifu", workflow_type="KeifuWorkflow")
+                    async def keifu(self, input: Input) -> Output: ...
+            """)
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    msgs = [f.message for f in findings if f.rule_id == "P016"]
+    assert len(msgs) == 1 and "keifu" in msgs[0]
+
+
+def test_p016_foreign_bare_node_does_not_rescue_an_unrelated_entrypoint(
+    tmp_path: Path,
+) -> None:
+    """A platform node like PublishWorkflow must not launder an unrouted EP."""
+    _write_single_manifest_with_routes(
+        tmp_path, ["app:extract-metadata", "PublishWorkflow"]
+    )
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                class MyApp(App):
+                    @entrypoint(name="extract-metadata")
+                    async def extract_metadata(self, input: Input) -> Output: ...
+                    @entrypoint(name="rogue")
+                    async def rogue(self, input: Input) -> Output: ...
+            """)
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    msgs = [f.message for f in findings if f.rule_id == "P016"]
+    assert len(msgs) == 1 and "rogue" in msgs[0]
+
+
+def test_p016_multi_mode_override_does_not_move_the_wire_name(
+    tmp_path: Path,
+) -> None:
+    """workflow_type moves Temporal registration only — subdir names still match."""
+    findings = _run(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                class MyApp(App):
+                    @entrypoint(name="query-intelligence", workflow_type="QueryIntelligenceWorkflow")
+                    async def query_intelligence(self, input: Input) -> Output: ...
+                    @entrypoint(name="keifu", workflow_type="KeifuWorkflow")
+                    async def keifu(self, input: Input) -> Output: ...
+            """)
+        },
+        ["query-intelligence", "keifu"],
+    )
+    assert _p016_ids(findings) == []

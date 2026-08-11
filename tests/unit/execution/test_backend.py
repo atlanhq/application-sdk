@@ -68,6 +68,24 @@ def _make_app_cls(
     return _MockApp
 
 
+def _make_ep_meta(
+    name: str, *, output_type: type = dict, workflow_type: str | None = None
+) -> Any:
+    """Stand-in EntryPointMetadata carrying the fields workflow naming reads.
+
+    ``implicit``/``workflow_type`` must be spelled out — a bare MagicMock makes
+    both truthy, which is not how a real entry point behaves.
+    """
+    ep_meta = mock.MagicMock(
+        output_type=output_type,
+        implicit=False,
+        workflow_type=workflow_type,
+    )
+    # ``name`` is a reserved MagicMock kwarg (it sets the repr), so assign it.
+    ep_meta.name = name
+    return ep_meta
+
+
 def _make_input_data(*, with_config_hash: bool = False) -> Any:
     inp = mock.MagicMock()
     if with_config_hash:
@@ -117,7 +135,7 @@ class TestTemporalExecutorBackendExecute:
 
     @pytest.mark.asyncio
     async def test_execute_with_entry_point_uses_qualified_workflow_name(self) -> None:
-        ep_meta = mock.MagicMock(output_type=dict)
+        ep_meta = _make_ep_meta("extract")
         client = mock.MagicMock()
         client.execute_workflow = mock.AsyncMock(return_value=None)
         backend = TemporalExecutorBackend(client=client)
@@ -139,7 +157,7 @@ class TestTemporalExecutorBackendExecute:
         client = mock.MagicMock()
         client.execute_workflow = mock.AsyncMock()
         backend = TemporalExecutorBackend(client=client)
-        app_cls = _make_app_cls(name="noeps", entry_points={"a": mock.MagicMock()})
+        app_cls = _make_app_cls(name="noeps", entry_points={"a": _make_ep_meta("a")})
         ctx = mock.MagicMock(app_name="noeps", correlation_id="c")
         with pytest.raises(UnknownEntryPointError):
             await backend.execute(
@@ -248,7 +266,7 @@ class TestTemporalExecutorBackendStart:
         client = mock.MagicMock()
         client.start_workflow = mock.AsyncMock(return_value=handle)
         backend = TemporalExecutorBackend(client=client)
-        app_cls = _make_app_cls(name="ep", entry_points={"do": mock.MagicMock()})
+        app_cls = _make_app_cls(name="ep", entry_points={"do": _make_ep_meta("do")})
         ctx = mock.MagicMock(app_name="ep", correlation_id="c")
         await backend.start(
             app_cls,

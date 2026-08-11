@@ -406,14 +406,15 @@ async def _get_workflow_result(
 def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
     """Resolve the correct Output type for a workflow from its Temporal type name.
 
-    Temporal workflow type names are ``"app-name"`` for the implicit (single)
-    entry point and ``"app-name:entrypoint-name"`` for explicit named entry
-    points.  We parse the entry-point suffix, look it up in AppRegistry, and
-    return its declared ``output_type`` so the caller can pass it to
-    ``get_workflow_handle(result_type=…)`` for typed deserialisation.
+    Looks the type up in the app's ``workflow_types`` index — the same index the
+    worker registers from — and returns the entry point's declared
+    ``output_type`` so the caller can pass it to
+    ``get_workflow_handle(result_type=…)`` for typed deserialisation.  Because
+    both sides read one index, a ``workflow_type`` override resolves here as
+    readily as a convention-derived name.
 
-    Returns ``None`` when the entry point cannot be resolved (e.g. missing
-    registry entry, external workflow); the caller falls back to untyped
+    Returns ``None`` when the type is not one this app registers (e.g. another
+    app's workflow, or an external one); the caller falls back to untyped
     deserialisation via ``_get_workflow_result``'s own fallback path.
     """
     if _workflow_config.app_class is None:
@@ -435,24 +436,7 @@ def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
         )
         return None
 
-    if ":" in workflow_type_name:
-        prefix, ep_name = workflow_type_name.split(":", 1)
-        if prefix != app_cls_name:
-            return None  # workflow belongs to a different app
-        ep = app_meta.entry_points.get(ep_name)
-    else:
-        if workflow_type_name != app_cls_name:
-            return None  # workflow belongs to a different app
-        # Implicit single-entrypoint (backward-compat run() path)
-        ep = next((e for e in app_meta.entry_points.values() if e.implicit), None)
-        if ep is None and len(app_meta.entry_points) == 1:
-            ep = next(iter(app_meta.entry_points.values()))
-            logger.debug(
-                "Resolved output_type via single-entrypoint fallback for workflow_type=%s ep=%s",
-                workflow_type_name,
-                ep.name,
-            )
-
+    ep = app_meta.workflow_types.get(workflow_type_name)
     return ep.output_type if ep else None
 
 
@@ -882,6 +866,12 @@ def _resolve_app_entrypoint(
 
     if selected_entrypoint:
         if selected_entrypoint not in entry_points:
+            # A caller holding a registered Temporal workflow type — the manifest
+            # carries that, not the entry-point name — is doing the obvious thing
+            # when it puts one in the legacy 'workflow_type' body field.
+            by_workflow_type = app_meta.workflow_types.get(selected_entrypoint)
+            if by_workflow_type is not None:
+                return app_meta, by_workflow_type
             # conformance: ignore[L009] logs caller-invisible context (the available entrypoints) that the generic HTTPException detail does not carry.
             logger.warning(
                 "Unknown entrypoint '%s' for app %s; available: %s",
@@ -1220,12 +1210,12 @@ def _register_workflow_routes(
                 _workflow_config.app_name, selected_entrypoint
             )
 
-            input_type = ep.input_type
-            workflow_name = (
-                _workflow_config.app_name
-                if ep.implicit
-                else f"{_workflow_config.app_name}:{ep.name}"
+            from application_sdk.app.entrypoint import (  # noqa: PLC0415 — circular at module import time
+                primary_workflow_type,
             )
+
+            input_type = ep.input_type
+            workflow_name = primary_workflow_type(_workflow_config.app_name, ep)
 
             if input_type is None:
                 raise HTTPException(

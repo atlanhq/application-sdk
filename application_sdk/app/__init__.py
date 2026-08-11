@@ -66,8 +66,11 @@ from application_sdk.app.base import App, AppError, NonRetryableError, Retryable
 from application_sdk.app.context import AppContext
 from application_sdk.app.entrypoint import (
     EntryPointMetadata,
+    canonical_workflow_type,
     entrypoint,
     entrypoint_module_segment,
+    primary_workflow_type,
+    workflow_types_for,
 )
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata, task
@@ -267,9 +270,11 @@ __all__ = [
     "RetryableError",
     "TaskMetadata",
     "TaskRegistry",
+    "canonical_workflow_type",
     "entrypoint",
     "entrypoint_module_segment",
     "mcp_tool",
+    "primary_workflow_type",
     "now",
     "query",
     "signal",
@@ -278,4 +283,5 @@ __all__ = [
     "update",
     "uuid4",
     "wait_condition",
+    "workflow_types_for",
 ]

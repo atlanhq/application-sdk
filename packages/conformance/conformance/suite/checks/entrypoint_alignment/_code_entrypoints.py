@@ -106,6 +106,23 @@ def _extract_ep_name(
     return None, False
 
 
+def _extract_workflow_type(deco: ast.expr) -> str | None:
+    """Parse a decorator expression for a literal ``workflow_type=`` override.
+
+    An entry point carrying an override registers a Temporal workflow type that
+    does not follow the ``<app>:<wire>`` convention, so the manifest declares
+    that verbatim string instead. Returns ``None`` when absent or non-literal.
+    """
+    if not (isinstance(deco, ast.Call) and isinstance(deco.func, ast.Name)):
+        return None
+    for kw in deco.keywords:
+        if kw.arg == "workflow_type":
+            if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                return kw.value.value
+            return None
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Result data structures
 # ---------------------------------------------------------------------------
@@ -122,6 +139,12 @@ class EntrypointLocation:
     node: ast.AST
     """The ``@entrypoint`` decorator node — anchored here so ``# conformance: ignore``
     on the line directly above the decorator suppresses the finding correctly."""
+
+    workflow_type: str | None = None
+    """Literal ``workflow_type=`` override, when the entry point declares one.
+
+    The manifest names this verbatim rather than the ``<app>:<wire>`` form, so
+    the route matcher needs it to recognise the DAG node as this entry point's."""
 
 
 @dataclass
@@ -216,6 +239,11 @@ def scan_file_for_entrypoints(
                 )
             elif ep_name is not None:
                 result.entrypoints.append(
-                    EntrypointLocation(name=ep_name, filename=filename, node=deco)
+                    EntrypointLocation(
+                        name=ep_name,
+                        filename=filename,
+                        node=deco,
+                        workflow_type=_extract_workflow_type(deco),
+                    )
                 )
             break  # Only the first @entrypoint decorator on a method counts.

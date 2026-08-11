@@ -38,12 +38,29 @@ class AppMetadata:
     entry_points: "Mapping[str, EntryPointMetadata]" = field(default_factory=dict)
     deprecated: bool = False
     deprecation_message: str | None = None
+    workflow_types: "Mapping[str, EntryPointMetadata]" = field(
+        default_factory=dict, init=False
+    )
+    """Every Temporal workflow type this app registers, mapped to its entry
+    point. Derived — the worker registers these keys and result-type resolution
+    reads them back, so registration and resolution cannot drift."""
 
     def __post_init__(self) -> None:
         # Freeze entry_points so callers cannot mutate it post-construction.
         # frozen=True prevents direct assignment; object.__setattr__ bypasses that.
+        from application_sdk.app.entrypoint import (  # noqa: PLC0415 — module-level import would cycle via contracts.base
+            build_workflow_type_index,
+        )
+
         object.__setattr__(
             self, "entry_points", types.MappingProxyType(self.entry_points)
+        )
+        object.__setattr__(
+            self,
+            "workflow_types",
+            types.MappingProxyType(
+                build_workflow_type_index(self.name, self.entry_points)
+            ),
         )
 
     @property

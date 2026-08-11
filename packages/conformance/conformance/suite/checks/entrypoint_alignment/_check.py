@@ -135,7 +135,15 @@ def check_p016(
 
     # ── Single-entry-point mode ──────────────────────────────────────────────
     if contract.mode == "single":
-        routes = contract.routes
+        # An entry point with @entrypoint(workflow_type="Bare") is routed by that
+        # verbatim string, which carries no colon — so contract.routes cannot see
+        # it. Without this the DAG node reads as a foreign platform node and the
+        # entry point looks unrouted (CNCT-199).
+        routes = contract.routes | {
+            ep.name
+            for ep in code.entrypoints
+            if ep.workflow_type and ep.workflow_type in contract.workflow_types
+        }
         if routes:
             # Route/card split (BLDX-1342): a secondary @entrypoint is valid when
             # the DAG declares it as a route (workflow_type "<app>:<wire>"), even
