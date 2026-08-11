@@ -1,4 +1,4 @@
-# ADR-0018: Progress-Aware Heartbeat and Duration-Backstop Timeouts
+# ADR-0018: Progress-Aware Stall Watchdog and Duration-Backstop Timeouts
 
 ## Status
 **Proposed**
@@ -16,15 +16,15 @@ Every SDK `@task` becomes a Temporal activity carrying two timeouts (see
   runs a background **auto-heartbeat loop** every 10s so app authors get liveness
   for free (`auto_heartbeat_loop` in `execution/heartbeat.py`).
 
-The two timeouts catch *orthogonal* failure modes and neither subsumes the other:
+The two timeouts catch *different* failure modes and neither subsumes the other:
 
-- `heartbeat_timeout` detects **unresponsiveness** (crash, deadlock, network loss,
-  event-loop starvation) — it only fires when heartbeats *stop*.
-- `start_to_close` detects **taking too long while healthy** — an activity that
-  keeps heartbeating but runs longer than allowed. It is the *only* bound on a
-  healthy-but-slow or wedged-but-alive attempt.
+- `heartbeat_timeout` detects **nothing is beating** — process crash, OOM kill,
+  node loss, network partition, event-loop starvation. It fires ~`heartbeat_timeout`
+  after the worker stops being able to beat.
+- `start_to_close` detects **taking too long while beating**. It is the *only*
+  bound on a healthy-but-slow or wedged-but-alive attempt.
 
-### The problem: `start_to_close` is an unguessable number
+### Problem 1: `start_to_close` is an unguessable number
 
 `start_to_close` forces app authors to answer *"how long should this whole
 activity take?"* — a number that scales with tenant size from seconds to days and
@@ -35,11 +35,22 @@ extraction, query-history, and processing activities — despite each app having
 already tuned per-task timeouts (e.g. 5-minute "light", 2-hour "medium", 6-hour
 "heavy" classes). The tuning is educated guessing, and the tail always exceeds it.
 
-The intuitive fix — *"raise the `start_to_close` default to something enormous
-like 24h and stop guessing"* — is directionally right (a generous
-`start_to_close` backstop plus a fast watchdog is Temporal's own recommended
-pattern for long-running work) but **unsafe as-is**, because of how the
-auto-heartbeat currently works.
+### Problem 2: heartbeat timeouts are the *larger* failure mode today
+
+This ADR must be honest that `StartToClose` is the smaller half of the evidence.
+Per FND-165, the `activity Heartbeat timeout` pattern re-alerted **18× since
+Aug 3**, hitting **five connectors/tenants in a trailing 24h**, and **at least
+nine teams** have independently re-tuned a heartbeat or timeout number since March
+rather than fixing the mechanism (CONNECT-728 ThoughtSpot, CONNECT-141 dbt,
+SHA-838/1318 publish, CAS-61/62 Context Agents — which needed **30 minutes**,
+SHA-327 QI, LH-1097 Lakehouse).
+
+Those heartbeat timeouts are, today, overwhelmingly *event-loop starvation*: the
+auto-loop cannot run because blocking work is holding the loop, so no beat is sent
+even though the activity is healthy. That is an ADR-0010 adoption problem, not a
+timeout-semantics problem, and **it is not what this ADR fixes.** It matters here
+for sequencing: any design that puts more weight on the heartbeat mechanism lands
+on top of a mechanism that is already the top failure. See *Rollout*.
 
 ### Why a large `start_to_close` is unsafe today
 
@@ -48,19 +59,18 @@ calls `activity.heartbeat()` every 10s regardless of whether the activity is
 making any real progress. It proves the *event loop is alive*, not that *work is
 advancing*. Consequences:
 
-1. `heartbeat_timeout` cannot catch a **wedged-but-alive** activity (an infinite
-   async retry loop, a fetch that streams forever, a driver stuck in a
-   yield-friendly wait). Heartbeats keep arriving, so only `start_to_close` ever
-   stops it.
-2. Therefore, if we raise `start_to_close` to 24h and keep the unconditional
-   keepalive, a wedged activity is guarded by **nothing** for a full day →
-   worker-slot exhaustion (Temporal's Python worker defaults to ~100 concurrent
-   activity slots; a handful of stuck activities can starve the pool) and
-   day-long non-detection.
+1. Nothing catches a **wedged-but-alive** activity (an infinite async retry loop,
+   a fetch that streams forever, a driver stuck in a yield-friendly wait).
+   Heartbeats keep arriving, so only `start_to_close` ever stops it.
+2. Therefore, if we raise `start_to_close` to 24h and change nothing else, a
+   wedged activity is guarded by **nothing** for a full day → worker-slot
+   exhaustion (Temporal's Python worker defaults to ~100 concurrent activity
+   slots; a handful of stuck activities can starve the pool) and day-long
+   non-detection.
 
 The number that is genuinely hard to guess (total duration) cannot simply be made
-huge unless *something else* reliably kills a stuck activity fast. That "something
-else" must be the heartbeat — and today it can't do the job.
+huge unless *something else* reliably kills a stuck activity fast. Today nothing
+does.
 
 ## Decision
 
@@ -81,9 +91,9 @@ that same observability *holistically and, wherever possible, automatically*:
 - **Explicit (developer chooses one mechanism):** for the spots the SDK cannot see
   — a custom async loop, or an opaque single `await` against the connector's own
   source client — the developer makes it observable with a manual beat or a scoped
-  bracket. This is not a rare edge: because the async source path has no mandatory
+  hold. This is not a rare edge: because the async source path has no mandatory
   SDK seam (unlike blocking calls, which all go through `run_in_thread`), the
-  explicit bracket is expected in nearly every connector (see *The async escape
+  explicit hold is expected in nearly every connector (see *The async escape
   hatch* below).
 
 This framing matters for expectations: **the residual work never disappears.** The
@@ -92,31 +102,52 @@ that does long work through code the SDK can't see will still need one of the th
 mechanisms. "Zero effort" is true only for the covered paths; everything else is a
 deliberate, one-line observability choice.
 
-### Inverting the timeout model
+### The watchdog runs in-process, and `heartbeat_timeout` keeps its meaning
 
-With observability in place, invert the two timeouts:
+Given a progress signal, the obvious move is to make the heartbeat *conditional* —
+beat only on progress, and let Temporal's `heartbeat_timeout` do the killing. This
+ADR deliberately **does not** do that (see *Option 5*, rejected). Instead:
 
-1. The auto-heartbeat loop sends a beat **only when a progress token advanced**
-   since the last tick (or a bounded blocking op is in flight). A stall stops
-   the beats, so `heartbeat_timeout` fires `heartbeat_timeout` seconds after the
-   *last real progress*.
-2. `heartbeat_timeout` is redefined as **"maximum acceptable time making zero
-   forward progress"** — a roughly workload-independent number (minutes), unlike
-   total duration. **Its default rises from 60s to 300s** in the same change that
-   flips the semantics (see *Migration*): 60s under the new meaning would be a live
-   tripwire that even well-instrumented apps trip between coarse-grained signals.
+1. The auto-heartbeat loop keeps sending its **unconditional** keepalive.
+   `heartbeat_timeout` keeps its current meaning and its current 60s default: it
+   detects *nothing is beating* — crash, OOM kill, node loss, partition,
+   event-loop starvation.
+2. The same loop gains a **stall watchdog**: it tracks a progress token, and when
+   the token has been flat for **`max_no_progress_seconds`** it **fails the
+   activity itself, in-process**, with a typed error naming the last progress
+   signal and the elapsed stall.
 3. `start_to_close` becomes a **pure backstop** (e.g. 24h) that authors never tune.
-4. Opaque single blocking calls that emit no progress (one long query/API call)
-   are kept alive by an explicit, scoped **liveness bracket** that is **bounded by
-   the blocking call's own declared timeout** — the DB `statement_timeout` / `httpx`
-   timeout ADR-0010 already mandates. The bracket vouches for the call only until
-   that bound elapses; past it, the beats stop and `heartbeat_timeout` fires. This
-   keeps the "blocking code owns its timeout" contract *and* closes the hole where
-   a wedged blocking call would otherwise be unguarded until the 24h backstop.
+4. Long single operations that emit no progress — one big query, one slow API call,
+   blocking or async — are covered by an explicit scoped **hold**
+   (`holding_progress()`), which vouches for them for a duration the author
+   declares. The SDK never derives or invents that duration (see *Holds*).
+
+Why one operator concept and two enforcement points: *"it stopped doing anything"*
+is a single idea, and the operator should see a single failure story. But the two
+underlying situations want very different reaction times, and one number would have
+to be the slower of the two:
+
+- Nothing will ever beat again (OOM, SIGKILL, node loss): the attempt is already
+  dead. Reclaim and retry **now** — 60s.
+- Wedged-but-alive, or healthy-but-quiet: a legitimate quiet spell must be waited
+  out first — **minutes**.
+
+Collapsing these into one knob means a crash-killed worker's activities sit idle
+for the whole no-progress budget before Temporal reclaims them. Graceful evictions
+(KEDA scale-down, VPA, spot reclaim) don't pay that cost — the SIGTERM path
+(`WORKER_EVICTED_TYPE`, `execution/_temporal/eviction_retry.py`) fires immediately
+— but SIGKILL/OOM/node-loss has no path other than `heartbeat_timeout`. OOM is a
+leading failure mode for exactly these connectors, so keeping 60s crash detection
+is not conservatism; it is the point.
+
+Keeping the two enforcement points separate also means the mechanisms cover each
+other's blind spot exactly: the in-process watchdog cannot fire when the event loop
+is starved — and that is precisely when `heartbeat_timeout` does.
 
 This shifts tuning off the hard knob (duration) onto two answerable ones: *"how
-long is no progress acceptable?"* (uniform default) and *"how long should one
-query take?"* (a property of the resource, which the call already declares).
+long is no progress acceptable?"* (roughly workload-independent, one default) and
+*"how long should this one operation take?"* (declared at the one call site that
+knows).
 
 ### What counts as "progress"
 
@@ -127,192 +158,237 @@ reviewer asks first, so it must be crisp:
 > or file transferred, a page fetched, or an explicit `context.heartbeat()`.
 
 It is emphatically **not** wall-clock time and **not** event-loop liveness — that
-was the old unconditional keepalive this ADR removes. The single rule an author
-needs follows directly from the definition:
+is what the unconditional keepalive already proves, and it is why the keepalive
+cannot double as the stall detector. The single rule an author needs follows
+directly from the definition:
 
-> **If any one step can run longer than the no-progress budget (`heartbeat_timeout`,
-> default 300s) without emitting a signal, that step must be made observable** — it
-> is already covered by a framework hook, or the author adds a manual beat or a
-> bracket.
+> **If any one step can run longer than the no-progress budget
+> (`max_no_progress_seconds`) without emitting a signal, that step must be made
+> observable** — it is already covered by a framework hook, or the author adds a
+> manual beat or a hold.
 
-By construction, **any gap between progress signals longer than `heartbeat_timeout`
-is treated as a stall.** That is the intended behavior, not a corner case: it is
+By construction, **any gap between progress signals longer than the budget is
+treated as a stall.** That is the intended behavior, not a corner case: it is
 exactly how a wedged-but-quiet activity gets caught. The design's job is to ensure
 the *legitimate* quiet spots are the small, known set that the automatic hooks and
-the bracket already cover.
+holds already cover.
 
-### The progress token
+### The progress tracker
 
-`TemporalHeartbeatController` (`execution/heartbeat.py`) gains a monotonic
-progress generation and a blocking **deadline** (not just a depth counter — the
-deadline is what bounds the bracket, see below):
+Progress tracking is a **new object, not a change to `HeartbeatController`.** The
+controller's job (send beats to Temporal) is unchanged, so its Protocol and
+`NoopHeartbeatController` keep their current contract. The tracker has no Temporal
+dependency, which means local and test execution exercise the same code path as
+production — and, usefully, a task with `heartbeat_timeout_seconds=None` still gets
+a stall watchdog.
 
 ```python
-class TemporalHeartbeatController:
-    def __init__(self) -> None:
-        self._last_details: tuple[Any, ...] = ()
-        self._progress_gen: int = 0            # bumped on every real progress signal
-        self._blocking_deadlines: list[float] = []  # monotonic deadlines of in-flight blocking ops
+class ProgressTracker:
+    """Observed forward progress for one activity attempt."""
 
-    def mark_progress(self) -> None:
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        # Injected clock, not a patched global: an asyncio loop shares
+        # time.monotonic, so patching it globally in tests makes the loop itself
+        # misbehave.
+        self._clock = clock
+        self._last_label: str = ""
+        self._last_at: float = clock()
+        self._holds: dict[int, float | None] = {}  # token -> deadline (None = unbounded)
+        self._next_token: int = 0
+
+    def mark_progress(self, label: str = "") -> None:
         """Framework + app signal for real forward progress."""
-        self._progress_gen += 1
+        self._last_at = self._clock()
+        if label:
+            self._last_label = label
 
-    def heartbeat(self, *details: Any) -> None:
-        # A manual heartbeat is, by definition, progress.
-        self._last_details = details
-        self._progress_gen += 1
-        activity.heartbeat(*details)
+    def enter_hold(self, deadline: float | None) -> int:
+        """Vouch for an in-flight opaque operation. Returns a token."""
+        token = self._next_token
+        self._next_token += 1
+        self._holds[token] = deadline
+        return token
 
-    def enter_blocking(self, timeout: float) -> None:
-        # Vouch for a blocking op only until its own declared timeout elapses.
-        self._blocking_deadlines.append(time.monotonic() + timeout)
+    def exit_hold(self, token: int) -> None:
+        # Keyed by token, not popped off a stack: concurrent holds in one
+        # activity (asyncio.gather over several run_in_thread calls) must not
+        # release each other's deadlines.
+        self._holds.pop(token, None)
 
-    def exit_blocking(self) -> None:
-        if self._blocking_deadlines:
-            self._blocking_deadlines.pop()
+    def held(self) -> bool:
+        now = self._clock()
+        return any(d is None or d > now for d in self._holds.values())
 
-    def blocking_active(self) -> bool:
-        # A blocking op is vouched-for only while its deadline is in the future;
-        # once a call overruns its own timeout we stop beating for it and let
-        # heartbeat_timeout fire (the thread itself can't be killed — see below).
-        now = time.monotonic()
-        return any(d > now for d in self._blocking_deadlines)
-
-    def heartbeat_keepalive(self) -> None:
-        activity.heartbeat(*self._last_details)   # unchanged: the raw send
+    def stalled_for(self) -> float:
+        """Seconds since the last observable progress, 0 while vouched-for."""
+        return 0.0 if self.held() else self._clock() - self._last_at
 ```
 
-### Gating the loop
+### The watchdog in the loop
 
-Only the *send* becomes conditional; the existing event-loop-block warning and
-memory-pressure sampling still run every tick:
+The existing send, event-loop-block warning and memory sampling are unchanged. The
+watchdog is additive:
 
 ```python
-last_seen_gen = -1
 while not stop_event.is_set():
     ...  # existing wait_for(stop_event) + block-detection warning + memory sampling
 
-    beat = (
-        hb.progress_gen != last_seen_gen     # real progress since last tick
-        or hb.blocking_active()              # bounded opaque op still within its timeout
-    )
-    if beat:
-        last_seen_gen = hb.progress_gen
-        hb.heartbeat_keepalive()
-    else:
-        logger.debug(
-            "No progress in last %.0fs for '%s'; withholding keepalive so "
-            "heartbeat_timeout can fire if the stall persists",
-            interval_seconds, task_name,
+    hb.heartbeat_keepalive()          # unchanged, unconditional: the crash detector
+
+    stalled = progress.stalled_for()
+    if budget_seconds is not None and stalled >= budget_seconds:
+        logger.warning(
+            "Task '%s' made no observable progress for %.0fs (budget %.0fs); last "
+            "signal was '%s' — failing the activity",
+            task_name, stalled, budget_seconds, progress.last_label or "<none>",
         )
+        on_stall(stalled, progress.last_label)
+        return   # cancel-and-return: the activity's finally awaits this task
 ```
 
-That `else` branch is the entire behavioral change.
+`on_stall` is injected by `activities.py`, the same way `heartbeat_fn` already is,
+so `heartbeat.py` stays free of activity/Temporal semantics and the watchdog is
+unit-testable without a worker.
 
-### Feeding the token (three mechanisms, most-automatic first)
+### Failing the activity, and what the failure looks like
 
-These are the three observability mechanisms from the mental model, ordered by how
-little the app author has to do:
+`activities.py` captures `asyncio.current_task()` before it creates the heartbeat
+task (`activities.py:196-207`), and `on_stall` flags the tracker and cancels that
+task. The cancellation lands at the activity's next `await` and hits the existing
+`except asyncio.CancelledError` handler (`activities.py:259`).
 
-1. **Framework hooks (automatic, no app action).** Call `hb.mark_progress()`
-   wherever the SDK already loops over units of work: the batched output writers,
-   the record/statistics emission path, and the `ObjectStore` transfer loops
+That handler gains a branch **ahead of** the `is_worker_shutting_down()` check,
+which raises a typed `AppError` — a new `TaskStalledError` alongside
+`AppTimeoutError` in `errors/leaves.py` — carrying `stalled_for_seconds` and
+`last_progress_label` as dataclass fields, so redaction stays at the
+`FailureDetails` wire layer rather than being achieved by withholding context.
+
+Three details that matter:
+
+- **Flag-check order.** A stall and a SIGTERM can coincide. The stall branch must
+  come first, or a stalled activity is mislabelled `WorkerEvicted` and re-dispatched
+  by the eviction-retry loop (`app/base.py:2447`) *outside* the normal retry budget.
+- **Cancel and return.** The watchdog *is* `heartbeat_task`, and the activity's
+  `finally` (`activities.py:334-347`) sets `stop_event` and awaits it with a 1s
+  bound. The watchdog must return immediately after cancelling, not keep looping.
+- **Translation is shared, not duplicated.** The `AppError → ApplicationError(*FailureDetails)`
+  translation in the `except Exception` branch (`activities.py:299-331`) already
+  handles the non-serialisable-evidence guard, `_sever_cause_chain` (BLDX-1512) and
+  `non_retryable=not e.effective_retryable`. Factor it into a helper both branches
+  call.
+
+**`TaskStalledError` is non-retryable by default.** A wedge usually re-wedges, and
+without activity-level checkpointing (REQ-1609) a retry restarts from zero — so an
+automatic retry mostly buys another full stall. This is a deliberate decision, cheap
+to revisit once REQ-1609 lands. See *Bounding total time*.
+
+Detection latency is `max_no_progress_seconds` plus at most one loop tick (10s).
+
+### Feeding the tracker (three mechanisms, most-automatic first)
+
+1. **Framework hooks (automatic, no app action).** Call `mark_progress()` wherever
+   the SDK already loops over units of work: the batched output writers, the
+   record/statistics emission path, and the `ObjectStore` transfer loops
    (`storage/transfer.py`, `storage/chunked.py`, `storage/file_ref_sync.py`). This
    covers the streaming majority — the bulk of connector runtime — with no code
    change in the app.
-2. **The blocking bracket around `run_in_thread` (automatic for blocking work).**
-   Anything offloaded through `run_in_thread` is bracketed by the SDK itself, so a
-   legitimate long blocking call is never false-killed (details below).
+2. **`run_in_thread` auto-holds (automatic for blocking work).** Anything offloaded
+   through `run_in_thread` is wrapped in an **unbounded** hold by the SDK, so a
+   legitimate long blocking call is never false-killed and behaviour on upgrade is
+   unchanged. An unbounded hold means the stall watchdog is inactive for the
+   duration of the call and the 24h backstop is the only bound — a real, documented
+   residual, which the conformance rule below is what shrinks.
 3. **Manual `context.heartbeat(...)` or `holding_progress(...)` (explicit, app
    action).** The residual: a custom async loop, or an opaque single `await`
    against the connector's own source client (see the asymmetry below — this is
-   *not* a rare case). `context.heartbeat()` already exists and now also bumps
-   progress (still carrying resume details for `get_last_heartbeat_details()`);
-   `holding_progress()` is the async analogue of the blocking bracket. This is the
-   mechanism that asks the author to *do* something — and the audit step in
-   *Rollout* exists to find exactly these spots.
+   *not* a rare case). `context.heartbeat()` already exists and now also marks
+   progress (still carrying resume details for `get_last_heartbeat_details()`).
 
-### The blocking bracket — bounded by the call's own timeout
+The tracker reaches `run_in_thread` and `holding_progress` through a ContextVar set
+by `activities.py`. There is no such ContextVar today — the controller is passed
+into `TaskExecutionContext` — so this is new plumbing, and it must cover the
+module-level `run_in_thread` (`execution/heartbeat.py:234`), not only the
+`TaskExecutionContext` wrapper, since both are used.
 
-Two questions from review shape this design:
+### Holds: the SDK never invents a duration
 
-**Q: If my blocking code goes through `run_in_thread`, does it just beat forever?**
-Not anymore. A naive "beat while `blocking_depth > 0`" would keep a *wedged*
-blocking call alive until the 24h backstop — reintroducing the exact hole this ADR
-closes for async code. Instead the bracket is **bounded by the blocking call's own
-declared timeout** and stops vouching once that elapses:
+One mechanism covers both blocking and async opaque work:
 
 ```python
-async def run_in_thread(func, *args, blocking_timeout: float | None = None, **kwargs):
-    hb = _current_heartbeat_controller()
-    bound = blocking_timeout if blocking_timeout is not None else _derive_timeout(func, kwargs)
-    if hb and bound is not None:
-        hb.enter_blocking(bound)
-    try:
-        return await loop.run_in_executor(_BLOCKING_EXECUTOR, ...)
-    finally:
-        if hb and bound is not None:
-            hb.exit_blocking()
+# async: the connector's own client
+async with self.context.holding_progress("snapshot metadata query", timeout=1800):
+    rows = await long_single_query(...)
+
+# blocking: the same wrapper around the offload
+async with self.context.holding_progress("full table scan", timeout=7200):
+    rows = await self.context.run_in_thread(cursor.execute, sql)
 ```
 
-Effective kill time for a wedged blocking call therefore drops from ~24h to
-`blocking_timeout + heartbeat_timeout`. (The Python thread itself cannot be
-cancelled — that is `run_in_thread`'s known limitation; only `run_fault_isolated`
-kills via a child process. The bracket doesn't kill the thread; it stops *lying to
-Temporal* about it, so the slot is reclaimed and the activity fails/retries.)
+An earlier draft of this ADR proposed *deriving* the hold's bound from the
+`timeout=` kwarg the call already carries, on the theory that ADR-0010 already
+mandates that number and reusing it avoids inventing a new one. **That is rejected**,
+for two reasons:
 
-**Where does the bound come from? Reuse the number the call already declares.**
-ADR-0010 already mandates that blocking code owns a timeout
-(`requests.get(url, timeout=30)`, `httpx` timeout, DB `statement_timeout`). The
-bracket bound is *that* number — not a new one to invent, which keeps faith with
-this ADR's whole thesis of eliminating guessed durations. Layered so we never
-silently guess:
+1. **`timeout=` almost never means "wall-clock bound on this call."** It is
+   per-operation: `requests`' read timeout bounds the gap between socket reads (a
+   streaming download legitimately runs for hours without exceeding it), `httpx`
+   is the same shape, DB `statement_timeout` is per *statement* (a call issuing
+   forty statements is bounded at forty times the limit), socket timeouts are per
+   recv. A successfully derived number is therefore systematically *smaller* than
+   the call's legitimate duration, so bracketing on it false-kills healthy work.
+2. **A derived bound is a total-duration guess wearing a disguise** — the exact
+   knob this ADR exists to abolish, reintroduced for blocking calls.
 
-1. **Explicit is the contract:** `run_in_thread(func, ..., blocking_timeout=30)`.
-2. **Convenience derivation** (`_derive_timeout`): if omitted, best-effort read a
-   `timeout=` / `timeout_seconds=` kwarg off the call and reuse it, logging at
-   DEBUG what was derived. Covers the common `requests`/`httpx` case with zero
-   boilerplate — the author already typed the number once. *Caveats made explicit
-   so no one over-trusts it:* it is heuristic — units vary (s vs ms), `requests`
-   uses a `(connect, read)` tuple, and some callees don't name the arg `timeout`
-   at all. Derivation is a convenience over the explicit arg, never a replacement.
-3. **Conservative fallback, never 24h:** if no bound is found, cap at a small
-   multiple of `heartbeat_timeout` and emit a WARNING, so the missing timeout
-   surfaces during the opt-in audit rather than hiding until a wedge.
+The dominant real shape makes it worse: `run_in_thread(cursor.execute, sql)` has
+no `timeout=` kwarg at all (the bound lives on the connection), so derivation
+fails and a fallback takes over. Any fallback tight enough to be useful as a
+watchdog — "a small multiple of the no-progress budget" — is *tighter than the
+status quo*, where the same call is bounded by the task's `start_to_close` of 2h or
+6h. Opt-in would then make legitimate long blocking work fail sooner than before,
+in precisely the apps most likely to opt in.
+
+(As a mechanical note, `blocking_timeout=` could not have been a `run_in_thread`
+kwarg anyway: `run_in_thread(func, *args, **kwargs)` forwards every kwarg to
+`func`, so the name would collide. The context manager sidesteps that too.)
+
+So there are exactly two honest paths at a call the SDK cannot see into, both
+explicit and both greppable:
+
+- The author declares a real wall-clock allowance and `holding_progress` honours it.
+  Past it, the hold lapses, the watchdog resumes, and the stall fires
+  `max_no_progress_seconds` later. Effective kill time for a wedged call is
+  `timeout + budget` instead of 24h.
+- The author declares nothing, the hold is unbounded, and the 24h backstop owns it —
+  an accepted residual, surfaced by the conformance rule rather than hidden.
+
+Opaque operations are the one place a duration bound is genuinely unavoidable,
+because there is nothing to observe from outside a blocked thread. The ADR's
+position is to say so, and to let a human state the number at the one site that
+knows it — never to let the SDK guess it.
 
 ### The async escape hatch — and the asymmetry that makes it common
-
-For an async-opaque single `await` with no progress signal, `holding_progress()` is
-the explicit analogue of the blocking bracket:
-
-```python
-async with self.context.holding_progress("snapshot metadata query", timeout=120):
-    rows = await long_single_query(...)   # its own statement_timeout is the watchdog
-```
 
 **Q: "Making people use it *always* might become a problem."** This is the most
 important open ergonomics question, and we should not pretend it away. There is a
 real asymmetry between the blocking and async paths:
 
-- **Blocking source calls are auto-covered.** `run_in_thread` is a *mandatory
-  seam* — every blocking call already goes through it (ADR-0010), so the SDK
-  brackets it for the author with no extra code.
+- **Blocking source calls are auto-held.** `run_in_thread` is a *mandatory seam* —
+  every blocking call already goes through it (ADR-0010), so the SDK holds for the
+  author with no extra code.
 - **Async source calls have no equivalent mandatory seam.** A connector connects
   to its *own* source system with its *own* async client (an async SQLAlchemy
   engine, an `httpx.AsyncClient`, a vendor SDK). **The SDK's internal SQL/HTTP
   clients are for the SDK's own purposes; they do not, and are not meant to, sit on
   the connector→source path** — so there is no SDK-owned wrapper we can transparently
-  instrument for that call. Auto-bracketing "the SDK clients" would cover almost
-  none of the real source I/O.
+  instrument for that call. Auto-holding "the SDK clients" would cover almost none
+  of the real source I/O.
 
 Two things soften this, but neither eliminates it:
 
 1. **Interleaved streaming reads are already covered by the write side.** The
-   common extraction shape — fetch a page, write a batch, repeat — ticks
-   `mark_progress()` on every batch write, so the read loop is covered as long as
-   one fetch+write cycle stays under the no-progress budget. `holding_progress()`
-   is *not* needed there.
+   common extraction shape — fetch a page, write a batch, repeat — marks progress
+   on every batch write, so the read loop is covered as long as one fetch+write
+   cycle stays under the budget. `holding_progress()` is *not* needed there.
 2. The residual is the genuinely **opaque single async call** — one large metadata
    query, one slow list/export API call that returns everything at once. Those
    emit nothing until they complete.
@@ -321,11 +397,84 @@ So the honest expectation: **`holding_progress()` will very likely be needed in
 almost every connector**, because almost every connector makes at least one such
 opaque async call against its source. It is a *standard part of writing a
 long-running async task*, not a rare escape hatch. We make that acceptable by (a)
-keeping it a one-line context manager whose `timeout` is just the client timeout
-the author already sets, (b) documenting it as expected rather than exceptional,
-and (c) having the opt-in audit specifically hunt source-side opaque async calls. A
-forgotten bracket false-kills at the tail (see *Migration*), so for such calls it
-is **required**, not advisory.
+keeping it a one-line context manager, (b) documenting it as expected rather than
+exceptional, and (c) having the conformance rule and the opt-in audit specifically
+hunt source-side opaque async calls. A forgotten hold false-kills at the tail (see
+*Migration*), so for such calls it is **required**, not advisory.
+
+## Bounding total time
+
+Removing the duration knob removes the only wall-clock bound the system has, and
+the ADR must say what replaces it — "nothing" is not an answer that survives an
+incident.
+
+**Retries multiply the backstop.** `get_activity_options`
+(`execution/_temporal/activities.py:418-420`) returns only `start_to_close_timeout`
+and a retry policy — **no `schedule_to_close`**. With the default
+`retry_max_attempts=3`, a 24h backstop is a **72h** worst case per activity. Today
+that product is 30 minutes. Options, in preference order:
+
+1. **Set `schedule_to_close` as the real backstop** and let `start_to_close` bound
+   one attempt. The SDK already has precedent for a budget-shaped pair in
+   `gate_timeouts` (`app/base.py:1902`), which derives both from one budget and a
+   max-attempts count.
+2. Keep `start_to_close` only, and cap attempts at 1 for backstop-class tasks.
+
+Either way the ADR's claim must be about the *product*, not one attempt.
+
+**Retries without checkpointing are expensive.** REQ-1609 (activity-level
+checkpointing) is not a nice-to-have adjacent to this work: without it, a stall kill
+at hour 5 of a 6-hour extraction restarts from zero. The watchdog makes failure
+*faster to detect* but not *cheaper to recover*, and a false kill at the tail is
+catastrophic rather than annoying. That is the main reason `TaskStalledError`
+defaults to non-retryable, and the main reason the tail-profile verification in
+*Rollout* is a gate rather than a suggestion.
+
+**A run with no duration bound anywhere still needs a duration signal.** Once the
+AE layer drops its timeouts (below) and `start_to_close` is a 24h backstop, a run
+that wedges while dribbling small amounts of progress is effectively unbounded. The
+replacement for a duration *kill* is a duration *alert* — an SLA on run length in
+the observability stack — so "remove the timeouts" does not quietly become "nobody
+notices for a week."
+
+## The Automation Engine layer
+
+An earlier draft declared the AE-orchestrated DAG-node timeouts out of scope. That
+is wrong in effect: the failures operators actually report — a connector run killed
+at exactly 2h — come from *that* layer, not from `@task`. Scoping it out while the
+symptom lives there makes this ADR look like a fix for something it does not touch.
+
+**AE should hold no duration opinion at all.** Connector DAG nodes are child-workflow
+invocations, not activities: `DAGNode.nodeType` defaults to `"workflow"`
+(`contract-toolkit/src/App.pkl:686`) because `renderNode` always emits
+`activity_name = "execute_workflow"`, and the toolkit *rejects*
+`heartbeatTimeoutSeconds` on workflow nodes (`App.pkl:716-720`) precisely because
+it is activity-only. Temporal requires no timeout on a workflow —
+`workflow_execution_timeout` and `workflow_run_timeout` both default to unlimited;
+only `workflow_task_timeout` has a mandatory default, and that bounds task dispatch,
+not run duration. So there is nothing structurally forcing a number, and the
+unguessability argument applies with full force one layer up.
+
+Three pieces of work follow, none of which are `@task` changes:
+
+1. **AE drops its default.** The toolkit cannot fix this by omission: setting
+   `errorHandling = null` falls back to *AE's own source default of 2h*
+   (`App.pkl:706-714`) — the number the toolkit already raised to 1d/72h to work
+   around. AE has to stop applying a duration to workflow nodes.
+2. **The toolkit floors the override.** `startToCloseTimeoutSeconds` is currently
+   `Int(isBetween(1, 864000))` (`App.pkl:740`) — a cap with no floor, which is how
+   an app ships 7200. Give it a floor so an app cannot tune *below* the generous
+   default.
+3. **A conformance rule makes it permanent.** A rule that flags an app-level node
+   timeout below the floor runs across every connector repo in seconds, reports
+   through connector-pulse, and is a regression guard forever — rather than a
+   one-off sweep repeated by hand each time this resurfaces. The same rule carries
+   the `@task` side: opaque `run_in_thread` / source-await sites with no declared
+   hold (see *Holds*).
+
+With all three, the picture is consistent at every layer: **no layer holds a
+duration opinion; the only watchdog is progress, inside the app; duration is an
+alert, not a kill.**
 
 ## Options Considered
 
@@ -334,49 +483,100 @@ is **required**, not advisory.
 The originating proposal: stop guessing durations by making the default enormous
 and removing the per-task constants.
 
-**Why rejected on its own:** with today's unconditional keepalive, nothing kills a
-wedged-but-alive activity for 24h → worker-slot exhaustion and day-long
-non-detection (see Context). It also does not even fix the observed failures: the
-apps in the dashboard *already* override the default on every task, so bumping the
-default reaches none of them. This option is the *cosmetic half* of the real fix
-and is only safe once Option 3 is in place.
+**Why rejected on its own:** with today's unconditional keepalive and no stall
+watchdog, nothing kills a wedged-but-alive activity for 24h → worker-slot
+exhaustion and day-long non-detection (see Context). It also does not even fix the
+observed failures: the apps in the dashboard *already* override the default on
+every task, so bumping the default reaches none of them. This option is the
+*cosmetic half* of the real fix and is only safe once Option 3 is in place.
 
 ### Option 2: Keep guessing, tune per-task durations harder (Rejected)
 
 Continue the status quo — better per-task `timeout_seconds` guesses.
 
 **Cons:** the number is fundamentally unguessable (scales with tenant/data); the
-dashboard shows thoughtful guesses still failing at the tail. Unbounded tuning
-that never converges.
+dashboard shows thoughtful guesses still failing at the tail; FND-165 documents
+nine teams doing this independently without convergence. Unbounded tuning that
+never converges.
 
-### Option 3: Progress-aware heartbeat + duration backstop (Chosen)
+### Option 3: In-process stall watchdog + duration backstop (Chosen)
 
-Redefine the heartbeat as a progress watchdog so `heartbeat_timeout` catches
-stalls fast; make `start_to_close` a backstop. Detailed above.
+Keep the unconditional keepalive and `heartbeat_timeout` as-is; add a progress
+tracker and an in-process watchdog on its own budget; make `start_to_close` a
+backstop. Detailed above.
 
 **Pros:**
 - Eliminates the unguessable knob; the surviving knobs don't scale with tenant size.
 - Kills wedged activities in minutes instead of a day → no slot exhaustion.
-- Streaming work and `run_in_thread` blocking work are covered automatically; the
-  residual (custom async loops, raw opaque awaits) shrinks to a small, auditable
-  set that needs one explicit observability call.
-- Reuses the existing `heartbeat_timeout` knob and single auto-loop send site;
-  small, localized change.
+- Crash/OOM reclaim stays at 60s.
+- No semantic change to an existing knob, so no "same field, new meaning"
+  migration and no coupled default bump.
+- The failure is a typed SDK error naming the last progress signal, not Temporal's
+  generic timeout string — which is also what makes the rollout measurable.
+- Streaming work and `run_in_thread` blocking work keep working with no code
+  changes; the residual shrinks to a small, conformance-auditable set.
 
 **Cons:**
-- Requires framework hooks at the right loops, and an audit of opaque single-call
-  tasks to bracket them (migration cost).
-- Turning it on globally without the hooks would false-kill pure-async tasks that
-  emit no progress → must be flag-gated during rollout.
+- Cancelling the activity task from a sibling task technically violates asyncio's
+  cancellation protocol — the same trade-off, with the same rationale, that
+  `activities.py:259-291` already documents for the worker-shutdown path.
+- A CPU-bound wedge with no `await` cannot receive the cancellation (covered by
+  `heartbeat_timeout`, which is exactly why it is kept).
+- A wedged blocking thread is still not killable — the hold lapses, the slot is
+  reclaimed, the thread is orphaned. Unchanged from today; `run_fault_isolated` is
+  the only tool that kills.
+- Requires framework hooks at the right loops and an audit of opaque calls
+  (migration cost).
 
 ### Option 4: Manual heartbeating only (Rejected)
 
 Disable auto-heartbeat; require `context.heartbeat()` everywhere. Rejected for the
 same reasons as ADR-0010 Option 3 — easy to forget, and it cannot heartbeat during
 a single long opaque call. The chosen option keeps the manual beat as one of three
-mechanisms but removes the tax on the common paths: framework hooks and the
-`run_in_thread` bracket cover the streaming and blocking majority automatically, so
-manual observability is the small, audited residual — not the whole burden.
+mechanisms but removes the tax on the common paths.
+
+### Option 5: Progress-gate the heartbeat and let `heartbeat_timeout` kill (Rejected)
+
+The most tempting variant, and the one an earlier draft of this ADR chose: send a
+beat only when the progress token advanced, redefine `heartbeat_timeout` as "max
+acceptable time making zero forward progress," and raise its default from 60s to
+300s in the same change.
+
+It does work mechanically. Temporal's Rust Core spawns local heartbeat and
+`start_to_close` timers per activity task specifically so that "activities can still
+get cleaned up even if the user isn't heartbeating"
+(`sdk-core/src/worker/activities.rs`), issuing a cancel with reason
+`ActivityCancelReason::TimedOut`. That behaviour is present across the SDK's
+declared `temporalio>=1.25.0` floor (verified in 1.23 and 1.30), so withholding
+beats really does get the activity cancelled and the slot reclaimed — this is not
+the reason it is rejected.
+
+**Why rejected:**
+
+- **It spends crash-recovery latency to buy the semantic merge.** One knob must be
+  sized for the *slower* case, so raising it to 300s (or the 1800s some apps have
+  needed) is also raising the time an OOM-killed worker's activities sit
+  unreclaimed, from 60s to the whole budget. OOM is a leading failure mode for
+  these connectors.
+- **It loads more weight onto the mechanism that is already the top failure.**
+  Heartbeat timeout is the dominant production alert (Problem 2). Progress-gating
+  adds a second, independent way to trip the same timeout, and the resulting
+  failure is indistinguishable from the existing loop-starvation one — precisely
+  when CNCT-10 is trying to split timeout subtypes apart.
+- **The kill produces a bare `CancelledError`.** `activities.py:259` only
+  translates cancellation for worker shutdown, so a stall would surface with no
+  explanation, no last-progress context, and no way to measure the rollout.
+- **The migration is riskier for no gain.** Redefining a live knob's meaning forces
+  a coupled default bump, and apps that never touched `heartbeat_timeout` are the
+  *most* exposed rather than the least. An in-process watchdog on its own new knob
+  needs neither.
+- **It silently changes what existing constraints mean.** The toolkit caps
+  `heartbeatTimeoutSeconds` at 3600 and asserts `heartbeat < startToClose`
+  (`App.pkl:742-748`); both were written against the current meaning.
+
+Under Option 3, Core's local timers remain a useful backstop-of-the-backstop for
+the case the in-process watchdog cannot cover (a starved loop), which is exactly
+the division of labour we want.
 
 ## Rationale
 
@@ -386,139 +586,147 @@ manual observability is the small, audited residual — not the whole burden.
 *"How long is it acceptable to make zero forward progress?"* is roughly
 workload-independent — a few minutes for almost any connector. One sane global
 number can express the second; no global number can express the first. That
-asymmetry is the entire reason a large `start_to_close` default becomes safe once
-the heartbeat is progress-aware.
+asymmetry is the entire reason a large `start_to_close` default becomes safe once a
+stall watchdog exists.
 
 ### Failure detection is preserved or improved for every mode
 
 | Scenario | Before | After |
 | --- | --- | --- |
-| Event loop fully blocked (no `run_in_thread`) | auto-loop starved → killed at `heartbeat_timeout` | unchanged — still correct |
-| Streaming work, healthy | beats unconditionally | beats on real throughput via hooks |
-| Wedged-but-looping async (the gap today) | only `start_to_close` (→ 24h under the naive proposal) | **killed at `heartbeat_timeout` after last progress** |
-| Legit long opaque call | keepalive keeps it alive; bounded by `start_to_close` | bracket vouches for it until its declared timeout; resource timeout is the watchdog |
-| **Wedged blocking call in `run_in_thread`** | keepalive beats forever → only `start_to_close` (24h) | **bracket stops at the call's timeout → killed at `blocking_timeout + heartbeat_timeout`** (thread orphaned; slot reclaimed) |
-| `run_best_effort` child-process work (ADR-0017) | parent awaits; keepalive beats | parent awaits via `run_in_thread`/await → bracket keeps beating |
+| Worker OOM-killed / node lost / partition | killed at `heartbeat_timeout` (60s) | **unchanged (60s)** — keepalive stays unconditional |
+| Graceful pod eviction (SIGTERM) | `WorkerEvicted` → re-dispatched | unchanged |
+| Event loop fully blocked (no `run_in_thread`) | auto-loop starved → killed at `heartbeat_timeout` | unchanged — still correct, still the only detector for this |
+| Streaming work, healthy | beats unconditionally | beats unconditionally; hooks mark progress |
+| Wedged-but-looping async (the gap today) | only `start_to_close` (→ 24h under Option 1) | **`TaskStalledError` at `max_no_progress_seconds`** |
+| Legit long opaque call, hold declared | keepalive keeps it alive; bounded by `start_to_close` | hold vouches to the declared allowance; then stall fires |
+| Legit long opaque call, no hold declared | bounded by `start_to_close` | unbounded hold → 24h backstop; flagged by conformance |
+| Wedged blocking call in `run_in_thread`, hold declared | keepalive beats forever → only `start_to_close` | killed at `timeout + budget`; thread orphaned, slot reclaimed |
+| `run_best_effort` child-process work (ADR-0017) | parent awaits; keepalive beats | parent's await is inside a hold |
 
 ### What authors tune afterward
 
 | Knob | Before | After |
 | --- | --- | --- |
-| `start_to_close` | the number everyone guesses wrong | 24h backstop, never tuned |
-| `heartbeat_timeout` | "how often do I beat" (coupled to keepalive) | **"max no-progress window"** — default 300s, roughly app-independent |
-| opaque-call bound | none / `start_to_close` | resource-level timeout (DB `statement_timeout`, `httpx` timeout), reused as the bracket bound |
+| `start_to_close` | the number everyone guesses wrong | 24h backstop, never tuned (with `schedule_to_close` bounding the retry product) |
+| `heartbeat_timeout` | "how often do I beat" | **unchanged** — 60s, "nothing is beating" |
+| `max_no_progress_seconds` | — | **new**: "max no-progress window", roughly app-independent |
+| opaque-operation allowance | none / `start_to_close` | declared once, at the call site, in `holding_progress(timeout=…)` |
+| AE node duration | app-set, often *below* the toolkit default | none (see *The Automation Engine layer*) |
 
 ## Migration & backward compatibility — "what if I do nothing?"
 
 The first question every consumer asks: *if I don't touch my code, what changes?*
-Precisely because two knobs are in play, the answer must separate them — one is
-safe to ship on upgrade, the other is not.
 
-**The progress-gating flag — safe, changes nothing on upgrade.** Progress-gating is
-**flag-gated, default off** (see *Rollout*), and the framework `mark_progress()`
-hooks are **inert while the flag is off** — they bump a counter nobody reads. So
-merely bumping the SDK version produces no new "no forward progress" kill.
+**On upgrade: nothing.** The watchdog is flag-gated, default off (see *Rollout*);
+`mark_progress()` hooks are inert while the flag is off; `heartbeat_timeout` keeps
+its meaning and its 60s default; `start_to_close` keeps its 600s default. There is
+no coupled default bump, because no existing knob changes meaning. This is the main
+practical advantage over Option 5.
 
-**The `start_to_close` default (600s → 24h) — this one DOES change behavior, and
-must NOT ship at plain upgrade.** If the 24h default landed as part of the base
-upgrade, here is what would happen to an app that does nothing:
-
-- Apps that set `timeout_seconds` explicitly per task (including every app in the
-  failure dashboard) are unaffected — the default never reaches them. Their
-  StartToClose kills persist until they lower/remove those values and/or opt in.
-- Apps **relying on the 600s default** would get a 24h ceiling *while still running
-  the old unconditional keepalive* (because progress-gating is off). That is the
-  exact unsafe pairing from *Context*: `heartbeat_timeout` cannot catch a wedge, so
-  a **wedged-but-alive activity would squat its worker slot for up to 24h**, doing
-  no real work — starving the ~100-slot pool and badly delaying legitimate work.
-
-The 24h backstop is only safe **once the progress-aware watchdog is active for that
-app.** Therefore the default bump is **coupled to the opt-in flip** (Rollout step 4
-is per-app-gated, not a global default change at upgrade): you never get the 24h
-ceiling without the minutes-scale watchdog that makes it safe. Shipping the ceiling
-fleet-wide for fast StartToClose relief is tempting, but it buys relief for
-default-relying apps at the cost of a fleet-wide 24h-wedge exposure window — so it
-is explicitly rejected as the default path. **Flipping the flag (which brings both
-halves together) is the migration action.**
-
-**On opt-in, whether unchanged code survives depends on its shape.** This is the
-sharp half — for the last two rows, do-nothing code *will* start hitting
-no-progress kills, and that is the design working as intended (those paths emit
-nothing the SDK can see, i.e. a healthy-but-quiet task it cannot distinguish from a
-wedged one):
+**On opt-in, whether unchanged code survives depends on its shape.** For the last
+two rows, do-nothing code *will* start hitting stall kills, and that is the design
+working as intended — those paths emit nothing the SDK can see, i.e. a
+healthy-but-quiet task it cannot distinguish from a wedged one:
 
 | Existing code shape | Outcome on opt-in | Author action |
 | --- | --- | --- |
-| Streaming through SDK batch writers / stats / `ObjectStore` transfer | Covered — hooks tick | none |
-| Already calls `context.heartbeat()` | Covered — bumps progress | none |
-| Opaque blocking call via `run_in_thread` | Covered — bracket vouches to its timeout | none (set `blocking_timeout` if not derivable) |
-| **Custom async loop doing its own I/O, never through an instrumented SDK path** | **False-killed** if any gap > `heartbeat_timeout` | add a beat/bracket |
+| Streaming through SDK batch writers / stats / `ObjectStore` transfer | Covered — hooks mark progress | none |
+| Already calls `context.heartbeat()` | Covered — marks progress | none |
+| Opaque blocking call via `run_in_thread` | Covered — unbounded auto-hold | none; declare a hold to get a real bound |
+| **Custom async loop doing its own I/O, never through an instrumented SDK path** | **False-killed** if any gap > budget | add a beat or a hold |
 | **Opaque single `await` against the source (connector's own async client)** | **False-killed** at the tail | wrap in `holding_progress()` — expected in ~every connector |
 
-Two consequences fall out of this and are load-bearing for a safe rollout:
+**The `start_to_close` 24h backstop is coupled to the same opt-in flip.** An app
+gets the 24h ceiling *and* the stall watchdog together, never one without the other:
+the ceiling without the watchdog is the unsafe pairing from *Context*. The global
+default only changes at the very end, once the flag is retired.
 
-1. **The `heartbeat_timeout` default must move to 300s in lockstep with the
-   semantic flip.** Apps that never touched it — left it at the old 60s — are the
-   *most* exposed, not the least: under the new meaning, 60s of no SDK-observable
-   signal (one coarse batch, one slow page) would trip even a fully instrumented
-   app. The bump is not optional polish; it is part of the semantic change.
-2. **Opt-in verification must exercise a large-tenant / tail profile, not a smoke
-   test.** A small tenant's fast steps hide the very gaps that only open at the
-   tail — the same tail that produced the original `StartToClose` failures. Signing
-   off on a small run and flipping the flag would just relocate the tail failure.
+**Opt-in verification must exercise a large-tenant / tail profile, not a smoke
+test.** A small tenant's fast steps hide the very gaps that only open at the tail —
+the same tail that produced the original failures. Signing off on a small run and
+flipping the flag would just relocate the tail failure, and with non-retryable
+stalls and no checkpointing, relocating it is worse than leaving it.
 
 ## Rollout
 
-Progress-gating cannot be turned on globally in one step: any existing task doing
-pure-async work that never hits a framework hook or manual beat would start being
-killed at `heartbeat_timeout`. Sequence:
+1. **Fix the loop-starvation failures first.** Heartbeat timeout is today's
+   dominant alert (Problem 2) and it is an ADR-0010 adoption gap, not a semantics
+   gap. Audit and fix the blocking-on-the-loop sites before adding a second
+   mechanism on top. This is sequencing, not scope creep: the measurement in step 2
+   is unreadable while starvation dominates the signal.
+2. **Land the measurement before the mechanism.** CNCT-10's timeout-subtype
+   classification, plus a counter for stall kills and observed no-progress gap
+   distribution. Without a baseline there is no way to tell whether the flip helped,
+   and *"verify against a tail profile"* in step 5 is not checkable.
+3. **Ship the framework `mark_progress()` hooks** (writers, emission, transfer
+   loops) so the streaming majority is covered before anyone opts in. Inert while
+   the flag is off.
+4. **Ship the conformance rule and the toolkit floor.** Both are independent of the
+   `@task` work and both deliver immediately: the floor stops the next app shipping
+   a 2h node timeout, and the rule finds the opaque-call sites step 5 has to audit.
+   Pair with the AE ask to drop its own default.
+5. **Gate behind a flag and flip per-app after verification** —
+   `progress_watchdog` on `@task` / `TaskMetadata`, defaulting **off**, plus an env
+   kill-switch. Per-app work is auditing the two at-risk shapes from *Migration* and
+   declaring holds, then verifying against a **large-tenant / tail profile**.
+6. **Couple the 24h `start_to_close` backstop (and its `schedule_to_close`
+   product) to that same per-app flip.** The global default changes only at the end,
+   once the flag is retired and the watchdog is universal; at that point the
+   per-task duration constants are retired.
 
-1. **Ship the framework `mark_progress()` hooks first** (writers, emission,
-   transfer loops) so the streaming majority is covered before anyone opts in.
-2. **Gate behind a flag** — `progress_aware_heartbeat` on `@task` /
-   `TaskMetadata`, defaulting **off**, plus an env kill-switch.
-3. **Flip per-app after verification** — with hooks in place, the migration work is
-   auditing the two at-risk shapes from *Migration* (custom async loops, opaque
-   source awaits) and adding a beat/bracket, and verifying against a
-   **large-tenant / tail profile**. The `heartbeat_timeout` default moves to 300s as
-   part of this flip so its new meaning and its value change together.
-4. **Couple the 24h `start_to_close` backstop to that same per-app flip** — an app
-   gets the 24h ceiling *and* the progress-aware watchdog together, never one
-   without the other. The **global** default only changes at the very end, once the
-   flag is retired and progress-aware is universal; raising it fleet-wide any
-   earlier would expose default-relying, non-opted apps to 24h wedges (see
-   *Migration*). At that point the per-task duration constants are retired.
-
-The AE-orchestrated DAG node timeouts (`errorHandling.startToCloseTimeoutSeconds`
-in the contract toolkit, defaulting 24h/72h) are a *separate layer* consumed by
-Automation Engine and are out of scope here; this ADR governs SDK-native `@task`
-activities. The same "backstop + progress watchdog" philosophy could later be
-applied there.
+Per the "delete v3-prep workarounds" discipline, the flag is temporary and its
+removal is part of the work, not a follow-up.
 
 ## Consequences
 
 **Positive:**
 - App authors stop guessing an unguessable duration; `start_to_close` becomes a
-  set-and-forget backstop.
+  set-and-forget backstop, at both the `@task` and AE layers.
 - Wedged-but-alive activities are detected in minutes, removing the slot-exhaustion
   risk that blocks a large `start_to_close` default.
-- Streaming connectors get correct behavior with no code changes (framework hooks).
-- Change is localized to `execution/heartbeat.py` (controller + loop +
-  `run_in_thread`), the `activities.py` wiring, and one-line `mark_progress()` calls
-  in existing SDK write/transfer loops.
+- Crash/OOM detection latency is unchanged, and no existing knob changes meaning —
+  upgrade is behaviourally identical until an app opts in.
+- Stalls surface as a typed error naming the last progress signal, which is both
+  better for the operator and what makes the rollout measurable.
+- Streaming connectors get correct behavior with no code changes.
+- Change is localized to `execution/heartbeat.py` (tracker + loop + hold plumbing),
+  the `activities.py` wiring and cancellation branch, one new error leaf, and
+  one-line `mark_progress()` calls in existing SDK write/transfer loops.
 
 **Negative:**
-- Opaque single-call tasks must be audited and either bracketed or given a
-  resource-level timeout — a one-time migration per app.
-- A new default semantics for `heartbeat_timeout` must be documented so authors
-  read it as "no-progress budget," not "beat interval."
-- During rollout, the flag adds a temporary branch that must be removed once
-  progress-aware heartbeat is the default (per the "delete v3-prep workarounds"
-  discipline).
+- Opaque single-operation calls must be audited and given a declared hold — a
+  one-time migration per app, and `holding_progress()` is expected in nearly every
+  connector rather than being a rare escape hatch.
+- A third timeout-ish knob exists (`max_no_progress_seconds`), and the docs must be
+  clear that it is *not* the beat interval and *not* a duration budget.
+- Cancelling the activity task from the watchdog carries the documented asyncio
+  protocol caveat.
+- Stall kills are non-retryable until REQ-1609 lands, so a false kill costs the
+  whole activity.
+- During rollout the flag adds a temporary branch that must be removed.
+
+## Open questions
+
+1. **The default for `max_no_progress_seconds`.** 300s was the earlier proposal;
+   the FND-165 evidence (apps needing 1800s under the *easier* unconditional
+   regime) argues for something larger, and a too-tight default is a false-kill
+   generator at the tail. Proposal: start at **900s**, and treat the observed
+   no-progress gap distribution from Rollout step 2 as the evidence that sets it.
+2. **`schedule_to_close` vs capped attempts** for bounding the retry product
+   (see *Bounding total time*).
+3. **Whether REQ-1609 (checkpointing) gates the per-app flip** or merely informs
+   the retryability default.
+4. **Sign-off on the AE ask** — dropping the workflow-node duration default is a
+   cross-team change, not an SDK one.
 
 ## Related
 
 - **ADR-0010** — Async-First Design and Blocking Code Pitfalls (blocking code owns
   its timeout; `run_in_thread` keeps the loop responsive). This ADR builds directly
-  on it: the blocking bracket reuses `run_in_thread`'s existing internal-timeout contract.
+  on it, and *Holds* explains why ADR-0010's per-operation timeout cannot be reused
+  as a wall-clock bound.
 - **ADR-0017** — Native Execution Isolation (`run_best_effort` / `run_fault_isolated`).
+- **REQ-1609** — Activity-level checkpointing. Determines whether a stall kill is
+  cheap or catastrophic.
+- **CNCT-10** — Timeout-error subtype classification. The measurement dependency.
+- **FND-165** — The production evidence for both failure modes.
