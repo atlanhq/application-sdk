@@ -11,6 +11,7 @@ import pytest
 
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.errors.categories import Audience
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionTaskInput,
@@ -26,6 +27,7 @@ from application_sdk.templates.sql_app_errors import (
     MapProcedureUnimplementedError,
     MapSchemaUnimplementedError,
     MapTableUnimplementedError,
+    SqlProbeTimeoutError,
 )
 
 # ---------------------------------------------------------------------------
@@ -2085,11 +2087,10 @@ class TestPrimeSqlAuth:
     async def test_prime_timeout_raises_app_timeout_error(
         self, error_type, error_message
     ):
-        """Probe failures classified as timeouts must surface as
-        ``AppTimeoutError`` — NOT ``AuthError`` — so the on-call's
-        ``suggested_action`` is "check network reachability" rather
-        than "run ACCOUNT UNLOCK". Pinned by application-sdk#1835
-        mothership comment-3287630230 (HIGH).
+        """Probe failures classified as timeouts must surface as a timeout
+        — NOT ``AuthError`` — so the on-call's ``suggested_action`` is
+        "check network reachability" rather than "run ACCOUNT UNLOCK".
+        Pinned by application-sdk#1835 mothership comment-3287630230 (HIGH).
         """
         from application_sdk.errors.leaves import AppTimeoutError
 
@@ -2124,6 +2125,12 @@ class TestPrimeSqlAuth:
         # field — driver message is inlined into ``message`` instead.
         assert error_message in err.message
         assert err.suggested_action and "network reachability" in err.suggested_action
+        # Routes to the customer, not Atlan. Only the driver's and the
+        # socket's clocks can reach this branch, so the source owns the
+        # timeout — AppTimeoutError's APP_OWNER default would be wrong.
+        assert isinstance(err, SqlProbeTimeoutError)
+        assert err.audience is Audience.USER
+        assert err.effective_retryable is True
 
     @pytest.mark.parametrize(
         "error_type,error_message",
@@ -2230,5 +2237,265 @@ class TestPrimeSqlAuth:
         err = exc_info.value
         assert "unclassified" in err.message.lower()
         assert (
-            err.suggested_action and "_classify_prime_failure" in err.suggested_action
+            err.suggested_action and "_classify_probe_strings" in err.suggested_action
         )
+
+
+# ---------------------------------------------------------------------------
+# Probe failure classification through the real client (CNCT-197)
+# ---------------------------------------------------------------------------
+
+
+# Deliberately named as sqlalchemy/pyodbc would name it: the class name is
+# what the classifier discriminates on, so a test-shaped name would not
+# reproduce production. HYT00 is the ODBC SQLSTATE for "login timeout expired".
+class OperationalError(Exception):
+    _HYT00 = (
+        "(pyodbc.OperationalError) ('HYT00', '[HYT00] [Microsoft][ODBC Driver 18 "
+        "for SQL Server]Login timeout expired (0) (SQLDriverConnect)')"
+    )
+
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(message or self._HYT00)
+
+
+def _wrapping_client(raises: Exception) -> Any:
+    """A real ``BaseSQLClient`` with only its transport stubbed.
+
+    ``FakeSQLClient`` raises straight out of ``get_results``, which is what let
+    CNCT-197 ship green: the SDK's own catch-all rewrap was never in the path,
+    so the classifier only ever saw driver-shaped inputs it cannot see in
+    production. Stubbing one layer lower keeps the rewrap under test.
+    """
+    from application_sdk.clients.sql import BaseSQLClient
+
+    class _Client(BaseSQLClient):
+        async def _execute_async_read_operation(self, query, chunksize):
+            raise raises
+
+        async def close(self):
+            pass
+
+    return _Client()
+
+
+class TestPrimeFailureClassification:
+    """CNCT-197 — the classifier must see the failure, not the wrapper.
+
+    ``BaseSQLClient.get_results`` rewraps every driver exception as
+    ``SqlPandasResultError``, whose message is a fixed string. Only a class
+    name and a message cross the activity boundary, so classifying there made
+    every probe failure — credential rejection, DNS failure, TLS error,
+    connect timeout — land on ``InternalError`` / ``APP_OWNER`` /
+    non-retryable. A customer-owned source problem was reported to the
+    Automation Engine as an Atlan internal fault, with no ``suggested_action``.
+
+    The fix classifies inside ``prime_sql_auth``, where the live exception and
+    its ``__cause__`` chain still exist, and carries the verdict on
+    ``PrimeAuthOutput.failure``.
+    """
+
+    @staticmethod
+    def _input() -> ExtractionTaskInput:
+        return ExtractionTaskInput(
+            workflow_id="wf-test",
+            output_path="/tmp/test",
+            output_prefix="/tmp",
+            exclude_filter="",
+            include_filter="",
+            temp_table_regex="",
+        )
+
+    @classmethod
+    async def _probe(cls, driver_exc: Exception) -> PrimeAuthOutput:
+        app = SqlApp.__new__(SqlApp)
+        app._app_name = "test-app"
+        client = _wrapping_client(driver_exc)
+        with patch.object(
+            SqlApp, "_init_sql_client", new=AsyncMock(return_value=client)
+        ):
+            return await app.prime_sql_auth(cls._input())
+
+    async def test_get_results_flattens_every_driver_error(self):
+        """The premise. Unchanged SDK behaviour, and the reason the fix has to
+        classify before the activity boundary rather than after it."""
+        from application_sdk.clients.sql_errors import SqlPandasResultError
+
+        client = _wrapping_client(OperationalError())
+
+        with pytest.raises(SqlPandasResultError) as ei:
+            await client.get_results("SELECT 1")
+
+        assert str(ei.value) == "Error reading data from SQL into a pandas DataFrame"
+        assert isinstance(ei.value.__cause__, OperationalError)
+
+    async def test_probe_reports_root_cause_not_the_wrapper(self):
+        result = await self._probe(OperationalError())
+
+        assert result.success is False
+        assert result.error_type == "OperationalError"
+        assert "HYT00" in (result.error_message or "")
+
+    async def test_login_timeout_routes_to_the_customer(self):
+        """The production case. An ODBC login timeout against a customer VPC
+        endpoint is a USER-owned, retryable source problem."""
+        from application_sdk.errors.categories import Audience, FailureCategory
+        from application_sdk.errors.leaves import SourceUnavailableError
+
+        err = SqlApp._classify_prime_failure(await self._probe(OperationalError()))
+
+        assert isinstance(err, SourceUnavailableError)
+        assert err.category is FailureCategory.SOURCE_UNAVAILABLE
+        assert err.audience is Audience.USER
+        assert err.effective_retryable is True
+        assert err.suggested_action and "DNS" in err.suggested_action
+
+    @pytest.mark.parametrize(
+        "driver_exc,expected_leaf",
+        [
+            (OperationalError(), "SourceUnavailableError"),
+            (OSError("[Errno -2] Name or service not known"), "SourceUnavailableError"),
+            (
+                Exception("(pyodbc.Error) ('28000', 'Login failed for user')"),
+                "AuthError",
+            ),
+            (TimeoutError("probe deadline exceeded"), "SqlProbeTimeoutError"),
+            (Exception("something no driver has produced before"), "InternalError"),
+        ],
+    )
+    async def test_each_failure_shape_reaches_its_own_verdict(
+        self, driver_exc, expected_leaf
+    ):
+        """Every one of these classified as ``InternalError`` before the fix,
+        because the wrapper collapsed them into a single shape."""
+        err = SqlApp._classify_prime_failure(await self._probe(driver_exc))
+        assert type(err).__name__ == expected_leaf
+
+    async def test_failed_probe_reports_failure_status(self):
+        """The output used to serialize as
+        ``{"status": "success", "success": false}`` — self-contradictory."""
+        from application_sdk.contracts.base import OutputStatus
+
+        result = await self._probe(OperationalError())
+
+        assert result.success is False
+        assert result.status is OutputStatus.FAILURE
+
+    async def test_verdict_survives_the_activity_boundary(self):
+        """``prime_sql_auth`` is a Temporal activity, so ``run()`` classifies
+        from a deserialized copy. The typed verdict and its evidence must
+        round-trip."""
+        from application_sdk.errors.categories import Audience
+        from application_sdk.errors.leaves import SourceUnavailableError
+
+        result = await self._probe(OperationalError())
+        rehydrated = PrimeAuthOutput.model_validate_json(result.model_dump_json())
+
+        err = SqlApp._classify_prime_failure(rehydrated)
+
+        assert isinstance(err, SourceUnavailableError)
+        assert err.audience is Audience.USER
+        assert err.source_type == "sql"
+        assert err.network_error == result.error_message
+
+    async def test_typed_root_cause_is_respected_as_is(self):
+        """A connector that raises its own typed ``AppError`` keeps its
+        verdict — string matching never gets to second-guess it."""
+        from application_sdk.errors.leaves import AuthError
+
+        typed = AuthError(message="source rejected the login", auth_method="odbc")
+
+        err = SqlApp._classify_prime_failure(await self._probe(typed))
+
+        assert isinstance(err, AuthError)
+        assert err.message == "source rejected the login"
+        assert err.auth_method == "odbc"
+
+    async def test_probe_never_puts_a_connection_string_on_the_wire(self):
+        """CNCT-198's blast radius, reached through this path. The fix
+        promotes the root driver message onto the activity result, so it is
+        redacted at the point of capture rather than by a later layer."""
+        dsn = (
+            "DRIVER={ODBC Driver 18 for SQL Server};SERVER=host.example.com,1433;"
+            "UID=sa;PWD=SyntheticValue123;Encrypt=yes"
+        )
+
+        result = await self._probe(OperationalError(f"login failed: {dsn}"))
+
+        assert "SyntheticValue123" not in (result.error_message or "")
+        assert result.failure is not None
+        assert "SyntheticValue123" not in result.failure.model_dump_json()
+
+    def test_string_fallback_still_classifies_legacy_outputs(self):
+        """Activity results written by an older SDK carry no ``failure``.
+        Temporal replays them, so the string path has to keep working."""
+        from application_sdk.errors.leaves import SourceUnavailableError
+
+        legacy = PrimeAuthOutput(
+            success=False,
+            error_type="gaierror",
+            error_message="[Errno -2] Name or service not known",
+        )
+
+        assert isinstance(
+            SqlApp._classify_prime_failure(legacy), SourceUnavailableError
+        )
+
+    def test_unknown_wire_code_degrades_to_internal(self):
+        """A newer producer must not crash an older consumer: an unknown code
+        and unknown evidence keys fall back instead of raising."""
+        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.errors.leaves import InternalError
+        from application_sdk.errors.wire import FailureDetails
+
+        unknown = PrimeAuthOutput(
+            success=False,
+            failure=FailureDetails(
+                category=FailureCategory.INTERNAL,
+                code="SOME_FUTURE_CODE",
+                retryable=False,
+                message="from a newer SDK",
+                evidence={"field_this_leaf_does_not_have": 1},
+            ),
+        )
+
+        err = SqlApp._classify_prime_failure(unknown)
+
+        assert isinstance(err, InternalError)
+        assert err.message == "from a newer SDK"
+
+    async def test_unserialisable_verdict_does_not_crash_the_probe(self):
+        """A crashed prime activity is retried, and retrying is what stacks
+        ``failed_login_attempts`` on the source — the exact cycle this task
+        exists to break. A connector error whose evidence key the
+        ``FailureDetails`` denylist rejects must degrade, not raise."""
+        from dataclasses import dataclass
+
+        from application_sdk.contracts.base import OutputStatus
+        from application_sdk.errors.leaves import AuthError
+
+        @dataclass(kw_only=True)
+        class _AppAuthError(AuthError):
+            api_key: str | None = None  # denylisted evidence key
+
+        result = await self._probe(
+            _AppAuthError(message="rejected", api_key="synthetic")
+        )
+
+        assert result.success is False
+        assert result.status is OutputStatus.FAILURE
+        assert result.failure is None
+        assert result.error_type == "_AppAuthError"
+
+    async def test_timeout_verdict_keeps_its_audience_across_the_wire(self):
+        """The probe-specific timeout leaf must rebuild as itself, not as the
+        base ``AppTimeoutError`` — the whole point of the leaf is its USER
+        audience override, and only the wire code carries it."""
+        result = await self._probe(TimeoutError("probe deadline exceeded"))
+        rehydrated = PrimeAuthOutput.model_validate_json(result.model_dump_json())
+
+        err = SqlApp._classify_prime_failure(rehydrated)
+
+        assert isinstance(err, SqlProbeTimeoutError)
+        assert err.audience is Audience.USER
+        assert err.operation == "prime_sql_auth"

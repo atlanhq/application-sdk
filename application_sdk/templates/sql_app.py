@@ -73,6 +73,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
 import time
 from collections.abc import Callable
@@ -81,6 +82,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, Union
 
 import orjson
+from pydantic import ValidationError
 from temporalio import workflow as _temporal_workflow
 
 from application_sdk.app.base import App
@@ -91,10 +93,16 @@ from application_sdk.common.sql_filters import (
     safe_substitute_placeholders,
 )
 from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
+from application_sdk.contracts.base import OutputStatus
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.credentials.ref import CredentialRef
-from application_sdk.errors import safe_traceback
+from application_sdk.errors import (
+    AppError,
+    FailureDetails,
+    redact_secrets,
+    safe_traceback,
+)
 from application_sdk.errors.leaves import (
     AppTimeoutError,
     AuthError,
@@ -113,6 +121,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     TransformInput,
     TransformOutput,
 )
+from application_sdk.templates.sql_app_errors import SqlProbeTimeoutError
 
 if TYPE_CHECKING:
     from pyatlan_v9.model.assets import Asset
@@ -132,6 +141,66 @@ _MapperFn = Callable[[dict[str, Any], str], Union["Asset", dict[str, Any]]]
 #: through ``client.run_query()``. Caps the in-flight set at
 #: ``_EXTRACT_BATCH_SIZE * row_size`` regardless of total result size.
 _EXTRACT_BATCH_SIZE: int = 10_000
+
+#: Leaves ``_classify_probe_strings`` can emit, keyed by wire code. Used to
+#: rebuild the typed error on the far side of the activity boundary, where only
+#: the ``FailureDetails`` envelope survives. The base ``TIMEOUT`` code is
+#: accepted alongside the probe-specific one so a verdict from any other
+#: producer still rebuilds as a timeout rather than degrading to internal.
+_PROBE_FAILURE_LEAVES: dict[str, type[AppError]] = {
+    AuthError.code: AuthError,
+    SqlProbeTimeoutError.code: SqlProbeTimeoutError,
+    AppTimeoutError.code: AppTimeoutError,
+    SourceUnavailableError.code: SourceUnavailableError,
+    InternalError.code: InternalError,
+}
+
+
+def _root_cause(exc: BaseException) -> BaseException:
+    """Walk ``__cause__`` to the innermost exception.
+
+    The SDK's SQL client rewraps driver exceptions, so the outermost
+    exception describes the wrapper and the innermost describes what
+    actually happened. Cycle-guarded — a hand-built ``__cause__`` loop
+    would otherwise hang the worker.
+    """
+    seen = {id(exc)}
+    while exc.__cause__ is not None and id(exc.__cause__) not in seen:
+        exc = exc.__cause__
+        seen.add(id(exc))
+    return exc
+
+
+def _redacted_validation_reason(exc: ValidationError) -> str:
+    """Return the validator messages only, dropping the rejected input.
+
+    ``str(ValidationError)`` embeds ``input_value=…`` — for a rejected
+    ``evidence`` dict that is the secret-named payload the denylist exists to
+    keep off the wire, so neither the exception nor ``exc_info`` may be logged.
+    The ``msg`` fields name the offending keys and nothing else.
+    """
+    return "; ".join(str(err.get("msg", "")) for err in exc.errors())
+
+
+def _error_from_failure_details(details: FailureDetails) -> AppError:
+    """Rebuild a typed error from its wire envelope.
+
+    ``evidence`` keys are the producing dataclass's field names, so they map
+    straight back onto the leaf's constructor. Keys the leaf does not declare
+    are dropped rather than raising — a newer producer must not break an older
+    consumer replaying its history.
+    """
+    leaf = _PROBE_FAILURE_LEAVES.get(details.code, InternalError)
+    declared = {f.name for f in dataclasses.fields(leaf)}
+    evidence = {k: v for k, v in details.evidence.items() if k in declared}
+    return leaf(
+        message=details.message,
+        retryable=details.retryable,
+        suggested_action=details.suggested_action,
+        app_name=details.app_name,
+        run_id=details.run_id,
+        **evidence,
+    )
 
 
 def _orjson_default(obj: Any) -> Any:
@@ -301,12 +370,20 @@ class SqlApp(App):
 
         Failure semantics (return-not-raise + zero Temporal retries):
             If the probe fails (auth rejected, network unreachable,
-            wrong host, etc.) this task catches the exception, populates
-            ``success=False`` + ``error_type`` + ``error_message`` on the
-            returned ``PrimeAuthOutput``, and lets ``run()`` short-circuit
-            the workflow with a typed error (``AuthError``,
-            ``AppTimeoutError`` or ``SourceUnavailableError``
-            depending on ``error_type``).
+            wrong host, etc.) this task catches the exception, classifies
+            it *here* — while the live exception and its ``__cause__``
+            chain are still available — and returns the verdict as
+            ``failure`` (plus ``success=False`` and the root cause's
+            ``error_type`` / ``error_message``) on the returned
+            ``PrimeAuthOutput``. ``run()`` rebuilds that typed error
+            (``AuthError``, ``SqlProbeTimeoutError`` or
+            ``SourceUnavailableError``) and raises it.
+
+            Classification has to happen here, not in ``run()``: only two
+            strings cross the activity boundary, and
+            ``BaseSQLClient.get_results`` rewraps every driver exception as
+            ``SqlPandasResultError`` with one fixed message, so those two
+            strings are identical for every failure mode (CNCT-197).
 
             Why return failure instead of raising and letting Temporal
             retry: the failure mode this task was added to prevent is
@@ -338,12 +415,36 @@ class SqlApp(App):
         # conformance: ignore[E004] exc_info=True would embed the SQLAlchemy connection string (incl. password) in structured logs; safe_traceback with secrets redacted is logged instead
         except Exception as exc:
             duration_ms = (time.perf_counter() - start) * 1000.0
-            # Truncate driver messages so the contract field stays bounded;
-            # secret-sanitisation happens later when run() wraps this into
-            # an AuthError (errors.base.sanitize_cause_repr).
-            error_message = str(exc)
+            # Report the ROOT cause, not whatever wrapper reached this
+            # clause. ``BaseSQLClient.get_results`` rewraps every driver
+            # exception as ``SqlPandasResultError`` with one fixed message, so
+            # the wrapper's class name and message are identical for a DNS
+            # failure, a TLS error and a credential rejection — nothing
+            # downstream can tell them apart. See CNCT-197.
+            root = _root_cause(exc)
+            # Redact here, not downstream: the root driver message can embed a
+            # connection string, and this value lands in the activity result,
+            # the classified error's evidence, and the logs.
+            error_message = redact_secrets(str(root))
             if len(error_message) > 500:
                 error_message = error_message[:500] + "…"
+            classified = self._classify_probe_exception(exc)
+            # Serialising the verdict must never turn a probe failure into a
+            # crashed activity — a crash is retried, and retrying this task is
+            # what stacks failed_login_attempts on the source. A
+            # connector-defined AppError can carry an evidence key the
+            # FailureDetails denylist rejects, so this degrades to the
+            # error_type / error_message path instead of raising.
+            try:
+                failure = classified.to_failure_details()
+            except ValidationError as verdict_error:
+                failure = None
+                logger.warning(
+                    "Could not serialise the prime failure verdict (%s); "
+                    "falling back to error_type/error_message classification. %s",
+                    type(classified).__name__,
+                    _redacted_validation_reason(verdict_error),
+                )
             # We want the traceback frames in worker logs — the long-tail
             # (TLS negotiation, driver bugs, version skew) is only diagnosable
             # from the original frames. But exc_info=True would render the
@@ -351,17 +452,20 @@ class SqlApp(App):
             # connection string incl. password. safe_traceback preserves the
             # frames and strips credentials before logging.
             logger.error(  # conformance: ignore[E005,L004] exc_info would expose SQLAlchemy password in traceback; safe_traceback redacts secrets from the frames
-                "SQL auth cache prime FAILED after %.1fms (%s) — short-circuiting "
+                "SQL auth cache prime FAILED after %.1fms (%s → %s) — short-circuiting "
                 "before parallel extract burst to avoid stacking failed_login_attempts "
                 "on the source.\n%s",
                 duration_ms,
-                type(exc).__name__,
+                type(root).__name__,
+                classified.qualified_code,
                 safe_traceback(exc),
             )
             return PrimeAuthOutput(
+                status=OutputStatus.FAILURE,
                 duration_ms=duration_ms,
                 success=False,
-                error_type=type(exc).__name__,
+                failure=failure,
+                error_type=type(root).__name__,
                 error_message=error_message,
             )
         duration_ms = (time.perf_counter() - start) * 1000.0
@@ -377,19 +481,65 @@ class SqlApp(App):
 
     @staticmethod
     def _classify_prime_failure(prime_result: PrimeAuthOutput) -> Exception:
-        """Map a failed ``PrimeAuthOutput`` to the right typed error.
+        """Rebuild the typed error for a failed ``PrimeAuthOutput``.
+
+        ``prime_sql_auth`` already classified the failure against the live
+        exception, so the work here is reconstruction, not classification —
+        one classifier, one implementation, no chance of the two diverging.
+
+        The string-matching fallback stays for outputs that carry no
+        ``failure``: activity results produced by an older SDK and replayed
+        from Temporal history, and connectors that build a
+        ``PrimeAuthOutput`` by hand.
+        """
+        if prime_result.failure is not None:
+            return _error_from_failure_details(prime_result.failure)
+        return SqlApp._classify_probe_strings(
+            prime_result.error_type or "", prime_result.error_message or ""
+        )
+
+    @staticmethod
+    def _classify_probe_exception(exc: BaseException) -> AppError:
+        """Classify a live probe exception, cause chain included.
+
+        Classifying here rather than at the activity boundary is the whole
+        point: ``BaseSQLClient.get_results`` rewraps every driver exception as
+        ``SqlPandasResultError``, so by the time only a class name and a
+        message survive there is nothing left to discriminate on (CNCT-197).
+
+        An already-typed root cause is returned as-is — if a connector took
+        the trouble to raise a typed ``AppError``, that verdict beats
+        anything string matching can infer.
+        """
+        root = _root_cause(exc)
+        if isinstance(root, AppError):
+            return root
+        return SqlApp._classify_probe_strings(
+            type(root).__name__, redact_secrets(str(root)), cause=root
+        )
+
+    @staticmethod
+    def _classify_probe_strings(
+        error_type: str,
+        error_message: str,
+        cause: BaseException | None = None,
+    ) -> AppError:
+        """Map a probe failure's class name and message to a typed error.
 
         Painting every probe failure as ``AuthError`` would mis-direct
         on-call: a DBA who follows the lockout-specific
         ``suggested_action`` for a DNS misconfiguration wastes time on
         a non-existent account-lockout. We discriminate based on
-        ``error_type`` / ``error_message`` and raise:
+        ``error_type`` / ``error_message`` and return:
 
         - ``AuthError`` for actual credential rejections
           (``Access denied``, MySQL code 1045,
           ``AuthenticationError`` class names).
-        - ``AppTimeoutError`` for probe timeouts (``TimeoutError`` /
-          ``asyncio.TimeoutError`` / message contains ``timed out``).
+        - ``SqlProbeTimeoutError`` for probe timeouts (``TimeoutError`` /
+          ``asyncio.TimeoutError`` / message contains ``timed out``). It
+          overrides ``AppTimeoutError``'s ``APP_OWNER`` default to USER: the
+          only timeouts that can reach here are the driver's and the socket's,
+          so the clock always ran out waiting for the customer's source.
         - ``SourceUnavailableError`` for network / DNS / TLS /
           connection-refused failures — the customer-owned source is
           presumed reachable but didn't respond cleanly, so the failure
@@ -397,22 +547,23 @@ class SqlApp(App):
         - ``InternalError`` as the last-resort fallback so we never
           return ``None`` and never accidentally swallow an unknown
           driver exception class.
+
+        ``error_message`` must already be secret-redacted — it is copied
+        verbatim into the returned error's evidence fields.
         """
-        error_type = prime_result.error_type or ""
-        error_message = prime_result.error_message or ""
         msg_lower = error_message.lower()
 
         is_timeout = "timeout" in error_type.lower() or "timed out" in msg_lower
         if is_timeout:
-            return AppTimeoutError(
+            return SqlProbeTimeoutError(
                 message=(
                     "SQL auth-cache prime probe timed out before parallel "
                     f"extract burst ({error_type}): {error_message}"
                 ),
-                operation="prime_sql_auth",
+                cause=cause,
                 suggested_action=(
                     "Check network reachability and source health: the probe "
-                    "did not get an auth response within the 60s task "
+                    "did not get an auth response within the 120s task "
                     "deadline. Verify the source listener is up and the "
                     "worker → source network path is healthy before "
                     "retrying the workflow."
@@ -447,6 +598,7 @@ class SqlApp(App):
                     "lockout counter."
                 ),
                 auth_method="sql_client",
+                cause=cause,
                 failure_reason=error_message,
                 suggested_action=(
                     "Verify the SQL connection credentials. If the source is "
@@ -485,6 +637,7 @@ class SqlApp(App):
                     f"parallel extract burst ({error_type})."
                 ),
                 source_type="sql",
+                cause=cause,
                 network_error=error_message,
                 suggested_action=(
                     "Check DNS resolution, NAT/firewall rules, TLS "
@@ -505,13 +658,14 @@ class SqlApp(App):
                 f"with an unclassified error ({error_type}): {error_message}"
             ),
             component="sql_app.prime_sql_auth",
+            cause=cause,
             classification_pending=True,
             suggested_action=(
                 "Inspect the worker logs (the prime task logs the original "
-                "traceback via exc_info=True). The error type was not "
-                "recognised as auth / timeout / network — please file a "
-                "ticket so the classifier in SqlApp._classify_prime_failure "
-                "can be extended."
+                "traceback, with secrets redacted, via safe_traceback). The "
+                "error type was not recognised as auth / timeout / network — "
+                "please file a ticket so the classifier in "
+                "SqlApp._classify_probe_strings can be extended."
             ),
         )
 

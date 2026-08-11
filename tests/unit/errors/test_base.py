@@ -221,6 +221,60 @@ def test_redact_secrets_consumes_at_in_password() -> None:
     assert out == "connect failed for postgresql://***@host:5432/db"
 
 
+# ODBC/DSN keyword syntax (CNCT-198). ODBC connection strings use `PWD=`,
+# not `password=`, and they are not URLs, so neither of the two existing
+# patterns covered them. Synthetic value, not a real credential.
+_ODBC_DSN = (
+    "DRIVER={ODBC Driver 18 for SQL Server};SERVER=host.example.com,1433;"
+    "DATABASE=metadata;UID=sa;PWD=SyntheticValue123;Encrypt=yes"
+)
+
+
+def test_redact_secrets_redacts_odbc_pwd_keyword() -> None:
+    from application_sdk.errors import redact_secrets
+
+    assert "SyntheticValue123" not in redact_secrets(_ODBC_DSN)
+
+
+def test_redact_secrets_stops_at_the_odbc_separator() -> None:
+    """`[^\\s&,;#]+` already ends the match at `;`, so the pairs that follow
+    the password survive. Losing them would strip the driver, host and
+    encryption mode an on-call reads to diagnose the connection."""
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets(_ODBC_DSN)
+    assert "Encrypt=yes" in out
+    assert "DATABASE=metadata" in out
+
+
+def test_redact_secrets_keeps_odbc_uid() -> None:
+    """`UID` is a user name, not a credential. Redacting it would remove
+    "which account failed to log in" from every auth failure."""
+    from application_sdk.errors import redact_secrets
+
+    assert "UID=sa" in redact_secrets(_ODBC_DSN)
+
+
+def test_redact_secrets_keeps_correlation_ids() -> None:
+    """A bare `uid` keyword has no word boundary in the alternation, so it
+    would also match the tail of `run_guid=` and `correlation_uuid=` —
+    redacting the exact IDs needed to trace a run. Guards against adding it."""
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets("run_guid=abc123 correlation_uuid=def456")
+    assert "abc123" in out
+    assert "def456" in out
+
+
+def test_sanitize_cause_repr_redacts_odbc_dsn() -> None:
+    """End to end: `cause_repr` is serialized into Temporal activity results
+    and rendered on the Sage setup-UI card."""
+    from application_sdk.errors import sanitize_cause_repr
+
+    out = sanitize_cause_repr(Exception(f"connection failed: {_ODBC_DSN}"))
+    assert "SyntheticValue123" not in out
+
+
 def test_safe_traceback_formats_frames() -> None:
     from application_sdk.errors import safe_traceback
 
