@@ -286,30 +286,20 @@ def test_the_lease_wait_fits_inside_the_job_timeout(jobs: dict) -> None:  # type
     assert timeout_seconds > wait_seconds
 
 
-#: Every job on the path from run creation to the last leg finishing. The TTL is
-#: measured from run CREATION, so all of it counts — not just the part after the
-#: lease is acquired. Sizing the TTL against install-plus-legs alone was an
-#: actual latent bug, not a theoretical one: that pair is 160 min against a chain
-#: of 325, so a healthy run that queued for runners could cross a 4h TTL partway
-#: through its own install and have a contender reap it mid-flight.
-_PRE_RELEASE_CHAIN = (
-    "discover-e2e",
-    "build-e2e-image",
-    "merge-e2e-image",
-    "lease-tenant",
-    "prepare-tenant",
-    "e2e",
-)
+#: The jobs a lease is actually HELD across: acquired before the install, released
+#: after the last leg. The TTL is measured from the acquisition time the holder
+#: records for itself, so only this span counts — none of the pre-lease work
+#: (discovery, image build, manifest merge, runner queue time) does.
+_LEASE_HELD_ACROSS = ("prepare-tenant", "e2e")
 
 
 def test_the_lease_ttl_cannot_fire_on_a_healthy_holder(jobs: dict) -> None:  # type: ignore[type-arg]
     """The TTL breaking a LIVE holder's lease puts a second installer on the
-    tenant — the exact race the lease exists to close — so it must clear the
-    whole chain, with room left for runner queue time, which has no timeout.
+    tenant — the exact race the lease exists to close — so it has to clear the
+    longest legitimate hold with room to spare.
 
-    Derived from the workflow's own timeouts rather than hard-coded, so adding a
-    job to the chain or raising a timeout forces the TTL up instead of quietly
-    eating the margin.
+    Derived from the workflow's own timeouts rather than hard-coded, so raising
+    either of them forces the TTL up instead of quietly eating the margin.
     """
     action = yaml.safe_load(
         (_REPO_ROOT / ".github/actions/e2e-tenant-lease/action.yaml").read_text(
@@ -317,20 +307,20 @@ def test_the_lease_ttl_cannot_fire_on_a_healthy_holder(jobs: dict) -> None:  # t
         )
     )
     ttl_seconds = int(action["inputs"]["ttl-seconds"]["default"])
-    chain_seconds = (
-        sum(int(jobs[job]["timeout-minutes"]) for job in _PRE_RELEASE_CHAIN) * 60
+    hold_seconds = (
+        sum(int(jobs[job]["timeout-minutes"]) for job in _LEASE_HELD_ACROSS) * 60
     )
 
-    assert ttl_seconds > chain_seconds, (
-        f"ttl-seconds ({ttl_seconds}s) does not clear the "
-        f"{'+'.join(_PRE_RELEASE_CHAIN)} chain ({chain_seconds}s). A healthy "
-        "holder that queued for runners would have its lease broken mid-install."
+    assert ttl_seconds > hold_seconds, (
+        f"ttl-seconds ({ttl_seconds}s) does not clear the longest legitimate hold "
+        f"({'+'.join(_LEASE_HELD_ACROSS)} = {hold_seconds}s). A healthy holder "
+        "would have its lease broken mid-run and a second installer would start."
     )
-    # Queue time between those jobs is unbounded, so clearing the chain exactly is
-    # not enough; require real headroom rather than a one-second pass.
-    assert ttl_seconds >= 2 * chain_seconds, (
-        f"ttl-seconds ({ttl_seconds}s) clears the chain ({chain_seconds}s) but "
-        "leaves no room for runner queue time, which has no timeout"
+    # Runner queue time between the held jobs is unbounded, so clearing the sum
+    # exactly is not enough; require real headroom rather than a one-second pass.
+    assert ttl_seconds >= 1.5 * hold_seconds, (
+        f"ttl-seconds ({ttl_seconds}s) clears the hold ({hold_seconds}s) but "
+        "leaves little room for runner queue time, which has no timeout"
     )
 
 

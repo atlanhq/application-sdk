@@ -232,26 +232,51 @@ everywhere else the run must be independent.
 
 **For a shared resource, take a lease instead.** The `(app, cloud)` tenant lease
 in [`e2e-tenant-lease`](../../.github/actions/e2e-tenant-lease/) is the worked
-example (FND-250). Its protocol is worth reusing because it needs no lock
-server:
+example (FND-250). It needs no lock server:
 
-* Each run creates a ticket ref, `refs/e2e-tenant-lease/<app>/<cloud>/<run_id>-<run_attempt>`.
-* The lease is held by the lowest-ordered **live** ticket. Every participant
-  derives the same holder from the same listing, so there is no
-  compare-and-swap and no lock object to strand.
-* Ordering is by `run_id`, which GitHub assigns and increases with run creation
-  time *within a repository* — a server-side arrival order, so no runner clock
-  can make two runs both believe they are first.
-* The ticket name is derived entirely from the run, so every job of that run
-  computes it identically. Acquire and release live in different jobs and pass
-  no state; re-creating a ticket restores the same queue position.
-* Liveness is the holder's run status, not a heartbeat. A ticket whose run is
+* One ref per resource, with a **fixed** name:
+  `refs/e2e-tenant-lease/<app>/<cloud>/holder`. `POST /git/refs` on a name that
+  already exists returns 422, and that is an atomic test-and-set evaluated by
+  GitHub — of N simultaneous callers exactly one gets 201. That 422 *is* the
+  lock, not an error path bolted onto one.
+* The ref points at a **blob** holding the holder's identity (run id, attempt,
+  acquisition time). A ref can target a blob, which is what lets a single atomic
+  creation both take the lease and record who took it. Waiters read it to tell a
+  live holder from a dead one.
+* Liveness is the holder's run status, not a heartbeat. A lease whose run is
   `completed` is reaped by whoever notices. This is the part `if: always()`
   cannot do: GitHub *cancels* queued jobs rather than running them, so a
   cancelled run's release job never starts.
+* Release must **check ownership first**. A fixed name is a name you can delete
+  someone else's lease with.
 
-Two consequences to design for. A waiting run occupies a runner, so give the
-wait a budget and fail loudly past it, naming the holder — a contention outcome
-must never be phrased as a test failure. And ref writes need `contents: write`,
-so put acquire/release in their own small jobs and leave the jobs that execute
-test code read-only.
+**Do not build exclusion out of an ordering rule.** The first version of this
+lease was an ordered queue: every run created a ticket ref named after itself,
+and the lease belonged to whichever live ticket sorted lowest by
+`(run_id, run_attempt)`. It failed on its first concurrent run — both contenders
+acquired and both installed onto the same tenant. Two reasons, and both
+generalise:
+
+* `run_id` increases with run *creation*, which is **not** the order runs reach a
+  given job. In the observed failure the lower-id run got there 15 seconds later.
+* A total order gives FIFO *fairness*, not *exclusion*. A run that checks only
+  the tickets ordered ahead of it never notices that a run behind it already
+  holds the lease.
+
+Ordering-based exclusion is only sound if every contender's ticket exists before
+any contender decides, and nothing enforces that. Use an atomic primitive and
+derive nothing from ids. The cost is fairness — acquisition becomes a scramble,
+so bound starvation with the wait budget below rather than with a queue position.
+
+Three consequences to design for:
+
+* A waiting run occupies a runner, so give the wait a budget and fail loudly past
+  it, **naming the holder**. A contention outcome must never be phrased as a test
+  failure.
+* Ref writes need `contents: write`, so put acquire/release in their own small
+  jobs and leave the jobs that execute test code read-only.
+* If the lease fails open when it cannot be taken (the right default when a
+  separate assertion already catches the underlying hazard), then a broken lease
+  looks exactly like a working one — green, with a warning. **Assert the acquire
+  step's `state` output in anger** when verifying, rather than concluding from an
+  absence of red.

@@ -1,94 +1,95 @@
 #!/usr/bin/env python3
-"""A real ``(app, cloud)`` tenant lease for e2e runs — a queue, not a one-deep
-waiting room.
+"""A real ``(app, cloud)`` tenant lease for e2e runs — mutual exclusion via an
+atomic compare-and-swap on a single git ref.
 
 Why this exists rather than a ``concurrency:`` group
 ---------------------------------------------------
 A tenant is a shared *mutable* resource: ``prepare-tenant`` installs a version
-onto it and the e2e legs then assert they are testing that version (FND-31). So
-access has to be serialised across the whole span of a run, from the install to
-the last leg. GitHub's ``concurrency:`` cannot express that, for two independent
-reasons:
+onto it and every e2e leg then asserts it is testing that version (FND-31). So
+exclusive access has to span from the install to the last leg, and
+``concurrency:`` structurally cannot do that:
 
-* It is per-job, not per-run. A group on ``prepare-tenant`` is released the
-  moment that job ends, which is before any leg has started — the race it looks
-  like it closes is still wide open. The existing comment on that job said as
-  much: *"GitHub has no cross-job lease, so another run can still install
-  between this job and the legs below"*.
-* It holds at most ONE pending run per group. A third arrival does not queue —
+* It is per-JOB. A group on ``prepare-tenant`` is released the moment that job
+  ends, which is before any leg has started.
+* It holds exactly ONE pending run per group. A third arrival does not queue —
   it cancels the run that was waiting, before that run is ever given a runner,
-  producing no log output at all. That is FND-218: what looked like connector
-  test failures across a merge-queue batch were evictions, and the callback
-  mirrored them onto the dispatching PR as ``failure``, which reads as "your
-  change broke the connector".
+  with no log output at all. That is FND-218.
 
-``cancel-in-progress: false`` is therefore a waiting room with one chair, not a
-queue. This module is the queue.
+The protocol
+------------
+One ref per tenant, with a FIXED name::
 
-Protocol
---------
-Every run that wants a tenant creates a *ticket* ref in its own repository::
+    refs/e2e-tenant-lease/<app>/<cloud>/holder
 
-    refs/e2e-tenant-lease/<app>/<cloud>/<run_id>-<run_attempt>
+``POST /git/refs`` on a name that already exists returns 422. That is an atomic
+test-and-set evaluated by GitHub, and it is the whole of the mutual exclusion:
+exactly one contender can get 201 for a given ref, no matter how many try at
+once or in what order. 422 means somebody else holds the tenant.
 
-The lease is held by whichever LIVE ticket sorts lowest by
-``(run_id, run_attempt)``. Nothing is negotiated and there is no lock object to
-leak: every participant derives the same holder from the same ref listing, so
-there is no compare-and-swap, and no step whose failure strands the resource.
-Two properties are what make that sound:
+The ref points at a **blob** holding the holder's identity (run id, attempt, and
+the time it acquired). A ref can target a blob — verified against the API — which
+is what lets a single atomic creation both take the lease and record who took it.
+A waiter reads that blob to find out whose lease it is, so it can tell a live
+holder from a dead one.
 
-* ``run_id`` is assigned by GitHub and increases with run creation time within a
-  repository, so ordering is *server-side arrival order*. No runner clock takes
-  part, which removes the window where two runs both believe they are first
-  because their wall clocks disagree. (Ordering by a timestamp written into the
-  ref name would have exactly that bug, and it would be invisible until it lost
-  a tenant.)
-* A ticket's name is derived entirely from the run, so it is identical in every
-  job of that run. The acquiring job and the releasing job compute the same name
-  without passing state between them, and re-creating a ticket is idempotent —
-  it restores the run's exact queue position instead of sending it to the back.
+Why not an ordered queue (and the bug that taught us)
+----------------------------------------------------
+The first version of this module was a queue: every run created a ticket ref
+named after itself, and the lease belonged to whichever live ticket sorted lowest
+by ``(run_id, run_attempt)``. That was wrong, and it failed on its first
+concurrent run — both contenders acquired and both installed onto the same
+tenants:
 
-Liveness comes from the holder's *run*, not from a heartbeat: a ticket whose run
-reports ``status: completed`` is dead, and any participant that notices deletes
-it. This is deliberately not "release in an ``if: always()`` job", because that
-does not cover the case that matters most — a cancelled run whose release job
-never starts at all, since GitHub cancels queued jobs rather than running them.
-The reaper makes a leaked ticket self-healing: the next contender clears it on
-its first poll, so the worst case is one wasted poll interval, not a wedged
-tenant.
+* ``run_id`` increases with run *creation*, which is not the order runs reach
+  the lease job. In the observed failure the lower-id run got there 15s later.
+* A total order gives FIFO *fairness*; it does not give *exclusion*. A run that
+  only checks the tickets ordered ahead of it never notices that a run behind it
+  already holds the lease — so the late lower-id arrival took a lease that a live
+  run was already holding.
 
-A hard TTL on run *age* is kept as a third-resort backstop, only for a run the
-Actions API keeps reporting as live forever. It is deliberately generous, because
-the two directions are not symmetric: firing it late costs a blocked tenant that
-a waiter is already complaining loudly about, whereas firing it early reaps a
-LIVE mid-install ticket and puts a second installer on the tenant — reintroducing
-exactly the race this module exists to close. It is also measured from run
-*creation*, not from acquisition, so it has to clear the whole chain ahead of the
-install (discovery, image build, manifest merge, the queue wait itself) plus
-runner queue time, which has no timeout at all. ``test_prepare_tenant_wiring.py``
-derives that bound from the workflow's own job timeouts so it cannot drift.
+Ordering-based exclusion only works if every contender's ticket exists before any
+contender decides, which nothing enforces. Exclusion needs an atomic primitive,
+so this version uses one and derives nothing from ids.
+
+The cost is fairness: acquisition is a scramble, not a queue, so a waiter can in
+principle be repeatedly beaten. That is bounded by the wait budget, which fails
+loudly and names the holder — a run that starves gets a red job saying the tenant
+was busy, not silence. Correctness first; FIFO was the property that turned out
+to be unaffordable.
+
+Liveness, not heartbeats
+------------------------
+A lease is breakable when the holder's *run* is over. GitHub reports run status
+directly, so there is nothing to heartbeat and no lock to strand. This is also
+the part ``if: always()`` cannot cover: GitHub *cancels* queued jobs rather than
+running them, so a cancelled run's release job never starts at all. Any later
+contender reaps the dead holder, which makes a leaked lease self-healing.
+
+A TTL on lease-HOLD time (from the ``acquired_at`` the holder wrote into its own
+blob, not from run age) is the backstop for a run the API keeps reporting as live
+forever. The two directions are not symmetric: breaking a lease too late costs a
+blocked tenant that a waiter is already complaining loudly about, whereas breaking
+one too early reaps a LIVE mid-install holder and puts a second installer on the
+tenant — the exact race this module exists to close. So it errs long.
 
 Failure posture
 ---------------
-* **No permission to write refs** (a repository or caller that does not grant
-  ``contents: write``) is a ``::warning::`` and the run proceeds *without* a
-  lease. The lease reduces contention; it is not the thing that keeps a
-  wrong-version run from passing — every e2e leg re-asserts the installed
-  version itself (FND-31). Making an ungrantable lease fail the run would turn a
-  safety improvement into a new way for e2e to go red fleet-wide.
-* **Not acquired within the wait budget** fails loudly by default, naming the
-  holding run. That is strictly better than the behaviour it replaces (silent
-  eviction with no log), and unlike fail-open it does not put two runs on one
-  tenant expecting different versions.
+* **No permission to write refs** is a ``::warning::`` and the run proceeds
+  *without* a lease. The lease reduces contention; it is not what keeps a
+  wrong-version run from passing — every leg re-asserts the installed version
+  itself (FND-31). Making an ungrantable lease fail the run would turn a safety
+  improvement into a new way for e2e to go red fleet-wide.
+* **Not acquired within the wait budget** fails loudly, naming the holding run.
 
 Co-located with the composite action, and pinned ``@main`` by every consumer on
-purpose: all contenders must agree on the ref layout and the ordering rule, so
-the protocol must not vary by which ref a caller happens to have checked out.
+purpose: all contenders must agree on the ref name, so the protocol must not vary
+with whichever ref a caller happens to have checked out.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import math
 import os
@@ -98,20 +99,19 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-# Ticket refs live outside refs/heads and refs/tags on purpose: a branch would
+# The lease ref lives outside refs/heads and refs/tags on purpose: a branch would
 # fire `push` events (and show up in the branch list), a tag would pollute the
 # release surface. A custom namespace is inert — nothing watches it.
 REF_NAMESPACE = "e2e-tenant-lease"
 
 # The only GitHub run status that means "over". Everything else — queued,
-# in_progress, requested, waiting, pending — is treated as live, so an
-# unfamiliar future status errs towards leaving a peer's lease alone.
+# in_progress, requested, waiting, pending — is treated as live, so an unfamiliar
+# future status errs towards leaving a peer's lease alone.
 _COMPLETED = "completed"
 
 # Characters safe in a single git ref path component. Deliberately narrower than
-# git's own rules: app names and cloud names come from workflow inputs, and a
-# ref name is the one place where "mostly valid" turns into a 422 nobody
-# expected.
+# git's own rules: app and cloud names come from workflow inputs, and a ref name
+# is the one place where "mostly valid" turns into a 422 nobody expected.
 _SAFE_SLUG_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._-")
 
 
@@ -120,8 +120,7 @@ def slug(value: str, *, default: str = "default") -> str:
 
     ``cloud`` is legitimately empty on the single-tenant path (the fallback
     matrix leg spells it as a defined-but-empty string), so an empty result maps
-    to ``default`` rather than producing ``refs/<ns>/<app>//<ticket>`` — an
-    empty component git rejects.
+    to ``default`` rather than producing an empty component, which git rejects.
     """
     cleaned = "".join(
         char if char in _SAFE_SLUG_CHARS else "-" for char in value.strip().lower()
@@ -136,49 +135,29 @@ def slug(value: str, *, default: str = "default") -> str:
     return cleaned or default
 
 
-def lease_prefix(app: str, cloud: str) -> str:
-    """The ref prefix every contender for one tenant shares (no ``refs/``)."""
-    return f"{REF_NAMESPACE}/{slug(app, default='app')}/{slug(cloud)}"
+def lease_ref(app: str, cloud: str) -> str:
+    """The single ref every contender for one tenant races to create.
 
-
-@dataclass(frozen=True, order=True)
-class Ticket:
-    """One run's claim on a tenant.
-
-    Ordered by ``(run_id, attempt)`` — declared in that field order so the
-    dataclass's generated comparison *is* the queue order, leaving no second
-    sort key to drift from it. A re-run keeps its original ``run_id`` and so
-    keeps its place in line; the two attempts can never be live at once, since a
-    re-run only starts after the previous attempt has finished.
+    Fixed for a given tenant — that is the point. The name carries no per-run
+    component, because a name only one run can guess is a name that cannot
+    collide, and collision is precisely the signal this design needs.
     """
+    return f"refs/{REF_NAMESPACE}/{slug(app, default='app')}/{slug(cloud)}/holder"
+
+
+@dataclass(frozen=True)
+class Holder:
+    """Who holds a lease, read back from the blob the lease ref points at."""
 
     run_id: int
     attempt: int
-
-    @property
-    def name(self) -> str:
-        return f"{self.run_id}-{self.attempt}"
-
-    def ref(self, prefix: str) -> str:
-        return f"refs/{prefix}/{self.name}"
+    acquired_at: float | None
 
     def run_url(self, repo: str) -> str:
         return f"https://github.com/{repo}/actions/runs/{self.run_id}"
 
-
-def parse_ticket(ref: str) -> Ticket | None:
-    """Parse a ticket out of a full ref name, or None if it is not one.
-
-    Unrecognised refs under the namespace are *ignored* rather than reaped: a
-    ref this version does not understand is more likely to be a newer protocol
-    than garbage, and ignoring it only costs the lease's mutual exclusion with
-    whoever wrote it — deleting it would break them outright.
-    """
-    name = ref.rsplit("/", 1)[-1]
-    run_id, _, attempt = name.partition("-")
-    if not run_id.isdigit() or not attempt.isdigit():
-        return None
-    return Ticket(int(run_id), int(attempt))
+    def is_me(self, run_id: int, attempt: int) -> bool:
+        return self.run_id == run_id and self.attempt == attempt
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -216,12 +195,12 @@ def gh_request(
 ) -> tuple[int, object | None]:
     """Call the GitHub API, returning the status code rather than raising on 4xx.
 
-    curl, not ``gh api``, for the same reason ``poll_check_runs_gate.py`` uses
-    it: ``gh api`` treats every non-2xx as a command failure and prints its own
-    diagnostic instead of the response, and here the non-2xx codes are load
-    bearing. 422 means "someone else already holds this ticket" and 403/404 mean
-    "this repository will not let us write refs" — two completely different
-    outcomes that both have to be distinguished from a genuine error.
+    curl, not ``gh api``, for the same reason ``poll_check_runs_gate.py`` uses it:
+    ``gh api`` treats every non-2xx as a command failure and prints its own
+    diagnostic instead of the response. Here the non-2xx codes are the entire
+    mechanism — 422 on ref creation IS the lock being held, and it has to be
+    distinguished from 403 ("this repo will not let us write refs") and from a
+    genuine error.
     """
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
@@ -256,222 +235,318 @@ def _message(body: object | None) -> str:
     return body.get("message", "") if isinstance(body, dict) else ""
 
 
-def create_ticket(repo: str, prefix: str, ticket: Ticket, sha: str) -> str:
-    """Create this run's ticket. Returns "created", "exists" or "denied"."""
+def _denied(status: int) -> bool:
+    """GitHub 404s resources it will not admit exist, so it is a permission
+    answer as much as 401/403 are."""
+    return status in (401, 403, 404)
+
+
+def create_identity_blob(
+    repo: str, run_id: int, attempt: int, now: float
+) -> str | None:
+    """Write the holder record the lease ref will point at. None ⇒ denied.
+
+    Created BEFORE the lease is taken, so it costs one wasted blob per failed
+    attempt. That is the right way round: an unreferenced blob is garbage GitHub
+    collects, whereas taking the lease first and describing it second would leave
+    a window where the lease is held by nobody identifiable.
+    """
+    payload = {
+        "run_id": run_id,
+        "attempt": attempt,
+        # Written by the acquirer at acquisition, which is what makes the TTL a
+        # measure of lease-HOLD time rather than of run age. A run reaches this
+        # job several jobs in (discovery, image build, manifest merge) and may
+        # have queued for runners first, none of which is lease-hold time.
+        "acquired_at": now,
+    }
     status, body = gh_request(
         "POST",
-        f"repos/{repo}/git/refs",
-        {"ref": ticket.ref(prefix), "sha": sha},
+        f"repos/{repo}/git/blobs",
+        {"content": json.dumps(payload), "encoding": "utf-8"},
+    )
+    if status in (200, 201) and isinstance(body, dict) and body.get("sha"):
+        return str(body["sha"])
+    if _denied(status):
+        return None
+    raise SystemExit(
+        f"::error::could not write the tenant lease holder record in {repo}: "
+        f"HTTP {status} {_message(body)!r}"
+    )
+
+
+def try_acquire(repo: str, ref: str, blob_sha: str) -> str:
+    """One atomic attempt. Returns "acquired", "occupied" or "denied".
+
+    The 422 is not an error path bolted on — it is the lock. GitHub evaluates
+    ref creation atomically, so of N simultaneous callers exactly one sees 201.
+    """
+    status, body = gh_request(
+        "POST", f"repos/{repo}/git/refs", {"ref": ref, "sha": blob_sha}
     )
     if status in (200, 201):
-        return "created"
-    # Ours, from an earlier job of this run (acquire runs before the install, and
-    # the release job re-derives the same name) or from a retried step.
+        return "acquired"
     if status == 422 and "already exists" in _message(body).lower():
-        return "exists"
-    if status in (401, 403, 404):
+        return "occupied"
+    if _denied(status):
         return "denied"
     raise SystemExit(
-        f"::error::could not create the tenant lease ticket {ticket.ref(prefix)} "
-        f"in {repo}: HTTP {status} {_message(body)!r}"
+        f"::error::could not take the tenant lease {ref} in {repo}: "
+        f"HTTP {status} {_message(body)!r}"
     )
 
 
-def list_tickets(repo: str, prefix: str) -> list[Ticket]:
-    """Every parseable ticket currently under the prefix, unordered."""
-    status, body = gh_request("GET", f"repos/{repo}/git/matching-refs/{prefix}/")
-    # An empty namespace answers 200 with [], but 404 is the documented shape for
-    # "no matching refs" on some paths — both mean "nobody is queued".
-    if status == 404:
-        return []
-    if status >= 400 or not isinstance(body, list):
-        raise SystemExit(
-            f"::error::could not list tenant lease tickets under refs/{prefix}/ "
-            f"in {repo}: HTTP {status} {_message(body)!r}"
+def read_holder(repo: str, ref: str) -> Holder | None:
+    """Who holds `ref`, or None if it is unheld or unreadable.
+
+    None deliberately conflates "nobody holds it" with "we could not tell": both
+    mean "retry the CAS", and the CAS is authoritative. Guessing at an
+    unreadable holder is what would be dangerous.
+    """
+    # git/ref/<name> wants the ref without the leading "refs/".
+    status, body = gh_request(
+        "GET", f"repos/{repo}/git/ref/{ref.removeprefix('refs/')}"
+    )
+    if status == 404 or not isinstance(body, dict):
+        return None
+    if status >= 400:
+        print(f"::warning::could not read the tenant lease {ref} (HTTP {status}).")
+        return None
+
+    target = body.get("object") or {}
+    blob_sha = target.get("sha") if isinstance(target, dict) else None
+    if not blob_sha:
+        return None
+
+    status, blob = gh_request("GET", f"repos/{repo}/git/blobs/{blob_sha}")
+    if status >= 400 or not isinstance(blob, dict):
+        print(
+            f"::warning::the tenant lease {ref} exists but its holder record "
+            f"({blob_sha}) is unreadable (HTTP {status})."
         )
-    tickets = []
-    for entry in body:
-        if not isinstance(entry, dict):
-            continue
-        ticket = parse_ticket(str(entry.get("ref", "")))
-        if ticket is not None:
-            tickets.append(ticket)
-    return tickets
+        return None
+    return _parse_holder(blob)
 
 
-def delete_ticket(repo: str, prefix: str, ticket: Ticket) -> bool:
-    """Best-effort delete. False means it was already gone, which is not a fault:
-    two contenders can reap the same dead ticket, and only one wins the race."""
+def _parse_holder(blob: dict) -> Holder | None:
+    content = blob.get("content")
+    if not isinstance(content, str):
+        return None
+    try:
+        decoded = base64.b64decode(content)
+        record = json.loads(decoded)
+    except (ValueError, TypeError):
+        print("::warning::the tenant lease holder record is not valid JSON.")
+        return None
+    if not isinstance(record, dict):
+        return None
+    try:
+        run_id = int(record["run_id"])
+        attempt = int(record["attempt"])
+    except (KeyError, TypeError, ValueError):
+        print("::warning::the tenant lease holder record names no run.")
+        return None
+    acquired_at = record.get("acquired_at")
+    return Holder(
+        run_id=run_id,
+        attempt=attempt,
+        acquired_at=float(acquired_at)
+        if isinstance(acquired_at, (int, float))
+        else None,
+    )
+
+
+def release_ref(repo: str, ref: str) -> bool:
+    """Delete the lease ref. False ⇒ it was already gone, which is not a fault."""
     status, _body = gh_request(
-        "DELETE", f"repos/{repo}/git/refs/{prefix}/{ticket.name}"
+        "DELETE", f"repos/{repo}/git/refs/{ref.removeprefix('refs/')}"
     )
     return status in (200, 204)
 
 
-def run_is_live(
+def holder_is_live(
     repo: str,
-    ticket: Ticket,
+    holder: Holder,
     *,
     ttl_seconds: int,
-    now=None,
+    now: float,
 ) -> bool:
-    """Is the run holding `ticket` still going?
+    """Is the lease still legitimately held?
 
-    Errs towards True. A transient API failure that read as "dead" would hand
-    the tenant to a second run while the first is mid-install — the exact race
-    the lease exists to prevent — whereas erring towards "live" only costs the
+    Errs towards True. Reading a transient API failure as "dead" would break a
+    live holder's lease and hand the tenant to a second installer — the race
+    this module exists to close — whereas erring towards "live" only costs the
     waiter another poll interval.
     """
-    status, body = gh_request("GET", f"repos/{repo}/actions/runs/{ticket.run_id}")
+    status, body = gh_request("GET", f"repos/{repo}/actions/runs/{holder.run_id}")
     if status == 404:
         # The run was deleted, or never existed. Nothing will ever release this.
         return False
     if status >= 400 or not isinstance(body, dict):
         print(
-            f"::warning::could not read run {ticket.run_id} in {repo} "
+            f"::warning::could not read run {holder.run_id} in {repo} "
             f"(HTTP {status}); treating its tenant lease as still held."
         )
         return True
     if body.get("status") == _COMPLETED:
         return False
-    if ttl_seconds > 0:
-        age = _run_age_seconds(body, now=now)
-        if age is not None and age > ttl_seconds:
-            print(
-                f"::warning::run {ticket.run_id} in {repo} still reports "
-                f"'{body.get('status')}' after {int(age)}s, past the "
-                f"{ttl_seconds}s tenant lease TTL — breaking the lease. If that "
-                "run is genuinely still installing, raise ttl-seconds."
-            )
-            return False
+    if ttl_seconds <= 0 or holder.acquired_at is None:
+        return True
+
+    # Sanity-check the holder's own timestamp against its run before trusting it.
+    # A lease cannot have been acquired before the run that took it existed, so an
+    # earlier acquired_at means the record is wrong — a clock far out of step, or a
+    # corrupted write. Believing it would make the hold time enormous and break a
+    # LIVE holder's lease on the first poll, which is the expensive direction.
+    # Erring towards "live" costs a waiter one poll interval.
+    #
+    # A run object with no created_at at all gets the same treatment. It should
+    # never happen, so it means something has changed underneath us, and the
+    # holder's run status is then the only evidence worth acting on.
+    run_started = _timestamp(body.get("created_at"))
+    if run_started is None:
+        return True
+    if holder.acquired_at < run_started:
+        print(
+            f"::warning::the tenant lease record for run {holder.run_id} claims an "
+            "acquisition time before that run existed, so it is not trustworthy; "
+            "ignoring the TTL and treating the lease as held. Its run status is "
+            "still authoritative."
+        )
+        return True
+
+    held_for = now - holder.acquired_at
+    if held_for > ttl_seconds:
+        print(
+            f"::warning::run {holder.run_id} has held the tenant lease for "
+            f"{int(held_for)}s, past the {ttl_seconds}s TTL, and still reports "
+            f"'{body.get('status')}' — breaking it. If that run is genuinely "
+            "still working, raise ttl-seconds."
+        )
+        return False
     return True
 
 
-def _run_age_seconds(run_body: dict, *, now=None) -> float | None:
-    """Seconds since the run was CREATED, or None if the API did not say.
-
-    Note what this is not: it is not how long the lease has been held. The lease
-    is taken several jobs into the run (discovery, then the per-arch image build,
-    then the manifest merge), and a run can also sit waiting for runners before
-    any of that. All of it counts here.
-
-    That is why the TTL has to be bounded by the whole chain and not by the
-    install-plus-legs span alone. Anchoring on creation and sizing the TTL for
-    only the part after acquisition would let the backstop fire on a *healthy*
-    holder that queued for a while — reaping a live mid-install ticket and
-    handing the tenant to a second installer, which is precisely the race the
-    lease exists to close. ``test_prepare_tenant_wiring.py`` derives the required
-    bound from the workflow's own job timeouts so it cannot drift out of date.
-
-    Only the TTL backstop uses this, so clock skew between the runner and GitHub
-    is immaterial at the hours-long scale it operates on. Queue ordering
-    deliberately does not depend on any clock — see the module docstring.
-    """
-    created = run_body.get("created_at")
-    if not isinstance(created, str) or not created:
+def _timestamp(value: object) -> float | None:
+    """Parse an ISO-8601 GitHub timestamp to a POSIX float, or None."""
+    if not isinstance(value, str) or not value:
         return None
     try:
-        stamp = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=timezone.utc)
-    current = now() if now is not None else datetime.now(timezone.utc)
-    return (current - stamp).total_seconds()
+    return stamp.timestamp()
 
 
 def acquire(
     repo: str,
-    prefix: str,
-    ticket: Ticket,
-    sha: str,
+    ref: str,
+    run_id: int,
+    attempt: int,
     *,
     wait_seconds: int,
     poll_seconds: int,
     ttl_seconds: int,
     sleep=time.sleep,
-    now=None,
-) -> tuple[str, Ticket | None]:
+    clock=time.time,
+) -> tuple[str, Holder | None]:
     """Take the lease, or report why not.
 
-    Returns ("acquired" | "disabled" | "timeout", blocking_ticket_or_None).
+    Returns ("acquired" | "disabled" | "timeout", blocking_holder_or_None).
     """
-    outcome = create_ticket(repo, prefix, ticket, sha)
-    if outcome == "denied":
-        print(
-            "::warning::this repository will not let the run write git refs, so "
-            "the (app, cloud) tenant lease is disabled for this run and e2e "
-            "proceeds unserialised. Grant the lease job 'contents: write' to "
-            "enable it. Each e2e leg still asserts the installed version "
-            "independently (FND-31), so a wrong-version run cannot pass "
-            "silently — it just fails less informatively."
-        )
-        return "disabled", None
-    print(f"Ticket {ticket.ref(prefix)} {outcome}.")
-
-    # Attempt-counted rather than deadline-checked, so the budget needs no clock
-    # (and tests need no clock stub). Ceiling division: a budget that is not an
-    # exact multiple of the interval still gets its final full attempt.
+    # Attempt-counted rather than deadline-checked so the budget needs no clock
+    # comparison. Ceiling division: a budget that is not an exact multiple of the
+    # interval still gets its final full attempt.
     max_attempts = max(1, math.ceil(wait_seconds / poll_seconds))
 
-    blocker: Ticket | None = None
-    for attempt in range(1, max_attempts + 1):
-        tickets = list_tickets(repo, prefix)
-        if ticket not in tickets:
-            # Either replica lag, or a peer reaped us after misreading this run
-            # as finished. Re-creating is safe and position-preserving: the name
-            # is derived from the run, so we land back in the same place in line.
-            if create_ticket(repo, prefix, ticket, sha) == "denied":
-                print(
-                    "::warning::lost the tenant lease ticket and cannot recreate "
-                    "it; proceeding unserialised."
-                )
-                return "disabled", None
-            tickets.append(ticket)
-
-        ordered = sorted(tickets)
-        blocker = None
-        for candidate in ordered:
-            if candidate == ticket:
-                break
-            if run_is_live(repo, candidate, ttl_seconds=ttl_seconds, now=now):
-                blocker = candidate
-                break
+    blocker: Holder | None = None
+    for attempt_number in range(1, max_attempts + 1):
+        blob_sha = create_identity_blob(repo, run_id, attempt, clock())
+        if blob_sha is None:
             print(
-                f"Reaping the tenant lease ticket of run {candidate.run_id} "
-                f"(attempt {candidate.attempt}) — that run is over."
+                "::warning::this repository will not let the run write git refs, "
+                "so the (app, cloud) tenant lease is disabled for this run and "
+                "e2e proceeds unserialised. Grant the lease job 'contents: write' "
+                "to enable it. Each e2e leg still asserts the installed version "
+                "independently (FND-31), so a wrong-version run cannot pass "
+                "silently — it just fails less informatively."
             )
-            delete_ticket(repo, prefix, candidate)
+            return "disabled", None
 
-        if blocker is None:
-            print(f"Tenant lease acquired: refs/{prefix}/{ticket.name}")
+        outcome = try_acquire(repo, ref, blob_sha)
+        if outcome == "denied":
+            print(
+                "::warning::this repository will not let the run create the tenant "
+                "lease ref; proceeding unserialised. See the note above."
+            )
+            return "disabled", None
+        if outcome == "acquired":
+            print(f"Tenant lease acquired: {ref}")
             return "acquired", None
 
-        ahead = ordered.index(blocker) + 1
-        print(
-            f"[{attempt}/{max_attempts}] waiting for the {prefix} tenant lease — "
-            f"held by run {blocker.run_id} ({blocker.run_url(repo)}), "
-            f"{ahead} ticket(s) ahead of this run."
-        )
-        if attempt < max_attempts:
+        # Occupied. Find out by whom, and whether that claim is still good.
+        blocker = read_holder(repo, ref)
+        if blocker is None:
+            # Either it was released between the CAS and the read, or we could
+            # not read it. Either way the CAS on the next pass is authoritative.
+            print("The tenant lease is held but its holder is unreadable; retrying.")
+        elif blocker.is_me(run_id, attempt):
+            # A retried step, or a re-run of this same attempt. Already ours.
+            print(f"Tenant lease already held by this run: {ref}")
+            return "acquired", None
+        elif not holder_is_live(repo, blocker, ttl_seconds=ttl_seconds, now=clock()):
+            print(
+                f"Reaping the tenant lease of run {blocker.run_id} "
+                f"(attempt {blocker.attempt}) — that run is over."
+            )
+            release_ref(repo, ref)
+            # Straight back to the CAS rather than sleeping: the tenant is free
+            # now, and any other waiter is racing us for it on equal terms.
+            continue
+        else:
+            print(
+                f"[{attempt_number}/{max_attempts}] waiting for {ref} — held by "
+                f"run {blocker.run_id} ({blocker.run_url(repo)})."
+            )
+
+        if attempt_number < max_attempts:
             sleep(poll_seconds)
 
     return "timeout", blocker
 
 
-def release(repo: str, prefix: str, ticket: Ticket) -> bool:
-    """Give up this run's ticket. Never fails the job — a missed release is
-    reaped by the next contender, which is what makes a cancelled run (whose
-    release job never starts) harmless."""
-    deleted = delete_ticket(repo, prefix, ticket)
-    if deleted:
-        print(f"Tenant lease released: refs/{prefix}/{ticket.name}")
-    else:
+def release(repo: str, ref: str, run_id: int, attempt: int) -> bool:
+    """Give up this run's lease, but only if it is actually ours.
+
+    The ref name is shared by every contender for the tenant, so unlike a
+    per-run name it is possible to delete somebody else's lease. Ownership is
+    therefore checked first.
+
+    The check-then-delete is not atomic (the API offers no conditional delete),
+    but the window is closed by the liveness rule rather than by luck: this runs
+    while our own run is still ``in_progress``, so no contender is entitled to
+    reap us, and nobody else can be holding the lease for us to delete by
+    mistake. The TTL could in principle break our lease while we are live, which
+    is one more reason it errs long.
+    """
+    holder = read_holder(repo, ref)
+    if holder is None:
+        print(f"No tenant lease to release at {ref} — already reaped.")
+        return False
+    if not holder.is_me(run_id, attempt):
         print(
-            f"No tenant lease ticket to release at refs/{prefix}/{ticket.name} "
-            "— already reaped."
+            f"::warning::not releasing {ref}: it is held by run {holder.run_id} "
+            f"(attempt {holder.attempt}), not this run. Ours was most likely "
+            "broken by the TTL, or reaped after this run was misread as finished."
         )
-    return deleted
+        return False
+    if release_ref(repo, ref):
+        print(f"Tenant lease released: {ref}")
+        return True
+    print(f"No tenant lease to release at {ref} — already reaped.")
+    return False
 
 
 def write_outputs(outputs: dict[str, str], path: str | None) -> None:
@@ -485,7 +560,7 @@ def write_outputs(outputs: dict[str, str], path: str | None) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Acquire or release a tenant lease.")
     parser.add_argument("--mode", required=True, choices=("acquire", "release"))
-    parser.add_argument("--repo", required=True, help="owner/repo the tickets live in.")
+    parser.add_argument("--repo", required=True, help="owner/repo the lease lives in.")
     parser.add_argument("--app", required=True, help="App under test (lease key part).")
     parser.add_argument(
         "--cloud", default="", help="Cloud (lease key part); empty = single tenant."
@@ -495,33 +570,28 @@ def main(argv: list[str] | None = None) -> int:
         "--run-attempt", required=True, type=int, help="github.run_attempt"
     )
     parser.add_argument(
-        "--sha", default="", help="Commit the ticket ref points at (acquire only)."
-    )
-    parser.add_argument(
         "--wait-seconds",
         type=int,
         default=5400,
-        help="How long to queue for the tenant before giving up (default 90min).",
+        help="How long to keep trying for the tenant before giving up (default 90min).",
     )
     parser.add_argument(
         "--poll-seconds",
         type=int,
         default=30,
-        help="Gap between queue checks. Two API calls per poll, so this also sets "
-        "the load on the 1000/hour GITHUB_TOKEN budget (default 30s).",
+        help="Gap between attempts. Each contended attempt costs a handful of API "
+        "calls, so this also sets the draw on the 1000/hour GITHUB_TOKEN budget.",
     )
     parser.add_argument(
         "--ttl-seconds",
         type=int,
-        default=43200,
-        help="Run AGE at which a still-'in_progress' holder is treated as wedged "
-        "and its lease broken. Measured from run creation, so it must exceed the "
-        "whole chain — discovery, image build, manifest merge, the lease wait "
-        "itself, the install and the legs — plus runner queue time, which has no "
-        "timeout at all. Default 12h against a ~5.5h chain. Deliberately "
-        "generous: the operator-facing signal for a stuck tenant is the wait "
-        "budget failing loudly after 90min, not this. All this does is stop a "
-        "ticket being immortal, and firing it early costs a concurrent install.",
+        default=14400,
+        help="How long a holder may HOLD the lease (measured from the acquisition "
+        "time it recorded, not from run age) before a waiter treats it as wedged "
+        "and breaks it. Must exceed the longest legitimate hold — the install plus "
+        "the leg ceiling — because breaking a live holder's lease puts a second "
+        "installer on the tenant. Default 4h against a 40min+120min hold. 0 "
+        "disables the backstop.",
     )
     parser.add_argument(
         "--on-timeout",
@@ -534,11 +604,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Bounds-checked up front rather than left to fail at the point of use.
     # poll_seconds=0 is a ZeroDivisionError in the attempt-count arithmetic and a
-    # negative one reaches sleep() as a ValueError — both loud rather than silently
-    # wrong, but both arrive as a traceback several steps from the input that
-    # caused them, which is a poor trade for one comparison. These come from
-    # action inputs with safe defaults, so this is a guard against a typo in a
-    # caller's YAML, not against hostile input.
+    # negative one reaches sleep() as a ValueError — both loud rather than
+    # silently wrong, but both arrive as a traceback several steps from the input
+    # that caused them.
     if args.poll_seconds < 1:
         raise SystemExit(
             f"::error::--poll-seconds must be at least 1, got {args.poll_seconds}"
@@ -553,21 +621,17 @@ def main(argv: list[str] | None = None) -> int:
             "(0 disables the TTL backstop)"
         )
 
-    prefix = lease_prefix(args.app, args.cloud)
-    ticket = Ticket(args.run_id, args.run_attempt)
+    ref = lease_ref(args.app, args.cloud)
 
     if args.mode == "release":
-        release(args.repo, prefix, ticket)
+        release(args.repo, ref, args.run_id, args.run_attempt)
         return 0
-
-    if not args.sha:
-        raise SystemExit("::error::--sha is required to acquire a lease")
 
     state, blocker = acquire(
         args.repo,
-        prefix,
-        ticket,
-        args.sha,
+        ref,
+        args.run_id,
+        args.run_attempt,
         wait_seconds=args.wait_seconds,
         poll_seconds=args.poll_seconds,
         ttl_seconds=args.ttl_seconds,
@@ -576,7 +640,7 @@ def main(argv: list[str] | None = None) -> int:
         {
             "acquired": "true" if state == "acquired" else "false",
             "state": state,
-            "lease-ref": ticket.ref(prefix),
+            "lease-ref": ref,
             "holder-run-id": str(blocker.run_id) if blocker else "",
         },
         os.environ.get("GITHUB_OUTPUT"),
@@ -592,12 +656,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.on_timeout == "warn":
         print(
-            f"::warning::gave up waiting for the {prefix} tenant lease after "
-            f"{args.wait_seconds}s and is proceeding unserialised.{held_by}"
+            f"::warning::gave up waiting for {ref} after {args.wait_seconds}s and "
+            f"is proceeding unserialised.{held_by}"
         )
         return 0
     print(
-        f"::error::could not get the {prefix} tenant lease within "
+        f"::error::could not get the tenant lease {ref} within "
         f"{args.wait_seconds}s.{held_by} Nothing is wrong with this change — the "
         "tenant is busy. Re-run this job once that run finishes, or raise "
         "wait-seconds if queueing this deep is expected."
