@@ -210,6 +210,13 @@ def _pr_to_dict(pr: RenovatePR) -> dict:
         "ageDays": pr.age_days,
         "createdAt": pr.created_at.isoformat(),
         "updatedAt": pr.updated_at.isoformat(),
+        # Which packages this PR delivers (parsed from body table / title) —
+        # lets the fleet-freshness dashboard join "repo behind on tool X" to
+        # the exact PR that fixes it. Empty for lock-maintenance PRs.
+        "deps": [
+            {"name": d.name, "from": d.from_version, "to": d.to_version}
+            for d in pr.deps
+        ],
     }
 
 
