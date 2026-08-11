@@ -1,16 +1,33 @@
 #!/usr/bin/env python3
-"""Determine the check-run conclusion + summary body for the cross-repo e2e
-callback (tests-reusable.yaml's report-to-sdk job).
+"""Build the summary body for the cross-repo e2e callback (tests-reusable.yaml's
+report-to-sdk job).
 
-Moved out of an inlined `run:` block per docs/standards/ci.md: deciding the
-conclusion and picking which summary file to use are both branches, which
-belong in a tested driver rather than workflow YAML.
+Moved out of an inlined `run:` block per docs/standards/ci.md: picking which
+summary file to use is a branch, which belongs in a tested driver rather than
+workflow YAML.
 
 Prefers the e2e leg's already-rendered report (asset/lineage tables etc.,
 written by sdr-e2e's PR-comment step) over a plain fallback, which only
 applies when e2e was skipped or its artifact never materialised.
 
-Writes conclusion=<success|failure> and summary_file=<path> to $GITHUB_OUTPUT.
+`determine_conclusion` is NO LONGER the callback's verdict. It decided the
+conclusion from a strict subset of the Tests Gate's inputs — no discover-e2e,
+no image-build legs, no "discovery found suites but the matrix skipped" anomaly
+rule — so a connector run whose Tests Gate was red reported success on the
+dispatching SDK PR, which is the whole reason a triggered app's failure could go
+unnoticed there. The gate driver
+(.github/actions/verify-test-gate/verify_test_gate.py) is now the single
+authority for both, and report-to-sdk reads its `conclusion` output instead.
+
+It survives here only as a transitional shim: this script is checked out from
+the DISPATCHING SDK ref while the workflow always comes from `main`, so a
+pre-fix `main` workflow can still be pairing itself with a post-fix copy of this
+script and reading `conclusion=` out of $GITHUB_OUTPUT. Delete it — along with
+the `conclusion=` output line and its tests — in the next release after this
+lands on `main`, once no `main` workflow reads it.
+
+Writes conclusion=<success|failure> (deprecated, see above) and
+summary_file=<path> to $GITHUB_OUTPUT.
 """
 
 from __future__ import annotations
@@ -36,6 +53,13 @@ def determine_conclusion(
     detect_integration_result: str,
     e2e_result: str,
 ) -> str:
+    """DEPRECATED — the Tests Gate driver decides the callback's conclusion.
+
+    Kept only so a pre-fix `main` workflow paired with a post-fix copy of this
+    script still gets a `conclusion=` output. See the module docstring for the
+    removal trigger. Do not add inputs here: fix the gate driver instead, or the
+    two verdicts start diverging again.
+    """
     if (
         unit_result == "success"
         and detect_integration_result in PASSING_DETECT_INTEGRATION_RESULTS

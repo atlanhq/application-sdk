@@ -5,6 +5,15 @@ driver is both the pass/fail authority AND the source of the human-readable
 status strings the PR "Tests Summary" table shows, so the displayed status and
 the enforced result can never drift.
 
+It is also the authority for the CROSS-REPO callback: tests-reusable's
+report-to-sdk job completes the ``Connector E2E run / <app>`` check run on the
+dispatching application-sdk PR using this driver's ``conclusion`` output. That
+matters because it used to compute its own verdict from a strictly smaller set
+of job results (no discover-e2e, no anomaly rule), so a connector run whose
+Tests Gate was red could still report green on the SDK side — a failure in the
+triggered app invisible to the PR that triggered it. One driver, two consumers,
+no second implementation to drift.
+
 Gate passes iff:
 
   * ``unit`` tests succeeded (the per-commit tier; runs on every event), AND
@@ -23,6 +32,9 @@ Gate passes iff:
     when the connector ships no integration suite), AND
   * e2e discovery succeeded OR was skipped (skipped = e2e not requested; a
     *failed* discovery means e2e was requested but no suites were found), AND
+  * the per-arch e2e image build, the manifest merge and the tenant install
+    succeeded OR were skipped (skipped = the install path is off, or e2e was
+    not requested), AND
   * the e2e matrix succeeded OR was skipped (matrix aggregate is success only
     if every leg passed).
 
@@ -34,10 +46,21 @@ legitimate) and ``integration`` then skips cleanly, so there is no analogous
 ``detect-integration == success and integration == skipped`` check — that pair
 is the normal no-suite path.
 
-It emits GitHub Actions outputs (``passed`` + per-row/overall status strings)
-and, when failing, ``::error::`` annotations. It does NOT exit non-zero — the
-gate job enforces via a branch-free ``if: ... outputs.passed != 'true'`` step,
-keeping conditional logic out of inline shell per ``docs/standards/ci.md``.
+The three install-path jobs are checked for the same reason the detection jobs
+are: ``build-e2e-image``, ``merge-e2e-image`` and ``prepare-tenant`` are exactly
+the jobs the e2e matrix's own ``if`` gates on, so a failure in any of them drops
+the matrix to a skip. The anomaly rule above already refused to green that, but
+it named the symptom ("matrix skipped") rather than the cause ("the arm64 image
+build failed") — which is precisely what made the first real occurrence take a
+reading of four workflow files to explain. Checking them directly puts the cause
+in the annotation, and the anomaly rule then fires only when nothing upstream
+explains the skip.
+
+It emits GitHub Actions outputs (``passed`` + ``conclusion`` + per-row/overall
+status strings) and, when failing, ``::error::`` annotations. It does NOT exit
+non-zero — the gate job enforces via a branch-free
+``if: ... outputs.passed != 'true'`` step, keeping conditional logic out of
+inline shell per ``docs/standards/ci.md``.
 
 Co-located with the composite action (checked out with it in consumer repos).
 """
@@ -52,6 +75,27 @@ import sys
 _OK_OPTIONAL = ("success", "skipped")
 
 
+def _install_path(
+    build_e2e_image: str, merge_e2e_image: str, prepare_tenant: str
+) -> list[tuple[str, str, str]]:
+    """The jobs between discovery and the e2e matrix, in order.
+
+    Each entry is (annotation phrase, summary-row phrase, result). One list so
+    ``evaluate`` and ``_e2e_status`` cannot disagree about which jobs belong to
+    this leg, about their order, or about which one a reader is pointed at when
+    several fail together.
+    """
+    return [
+        ("the e2e image build", "e2e image build", build_e2e_image),
+        (
+            "the e2e image manifest merge",
+            "e2e image manifest merge",
+            merge_e2e_image,
+        ),
+        ("the tenant install", "Tenant install", prepare_tenant),
+    ]
+
+
 def evaluate(
     unit: str,
     integration: str,
@@ -59,12 +103,18 @@ def evaluate(
     discover_e2e: str,
     e2e: str,
     detect_merge_queue: str = "skipped",
+    build_e2e_image: str = "skipped",
+    merge_e2e_image: str = "skipped",
+    prepare_tenant: str = "skipped",
 ) -> list[str]:
     """Return human-readable failure reasons (empty ⇒ the gate passes).
 
-    ``detect_merge_queue`` is last and defaults to "skipped" because this driver
-    is consumed cross-repo via ``@main``: a required positional would break every
-    caller the instant it merged, before their workflows could update.
+    ``detect_merge_queue`` and the three install-path results are trailing and
+    default to "skipped" because this driver is consumed cross-repo via
+    ``@main``: a required positional would break every caller the instant it
+    merged, before their workflows could update. "skipped" is the neutral
+    default in every case — it is what a caller that does not run the job at
+    all would report.
     """
     errors: list[str] = []
     if unit != "success":
@@ -92,13 +142,35 @@ def evaluate(
         errors.append(f"integration tests did not succeed (result={integration})")
     if discover_e2e not in _OK_OPTIONAL:
         errors.append(f"e2e discovery did not succeed (result={discover_e2e})")
+    # The install path, in order. These are exactly the jobs the e2e matrix's own
+    # `if` gates on, so a failure in any of them silently drops the matrix to a
+    # skip. Named directly so the annotation reports the cause rather than the
+    # downstream symptom.
+    for annotation, _row, result in _install_path(
+        build_e2e_image, merge_e2e_image, prepare_tenant
+    ):
+        if result not in _OK_OPTIONAL:
+            errors.append(f"{annotation} did not succeed (result={result})")
     if e2e not in _OK_OPTIONAL:
         errors.append(f"one or more e2e suites did not succeed (result={e2e})")
     # Defensive: a successful discovery means suites exist (discover-e2e fails on
     # count=0), so the matrix should have run. A skipped matrix here is an
     # anomaly — this driver is consumed cross-repo via @main, so don't let a
     # future caller that re-wires the e2e `if` green the gate by skipping it.
-    if discover_e2e == "success" and e2e == "skipped":
+    #
+    # Suppressed when an install-path job already failed: that IS the explanation
+    # for the skip, and it is reported above with the failing job named. Firing
+    # both would bury the cause under the symptom.
+    if (
+        discover_e2e == "success"
+        and e2e == "skipped"
+        and all(
+            result in _OK_OPTIONAL
+            for _annotation, _row, result in _install_path(
+                build_e2e_image, merge_e2e_image, prepare_tenant
+            )
+        )
+    ):
         errors.append(
             "e2e discovery succeeded (suites found) but the matrix was skipped"
         )
@@ -133,11 +205,26 @@ def _integration_status(
     return "❌ Failed"
 
 
-def _e2e_status(discover_e2e: str, e2e: str) -> str:
+def _e2e_status(
+    discover_e2e: str,
+    e2e: str,
+    build_e2e_image: str = "skipped",
+    merge_e2e_image: str = "skipped",
+    prepare_tenant: str = "skipped",
+) -> str:
     if discover_e2e == "skipped":
         return "⊘ Skipped — add `e2e` label to trigger"
     if discover_e2e == "failure":
         return "❌ No suites discovered (e2e was requested)"
+    # Ahead of the success/skip checks: an install-path failure is WHY the matrix
+    # skipped, and the row must say so rather than report a benign skip. Reported
+    # in the same order and with the same labels as the annotations, from the one
+    # list, so the row and the error text always name the same job.
+    for _annotation, row, result in _install_path(
+        build_e2e_image, merge_e2e_image, prepare_tenant
+    ):
+        if result not in _OK_OPTIONAL:
+            return f"❌ {row} failed"
     if e2e == "success":
         return "✅ Passed"
     if discover_e2e == "success" and e2e == "skipped":
@@ -154,18 +241,39 @@ def render(
     discover_e2e: str,
     e2e: str,
     detect_merge_queue: str = "skipped",
+    build_e2e_image: str = "skipped",
+    merge_e2e_image: str = "skipped",
+    prepare_tenant: str = "skipped",
 ) -> dict[str, str]:
-    """Compute the gate's outputs: pass/fail + the display status strings."""
+    """Compute the gate's outputs: pass/fail + the display status strings.
+
+    ``conclusion`` is the same verdict as ``passed``, spelled as a GitHub Checks
+    API conclusion. It exists so the cross-repo callback can wire this driver
+    straight into ``complete_check_run.py --conclusion`` — mapping true/false to
+    success/failure in workflow YAML would put the decision back outside the one
+    tested authority, which is the drift this driver exists to prevent.
+    """
     errors = evaluate(
-        unit, integration, detect_integration, discover_e2e, e2e, detect_merge_queue
+        unit,
+        integration,
+        detect_integration,
+        discover_e2e,
+        e2e,
+        detect_merge_queue,
+        build_e2e_image,
+        merge_e2e_image,
+        prepare_tenant,
     )
     return {
         "passed": "true" if not errors else "false",
+        "conclusion": "success" if not errors else "failure",
         "unit-status": _unit_status(unit),
         "integration-status": _integration_status(
             integration, detect_integration, detect_merge_queue
         ),
-        "e2e-status": _e2e_status(discover_e2e, e2e),
+        "e2e-status": _e2e_status(
+            discover_e2e, e2e, build_e2e_image, merge_e2e_image, prepare_tenant
+        ),
         "overall-status": "✅ All passed" if not errors else "❌ Some failed",
     }
 
@@ -190,6 +298,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--discover-e2e", required=True, help="needs.discover-e2e.result"
     )
+    # Optional for the same cross-repo reason as --detect-merge-queue above.
+    parser.add_argument(
+        "--build-e2e-image",
+        default="skipped",
+        help="needs.build-e2e-image.result",
+    )
+    parser.add_argument(
+        "--merge-e2e-image",
+        default="skipped",
+        help="needs.merge-e2e-image.result",
+    )
+    parser.add_argument(
+        "--prepare-tenant",
+        default="skipped",
+        help="needs.prepare-tenant.result",
+    )
     parser.add_argument("--e2e", required=True, help="needs.e2e.result")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
@@ -202,6 +326,9 @@ def main(argv: list[str] | None = None) -> int:
         args.discover_e2e,
         args.e2e,
         args.detect_merge_queue,
+        args.build_e2e_image,
+        args.merge_e2e_image,
+        args.prepare_tenant,
     ):
         print(f"::error::{reason}", file=sys.stderr)
 
@@ -212,6 +339,9 @@ def main(argv: list[str] | None = None) -> int:
         args.discover_e2e,
         args.e2e,
         args.detect_merge_queue,
+        args.build_e2e_image,
+        args.merge_e2e_image,
+        args.prepare_tenant,
     ).items():
         print(f"{key}={value}")
     return 0
