@@ -640,13 +640,39 @@ class SqlApp(App):
         evidence values; other non-string values are left untouched.
         """
 
-        def _redact_value(value: Any) -> Any:
+        def _redact_value(value: Any, seen: frozenset[int] = frozenset()) -> Any:
             if isinstance(value, str):
                 return redact_secrets(value)
             if isinstance(value, dict):
-                return {k: _redact_value(v) for k, v in value.items()}
+                # A self-referential container would otherwise recurse
+                # forever — the RecursionError escapes the probe's
+                # ``except ValidationError`` degrade and crashes the
+                # activity, and a crashed probe is retried, stacking
+                # failed_login_attempts on the source (the cycle this
+                # classifier exists to break). Same id-tracking pattern
+                # ``_root_cause`` uses for the ``__cause__`` walk; a cycle
+                # is pruned rather than rendered.
+                if id(value) in seen:
+                    return None
+                seen = seen | {id(value)}
+                return {k: _redact_value(v, seen) for k, v in value.items()}
             if isinstance(value, (list, tuple, set, frozenset)):
-                return type(value)(_redact_value(v) for v in value)
+                if id(value) in seen:
+                    return None
+                seen = seen | {id(value)}
+                redacted = [_redact_value(v, seen) for v in value]
+                try:
+                    # ``type(value)(<iterable>)`` rebuilds plain containers
+                    # but crashes on a NamedTuple (it takes positional
+                    # fields, not an iterable — a 1-field namedtuple is
+                    # silently rebuilt with the generator object as its
+                    # field). Same crash-through-the-degrade concern as
+                    # cycles, so fall back to a plain container of the same
+                    # shape: values are redacted either way, and evidence
+                    # serialises as JSON arrays regardless.
+                    return type(value)(redacted)
+                except (TypeError, ValueError):
+                    return tuple(redacted) if isinstance(value, tuple) else redacted
             return value
 
         err.message = redact_secrets(err.message)

@@ -2498,6 +2498,73 @@ class TestPrimeFailureClassification:
         assert "SyntheticValue123" not in wire
         assert "PWD=***" in wire
 
+    async def test_namedtuple_evidence_does_not_crash_the_probe(self):
+        """``type(value)(<generator>)`` rebuilds plain containers but not a
+        NamedTuple: a 2+-field one raises ``TypeError`` (missing positional
+        args) and a 1-field one is silently rebuilt with the generator object
+        as its sole field. The ``TypeError`` escapes the probe's
+        ``except ValidationError`` degrade, crashing the activity — and a
+        crashed probe is retried, stacking ``failed_login_attempts`` on the
+        source. The redactor must degrade to a plain container instead."""
+        from dataclasses import dataclass
+        from typing import NamedTuple
+
+        from application_sdk.errors.leaves import AuthError
+
+        class _Pair(NamedTuple):
+            dsn: str
+            driver: str
+
+        class _Solo(NamedTuple):
+            dsn: str
+
+        @dataclass(kw_only=True)
+        class _NamedTupleEvidenceError(AuthError):
+            pair: object = None
+            solo: object = None
+
+        typed = _NamedTupleEvidenceError(
+            message="source rejected the login",
+            pair=_Pair(dsn="UID=sa;PWD=SyntheticValue123", driver="odbc"),
+            solo=_Solo(dsn="PWD=SyntheticValue123"),
+        )
+
+        result = await self._probe(typed)
+
+        assert result.failure is not None
+        wire = result.failure.model_dump_json()
+        assert "SyntheticValue123" not in wire
+        assert "PWD=***" in wire
+
+    async def test_cyclic_evidence_does_not_crash_the_probe(self):
+        """A self-referential evidence container recurses forever — the
+        ``RecursionError`` escapes the probe's ``except ValidationError``
+        degrade and crashes the activity, which is retried and stacks
+        ``failed_login_attempts``. The redactor must prune the cycle (same
+        id-tracking pattern ``_root_cause`` uses for ``__cause__``)."""
+        from dataclasses import dataclass
+
+        from application_sdk.errors.leaves import AuthError
+
+        @dataclass(kw_only=True)
+        class _CyclicEvidenceError(AuthError):
+            details: dict | None = None
+
+        cyclic: dict = {"dsn": "PWD=SyntheticValue123"}
+        cyclic["self"] = cyclic
+
+        typed = _CyclicEvidenceError(
+            message="source rejected the login",
+            details=cyclic,
+        )
+
+        result = await self._probe(typed)
+
+        assert result.failure is not None
+        wire = result.failure.model_dump_json()
+        assert "SyntheticValue123" not in wire
+        assert "PWD=***" in wire
+
     def test_string_fallback_redacts_a_secret_bearing_message(self):
         """A hand-built / pre-redaction-era output whose producer did not redact
         must be re-redacted at the fallback trust boundary."""
