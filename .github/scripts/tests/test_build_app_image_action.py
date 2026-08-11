@@ -441,3 +441,60 @@ def test_buildx_cache_scope_is_unchanged() -> None:
         "the `--cache-to` line was removed (or `mode=max` was dropped). Builds "
         "would never write the cache, so every leg goes cold on the next run."
     )
+
+
+# --- the PR-scoped SDK runtime base ----------------------------------------
+# `build-sdk-base-image` (pull_request.yaml) publishes a PR-scoped
+# app-runtime-base so an e2e-labelled SDK PR exercises its own Dockerfile /
+# daprd / base changes. Every leg of `build-e2e-image` above then does
+# `FROM <that image>`, which makes the two a cross-file contract: whatever
+# architectures the connector matrix builds, the base must serve. Nothing else
+# enforced it — the two live in different workflows, and the base build stayed
+# amd64-only after the matrix went two-arch, failing every e2e-labelled SDK PR's
+# arm64 leg on `no match for platform in manifest` before a single line of the
+# connector Dockerfile ran.
+
+
+def _pull_request_workflow() -> dict:  # type: ignore[type-arg]
+    return yaml.safe_load(
+        (_REPO_ROOT / ".github/workflows/pull_request.yaml").read_text(encoding="utf-8")
+    )
+
+
+def _sdk_base_build_step() -> dict:  # type: ignore[type-arg]
+    job = _pull_request_workflow()["jobs"]["build-sdk-base-image"]
+    return next(
+        s for s in job["steps"] if "secure-build-push-apps" in str(s.get("uses", ""))
+    )
+
+
+def test_the_pr_base_image_serves_every_arch_the_connector_matrix_builds() -> None:
+    """Derived from the matrix, not hardcoded, so adding a third architecture
+    cannot silently leave the base behind."""
+    consumed = {
+        leg["platform"]
+        for leg in _reusable()["jobs"]["build-e2e-image"]["strategy"]["matrix"][
+            "include"
+        ]
+    }
+    published = {
+        p.strip() for p in _sdk_base_build_step()["with"]["platforms"].split(",")
+    }
+
+    missing = consumed - published
+    assert not missing, (
+        f"build-e2e-image builds {sorted(consumed)} FROM the PR base image, but "
+        f"the base publishes only {sorted(published)}. The {sorted(missing)} "
+        "leg(s) fail on `no match for platform in manifest` — a failure that "
+        "happens before the Dockerfile runs and reads as nothing to do with the "
+        "base image."
+    )
+
+
+def test_the_base_image_build_is_reached_through_the_scanning_action() -> None:
+    # Multi-arch here rides on secure-build-push-apps scanning the runner's
+    # native arch and then building the full platform list for the push.
+    # Swapping in a raw docker/build-push-action would publish both unscanned.
+    step = _sdk_base_build_step()
+    assert "secure-build-push-apps" in step["uses"]
+    assert step["with"]["push"] is True

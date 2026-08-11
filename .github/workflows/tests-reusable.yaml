@@ -1528,7 +1528,25 @@ jobs:
   # empty on the connector's own same-repo pull_request/push runs.
   report-to-sdk:
     name: Report to application-sdk
-    needs: [unit, detect-integration, integration, e2e]
+    # The SAME set the Tests Gate aggregates, because this job now reports the
+    # SAME verdict: the mirrored `Connector E2E run / <app>` check on the
+    # dispatching SDK PR must say what this run's gate says. It previously
+    # needed a strict subset (no detect-merge-queue, no discover-e2e, none of
+    # the install path) and re-derived its own conclusion from it, which is
+    # exactly how a connector run with a red Tests Gate reported green on the
+    # SDK side.
+    needs:
+      [
+        unit,
+        detect-merge-queue,
+        detect-integration,
+        integration,
+        discover-e2e,
+        build-e2e-image,
+        merge-e2e-image,
+        prepare-tenant,
+        e2e,
+      ]
     if: |
       always() &&
       github.event_name == 'workflow_dispatch' &&
@@ -1620,7 +1638,32 @@ jobs:
           name: sdr-integration-tests-${{ inputs.app-name }}-results
           path: connector-results
 
-      - name: Determine conclusion + build summary
+      # THE verdict. Same action, same inputs as the Tests Gate job below, so
+      # the mirrored check on the dispatching SDK PR and this run's required
+      # check are one decision evaluated twice rather than two decisions that
+      # can disagree. Pinned at @main (not the dispatching SDK ref) on purpose:
+      # the action and its driver are checked out together, so unlike the
+      # callback scripts below there is no ref-skew to guard against.
+      - name: Evaluate Tests Gate (the conclusion this callback reports)
+        id: gate
+        uses: atlanhq/application-sdk/.github/actions/verify-test-gate@main
+        with:
+          unit-result: ${{ needs.unit.result }}
+          integration-result: ${{ needs.integration.result }}
+          detect-integration-result: ${{ needs.detect-integration.result }}
+          detect-merge-queue-result: ${{ needs.detect-merge-queue.result }}
+          discover-e2e-result: ${{ needs.discover-e2e.result }}
+          build-e2e-image-result: ${{ needs.build-e2e-image.result }}
+          merge-e2e-image-result: ${{ needs.merge-e2e-image.result }}
+          prepare-tenant-result: ${{ needs.prepare-tenant.result }}
+          e2e-result: ${{ needs.e2e.result }}
+
+      # Body only — the `conclusion` this step still emits is ignored (see the
+      # completion step). Its CLI is deliberately left untouched: this script is
+      # checked out from the DISPATCHING SDK ref, which can be older than the
+      # workflow (always @main), so a new flag here would make every in-flight
+      # SDK PR's callback die on `unrecognized arguments`.
+      - name: Build summary
         id: report
         env:
           UNIT_RESULT: ${{ needs.unit.result }}
@@ -1638,6 +1681,26 @@ jobs:
             --unit-summary "$UNIT_SUMMARY" \
             --integration-summary "$INTEGRATION_SUMMARY"
 
+      # The body above is built from the four results that script has always
+      # taken, so on the paths it cannot see (a failed image build, a skipped
+      # matrix) it would render a benign "**e2e:** skipped" under a failure
+      # conclusion. Append the gate's own rendered verdict so the check run a
+      # reviewer opens on the SDK PR states the cause. Straight-line appends —
+      # no branching in the shell, per docs/standards/ci.md — and it works for
+      # both the artifact-rendered report and the fallback body.
+      - name: Append the gate verdict to the check-run body
+        env:
+          SUMMARY_FILE: ${{ steps.report.outputs.summary_file }}
+          OVERALL_STATUS: ${{ steps.gate.outputs.overall-status }}
+          E2E_STATUS: ${{ steps.gate.outputs.e2e-status }}
+        run: |
+          set -euo pipefail
+          {
+            printf '\n---\n\n'
+            printf '**Tests Gate:** %s\n' "$OVERALL_STATUS"
+            printf '**e2e:** %s\n' "$E2E_STATUS"
+          } >> "$SUMMARY_FILE"
+
       - name: Complete the check run on application-sdk
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -1649,7 +1712,7 @@ jobs:
             --repo atlanhq/application-sdk \
             --sha "$SHA" \
             --name "Connector E2E run / ${REPO_SHORT}" \
-            --conclusion "${{ steps.report.outputs.conclusion }}" \
+            --conclusion "${{ steps.gate.outputs.conclusion }}" \
             --summary-file "${{ steps.report.outputs.summary_file }}" \
             --details-url "$RUN_URL"
 
@@ -1734,6 +1797,9 @@ jobs:
         detect-integration,
         integration,
         discover-e2e,
+        build-e2e-image,
+        merge-e2e-image,
+        prepare-tenant,
         e2e,
       ]
     if: always()
@@ -1753,7 +1819,11 @@ jobs:
       # passed. Integration skipped (PR / no suite) is a pass; unit must succeed.
       # detect-integration is gated too: a *failed* detection (not a PR skip)
       # fails the gate, so a checkout/glob flake can't silently skip integration
-      # and green the required check.
+      # and green the required check. The three install-path jobs (image build,
+      # manifest merge, tenant install) are gated for the same reason — they are
+      # exactly what the e2e matrix's own `if` requires, so a failure in any of
+      # them drops e2e to a skip. Passing them in names the cause instead of
+      # leaving the driver to infer it from the skip.
       - name: Evaluate Tests Gate
         id: gate
         if: always()
@@ -1764,6 +1834,9 @@ jobs:
           detect-integration-result: ${{ needs.detect-integration.result }}
           detect-merge-queue-result: ${{ needs.detect-merge-queue.result }}
           discover-e2e-result: ${{ needs.discover-e2e.result }}
+          build-e2e-image-result: ${{ needs.build-e2e-image.result }}
+          merge-e2e-image-result: ${{ needs.merge-e2e-image.result }}
+          prepare-tenant-result: ${{ needs.prepare-tenant.result }}
           e2e-result: ${{ needs.e2e.result }}
 
       - name: Post unified test-summary comment on PR

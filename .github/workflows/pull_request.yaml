@@ -294,9 +294,21 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          # amd64 only — GitHub-hosted e2e runners are amd64; the connector
-          # build (sdr-e2e) is single-platform too. Keeps the rebuild fast.
-          platforms: linux/amd64
+          # BOTH arches, and it has to stay that way: the connector's e2e image
+          # build (tests-reusable's build-e2e-image) is a two-leg native matrix
+          # — amd64 for the per-leg worker on the runner, arm64 for the tenant's
+          # node — and each leg does `FROM <this image>`. A single-arch base
+          # fails the arm64 leg outright with "no match for platform in
+          # manifest" before a line of the Dockerfile runs, which is what took
+          # down the arm64 leg of every e2e-labelled SDK PR. The claim this
+          # comment used to make ("the connector build is single-platform too")
+          # went stale when that matrix landed.
+          #
+          # Matches build-image.yaml's released-base build, which has published
+          # this same Dockerfile for both arches through this same action for as
+          # long as it has existed. secure-build-push-apps scans on the runner's
+          # native arch and then builds the full platform list for the push.
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.ref.outputs.image }}
           github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         env:
