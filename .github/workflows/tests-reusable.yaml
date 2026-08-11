@@ -1792,11 +1792,11 @@ jobs:
           prepare-tenant-result: ${{ needs.prepare-tenant.result }}
           e2e-result: ${{ needs.e2e.result }}
 
-      # Body only — the `conclusion` this step still emits is ignored (see the
-      # completion step). Its CLI is deliberately left untouched: this script is
-      # checked out from the DISPATCHING SDK ref, which can be older than the
-      # workflow (always @main), so a new flag here would make every in-flight
-      # SDK PR's callback die on `unrecognized arguments`.
+      # Body only — this step emits no verdict; the completion step below takes
+      # the gate's. Its CLI stays frozen: this script is checked out from the
+      # DISPATCHING SDK ref, which can be older than the workflow (always
+      # @main), so a new flag here would make every in-flight SDK PR's callback
+      # die on `unrecognized arguments`.
       - name: Build summary
         id: report
         env:
