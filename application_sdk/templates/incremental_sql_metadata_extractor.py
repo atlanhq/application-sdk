@@ -776,6 +776,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 run_id=run_id,
                 application_name=app_name,
                 copy_workers=input.copy_workers,
+                upload_concurrency=input.upload_concurrency,
             )
 
             return WriteCurrentStateOutput(

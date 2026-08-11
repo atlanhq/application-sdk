@@ -389,6 +389,12 @@ class WriteCurrentStateInput(IncrementalTaskInput):
     copy_workers: int = 3
     """Parallel workers for file copy operations."""
 
+    upload_concurrency: int = 4
+    """Max concurrent object-store requests when uploading the current-state
+    snapshot and incremental diff. Connections with very large column counts
+    (100K+) can raise this to shrink wall-clock time on the upload step,
+    which otherwise runs at this same fixed default regardless of scale."""
+
     application_name: str = ""
 
 
