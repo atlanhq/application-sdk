@@ -26,7 +26,7 @@ import importlib.util
 import json
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pyatlan_v9.model.assets import Column, Database, Schema, Table
@@ -338,6 +338,27 @@ class TestWarnOnInvalidTransformedAssets:
             logger.warning.assert_called_once()
             assert "timed out" in logger.warning.call_args.args[0]
             logger.info.assert_not_called()
+
+    async def test_scan_is_serialized_to_one_worker(self, tmp_path: Path) -> None:
+        # Regression guard: the scan must pin max_workers=1 on its
+        # run_best_effort call. Each child re-imports the pyatlan/msgspec decode
+        # stack, so letting the default width (min(4, cpu_count)) fan out lets N
+        # concurrent uploads on the same pod spawn N children in parallel — the
+        # dominant memory cost observed pushing a modestly-sized worker pod
+        # (e.g. 750Mi) into OOMKill under concurrent load. Serializing behind one
+        # child bounds worst-case memory; this is best-effort/warn-only work off
+        # the workflow-critical path, so the added queueing latency is an
+        # acceptable trade. Asserted directly on the call args (rather than
+        # behaviorally, e.g. via timing) to avoid flakiness.
+        _valid_hierarchy(tmp_path)
+        with patch.object(base_module, "_task_logger"):
+            with patch(
+                "application_sdk.execution.heartbeat.run_best_effort",
+                AsyncMock(return_value=None),
+            ) as mock_run_best_effort:
+                await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
+            mock_run_best_effort.assert_called_once()
+            assert mock_run_best_effort.call_args.kwargs.get("max_workers") == 1
 
     async def test_concurrent_uploads_both_survive_timeouts(
         self, tmp_path: Path

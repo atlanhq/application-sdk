@@ -239,12 +239,28 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     # Best-effort: run_best_effort isolates the scan in a child process and, on
     # any native crash / timeout / error, logs a warning and returns None — the
     # upload is never blocked, failed, or crashed by the validation scaffold.
+    #
+    # max_workers=1: serialize this across concurrent uploads on the same worker
+    # process rather than letting the default width (min(4, cpu_count)) spawn up
+    # to 4 parallel children. Each child re-imports the pyatlan/msgspec decode
+    # stack, which is the dominant memory cost here (measured ~250-300MB RSS per
+    # child from a 274-column real-world sample). On a pod handling several
+    # concurrent connector workflows — the normal case for a tenant with multiple
+    # connections on the same cron schedule — parallel children compound and can
+    # push a modestly-sized pod (e.g. 750Mi limit) into OOMKill. This is
+    # best-effort, warn-only validation off the workflow-critical path, so the
+    # added queueing latency under concurrency is an acceptable trade for
+    # bounded worst-case memory (measured ~45% lower peak RSS under 3 concurrent
+    # callers: 746MB -> 407MB for this same sample) — found investigating a
+    # production `App.upload()` heartbeat-timeout that traced to the worker
+    # pod being OOMKilled under this exact concurrent-upload pattern.
     report = await run_best_effort(
         validate_transformed_dir,
         str(target),
         label="Transformed-asset validation",
         logger=_task_logger,
         timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
+        max_workers=1,
     )
 
     if report is None:
