@@ -24,6 +24,7 @@ from application_sdk.handler.contracts import (
     PreflightStatus,
     SqlMetadataObject,
     SqlMetadataOutput,
+    flatten_credentials_to_pairs,
 )
 
 
@@ -37,6 +38,70 @@ class TestHandlerCredential:
         cred = HandlerCredential(key="token", value="abc123")
         assert cred.key == "token"
         assert cred.value == "abc123"
+
+
+class TestFlattenCredentialsToPairs:
+    """`flatten_credentials_to_pairs` / `HandlerCredential.list_from_raw`.
+
+    The flattened pairs are the only credential view a gate-side handler ever
+    sees, so `extra` must survive in both of its legal shapes (dict and JSON
+    string) — a dropped `extra` starves the handler of connection params the
+    runtime client would resolve (the Oracle miner false-block defect).
+    """
+
+    def test_top_level_keys_flatten(self):
+        pairs = flatten_credentials_to_pairs({"username": "u", "port": 1521})
+        assert {"key": "username", "value": "u"} in pairs
+        assert {"key": "port", "value": "1521"} in pairs
+
+    def test_dict_extra_hoisted(self):
+        pairs = flatten_credentials_to_pairs(
+            {"username": "u", "extra": {"host": "h", "protocol": "TCP"}}
+        )
+        assert {"key": "extra.host", "value": "h"} in pairs
+        assert {"key": "extra.protocol", "value": "TCP"} in pairs
+
+    def test_string_extra_parsed_and_hoisted(self):
+        """JSON-string `extra` must flatten identically to dict `extra`."""
+        as_dict = flatten_credentials_to_pairs(
+            {"username": "u", "extra": {"host": "h", "port": 1521, "sid": "ORCL"}}
+        )
+        as_string = flatten_credentials_to_pairs(
+            {
+                "username": "u",
+                "extra": '{"host": "h", "port": 1521, "sid": "ORCL"}',
+            }
+        )
+        assert as_string == as_dict
+        assert {"key": "extra.host", "value": "h"} in as_string
+
+    def test_string_extra_nested_values_serialized(self):
+        pairs = flatten_credentials_to_pairs({"extra": '{"filter": {"db": ["s"]}}'})
+        assert pairs == [{"key": "extra.filter", "value": '{"db": ["s"]}'}]
+
+    def test_invalid_json_string_extra_skipped(self):
+        """Undecodable string keeps the legacy drop — flattening never raises."""
+        pairs = flatten_credentials_to_pairs({"username": "u", "extra": "{not-json"})
+        assert pairs == [{"key": "username", "value": "u"}]
+
+    def test_non_dict_json_string_extra_skipped(self):
+        pairs = flatten_credentials_to_pairs({"username": "u", "extra": '["a", "b"]'})
+        assert pairs == [{"key": "username", "value": "u"}]
+
+    def test_none_values_skipped(self):
+        pairs = flatten_credentials_to_pairs(
+            {"username": "u", "password": None, "extra": '{"host": "h", "sid": null}'}
+        )
+        assert pairs == [
+            {"key": "username", "value": "u"},
+            {"key": "extra.host", "value": "h"},
+        ]
+
+    def test_list_from_raw_round_trips_string_extra(self):
+        creds = HandlerCredential.list_from_raw(
+            {"username": "u", "extra": '{"host": "h"}'}
+        )
+        assert HandlerCredential(key="extra.host", value="h") in creds
 
 
 class TestAuthStatus:

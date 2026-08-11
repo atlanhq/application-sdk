@@ -207,9 +207,22 @@ def flatten_credentials_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, s
     Nested ``extra`` is hoisted to ``extra.<k>`` keys. Shared by the HTTP
     preflight path (heracles-normalized requests) and the injected gate's
     resolved-credential conversion so both emit identical shapes.
+
+    ``extra`` stored as a JSON string (a legal shape — every SQL client parses
+    it via ``parse_credentials_extra``) is decoded before hoisting. Dropping it
+    instead starved gate-side handlers of connection params the runtime client
+    could see (e.g. Oracle host/port/sid living inside ``extra``), turning
+    every preflight into an instant false block. A string that does not decode
+    to a dict keeps the legacy behavior (skipped) — the runtime client would
+    reject it anyway, and flattening must not fail where it previously didn't.
     """
     pairs: list[dict[str, str]] = []
     extra = creds_dict.get("extra")
+    if isinstance(extra, str):
+        try:
+            extra = json.loads(extra)
+        except json.JSONDecodeError:
+            extra = None
     for key, value in creds_dict.items():
         if key == "extra" or value is None:
             continue
