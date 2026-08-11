@@ -483,3 +483,160 @@ def test_parse_checks_state_failing_checkrun_not_classified_green() -> None:
 
 def test_parse_checks_state_empty_rollup() -> None:
     assert _parse_checks_state([]) is ChecksState.UNKNOWN
+
+
+# ── Category: sdk-package ────────────────────────────────────────────────────
+
+
+def test_category_sdk_package_via_label() -> None:
+    pr = classify(make_pr(labels=["sdk-package-update"]))
+    assert pr.category is Category.SDK_PACKAGE
+
+
+def test_category_sdk_package_fallback_branch() -> None:
+    pr = classify(make_pr(labels=[], branch="renovate/atlan-application-sdk-3.x"))
+    assert pr.category is Category.SDK_PACKAGE
+
+
+def test_category_sdk_package_fallback_title() -> None:
+    pr = classify(
+        make_pr(
+            labels=[],
+            branch="renovate/some-branch",
+            title="chore(deps): update dependency atlan-application-sdk to v3.27.0",
+        )
+    )
+    assert pr.category is Category.SDK_PACKAGE
+
+
+def test_category_sdk_does_not_steal_conformance() -> None:
+    # "atlan-application-sdk" is a prefix of the conformance package name, so
+    # the conformance check must win for both branch and title variants.
+    pr = classify(
+        make_pr(labels=[], branch="renovate/atlan-application-sdk-conformance-0.x")
+    )
+    assert pr.category is Category.CONFORMANCE_PACKAGE
+    pr = classify(
+        make_pr(
+            labels=[],
+            branch="renovate/some-branch",
+            title="Update dependency atlan-application-sdk-conformance to v0.14.0",
+        )
+    )
+    assert pr.category is Category.CONFORMANCE_PACKAGE
+
+
+def test_auto_merge_expected_sdk_package() -> None:
+    # Runtime SDK bumps are a deliberate human merge regardless of update type.
+    pr = classify(make_pr(labels=["sdk-package-update", "update:patch"]))
+    assert pr.auto_merge_expected is False
+    assert pr.blocking_reason is BlockingReason.AWAITING_HUMAN_REVIEW
+
+
+# ── extract_deps: PR → delivered packages ────────────────────────────────────
+
+
+_SDK_BODY_TABLE = """\
+This PR contains the following updates:
+
+| Package | Change | Age | Adoption | Passing | Confidence |
+|---|---|---|---|---|---|
+| [atlan-application-sdk](https://redirect.github.com/atlanhq/application-sdk) ([changelog](https://example)) | `3.26.0` -> `3.27.0` | ok | ok | ok | ok |
+"""
+
+_GROUP_BODY_TABLE = """\
+| Package | Change |
+|---|---|
+| [requests](https://example) | `2.31.0` -> `2.32.1` |
+| pydantic | `2.7.0` -> `2.8.0` |
+"""
+
+
+def test_extract_deps_from_body_table_linked() -> None:
+    pr = classify(make_pr(body=_SDK_BODY_TABLE))
+    assert [(d.name, d.from_version, d.to_version) for d in pr.deps] == [
+        ("atlan-application-sdk", "3.26.0", "3.27.0")
+    ]
+
+
+def test_extract_deps_from_body_table_grouped_multiple_rows() -> None:
+    # Grouped PRs: every package row is captured; header/separator rows are not.
+    pr = classify(make_pr(body=_GROUP_BODY_TABLE))
+    assert [(d.name, d.to_version) for d in pr.deps] == [
+        ("requests", "2.32.1"),
+        ("pydantic", "2.8.0"),
+    ]
+
+
+def test_extract_deps_title_fallback_when_no_table() -> None:
+    pr = classify(
+        make_pr(
+            body="no table here",
+            title="chore(deps): update dependency atlan-application-sdk to v3.27.0",
+        )
+    )
+    assert [(d.name, d.from_version, d.to_version) for d in pr.deps] == [
+        ("atlan-application-sdk", "", "3.27.0")
+    ]
+
+
+def test_extract_deps_custom_manager_title() -> None:
+    # The contract-toolkit custom manager drops the "dependency" word.
+    pr = classify(
+        make_pr(body="", title="chore(deps): update app-contract-toolkit to v0.18.1")
+    )
+    assert [(d.name, d.to_version) for d in pr.deps] == [
+        ("app-contract-toolkit", "0.18.1")
+    ]
+
+
+def test_extract_deps_lock_maintenance_empty() -> None:
+    # Lock refresh PRs carry no version table and no versioned title.
+    pr = classify(
+        make_pr(
+            labels=["update:lock-maintenance"],
+            title="Lock file maintenance",
+            branch="renovate/lock-file-maintenance",
+            body="This PR refreshes the lock file.",
+        )
+    )
+    assert pr.deps == ()
+
+
+def test_extract_deps_grouped_title_without_version_yields_empty() -> None:
+    pr = classify(
+        make_pr(body="", title="chore(deps): update non-critical python dependencies")
+    )
+    assert pr.deps == ()
+
+
+# Live Renovate bodies render the Change column with a Unicode arrow — captured
+# from PR #3117 on this repo (an `update … action to …` github-actions PR). The
+# parser must match what Renovate actually emits, not an idealized ASCII table.
+_LIVE_BODY_TABLE_UNICODE_ARROW = """\
+This PR contains the following updates:
+
+| Package | Type | Update | Change |
+|---|---|---|---|
+| [atlanhq/application-sdk](https://redirect.github.com/atlanhq/application-sdk) | action | patch | `v3.27.0` → `v3.27.1` |
+"""
+
+
+def test_extract_deps_from_live_body_table_unicode_arrow() -> None:
+    pr = classify(make_pr(body=_LIVE_BODY_TABLE_UNICODE_ARROW))
+    assert [(d.name, d.from_version, d.to_version) for d in pr.deps] == [
+        ("atlanhq/application-sdk", "v3.27.0", "v3.27.1")
+    ]
+
+
+def test_extract_deps_title_fallback_action_form() -> None:
+    # Live title of PR #3112: github-actions bumps say "update X action to vY".
+    pr = classify(
+        make_pr(
+            body="no table here",
+            title="chore(deps): update anthropics/claude-code-action action to v1.0.190",
+        )
+    )
+    assert [(d.name, d.from_version, d.to_version) for d in pr.deps] == [
+        ("anthropics/claude-code-action", "", "1.0.190")
+    ]

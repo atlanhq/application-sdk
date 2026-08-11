@@ -223,12 +223,30 @@ def wait_for_checks(
         return False
 
     failed = [
-        n
+        (n, latest[n].get("conclusion"))
         for n in expected_names
         if latest[n].get("conclusion") not in PASSING_CONCLUSIONS
     ]
     if failed:
-        print(f"::error::check runs did not pass: {failed}")
+        # Name the CONCLUSION, not just the check. This used to print bare names,
+        # which made a connector whose tests genuinely failed indistinguishable
+        # from one that never ran — and the second case has a completely
+        # different response (re-run, don't read the diff).
+        print(
+            "::error::check runs did not pass: "
+            + ", ".join(f"{name} ({conclusion})" for name, conclusion in failed)
+        )
+        cancelled = [name for name, conclusion in failed if conclusion == "cancelled"]
+        if cancelled:
+            print(
+                "::error::cancelled, not failed: "
+                + ", ".join(cancelled)
+                + " — no test reported a verdict. Usually a concurrency-group "
+                "eviction in the connector repo (GitHub keeps only ONE pending "
+                "run per group, so a third arrival cancels the queued one before "
+                "it gets a runner), or a manual cancel. Re-run rather than "
+                "triage the diff. See FND-218."
+            )
         return False
 
     print(f"All {len(expected_names)} connector check run(s) passed.")
