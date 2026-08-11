@@ -240,9 +240,7 @@ def test_composite_action_invokes_scripts_at_real_paths():
     action_dir = _REPO_ROOT / ".github" / "actions" / "dataforge-source"
     action_yaml = (action_dir / "action.yaml").read_text()
     assert _CAPTURE_SHAPE.search(action_yaml), "action must capture fetch stdout"
-    for rel in re.findall(
-        r"\$\{\{ github\.action_path \}\}/(\S+?\.py)", action_yaml
-    ):
+    for rel in re.findall(r"\$\{\{ github\.action_path \}\}/(\S+?\.py)", action_yaml):
         resolved = (action_dir / rel).resolve()
         assert resolved.is_file(), f"action.yaml references missing script {rel}"
 

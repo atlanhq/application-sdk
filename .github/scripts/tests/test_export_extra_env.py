@@ -737,7 +737,7 @@ def test_call_sites_are_the_expected_files():
             id="indirect-via-shell-var",
         ),
         pytest.param(
-            '        python3 "$D/export_extra_env.py" --json "$P" ' '>> "$GITHUB_ENV"',
+            '        python3 "$D/export_extra_env.py" --json "$P" >> "$GITHUB_ENV"',
             id="single-line-no-continuation",
         ),
     ],

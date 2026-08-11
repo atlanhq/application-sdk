@@ -84,7 +84,7 @@ def _request(method: str, url: str, api_key: str) -> dict:
         detail = ""
         try:
             detail = exc.read().decode("utf-8", "replace")[:500]
-        except Exception:  # pragma: no cover - best-effort detail
+        except Exception:  # noqa: S110 — pragma: no cover - best-effort detail
             pass
         raise DataforgeSourceError(
             f"dataforge {method} {url.split('?')[0]} failed: HTTP {exc.code} {detail}"
