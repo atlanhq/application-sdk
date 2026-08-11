@@ -190,3 +190,68 @@ sparse-checkout it into a side path and invoke from there — the
 
 The driver runs from the consumer's working directory, so it acts on the
 consumer's files; `.sdk-scripts` only holds SDK code and must never be staged.
+
+## `concurrency:` is not a lock, and not a queue
+
+**Rule:** never use a `concurrency:` group to protect a shared external resource
+(a tenant, a fixed environment, a singleton deployment). Use it only to
+supersede or de-duplicate *runs of the same thing*.
+
+Two independent limits make it unfit as a lock:
+
+* **It is per-job.** The group is released when the job ends. Anything the job
+  set up for later jobs to use — an install, a seeded database — is unprotected
+  from the moment that job finishes.
+* **It holds ONE pending run.** `cancel-in-progress: false` reads like a queue
+  but is a waiting room with a single chair. A third arrival does not wait: it
+  *evicts* the run that was waiting, which is reported as `cancelled` having
+  never been given a runner, so there is no log blob at all (`gh api
+  .../jobs/<id>/logs` → 404). A few-second job lifetime with no logs is the
+  signature.
+
+That combination caused FND-218: batching more than two PRs into the merge queue
+self-inflicted roughly a two-in-three ejection rate, and because the connector
+callback mirrored `cancelled` as `failure`, it read on the dispatching PR as
+"your change broke the connector".
+
+**Do not key a group on `github.ref` for anything a merge queue or a cross-repo
+dispatch can reach.** On a cross-repo `workflow_dispatch`, `github.ref` is the
+*callee's* ref — always `refs/heads/main` — never the dispatching commit. So a
+ref-keyed group collapses every concurrent dispatch into one group, and the
+one-pending-slot rule then evicts all but two. Key on `github.run_id` off the PR
+path:
+
+```yaml
+concurrency:
+  group: thing-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+```
+
+On a real PR ref the shared group is the point (supersede the previous commit);
+everywhere else the run must be independent.
+
+**For a shared resource, take a lease instead.** The `(app, cloud)` tenant lease
+in [`e2e-tenant-lease`](../../.github/actions/e2e-tenant-lease/) is the worked
+example (FND-250). Its protocol is worth reusing because it needs no lock
+server:
+
+* Each run creates a ticket ref, `refs/e2e-tenant-lease/<app>/<cloud>/<run_id>-<run_attempt>`.
+* The lease is held by the lowest-ordered **live** ticket. Every participant
+  derives the same holder from the same listing, so there is no
+  compare-and-swap and no lock object to strand.
+* Ordering is by `run_id`, which GitHub assigns and increases with run creation
+  time *within a repository* — a server-side arrival order, so no runner clock
+  can make two runs both believe they are first.
+* The ticket name is derived entirely from the run, so every job of that run
+  computes it identically. Acquire and release live in different jobs and pass
+  no state; re-creating a ticket restores the same queue position.
+* Liveness is the holder's run status, not a heartbeat. A ticket whose run is
+  `completed` is reaped by whoever notices. This is the part `if: always()`
+  cannot do: GitHub *cancels* queued jobs rather than running them, so a
+  cancelled run's release job never starts.
+
+Two consequences to design for. A waiting run occupies a runner, so give the
+wait a budget and fail loudly past it, naming the holder — a contention outcome
+must never be phrased as a test failure. And ref writes need `contents: write`,
+so put acquire/release in their own small jobs and leave the jobs that execute
+test code read-only.
