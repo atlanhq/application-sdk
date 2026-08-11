@@ -114,6 +114,18 @@ concurrency:
   # app per tenant), so two concurrent installs would race and the loser would
   # silently be the version left running. Not cancel-in-progress — cancelling
   # mid-install leaves the tenant in whatever state LM reached.
+  #
+  # Still a group and not the (app, cloud) lease that tests-reusable's install
+  # path now takes (FND-250), because the two cannot see each other: lease
+  # tickets are refs in the repository the run belongs to, and this workflow runs
+  # in application-sdk while the runs it contends with run in the app repos.
+  # Keying the lease centrally would need a cross-repo PAT with ref-write on
+  # every app repo, which is a much larger blast radius than this hazard
+  # justifies — this is a deliberate, human-triggered install, not something CI
+  # fires concurrently. Cloud-keyed (not app-keyed) it is also stricter than the
+  # lease, serialising installs across ALL apps on a cloud. Residual gap: a
+  # manual install here can still land underneath an app repo's e2e run. Tracked
+  # on FND-250.
   group: e2e-tenant-install-${{ inputs.cloud }}
   cancel-in-progress: false
 

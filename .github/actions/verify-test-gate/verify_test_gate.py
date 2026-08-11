@@ -32,9 +32,9 @@ Gate passes iff:
     when the connector ships no integration suite), AND
   * e2e discovery succeeded OR was skipped (skipped = e2e not requested; a
     *failed* discovery means e2e was requested but no suites were found), AND
-  * the per-arch e2e image build, the manifest merge and the tenant install
-    succeeded OR were skipped (skipped = the install path is off, or e2e was
-    not requested), AND
+  * the per-arch e2e image build, the manifest merge, the tenant lease and the
+    tenant install succeeded OR were skipped (skipped = the install path is off,
+    or e2e was not requested), AND
   * the e2e matrix succeeded OR was skipped (matrix aggregate is success only
     if every leg passed).
 
@@ -46,9 +46,9 @@ legitimate) and ``integration`` then skips cleanly, so there is no analogous
 ``detect-integration == success and integration == skipped`` check — that pair
 is the normal no-suite path.
 
-The three install-path jobs are checked for the same reason the detection jobs
-are: ``build-e2e-image``, ``merge-e2e-image`` and ``prepare-tenant`` are exactly
-the jobs the e2e matrix's own ``if`` gates on, so a failure in any of them drops
+The install-path jobs are checked for the same reason the detection jobs are:
+``build-e2e-image``, ``merge-e2e-image``, ``lease-tenant`` and ``prepare-tenant``
+are exactly the jobs the e2e matrix's own ``if`` gates on, so a failure in any of them drops
 the matrix to a skip. The anomaly rule above already refused to green that, but
 it named the symptom ("matrix skipped") rather than the cause ("the arm64 image
 build failed") — which is precisely what made the first real occurrence take a
@@ -92,7 +92,10 @@ _CANCELLED_GUIDANCE = (
 
 
 def _install_path(
-    build_e2e_image: str, merge_e2e_image: str, prepare_tenant: str
+    build_e2e_image: str,
+    merge_e2e_image: str,
+    prepare_tenant: str,
+    lease_tenant: str,
 ) -> list[tuple[str, str, str]]:
     """The jobs between discovery and the e2e matrix, in order.
 
@@ -100,6 +103,21 @@ def _install_path(
     ``evaluate`` and ``_e2e_status`` cannot disagree about which jobs belong to
     this leg, about their order, or about which one a reader is pointed at when
     several fail together.
+
+    ``lease-tenant`` sits where it runs: after the image exists and immediately
+    before the install, because it is the job that waits for the tenant to be
+    free (FND-250). Its failure mode is contention, not a broken change, so it
+    has to be named — left unnamed it would surface only as the downstream
+    "matrix skipped despite discovered suites" anomaly, which reads like a
+    workflow misconfiguration.
+
+    No parameter here has a default, deliberately: every caller must name every
+    job. A default let a call site that predated ``lease_tenant`` keep compiling
+    while silently computing the install path as though the lease had passed,
+    which relabelled a cancelled lease as ``failure``. The public functions keep
+    their trailing defaults — they are consumed cross-repo at ``@main`` and
+    cannot break callers — but this helper is module-private, so a missed
+    argument should be a TypeError.
     """
     return [
         ("the e2e image build", "e2e image build", build_e2e_image),
@@ -108,6 +126,7 @@ def _install_path(
             "e2e image manifest merge",
             merge_e2e_image,
         ),
+        ("the tenant lease", "Tenant lease", lease_tenant),
         ("the tenant install", "Tenant install", prepare_tenant),
     ]
 
@@ -122,10 +141,11 @@ def evaluate(
     build_e2e_image: str = "skipped",
     merge_e2e_image: str = "skipped",
     prepare_tenant: str = "skipped",
+    lease_tenant: str = "skipped",
 ) -> list[str]:
     """Return human-readable failure reasons (empty ⇒ the gate passes).
 
-    ``detect_merge_queue`` and the three install-path results are trailing and
+    ``detect_merge_queue`` and the four install-path results are trailing and
     default to "skipped" because this driver is consumed cross-repo via
     ``@main``: a required positional would break every caller the instant it
     merged, before their workflows could update. "skipped" is the neutral
@@ -163,7 +183,7 @@ def evaluate(
     # skip. Named directly so the annotation reports the cause rather than the
     # downstream symptom.
     for annotation, _row, result in _install_path(
-        build_e2e_image, merge_e2e_image, prepare_tenant
+        build_e2e_image, merge_e2e_image, prepare_tenant, lease_tenant
     ):
         if result not in _OK_OPTIONAL:
             errors.append(f"{annotation} did not succeed (result={result})")
@@ -183,7 +203,7 @@ def evaluate(
         and all(
             result in _OK_OPTIONAL
             for _annotation, _row, result in _install_path(
-                build_e2e_image, merge_e2e_image, prepare_tenant
+                build_e2e_image, merge_e2e_image, prepare_tenant, lease_tenant
             )
         )
     ):
@@ -203,6 +223,7 @@ def cancelled_only(
     build_e2e_image: str = "skipped",
     merge_e2e_image: str = "skipped",
     prepare_tenant: str = "skipped",
+    lease_tenant: str = "skipped",
 ) -> bool:
     """True when at least one job was cancelled and nothing actually failed.
 
@@ -226,7 +247,7 @@ def cancelled_only(
         and all(
             result in _OK_OPTIONAL
             for _annotation, _row, result in _install_path(
-                build_e2e_image, merge_e2e_image, prepare_tenant
+                build_e2e_image, merge_e2e_image, prepare_tenant, lease_tenant
             )
         )
     ):
@@ -243,6 +264,7 @@ def cancelled_only(
             build_e2e_image,
             merge_e2e_image,
             prepare_tenant,
+            lease_tenant,
         )
         if result not in _OK_OPTIONAL
     ]
@@ -297,6 +319,7 @@ def _e2e_status(
     build_e2e_image: str = "skipped",
     merge_e2e_image: str = "skipped",
     prepare_tenant: str = "skipped",
+    lease_tenant: str = "skipped",
 ) -> str:
     if discover_e2e == "skipped":
         return "⊘ Skipped — add `e2e` label to trigger"
@@ -309,11 +332,15 @@ def _e2e_status(
     # in the same order and with the same labels as the annotations, from the one
     # list, so the row and the error text always name the same job.
     for _annotation, row, result in _install_path(
-        build_e2e_image, merge_e2e_image, prepare_tenant
+        build_e2e_image, merge_e2e_image, prepare_tenant, lease_tenant
     ):
         if result == _CANCELLED:
             return f"🚫 {row} cancelled — not run"
         if result not in _OK_OPTIONAL:
+            # The lease row says why, because "failed" alone would send a reader
+            # into their own diff: the tenant was busy, not broken.
+            if row == "Tenant lease":
+                return "⏳ Tenant busy — lease not acquired, re-run"
             return f"❌ {row} failed"
     if e2e == "success":
         return "✅ Passed"
@@ -336,6 +363,7 @@ def render(
     build_e2e_image: str = "skipped",
     merge_e2e_image: str = "skipped",
     prepare_tenant: str = "skipped",
+    lease_tenant: str = "skipped",
 ) -> dict[str, str]:
     """Compute the gate's outputs: pass/fail + the display status strings.
 
@@ -365,6 +393,7 @@ def render(
         build_e2e_image,
         merge_e2e_image,
         prepare_tenant,
+        lease_tenant,
     )
     blocked_by_cancellation = errors and cancelled_only(
         unit,
@@ -376,6 +405,7 @@ def render(
         build_e2e_image,
         merge_e2e_image,
         prepare_tenant,
+        lease_tenant,
     )
     return {
         "passed": "true" if not errors else "false",
@@ -391,7 +421,12 @@ def render(
             integration, detect_integration, detect_merge_queue
         ),
         "e2e-status": _e2e_status(
-            discover_e2e, e2e, build_e2e_image, merge_e2e_image, prepare_tenant
+            discover_e2e,
+            e2e,
+            build_e2e_image,
+            merge_e2e_image,
+            prepare_tenant,
+            lease_tenant,
         ),
         "overall-status": (
             "✅ All passed"
@@ -435,6 +470,11 @@ def main(argv: list[str] | None = None) -> int:
         help="needs.merge-e2e-image.result",
     )
     parser.add_argument(
+        "--lease-tenant",
+        default="skipped",
+        help="needs.lease-tenant.result (queues for the shared tenant)",
+    )
+    parser.add_argument(
         "--prepare-tenant",
         default="skipped",
         help="needs.prepare-tenant.result",
@@ -454,6 +494,7 @@ def main(argv: list[str] | None = None) -> int:
         args.build_e2e_image,
         args.merge_e2e_image,
         args.prepare_tenant,
+        args.lease_tenant,
     ):
         print(f"::error::{reason}", file=sys.stderr)
 
@@ -469,6 +510,7 @@ def main(argv: list[str] | None = None) -> int:
         args.build_e2e_image,
         args.merge_e2e_image,
         args.prepare_tenant,
+        args.lease_tenant,
     ):
         print(f"::error::{_CANCELLED_GUIDANCE}", file=sys.stderr)
 
@@ -482,6 +524,7 @@ def main(argv: list[str] | None = None) -> int:
         args.build_e2e_image,
         args.merge_e2e_image,
         args.prepare_tenant,
+        args.lease_tenant,
     ).items():
         print(f"{key}={value}")
     return 0

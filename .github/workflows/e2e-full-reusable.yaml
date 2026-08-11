@@ -292,9 +292,26 @@ jobs:
       matrix: ${{ fromJson(needs.plan-clouds.outputs.count != '0' && needs.plan-clouds.outputs.matrix || '{"include":[{"cloud":""}]}') }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
+    # This workflow deliberately does NOT take the (app, cloud) tenant lease that
+    # tests-reusable.yaml's install path takes (FND-250). It never installs, so it
+    # cannot lose a version race: nothing it does changes what is deployed on the
+    # tenant, and no leg here asserts a version. Taking the lease would serialise
+    # it against installing runs for no safety gain, at the cost of holding a
+    # tenant for a whole full-DAG run. The residual gap — an installing run
+    # swapping the version underneath a full-DAG run in flight — predates this
+    # change and is tracked on FND-250 rather than papered over here.
     concurrency:
-      # Per-cloud group: a shared group would serialise the legs.
-      group: e2e-full-${{ github.workflow }}-${{ github.ref }}-${{ matrix.cloud || 'default' }}
+      # Per-cloud (a shared group would serialise the legs) and run-unique. It
+      # used to be keyed on github.ref, which on the dispatch path is this repo's
+      # refs/heads/main for EVERY run — so all concurrent dispatches collapsed
+      # into one group, and a group holds only one pending run: a third dispatch
+      # cancelled the queued one before it got a runner, with no log to say so
+      # (FND-218).
+      #
+      # cancel-in-progress stays false for the same reason as the e2e legs in
+      # tests-reusable.yaml: cancelling mid-run abandons a live Automation Engine
+      # run and leaves tenant state with no cleanup path.
+      group: e2e-full-${{ github.workflow }}-${{ github.run_id }}-${{ matrix.cloud || 'default' }}
       cancel-in-progress: false
     permissions:
       pull-requests: write
