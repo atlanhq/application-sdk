@@ -250,6 +250,20 @@ example (FND-250). It needs no lock server:
 * Release must **check ownership first**. A fixed name is a name you can delete
   someone else's lease with.
 
+**Release cannot be made fully atomic, and that is an accepted trade-off, not an
+oversight.** The check-then-delete above is inherently racy: the refs API offers
+*no* conditional delete, so between the final ownership read and the `DELETE` a
+replacement holder can acquire the ref, and the delete would take the new
+holder's lease. The implementation re-reads the target immediately before the
+delete, which narrows the window to one round-trip but cannot close it. The
+deliberate decision is to **rely on the TTL as the load-bearing bound** rather
+than chase a stronger primitive: the only interleaving that loses is a TTL
+breaking a lease whose run is *still live*, and sizing the TTL above the longest
+legitimate hold makes that window unreachable in practice. The alternative —
+deleting only via a storage/API primitive that supports delete-if-current-target
+— does not exist on `git/refs`, so proactive release stays best-effort and the
+next acquirer's reaping of completed holders is the actual safety net.
+
 **Do not build exclusion out of an ordering rule.** The first version of this
 lease was an ordered queue: every run created a ticket ref named after itself,
 and the lease belonged to whichever live ticket sorted lowest by

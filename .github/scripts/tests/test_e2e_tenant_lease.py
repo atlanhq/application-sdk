@@ -74,6 +74,7 @@ class FakeHTTP:
     def __init__(self) -> None:
         self.routes: dict[tuple[str, str], list[tuple[int, object]]] = {}
         self.calls: list[tuple[str, str]] = []
+        self.cmds: list[list[str]] = []
         self.payloads: list[dict] = []
 
     def route(self, method: str, contains: str, *responses: tuple[int, object]) -> None:
@@ -83,6 +84,7 @@ class FakeHTTP:
         method = cmd[cmd.index("-X") + 1]
         url = cmd[-1]
         self.calls.append((method, url))
+        self.cmds.append(cmd)
         if "-d" in cmd:
             self.payloads.append(json.loads(cmd[cmd.index("-d") + 1]))
         for (route_method, contains), responses in self.routes.items():
@@ -1027,6 +1029,22 @@ def test_missing_token_is_a_clear_error(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     with pytest.raises(SystemExit, match="GH_TOKEN"):
         try_acquire(REPO, REF, BLOB)
+
+
+def test_token_is_not_in_the_curl_command_line(http: FakeHTTP) -> None:
+    """The credential must not be observable via /proc/<pid>/cmdline.
+
+    The token is fed to curl through a stdin config (-K -) instead of a -H
+    argument, so while the request runs the process list carries no copy of it.
+    """
+    secret = "ghp_super_secret_token"
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GH_TOKEN", secret)
+        http.route("POST", "/git/refs", (422, {"message": "Reference already exists"}))
+        try_acquire(REPO, REF, BLOB)
+
+    cmd = http.cmds[0]
+    assert not any(secret in arg for arg in cmd), "token leaked into curl argv"
 
 
 # --- input bounds ----------------------------------------------------------
