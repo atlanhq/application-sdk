@@ -74,6 +74,22 @@ import sys
 # "e2e not requested" and "discovery skipped"; anything else fails the gate.
 _OK_OPTIONAL = ("success", "skipped")
 
+# A job that never ran to a verdict. GitHub reports this for a manual cancel,
+# for a run superseded via cancel-in-progress — and for a concurrency-group
+# EVICTION, which is the one worth spelling out: GitHub keeps only ONE pending
+# run per group, so a third arrival cancels the queued one before it is ever
+# given a runner (no log output at all). None of these are test failures, and
+# the fix for all of them is "re-run", not "triage the diff". The gate still
+# BLOCKS — an un-run test cannot green a merge — but it must not report the
+# result as though the code was found wanting. See FND-218.
+_CANCELLED = "cancelled"
+
+_CANCELLED_GUIDANCE = (
+    "no test reported a verdict: the job(s) above were cancelled, not failed "
+    "(manual cancel, superseded commit, or a concurrency-group eviction). "
+    "Re-run rather than triage the diff."
+)
+
 
 def _install_path(
     build_e2e_image: str, merge_e2e_image: str, prepare_tenant: str
@@ -177,11 +193,75 @@ def evaluate(
     return errors
 
 
+def cancelled_only(
+    unit: str,
+    integration: str,
+    detect_integration: str,
+    discover_e2e: str,
+    e2e: str,
+    detect_merge_queue: str = "skipped",
+    build_e2e_image: str = "skipped",
+    merge_e2e_image: str = "skipped",
+    prepare_tenant: str = "skipped",
+) -> bool:
+    """True when at least one job was cancelled and nothing actually failed.
+
+    Deliberately requires a cancellation to be *present* rather than merely an
+    absence of failures. The "discovery succeeded but the matrix was skipped"
+    anomaly produces an error while every result sits in ``_OK_OPTIONAL``;
+    treating that as a cancellation would hide a real misconfiguration behind a
+    "just re-run" verdict — the opposite of what this distinction is for. The
+    anomaly is raised by ``evaluate`` independently of the raw job results, so a
+    cancellation elsewhere does not make it disappear: it must be excluded
+    explicitly, or a simultaneous cancellation would mask it.
+    """
+    # The matrix-skipped anomaly fires on raw results that all sit in
+    # _OK_OPTIONAL, so it is invisible to the non_ok filter below. It is the one
+    # gate error that is never cancellation-attributable, so its presence means
+    # the block is not a pure cancellation — spell it "failure" and surface the
+    # misconfiguration, never "just re-run".
+    if (
+        discover_e2e == "success"
+        and e2e == "skipped"
+        and all(
+            result in _OK_OPTIONAL
+            for _annotation, _row, result in _install_path(
+                build_e2e_image, merge_e2e_image, prepare_tenant
+            )
+        )
+    ):
+        return False
+    non_ok = [
+        result
+        for result in (
+            unit,
+            integration,
+            detect_integration,
+            discover_e2e,
+            e2e,
+            detect_merge_queue,
+            build_e2e_image,
+            merge_e2e_image,
+            prepare_tenant,
+        )
+        if result not in _OK_OPTIONAL
+    ]
+    return bool(non_ok) and all(result == _CANCELLED for result in non_ok)
+
+
+# Row text for a job that was cancelled. Distinct glyph from ❌ on purpose: the
+# summary table is the first thing read, and "failed" there sends a reviewer
+# into a diff that is not the problem.
+_CANCELLED_ROW = "🚫 Cancelled — not run"
+
+
 def _unit_status(unit: str) -> str:
     if unit == "success":
         return "✅ Passed"
     if unit == "skipped":
         return "⊘ Skipped"
+    if unit == _CANCELLED:
+        return _CANCELLED_ROW
     return "❌ Failed"
 
 
@@ -191,12 +271,18 @@ def _integration_status(
     # A detection failure drops integration to a skip; surface that as a failure
     # rather than the benign "skipped" string, so the display never claims the
     # tier was cleanly skipped when detection actually broke.
+    if detect_merge_queue == _CANCELLED:
+        return "🚫 Merge-queue detection cancelled — not run"
     if detect_merge_queue not in _OK_OPTIONAL:
         return "❌ Merge-queue detection failed"
+    if detect_integration == _CANCELLED:
+        return "🚫 Integration-suite detection cancelled — not run"
     if detect_integration not in _OK_OPTIONAL:
         return "❌ Integration-suite detection failed"
     if integration == "success":
         return "✅ Passed"
+    if integration == _CANCELLED:
+        return _CANCELLED_ROW
     if integration == "skipped":
         # Two distinct reasons, and the difference matters to a reader deciding
         # whether their change was actually exercised: a queue will run the tier
@@ -214,6 +300,8 @@ def _e2e_status(
 ) -> str:
     if discover_e2e == "skipped":
         return "⊘ Skipped — add `e2e` label to trigger"
+    if discover_e2e == _CANCELLED:
+        return "🚫 e2e discovery cancelled — not run"
     if discover_e2e == "failure":
         return "❌ No suites discovered (e2e was requested)"
     # Ahead of the success/skip checks: an install-path failure is WHY the matrix
@@ -223,6 +311,8 @@ def _e2e_status(
     for _annotation, row, result in _install_path(
         build_e2e_image, merge_e2e_image, prepare_tenant
     ):
+        if result == _CANCELLED:
+            return f"🚫 {row} cancelled — not run"
         if result not in _OK_OPTIONAL:
             return f"❌ {row} failed"
     if e2e == "success":
@@ -231,6 +321,8 @@ def _e2e_status(
         return "❌ Matrix skipped despite discovered suites"
     if e2e == "skipped":
         return "⊘ Skipped"
+    if e2e == _CANCELLED:
+        return _CANCELLED_ROW
     return "❌ Failed"
 
 
@@ -252,6 +344,16 @@ def render(
     straight into ``complete_check_run.py --conclusion`` — mapping true/false to
     success/failure in workflow YAML would put the decision back outside the one
     tested authority, which is the drift this driver exists to prevent.
+
+    A blocked gate is spelled ``cancelled`` rather than ``failure`` when nothing
+    actually failed and the blocking results are all cancellations. ``passed``
+    is "false" either way — the gate must never green an un-run test — but the
+    two are NOT interchangeable to a reader: a mirrored ``failure`` on the
+    dispatching SDK PR reads as "your change broke the connector" and sends
+    someone into the wrong diff, which is precisely what happened in FND-218.
+    ``cancelled`` is a valid Checks API conclusion and has been in
+    ``complete_check_run.py``'s accepted set since that script was introduced,
+    so this is safe for the oldest dispatching SDK ref that can still call back.
     """
     errors = evaluate(
         unit,
@@ -264,9 +366,26 @@ def render(
         merge_e2e_image,
         prepare_tenant,
     )
+    blocked_by_cancellation = errors and cancelled_only(
+        unit,
+        integration,
+        detect_integration,
+        discover_e2e,
+        e2e,
+        detect_merge_queue,
+        build_e2e_image,
+        merge_e2e_image,
+        prepare_tenant,
+    )
     return {
         "passed": "true" if not errors else "false",
-        "conclusion": "success" if not errors else "failure",
+        "conclusion": (
+            "success"
+            if not errors
+            else _CANCELLED
+            if blocked_by_cancellation
+            else "failure"
+        ),
         "unit-status": _unit_status(unit),
         "integration-status": _integration_status(
             integration, detect_integration, detect_merge_queue
@@ -274,7 +393,13 @@ def render(
         "e2e-status": _e2e_status(
             discover_e2e, e2e, build_e2e_image, merge_e2e_image, prepare_tenant
         ),
-        "overall-status": "✅ All passed" if not errors else "❌ Some failed",
+        "overall-status": (
+            "✅ All passed"
+            if not errors
+            else "🚫 Cancelled — no verdict, re-run"
+            if blocked_by_cancellation
+            else "❌ Some failed"
+        ),
     }
 
 
@@ -331,6 +456,21 @@ def main(argv: list[str] | None = None) -> int:
         args.prepare_tenant,
     ):
         print(f"::error::{reason}", file=sys.stderr)
+
+    # Follows the per-job reasons so the annotation list reads cause-then-verdict:
+    # which jobs did not report, then what that means for whoever is looking.
+    if cancelled_only(
+        args.unit,
+        args.integration,
+        args.detect_integration,
+        args.discover_e2e,
+        args.e2e,
+        args.detect_merge_queue,
+        args.build_e2e_image,
+        args.merge_e2e_image,
+        args.prepare_tenant,
+    ):
+        print(f"::error::{_CANCELLED_GUIDANCE}", file=sys.stderr)
 
     for key, value in render(
         args.unit,
