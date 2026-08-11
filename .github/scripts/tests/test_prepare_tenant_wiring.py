@@ -19,8 +19,10 @@ import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 
 import e2e_tenant_app as app  # noqa: E402
+from _gha_expr import evaluate  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
@@ -268,8 +270,41 @@ def test_the_lease_is_released_even_when_the_legs_fail(jobs: dict) -> None:  # t
     # having taken the lease — not on the outcome of anything after it.
     gate = jobs["release-tenant"]["if"]
     assert "always()" in gate
-    assert "needs.lease-tenant.result == 'success'" in gate
     assert "e2e" in jobs["release-tenant"]["needs"]
+
+
+@pytest.mark.parametrize(
+    ("lease_result", "should_release"),
+    [
+        ("success", True),
+        # THE case that was broken. lease-tenant is a per-cloud MATRIX job, so
+        # `.result` is the aggregate: one cloud's acquire timing out made it
+        # 'failure' and skipped the release for EVERY cloud, including the legs
+        # that did acquire. Their leases then waited for the next contender's
+        # reaper instead of being handed back — directly against this job's stated
+        # purpose. Gating on "ran" rather than "succeeded" fixes it.
+        ("failure", True),
+        ("cancelled", True),
+        # Never ran, so there is nothing to release.
+        ("skipped", False),
+    ],
+)
+def test_release_runs_whenever_any_lease_leg_may_hold_a_tenant(
+    lease_result: str, should_release: bool
+) -> None:
+    """Evaluated rather than pattern-matched: `&&` binds tighter than `||` in
+    GitHub expressions, so a gate that merely *mentions* the right terms can
+    still be wrong. Widening this is only safe because the release driver checks
+    ownership before deleting, so a leg that never acquired no-ops."""
+    expression = _load_gate("release-tenant")
+    assert (
+        evaluate(expression, {"needs": {"lease-tenant": {"result": lease_result}}})
+        is should_release
+    )
+
+
+def _load_gate(job: str) -> str:
+    return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))["jobs"][job]["if"]
 
 
 def test_the_lease_wait_fits_inside_the_job_timeout(jobs: dict) -> None:  # type: ignore[type-arg]

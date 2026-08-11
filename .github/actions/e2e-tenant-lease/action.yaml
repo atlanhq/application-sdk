@@ -40,8 +40,22 @@ inputs:
     default: "5400"
   poll-seconds:
     description: |
-      Gap between queue checks. Each poll costs two API calls, so this also sets
-      the draw on the 1000/hour GITHUB_TOKEN budget.
+      Gap between attempts. A waiting pass costs TWO API calls (read the lease
+      ref; check the holding run's status — the holder record is memoised by the
+      ref's target sha), and FOUR on the pass that takes the lease (plus a fifth
+      to reap a dead holder).
+
+      That budget is 1000 requests/hour per REPOSITORY, and every matrix leg of
+      every concurrent run shares it. So raise this rather than lower it when
+      several clouds contend: at 30s, one leg waiting the full 90min budget draws
+      ~360 calls, and three clouds waiting together draw ~1080 over that 90
+      minutes — about 720/hour, which is close enough to the ceiling to matter
+      once the rest of the run's API use is counted.
+
+      A rate-limit 403 no longer disables the lease: it is told apart from a
+      permission 403, backs off (honouring Retry-After), and fails loudly if it
+      never clears. Staying inside the budget is still much better than relying
+      on that.
     required: false
     default: "30"
   ttl-seconds:
@@ -74,10 +88,13 @@ outputs:
     value: ${{ steps.lease.outputs.acquired }}
   state:
     description: |
-      "acquired", "disabled" (no ref-write permission — the run proceeds
-      unserialised) or "timeout". Worth asserting in anger rather than trusting a
-      green job: "disabled" is a deliberate fail-open, so a lease that is not
-      working at all still leaves the job green with only a warning.
+      "acquired"; "disabled" (no ref-write permission — the run proceeds
+      unserialised); "timeout" (the tenant stayed busy); or "rate-limited" (the
+      API never cleared, which fails rather than proceeding unserialised).
+
+      Worth asserting in anger rather than trusting a green job: "disabled" is a
+      deliberate fail-open, so a lease that is not working at all still leaves
+      the job green with only a warning.
     value: ${{ steps.lease.outputs.state }}
   lease-ref:
     description: The tenant's lease ref this run raced for.

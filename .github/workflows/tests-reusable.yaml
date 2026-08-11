@@ -1638,9 +1638,18 @@ jobs:
   release-tenant:
     name: Release tenant lease (${{ matrix.cloud || 'default' }})
     needs: [discover-e2e, lease-tenant, prepare-tenant, e2e]
-    # Only when this run actually took a lease. Not gated on the legs' outcome —
-    # a failed leg must still give the tenant back.
-    if: always() && needs.lease-tenant.result == 'success'
+    # Gated on lease-tenant having RUN, not on it having succeeded. `.result` on a
+    # matrix job is the aggregate, so `== 'success'` meant one cloud's acquire
+    # timing out skipped the release for EVERY cloud — including the legs that did
+    # acquire, whose leases would then wait for the next contender's reaper
+    # instead of being handed back. That directly contradicts this job's own
+    # reason for existing.
+    #
+    # Safe to widen because the release driver checks ownership before deleting:
+    # a leg that never acquired reads a lease that is not its own (or none at all)
+    # and no-ops. Not gated on the legs' outcome either — a failed leg must still
+    # give the tenant back.
+    if: always() && needs.lease-tenant.result != 'skipped'
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-count != '0' && needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}

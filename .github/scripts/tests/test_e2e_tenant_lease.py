@@ -34,8 +34,12 @@ sys.path.insert(
 
 from e2e_tenant_lease import (  # noqa: E402
     Holder,
+    RateLimited,
+    _denied,
+    _rate_limited,
     acquire,
     create_identity_blob,
+    gh_request,
     holder_is_live,
     lease_ref,
     main,
@@ -84,9 +88,12 @@ class FakeHTTP:
         for (route_method, contains), responses in self.routes.items():
             if route_method != method or contains not in url:
                 continue
-            status, body = responses[0] if len(responses) == 1 else responses.pop(0)
+            entry = responses[0] if len(responses) == 1 else responses.pop(0)
+            status, body = entry[0], entry[1]
+            headers = entry[2] if len(entry) > 2 else {}
             payload = "" if body is None else json.dumps(body)
-            return _completed(f"HTTP/2 {status}\r\n\r\n{payload}")
+            header_lines = "".join(f"\r\n{k}: {v}" for k, v in headers.items())
+            return _completed(f"HTTP/2 {status}{header_lines}\r\n\r\n{payload}")
         raise AssertionError(f"unstubbed request: {method} {url}")
 
     def count(self, method: str, contains: str) -> int:
@@ -122,6 +129,29 @@ def _ref_body(sha: str = BLOB):
 
 def _stub_blob_write(http: FakeHTTP) -> None:
     http.route("POST", "/git/blobs", (201, {"sha": BLOB}))
+
+
+def _stub_unheld(http: FakeHTTP, *later: tuple) -> None:
+    """The lease ref does not exist. `acquire` reads the ref BEFORE minting an
+    identity blob, so the free path starts with a 404 here — that pre-read is
+    what makes a waiting pass two calls instead of five."""
+    http.route("GET", "/git/ref/", (404, {"message": "Not Found"}), *later)
+
+
+#: A rate-limit answer. GitHub spells this as a 403 with the remaining-quota
+#: header at zero, which is indistinguishable from a permission 403 by status
+#: alone — the conflation that made the lease disable itself under contention.
+_RATE_LIMIT = (
+    403,
+    {"message": "API rate limit exceeded for installation"},
+    {"x-ratelimit-remaining": "0"},
+)
+_SECONDARY_LIMIT = (
+    403,
+    {"message": "You have exceeded a secondary rate limit"},
+    {"retry-after": "45"},
+)
+_PERMISSION_DENIED = (403, {"message": "Resource not accessible by integration"})
 
 
 # --- keying ----------------------------------------------------------------
@@ -230,6 +260,61 @@ def test_the_lease_ref_points_at_the_identity_blob(http: FakeHTTP) -> None:
 def test_identity_blob_reports_denied(http: FakeHTTP, status: int) -> None:
     http.route("POST", "/git/blobs", (status, {"message": "nope"}))
     assert create_identity_blob(REPO, 1, 1, 0.0) is None
+
+
+def test_identity_blob_raises_rather_than_denying_on_a_rate_limit(
+    http: FakeHTTP,
+) -> None:
+    # Signalled as an exception so no call site can silently treat it as a
+    # permission denial and fail the lease open.
+    http.route("POST", "/git/blobs", _RATE_LIMIT)
+    with pytest.raises(RateLimited):
+        create_identity_blob(REPO, 1, 1, 0.0)
+
+
+def test_try_acquire_raises_rather_than_denying_on_a_rate_limit(
+    http: FakeHTTP,
+) -> None:
+    http.route("POST", "/git/refs", _SECONDARY_LIMIT)
+    with pytest.raises(RateLimited) as raised:
+        try_acquire(REPO, REF, BLOB)
+    assert raised.value.retry_after == 45
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (_RATE_LIMIT, True),
+        (_SECONDARY_LIMIT, True),
+        ((429, {"message": "Too Many Requests"}), True),
+        (_PERMISSION_DENIED, False),
+        ((404, {"message": "Not Found"}), False),
+        (
+            (
+                403,
+                {"message": "Resource not accessible"},
+                {"x-ratelimit-remaining": "42"},
+            ),
+            False,
+        ),
+    ],
+)
+def test_rate_limit_detection(http: FakeHTTP, response: tuple, expected: bool) -> None:
+    http.route("GET", "/probe", response)
+    assert _rate_limited(gh_request("GET", "probe")) is expected
+
+
+def test_a_403_with_quota_remaining_is_a_permission_denial(http: FakeHTTP) -> None:
+    # The discriminator has to be the quota, not the status: a permission 403
+    # arrives with plenty of budget left and must still disable the lease.
+    http.route(
+        "GET",
+        "/probe",
+        (403, {"message": "Resource not accessible"}, {"x-ratelimit-remaining": "988"}),
+    )
+    response = gh_request("GET", "probe")
+    assert _rate_limited(response) is False
+    assert _denied(response) is True
 
 
 # --- reading the holder ----------------------------------------------------
@@ -420,6 +505,7 @@ def _acquire(**kwargs):
 
 
 def test_acquire_takes_an_unheld_lease(http: FakeHTTP) -> None:
+    _stub_unheld(http)
     _stub_blob_write(http)
     http.route("POST", "/git/refs", (201, {"ref": REF}))
     assert _acquire() == ("acquired", None)
@@ -433,8 +519,6 @@ def test_a_late_arriver_does_not_steal_a_live_holders_lease(http: FakeHTTP) -> N
     itself as the rightful holder and acquired too — both installed onto the same
     tenant. Exclusion must not depend on ids at all: whoever holds it, holds it.
     """
-    _stub_blob_write(http)
-    http.route("POST", "/git/refs", (422, {"message": "Reference already exists"}))
     http.route("GET", "/git/ref/", (200, _ref_body()))
     # The holder's run_id is HIGHER than ours (100), which under the old rule
     # would have made us the winner.
@@ -445,11 +529,76 @@ def test_a_late_arriver_does_not_steal_a_live_holders_lease(http: FakeHTTP) -> N
 
     assert state == "timeout"
     assert blocker is not None and blocker.run_id == 99999
-    # And critically: it never deleted the live holder's lease.
+    # And critically: it never deleted the live holder's lease, and never even
+    # attempted the CAS — the ref was held, so there was nothing to race for.
     assert http.count("DELETE", "/git/refs/") == 0
+    assert http.count("POST", "/git/refs") == 0
+
+
+def test_a_waiting_pass_costs_two_api_calls(http: FakeHTTP) -> None:
+    """The GITHUB_TOKEN budget is 1000/hour per REPOSITORY and every matrix leg
+    shares it, so a waiting poll has to be cheap. Reading the ref tells us the
+    lease is held; the run-status call tells us whether to reap it. The holder
+    record is memoised by the ref's target sha, so it is not re-read while the
+    lease has not changed hands."""
+    http.route("GET", "/git/ref/", (200, _ref_body()))
+    http.route("GET", "/git/blobs/", (200, _holder_blob(500)))
+    http.route("GET", "/actions/runs/", _live())
+
+    _acquire(wait_seconds=90, poll_seconds=30)
+
+    # 3 passes: 3 ref reads + 3 run-status reads + exactly ONE record read.
+    assert http.count("GET", "/git/ref/") == 3
+    assert http.count("GET", "/actions/runs/") == 3
+    assert http.count("GET", "/git/blobs/") == 1
+    # And nothing was written at all while the lease was held.
+    assert http.count("POST", "/git/blobs") == 0
+    assert http.count("POST", "/git/refs") == 0
+
+
+def test_the_holder_record_is_re_read_when_the_lease_changes_hands(
+    http: FakeHTTP,
+) -> None:
+    # The memo is keyed on the target sha precisely so a new holder is noticed.
+    http.route(
+        "GET",
+        "/git/ref/",
+        (200, _ref_body("aaa")),
+        (200, _ref_body("bbb")),
+        (200, _ref_body("bbb")),
+    )
+    http.route(
+        "GET",
+        "/git/blobs/",
+        (200, _holder_blob(500)),
+        (200, _holder_blob(600)),
+    )
+    http.route("GET", "/actions/runs/", _live())
+
+    _, blocker = _acquire(wait_seconds=90, poll_seconds=30)
+    assert http.count("GET", "/git/blobs/") == 2
+    assert blocker is not None and blocker.run_id == 600
 
 
 def test_acquire_waits_then_wins_when_the_holder_releases(http: FakeHTTP) -> None:
+    http.route(
+        "GET",
+        "/git/ref/",
+        (200, _ref_body()),
+        (404, {"message": "Not Found"}),
+    )
+    http.route("GET", "/git/blobs/", (200, _holder_blob(500)))
+    http.route("GET", "/actions/runs/", _live())
+    _stub_blob_write(http)
+    http.route("POST", "/git/refs", (201, {"ref": REF}))
+    assert _acquire(wait_seconds=60, poll_seconds=30) == ("acquired", None)
+
+
+def test_acquire_loses_a_race_after_the_ref_looked_free(http: FakeHTTP) -> None:
+    """The pre-read is an optimisation, not a decision. Another contender can win
+    between our read and our CAS, and the 422 has to be handled as normal
+    contention rather than trusted from the earlier read."""
+    _stub_unheld(http, (404, {"message": "Not Found"}))
     _stub_blob_write(http)
     http.route(
         "POST",
@@ -457,26 +606,23 @@ def test_acquire_waits_then_wins_when_the_holder_releases(http: FakeHTTP) -> Non
         (422, {"message": "Reference already exists"}),
         (201, {"ref": REF}),
     )
-    http.route("GET", "/git/ref/", (200, _ref_body()))
-    http.route("GET", "/git/blobs/", (200, _holder_blob(500)))
-    http.route("GET", "/actions/runs/", _live())
     assert _acquire(wait_seconds=60, poll_seconds=30) == ("acquired", None)
 
 
 def test_acquire_reaps_a_dead_holder_and_takes_the_lease(http: FakeHTTP) -> None:
     """The case `if: always()` cannot cover — a cancelled run whose release job
     never started. The next contender clears it in-band."""
-    _stub_blob_write(http)
     http.route(
-        "POST",
-        "/git/refs",
-        (422, {"message": "Reference already exists"}),
-        (201, {"ref": REF}),
+        "GET",
+        "/git/ref/",
+        (200, _ref_body()),
+        (404, {"message": "Not Found"}),
     )
-    http.route("GET", "/git/ref/", (200, _ref_body()))
     http.route("GET", "/git/blobs/", (200, _holder_blob(500)))
     http.route("GET", "/actions/runs/", _live("completed"))
     http.route("DELETE", "/git/refs/", (204, None))
+    _stub_blob_write(http)
+    http.route("POST", "/git/refs", (201, {"ref": REF}))
 
     assert _acquire() == ("acquired", None)
     assert http.count("DELETE", "/git/refs/") == 1
@@ -485,17 +631,17 @@ def test_acquire_reaps_a_dead_holder_and_takes_the_lease(http: FakeHTTP) -> None
 def test_reaping_retries_the_cas_without_sleeping(http: FakeHTTP) -> None:
     # The tenant is free the instant the dead lease is deleted; sleeping a full
     # poll interval first would hand it to whoever wakes up sooner.
-    _stub_blob_write(http)
     http.route(
-        "POST",
-        "/git/refs",
-        (422, {"message": "Reference already exists"}),
-        (201, {"ref": REF}),
+        "GET",
+        "/git/ref/",
+        (200, _ref_body()),
+        (404, {"message": "Not Found"}),
     )
-    http.route("GET", "/git/ref/", (200, _ref_body()))
     http.route("GET", "/git/blobs/", (200, _holder_blob(500)))
     http.route("GET", "/actions/runs/", _live("completed"))
     http.route("DELETE", "/git/refs/", (204, None))
+    _stub_blob_write(http)
+    http.route("POST", "/git/refs", (201, {"ref": REF}))
 
     slept: list[int] = []
     assert _acquire(sleep=slept.append) == ("acquired", None)
@@ -505,43 +651,38 @@ def test_reaping_retries_the_cas_without_sleeping(http: FakeHTTP) -> None:
 def test_acquire_treats_its_own_existing_lease_as_held(http: FakeHTTP) -> None:
     # A retried step, or a re-run of the same attempt. Must not deadlock against
     # itself.
-    _stub_blob_write(http)
-    http.route("POST", "/git/refs", (422, {"message": "Reference already exists"}))
     http.route("GET", "/git/ref/", (200, _ref_body()))
     http.route("GET", "/git/blobs/", (200, _holder_blob(100, 1)))
     assert _acquire() == ("acquired", None)
 
 
 def test_acquire_retries_when_the_holder_is_unreadable(http: FakeHTTP) -> None:
-    # Released between the CAS and the read, or unreadable — either way the next
-    # CAS is authoritative rather than a guess.
-    _stub_blob_write(http)
-    http.route(
-        "POST",
-        "/git/refs",
-        (422, {"message": "Reference already exists"}),
-        (201, {"ref": REF}),
-    )
-    http.route("GET", "/git/ref/", (404, {"message": "Not Found"}))
-    assert _acquire() == ("acquired", None)
+    # Unreadable record: the CAS on a later pass is authoritative rather than a
+    # guess, so it waits rather than assuming either way.
+    http.route("GET", "/git/ref/", (200, _ref_body()))
+    http.route("GET", "/git/blobs/", (500, {"message": "boom"}))
+    state, blocker = _acquire(wait_seconds=30, poll_seconds=30)
+    assert state == "timeout"
+    assert blocker is None
+    assert http.count("DELETE", "/git/refs/") == 0
 
 
 def test_acquire_disables_itself_without_blob_write(http: FakeHTTP) -> None:
     # Fail-open: the lease reduces contention, it is not what makes a
     # wrong-version run detectable (each leg re-asserts the version, FND-31).
-    http.route("POST", "/git/blobs", (403, {"message": "Resource not accessible"}))
+    _stub_unheld(http)
+    http.route("POST", "/git/blobs", _PERMISSION_DENIED)
     assert _acquire() == ("disabled", None)
 
 
 def test_acquire_disables_itself_without_ref_write(http: FakeHTTP) -> None:
+    _stub_unheld(http)
     _stub_blob_write(http)
-    http.route("POST", "/git/refs", (403, {"message": "Resource not accessible"}))
+    http.route("POST", "/git/refs", _PERMISSION_DENIED)
     assert _acquire() == ("disabled", None)
 
 
 def test_acquire_respects_the_wait_budget(http: FakeHTTP) -> None:
-    _stub_blob_write(http)
-    http.route("POST", "/git/refs", (422, {"message": "Reference already exists"}))
     http.route("GET", "/git/ref/", (200, _ref_body()))
     http.route("GET", "/git/blobs/", (200, _holder_blob(500)))
     http.route("GET", "/actions/runs/", _live())
@@ -552,9 +693,94 @@ def test_acquire_respects_the_wait_budget(http: FakeHTTP) -> None:
 
 
 def test_acquire_always_makes_one_attempt_on_a_zero_budget(http: FakeHTTP) -> None:
+    _stub_unheld(http)
     _stub_blob_write(http)
     http.route("POST", "/git/refs", (201, {"ref": REF}))
     assert _acquire(wait_seconds=0, poll_seconds=30) == ("acquired", None)
+
+
+# --- rate limiting must never fail the lease open --------------------------
+
+
+def test_a_rate_limit_is_not_a_permission_denial(http: FakeHTTP) -> None:
+    """Both are 403. Conflating them switched the lease OFF exactly when it was
+    needed: several legs queueing for tenants is also when the shared
+    per-repository budget runs out, and the fail-open then let every waiting run
+    proceed onto the tenant unserialised."""
+    _stub_unheld(http)
+    http.route("POST", "/git/blobs", _RATE_LIMIT)
+    state, _ = _acquire(wait_seconds=30, poll_seconds=30)
+    assert state == "rate-limited"
+
+
+def test_a_rate_limited_cas_does_not_disable_the_lease(http: FakeHTTP) -> None:
+    _stub_unheld(http)
+    _stub_blob_write(http)
+    http.route("POST", "/git/refs", _RATE_LIMIT)
+    state, _ = _acquire(wait_seconds=30, poll_seconds=30)
+    assert state == "rate-limited"
+
+
+def test_a_secondary_rate_limit_is_recognised_from_retry_after(
+    http: FakeHTTP,
+) -> None:
+    # Secondary limits do not always carry x-ratelimit-remaining, so the header
+    # and the message are both checked rather than relying on GitHub's prose.
+    _stub_unheld(http)
+    http.route("POST", "/git/blobs", _SECONDARY_LIMIT)
+    state, _ = _acquire(wait_seconds=30, poll_seconds=30)
+    assert state == "rate-limited"
+
+
+def test_a_rate_limit_backoff_honours_retry_after(http: FakeHTTP) -> None:
+    _stub_unheld(http)
+    http.route("POST", "/git/blobs", _SECONDARY_LIMIT)
+    slept: list[int] = []
+    _acquire(wait_seconds=90, poll_seconds=30, sleep=slept.append)
+    # Retry-After of 45 beats the 30s poll interval, and is not applied after the
+    # final attempt.
+    assert slept == [45, 45]
+
+
+def test_a_rate_limit_backoff_never_undercuts_the_poll_interval(
+    http: FakeHTTP,
+) -> None:
+    _stub_unheld(http)
+    http.route(
+        "POST",
+        "/git/blobs",
+        (403, {"message": "rate limit"}, {"retry-after": "1"}),
+    )
+    slept: list[int] = []
+    _acquire(wait_seconds=60, poll_seconds=30, sleep=slept.append)
+    assert slept == [30]
+
+
+def test_a_rate_limit_backoff_is_capped(http: FakeHTTP) -> None:
+    # A very long Retry-After must not swallow the whole wait budget in one sleep.
+    _stub_unheld(http)
+    http.route(
+        "POST",
+        "/git/blobs",
+        (403, {"message": "rate limit"}, {"retry-after": "99999"}),
+    )
+    slept: list[int] = []
+    _acquire(wait_seconds=60, poll_seconds=30, sleep=slept.append)
+    assert slept == [300]
+
+
+def test_a_rate_limit_that_clears_still_acquires(http: FakeHTTP) -> None:
+    _stub_unheld(http, (404, {"message": "Not Found"}))
+    http.route("POST", "/git/blobs", _RATE_LIMIT, (201, {"sha": BLOB}))
+    http.route("POST", "/git/refs", (201, {"ref": REF}))
+    assert _acquire(wait_seconds=60, poll_seconds=30) == ("acquired", None)
+
+
+def test_a_429_is_treated_as_a_rate_limit(http: FakeHTTP) -> None:
+    _stub_unheld(http)
+    http.route("POST", "/git/blobs", (429, {"message": "Too Many Requests"}))
+    state, _ = _acquire(wait_seconds=30, poll_seconds=30)
+    assert state == "rate-limited"
 
 
 # --- release ---------------------------------------------------------------
@@ -565,6 +791,51 @@ def test_release_deletes_our_own_lease(http: FakeHTTP) -> None:
     http.route("GET", "/git/blobs/", (200, _holder_blob(100, 1)))
     http.route("DELETE", "/git/refs/", (204, None))
     assert release(REPO, REF, 100, 1) is True
+
+
+def test_release_rechecks_the_target_immediately_before_deleting(
+    http: FakeHTTP,
+) -> None:
+    """The check-then-delete is not atomic and the API offers no conditional
+    delete, so the target is re-read to narrow the window to the DELETE
+    round-trip.
+
+    The interleaving this guards against: the TTL breaks OUR lease while we are
+    still live, another run acquires, and we then delete the replacement holder's
+    lease — putting a second installer on the tenant. Cannot happen while the TTL
+    exceeds the longest legitimate hold, which is why that sizing is pinned by a
+    test and why the TTL is load-bearing for release as well as acquisition.
+    """
+    http.route(
+        "GET",
+        "/git/ref/",
+        (200, _ref_body("ours")),
+        (200, _ref_body("someone-elses")),
+    )
+    http.route("GET", "/git/blobs/", (200, _holder_blob(100, 1)))
+    assert release(REPO, REF, 100, 1) is False
+    assert http.count("DELETE", "/git/refs/") == 0
+
+
+def test_release_proceeds_when_the_target_is_unchanged(http: FakeHTTP) -> None:
+    http.route(
+        "GET",
+        "/git/ref/",
+        (200, _ref_body("ours")),
+        (200, _ref_body("ours")),
+    )
+    http.route("GET", "/git/blobs/", (200, _holder_blob(100, 1)))
+    http.route("DELETE", "/git/refs/", (204, None))
+    assert release(REPO, REF, 100, 1) is True
+
+
+def test_release_refuses_when_ownership_cannot_be_confirmed(http: FakeHTTP) -> None:
+    # An unreadable record is not permission to delete. The next contender reaps
+    # it if this run is genuinely over.
+    http.route("GET", "/git/ref/", (200, _ref_body()))
+    http.route("GET", "/git/blobs/", (500, {"message": "boom"}))
+    assert release(REPO, REF, 100, 1) is False
+    assert http.count("DELETE", "/git/refs/") == 0
 
 
 def test_release_refuses_to_delete_someone_elses_lease(http: FakeHTTP) -> None:
@@ -633,6 +904,7 @@ def test_main_acquire_exits_zero_and_reports_outputs(
 ) -> None:
     out = tmp_path / "out"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    _stub_unheld(http)
     _stub_blob_write(http)
     http.route("POST", "/git/refs", (201, {"ref": REF}))
     assert main(_argv("acquire")) == 0
@@ -684,8 +956,24 @@ def test_main_acquire_exits_zero_when_the_lease_is_disabled(
     http: FakeHTTP, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
-    http.route("POST", "/git/blobs", (403, {"message": "nope"}))
+    _stub_unheld(http)
+    http.route("POST", "/git/blobs", _PERMISSION_DENIED)
     assert main(_argv("acquire")) == 0
+
+
+def test_main_acquire_fails_on_a_persistent_rate_limit(
+    http: FakeHTTP, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Explicitly NOT fail-open: proceeding unserialised because the API was busy
+    # is how two runs end up installing onto one tenant.
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    _stub_unheld(http)
+    http.route("POST", "/git/blobs", _RATE_LIMIT)
+    assert main(_argv("acquire", "--wait-seconds", "1", "--poll-seconds", "1")) == 1
+    printed = capsys.readouterr().out
+    assert "::error::" in printed
+    assert "rate-limited" in printed
+    assert "Nothing is wrong with this change" in printed
 
 
 def test_main_release_exits_zero(
@@ -715,6 +1003,7 @@ def test_acquire_and_release_agree_on_the_lease_ref(
     disagreed about the ref, every run would leak its lease."""
     out = tmp_path / "out"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    _stub_unheld(http)
     _stub_blob_write(http)
     http.route("POST", "/git/refs", (201, {"ref": REF}))
     main(_argv("acquire"))

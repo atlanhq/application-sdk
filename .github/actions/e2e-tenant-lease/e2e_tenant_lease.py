@@ -57,6 +57,24 @@ loudly and names the holder — a run that starves gets a red job saying the ten
 was busy, not silence. Correctness first; FIFO was the property that turned out
 to be unaffordable.
 
+API budget
+----------
+``GITHUB_TOKEN`` allows 1000 requests/hour **per repository**, and every matrix
+leg of a run shares that one budget. A waiting poll therefore has to be cheap or
+the lease starves itself of API calls precisely when several legs are queueing —
+and a rate-limit 403 looks exactly like a permission 403, which used to fail the
+lease open. So:
+
+* A waiting poll costs **two** calls: read the lease ref, and check the holding
+  run's status. The holder record is memoised by the ref's target sha, so it is
+  only re-read when the lease actually changes hands.
+* The identity blob and the CAS are only paid when the ref *looks* free, which
+  makes the acquisition path 4 calls and the steady-state waiting path 2. The
+  pre-read is purely an optimisation: the CAS is still the authority, and losing
+  a race after the ref looked free is handled like any other 422.
+* Rate limiting is detected separately from permission denial and never
+  fail-opens. See ``_rate_limited``.
+
 Liveness, not heartbeats
 ------------------------
 A lease is breakable when the holder's *run* is over. GitHub reports run status
@@ -70,7 +88,9 @@ blob, not from run age) is the backstop for a run the API keeps reporting as liv
 forever. The two directions are not symmetric: breaking a lease too late costs a
 blocked tenant that a waiter is already complaining loudly about, whereas breaking
 one too early reaps a LIVE mid-install holder and puts a second installer on the
-tenant — the exact race this module exists to close. So it errs long.
+tenant — the exact race this module exists to close. So it errs long, and that
+sizing is load-bearing for release safety as well as for acquisition: see
+``release``.
 
 Failure posture
 ---------------
@@ -79,6 +99,13 @@ Failure posture
   wrong-version run from passing — every leg re-asserts the installed version
   itself (FND-31). Making an ungrantable lease fail the run would turn a safety
   improvement into a new way for e2e to go red fleet-wide.
+
+  Note the limit of that backstop, which is easy to overstate: the version assert
+  catches a *wrong-version* run, not two runs installing the *same* version and
+  fighting over one tenant. Two dispatches of one commit do exactly that, and it
+  surfaces as a worker/task-queue failure rather than a version mismatch. So
+  fail-open is a real reduction in protection, not a no-op — which is why a rate
+  limit must never be allowed to trigger it.
 * **Not acquired within the wait budget** fails loudly, naming the holding run.
 
 Co-located with the composite action, and pinned ``@main`` by every consumer on
@@ -108,6 +135,10 @@ REF_NAMESPACE = "e2e-tenant-lease"
 # in_progress, requested, waiting, pending — is treated as live, so an unfamiliar
 # future status errs towards leaving a peer's lease alone.
 _COMPLETED = "completed"
+
+# Ceiling on how long a Retry-After will be honoured, so a long secondary-limit
+# backoff cannot swallow the whole wait budget in one sleep.
+_MAX_RETRY_AFTER = 300
 
 # Characters safe in a single git ref path component. Deliberately narrower than
 # git's own rules: app and cloud names come from workflow inputs, and a ref name
@@ -160,13 +191,28 @@ class Holder:
         return self.run_id == run_id and self.attempt == attempt
 
 
+@dataclass(frozen=True)
+class Response:
+    """One API answer. Headers are carried because rate-limit detection needs
+    them, and mistaking a rate limit for a permission denial fails the lease
+    open under contention."""
+
+    status: int
+    headers: dict[str, str]
+    body: object | None
+
+    @property
+    def message(self) -> str:
+        return self.body.get("message", "") if isinstance(self.body, dict) else ""
+
+
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     """Single seam so tests can stub the HTTP client."""
     return subprocess.run(cmd, **kwargs)
 
 
-def _parse_http(raw: str, label: str) -> tuple[int, object | None]:
-    """Split a ``curl -i`` response into (status_code, parsed_body_or_None)."""
+def _parse_http(raw: str, label: str) -> Response:
+    """Split a ``curl -i`` response into status, headers and parsed body."""
     text = raw.replace("\r\n", "\n")
     if "\n\n" not in text:
         raise SystemExit(f"::error::unexpected response for {label}: {text[:300]!r}")
@@ -179,28 +225,31 @@ def _parse_http(raw: str, label: str) -> tuple[int, object | None]:
             f"::error::could not parse HTTP status line for {label}: "
             f"{(lines[0] if lines else '')!r}"
         )
+    headers: dict[str, str] = {}
+    for line in lines[1:]:
+        name, sep, value = line.partition(":")
+        if sep:
+            headers[name.strip().lower()] = value.strip()
+
     if not body.strip():
-        return status_code, None
+        return Response(status_code, headers, None)
     try:
-        return status_code, json.loads(body)
+        return Response(status_code, headers, json.loads(body))
     except json.JSONDecodeError:
         # A non-JSON body (an HTML error page from a proxy) must not crash the
         # caller before it can report the status code, which is the part that
         # decides what happens next.
-        return status_code, None
+        return Response(status_code, headers, None)
 
 
-def gh_request(
-    method: str, path: str, payload: dict | None = None
-) -> tuple[int, object | None]:
-    """Call the GitHub API, returning the status code rather than raising on 4xx.
+def gh_request(method: str, path: str, payload: dict | None = None) -> Response:
+    """Call the GitHub API, returning the status rather than raising on 4xx.
 
     curl, not ``gh api``, for the same reason ``poll_check_runs_gate.py`` uses it:
     ``gh api`` treats every non-2xx as a command failure and prints its own
     diagnostic instead of the response. Here the non-2xx codes are the entire
     mechanism — 422 on ref creation IS the lock being held, and it has to be
-    distinguished from 403 ("this repo will not let us write refs") and from a
-    genuine error.
+    told apart from 403-permission and 403-rate-limit, which mean opposite things.
     """
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
@@ -231,25 +280,72 @@ def gh_request(
     return _parse_http(result.stdout, f"{method} {path}")
 
 
-def _message(body: object | None) -> str:
-    return body.get("message", "") if isinstance(body, dict) else ""
+def _rate_limited(response: Response) -> bool:
+    """Is this a rate limit rather than a permission problem?
+
+    Both arrive as 403, and conflating them is how the lease used to switch
+    itself OFF exactly when it was needed: several legs queueing for tenants is
+    also when the shared per-repository budget runs out, and the fail-open path
+    then let every waiting run proceed onto the tenant unserialised.
+
+    Detected from the headers first (``x-ratelimit-remaining: 0``, or a
+    ``retry-after`` on a secondary limit) and the message second, so it does not
+    hinge on GitHub's exact prose.
+    """
+    # 429 means this by definition, whatever else the body says.
+    if response.status == 429:
+        return True
+    if response.status != 403:
+        return False
+    # A 403 is ambiguous, so it needs evidence. Headers first, message second, so
+    # detection does not hinge on GitHub's exact prose.
+    if response.headers.get("x-ratelimit-remaining") == "0":
+        return True
+    if "retry-after" in response.headers:
+        return True
+    message = response.message.lower()
+    return "rate limit" in message or "abuse detection" in message
 
 
-def _denied(status: int) -> bool:
-    """GitHub 404s resources it will not admit exist, so it is a permission
-    answer as much as 401/403 are."""
-    return status in (401, 403, 404)
+def _denied(response: Response) -> bool:
+    """A genuine permission answer. GitHub 404s resources it will not admit
+    exist, so 404 counts, but a rate limit explicitly does not."""
+    return response.status in (401, 403, 404) and not _rate_limited(response)
+
+
+def _retry_after(response: Response) -> int | None:
+    try:
+        return max(0, int(response.headers["retry-after"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+class RateLimited(Exception):
+    """The API rate-limited us. Carries Retry-After when GitHub supplied one.
+
+    An exception rather than a return value so every call site cannot forget to
+    distinguish it from a permission denial — which is the mistake that made the
+    lease fail open under contention.
+    """
+
+    def __init__(self, retry_after: int | None = None) -> None:
+        super().__init__("rate limited")
+        self.retry_after = retry_after
 
 
 def create_identity_blob(
     repo: str, run_id: int, attempt: int, now: float
 ) -> str | None:
-    """Write the holder record the lease ref will point at. None ⇒ denied.
+    """Write the holder record the lease ref will point at.
 
-    Created BEFORE the lease is taken, so it costs one wasted blob per failed
-    attempt. That is the right way round: an unreferenced blob is garbage GitHub
-    collects, whereas taking the lease first and describing it second would leave
-    a window where the lease is held by nobody identifiable.
+    Returns the blob sha, or None if ref writes are not permitted. Raises
+    ``RateLimited`` when the API is merely busy.
+
+    Written immediately before the CAS, not once per acquire, because the record
+    carries the acquisition timestamp: a blob minted when the run first started
+    queueing would date the lease from before it was held, and the TTL would then
+    measure a hold that had not happened yet. It is only paid on attempts where
+    the ref actually looks free, so a long wait does not pay for it repeatedly.
     """
     payload = {
         "run_id": run_id,
@@ -260,72 +356,89 @@ def create_identity_blob(
         # have queued for runners first, none of which is lease-hold time.
         "acquired_at": now,
     }
-    status, body = gh_request(
+    response = gh_request(
         "POST",
         f"repos/{repo}/git/blobs",
         {"content": json.dumps(payload), "encoding": "utf-8"},
     )
-    if status in (200, 201) and isinstance(body, dict) and body.get("sha"):
-        return str(body["sha"])
-    if _denied(status):
+    if (
+        response.status in (200, 201)
+        and isinstance(response.body, dict)
+        and response.body.get("sha")
+    ):
+        return str(response.body["sha"])
+    if _rate_limited(response):
+        raise RateLimited(_retry_after(response))
+    if _denied(response):
         return None
     raise SystemExit(
         f"::error::could not write the tenant lease holder record in {repo}: "
-        f"HTTP {status} {_message(body)!r}"
+        f"HTTP {response.status} {response.message!r}"
     )
 
 
 def try_acquire(repo: str, ref: str, blob_sha: str) -> str:
-    """One atomic attempt. Returns "acquired", "occupied" or "denied".
+    """One atomic attempt. "acquired", "occupied" or "denied"; raises RateLimited.
 
     The 422 is not an error path bolted on — it is the lock. GitHub evaluates
     ref creation atomically, so of N simultaneous callers exactly one sees 201.
     """
-    status, body = gh_request(
+    response = gh_request(
         "POST", f"repos/{repo}/git/refs", {"ref": ref, "sha": blob_sha}
     )
-    if status in (200, 201):
+    if response.status in (200, 201):
         return "acquired"
-    if status == 422 and "already exists" in _message(body).lower():
+    if response.status == 422 and "already exists" in response.message.lower():
         return "occupied"
-    if _denied(status):
+    if _rate_limited(response):
+        raise RateLimited(_retry_after(response))
+    if _denied(response):
         return "denied"
     raise SystemExit(
         f"::error::could not take the tenant lease {ref} in {repo}: "
-        f"HTTP {status} {_message(body)!r}"
+        f"HTTP {response.status} {response.message!r}"
     )
+
+
+def read_lease_target(repo: str, ref: str) -> str | None:
+    """The sha the lease ref points at, or None if unheld or unreadable.
+
+    One API call, and the cheap half of a waiting poll. None deliberately
+    conflates "nobody holds it" with "we could not tell": both mean "try the
+    CAS", and the CAS is the authority.
+    """
+    # git/ref/<name> wants the ref without the leading "refs/".
+    response = gh_request("GET", f"repos/{repo}/git/ref/{ref.removeprefix('refs/')}")
+    if response.status == 404 or not isinstance(response.body, dict):
+        return None
+    if response.status >= 400:
+        print(
+            f"::warning::could not read the tenant lease {ref} (HTTP {response.status})."
+        )
+        return None
+    target = response.body.get("object") or {}
+    sha = target.get("sha") if isinstance(target, dict) else None
+    return str(sha) if sha else None
+
+
+def read_holder_record(repo: str, blob_sha: str) -> Holder | None:
+    """Decode the holder record a lease ref points at. One API call."""
+    response = gh_request("GET", f"repos/{repo}/git/blobs/{blob_sha}")
+    if response.status >= 400 or not isinstance(response.body, dict):
+        print(
+            f"::warning::a tenant lease holder record ({blob_sha}) is unreadable "
+            f"(HTTP {response.status})."
+        )
+        return None
+    return _parse_holder(response.body)
 
 
 def read_holder(repo: str, ref: str) -> Holder | None:
-    """Who holds `ref`, or None if it is unheld or unreadable.
-
-    None deliberately conflates "nobody holds it" with "we could not tell": both
-    mean "retry the CAS", and the CAS is authoritative. Guessing at an
-    unreadable holder is what would be dangerous.
-    """
-    # git/ref/<name> wants the ref without the leading "refs/".
-    status, body = gh_request(
-        "GET", f"repos/{repo}/git/ref/{ref.removeprefix('refs/')}"
-    )
-    if status == 404 or not isinstance(body, dict):
+    """Who holds `ref`, or None if unheld/unreadable. Two API calls."""
+    target = read_lease_target(repo, ref)
+    if target is None:
         return None
-    if status >= 400:
-        print(f"::warning::could not read the tenant lease {ref} (HTTP {status}).")
-        return None
-
-    target = body.get("object") or {}
-    blob_sha = target.get("sha") if isinstance(target, dict) else None
-    if not blob_sha:
-        return None
-
-    status, blob = gh_request("GET", f"repos/{repo}/git/blobs/{blob_sha}")
-    if status >= 400 or not isinstance(blob, dict):
-        print(
-            f"::warning::the tenant lease {ref} exists but its holder record "
-            f"({blob_sha}) is unreadable (HTTP {status})."
-        )
-        return None
-    return _parse_holder(blob)
+    return read_holder_record(repo, target)
 
 
 def _parse_holder(blob: dict) -> Holder | None:
@@ -358,10 +471,10 @@ def _parse_holder(blob: dict) -> Holder | None:
 
 def release_ref(repo: str, ref: str) -> bool:
     """Delete the lease ref. False ⇒ it was already gone, which is not a fault."""
-    status, _body = gh_request(
+    response = gh_request(
         "DELETE", f"repos/{repo}/git/refs/{ref.removeprefix('refs/')}"
     )
-    return status in (200, 204)
+    return response.status in (200, 204)
 
 
 def holder_is_live(
@@ -378,16 +491,17 @@ def holder_is_live(
     this module exists to close — whereas erring towards "live" only costs the
     waiter another poll interval.
     """
-    status, body = gh_request("GET", f"repos/{repo}/actions/runs/{holder.run_id}")
-    if status == 404:
+    response = gh_request("GET", f"repos/{repo}/actions/runs/{holder.run_id}")
+    if response.status == 404:
         # The run was deleted, or never existed. Nothing will ever release this.
         return False
-    if status >= 400 or not isinstance(body, dict):
+    if response.status >= 400 or not isinstance(response.body, dict):
         print(
             f"::warning::could not read run {holder.run_id} in {repo} "
-            f"(HTTP {status}); treating its tenant lease as still held."
+            f"(HTTP {response.status}); treating its tenant lease as still held."
         )
         return True
+    body = response.body
     if body.get("status") == _COMPLETED:
         return False
     if ttl_seconds <= 0 or holder.acquired_at is None:
@@ -440,6 +554,17 @@ def _timestamp(value: object) -> float | None:
     return stamp.timestamp()
 
 
+_DISABLED_WARNING = (
+    "::warning::this repository will not let the run write git refs, so the "
+    "(app, cloud) tenant lease is disabled for this run and e2e proceeds "
+    "unserialised. Grant the lease job 'contents: write' to enable it. Each e2e "
+    "leg still asserts the installed version independently (FND-31), so a "
+    "WRONG-version run cannot pass silently — but two runs installing the SAME "
+    "version will still fight over the tenant, so this is a real loss of "
+    "protection, not a no-op."
+)
+
+
 def acquire(
     repo: str,
     ref: str,
@@ -454,43 +579,64 @@ def acquire(
 ) -> tuple[str, Holder | None]:
     """Take the lease, or report why not.
 
-    Returns ("acquired" | "disabled" | "timeout", blocking_holder_or_None).
+    Returns ("acquired" | "disabled" | "timeout" | "rate-limited",
+    blocking_holder_or_None).
+
+    Each waiting pass costs two API calls: read the ref, and check the holding
+    run. The identity blob and the CAS are only paid when the ref looks free.
+    That pre-read is an optimisation, not a decision — the CAS remains the
+    authority, and losing a race after the ref looked free is just another 422.
     """
     # Attempt-counted rather than deadline-checked so the budget needs no clock
     # comparison. Ceiling division: a budget that is not an exact multiple of the
     # interval still gets its final full attempt.
     max_attempts = max(1, math.ceil(wait_seconds / poll_seconds))
 
+    # Memoised by the ref's target sha: while a lease does not change hands, the
+    # record behind it cannot change either, so re-reading it every poll would
+    # spend a call per poll to learn what we already know.
+    records: dict[str, Holder | None] = {}
     blocker: Holder | None = None
+    rate_limited = False
+
     for attempt_number in range(1, max_attempts + 1):
-        blob_sha = create_identity_blob(repo, run_id, attempt, clock())
-        if blob_sha is None:
-            print(
-                "::warning::this repository will not let the run write git refs, "
-                "so the (app, cloud) tenant lease is disabled for this run and "
-                "e2e proceeds unserialised. Grant the lease job 'contents: write' "
-                "to enable it. Each e2e leg still asserts the installed version "
-                "independently (FND-31), so a wrong-version run cannot pass "
-                "silently — it just fails less informatively."
-            )
-            return "disabled", None
+        target = read_lease_target(repo, ref)
 
-        outcome = try_acquire(repo, ref, blob_sha)
-        if outcome == "denied":
-            print(
-                "::warning::this repository will not let the run create the tenant "
-                "lease ref; proceeding unserialised. See the note above."
-            )
-            return "disabled", None
-        if outcome == "acquired":
-            print(f"Tenant lease acquired: {ref}")
-            return "acquired", None
+        if target is None:
+            # Looks free — mint an identity and race for it.
+            try:
+                blob_sha = create_identity_blob(repo, run_id, attempt, clock())
+                if blob_sha is None:
+                    print(_DISABLED_WARNING)
+                    return "disabled", None
+                outcome = try_acquire(repo, ref, blob_sha)
+            except RateLimited as limited:
+                rate_limited = True
+                if attempt_number < max_attempts:
+                    _sleep_for_rate_limit(sleep, poll_seconds, limited.retry_after)
+                continue
 
-        # Occupied. Find out by whom, and whether that claim is still good.
-        blocker = read_holder(repo, ref)
+            if outcome == "acquired":
+                print(f"Tenant lease acquired: {ref}")
+                return "acquired", None
+            if outcome == "denied":
+                print(_DISABLED_WARNING)
+                return "disabled", None
+            # "occupied": somebody won the race between our read and our CAS.
+            # Re-read next pass; the CAS was the authority, as intended.
+            print("Lost the race for the tenant lease; it is held again.")
+            if attempt_number < max_attempts:
+                sleep(poll_seconds)
+            continue
+
+        rate_limited = False
+        if target not in records:
+            records[target] = read_holder_record(repo, target)
+        blocker = records[target]
+
         if blocker is None:
-            # Either it was released between the CAS and the read, or we could
-            # not read it. Either way the CAS on the next pass is authoritative.
+            # Unreadable record. The CAS on the next pass is authoritative rather
+            # than a guess, so just wait for it.
             print("The tenant lease is held but its holder is unreadable; retrying.")
         elif blocker.is_me(run_id, attempt):
             # A retried step, or a re-run of this same attempt. Already ours.
@@ -514,7 +660,27 @@ def acquire(
         if attempt_number < max_attempts:
             sleep(poll_seconds)
 
-    return "timeout", blocker
+    return ("rate-limited" if rate_limited else "timeout"), blocker
+
+
+def _sleep_for_rate_limit(sleep, poll_seconds: int, retry_after: int | None) -> None:
+    """Back off after a rate limit, honouring Retry-After within reason.
+
+    Never returns "disabled" to the caller: a rate limit is a reason to wait, not
+    evidence that the lease cannot be taken. Switching the lease off here would
+    do it precisely when several legs are contending, which is both when the
+    budget runs out and when the lease matters most.
+    """
+    delay = poll_seconds
+    if retry_after is not None:
+        delay = max(poll_seconds, min(retry_after, _MAX_RETRY_AFTER))
+    print(
+        "::warning::rate-limited by the GitHub API while taking the tenant lease; "
+        f"backing off {delay}s and retrying. The lease is NOT being disabled — "
+        "the per-repository budget is shared by every matrix leg, so this is "
+        "expected under contention."
+    )
+    sleep(delay)
 
 
 def release(repo: str, ref: str, run_id: int, attempt: int) -> bool:
@@ -522,18 +688,30 @@ def release(repo: str, ref: str, run_id: int, attempt: int) -> bool:
 
     The ref name is shared by every contender for the tenant, so unlike a
     per-run name it is possible to delete somebody else's lease. Ownership is
-    therefore checked first.
+    therefore checked first, and the ref's target is re-read immediately before
+    the delete so a lease that changed hands in between is left alone.
 
-    The check-then-delete is not atomic (the API offers no conditional delete),
-    but the window is closed by the liveness rule rather than by luck: this runs
-    while our own run is still ``in_progress``, so no contender is entitled to
-    reap us, and nobody else can be holding the lease for us to delete by
-    mistake. The TTL could in principle break our lease while we are live, which
-    is one more reason it errs long.
+    That narrows the window to a single DELETE round-trip; it does not close it,
+    because the API offers no conditional delete. The interleaving that remains
+    is worth naming rather than waving at: if the TTL breaks *our* lease while we
+    are still live and another run acquires between our last read and our DELETE,
+    we would delete the replacement holder's lease and put a second installer on
+    the tenant. That cannot happen while the TTL exceeds the longest legitimate
+    hold — which is exactly why the TTL errs long and why its sizing is pinned by
+    a test. The TTL is load-bearing for release safety, not only for acquisition.
     """
-    holder = read_holder(repo, ref)
-    if holder is None:
+    target = read_lease_target(repo, ref)
+    if target is None:
         print(f"No tenant lease to release at {ref} — already reaped.")
+        return False
+
+    holder = read_holder_record(repo, target)
+    if holder is None:
+        print(
+            f"::warning::not releasing {ref}: its holder record is unreadable, so "
+            "ownership cannot be confirmed. The next contender will reap it if "
+            "this run is over."
+        )
         return False
     if not holder.is_me(run_id, attempt):
         print(
@@ -542,6 +720,17 @@ def release(repo: str, ref: str, run_id: int, attempt: int) -> bool:
             "broken by the TTL, or reaped after this run was misread as finished."
         )
         return False
+
+    # Re-read the target rather than trusting the one we validated against: if the
+    # lease changed hands while we were reading the record, the sha moves, and
+    # deleting would take the new holder's lease rather than ours.
+    if read_lease_target(repo, ref) != target:
+        print(
+            f"::warning::not releasing {ref}: it changed hands while this run was "
+            "confirming ownership, so the lease being held is no longer ours."
+        )
+        return False
+
     if release_ref(repo, ref):
         print(f"Tenant lease released: {ref}")
         return True
@@ -579,8 +768,10 @@ def main(argv: list[str] | None = None) -> int:
         "--poll-seconds",
         type=int,
         default=30,
-        help="Gap between attempts. Each contended attempt costs a handful of API "
-        "calls, so this also sets the draw on the 1000/hour GITHUB_TOKEN budget.",
+        help="Gap between attempts. A waiting pass costs two API calls (read the "
+        "lease ref, check the holding run), and four on the pass that takes it. "
+        "GITHUB_TOKEN allows 1000/hour per REPOSITORY and every matrix leg shares "
+        "it, so raise this rather than lower it when many clouds contend.",
     )
     parser.add_argument(
         "--ttl-seconds",
@@ -590,8 +781,8 @@ def main(argv: list[str] | None = None) -> int:
         "time it recorded, not from run age) before a waiter treats it as wedged "
         "and breaks it. Must exceed the longest legitimate hold — the install plus "
         "the leg ceiling — because breaking a live holder's lease puts a second "
-        "installer on the tenant. Default 4h against a 40min+120min hold. 0 "
-        "disables the backstop.",
+        "installer on the tenant, and because release safety depends on it too. "
+        "Default 4h against a 40min+120min hold. 0 disables the backstop.",
     )
     parser.add_argument(
         "--on-timeout",
@@ -646,8 +837,21 @@ def main(argv: list[str] | None = None) -> int:
         os.environ.get("GITHUB_OUTPUT"),
     )
 
-    if state != "timeout":
+    if state in ("acquired", "disabled"):
         return 0
+
+    if state == "rate-limited":
+        # Deliberately NOT fail-open: proceeding unserialised because the API was
+        # busy is how two runs end up on one tenant.
+        print(
+            f"::error::could not get the tenant lease {ref} within "
+            f"{args.wait_seconds}s because the GitHub API rate-limited this "
+            "repository throughout. Nothing is wrong with this change. The "
+            "GITHUB_TOKEN budget is 1000 requests/hour per repository and is "
+            "shared by every matrix leg — re-run when the hour rolls over, or "
+            "raise poll-seconds so a waiting leg costs fewer calls."
+        )
+        return 1
 
     held_by = (
         f" It is held by run {blocker.run_id} ({blocker.run_url(args.repo)})."
