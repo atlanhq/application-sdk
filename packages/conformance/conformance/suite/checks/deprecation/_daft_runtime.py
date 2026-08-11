@@ -195,6 +195,12 @@ def _iterable_element(
     different function whose ``tables`` is an SDK reader frame. Bindings are
     collected per scope precisely so generic names cannot leak exemptions
     across functions; scanning every scope here would re-open that hole.
+
+    The walk also stops at the first scope that binds the name **non-pyarrow
+    last**: a ``def f(tables):`` parameter (recorded unknown/non-pyarrow)
+    shadows a module-level ``tables = [pa.table({}) ...]`` at runtime, so the
+    walk must not reach past it to clear the call. Returning ``None`` there
+    lets the shadowing scope void the exemption exactly as Python scoping does.
     """
     if _yields_pyarrow(iterable):
         return ast.Call(
@@ -205,13 +211,17 @@ def _iterable_element(
     if isinstance(iterable, ast.Name):
         scope: ast.AST | None = scopes.scope_of(node)
         while scope is not None:
-            for lineno_flag in by_scope.get(scope, {}).get(iterable.id, []):
-                if lineno_flag[1]:
+            bindings = by_scope.get(scope, {}).get(iterable.id)
+            if bindings:
+                # Last binding in this scope decides. Pyarrow → stand-in
+                # producer; non-pyarrow (incl. a shadowing parameter) → stop.
+                if max(bindings, key=lambda b: b[0])[1]:
                     return ast.Call(
                         func=ast.Attribute(value=ast.Name(id="pa"), attr="table"),
                         args=[],
                         keywords=[],
                     )
+                return None
             scope = scopes.parent_of(scope)
         return None
     return None
@@ -256,6 +266,29 @@ def _pyarrow_bindings_by_scope(
         entry.append((getattr(node, "lineno", 0), is_pyarrow))
 
     for node in ast.walk(tree):
+        # Function parameters: `def f(df):` binds `df` in the function's scope
+        # with an unknown value. Record every parameter as
+        # unknown-and-therefore-non-pyarrow so the parameter kills an enclosing
+        # same-named pyarrow exemption — a module-level `tables = [pa.table({})]`
+        # must not clear `[t.to_pylist() for t in tables]` inside
+        # `def f(tables):`, where the parameter shadows the global at runtime
+        # and holds whatever the caller passed (an SDK reader frame, say).
+        # Recorded at the `def` line, which sorts before every use in the body:
+        # `ast.walk` is breadth-first, so assignments in this body are already
+        # recorded before a *nested* function's parameters — a rebind to
+        # pyarrow inside the body therefore still wins the own-scope
+        # last-binding-before-the-use rule and re-establishes the exemption
+        # from that line on, matching the runtime shadow-then-rebind sequence.
+        if isinstance(node, _FUNCTION_SCOPES):
+            for arg in (
+                *node.args.posonlyargs,
+                *node.args.args,
+                *node.args.kwonlyargs,
+                *([node.args.vararg] if node.args.vararg else []),
+                *([node.args.kwarg] if node.args.kwarg else []),
+            ):
+                entry = by_scope.setdefault(node, {}).setdefault(arg.arg, [])
+                entry.append((getattr(node, "lineno", 0), False))
         # Plain assignment, including the chained form `a = df = frame`.
         if isinstance(node, ast.Assign):
             for target in node.targets:

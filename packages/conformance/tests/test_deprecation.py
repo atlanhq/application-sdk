@@ -972,6 +972,49 @@ def test_b007_pyarrow_iterable_in_a_sibling_scope_does_not_exempt() -> None:
     assert [f.rule_id for f in _b007(src)] == ["B007"]
 
 
+def test_b007_parameter_shadowing_a_module_pyarrow_binding_does_not_exempt() -> None:
+    """A same-named function parameter kills an enclosing pyarrow exemption.
+
+    ``_pyarrow_bindings_by_scope`` collected assignments only, so walking
+    outward from ``f``'s body found the module-level
+    ``tables = [pa.table({}) ...]`` and cleared
+    ``[t.to_pylist() for t in tables]`` — even though the parameter ``tables``
+    shadows the global at runtime and holds whatever the caller passed (an SDK
+    reader frame, say). Parameters are now recorded as unknown/non-pyarrow
+    bindings in the function's scope, so the shadowing name voids the
+    exemption before the walk ever reaches the module binding.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "tables = [pa.table({}) for _ in range(3)]\n"
+        + "\n"
+        + "def f(tables):\n"
+        + "    return [t.to_pylist() for t in tables]\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_rebinding_a_parameter_to_pyarrow_restores_the_exemption() -> None:
+    """A parameter rebound to pyarrow inside the body is exempt from that line.
+
+    Parameters are recorded as unknown/non-pyarrow at the ``def`` line, which
+    sorts before every use — so a later ``tables = [pa.table({}) ...]`` inside
+    the body wins the own-scope last-binding-before-the-use rule, and the
+    shadow-then-rebind sequence ends pyarrow, exactly as the runtime does.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f(tables):\n"
+        + "    tables = [pa.table({}) for _ in range(3)]\n"
+        + "    return [t.to_pylist() for t in tables]\n"
+    )
+    assert _b007(src) == []
+
+
 def test_b007_pyarrow_iterable_in_an_enclosing_scope_still_exempts() -> None:
     """The enclosing chain is still honoured — only sibling scopes are cut off."""
     src = (
