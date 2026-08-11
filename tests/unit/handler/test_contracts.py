@@ -44,9 +44,15 @@ class TestFlattenCredentialsToPairs:
     """`flatten_credentials_to_pairs` / `HandlerCredential.list_from_raw`.
 
     The flattened pairs are the only credential view a gate-side handler ever
-    sees, so `extra` must survive in both of its legal shapes (dict and JSON
-    string) — a dropped `extra` starves the handler of connection params the
-    runtime client would resolve (the Oracle miner false-block defect).
+    sees. `extra` is stored in two legal shapes (nested object, or that object
+    serialized to a JSON string), so both must flatten identically — a dropped
+    `extra` hands the handler fewer connection params than the runtime client
+    resolves from the same credential.
+
+    Flattening must never raise: it runs on the HTTP request path and inside
+    the injected gate, neither of which has a caller positioned to distinguish
+    "malformed credential" from "no credential". Unusable `extra` is dropped
+    and the runtime client raises the typed error on its own path.
     """
 
     def test_top_level_keys_flatten(self):
@@ -64,12 +70,12 @@ class TestFlattenCredentialsToPairs:
     def test_string_extra_parsed_and_hoisted(self):
         """JSON-string `extra` must flatten identically to dict `extra`."""
         as_dict = flatten_credentials_to_pairs(
-            {"username": "u", "extra": {"host": "h", "port": 1521, "sid": "ORCL"}}
+            {"username": "u", "extra": {"host": "h", "port": 1521, "sid": "DB1"}}
         )
         as_string = flatten_credentials_to_pairs(
             {
                 "username": "u",
-                "extra": '{"host": "h", "port": 1521, "sid": "ORCL"}',
+                "extra": '{"host": "h", "port": 1521, "sid": "DB1"}',
             }
         )
         assert as_string == as_dict
@@ -79,13 +85,22 @@ class TestFlattenCredentialsToPairs:
         pairs = flatten_credentials_to_pairs({"extra": '{"filter": {"db": ["s"]}}'})
         assert pairs == [{"key": "extra.filter", "value": '{"db": ["s"]}'}]
 
-    def test_invalid_json_string_extra_skipped(self):
-        """Undecodable string keeps the legacy drop — flattening never raises."""
+    def test_invalid_json_string_extra_dropped(self):
+        """Undecodable string is dropped — flattening never raises."""
         pairs = flatten_credentials_to_pairs({"username": "u", "extra": "{not-json"})
         assert pairs == [{"key": "username", "value": "u"}]
 
-    def test_non_dict_json_string_extra_skipped(self):
+    def test_non_object_json_string_extra_dropped(self):
         pairs = flatten_credentials_to_pairs({"username": "u", "extra": '["a", "b"]'})
+        assert pairs == [{"key": "username", "value": "u"}]
+
+    def test_non_mapping_extra_dropped(self):
+        """A non-str, non-dict `extra` has no keys to hoist and must not raise."""
+        pairs = flatten_credentials_to_pairs({"username": "u", "extra": 7})
+        assert pairs == [{"key": "username", "value": "u"}]
+
+    def test_null_extra_dropped(self):
+        pairs = flatten_credentials_to_pairs({"username": "u", "extra": None})
         assert pairs == [{"key": "username", "value": "u"}]
 
     def test_none_values_skipped(self):

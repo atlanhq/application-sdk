@@ -23,6 +23,7 @@ from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
 from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.credentials.utils import parse_credentials_extra
 from application_sdk.errors.base import AppError
 from application_sdk.errors.wire import FailureDetails
 
@@ -208,31 +209,30 @@ def flatten_credentials_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, s
     preflight path (heracles-normalized requests) and the injected gate's
     resolved-credential conversion so both emit identical shapes.
 
-    ``extra`` stored as a JSON string (a legal shape — every SQL client parses
-    it via ``parse_credentials_extra``) is decoded before hoisting. Dropping it
-    instead starved gate-side handlers of connection params the runtime client
-    could see (e.g. Oracle host/port/sid living inside ``extra``), turning
-    every preflight into an instant false block. A string that does not decode
-    to a dict keeps the legacy behavior (skipped) — the runtime client would
-    reject it anyway, and flattening must not fail where it previously didn't.
+    These pairs are the only credential view a gate-side handler ever sees, so
+    ``extra`` is decoded through :func:`parse_credentials_extra` — the same
+    decoder the runtime clients use — rather than shape-matched here. Anything
+    the runtime client can resolve out of ``extra`` must therefore also be
+    reachable in this view; a second, narrower reader is how the two views
+    drift apart and the gate starts blocking on params the extraction path
+    would have found.
+
+    ``strict=False``: flattening runs on the HTTP request path and inside the
+    injected gate, neither of which has a caller positioned to act on a parse
+    failure. An unusable ``extra`` is dropped here and the runtime client
+    raises the typed error on its own path.
     """
     pairs: list[dict[str, str]] = []
-    extra = creds_dict.get("extra")
-    if isinstance(extra, str):
-        try:
-            extra = json.loads(extra)
-        except json.JSONDecodeError:
-            extra = None
+    extra = parse_credentials_extra(creds_dict, strict=False)
     for key, value in creds_dict.items():
         if key == "extra" or value is None:
             continue
         pairs.append({"key": key, "value": _serialize_credential_value(value)})
-    if isinstance(extra, dict):
-        for key, value in extra.items():
-            if value is not None:
-                pairs.append(
-                    {"key": f"extra.{key}", "value": _serialize_credential_value(value)}
-                )
+    for key, value in extra.items():
+        if value is not None:
+            pairs.append(
+                {"key": f"extra.{key}", "value": _serialize_credential_value(value)}
+            )
     return pairs
 
 

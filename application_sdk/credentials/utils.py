@@ -22,33 +22,82 @@ logger = get_logger(__name__)
 OBJECT_STORE_PREFIX = "objectstore://"
 
 
-def parse_credentials_extra(credentials: dict[str, Any]) -> dict[str, Any]:
-    """Parse the 'extra' field from credentials, handling both string and dict inputs.
+def parse_credentials_extra(
+    credentials: dict[str, Any], *, strict: bool = True
+) -> dict[str, Any]:
+    """Decode the ``extra`` field of a credential dict.
+
+    ``extra`` is stored in two legal shapes — a nested object, or that same
+    object serialized to a JSON string — because its producers (the Atlan UI,
+    Heracles, Argo templates, agent JSON) straddle the v2/v3 credential
+    contract boundary. This is the **only** decoder for that field: every
+    consumer routes through it so that a shape one code path accepts cannot
+    be a shape another code path silently drops.
+
+    Always returns a mapping. Absent, null, and empty ``extra`` are all "no
+    extra" — handing back the raw ``None`` instead only moved the failure to
+    an ``AttributeError`` on the caller's next ``.get()``.
 
     Args:
-        credentials: Credentials dictionary containing an 'extra' field.
+        credentials: Credential dict that may carry an ``extra`` field.
+        strict: Policy for an ``extra`` that is present but unusable (not
+            decodable, or not a JSON object). ``True`` — the runtime-client
+            policy — raises: a connector cannot build a DSN without it, and
+            a typed credential error beats a downstream ``AttributeError``.
+            ``False`` — the flattening policy — returns ``{}`` instead, for
+            callers that run where no one is positioned to distinguish a
+            malformed credential from an absent one and so must never raise.
 
     Returns:
-        Parsed extra field as a dictionary.
+        The decoded ``extra`` object, or ``{}`` when it is absent (or
+        unusable and ``strict`` is ``False``).
 
     Raises:
-        CommonError: If the extra field contains invalid JSON.
+        CredentialParseError: ``strict`` is set and ``extra`` is present but
+            is neither valid JSON nor a JSON object.
     """
-    extra: str | dict[str, Any] = credentials.get("extra", {})
+    extra: Any = credentials.get("extra")
+
+    if extra is None or extra == "":
+        return {}
+
+    if isinstance(extra, dict):
+        return extra
+
+    def _reject(message: str, cause: Exception | None = None) -> dict[str, Any]:
+        if not strict:
+            # Never silent: dropping ``extra`` costs the caller every
+            # connection param stored inside it, and a lenient caller by
+            # definition has no error to surface. The log line is the only
+            # trace, so it must carry the reason — but never the value, which
+            # is credential material.
+            logger.warning(
+                "Dropping unusable credentials extra field, continuing without "
+                "it (any connection params stored inside it will be absent): %s",
+                message,
+                exc_info=cause is not None,
+            )
+            return {}
+        from application_sdk.credentials.errors import (  # noqa: PLC0415
+            CredentialParseError,
+        )
+
+        raise CredentialParseError(
+            message=message, credential_name="extra", cause=cause
+        ) from cause
 
     if isinstance(extra, str):
         try:
-            return orjson.loads(extra)
+            extra = orjson.loads(extra)
         except json.JSONDecodeError as e:
-            from application_sdk.credentials.errors import (  # noqa: PLC0415
-                CredentialParseError,
-            )
+            # conformance: ignore[E007] not swallowed — _reject raises under strict and logs a WARNING with exc_info otherwise; the rule is lexical and cannot follow into the helper
+            return _reject("Invalid JSON in credentials extra field", e)
 
-            raise CredentialParseError(
-                message="Invalid JSON in credentials extra field",
-                credential_name="extra",
-                cause=e,
-            ) from e
+    if not isinstance(extra, dict):
+        return _reject(
+            "Credentials extra field is not a JSON object "
+            f"(decoded to {type(extra).__name__})"
+        )
 
     return extra
 
