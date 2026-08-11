@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.25.0
-source-sha:    5eb4071168018c34fe35ab3af23cdecfff09c40c
-source-date:   2026-07-31T12:34:50+05:30
+sdk-version:   3.27.1
+source-sha:    0cafd2583309a55ffe8fdcc2dc6458b7ce903363
+source-date:   2026-08-11T12:57:07+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -3273,6 +3273,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `workflow_run_id: str` `= ''` — Temporal run ID used to name the incremental diff subfolder.
   - `current_state_s3_prefix: str` `= ''` — S3 prefix for the existing current-state (for previous-state download).
   - `copy_workers: int` `= 3` — Parallel workers for file copy operations.
+  - `upload_concurrency: int` `= 4` — Max concurrent object-store requests when uploading the current-state
   - `application_name: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 
