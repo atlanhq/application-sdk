@@ -1400,9 +1400,11 @@ jobs:
       #
       # cancel-in-progress stays false, and deliberately so: cancelling a leg
       # mid-flight abandons a live Automation Engine run, and there is no cleanup
-      # path for the tenant state it leaves behind. Turning it on is a real
-      # decision that needs that cleanup path first — test_label_trigger_gates.py
-      # pins this so the decision cannot be taken by accident.
+      # path for the tenant state it leaves behind. Turning it on needs that
+      # cleanup path first (FND-252) — test_label_trigger_gates.py pins this so
+      # the decision cannot be taken by accident, and it has already caught one
+      # attempt. The cost of leaving it false is a superseded commit's leg running
+      # to the 120-minute ceiling while holding the tenant lease.
       group: tests-e2e-${{ github.run_id }}-${{ matrix.name }}
       cancel-in-progress: false
     permissions:

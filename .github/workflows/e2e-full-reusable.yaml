@@ -310,7 +310,7 @@ jobs:
       #
       # cancel-in-progress stays false for the same reason as the e2e legs in
       # tests-reusable.yaml: cancelling mid-run abandons a live Automation Engine
-      # run and leaves tenant state with no cleanup path.
+      # run and leaves tenant state with no cleanup path (FND-252).
       group: e2e-full-${{ github.workflow }}-${{ github.run_id }}-${{ matrix.cloud || 'default' }}
       cancel-in-progress: false
     permissions:
