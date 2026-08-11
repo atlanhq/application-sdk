@@ -276,6 +276,8 @@ class TestAttachPsycopg3:
         ConnClass.__module__ = "psycopg.connection"
         conn = ConnClass()
         conn.adapters = fake_adapters  # type: ignore[attr-defined]  # — attribute injected onto a dynamically-built fake connection class
+
+        attach_tolerant_text_decoder(conn)
         loader_cls = fake_adapters.register_loader.call_args_list[0].args[1]
 
         # Loader.__init__ wants (oid, context); context can be None.
