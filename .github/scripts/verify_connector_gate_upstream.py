@@ -39,8 +39,16 @@ def evaluate(
     matrix_result: str,
     base_image_result: str,
     connector_result: str,
+    merge_base_image_result: str,
 ) -> tuple[str | None, bool]:
-    """Returns (error_message, dispatched). error_message is None on success."""
+    """Returns (error_message, dispatched). error_message is None on success.
+
+    ``merge_base_image_result`` is the manifest-merge job that combines the
+    per-arch base builds. It is checked separately because a failed arch leg
+    leaves the merge *skipped* rather than failed, and skipped is the benign
+    value for both — so neither result alone distinguishes "no base image was
+    requested" from "the base image never got built".
+    """
     if changes_result != "success":
         return (
             f"Detect Changes did not succeed ({changes_result}) — failing the gate closed.",
@@ -56,6 +64,21 @@ def evaluate(
             f"Build SDK base image did not succeed ({base_image_result}) — failing the gate closed.",
             False,
         )
+    if merge_base_image_result not in OK_BASE_IMAGE_RESULTS:
+        return (
+            f"Merge SDK base image manifest did not succeed ({merge_base_image_result}) "
+            "— failing the gate closed.",
+            False,
+        )
+    # The pair that neither check above catches on its own: the arch legs
+    # succeeded, so the merge should have run, but it did not. The connectors
+    # would have been dispatched against a manifest tag that was never created.
+    if base_image_result == "success" and merge_base_image_result == "skipped":
+        return (
+            "Build SDK base image succeeded but the manifest merge was skipped — "
+            "the PR base image tag was never created; failing the gate closed.",
+            False,
+        )
     if connector_result not in OK_CONNECTOR_RESULTS:
         return (
             f"Connector Tests dispatch did not succeed ({connector_result}) — failing the gate.",
@@ -69,6 +92,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--changes-result", required=True)
     parser.add_argument("--matrix-result", required=True)
     parser.add_argument("--base-image-result", required=True)
+    # Required, not defaulted: this gate is fail-closed, and a default of
+    # "skipped" would make a forgotten flag look like the legitimate merge_group
+    # path rather than an omission.
+    parser.add_argument("--merge-base-image-result", required=True)
     parser.add_argument("--connector-result", required=True)
     args = parser.parse_args(argv)
 
@@ -77,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         args.matrix_result,
         args.base_image_result,
         args.connector_result,
+        args.merge_base_image_result,
     )
     if error:
         print(f"::error::{error}")

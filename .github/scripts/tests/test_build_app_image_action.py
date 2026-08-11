@@ -461,25 +461,30 @@ def _pull_request_workflow() -> dict:  # type: ignore[type-arg]
     )
 
 
+def _sdk_base_job() -> dict:  # type: ignore[type-arg]
+    return _pull_request_workflow()["jobs"]["build-sdk-base-image"]
+
+
 def _sdk_base_build_step() -> dict:  # type: ignore[type-arg]
-    job = _pull_request_workflow()["jobs"]["build-sdk-base-image"]
     return next(
-        s for s in job["steps"] if "secure-build-push-apps" in str(s.get("uses", ""))
+        s
+        for s in _sdk_base_job()["steps"]
+        if "secure-build-push-apps" in str(s.get("uses", ""))
     )
 
 
+def _legs(job: dict) -> dict:  # type: ignore[type-arg]
+    return {leg["arch"]: leg for leg in job["strategy"]["matrix"]["include"]}
+
+
 def test_the_pr_base_image_serves_every_arch_the_connector_matrix_builds() -> None:
-    """Derived from the matrix, not hardcoded, so adding a third architecture
-    cannot silently leave the base behind."""
+    """Both matrices are read from the YAML, so adding a third architecture to
+    the app image cannot silently leave the base behind."""
     consumed = {
         leg["platform"]
-        for leg in _reusable()["jobs"]["build-e2e-image"]["strategy"]["matrix"][
-            "include"
-        ]
+        for leg in _legs(_reusable()["jobs"]["build-e2e-image"]).values()
     }
-    published = {
-        p.strip() for p in _sdk_base_build_step()["with"]["platforms"].split(",")
-    }
+    published = {leg["platform"] for leg in _legs(_sdk_base_job()).values()}
 
     missing = consumed - published
     assert not missing, (
@@ -491,10 +496,81 @@ def test_the_pr_base_image_serves_every_arch_the_connector_matrix_builds() -> No
     )
 
 
+def test_the_base_image_legs_are_native_like_the_app_image_legs() -> None:
+    # Same property test_each_architecture_builds_on_a_runner_native_to_it pins
+    # for the app image, and it fails just as silently here: an emulated leg
+    # still succeeds, only slower, on a path that runs on every e2e-labelled PR.
+    job = _sdk_base_job()
+    assert job["runs-on"] == "${{ matrix.runner }}"
+    legs = _legs(job)
+    for arch, leg in legs.items():
+        assert leg["platform"] == f"linux/{arch}"
+    assert "arm" in legs["arm64"]["runner"]
+    assert "arm" not in legs["amd64"]["runner"]
+
+
+def test_the_base_image_legs_do_not_collide_in_the_tag_or_the_cache() -> None:
+    # The action defaults to an unscoped `type=gha`, so without an explicit
+    # per-arch scope the two legs overwrite each other's cache manifest and both
+    # go cold on every later run — silently.
+    with_ = _sdk_base_build_step()["with"]
+    assert with_["tags"].endswith("-${{ matrix.arch }}")
+    assert with_["platforms"] == "${{ matrix.platform }}"
+    assert "${{ matrix.arch }}" in with_["cache-from"]
+    assert "${{ matrix.arch }}" in with_["cache-to"]
+
+
 def test_the_base_image_build_is_reached_through_the_scanning_action() -> None:
-    # Multi-arch here rides on secure-build-push-apps scanning the runner's
-    # native arch and then building the full platform list for the push.
-    # Swapping in a raw docker/build-push-action would publish both unscanned.
+    # Swapping in a raw docker/build-push-action would publish unscanned images.
     step = _sdk_base_build_step()
     assert "secure-build-push-apps" in step["uses"]
     assert step["with"]["push"] is True
+
+
+def test_the_merge_job_asserts_the_reference_the_connector_builds_from() -> None:
+    """The per-arch legs cannot assert themselves — only the merged tag can be.
+
+    A leg that quietly built the wrong architecture produces an index with two
+    of the same, and the failure surfaces a repo away as the connector's
+    `no match for platform in manifest`.
+    """
+    job = _pull_request_workflow()["jobs"]["merge-sdk-base-image"]
+    scripts = " ".join(str(s.get("run", "")) for s in job["steps"])
+    assert "imagetools create" in scripts
+    assert "assert_image_platforms.py" in scripts
+    assert "linux/amd64,linux/arm64" in scripts
+    assert "with-retry.sh" in scripts, (
+        "`imagetools create` writes the manifest list only in the registry, so "
+        "reading it back a step later is a read-after-write race"
+    )
+
+
+def test_the_connector_dispatch_gates_on_both_base_image_jobs() -> None:
+    """A failed arch leg leaves the merge SKIPPED, not failed.
+
+    'skipped' is the benign value in these clauses, so gating on the merge alone
+    would dispatch connectors against a manifest tag that was never created.
+    """
+    gate = _pull_request_workflow()["jobs"]["connector-tests"]["if"]
+    for job in ("build-sdk-base-image", "merge-sdk-base-image"):
+        assert f"needs.{job}.result == 'success'" in gate
+        assert f"needs.{job}.result == 'skipped'" in gate
+
+
+def test_the_scan_step_builds_the_runners_own_architecture() -> None:
+    """Otherwise the native split moves the emulation into the Trivy scan.
+
+    The scan builds and `--load`s an image for Trivy, then the push builds the
+    requested platform. Hardcoding amd64 there means an arm64 leg scans an
+    emulated amd64 image that is not the artefact being pushed — the scan stops
+    describing the thing it gates.
+    """
+    action = yaml.safe_load(
+        (_ACTIONS / "secure-build-push-apps" / "action.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    scan = next(s for s in action["runs"]["steps"] if s.get("id") == "build_for_scan")
+    assert (
+        "runner.arch" in scan["with"]["platforms"]
+    ), "the scan platform must follow the runner, not be hardcoded"
