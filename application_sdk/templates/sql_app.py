@@ -180,10 +180,17 @@ class _EnvelopeError(AppError):
     on this subclass and fail validation. The serializer is therefore
     overridden to read both instance-level, so a reconstructed unknown-code
     error round-trips.
+
+    ``code`` / ``cause_repr`` / ``evidence`` are likewise carried as
+    passthrough instance fields so the producer's diagnostic context and
+    fine-grained code survive re-serialisation — not just the routing.
     """
 
     category_override: FailureCategory
     audience_override: Audience
+    code_override: str | None = None
+    cause_repr: str | None = None
+    evidence: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     @property
     def category(self) -> FailureCategory:  # type: ignore[override]
@@ -193,15 +200,29 @@ class _EnvelopeError(AppError):
     def audience(self) -> Audience:  # type: ignore[override]
         return self.audience_override
 
+    @property
+    def code(self) -> str:  # type: ignore[override]
+        return self.code_override or super().code
+
     def to_failure_details(self) -> FailureDetails:
-        # ``category_override`` / ``audience_override`` carry routing, not
-        # evidence — exclude them alongside the base fields.
+        # ``category_override`` / ``audience_override`` / ``code_override``
+        # carry routing, not evidence — exclude them alongside the base
+        # fields; the producer's evidence returns as the envelope's evidence.
+        # ``cause_repr`` serialises as its own envelope field, not evidence.
         evidence: dict[str, Any] = {
             f.name: getattr(self, f.name)
             for f in dataclasses.fields(self)
-            if f.name not in _BASE_ERROR_FIELD_NAMES
-            and f.name not in ("category_override", "audience_override")
+            if f.name
+            not in _BASE_ERROR_FIELD_NAMES
+            | {
+                "category_override",
+                "audience_override",
+                "code_override",
+                "cause_repr",
+                "evidence",
+            }
         }
+        evidence.update(self.evidence)
         return FailureDetails(
             category=self.category,
             code=self.code,
@@ -212,6 +233,7 @@ class _EnvelopeError(AppError):
             evidence=evidence,
             app_name=self.app_name,
             run_id=self.run_id,
+            cause_repr=self.cause_repr,
         )
 
 
@@ -261,6 +283,9 @@ def _error_from_failure_details(details: FailureDetails) -> AppError:
         return _EnvelopeError(
             category_override=details.category,
             audience_override=details.audience,
+            code_override=details.code,
+            cause_repr=details.cause_repr,
+            evidence=dict(details.evidence),
             message=details.message,
             retryable=details.retryable,
             suggested_action=details.suggested_action,
@@ -604,21 +629,33 @@ class SqlApp(App):
 
     @staticmethod
     def _redact_typed_error(err: AppError) -> AppError:
-        """Redact a connector-raised typed error's message and string evidence.
+        """Redact everything on a typed error that serialises onto the wire.
 
         Only ``cause_repr`` is sanitised by ``to_failure_details()``; the
-        ``message`` and per-leaf evidence fields are not. Redact them in place
-        so the wire envelope (and the Temporal payload) never carries a secret
-        the producer embedded in a non-denylisted field. Non-string evidence
-        values are left untouched.
+        ``message``, ``suggested_action`` and per-leaf evidence fields are
+        not. Redact them in place so the wire envelope (and the Temporal
+        payload) never carries a secret the producer embedded in any field —
+        a base wire field or a nested evidence structure alike. Strings are
+        redacted wherever they appear inside dict / list / tuple / set
+        evidence values; other non-string values are left untouched.
         """
+
+        def _redact_value(value: Any) -> Any:
+            if isinstance(value, str):
+                return redact_secrets(value)
+            if isinstance(value, dict):
+                return {k: _redact_value(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple, set, frozenset)):
+                return type(value)(_redact_value(v) for v in value)
+            return value
+
         err.message = redact_secrets(err.message)
+        if err.suggested_action is not None:
+            err.suggested_action = redact_secrets(err.suggested_action)
         for f in dataclasses.fields(err):
             if f.name in _BASE_ERROR_FIELD_NAMES:
                 continue
-            value = getattr(err, f.name)
-            if isinstance(value, str):
-                setattr(err, f.name, redact_secrets(value))
+            setattr(err, f.name, _redact_value(getattr(err, f.name)))
         return err
 
     @staticmethod

@@ -2449,6 +2449,55 @@ class TestPrimeFailureClassification:
         assert "SyntheticValue123" not in wire
         assert "PWD=***" in wire
 
+    async def test_typed_error_redacts_a_secret_bearing_suggested_action(self):
+        """``suggested_action`` is a base field serialised verbatim by
+        ``to_failure_details()`` — a producer that embeds a secret in the
+        remediation hint must not leak it onto the wire just because the
+        field lives on the base dataclass rather than in evidence."""
+        from application_sdk.errors.leaves import AuthError
+
+        typed = AuthError(
+            message="source rejected the login",
+            suggested_action="rotate the credential PWD=SyntheticValue123 now",
+        )
+
+        result = await self._probe(typed)
+
+        assert result.failure is not None
+        wire = result.failure.model_dump_json()
+        assert "SyntheticValue123" not in wire
+        assert "PWD=***" in wire
+
+    async def test_typed_error_redacts_nested_evidence_values(self):
+        """Structured evidence is copied onto the envelope as-is — a secret
+        inside a nested dict or list is invisible to key-name denylists, so
+        the redactor must recurse into container values, not just direct
+        string fields."""
+        from dataclasses import dataclass
+
+        from application_sdk.errors.leaves import AuthError
+
+        @dataclass(kw_only=True)
+        class _NestedEvidenceError(AuthError):
+            details: dict | None = None
+            attempts: list | None = None
+
+        typed = _NestedEvidenceError(
+            message="source rejected the login",
+            details={
+                "connection": "SERVER=h;PWD=SyntheticValue123",
+                "inner": {"dsn": "UID=sa;PWD=SyntheticValue123"},
+            },
+            attempts=["first: PWD=SyntheticValue123"],
+        )
+
+        result = await self._probe(typed)
+
+        assert result.failure is not None
+        wire = result.failure.model_dump_json()
+        assert "SyntheticValue123" not in wire
+        assert "PWD=***" in wire
+
     def test_string_fallback_redacts_a_secret_bearing_message(self):
         """A hand-built / pre-redaction-era output whose producer did not redact
         must be re-redacted at the fallback trust boundary."""
@@ -2530,7 +2579,10 @@ class TestPrimeFailureClassification:
         class-level (``type(self).audience``), which returns the raw property
         object on the reconstruction leaf and raises ValidationError on
         serialize. The reconstructed unknown-code error must serialise back to
-        an envelope that keeps category / audience / retryable."""
+        an envelope that keeps category / audience / retryable — and also the
+        producer's fine-grained ``code``, ``cause_repr`` and ``evidence``, so
+        re-serialisation does not strip the diagnostic context a newer
+        producer attached."""
         from application_sdk.errors.categories import Audience, FailureCategory
         from application_sdk.errors.wire import FailureDetails
 
@@ -2542,6 +2594,8 @@ class TestPrimeFailureClassification:
                 retryable=True,
                 audience=Audience.USER,
                 message="from a newer SDK",
+                evidence={"future_field": "future-value"},
+                cause_repr="FutureError: something new broke",
             ),
         )
 
@@ -2551,6 +2605,10 @@ class TestPrimeFailureClassification:
         assert details.category is FailureCategory.SOURCE_UNAVAILABLE
         assert details.audience is Audience.USER
         assert details.retryable is True
+        # Diagnostic context survives re-serialisation, not just routing.
+        assert details.code == "SOME_FUTURE_CODE"
+        assert details.cause_repr == "FutureError: something new broke"
+        assert details.evidence == {"future_field": "future-value"}
         # And the re-serialised envelope reconstructs to the same routing.
         assert err.category is details.category
         assert err.audience is details.audience
