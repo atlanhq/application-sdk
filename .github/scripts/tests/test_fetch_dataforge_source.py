@@ -123,6 +123,72 @@ def test_all_values_are_strings():
     assert all(isinstance(v, str) for v in out.values())
 
 
+# ── HTTP error hardening (the error body is never echoed) ────────────────────
+
+
+class _FakeHTTPError(fds.urllib.error.HTTPError):
+    """HTTPError with a controllable body (the real one reads from a socket)."""
+
+    def __init__(self, code, body: bytes):
+        super().__init__("https://b/api", code, "msg", None, None)
+        self._body = body
+
+    def read(self, *args, **kwargs):
+        return self._body
+
+
+def _http_error(code, body: bytes):
+    return _FakeHTTPError(code, body)
+
+
+def test_error_body_credential_value_never_reaches_message(monkeypatch):
+    """A credential-shaped value embedded in a dataforge error body must NOT
+    appear in the raised error (which is printed to stderr before any masking
+    exists)."""
+    secret = "df_live_secretvalue_123"
+    body = json.dumps({"error": "vault_item_missing", "detail": secret}).encode()
+    monkeypatch.setattr(
+        fds.urllib.request,
+        "urlopen",
+        lambda req, timeout=0: (_ for _ in ()).throw(_http_error(404, body)),
+    )
+    with pytest.raises(fds.DataforgeSourceError) as excinfo:
+        fds._http_get("https://b/api/v1/resources/res-1", "k")
+    msg = str(excinfo.value)
+    assert secret not in msg
+    assert "404" in msg
+    assert "vault_item_missing" in msg  # allowlisted failure class survives
+
+
+def test_error_body_unrecognized_class_collapses_to_request_failed(monkeypatch):
+    """A non-allowlisted error field — or one carrying a value — collapses to
+    the generic class, so nothing body-derived reaches stderr."""
+    secret = "p@ssw0rd-value"
+    body = json.dumps({"error": secret}).encode()
+    monkeypatch.setattr(
+        fds.urllib.request,
+        "urlopen",
+        lambda req, timeout=0: (_ for _ in ()).throw(_http_error(500, body)),
+    )
+    with pytest.raises(fds.DataforgeSourceError) as excinfo:
+        fds._http_get("https://b/api/v1/resources/res-1", "k")
+    msg = str(excinfo.value)
+    assert secret not in msg
+    assert "request_failed" in msg
+
+
+def test_error_body_non_json_yields_generic_class(monkeypatch):
+    monkeypatch.setattr(
+        fds.urllib.request,
+        "urlopen",
+        lambda req, timeout=0: (_ for _ in ()).throw(
+            _http_error(502, b"<html>bad gateway</html>")
+        ),
+    )
+    with pytest.raises(fds.DataforgeSourceError, match="request_failed"):
+        fds._http_get("https://b/api/v1/resources/res-1", "k")
+
+
 # ── Resolution: resource mode ─────────────────────────────────────────────────
 
 
@@ -149,7 +215,13 @@ _MANAGED_ITEMS = {
     "items": [
         {"ID": "m-dead", "LifecycleStatus": "decommissioned", "TestStatus": "passing"},
         {"ID": "m-untested", "LifecycleStatus": "active", "TestStatus": "untested"},
-        {"ID": "m-good", "LifecycleStatus": "active", "TestStatus": "passing"},
+        {
+            "ID": "m-good",
+            "LifecycleStatus": "active",
+            "TestStatus": "passing",
+            "RotatedAt": "2026-08-01T00:00:00Z",
+            "LastSeenInVaultAt": "2026-08-02T00:00:00Z",
+        },
     ]
 }
 
@@ -167,6 +239,65 @@ def test_resolve_managed_filters_decommissioned_and_prefers_passing(monkeypatch)
     assert cred_id == "m-good"
     assert "m-good/reveal" in revealed["url"]
     assert fields == {"host": "h", "password": "p"}
+
+
+def test_resolve_managed_rotation_picks_newest_passing_entry(monkeypatch):
+    """A rotation leaves old + new entries both active+passing until the old
+    one is decommissioned. Selection must land on the newest (highest
+    RotatedAt), not whichever the API returned first."""
+    rotated = {
+        "items": [
+            {
+                "ID": "m-stale",
+                "LifecycleStatus": "active",
+                "TestStatus": "passing",
+                "RotatedAt": "2026-07-01T00:00:00Z",
+                "LastSeenInVaultAt": "2026-08-10T00:00:00Z",
+            },
+            {
+                "ID": "m-fresh",
+                "LifecycleStatus": "active",
+                "TestStatus": "passing",
+                "RotatedAt": "2026-08-09T00:00:00Z",
+                "LastSeenInVaultAt": "2026-08-10T00:00:00Z",
+            },
+        ]
+    }
+    monkeypatch.setattr(fds, "_http_get", lambda url, key: rotated)
+    monkeypatch.setattr(
+        fds, "_http_post", lambda url, key: {"fields": {"host": "h", "password": "p"}}
+    )
+    _, cred_id = fds.resolve_managed("https://b", "k", "snowflake")
+    assert cred_id == "m-fresh"
+
+
+def test_resolve_managed_unrotated_entries_fall_back_to_last_seen(monkeypatch):
+    """Entries never rotated (RotatedAt null) rank below rotated ones and are
+    ordered among themselves by LastSeenInVaultAt (always populated)."""
+    items = {
+        "items": [
+            {
+                "ID": "m-old-seen",
+                "LifecycleStatus": "active",
+                "TestStatus": "passing",
+                "RotatedAt": None,
+                "LastSeenInVaultAt": "2026-08-01T00:00:00Z",
+            },
+            {
+                "ID": "m-new-seen",
+                "LifecycleStatus": "active",
+                "TestStatus": "passing",
+                "RotatedAt": None,
+                "LastSeenInVaultAt": "2026-08-10T00:00:00Z",
+            },
+        ]
+    }
+    monkeypatch.setattr(fds, "_http_get", lambda url, key: items)
+    monkeypatch.setattr(
+        fds, "_http_post", lambda url, key: {"fields": {"host": "h", "password": "p"}}
+    )
+    _, cred_id = fds.resolve_managed("https://b", "k", "snowflake")
+    assert cred_id == "m-new-seen"
 
 
 def test_resolve_managed_no_active_entry_errors(monkeypatch):

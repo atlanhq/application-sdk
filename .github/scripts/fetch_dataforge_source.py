@@ -15,9 +15,12 @@ two lookups:
 * ``managed`` mode — ``POST /api/v1/managed-credentials/{id}/reveal``, or when
   no id is pinned, ``GET /api/v1/managed-credentials?datasource=X`` filtered
   client-side to ``LifecycleStatus == "active"`` (the list endpoint does NOT
-  exclude decommissioned rows) preferring ``TestStatus == "passing"``, then
-  reveal. List items are PascalCase (the Go entity has no json tags);
-  ``RevealResult.fields`` is a flat, vault-controlled, free-form map.
+  exclude decommissioned rows), preferring ``TestStatus == "passing"`` and
+  then the *newest* entry (``RotatedAt`` descending, then
+  ``LastSeenInVaultAt`` descending — the ordering dataforge's own
+  credential-first router uses), then reveal. List items are PascalCase (the
+  Go entity has no json tags); ``RevealResult.fields`` is a flat,
+  vault-controlled, free-form map.
 
 Raw field names vary per source (SQL modules emit host/port/database/username/
 password; snowflake emits account/warehouse/…; powerbi emits tenant_id/
@@ -79,16 +82,53 @@ def _request(method: str, url: str, api_key: str) -> dict:
         with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 — https API host from trusted config
             return json.load(resp)
     except urllib.error.HTTPError as exc:
-        # Error bodies name the failure class (vault_disabled,
-        # vault_item_missing, …) and never contain credential values.
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8", "replace")[:500]
-        except Exception:  # noqa: S110 — pragma: no cover - best-effort detail
-            pass
+        # Do NOT echo the response body: nothing upstream enforces that a
+        # dataforge error payload can never embed a credential value, and this
+        # write happens before any masking exists. Log only the status plus a
+        # fixed, allowlisted failure class parsed from a known-safe field.
         raise DataforgeSourceError(
-            f"dataforge {method} {url.split('?')[0]} failed: HTTP {exc.code} {detail}"
+            f"dataforge {method} {url.split('?')[0]} failed: "
+            f"HTTP {exc.code} ({_error_class(exc)})"
         ) from exc
+
+
+# Allowlisted failure classes dataforge is known to return. Anything else —
+# including any body field that could carry a credential value — is collapsed
+# to "request_failed" so it can never reach stderr.
+_KNOWN_ERROR_CLASSES = frozenset(
+    {
+        "vault_disabled",
+        "vault_item_missing",
+        "credential_not_found",
+        "resource_not_found",
+        "not_provisioned",
+        "forbidden",
+        "unauthorized",
+        "bad_request",
+        "not_found",
+        "conflict",
+        "rate_limited",
+    }
+)
+
+
+def _error_class(exc: urllib.error.HTTPError) -> str:
+    """Extract a safe, allowlisted failure class from an HTTP error body.
+
+    Reads only a known-safe ``error``/``code`` field, matches it against an
+    allowlist, and returns ``request_failed`` for anything unrecognized — so a
+    credential-shaped value in an error body can never reach stderr.
+    """
+    try:
+        body = exc.read().decode("utf-8", "replace")
+        parsed = json.loads(body)
+    except Exception:  # noqa: S110 — non-JSON / unreadable body → generic class
+        return "request_failed"
+    candidate = ""
+    if isinstance(parsed, dict):
+        raw = parsed.get("error") or parsed.get("code") or ""
+        candidate = str(raw).strip().lower()
+    return candidate if candidate in _KNOWN_ERROR_CLASSES else "request_failed"
 
 
 def _http_get(url: str, api_key: str) -> dict:
@@ -122,6 +162,40 @@ def resolve_resource(base_url: str, api_key: str, resource_id: str) -> dict:
     return data
 
 
+def _recency_key(row: dict) -> tuple:
+    """Newest-first ordering for a managed-credential list row.
+
+    Mirrors dataforge's own credential-first router ordering
+    (``rotated_at DESC NULLS LAST, last_seen_in_vault_at DESC``) so the entry
+    this script picks is the same "newest active" one dataforge would propose.
+    A rotation repoints ``RotatedAt`` at the fresh entry, so sorting by it
+    first is what keeps a post-rotation lookup off the stale credential.
+    ``RotatedAt`` is null until the first rotation; ``LastSeenInVaultAt`` is
+    always populated, so it is the recency tiebreak (and the primary signal
+    for entries that have never been rotated). Missing/blank values sort
+    oldest. Returns a tuple ordered for ``sorted(..., reverse=True)``.
+    """
+    rotated = str(row.get("RotatedAt") or "")
+    seen = str(row.get("LastSeenInVaultAt") or "")
+    # has_rotated ranks any real RotatedAt above an absent one (NULLS LAST).
+    return (1 if rotated else 0, rotated, seen)
+
+
+def _select_credential(rows: list[dict]) -> str:
+    """Pick the credential ID the docs promise: the newest active entry.
+
+    Among the active rows, prefer one whose last connectivity test passed —
+    but never fail the lookup over TestStatus alone (untested is common for
+    fresh entries) — and within that group take the newest by recency, so a
+    rotation (which leaves the old + new entries both active and passing until
+    the old one is decommissioned) resolves to the fresh credential, not to
+    whichever the API happened to return first.
+    """
+    passing = [row for row in rows if row.get("TestStatus") == "passing"]
+    pool = passing if passing else rows
+    return max(pool, key=_recency_key)["ID"]
+
+
 def resolve_managed(
     base_url: str,
     api_key: str,
@@ -151,10 +225,7 @@ def resolve_managed(
                 + (f" instance={instance_name!r}" if instance_name else "")
                 + " — add one in the dataforge vault or pass a credential UUID"
             )
-        # Prefer entries whose last connectivity test passed; never fail the
-        # lookup over TestStatus alone (untested is common for fresh entries).
-        rows.sort(key=lambda row: 0 if row.get("TestStatus") == "passing" else 1)
-        credential_id = rows[0]["ID"]
+        credential_id = _select_credential(rows)
 
     reveal = _http_post(
         f"{base_url}/api/v1/managed-credentials/{credential_id}/reveal", api_key
