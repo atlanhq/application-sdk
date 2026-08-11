@@ -173,6 +173,13 @@ class _EnvelopeError(AppError):
     Routing (``category`` / ``audience``) is taken from the envelope, not from
     class-level constants, so a newer producer's verdict keeps its original
     routing instead of degrading to ``INTERNAL`` / ``APP_OWNER``.
+
+    ``category`` / ``audience`` are instance values here, but the base
+    ``to_failure_details()`` reads ``audience`` class-level
+    (``type(self).audience``) — which would return the raw ``property`` object
+    on this subclass and fail validation. The serializer is therefore
+    overridden to read both instance-level, so a reconstructed unknown-code
+    error round-trips.
     """
 
     category_override: FailureCategory
@@ -185,6 +192,27 @@ class _EnvelopeError(AppError):
     @property
     def audience(self) -> Audience:  # type: ignore[override]
         return self.audience_override
+
+    def to_failure_details(self) -> FailureDetails:
+        # ``category_override`` / ``audience_override`` carry routing, not
+        # evidence — exclude them alongside the base fields.
+        evidence: dict[str, Any] = {
+            f.name: getattr(self, f.name)
+            for f in dataclasses.fields(self)
+            if f.name not in _BASE_ERROR_FIELD_NAMES
+            and f.name not in ("category_override", "audience_override")
+        }
+        return FailureDetails(
+            category=self.category,
+            code=self.code,
+            retryable=self.effective_retryable,
+            audience=self.audience,
+            message=self.message,
+            suggested_action=self.suggested_action,
+            evidence=evidence,
+            app_name=self.app_name,
+            run_id=self.run_id,
+        )
 
 
 def _root_cause(exc: BaseException) -> BaseException:

@@ -2525,6 +2525,36 @@ class TestPrimeFailureClassification:
         assert err.effective_retryable is True
         assert err.message == "from a newer SDK"
 
+    def test_unknown_wire_code_reconstruction_round_trips(self):
+        """Regression: the base ``to_failure_details()`` reads ``audience``
+        class-level (``type(self).audience``), which returns the raw property
+        object on the reconstruction leaf and raises ValidationError on
+        serialize. The reconstructed unknown-code error must serialise back to
+        an envelope that keeps category / audience / retryable."""
+        from application_sdk.errors.categories import Audience, FailureCategory
+        from application_sdk.errors.wire import FailureDetails
+
+        unknown = PrimeAuthOutput(
+            success=False,
+            failure=FailureDetails(
+                category=FailureCategory.SOURCE_UNAVAILABLE,
+                code="SOME_FUTURE_CODE",
+                retryable=True,
+                audience=Audience.USER,
+                message="from a newer SDK",
+            ),
+        )
+
+        err = SqlApp._classify_prime_failure(unknown)
+        details = err.to_failure_details()
+
+        assert details.category is FailureCategory.SOURCE_UNAVAILABLE
+        assert details.audience is Audience.USER
+        assert details.retryable is True
+        # And the re-serialised envelope reconstructs to the same routing.
+        assert err.category is details.category
+        assert err.audience is details.audience
+
     async def test_unserialisable_verdict_does_not_crash_the_probe(self):
         """A crashed prime activity is retried, and retrying is what stacks
         ``failed_login_attempts`` on the source — the exact cycle this task
