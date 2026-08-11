@@ -259,6 +259,7 @@ def test_connector_tests_only_reacts_to_the_e2e_label_being_added() -> None:
                 **_CHANGES_SDK,
                 "matrix-builder": {"result": "success"},
                 "build-sdk-base-image": {"result": "success"},
+                "merge-sdk-base-image": {"result": "success"},
             }
         },
     )
@@ -304,6 +305,7 @@ def test_the_merge_queue_path_is_unaffected_by_the_label_term(job: str) -> None:
             "matrix-builder": {"result": "success"},
             # Skipped on the merge-queue path — the gate tolerates that by design.
             "build-sdk-base-image": {"result": "skipped"},
+            "merge-sdk-base-image": {"result": "skipped"},
         },
     }
     assert evaluate(_gate("pull_request.yaml", job), contexts) is True
