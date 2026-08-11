@@ -27,7 +27,7 @@ if importlib.util.find_spec("psycopg2") is not None:
 
     _PRISTINE_PSYCOPG2_ENCODINGS: dict[str, str] | None = dict(_psycopg2_ext.encodings)
 else:  # psycopg2 is a test-only dep; tolerate interpreters without a wheel
-    _psycopg2_ext = None  # type: ignore[assignment]
+    _psycopg2_ext = None  # type: ignore[assignment]  # — sentinel for "driver not installed": None is not a module
     _PRISTINE_PSYCOPG2_ENCODINGS = None
 
 

@@ -52,8 +52,8 @@ if _HAS_PSYCOPG2:
     import psycopg2._psycopg as _real_psycopg2_c
     import psycopg2.extensions as _real_psycopg2_ext
 else:  # pragma: no cover — psycopg2 is a test dep; only missing without a wheel
-    _real_psycopg2_c = None  # type: ignore[assignment]
-    _real_psycopg2_ext = None  # type: ignore[assignment]
+    _real_psycopg2_c = None  # type: ignore[assignment]  # — sentinel for "driver not installed": None is not a module
+    _real_psycopg2_ext = None  # type: ignore[assignment]  # — sentinel for "driver not installed": None is not a module
 
 
 @pytest.fixture(autouse=True)
@@ -177,6 +177,19 @@ class TestReplacementObservability:
         for leaked in ("ssn", "patients", "Ann", "SELECT"):
             assert leaked not in message
 
+    def test_no_nonascii_query_text_reaches_the_log(self) -> None:
+        # 'José' is valid UTF-8 (é = 0xC3 0xA9) sitting next to the bad byte —
+        # real PII. Its bytes must be masked, not echoed as \xNN, or the excerpt
+        # recovers the name.
+        with patch.object(sql_typecasters, "logger") as mock_logger:
+            _decode_tolerant_utf8(b"WHERE name='Jos\xc3\xa9 \x96 Q2'")
+
+        message = _warnings(mock_logger)[0]
+        assert "\\xc3" not in message
+        assert "\\xa9" not in message
+        assert "Jos" not in message
+        assert "[\\x96]" in message  # the offending byte itself stays visible
+
 
 class TestRedactedExcerpt:
     """The log excerpt must be diagnostic without leaking query text."""
@@ -199,11 +212,15 @@ class TestRedactedExcerpt:
         excerpt = _redacted_excerpt(b"= 'x\x96y'", 4)
         assert "'" in excerpt
 
-    def test_shows_neighbouring_high_bytes_as_hex(self) -> None:
-        # The tell for a wholesale Windows-1252 column: a run of high bytes.
+    def test_masks_neighbouring_high_bytes_but_keeps_their_count(self) -> None:
+        # Neighbour values are content (a valid UTF-8 sequence next to the bad
+        # byte is customer data), so they must not be recoverable — but the
+        # *count* of high bytes is the tell for a wholesale Windows-1252 column,
+        # so each one still renders as a fixed placeholder.
         excerpt = _redacted_excerpt(b"a\x92b\x96c\x93d", 3)
-        assert "\\x92" in excerpt
-        assert "\\x93" in excerpt
+        assert excerpt == "a\\x??a[\\x96]a\\x??a"
+        assert "\\x92" not in excerpt
+        assert "\\x93" not in excerpt
 
     def test_elides_around_a_long_value(self) -> None:
         raw = b"x" * 100 + b"\x96" + b"y" * 100
@@ -233,7 +250,7 @@ class TestAttachPsycopg3:
         ConnClass = type("Connection", (), {})
         ConnClass.__module__ = "psycopg.connection"
         conn = ConnClass()
-        conn.adapters = fake_adapters  # type: ignore[attr-defined]
+        conn.adapters = fake_adapters  # type: ignore[attr-defined]  # — attribute injected onto a dynamically-built fake connection class
 
         attached = attach_tolerant_text_decoder(conn)
         assert attached is True
@@ -258,9 +275,7 @@ class TestAttachPsycopg3:
         ConnClass = type("Connection", (), {})
         ConnClass.__module__ = "psycopg.connection"
         conn = ConnClass()
-        conn.adapters = fake_adapters  # type: ignore[attr-defined]
-
-        attach_tolerant_text_decoder(conn)
+        conn.adapters = fake_adapters  # type: ignore[attr-defined]  # — attribute injected onto a dynamically-built fake connection class
         loader_cls = fake_adapters.register_loader.call_args_list[0].args[1]
 
         # Loader.__init__ wants (oid, context); context can be None.
@@ -339,9 +354,12 @@ class TestConnectionLevelDecoder:
         :class:`TestRealPsycopg2Premises` pins the ones that matter against the
         installed driver where there is one.
         """
+        self._saved_sys_modules = {
+            name: sys.modules.get(name) for name in ("psycopg2", "psycopg2.extensions")
+        }
         fake_pkg = types.ModuleType("psycopg2")
         fake_ext = types.ModuleType("psycopg2.extensions")
-        fake_ext.encodings = {  # type: ignore[attr-defined]
+        fake_ext.encodings = {  # type: ignore[attr-defined]  # — attribute injected onto a dynamically-built fake psycopg2 module
             "UNICODE": "utf_8",
             "UTF8": "utf_8",
             "LATIN1": "iso8859_1",
@@ -351,14 +369,21 @@ class TestConnectionLevelDecoder:
             "EUC_JP": "euc_jp",
             "BIG5": "big5",
         }
-        fake_pkg.extensions = fake_ext  # type: ignore[attr-defined]
+        fake_pkg.extensions = fake_ext  # type: ignore[attr-defined]  # — attribute injected onto a dynamically-built fake psycopg2 module
         sys.modules["psycopg2"] = fake_pkg
         sys.modules["psycopg2.extensions"] = fake_ext
         return fake_ext
 
     def teardown_method(self) -> None:
-        sys.modules.pop("psycopg2", None)
-        sys.modules.pop("psycopg2.extensions", None)
+        # Restore the prior entries rather than popping: a pop leaves a hole a
+        # later ``import psycopg2`` fills with a fresh module object — and a
+        # fresh ``encodings`` dict — which would break the dict identity the
+        # directory conftest's snapshot/restore depends on.
+        for name, original in getattr(self, "_saved_sys_modules", {}).items():
+            if original is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original
 
     @staticmethod
     def _conn_decode(encodings: dict[str, str], pg_encoding: str, raw: bytes) -> str:
@@ -376,7 +401,7 @@ class TestConnectionLevelDecoder:
         fake_ext = self._install_fake_psycopg2()
         with pytest.raises(UnicodeDecodeError) as exc:
             self._conn_decode(
-                fake_ext.encodings,  # type: ignore[attr-defined]
+                fake_ext.encodings,  # type: ignore[attr-defined]  # — set dynamically on the fake module by _install_fake_psycopg2
                 self._REDSHIFT_PG_ENCODING,
                 self._RAW,
             )
@@ -393,7 +418,7 @@ class TestConnectionLevelDecoder:
         install_tolerant_text_decoder_hook(MagicMock())
 
         decoded = self._conn_decode(
-            fake_ext.encodings,  # type: ignore[attr-defined]
+            fake_ext.encodings,  # type: ignore[attr-defined]  # — set dynamically on the fake module by _install_fake_psycopg2
             self._REDSHIFT_PG_ENCODING,
             self._RAW,
         )
@@ -403,8 +428,8 @@ class TestConnectionLevelDecoder:
     def test_installer_reports_and_rewrites_utf8_entries(self) -> None:
         fake_ext = self._install_fake_psycopg2()
         assert install_tolerant_connection_decoder() is True
-        assert fake_ext.encodings["UNICODE"] == _TOLERANT_CODEC_NAME  # type: ignore[attr-defined]
-        assert fake_ext.encodings["UTF8"] == _TOLERANT_CODEC_NAME  # type: ignore[attr-defined]
+        assert fake_ext.encodings["UNICODE"] == _TOLERANT_CODEC_NAME  # type: ignore[attr-defined]  # — set dynamically on the fake module by _install_fake_psycopg2
+        assert fake_ext.encodings["UTF8"] == _TOLERANT_CODEC_NAME  # type: ignore[attr-defined]  # — set dynamically on the fake module by _install_fake_psycopg2
 
     def test_valid_utf8_is_not_mojibaked(self) -> None:
         """The latin1 workaround would yield 'Ã©'; tolerant UTF-8 must keep 'é'."""
@@ -412,7 +437,7 @@ class TestConnectionLevelDecoder:
         install_tolerant_connection_decoder()
         assert (
             self._conn_decode(
-                fake_ext.encodings,  # type: ignore[attr-defined]
+                fake_ext.encodings,  # type: ignore[attr-defined]  # — set dynamically on the fake module by _install_fake_psycopg2
                 self._REDSHIFT_PG_ENCODING,
                 b"caf\xc3\xa9",
             )
@@ -423,13 +448,13 @@ class TestConnectionLevelDecoder:
         """Outgoing SQL must not change: only the decoder is tolerant."""
         fake_ext = self._install_fake_psycopg2()
         install_tolerant_connection_decoder()
-        encoder = codecs.getencoder(fake_ext.encodings["UNICODE"])  # type: ignore[attr-defined]
+        encoder = codecs.getencoder(fake_ext.encodings["UNICODE"])  # type: ignore[attr-defined]  # — set dynamically on the fake module by _install_fake_psycopg2
         assert encoder("café – Q1")[0] == "café – Q1".encode()
 
     def test_non_utf8_mappings_are_left_alone(self) -> None:
         fake_ext = self._install_fake_psycopg2()
         install_tolerant_connection_decoder()
-        encodings = fake_ext.encodings  # type: ignore[attr-defined]
+        encodings = fake_ext.encodings  # type: ignore[attr-defined]  # — set dynamically on the fake module by _install_fake_psycopg2
         assert encodings["LATIN1"] == "iso8859_1"
         assert encodings["LATIN9"] == "iso8859_15"
         assert encodings["SQL_ASCII"] == "ascii"

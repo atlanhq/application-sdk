@@ -111,12 +111,16 @@ def _redacted_excerpt(data: bytes, offset: int) -> str:
 
     ASCII letters collapse to ``a``/``A`` and digits to ``0``, so identifiers,
     literals and any customer-identifying value are destroyed while the *shape*
-    survives. Punctuation is structural and kept; every non-ASCII byte is shown
-    as ``\\xNN``. The offending byte is bracketed.
+    survives. Punctuation is structural and kept. Only the bracketed offending
+    byte is rendered as its exact ``\\xNN`` value — it is already unrecoverable
+    from the decoded text, so revealing it leaks nothing.
 
-    That is exactly the signal needed to tell the two cases apart: a lone
-    ``[\\x96]`` surrounded by masked ASCII is one stray byte, whereas a run of
-    ``\\x92 \\x93 \\xe9`` neighbours means the column was Windows-1252 all along.
+    Every *other* non-ASCII byte renders as the fixed token ``\\x??``: a valid
+    UTF-8 multi-byte sequence next to the bad byte is customer content (``é`` in
+    a name), so its value must not reach the log — but the *count* of high bytes
+    is kept, because that is the tell for a wholesale Windows-1252 column: one
+    lone ``[\\x96]`` in masked ASCII is a stray byte, whereas a run of ``\\x??``
+    neighbours means the column was never UTF-8.
     """
     start = max(0, offset - _EXCERPT_WINDOW)
     end = min(len(data), offset + _EXCERPT_WINDOW + 1)
@@ -136,8 +140,8 @@ def _redacted_excerpt(data: bytes, offset: int) -> str:
             rendered.append(" ")
         elif byte < 0x80:  # ASCII punctuation — structural, not content
             rendered.append(chr(byte))
-        else:
-            rendered.append(f"\\x{byte:02x}")
+        else:  # non-ASCII neighbour — value is content; only the count matters
+            rendered.append("\\x??")
 
     prefix = "…" if start > 0 else ""
     suffix = "…" if end < len(data) else ""
