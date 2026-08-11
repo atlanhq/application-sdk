@@ -250,7 +250,54 @@ def test_prepare_tenant_is_gated_on_the_lease(jobs: dict) -> None:  # type: igno
     # Installing without the lease is precisely the race the lease closes, so
     # this is a gate and not merely an ordering edge.
     assert "lease-tenant" in jobs["prepare-tenant"]["needs"]
-    assert "needs.lease-tenant.result == 'success'" in jobs["prepare-tenant"]["if"]
+    assert "needs.lease-tenant.result != 'skipped'" in jobs["prepare-tenant"]["if"]
+
+
+def test_prepare_tenant_confirms_its_own_clouds_lease_before_installing(
+    jobs: dict,  # type: ignore[type-arg]
+) -> None:
+    """The job's `if:` can only see the lease matrix AGGREGATE, so it cannot tell
+    "my cloud's lease succeeded" from "some cloud's did". Observed live: one
+    cloud's acquire failed on a transient TLS error and the aggregate skipped the
+    install for the two clouds whose leases HAD been taken — a run holding two
+    tenants that installed onto neither.
+
+    So the gate is widened to "the lease job ran" and each leg confirms its own
+    tenant. That verify step must come FIRST, before anything touches the tenant.
+    """
+    steps = jobs["prepare-tenant"]["steps"]
+    first = steps[0]
+    assert "e2e-tenant-lease" in str(first.get("uses", "")), (
+        "prepare-tenant's first step must confirm this leg holds its cloud's "
+        "lease; anything before it runs against an unverified tenant"
+    )
+    assert first["with"]["mode"] == "verify"
+    assert first["with"]["cloud"] == "${{ matrix.cloud }}"
+    assert first["with"]["app"] == "${{ inputs.app-name }}"
+
+
+@pytest.mark.parametrize(
+    ("lease_result", "should_install"),
+    [
+        ("success", True),
+        # The case that was broken: another cloud's lease failed. This leg must
+        # still get the chance to install, and its verify step decides.
+        ("failure", True),
+        ("skipped", False),
+    ],
+)
+def test_install_runs_whenever_the_lease_job_ran(
+    lease_result: str, should_install: bool
+) -> None:
+    expression = _load_gate("prepare-tenant")
+    contexts = {
+        "inputs": {"install-app-to-tenant": True},
+        "needs": {
+            "merge-e2e-image": {"result": "success"},
+            "lease-tenant": {"result": lease_result},
+        },
+    }
+    assert evaluate(expression, contexts) is should_install
 
 
 def test_the_legs_refuse_to_run_on_a_failed_lease(jobs: dict) -> None:  # type: ignore[type-arg]

@@ -20,7 +20,15 @@ description: |
 
 inputs:
   mode:
-    description: '"acquire" or "release".'
+    description: |
+      "acquire", "verify" or "release".
+
+      "verify" confirms this run currently holds the lease and fails the step if
+      not. It exists because a matrix job cannot depend on its own leg of an
+      upstream matrix job — `needs.lease-tenant.result` is the AGGREGATE across
+      clouds, so it says "some cloud's lease succeeded", never "mine did". The
+      install therefore gates on the lease job having RUN and confirms its own
+      tenant with this.
     required: true
   app:
     description: App under test; one half of the lease key.
@@ -106,7 +114,7 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: ${{ inputs.mode == 'release' && 'Release' || 'Acquire' }} the tenant lease
+    - name: ${{ inputs.mode == 'release' && 'Release' || inputs.mode == 'verify' && 'Confirm' || 'Acquire' }} the tenant lease
       id: lease
       shell: bash
       # Inputs routed through env rather than inline ${{ }} so nothing

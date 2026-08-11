@@ -1134,9 +1134,17 @@ jobs:
   prepare-tenant:
     name: Prepare tenant (${{ matrix.cloud || 'default' }})
     needs: [discover-e2e, merge-e2e-image, lease-tenant]
-    # lease-tenant gates the install rather than merely preceding it: installing
-    # without the lease is the race this whole path exists to close.
-    if: inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success' && needs.lease-tenant.result == 'success'
+    # Gated on lease-tenant having RUN, not on it having succeeded, and then each
+    # leg confirms its OWN cloud's lease in its first step.
+    #
+    # `needs.lease-tenant.result` is the matrix AGGREGATE, so `== 'success'` means
+    # "some cloud's lease succeeded", never "this leg's did". Observed live: one
+    # cloud's acquire failed on a transient TLS error and the aggregate then
+    # skipped the install for the two clouds whose leases HAD been taken — a run
+    # holding two tenants that installed onto neither. Widening the gate and
+    # verifying per-leg makes the precondition true per cloud instead of
+    # approximately true across clouds.
+    if: inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success' && needs.lease-tenant.result != 'skipped'
     strategy:
       # One cloud's tenant being uninstallable must not cancel the others; the
       # legs for that cloud fail on their own version check.
@@ -1186,6 +1194,18 @@ jobs:
       FALLBACK_SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
       FALLBACK_ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
     steps:
+      # FIRST, before anything touches the tenant: confirm THIS leg holds THIS
+      # cloud's lease. The job's `if:` can only see the lease matrix aggregate, so
+      # it cannot tell "my cloud's lease succeeded" from "some cloud's did" — this
+      # is what makes the install's precondition true per cloud. Fails the leg
+      # rather than installing into a race.
+      - name: Confirm this run holds the tenant lease
+        uses: atlanhq/application-sdk/.github/actions/e2e-tenant-lease@main
+        with:
+          mode: verify
+          app: ${{ inputs.app-name }}
+          cloud: ${{ matrix.cloud }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

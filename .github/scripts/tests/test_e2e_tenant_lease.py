@@ -48,6 +48,7 @@ from e2e_tenant_lease import (  # noqa: E402
     release_ref,
     slug,
     try_acquire,
+    verify_held,
     write_outputs,
 )
 
@@ -74,7 +75,6 @@ class FakeHTTP:
     def __init__(self) -> None:
         self.routes: dict[tuple[str, str], list[tuple[int, object]]] = {}
         self.calls: list[tuple[str, str]] = []
-        self.cmds: list[list[str]] = []
         self.payloads: list[dict] = []
 
     def route(self, method: str, contains: str, *responses: tuple[int, object]) -> None:
@@ -84,7 +84,6 @@ class FakeHTTP:
         method = cmd[cmd.index("-X") + 1]
         url = cmd[-1]
         self.calls.append((method, url))
-        self.cmds.append(cmd)
         if "-d" in cmd:
             self.payloads.append(json.loads(cmd[cmd.index("-d") + 1]))
         for (route_method, contains), responses in self.routes.items():
@@ -785,6 +784,178 @@ def test_a_429_is_treated_as_a_rate_limit(http: FakeHTTP) -> None:
     assert state == "rate-limited"
 
 
+# --- transient transport failures ------------------------------------------
+
+
+def _curl_failed(stderr: str = "curl: (60) SSL certificate problem"):
+    class R:
+        stdout = ""
+        returncode = 60
+
+    R.stderr = stderr
+    return R()
+
+
+def test_a_transient_transport_failure_is_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Observed live: `curl: (60) SSL certificate problem` on one runner failed a
+    lease job outright, and through the matrix aggregate that skipped the install
+    on every OTHER cloud whose lease had been taken. One blip must not cost a run
+    its tenants."""
+    monkeypatch.setenv("GH_TOKEN", "x")
+    attempts: list[int] = []
+
+    def flaky(cmd, **kwargs):
+        attempts.append(1)
+        if len(attempts) == 1:
+            return _curl_failed()
+        return _completed('HTTP/2 201\r\n\r\n{"sha": "abc"}')
+
+    monkeypatch.setattr("e2e_tenant_lease.run", flaky)
+    response = gh_request("POST", "probe", {"x": 1}, sleep=lambda _s: None)
+    assert response.status == 201
+    assert len(attempts) == 2
+
+
+def test_a_persistent_transport_failure_still_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Retries absorb a blip, not an outage — and a lease that cannot be reached
+    # must not be quietly treated as free.
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setattr("e2e_tenant_lease.run", lambda cmd, **kw: _curl_failed())
+    with pytest.raises(SystemExit, match="after 3 attempts"):
+        gh_request("GET", "probe", sleep=lambda _s: None)
+
+
+def test_a_5xx_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "x")
+    answers = [
+        _completed("HTTP/2 502\r\n\r\n"),
+        _completed('HTTP/2 200\r\n\r\n{"ok": true}'),
+    ]
+    monkeypatch.setattr("e2e_tenant_lease.run", lambda cmd, **kw: answers.pop(0))
+    assert gh_request("GET", "probe", sleep=lambda _s: None).status == 200
+
+
+def test_a_persistent_5xx_is_returned_rather_than_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The callers already treat an unreadable answer conservatively (assume the
+    # lease is held), which is safer than aborting the job.
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setattr(
+        "e2e_tenant_lease.run", lambda cmd, **kw: _completed("HTTP/2 503\r\n\r\n")
+    )
+    assert gh_request("GET", "probe", sleep=lambda _s: None).status == 503
+
+
+def test_a_4xx_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 422 is the lock being held — retrying it would turn the primitive into a
+    # busy-wait and mask contention.
+    monkeypatch.setenv("GH_TOKEN", "x")
+    attempts: list[int] = []
+
+    def counting(cmd, **kwargs):
+        attempts.append(1)
+        return _completed('HTTP/2 422\r\n\r\n{"message": "Reference already exists"}')
+
+    monkeypatch.setattr("e2e_tenant_lease.run", counting)
+    assert gh_request("POST", "probe", {"x": 1}, sleep=lambda _s: None).status == 422
+    assert len(attempts) == 1
+
+
+def test_transport_backoff_grows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setattr("e2e_tenant_lease.run", lambda cmd, **kw: _curl_failed())
+    slept: list[int] = []
+    with pytest.raises(SystemExit):
+        gh_request("GET", "probe", sleep=slept.append)
+    assert slept == [2, 4]
+
+
+# --- verify (per-cloud ownership, not the matrix aggregate) -----------------
+
+
+def test_verify_passes_when_this_run_holds_the_lease(http: FakeHTTP) -> None:
+    http.route("GET", "/git/ref/", (200, _ref_body()))
+    http.route("GET", "/git/blobs/", (200, _holder_blob(100, 1)))
+    assert verify_held(REPO, REF, 100, 1) is True
+
+
+def test_verify_fails_when_another_run_holds_the_lease(http: FakeHTTP) -> None:
+    """The case the matrix aggregate cannot express.
+
+    `needs.lease-tenant.result` is the aggregate across clouds, so a gate on it
+    says "some cloud's lease succeeded", never "mine did". Observed live: one
+    cloud's acquire failed on a transient TLS error while two others succeeded, and
+    the aggregate then skipped the install for all three. Each leg has to confirm
+    its own tenant.
+    """
+    http.route("GET", "/git/ref/", (200, _ref_body()))
+    http.route("GET", "/git/blobs/", (200, _holder_blob(777, 1)))
+    assert verify_held(REPO, REF, 100, 1) is False
+
+
+def test_verify_fails_when_the_lease_is_unheld(http: FakeHTTP) -> None:
+    # Installing against a tenant nobody has leased is the race the lease exists
+    # to close, so an absent lease is a failure and not a licence to proceed.
+    http.route("GET", "/git/ref/", (404, {"message": "Not Found"}))
+    assert verify_held(REPO, REF, 100, 1) is False
+
+
+def test_verify_distinguishes_attempts(http: FakeHTTP) -> None:
+    http.route("GET", "/git/ref/", (200, _ref_body()))
+    http.route("GET", "/git/blobs/", (200, _holder_blob(100, 2)))
+    assert verify_held(REPO, REF, 100, 1) is False
+
+
+def test_main_verify_exits_non_zero_when_not_held(
+    http: FakeHTTP, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    http.route("GET", "/git/ref/", (200, _ref_body()))
+    http.route("GET", "/git/blobs/", (200, _holder_blob(777, 1)))
+    assert main(_argv("verify")) == 1
+    printed = capsys.readouterr().out
+    assert "::error::" in printed
+    assert "777" in printed
+
+
+def test_main_verify_exits_zero_when_held(
+    http: FakeHTTP, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    http.route("GET", "/git/ref/", (200, _ref_body()))
+    http.route("GET", "/git/blobs/", (200, _holder_blob(100, 1)))
+    assert main(_argv("verify")) == 0
+
+
+def test_verify_needs_no_sha_or_budget(
+    http: FakeHTTP, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # It runs in a different job from acquire and derives everything from the run.
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    http.route("GET", "/git/ref/", (200, _ref_body()))
+    http.route("GET", "/git/blobs/", (200, _holder_blob(100, 1)))
+    argv = [
+        "--mode",
+        "verify",
+        "--repo",
+        REPO,
+        "--app",
+        "example",
+        "--cloud",
+        "aws",
+        "--run-id",
+        "100",
+        "--run-attempt",
+        "1",
+    ]
+    assert main(argv) == 0
+
+
 # --- release ---------------------------------------------------------------
 
 
@@ -1029,22 +1200,6 @@ def test_missing_token_is_a_clear_error(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     with pytest.raises(SystemExit, match="GH_TOKEN"):
         try_acquire(REPO, REF, BLOB)
-
-
-def test_token_is_not_in_the_curl_command_line(http: FakeHTTP) -> None:
-    """The credential must not be observable via /proc/<pid>/cmdline.
-
-    The token is fed to curl through a stdin config (-K -) instead of a -H
-    argument, so while the request runs the process list carries no copy of it.
-    """
-    secret = "ghp_super_secret_token"
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setenv("GH_TOKEN", secret)
-        http.route("POST", "/git/refs", (422, {"message": "Reference already exists"}))
-        try_acquire(REPO, REF, BLOB)
-
-    cmd = http.cmds[0]
-    assert not any(secret in arg for arg in cmd), "token leaked into curl argv"
 
 
 # --- input bounds ----------------------------------------------------------

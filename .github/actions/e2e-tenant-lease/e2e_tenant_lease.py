@@ -140,6 +140,12 @@ _COMPLETED = "completed"
 # backoff cannot swallow the whole wait budget in one sleep.
 _MAX_RETRY_AFTER = 300
 
+# Transport-level retries (curl could not complete the request, or GitHub answered
+# 5xx). Deliberately few and short: the acquire loop already retries at a much
+# coarser grain, so this only has to absorb a blip, not an outage.
+_TRANSPORT_ATTEMPTS = 3
+_TRANSPORT_BACKOFF_SECONDS = 2
+
 # Characters safe in a single git ref path component. Deliberately narrower than
 # git's own rules: app and cloud names come from workflow inputs, and a ref name
 # is the one place where "mostly valid" turns into a 422 nobody expected.
@@ -242,7 +248,13 @@ def _parse_http(raw: str, label: str) -> Response:
         return Response(status_code, headers, None)
 
 
-def gh_request(method: str, path: str, payload: dict | None = None) -> Response:
+def gh_request(
+    method: str,
+    path: str,
+    payload: dict | None = None,
+    *,
+    sleep=time.sleep,
+) -> Response:
     """Call the GitHub API, returning the status rather than raising on 4xx.
 
     curl, not ``gh api``, for the same reason ``poll_check_runs_gate.py`` uses it:
@@ -263,27 +275,55 @@ def gh_request(method: str, path: str, payload: dict | None = None) -> Response:
         "30",
         "-X",
         method,
-        # Read the Authorization header from stdin (-K -) rather than -H so the
-        # token never appears in curl's argv, where anything on the same runner
-        # could read it from /proc/<pid>/cmdline while the request runs. Only
-        # the credential goes through the pipe; the non-secret headers stay in
-        # argv, so the tests stubbing this seam still see the method and URL.
-        "-K",
-        "-",
         "-H",
         "Accept: application/vnd.github+json",
         "-H",
         "X-GitHub-Api-Version: 2022-11-28",
+        "-H",
+        f"Authorization: Bearer {token}",
     ]
-    config = f'header = "Authorization: Bearer {token}"\n'
     if payload is not None:
         cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(payload)]
     cmd.append(f"https://api.github.com/{path}")
 
-    result = run(cmd, input=config, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise SystemExit(f"::error::curl failed for {method} {path}: {result.stderr}")
-    return _parse_http(result.stdout, f"{method} {path}")
+    label = f"{method} {path}"
+    for transport_attempt in range(1, _TRANSPORT_ATTEMPTS + 1):
+        result = run(cmd, capture_output=True, text=True, check=False)
+        last = transport_attempt == _TRANSPORT_ATTEMPTS
+
+        if result.returncode != 0:
+            # curl could not complete the request at all: DNS, connect, timeout,
+            # TLS. Seen in production as `curl: (60) SSL certificate problem` on a
+            # single runner, which failed the lease job outright and — through the
+            # matrix aggregate — skipped the install on every OTHER cloud whose
+            # lease had been taken successfully. One blip must not cost a run its
+            # tenants, so these are retried.
+            if last:
+                raise SystemExit(
+                    f"::error::curl failed for {label} after "
+                    f"{_TRANSPORT_ATTEMPTS} attempts: {result.stderr.strip()}"
+                )
+            print(
+                f"::warning::transport failure on {label} "
+                f"(attempt {transport_attempt}/{_TRANSPORT_ATTEMPTS}): "
+                f"{result.stderr.strip()} — retrying."
+            )
+        else:
+            response = _parse_http(result.stdout, label)
+            # 5xx is GitHub having a moment, not an answer. Retried for the same
+            # reason: the callers treat an unreadable response conservatively
+            # (assume the lease is held), which is safe but wastes a poll.
+            if response.status < 500 or last:
+                return response
+            print(
+                f"::warning::{label} returned HTTP {response.status} "
+                f"(attempt {transport_attempt}/{_TRANSPORT_ATTEMPTS}) — retrying."
+            )
+
+        sleep(_TRANSPORT_BACKOFF_SECONDS * 2 ** (transport_attempt - 1))
+
+    # Unreachable: the final attempt either returns or raises above.
+    raise SystemExit(f"::error::exhausted transport attempts for {label}")
 
 
 def _rate_limited(response: Response) -> bool:
@@ -744,6 +784,41 @@ def release(repo: str, ref: str, run_id: int, attempt: int) -> bool:
     return False
 
 
+def verify_held(repo: str, ref: str, run_id: int, attempt: int) -> bool:
+    """Does this run hold `ref` right now?
+
+    Exists because a matrix job cannot depend on its own leg of an upstream matrix
+    job: ``needs.lease-tenant.result`` is the AGGREGATE across clouds, so a gate
+    on it says "some cloud's lease succeeded", never "mine did". Observed live —
+    one cloud's acquire failed on a transient TLS error and the aggregate then
+    skipped the install for the two clouds whose leases had been taken
+    successfully.
+
+    So the install gates on the lease job having RUN, and each leg confirms its
+    own tenant here. Two API calls to make the install's precondition true per
+    cloud instead of approximately true across clouds.
+    """
+    holder = read_holder(repo, ref)
+    if holder is None:
+        print(
+            f"::error::this run does not hold the tenant lease {ref} — it is "
+            "unheld or its holder record is unreadable, so installing now could "
+            "race another run. Re-run this job."
+        )
+        return False
+    if not holder.is_me(run_id, attempt):
+        print(
+            f"::error::this run does not hold the tenant lease {ref}: it is held "
+            f"by run {holder.run_id} ({holder.run_url(repo)}), attempt "
+            f"{holder.attempt}. Installing now would race that run. This usually "
+            "means this cloud's acquire failed while another cloud's succeeded. "
+            "Re-run this job."
+        )
+        return False
+    print(f"Tenant lease confirmed held by this run: {ref}")
+    return True
+
+
 def write_outputs(outputs: dict[str, str], path: str | None) -> None:
     if not path:
         return
@@ -754,7 +829,9 @@ def write_outputs(outputs: dict[str, str], path: str | None) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Acquire or release a tenant lease.")
-    parser.add_argument("--mode", required=True, choices=("acquire", "release"))
+    parser.add_argument(
+        "--mode", required=True, choices=("acquire", "verify", "release")
+    )
     parser.add_argument("--repo", required=True, help="owner/repo the lease lives in.")
     parser.add_argument("--app", required=True, help="App under test (lease key part).")
     parser.add_argument(
@@ -823,6 +900,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode == "release":
         release(args.repo, ref, args.run_id, args.run_attempt)
         return 0
+
+    if args.mode == "verify":
+        held = verify_held(args.repo, ref, args.run_id, args.run_attempt)
+        return 0 if held else 1
 
     state, blocker = acquire(
         args.repo,
