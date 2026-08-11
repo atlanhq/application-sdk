@@ -255,15 +255,23 @@ while not stop_event.is_set():
 
     stalled = progress.stalled_for()
     if budget_seconds is not None and stalled >= budget_seconds:
-        logger.warning(
-            "Task '%s' made no observable progress for %.0fs (budget %.0fs); last "
-            "signal was '%s'%s",
-            task_name, stalled, budget_seconds, progress.last_label or "<none>",
-            " — failing the activity" if mode is Mode.ENFORCE else " (warn mode: not failing)",
-        )
+        # Always a metric; the log level differs by mode. In warn mode this is an
+        # expected observation on a fleet-wide default, so it must NOT be WARNING
+        # — see "Warn mode is the default".
+        _no_progress_gap.record(stalled, task=task_name, label=progress.last_label)
         if mode is Mode.ENFORCE:
+            logger.warning(
+                "Task '%s' made no observable progress for %.0fs (budget %.0fs); "
+                "last signal was '%s' — failing the activity",
+                task_name, stalled, budget_seconds, progress.last_label or "<none>",
+            )
             on_stall(stalled, progress.last_label)
             return   # cancel-and-return: the activity's finally awaits this task
+        logger.info(
+            "Task '%s' made no observable progress for %.0fs (budget %.0fs); last "
+            "signal was '%s' — not failing (warn mode)",
+            task_name, stalled, budget_seconds, progress.last_label or "<none>",
+        )
         progress.mark_progress()   # re-arm so warn mode reports each gap once
 ```
 
@@ -280,9 +288,10 @@ a per-site number, guessed up front, by hand.
 
 So the flag has **three states, not two** — `off`, `warn`, `enforce`:
 
-- **`off`** — hooks are inert, nothing observes anything. Behaviour identical to today.
-- **`warn`** — the watchdog runs and reports, but never fails the activity. This is
-  the audit tool.
+- **`off`** — hooks are inert, nothing observes anything. Byte-identical to today.
+  Retained as a kill-switch, not as the normal state.
+- **`warn`** — the watchdog runs and reports, but can never fail an activity. This is
+  the audit tool, and the **default**.
 - **`enforce`** — as described above.
 
 Warn mode emits the two things an author needs, and they map to the two shapes that
@@ -295,18 +304,43 @@ need action:
    because it is auto-vouched-for; these are the sites that want an explicit
    allowance instead of relying on the backstop.
 
-One run against a large tenant therefore produces a ranked work-list, and the author
+A run against a large tenant therefore produces a ranked work-list, and the author
 wraps the sites that exceeded the budget and ignores the rest — which is most of the
 app. The whole-codebase audit collapses into reading a report.
 
-This is not extra machinery: the rollout already gates opt-in on a large-tenant
-tail-profile run, and already needs stall telemetry to tell whether the change
-helped. Warn mode makes that same run the audit, and means **an app's first
-exposure to this design is a report, not a behaviour change.**
+#### Warn mode is the default, fleet-wide
+
+Because warn mode cannot fail an activity, there is no reason to make apps opt into
+it — and two reasons not to:
+
+- **It removes a per-app coordination step from the critical path.** Asking ~20
+  connector teams to each turn a flag on is exactly the shape of work that FND-165
+  documents stalling (nine teams independently re-tuning a number over five months).
+  Defaulting to `warn` means the evidence arrives without anyone being asked to care.
+- **It makes the migration an *eventual optimisation* rather than an upgrade task.**
+  On upgrade an app does nothing, and keeps doing nothing until someone chooses to
+  look at its report. `holding_progress()` becomes work you do when you want the
+  stronger guarantee, not a precondition for taking the version.
+
+Two constraints come with defaulting it on:
+
+- **Warn-mode findings must not be WARNING-level.** A stall observation in warn mode
+  is an expected observation on a fleet-wide default, not an actionable failure.
+  Emitting it at WARNING would manufacture fleet-wide alert noise — the same class of
+  noise this ADR is trying to reduce. It is a metric plus an INFO log; dashboards and
+  the per-app report read the metric.
+- **Hooks go on batch, chunk and page boundaries — never per record.** `mark_progress()`
+  is cheap, but "cheap" in a per-record loop is still a hot-path cost for no extra
+  signal: one batch is already the unit of observable work.
+
+"No behaviour change on upgrade" is therefore precise rather than absolute: no
+activity fails differently, no knob changes meaning, and the added cost is telemetry.
+`off` exists for anyone who needs even that gone.
 
 The same telemetry answers all three open sizing questions at once: where holds go,
 what each allowance should be, and what the global `max_no_progress_seconds` default
-should be (Open question 1).
+should be (Open question 1) — and, per the RFC discussion, whether long stalls occur
+in practice at all, which is currently argued from recollection on both sides.
 
 ### Failing the activity, and what the failure looks like
 
@@ -695,16 +729,18 @@ stall watchdog exists.
 
 The first question every consumer asks: *if I don't touch my code, what changes?*
 
-**On upgrade: nothing.** The watchdog is flag-gated, default off (see *Rollout*);
-`mark_progress()` hooks are inert while the flag is off; `heartbeat_timeout` keeps
-its meaning and its 60s default; `start_to_close` keeps its 600s default. There is
-no coupled default bump, because no existing knob changes meaning. This is the main
-practical advantage over Option 5.
+**On upgrade you land in warn mode, and nothing fails differently.** No activity is
+killed that wasn't before, `heartbeat_timeout` keeps its meaning and its 60s default,
+`start_to_close` keeps its 600s default, and there is no coupled default bump because
+no existing knob changes meaning. What you gain is a report about your own code. This
+is the main practical advantage over Option 5, which could not be defaulted on at all.
 
-**In warn mode: still nothing changes, but you get the work-list.** Warn mode is the
-intermediate state every app passes through, and it cannot fail an activity. The two
-at-risk shapes below show up as report lines instead of kills, which is what makes
-the migration a reading exercise rather than a code audit.
+**So there is no migration task on upgrade — only an eventual optimisation.** An app
+does nothing, indefinitely, and stays correct: warn mode cannot fail an activity, and
+the pre-existing timeouts still apply. Declaring holds is work an app takes on when it
+wants the stronger guarantee (a wedge caught in minutes instead of at the backstop), at
+a time of its choosing, guided by its own report. Nothing about taking the SDK version
+requires touching connector code.
 
 **In enforce mode, whether unchanged code survives depends on its shape.** For the
 last two rows, do-nothing code *will* hit stall kills, and that is the design working
@@ -719,16 +755,18 @@ it cannot distinguish from a wedged one:
 | **Custom async loop doing its own I/O, never through an instrumented SDK path** | reported as a no-progress gap | **False-killed** if any gap > budget | add a beat or a hold |
 | **Opaque single `await` against the source (connector's own async client)** | reported as a no-progress gap | **False-killed** at the tail | wrap in `holding_progress()` — expected in ~every connector |
 
-**The `start_to_close` 24h backstop is coupled to the same opt-in flip.** An app
-gets the 24h ceiling *and* the stall watchdog together, never one without the other:
-the ceiling without the watchdog is the unsafe pairing from *Context*. The global
-default only changes at the very end, once the flag is retired.
+**The `start_to_close` 24h backstop is coupled to `enforce`, not to warn.** An app
+gets the 24h ceiling *and* an enforcing stall watchdog together, never one without the
+other: the ceiling without a watchdog that can actually kill is the unsafe pairing
+from *Context*. Warn mode deliberately buys no ceiling relief — it only buys evidence.
+The global default changes at the very end, once the flag is retired.
 
-**Opt-in verification must exercise a large-tenant / tail profile, not a smoke
-test.** A small tenant's fast steps hide the very gaps that only open at the tail —
-the same tail that produced the original failures. Signing off on a small run and
-flipping the flag would just relocate the tail failure, and with non-retryable
-stalls and no checkpointing, relocating it is worse than leaving it.
+**Flipping to `enforce` must be verified against a large-tenant / tail profile, not a
+smoke test.** A small tenant's fast steps hide the very gaps that only open at the
+tail — the same tail that produced the original failures. Flipping on the strength of
+a small run would just relocate the tail failure, and with non-retryable stalls and no
+checkpointing, relocating it is worse than leaving it. Warn mode is what makes this
+checkable rather than aspirational.
 
 ## Rollout
 
@@ -738,28 +776,32 @@ stalls and no checkpointing, relocating it is worse than leaving it.
    mechanism on top. This is sequencing, not scope creep: the warn-mode signal in
    step 3 is unreadable while starvation dominates it.
 2. **Ship the framework `mark_progress()` hooks** (writers, emission, transfer
-   loops) so the streaming majority is covered before anyone observes anything.
-   Inert while the flag is off. Land CNCT-10's timeout-subtype classification
-   alongside, so stall kills are distinguishable from starvation kills in the
-   fleet-wide numbers.
-3. **Run every app in `warn` first.** Warn mode is both the measurement and the
-   audit: it produces the per-app work-list (no-progress gaps, long unbounded holds)
-   and the fleet-wide gap distribution that sets the
-   `max_no_progress_seconds` default. Nothing can be killed in this state, so it is
-   safe to turn on broadly and early — and it means the first thing an app team sees
-   is a report about their own code, not a behaviour change.
+   loops) so the streaming majority is covered before anything observes anything.
+   Land CNCT-10's timeout-subtype classification alongside, so stall kills are
+   distinguishable from starvation kills in the fleet-wide numbers.
+3. **Ship `warn` as the default — no per-app step.** Warn mode cannot fail an
+   activity, so it needs no opt-in: on upgrade every app starts producing its own
+   work-list (no-progress gaps, long unbounded holds) and contributing to the
+   fleet-wide gap distribution that sets the `max_no_progress_seconds` default.
+   This is deliberately *not* a step that requires ~20 teams to each do something.
+   `off` ships alongside as an env kill-switch.
 4. **Ship the conformance rule and the toolkit floor.** Both are independent of the
    `@task` work and both deliver immediately: the floor stops the next app shipping
-   a 2h node timeout, and the rule keeps un-held opaque sites visible after the
-   warn-mode pass has cleared the backlog. Pair with the AE ask to drop its own
+   a 2h node timeout, and the rule keeps un-held opaque sites visible once teams
+   start working through their reports. Pair with the AE ask to drop its own
    default.
-5. **Flip per-app to `enforce` once that app's warn report is clean** — i.e. its
-   remaining gaps are all inside declared holds or under budget, verified against a
-   **large-tenant / tail profile**, not a smoke test. The flag (`progress_watchdog`
-   on `@task` / `TaskMetadata`) carries an env kill-switch back to `warn`.
-6. **Couple the 24h `start_to_close` backstop (and its `schedule_to_close`
+5. **Read the fleet data before committing to `enforce` at all.** If long stalls
+   turn out to be rare, that is an argument for a generous budget — or for leaving
+   the fleet in warn and taking only the AE/backstop half of this ADR. Deciding this
+   from measurement rather than from either side's recollection is the point of
+   getting warn out early.
+6. **Flip per-app to `enforce` when that app wants the guarantee** — its remaining
+   gaps inside declared holds or under budget, verified against a **large-tenant /
+   tail profile**, not a smoke test. The flag is `progress_watchdog` on `@task` /
+   `TaskMetadata`.
+7. **Couple the 24h `start_to_close` backstop (and its `schedule_to_close`
    product) to that same per-app flip.** The global default changes only at the end,
-   once the flag is retired and the watchdog is universal; at that point the
+   once the flag is retired and enforcement is universal; at that point the
    per-task duration constants are retired.
 
 Per the "delete v3-prep workarounds" discipline, the flag is temporary and its
@@ -776,9 +818,12 @@ removal is part of the work, not a follow-up.
   upgrade is behaviourally identical until an app opts in.
 - Stalls surface as a typed error naming the last progress signal, which is both
   better for the operator and what makes the rollout measurable.
-- The per-app migration is mechanical rather than manual: warn mode produces the
-  work-list and the evidence for each allowance, so nobody has to read a whole
-  codebase deciding where a hold belongs or invent a number for it.
+- The per-app migration is mechanical rather than manual, and it is not on the
+  upgrade path at all: warn mode ships on by default, produces the work-list and the
+  evidence for each allowance, and declaring holds becomes an optimisation an app
+  takes on when it wants the stronger guarantee.
+- Whether long stalls actually happen becomes a measured question rather than an
+  argued one, fleet-wide, before anything can be killed for it.
 - Streaming connectors get correct behavior with no code changes.
 - Change is localized to `execution/heartbeat.py` (tracker + loop + hold plumbing),
   the `activities.py` wiring and cancellation branch, one new error leaf, and
