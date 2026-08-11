@@ -234,6 +234,44 @@ on:
           worker-up-only check (assert the worker deploys + serves
           /server/health) and skips extraction/publish/Atlas assertions,
           until the owner provisions a source.
+      dataforge-datasource:
+        required: false
+        type: string
+        default: ""
+        description: |
+          Dataforge datasource name (postgres, snowflake, powerbi, …). When set
+          (and DATAFORGE_API_KEY is shared), the e2e job fetches this
+          connector's SOURCE credentials from dataforge at run time — instead
+          of, or in addition to, the static E2E_SOURCE_ENV_JSON secret — and
+          exports them as E2E_SOURCE_* plus E2E_<DATASOURCE>_* env before the
+          secrets bundle is written. Runs BEFORE the E2E_SOURCE_ENV_JSON
+          export, so on a key collision the connector's explicit secrets win —
+          the escape hatch while migrating. Empty (the default) disables the
+          fetch entirely; existing callers are unaffected.
+      dataforge-mode:
+        required: false
+        type: string
+        default: "resource"
+        description: |
+          How the source is looked up in dataforge. "resource": a provisioned
+          instance's artifacts, keyed by the DATAFORGE_RESOURCE_ID secret
+          (provision once, human-approved, category "ci" so the lifecycle
+          reaper skips it). "managed": a vault-managed credential — the only
+          home for SaaS sources that cannot be provisioned (powerbi, snowflake,
+          …); looked up by datasource (+ dataforge-env-tier), newest active
+          entry, unless DATAFORGE_RESOURCE_ID pins a credential UUID.
+      dataforge-env-tier:
+        required: false
+        type: string
+        default: ""
+        description: Managed-credential tier filter (dev/stg/prd). Managed mode only.
+      dataforge-output-prefix:
+        required: false
+        type: string
+        default: ""
+        description: |
+          Prefix for the aliased env set (E2E_<PREFIX>_HOST, …). Empty = the
+          uppercased datasource name.
       private-git-deps:
         required: false
         type: boolean
@@ -339,6 +377,22 @@ on:
           JSON rather than KEY=VALUE lines because a key-pair PEM or
           service-account key is multi-line. Connectors with a hermetic
           container source (the mysql shape) need none of this.
+      DATAFORGE_API_KEY:
+        required: false
+        description: |
+          Dataforge API key (df_<id>_<secret>) the e2e job fetches SOURCE
+          credentials with when dataforge-datasource is set. Reads are
+          audited server-side per key owner. Mint from a dedicated
+          low-privilege dataforge user (any authenticated role can read
+          resource artifacts / reveal managed credentials by product
+          decision), and record a rotation owner — keys never expire.
+      DATAFORGE_RESOURCE_ID:
+        required: false
+        description: |
+          Resource UUID (dataforge-mode "resource") or managed-credential UUID
+          ("managed"; optional there — empty means newest active entry for the
+          datasource). A UUID, not a secret in the credential sense, but kept
+          in secrets so rotating the pinned instance never needs a code change.
       # Resolved per leg by .github/scripts/resolve_e2e_tenant.py. The pointer
       # lives in a YAML comment rather than in the description below because
       # test_resolve_e2e_tenant.py's call-site guard treats any non-comment
@@ -1329,6 +1383,9 @@ jobs:
       GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
       # See the integration job: needed as env for the step-level `if:` gates.
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
+      # Same reason: the dataforge fetch step gates on the key being shared.
+      DATAFORGE_API_KEY: ${{ secrets.DATAFORGE_API_KEY }}
+      DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
       GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: distinct-id ${{ inputs.distinct-id }}
@@ -1413,6 +1470,35 @@ jobs:
             --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
             --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
             >> "$GITHUB_ENV"
+
+      # Dataforge-sourced connector credentials (FND-205). The fetch's stdout
+      # is captured into a shell variable — values never reach the log — and
+      # handed to export_extra_env.py, whose mask-first two-pass protocol is
+      # the audited path into $GITHUB_ENV (see the export step below). One
+      # fetch feeds both passes, so the masked strings and the written strings
+      # can never diverge (a re-fetch between passes could rotate mid-step).
+      # Sits BEFORE the E2E_SOURCE_ENV_JSON export so a connector setting both
+      # has its explicit secrets win on key collisions — the migration escape
+      # hatch documented on the dataforge-datasource input.
+      - name: Fetch connector source credentials from dataforge
+        if: env.DATAFORGE_API_KEY != '' && inputs.dataforge-datasource != ''
+        env:
+          DF_DATASOURCE: ${{ inputs.dataforge-datasource }}
+          DF_MODE: ${{ inputs.dataforge-mode }}
+          DF_ENV_TIER: ${{ inputs.dataforge-env-tier }}
+          DF_OUTPUT_PREFIX: ${{ inputs.dataforge-output-prefix }}
+        run: |
+          set -euo pipefail
+          DF_ENV_JSON="$(python3 application-sdk-scripts/.github/scripts/fetch_dataforge_source.py \
+            --datasource "$DF_DATASOURCE" \
+            --mode "$DF_MODE" \
+            --resource-id "$DATAFORGE_RESOURCE_ID" \
+            --env-tier "$DF_ENV_TIER" \
+            --output-prefix "$DF_OUTPUT_PREFIX")"
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$DF_ENV_JSON" --mask-only
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$DF_ENV_JSON" >> "$GITHUB_ENV"
 
       # See the integration job above for why this is two invocations, why the
       # `--mask-only` pass has to come first, and why `set -e` is explicit.
