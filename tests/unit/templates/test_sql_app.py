@@ -2499,13 +2499,16 @@ class TestPrimeFailureClassification:
         assert "PWD=***" in wire
 
     async def test_namedtuple_evidence_does_not_crash_the_probe(self):
-        """``type(value)(<generator>)`` rebuilds plain containers but not a
-        NamedTuple: a 2+-field one raises ``TypeError`` (missing positional
-        args) and a 1-field one is silently rebuilt with the generator object
-        as its sole field. The ``TypeError`` escapes the probe's
+        """A NamedTuple takes positional fields, not an iterable —
+        ``type(value)(<generator>)`` crashes a 2+-field one (``TypeError``)
+        and silently retypes a 1-field one (its sole field becomes the
+        redacted *list*). The ``TypeError`` escapes the probe's
         ``except ValidationError`` degrade, crashing the activity — and a
         crashed probe is retried, stacking ``failed_login_attempts`` on the
-        source. The redactor must degrade to a plain container instead."""
+        source. The redactor must rebuild namedtuples with positional
+        expansion so the shape survives; assert the wire shape directly, not
+        just secret-absence."""
+        import json
         from dataclasses import dataclass
         from typing import NamedTuple
 
@@ -2535,13 +2538,23 @@ class TestPrimeFailureClassification:
         wire = result.failure.model_dump_json()
         assert "SyntheticValue123" not in wire
         assert "PWD=***" in wire
+        evidence = json.loads(wire)["evidence"]
+        # 1-field namedtuple keeps its scalar shape — not the silent
+        # ``_Solo(dsn=[...])`` retype the iterable-rebuild produced.
+        assert evidence["solo"] == ["PWD=***"]
+        # 2+-field namedtuple rebuilds with both fields positionally.
+        assert evidence["pair"] == ["UID=sa;PWD=***", "odbc"]
 
     async def test_cyclic_evidence_does_not_crash_the_probe(self):
         """A self-referential evidence container recurses forever — the
         ``RecursionError`` escapes the probe's ``except ValidationError``
         degrade and crashes the activity, which is retried and stacks
         ``failed_login_attempts``. The redactor must prune the cycle (same
-        id-tracking pattern ``_root_cause`` uses for ``__cause__``)."""
+        id-tracking pattern ``_root_cause`` uses for ``__cause__``) — and
+        pruning must null the back-edge, not drop the field, so a lossy
+        implementation cannot pass. Covers both the dict and the list
+        self-cycle (each exercises its own guarded branch)."""
+        import json
         from dataclasses import dataclass
 
         from application_sdk.errors.leaves import AuthError
@@ -2549,13 +2562,17 @@ class TestPrimeFailureClassification:
         @dataclass(kw_only=True)
         class _CyclicEvidenceError(AuthError):
             details: dict | None = None
+            items: list | None = None
 
         cyclic: dict = {"dsn": "PWD=SyntheticValue123"}
         cyclic["self"] = cyclic
+        cyclic_list: list = ["PWD=SyntheticValue123"]
+        cyclic_list.append(cyclic_list)
 
         typed = _CyclicEvidenceError(
             message="source rejected the login",
             details=cyclic,
+            items=cyclic_list,
         )
 
         result = await self._probe(typed)
@@ -2564,6 +2581,43 @@ class TestPrimeFailureClassification:
         wire = result.failure.model_dump_json()
         assert "SyntheticValue123" not in wire
         assert "PWD=***" in wire
+        evidence = json.loads(wire)["evidence"]
+        # The dict back-edge is pruned to null, the value redacted.
+        assert evidence["details"]["self"] is None
+        assert evidence["details"]["dsn"] == "PWD=***"
+        # The list self-cycle prunes its back-edge to null too.
+        assert evidence["items"] == ["PWD=***", None]
+
+    async def test_deeply_nested_evidence_truncates_past_the_depth_cap(self):
+        """The cycle guard bounds revisits but not depth: a pathologically
+        deep acyclic structure overflows the stack with a ``RecursionError``
+        that escapes the probe's degrade. The redactor caps depth and
+        truncates past it rather than crashing."""
+        from dataclasses import dataclass
+
+        from application_sdk.errors.leaves import AuthError
+
+        @dataclass(kw_only=True)
+        class _DeepEvidenceError(AuthError):
+            details: dict | None = None
+
+        deep: dict = {}
+        node = deep
+        for _ in range(100):
+            node["next"] = {}
+            node = node["next"]
+        node["dsn"] = "PWD=SyntheticValue123"
+
+        typed = _DeepEvidenceError(
+            message="source rejected the login",
+            details=deep,
+        )
+
+        result = await self._probe(typed)
+
+        assert result.failure is not None
+        # Secret never reaches the wire (it sits past the cap, truncated).
+        assert "SyntheticValue123" not in result.failure.model_dump_json()
 
     def test_string_fallback_redacts_a_secret_bearing_message(self):
         """A hand-built / pre-redaction-era output whose producer did not redact

@@ -640,38 +640,69 @@ class SqlApp(App):
         evidence values; other non-string values are left untouched.
         """
 
-        def _redact_value(value: Any, seen: frozenset[int] = frozenset()) -> Any:
+        def _redact_value(
+            value: Any, seen: set[int] | None = None, depth: int = 0
+        ) -> Any:
             if isinstance(value, str):
                 return redact_secrets(value)
             if isinstance(value, dict):
-                # A self-referential container would otherwise recurse
-                # forever — the RecursionError escapes the probe's
-                # ``except ValidationError`` degrade and crashes the
-                # activity, and a crashed probe is retried, stacking
+                if seen is None:
+                    seen = set()
+                # Guard the two ways a hand-built container can crash the
+                # probe — both escape the ``except ValidationError`` degrade,
+                # and a crashed activity is retried, stacking
                 # failed_login_attempts on the source (the cycle this
-                # classifier exists to break). Same id-tracking pattern
-                # ``_root_cause`` uses for the ``__cause__`` walk; a cycle
-                # is pruned rather than rendered.
+                # classifier exists to break):
+                #   * a self-referential container recurses forever — prune a
+                #     revisit rather than render it (the same id-tracking
+                #     pattern ``_root_cause`` uses for the ``__cause__`` walk);
+                #   * a pathologically deep acyclic structure overflows the
+                #     stack — bound depth and truncate past it.
+                # ``seen`` is a mutable add/remove recursion stack shared
+                # along the path, so diamond-shared (acyclic) subcontainers
+                # are redacted, not falsely pruned, and no frozenset is
+                # allocated per level.
                 if id(value) in seen:
                     return None
-                seen = seen | {id(value)}
-                return {k: _redact_value(v, seen) for k, v in value.items()}
-            if isinstance(value, (list, tuple, set, frozenset)):
-                if id(value) in seen:
-                    return None
-                seen = seen | {id(value)}
-                redacted = [_redact_value(v, seen) for v in value]
+                if depth >= 32:
+                    return "…"
+                seen.add(id(value))
                 try:
-                    # ``type(value)(<iterable>)`` rebuilds plain containers
-                    # but crashes on a NamedTuple (it takes positional
-                    # fields, not an iterable — a 1-field namedtuple is
-                    # silently rebuilt with the generator object as its
-                    # field). Same crash-through-the-degrade concern as
-                    # cycles, so fall back to a plain container of the same
-                    # shape: values are redacted either way, and evidence
-                    # serialises as JSON arrays regardless.
+                    return {
+                        k: _redact_value(v, seen, depth + 1) for k, v in value.items()
+                    }
+                finally:
+                    seen.discard(id(value))
+            if isinstance(value, (list, tuple, set, frozenset)):
+                if seen is None:
+                    seen = set()
+                if id(value) in seen:
+                    return None
+                if depth >= 32:
+                    return "…"
+                seen.add(id(value))
+                try:
+                    redacted = [_redact_value(v, seen, depth + 1) for v in value]
+                finally:
+                    seen.discard(id(value))
+                if isinstance(value, tuple) and hasattr(type(value), "_fields"):
+                    # A NamedTuple takes positional fields, not an iterable —
+                    # ``type(value)(redacted)`` crashes a 2+-field one and
+                    # silently retypes a 1-field one (its sole field becomes
+                    # the redacted *list*). Rebuild with positional expansion
+                    # so the shape survives.
+                    try:
+                        return type(value)(*redacted)
+                    except Exception:  # noqa: BLE001 — see fallback below
+                        return tuple(redacted)
+                try:
                     return type(value)(redacted)
-                except (TypeError, ValueError):
+                except Exception:  # noqa: BLE001 — a connector-authored
+                    # container subclass whose constructor raises (any type,
+                    # not just TypeError/ValueError) must not crash through
+                    # the degrade either; fall back to a plain container of
+                    # the same shape. Values are redacted either way, and
+                    # evidence serialises as JSON arrays regardless.
                     return tuple(redacted) if isinstance(value, tuple) else redacted
             return value
 
