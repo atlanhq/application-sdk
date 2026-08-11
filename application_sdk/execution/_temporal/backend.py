@@ -24,6 +24,7 @@ from temporalio.runtime import (
     TelemetryFilter,
 )
 
+from application_sdk.app.entrypoint import primary_workflow_type
 from application_sdk.constants import (
     ENABLE_ATLAN_UPLOAD,
     TEMPORAL_PROMETHEUS_BIND_ADDRESS,
@@ -162,11 +163,6 @@ def _workflow_name_for(app_cls: "type[App]", ep_meta: Any | None) -> str:
     """
     if ep_meta is None:
         return app_cls._app_name
-
-    from application_sdk.app.entrypoint import (  # noqa: PLC0415 — lazy: app.base imports this module
-        primary_workflow_type,
-    )
-
     return primary_workflow_type(app_cls._app_name, ep_meta)
 
 
@@ -280,12 +276,16 @@ class TemporalExecutorBackend:
             else f"{prefix}-{short_id}"
         )
 
-        workflow_name = _workflow_name_for(
-            app_cls,
-            app_cls._app_metadata.entry_points.get(entry_point)
-            if entry_point
-            else None,
+        ep_meta = (
+            app_cls._app_metadata.entry_points.get(entry_point) if entry_point else None
         )
+        if entry_point is not None and ep_meta is None:
+            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+                UnknownEntryPointError,
+            )
+
+            raise UnknownEntryPointError(resource_identifier=entry_point)
+        workflow_name = _workflow_name_for(app_cls, ep_meta)
         handle = await self._client.start_workflow(
             workflow_name,
             args=[input_data],

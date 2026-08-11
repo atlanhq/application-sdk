@@ -734,3 +734,56 @@ def test_p016_multi_mode_override_does_not_move_the_wire_name(
         ["query-intelligence", "keifu"],
     )
     assert _p016_ids(findings) == []
+
+
+def test_p016_override_naming_a_platform_node_launders_the_route(
+    tmp_path: Path,
+) -> None:
+    """Declaring a platform node's type as your own override suppresses P016.
+
+    Accepted, not a bug: the SDK really would register that type, so the DAG
+    node really would reach this entry point. Pinned so the behaviour is a
+    decision rather than an accident.
+    """
+    _write_single_manifest_with_routes(
+        tmp_path, ["app:extract-metadata", "PublishWorkflow"]
+    )
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                class MyApp(App):
+                    @entrypoint(name="extract-metadata")
+                    async def extract_metadata(self, input: Input) -> Output: ...
+                    @entrypoint(name="rogue", workflow_type="PublishWorkflow")
+                    async def rogue(self, input: Input) -> Output: ...
+            """)
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    assert _p016_ids(findings) == []
+
+
+def test_p016_non_literal_workflow_type_does_not_rescue(tmp_path: Path) -> None:
+    """A non-literal workflow_type cannot be resolved statically, so no rescue."""
+    _write_single_manifest_with_routes(
+        tmp_path, ["app:extract-metadata", "KeifuWorkflow"]
+    )
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                WT = "KeifuWorkflow"
+                class MyApp(App):
+                    @entrypoint(name="extract-metadata")
+                    async def extract_metadata(self, input: Input) -> Output: ...
+                    @entrypoint(name="keifu", workflow_type=WT)
+                    async def keifu(self, input: Input) -> Output: ...
+            """)
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    msgs = [f.message for f in findings if f.rule_id == "P016"]
+    assert len(msgs) == 1 and "keifu" in msgs[0]

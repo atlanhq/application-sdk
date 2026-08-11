@@ -278,6 +278,29 @@ class TestTemporalExecutorBackendStart:
         assert client.start_workflow.await_args.args[0] == "ep:do"
 
     @pytest.mark.asyncio
+    async def test_start_with_unknown_entry_point_raises(self) -> None:
+        """start() must reject an unknown entry point like execute() does.
+
+        Without the guard a typo falls through to the bare app name, which for a
+        mixed run()+@entrypoint app IS registered — so the wrong entry point
+        runs and reports success instead of the request failing.
+        """
+        client = mock.MagicMock()
+        client.start_workflow = mock.AsyncMock()
+        backend = TemporalExecutorBackend(client=client)
+        app_cls = _make_app_cls(name="ep", entry_points={"do": _make_ep_meta("do")})
+        ctx = mock.MagicMock(app_name="ep", correlation_id="c")
+        with pytest.raises(UnknownEntryPointError):
+            await backend.start(
+                app_cls,
+                _make_input_data(),
+                context=ctx,
+                retry_policy=SdkRetryPolicy(),
+                entry_point="missing",
+            )
+        client.start_workflow.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_start_passes_correlation_memo_from_context(self) -> None:
         # CNCT-104: start() mirrors execute() — correlation memo always set.
         handle = mock.MagicMock(id="abc")

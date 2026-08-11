@@ -54,6 +54,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 from temporalio.client import WorkflowFailureError
 
+from application_sdk.app.entrypoint import primary_workflow_type
 from application_sdk.common.task_queue import (
     resolve_manifest_tokens,
     task_queue_from_env,
@@ -1208,10 +1209,6 @@ def _register_workflow_routes(
             # out to apps with multiple entry points.
             _, ep = _resolve_app_entrypoint(
                 _workflow_config.app_name, selected_entrypoint
-            )
-
-            from application_sdk.app.entrypoint import (  # noqa: PLC0415 — circular at module import time
-                primary_workflow_type,
             )
 
             input_type = ep.input_type

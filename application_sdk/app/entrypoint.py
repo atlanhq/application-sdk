@@ -204,12 +204,18 @@ def build_workflow_type_index(
     drift apart.
 
     Raises:
-        EntryPointContractError: If two entry points claim the same type. This
-            one rule also covers an override colliding with another entry
-            point's canonical name or with the implicit bare app name, since
-            every such name is a key here.
+        EntryPointContractError: If two entry points claim the same type, or if
+            two distinct types fold to the same generated class name. The first
+            also covers an override colliding with another entry point's
+            canonical name or with the implicit bare app name, since every such
+            name is a key here.
     """
     index: dict[str, EntryPointMetadata] = {}
+    # Registration is unique on the type, but dispatch under Temporal's sandbox
+    # goes through the generated class name, which folds both '-' and ':' to
+    # '_'. So 'qi:bar' and 'qi-bar' are distinct types that would overwrite each
+    # other in the module namespace and silently run the wrong entry point.
+    by_class_segment: dict[str, str] = {}
     for ep in entry_points.values():
         for workflow_type in workflow_types_for(app_name, ep):
             claimed = index.get(workflow_type)
@@ -221,6 +227,17 @@ def build_workflow_type_index(
                     f"exactly one entry point — change one @entrypoint's "
                     f"workflow_type."
                 )
+            segment = workflow_type_class_segment(workflow_type)
+            twin = by_class_segment.get(segment)
+            if twin is not None and twin != workflow_type:
+                raise EntryPointContractError(
+                    f"App '{app_name}': Temporal workflow types '{twin}' and "
+                    f"'{workflow_type}' both generate the workflow class "
+                    f"'_Workflow_{segment}', so one would silently dispatch to "
+                    f"the other. Hyphens and colons both become underscores — "
+                    f"pick a workflow_type that differs by more than those."
+                )
+            by_class_segment[segment] = workflow_type
             index[workflow_type] = ep
     return index
 
@@ -319,13 +336,17 @@ def _validate_workflow_type_override(ep_name: str, workflow_type: str) -> None:
             f"Entry point '{ep_name}': workflow_type must be a non-empty string "
             f"with no surrounding whitespace, got {workflow_type!r}."
         )
+    # Test the real constraint: the type is embedded in ``_Workflow_<segment>``,
+    # so a leading digit is fine. Requiring the segment alone to be an identifier
+    # would reject a legacy type like "9to5Workflow" with no escape hatch.
+    segment = workflow_type_class_segment(workflow_type)
     if not any(char.isalnum() for char in workflow_type) or not (
-        workflow_type_class_segment(workflow_type).isidentifier()
+        f"_Workflow_{segment}".isidentifier()
     ):
         raise EntryPointContractError(
             f"Entry point '{ep_name}': workflow_type {workflow_type!r} is not a "
             f"usable Temporal workflow type. Use letters, digits, hyphens, "
-            f"underscores and colons, and do not start with a digit."
+            f"underscores and colons."
         )
 
 

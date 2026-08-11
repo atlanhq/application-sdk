@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from application_sdk.app.task import TaskMetadata
 
 
+from application_sdk.app.entrypoint import build_workflow_type_index
 from application_sdk.contracts.base import validate_is_contract
 from application_sdk.errors import (
     APP_ALREADY_REGISTERED,
@@ -48,10 +49,6 @@ class AppMetadata:
     def __post_init__(self) -> None:
         # Freeze entry_points so callers cannot mutate it post-construction.
         # frozen=True prevents direct assignment; object.__setattr__ bypasses that.
-        from application_sdk.app.entrypoint import (  # noqa: PLC0415 — module-level import would cycle via contracts.base
-            build_workflow_type_index,
-        )
-
         object.__setattr__(
             self, "entry_points", types.MappingProxyType(self.entry_points)
         )

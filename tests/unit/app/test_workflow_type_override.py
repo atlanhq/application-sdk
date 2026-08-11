@@ -114,9 +114,9 @@ class TestDecoratorAcceptsOverride:
             "Keifu Workflow",
             "Keifu\tWorkflow",
             "Keifu\nWorkflow",
-            "123Workflow",
             "Keifu/Workflow",
             ":",
+            "Keifu.Workflow",
         ],
     )
     def test_rejects_unusable_override(self, bad: str) -> None:
@@ -125,6 +125,18 @@ class TestDecoratorAcceptsOverride:
             @entrypoint(name="keifu", workflow_type=bad)
             async def keifu(self: object, input: _QiInput) -> _QiOutput:
                 return _QiOutput()
+
+    def test_leading_digit_is_allowed(self) -> None:
+        """The type is embedded in _Workflow_<segment>, so a digit-first legacy
+        type is registerable — rejecting it would leave such an app no way out."""
+
+        @entrypoint(name="legacy", workflow_type="9to5Workflow")
+        async def legacy(self: object, input: _QiInput) -> _QiOutput:
+            return _QiOutput()
+
+        meta = get_entrypoint_metadata(legacy)
+        assert meta is not None
+        assert meta.workflow_type == "9to5Workflow"
 
     def test_rejects_non_string(self) -> None:
         with pytest.raises(EntryPointContractError):
@@ -229,6 +241,29 @@ class TestBuildWorkflowTypeIndex:
         }
         with pytest.raises(EntryPointContractError, match="'qi'"):
             build_workflow_type_index("qi", eps)
+
+    def test_rejects_types_that_fold_to_one_class_name(self) -> None:
+        """'qi:bar' and 'qi-bar' are distinct types but one generated class.
+
+        Both hyphen and colon become '_', so the second generated class would
+        overwrite the first in the module namespace and Temporal's sandbox would
+        re-import the survivor for both types — silently running the wrong
+        entry point.
+        """
+        eps = {
+            "bar": _ep("bar"),
+            "baz": _ep("baz", workflow_type="qi-bar"),
+        }
+        with pytest.raises(EntryPointContractError, match="_Workflow_qi_bar"):
+            build_workflow_type_index("qi", eps)
+
+    def test_distinct_class_segments_are_fine(self) -> None:
+        eps = {
+            "bar": _ep("bar"),
+            "baz": _ep("baz", workflow_type="QiBar"),
+        }
+        index = build_workflow_type_index("qi", eps)
+        assert "QiBar" in index and "qi:bar" in index
 
 
 # ---------------------------------------------------------------------------

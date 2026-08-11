@@ -172,6 +172,36 @@ class SnowflakeApp(App):
 
 Method names are converted to kebab-case automatically. Override with `@entrypoint(name="custom-name")`.
 
+#### Preserving an established workflow type
+
+A single-`run()` app gets a bare workflow type for free. A multi-entry-point app cannot — every entry point is prefixed. That is a problem only when external callers already dispatch a bare type and cannot be changed in step with the app.
+
+`workflow_type` moves **Temporal registration only**:
+
+```python
+class QueryIntelligenceApp(App):
+    name = "query-intelligence"
+
+    @entrypoint(default=True, workflow_type="QueryIntelligenceWorkflow")
+    async def query_intelligence(self, input: QIInput) -> QIOutput: ...
+
+    @entrypoint(name="keifu", workflow_type="KeifuWorkflow")
+    async def keifu(self, input: KeifuInput) -> KeifuOutput: ...
+```
+
+| Registered Temporal type | Reaches |
+|---|---|
+| `QueryIntelligenceWorkflow` | `query_intelligence` (primary — new runs start here) |
+| `query-intelligence:query-intelligence` | `query_intelligence` (canonical alias) |
+| `KeifuWorkflow` | `keifu` (primary) |
+| `query-intelligence:keifu` | `keifu` (canonical alias) |
+
+The canonical name stays registered, so adopting an override cannot break a caller already using it, and an app can migrate in either direction without a flag day.
+
+What does **not** move: `?entrypoint=` still selects by entry-point name, task activity names keep their `{app-name}:{task-name}` prefix, and `App.name` is untouched — so state and storage namespaces stay put.
+
+Use it only to preserve an existing wire contract. For a new entry point, take the canonical name. Registration fails at class-definition time if two entry points claim the same type, or if two types differ only by characters that collapse in the generated class name (`-` and `:` both become `_`).
+
 ### HTTP dispatch
 
 Trigger a specific entry point via the `?entrypoint=` query parameter on `POST /workflows/v1/start`:

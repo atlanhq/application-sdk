@@ -158,11 +158,32 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 ### Functions
 
+#### `canonical_workflow_type`
+
+- **Import:** `from application_sdk.app import canonical_workflow_type`
+- **Signature:** `canonical_workflow_type(app_name: str, ep: EntryPointMetadata)`
+- **Summary:** The convention-derived Temporal workflow type for an entry point.
+- **Defined in:** `application_sdk/app/entrypoint.py`
+
 #### `entrypoint_module_segment`
 
 - **Import:** `from application_sdk.app import entrypoint_module_segment`
 - **Signature:** `entrypoint_module_segment(name: str)`
 - **Summary:** Convert a kebab-case entry-point name to its Python module segment.
+- **Defined in:** `application_sdk/app/entrypoint.py`
+
+#### `primary_workflow_type`
+
+- **Import:** `from application_sdk.app import primary_workflow_type`
+- **Signature:** `primary_workflow_type(app_name: str, ep: EntryPointMetadata)`
+- **Summary:** The Temporal workflow type new runs of an entry point should start on.
+- **Defined in:** `application_sdk/app/entrypoint.py`
+
+#### `workflow_types_for`
+
+- **Import:** `from application_sdk.app import workflow_types_for`
+- **Signature:** `workflow_types_for(app_name: str, ep: EntryPointMetadata)`
+- **Summary:** Every Temporal workflow type an entry point registers, primary first.
 - **Defined in:** `application_sdk/app/entrypoint.py`
 
 #### `mcp_tool`
