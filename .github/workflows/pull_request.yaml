@@ -51,6 +51,16 @@ jobs:
             container:
               - 'Dockerfile'
               - 'entrypoint.sh'
+              # The action that BUILDS and SCANS that Dockerfile, so a change to
+              # how the image is produced re-runs the paths that produce it —
+              # the container Trivy scan and the PR base-image build. Same
+              # reasoning as the self-referential `ci:` entry below, and as
+              # `sdk:` listing the test-harness action dirs: without it, a change
+              # to the build/scan machinery merges without either ever running
+              # against it. That is not hypothetical — the per-arch split of
+              # build-sdk-base-image and the fix to this action's hardcoded scan
+              # platform both landed on a PR where these jobs skipped.
+              - '.github/actions/secure-build-push-apps/**'
             sdk:
               - 'application_sdk/**'
               - 'tests/**'
@@ -251,10 +261,34 @@ jobs:
       (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
       github.event.pull_request.head.repo.fork != true &&
       github.event.pull_request.user.login != 'dependabot[bot]'
-    runs-on: ubuntu-latest
+    # One architecture per job, each on a runner native to it — the same shape
+    # build-e2e-image uses for the app image, and for the same reason: every leg
+    # of that matrix does `FROM` this image, so this must serve both arches, and
+    # emulating either half is a cost paid on every e2e-labelled PR. See
+    # docs/standards/connector-ci-e2e.md.
+    strategy:
+      # Knowing whether ONE arch or BOTH failed is the diagnosis when a base
+      # build breaks on an architecture rather than in general.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            # NOT ubuntu-latest — that would build arm64 under QEMU and still
+            # succeed, just slower, which is a regression that looks like
+            # nothing in review. test_build_app_image_action pins the pairing.
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     outputs:
-      image: ${{ steps.ref.outputs.image }}
+      # The tag WITHOUT the per-arch suffix — what merge-sdk-base-image combines
+      # into and what the connector actually builds FROM. Matrix job outputs are
+      # last-writer-wins, which is safe here only because every leg writes the
+      # same string; the per-arch refs are deliberately not surfaced.
+      image-base: ${{ steps.ref.outputs.image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Buildx
@@ -294,39 +328,133 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          # amd64 only — GitHub-hosted e2e runners are amd64; the connector
-          # build (sdr-e2e) is single-platform too. Keeps the rebuild fast.
-          platforms: linux/amd64
-          tags: ${{ steps.ref.outputs.image }}
+          # This leg's architecture only; merge-sdk-base-image combines the two.
+          # The base MUST end up serving both: the connector's e2e image build
+          # (tests-reusable's build-e2e-image) is itself a two-leg native matrix
+          # — amd64 for the per-leg worker on the runner, arm64 for the tenant's
+          # node — and each leg does `FROM <this image>`. A single-arch base
+          # fails the arm64 leg outright with "no match for platform in
+          # manifest" before a line of the Dockerfile runs, which is what took
+          # down the arm64 leg of every e2e-labelled SDK PR. The claim the
+          # comment here used to make ("the connector build is single-platform
+          # too") went stale when that matrix landed.
+          platforms: ${{ matrix.platform }}
+          tags: ${{ steps.ref.outputs.image }}-${{ matrix.arch }}
+          # Per-arch cache scope, and it is load-bearing. The action defaults to
+          # an unscoped `type=gha`, which both legs would then share: concurrent
+          # builds overwrite each other's cache manifest, after which every later
+          # run finds the other architecture's and misses. Nothing breaks; both
+          # legs just go cold forever. Same trap tag-suffix closes for the app
+          # image build.
+          cache-from: type=gha,scope=sdk-base-${{ matrix.arch }}
+          cache-to: type=gha,mode=min,scope=sdk-base-${{ matrix.arch }}
           github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600
           COMPOSE_HTTP_TIMEOUT: 600
 
+  # Combine the two per-arch base images into the manifest list the connector
+  # builds FROM. `imagetools create` is a registry-side operation on digests —
+  # no build context, no pull, a handful of seconds — which is what makes the
+  # native split nearly free next to emulating one half.
+  merge-sdk-base-image:
+    name: Merge SDK base image manifest
+    needs: build-sdk-base-image
+    # No label term needed: this inherits build-sdk-base-image's skip, and the
+    # FND-48 gate lives on that job. A failed arch leg leaves this SKIPPED, not
+    # failed, which is why every consumer below gates on BOTH results.
+    if: needs.build-sdk-base-image.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      image: ${{ needs.build-sdk-base-image.outputs.image-base }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Log in to Atlan Harbor Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: registry.atlan.com
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+      # Buildx for `imagetools`, which is a buildx subcommand.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Create the multi-arch manifest
+        env:
+          IMAGE: ${{ needs.build-sdk-base-image.outputs.image-base }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --tag "$IMAGE" \
+            "${IMAGE}-amd64" "${IMAGE}-arm64"
+
+      # The assert that matters: this is the reference the connector's Dockerfile
+      # resolves. A leg that quietly built the wrong architecture produces an
+      # index with two of the same, and the failure would surface a repo away as
+      # "no match for platform in manifest" — the error this whole change exists
+      # to stop shipping.
+      #
+      # Retried, for the reason merge-e2e-image's copy is: `imagetools create`
+      # writes the manifest list ONLY in the registry, so reading it back a step
+      # later is exactly the read-after-write that returned `manifest unknown`
+      # 0.7s after a push reported success. The retry wraps the inspect, not the
+      # assertion over its output, so a genuinely single-arch manifest still
+      # fails once rather than three times.
+      - name: Assert the manifest serves both architectures
+        env:
+          IMAGE: ${{ needs.build-sdk-base-image.outputs.image-base }}
+        run: |
+          set -euo pipefail
+          RAW=$(.github/scripts/with-retry.sh \
+            docker buildx imagetools inspect --raw "$IMAGE")
+          printf '%s' "$RAW" \
+            | python3 .github/scripts/assert_image_platforms.py \
+                --expected linux/amd64,linux/arm64
+
   # Connector tests: dispatches tests.yaml to each connector repo.
   # Triggers:
   #   merge_group — always runs on code-changing merge queue entries (the
-  #     primary gate). Each entry has a unique SHA so runs are parallel.
+  #     primary gate). Each entry has a unique SHA, but note the SDK's SHA is
+  #     NOT what scopes the connector-side concurrency groups: on the dispatch
+  #     path github.ref over there is the connector's own refs/heads/main. The
+  #     unit/integration groups in tests-reusable are therefore run-unique off
+  #     the PR path — see the long note on that job. Don't reintroduce a
+  #     ref-keyed group for anything a merge-queue batch can reach.
   #     build-sdk-base-image is skipped here, so base_image_ref is omitted
   #     and connectors build FROM the released base.
   #   pull_request + 'e2e' label — opt-in during PR development; also used
-  #     to release-gate the release PR before merging. The connector-side
-  #     e2e job serialises itself via its own concurrency group, so
-  #     simultaneous e2e-labelled PRs queue safely on the connector side.
+  #     to release-gate the release PR before merging. Tenant access on the
+  #     connector side is serialised by the (app, cloud) lease in
+  #     tests-reusable's lease-tenant job, which is a real queue: concurrent
+  #     e2e-labelled PRs wait their turn instead of the third one being
+  #     silently evicted as `cancelled` (FND-218 / FND-250). No cap on how
+  #     many can be in flight — a run that waits longer than the lease budget
+  #     fails saying the tenant was busy, naming the run that holds it.
   #     On this path base_image_ref is the freshly-built PR base image, so
   #     the connector is rebuilt on top of the SDK PR's runtime image.
   connector-tests:
     name: Connector E2E dispatch (${{ matrix.repo_name }})
-    needs: [changes, matrix-builder, build-sdk-base-image]
+    needs: [changes, matrix-builder, build-sdk-base-image, merge-sdk-base-image]
     # always() so a *skipped* build-sdk-base-image (merge_group path) does
     # not auto-skip this job. The explicit result clause still BLOCKS this
     # job when the base build genuinely fails on the e2e path — a base that
     # won't build is the signal, not something to mask by silently falling
     # back to the released base.
+    #
+    # BOTH base-image jobs are named, and that is not belt-and-braces: a failed
+    # arch leg leaves merge-sdk-base-image SKIPPED rather than failed (its `if`
+    # is simply not satisfied), and 'skipped' is the benign value in these
+    # clauses. Gating on the merge alone would dispatch the connectors with
+    # base_image_ref pointing at a manifest tag that was never created — every
+    # connector build then failing on a missing image, a repo away from the
+    # cause. Gating on the build alone would miss a merge that failed on its
+    # own. This is the same trap tests-reusable's e2e job documents.
     if: |
       always() &&
       needs.matrix-builder.result == 'success' &&
-      (needs.build-sdk-base-image.result == 'success' || needs.build-sdk-base-image.result == 'skipped') && (
+      (needs.build-sdk-base-image.result == 'success' || needs.build-sdk-base-image.result == 'skipped') &&
+      (needs.merge-sdk-base-image.result == 'success' || needs.merge-sdk-base-image.result == 'skipped') && (
         (
           (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.ci == 'true') &&
           github.event_name == 'merge_group'
@@ -393,10 +521,11 @@ jobs:
           # distinct_id is passed explicitly: return-dispatch v4 no longer
           # injects it (see the e2e-apps workflow-inputs description). Here it
           # is only a human breadcrumb correlating the connector run back to
-          # this SDK PR — tests-reusable keys its concurrency on github.ref and
-          # its e2e legs are cancel-in-progress:false, so nothing depends on it.
+          # this SDK PR — tests-reusable's unit/integration groups are run-unique
+          # off the PR path and its e2e legs are cancel-in-progress:false, so
+          # nothing depends on it.
           # Set to the same SHA as check-sha below so the two line up.
-          workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}","distinct_id":"{1}"}}', github.sha, github.sha) || format('{{"application_sdk_ref":"{0}","run_e2e":"true","base_image_ref":"{1}","distinct_id":"{2}"}}', github.event.pull_request.head.sha, needs.build-sdk-base-image.outputs.image, github.event.pull_request.head.sha) }}
+          workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}","distinct_id":"{1}"}}', github.sha, github.sha) || format('{{"application_sdk_ref":"{0}","run_e2e":"true","base_image_ref":"{1}","distinct_id":"{2}"}}', github.event.pull_request.head.sha, needs.merge-sdk-base-image.outputs.image, github.event.pull_request.head.sha) }}
           wait-mode: callback
           check-run-name: "Connector E2E run / ${{ matrix.repo_name }}"
           check-sha: ${{ github.event_name == 'merge_group' && github.sha || github.event.pull_request.head.sha }}
@@ -494,7 +623,14 @@ jobs:
   # treating a skipped connector-tests as the genuine docs-only skip.
   connector-gate:
     name: Connector Tests Gate
-    needs: [changes, matrix-builder, build-sdk-base-image, connector-tests]
+    needs:
+      [
+        changes,
+        matrix-builder,
+        build-sdk-base-image,
+        merge-sdk-base-image,
+        connector-tests,
+      ]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -515,12 +651,14 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           MATRIX_RESULT: ${{ needs.matrix-builder.result }}
           BASE_IMAGE_RESULT: ${{ needs.build-sdk-base-image.result }}
+          MERGE_BASE_IMAGE_RESULT: ${{ needs.merge-sdk-base-image.result }}
           CONNECTOR_RESULT: ${{ needs.connector-tests.result }}
         run: |
           python3 .github/scripts/verify_connector_gate_upstream.py \
             --changes-result "$CHANGES_RESULT" \
             --matrix-result "$MATRIX_RESULT" \
             --base-image-result "$BASE_IMAGE_RESULT" \
+            --merge-base-image-result "$MERGE_BASE_IMAGE_RESULT" \
             --connector-result "$CONNECTOR_RESULT"
 
       # Rolls up every 'Connector E2E run / <repo>' check run in ONE endpoint

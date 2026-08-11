@@ -6,7 +6,12 @@ it:
 * **Consumer side (B001, scope ``app``)** — an app keeps using an SDK symbol the
   SDK has marked deprecated.  Driven by a committed manifest generated from SDK
   source, so every future deprecation fans out as a fleet-wide signal with no
-  per-app work (BLDX-1418).
+  per-app work (BLDX-1418).  B007 extends the consumer side to *third-party*
+  APIs the manifest cannot carry: daft-only DataFrame calls that are dead on the
+  daft-less SDK runtime, where readers return pandas.  The dividing line is
+  ownership — an SDK symbol belongs in the manifest (including an enum member,
+  via the ``__deprecated_members__`` convention), and only what the SDK does not
+  own gets hand-coded.
 * **Authoring side (B002/B003/B004, scope ``sdk``)** — the SDK must declare its
   deprecations correctly: each notice names a replacement and a removal version
   (B002), no deprecation outlives its promised removal version (B003), and a
@@ -62,7 +67,7 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         full_description=(
             "Flags app consumption of any symbol recorded in the deprecated-symbol\n"
-            "manifest the SDK ships with this conformance package (BLDX-1418).  Three\n"
+            "manifest the SDK ships with this conformance package (BLDX-1418).  Four\n"
             "surfaces are matched, name-anchored within an ``application_sdk`` import\n"
             "context:\n"
             "\n"
@@ -70,7 +75,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "(``from application_sdk.x import Foo``);\n"
             "* subclassing a deprecated base "
             "(``class MyExtractor(BaseMetadataExtractor)``);\n"
-            "* calling a deprecated method by attribute (``obj.upload_to_atlan(...)``).\n"
+            "* calling a deprecated method by attribute (``obj.upload_to_atlan(...)``);\n"
+            "* reading a deprecated enum member (``DataframeType.daft``), which the\n"
+            "  SDK marks with a ``__deprecated_members__`` mapping in the enum's\n"
+            "  class body — the convention that exists because ``@deprecated``\n"
+            "  cannot attach to a member.  Matching is module-aware through the enum\n"
+            "  class, so an app's own same-named enum is never flagged.\n"
             "\n"
             "The finding carries the SDK's migration guidance from the deprecation\n"
             "notice so the fix is concrete.  Complements E013 ``LegacyAtlanErrorRaise``\n"
@@ -293,5 +303,72 @@ RULES: tuple[RuleDefinition, ...] = (
             "the ledger will be regenerated before the first deploy.\n"
         ),
         help_uri=f"{_HELP_BASE}#b006",
+    ),
+    RuleDefinition(
+        id="B007",
+        scope=RuleScope.APP,
+        name="DaftOnlyDataframeApiUsage",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="daft-removal",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.18.0",
+        rationale=(
+            "The SDK's daft transformer engine is gone and its readers return pandas "
+            "DataFrames, so daft-only DataFrame APIs — count_rows(), to_pylist(), "
+            "the .names property — raise AttributeError on the frames apps actually "
+            "receive. Locks crossed the 3.22 line via automated upgrades without "
+            "anything exercising the real pipeline, so these calls sat as latent "
+            "production breakage on main (a document-store connector hit all of them "
+            "in fleet testing). These are third-party daft APIs, not SDK symbols, so "
+            "the generated deprecated-symbol manifest (B001) cannot carry them — this "
+            "rule encodes them directly. DataframeType.daft is deliberately NOT here: "
+            "it is the SDK's own symbol and now carries a __deprecated_members__ "
+            "marker, so B001 reports it from the generated manifest like every other "
+            "SDK deprecation. WARN because matching is heuristic "
+            "(attribute-name-anchored with pyarrow-receiver exemptions) and the "
+            "pandas migration changes call shapes."
+        ),
+        short_description=(
+            "Calls a daft-only DataFrame API (count_rows/to_pylist/.names) — dead on "
+            "the daft-less SDK runtime"
+        ),
+        full_description=(
+            "Flags daft-only DataFrame API usage in apps that consume the SDK\n"
+            "(files importing ``application_sdk``), where SDK >= 3.22 readers\n"
+            "return **pandas** frames and the ``[daft]`` extra installs nothing:\n"
+            "\n"
+            "* ``frame.count_rows()`` — daft-only; pandas uses ``len(frame)``;\n"
+            "* ``frame.to_pylist()`` — daft-only on reader frames; pandas uses\n"
+            '  ``frame.to_dict("records")``.  Receivers that are demonstrably\n'
+            "  pyarrow Tables (bound from ``pa.Table.from_*`` / ``pa.table`` /\n"
+            "  ``.to_arrow_table()``) are exempt — ``pyarrow.Table.to_pylist()``\n"
+            "  is a real API;\n"
+            "* ``frame.names`` — daft-only; pandas uses ``frame.columns``.  Only\n"
+            "  simple-variable receivers are matched (``df.schema.names`` /\n"
+            "  ``df.index.names`` are legitimate pyarrow/pandas chains and are\n"
+            "  not flagged).\n"
+            "\n"
+            "``DataframeType.daft`` is **not** matched here.  It is the SDK's own\n"
+            "symbol and was only hand-coded into this rule because nothing marked\n"
+            "it; it now carries a ``__deprecated_members__`` entry and rides the\n"
+            "generated manifest, so **B001** reports it — module-aware, and with\n"
+            "the SDK's own migration text.  A second copy here would double-report\n"
+            "one line and reopen the drift the manifest's byte-gate prevents.\n"
+            "\n"
+            "The failure class is latent: imports succeed and mocked unit tests\n"
+            "pass; the AttributeError appears only when a real reader frame flows\n"
+            "through the pipeline.  Fleet remediation guidance: do not fix these\n"
+            "one CI cycle at a time — run the app's transforms locally against\n"
+            "synthetic raw data (a template harness) and migrate every call in one\n"
+            "pass.\n"
+            "\n"
+            "Matching is attribute-name-anchored (the B001 posture): a same-named\n"
+            "method on an unrelated object is a known false-positive risk,\n"
+            "accepted at WARN.  Suppress with ``# conformance: ignore[B007]\n"
+            "<reason>`` where the receiver is genuinely not an SDK reader frame.\n"
+        ),
+        help_uri=f"{_HELP_BASE}#b007",
     ),
 )

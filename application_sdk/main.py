@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import orjson
 
 from application_sdk.common._env import env_int as _env_int
+from application_sdk.common.task_queue import task_queue_from_env
 from application_sdk.discovery import (
     load_app_class,
     load_handler_class,
@@ -755,18 +756,15 @@ def _derive_service_name(app_module: str) -> str:
 def _derive_task_queue(app_module: str) -> str:
     """Derive the default task queue name.
 
-    Mirrors v2 TemporalWorkflowClient.get_worker_task_queue():
-    - If ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME are set → atlan-{app}-{deployment}
-    - If only ATLAN_APPLICATION_NAME is set → {app}
-    - Otherwise fall back to class-name derivation → {ClassName}-queue
+    The env-var rule itself lives in
+    :func:`application_sdk.common.task_queue.task_queue_from_env` — the same
+    function the manifest-serving path consults, so the queue this worker polls
+    and the queue AE submits to cannot drift apart (FND-195). Only the
+    no-app-name fallback is local to the worker: ``{ClassName}-queue`` predates
+    the env-var convention and is load-bearing for local dev, where nothing reads
+    the manifest's queue anyway.
     """
-    app_name = os.environ.get("ATLAN_APPLICATION_NAME", "")
-    deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", "")
-    if app_name and deployment_name:
-        return f"atlan-{app_name}-{deployment_name}"
-    if app_name:
-        return app_name
-    return f"{_derive_service_name(app_module)}-queue"
+    return task_queue_from_env() or f"{_derive_service_name(app_module)}-queue"
 
 
 def _parse_workflow_max_timeout_hours() -> int | None:

@@ -17,8 +17,8 @@ findings in the working tree, as reported by `suite.runner --series D`.
 #### violations-dependency
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
-include WARNING results in strict mode — D002/D003/D004/D005/D006/D007/D008 are
-WARN-tier, so they are processed in strict mode; D001 and D009 are BLOCK-tier
+include WARNING results in strict mode — D002/D003/D004/D005/D006/D007/D008/D010
+are WARN-tier, so they are processed in strict mode; D001 and D009 are BLOCK-tier
 and processed in both modes.
 
 This facet's fingerprint moves when any D-series finding is resolved (fixed or
@@ -179,6 +179,32 @@ WARN-tier — route to residue for human decision):
   `__import__`, `importlib.import_module`, entry-point declarations in
   `[project.entry-points.*]`, and `console_scripts` are all legitimate uses.
 
+- **D010 QueryTransformerWithoutDuckdb** — the app imports the SDK query
+  transformer (`application_sdk.transformers.query`; the finding message names
+  the import site) but `duckdb` does not resolve: it is missing from `uv.lock`
+  (or, with no lock, no `atlan-application-sdk[sql]`/`[incremental]` extra or
+  direct `duckdb` dependency is declared).  Every `transform_metadata` call
+  then fails at runtime with `ImportError: duckdb is required for
+  DuckDBConnectionManager` — latent breakage that imports and mocked tests
+  never exercise (fleet SDR sweep).  The finding is anchored at the SDK
+  dependency line in `pyproject.toml`.
+
+  **Check the extra on that line before proposing anything.**  If the app pins
+  `atlan-application-sdk[daft]`, the defect is the SDK's, not the app's: that
+  extra resolved to nothing over SDK 3.22–3.27 and aliases `[sql]` again from
+  3.28.0.  Propose raising the SDK floor to `>=3.28.0` and leave the extra
+  alone — the bump is the whole fix, and rewriting the app's extras instead
+  pays per repo for a defect fixed once upstream.
+
+  Otherwise (a plain SDK pin with no extra — the shape the rule now describes),
+  draft the edit that changes the SDK reference to `atlan-application-sdk[sql]`
+  (or `[incremental]` for the incremental analytics stack).  Do **not** propose
+  declaring `duckdb` directly as an equivalent option: it clears the finding
+  but duplicates a pin the SDK's extras manage, leaving the app to track the
+  SDK's range by hand.  Either way note that `uv lock` must be re-run; the
+  relock touches the resolved environment, so route to residue rather than
+  auto-applying (the D-series loop does not `uv sync` between edit and gates).
+
 **Judgment rules** (`autofixable = false`, `classification = "judgment"`; route
 to residue):
 
@@ -195,7 +221,8 @@ When `mode == "strict"` and `finding.disposition == "warning"`, the model may
 propose an inline suppression instead of a fix if the deviation is a deliberate,
 justified exception for this app.  Applicable rules and notes:
 
-- **D002 / D004 / D005 / D006 / D007 / D008** — standard inline suppression.
+- **D002 / D004 / D005 / D006 / D007 / D008 / D010** — standard inline
+  suppression.
   TOML uses `#` for comments, so the directive trails the entry or sits on the
   line above it:
 

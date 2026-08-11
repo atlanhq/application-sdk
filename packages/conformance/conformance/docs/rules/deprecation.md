@@ -5,7 +5,7 @@
 
 # Backwards-Compatibility / Deprecation Rules (B-series)
 
-**6 rules** · Checker: `suite.checks.deprecation` (AST-based)
+**7 rules** · Checker: `suite.checks.deprecation` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -29,6 +29,7 @@ reassigned.
 | [B004](#b004) | `UnmarkedDeprecationClaim` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
 | [B005](#b005) | `NonAdditiveContractChange` | `block` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
 | [B006](#b006) | `StaleContractLedger` | `block` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
+| [B007](#b007) | `DaftOnlyDataframeApiUsage` | `warn` | `app` | `daft-removal` | — | 0.18.0 |
 
 ---
 
@@ -48,12 +49,16 @@ migration changes call shapes (signatures, return types) and needs human judgeme
 a blind swap.
 
 Flags app consumption of any symbol recorded in the deprecated-symbol manifest the SDK
-ships with this conformance package (BLDX-1418).  Three surfaces are matched,
+ships with this conformance package (BLDX-1418).  Four surfaces are matched,
 name-anchored within an `application_sdk` import context:
 
 * importing a deprecated class/function (`from application_sdk.x import Foo`); *
 subclassing a deprecated base (`class MyExtractor(BaseMetadataExtractor)`); * calling a
-deprecated method by attribute (`obj.upload_to_atlan(...)`).
+deprecated method by attribute (`obj.upload_to_atlan(...)`); * reading a deprecated enum
+member (`DataframeType.daft`), which the   SDK marks with a `__deprecated_members__`
+mapping in the enum's   class body — the convention that exists because `@deprecated`
+cannot attach to a member.  Matching is module-aware through the enum   class, so an
+app's own same-named enum is never flagged.
 
 The finding carries the SDK's migration guidance from the deprecation notice so the fix
 is concrete.  Complements E013 `LegacyAtlanErrorRaise` (which owns the `raise
@@ -214,5 +219,54 @@ persisted ledger entry.
 Suppression: `# conformance: ignore[B006] <reason>` on the field line. Only appropriate
 when the contract is pre-deployment (no consumers) and the ledger will be regenerated
 before the first deploy.
+
+---
+
+## B007 — `DaftOnlyDataframeApiUsage` {#b007}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `daft-removal` · **Autofixable:** — · **Since:** 0.18.0
+
+> Calls a daft-only DataFrame API (count_rows/to_pylist/.names) — dead on the daft-less SDK runtime
+
+**Rationale:** The SDK's daft transformer engine is gone and its readers return pandas DataFrames, so
+daft-only DataFrame APIs — count_rows(), to_pylist(), the .names property — raise
+AttributeError on the frames apps actually receive. Locks crossed the 3.22 line via
+automated upgrades without anything exercising the real pipeline, so these calls sat as
+latent production breakage on main (a document-store connector hit all of them in fleet
+testing). These are third-party daft APIs, not SDK symbols, so the generated
+deprecated-symbol manifest (B001) cannot carry them — this rule encodes them directly.
+DataframeType.daft is deliberately NOT here: it is the SDK's own symbol and now carries
+a __deprecated_members__ marker, so B001 reports it from the generated manifest like
+every other SDK deprecation. WARN because matching is heuristic (attribute-name-anchored
+with pyarrow-receiver exemptions) and the pandas migration changes call shapes.
+
+Flags daft-only DataFrame API usage in apps that consume the SDK (files importing
+`application_sdk`), where SDK >= 3.22 readers return **pandas** frames and the `[daft]`
+extra installs nothing:
+
+* `frame.count_rows()` — daft-only; pandas uses `len(frame)`; * `frame.to_pylist()` —
+daft-only on reader frames; pandas uses   `frame.to_dict("records")`.  Receivers that
+are demonstrably   pyarrow Tables (bound from `pa.Table.from_*` / `pa.table` /
+`.to_arrow_table()`) are exempt — `pyarrow.Table.to_pylist()`   is a real API; *
+`frame.names` — daft-only; pandas uses `frame.columns`.  Only   simple-variable
+receivers are matched (`df.schema.names` /   `df.index.names` are legitimate
+pyarrow/pandas chains and are   not flagged).
+
+`DataframeType.daft` is **not** matched here.  It is the SDK's own symbol and was only
+hand-coded into this rule because nothing marked it; it now carries a
+`__deprecated_members__` entry and rides the generated manifest, so **B001** reports it
+— module-aware, and with the SDK's own migration text.  A second copy here would
+double-report one line and reopen the drift the manifest's byte-gate prevents.
+
+The failure class is latent: imports succeed and mocked unit tests pass; the
+AttributeError appears only when a real reader frame flows through the pipeline.  Fleet
+remediation guidance: do not fix these one CI cycle at a time — run the app's transforms
+locally against synthetic raw data (a template harness) and migrate every call in one
+pass.
+
+Matching is attribute-name-anchored (the B001 posture): a same-named method on an
+unrelated object is a known false-positive risk, accepted at WARN.  Suppress with `#
+conformance: ignore[B007] <reason>` where the receiver is genuinely not an SDK reader
+frame.
 
 ---

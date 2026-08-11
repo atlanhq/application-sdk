@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.27.0
-source-sha:    16db8ed0ad036237a21caa21492c0d8391ee1d9f
-source-date:   2026-08-10T21:31:32+00:00
+sdk-version:   3.27.1
+source-sha:    b6e756091f012a5e5e7db9309f99e5e9655c931b
+source-date:   2026-08-11T10:10:51+00:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -3084,6 +3084,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `column_batch_size: int` `= 25000` — Number of tables per batch for incremental column extraction.
   - `column_chunk_size: int` `= 100000` — Number of column records per output chunk file.
   - `copy_workers: int` `= 3` — Parallel workers for file copy operations during state snapshot.
+  - `upload_concurrency: int` `= Field(default=4, gt=0)` — Max concurrent object-store requests for the current-state and
   - `prepone_marker_timestamp: bool` `= True` — Whether to move the marker back by ``prepone_marker_hours``.
   - `prepone_marker_hours: int` `= 3` — Hours to subtract from the marker when preponing is enabled.
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
@@ -3301,6 +3302,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `workflow_run_id: str` `= ''` — Temporal run ID used to name the incremental diff subfolder.
   - `current_state_s3_prefix: str` `= ''` — S3 prefix for the existing current-state (for previous-state download).
   - `copy_workers: int` `= 3` — Parallel workers for file copy operations.
+  - `upload_concurrency: int` `= Field(default=4, gt=0)` — Max concurrent object-store requests when uploading the current-state
   - `application_name: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 

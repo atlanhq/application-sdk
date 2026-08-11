@@ -318,15 +318,35 @@ jobs:
             exclude_paths: ${{ inputs.exclude-paths-l }}
           # T005-T009/T013 walk the whole `tests/` tree (not just integration) and
           # T010-T012/T014-T015 read `pyproject.toml` directly, so the filter covers
-          # both.  Any PR that changes a test file or `pyproject.toml` re-runs this
-          # leg; staleness for the remaining edge cases (e.g. a change to a
-          # workflow's own `--fail-under` input, which T014 doesn't read) is caught
-          # on push to main, where every leg runs unconditionally.  Acceptable at
-          # WARN tier.
+          # both.
+          #
+          # Two more sources, both NOT optional — a T checker that reads only
+          # these was previously invisible to the filter, so the leg reported
+          # success without ever grading the diff:
+          #
+          # * `.github/**` — e2e_workflow_shape (T020/T021/T022) globs
+          #   `.github/workflows/`, e2e_deployment_name rglobs all of `.github`
+          #   for compose overlays, coverage_config reads the workflow's own
+          #   `--fail-under`.  Without it a PR that ONLY edits
+          #   `.github/workflows/tests.yaml` — dropping the reusable caller,
+          #   flipping `enable-e2e` to false, removing `two-store: true` —
+          #   matched no filter path, on exactly the diff shape T020-T022 grade.
+          # * `app/generated/**` + `contract/**` — e2e_generated_harness reads
+          #   the committed `_e2e_base.py` under both trees, so a PR that only
+          #   re-runs the toolkit was equally invisible.  Same reasoning (and
+          #   same two entries) as the P-series glob above.
+          #
+          # A wildcard alternative cannot substitute for these: picomatch does not
+          # match a leading dot with `*`, so `**/*.yaml` never matches
+          # `.github/...`.  `test_series_globs_cover_their_checkers` fails if a
+          # future checker reads a tree its leg's glob does not watch.
+          #
+          # Staleness for the remaining edge cases is caught on push to main, where
+          # every leg runs unconditionally.  Acceptable at WARN tier.
           - series: T
             name: "Tests"
             slug: tests
-            paths: "{tests/**,**/pyproject.toml}"
+            paths: "{tests/**,**/pyproject.toml,.github/**,app/generated/**,contract/**}"
             exclude_paths: ${{ inputs.exclude-paths-t }}
           # I-series (container image) is APP-scoped and no-ops on the SDK itself
           # since the SDK Dockerfile builds the base image, not a consumer app.

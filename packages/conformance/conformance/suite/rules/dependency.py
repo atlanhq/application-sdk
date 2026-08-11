@@ -24,6 +24,11 @@ SDK upgrades.  These rules enforce two invariants:
   ``standard``.
 * ``D009`` — no ``[tool.poe.tasks.*]`` entry fetches Dapr component YAMLs
   from GitHub over the network; the installed SDK wheel bundles them.
+* ``D010`` — an app whose code path uses the SDK query transformer
+  (``application_sdk.transformers.query`` / ``transform_metadata``) must
+  resolve ``duckdb`` — via the SDK's ``[sql]``/``[incremental]`` extra or a
+  direct dependency.  On SDK >= 3.22 (daft extra emptied) a missing duckdb is
+  a guaranteed runtime ``ImportError`` in every transform.
 """
 
 from __future__ import annotations
@@ -361,6 +366,98 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d009"
+        ),
+    ),
+    RuleDefinition(
+        id="D010",
+        scope=RuleScope.APP,
+        name="QueryTransformerWithoutDuckdb",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="runtime-dependencies",
+        autofixable=False,
+        since="0.18.0",
+        rationale=(
+            "The SDK's query transformer (application_sdk.transformers.query, the "
+            "transform_metadata path) executes its transform SQL through "
+            "DuckDBConnectionManager, and duckdb ships only in the SDK's [sql] and "
+            "[incremental] extras — never in core. An app that imports the query "
+            "transformer on a plain atlan-application-sdk pin, with no extra at all, "
+            "hits a guaranteed runtime ImportError ('duckdb is required for "
+            "DuckDBConnectionManager') in EVERY transform — latent until the first "
+            "real pipeline run, because imports alone succeed and mocked unit tests "
+            "pass. The population that surfaced this was a different, SDK-owned "
+            "shape: apps pinned to the deprecated [daft] extra, which resolved "
+            "empty over 3.22–3.27 (observed live on main for a document-store "
+            "connector in fleet testing after an automated upgrade crossed the 3.22 "
+            "line). That half is fixed at the root — [daft] aliases [sql] again from "
+            "3.28.0 — so this rule now covers the no-extras case it always also "
+            "covered. Statically checkable: transformer-usage scan + "
+            "lockfile/pyproject scan."
+        ),
+        short_description=(
+            "App imports the SDK query transformer but duckdb is not resolved "
+            "(no [sql]/[incremental] extra, no direct dependency)"
+        ),
+        full_description=(
+            "An app whose source imports the SDK query transformer\n"
+            "(``application_sdk.transformers.query`` — the\n"
+            "``transform_metadata`` / ``QueryBasedTransformer`` path) must be able\n"
+            "to import ``duckdb`` at runtime: the transformer executes its\n"
+            "transform SQL through ``DuckDBConnectionManager``, which raises\n"
+            "``ImportError: duckdb is required for DuckDBConnectionManager`` when\n"
+            "the package is absent.\n"
+            "\n"
+            "``duckdb`` is provided by the SDK's ``[sql]`` and ``[incremental]``\n"
+            "extras only — never by the core dependency set.  So the shape this\n"
+            "rule describes is an app that imports the transformer on a **plain**\n"
+            "``atlan-application-sdk`` pin, with no extra at all: the failure is\n"
+            "silent until the first real end-to-end transform, because imports\n"
+            "succeed and unit tests that mock the transformer pass.\n"
+            "\n"
+            "**Not the ``[daft]`` case — that one was ours.**  Over SDK 3.22–3.27\n"
+            "the deprecated ``[daft]`` extra resolved to nothing, so apps that\n"
+            "were following the SDK's own deprecation note were broken by an\n"
+            "automated upgrade crossing the 3.22 line.  That is fixed at the\n"
+            "root: from 3.28.0 ``[daft]`` aliases ``[sql]`` again, and a version\n"
+            "bump alone resolves ``duckdb`` for every such app with no repo-side\n"
+            "change.  If this rule fires on an app pinned to ``[daft]``, upgrade\n"
+            "the SDK rather than editing the app's extras.\n"
+            "\n"
+            "Resolution order of the check:\n"
+            "\n"
+            "* with a parseable ``uv.lock`` present, ``duckdb`` must be reachable\n"
+            "  from the app's OWN production dependencies — the lock is walked\n"
+            "  from the app's ``[[package]]`` entry along ``dependencies`` and the\n"
+            "  ``optional-dependencies`` groups an incoming extra activates.\n"
+            "  ``uv.lock`` is a *universal* resolution graph covering dev groups\n"
+            "  and every extra, so duckdb merely appearing somewhere in it does\n"
+            "  NOT mean a default ``uv sync --no-dev`` installs it;\n"
+            "  ``[package.dev-dependencies]`` is deliberately not traversed;\n"
+            "* without a usable lock, the app's ``pyproject.toml`` must declare\n"
+            "  ``duckdb`` directly or reference ``atlan-application-sdk`` with a\n"
+            "  ``sql`` or ``incremental`` extra — in ``[project] dependencies``\n"
+            "  specifically.  Dependency groups and optional-dependency arrays do\n"
+            "  not count: they are not installed by default.\n"
+            "\n"
+            "**Remediation:** change the SDK reference to\n"
+            "``atlan-application-sdk[sql]`` (or ``[incremental]`` for the\n"
+            "incremental analytics stack) in ``[project.dependencies]`` and relock\n"
+            "(``uv lock``).  That is the fix.\n"
+            "\n"
+            "Declaring ``duckdb`` directly is a discouraged fallback, not a\n"
+            "co-equal option: it clears the finding, but it duplicates a pin the\n"
+            "SDK's extras already manage, so the app now owns a version range it\n"
+            "has to keep in step with the SDK's by hand.  Reach for it only where\n"
+            "the extra genuinely cannot be used.\n"
+            "\n"
+            "This is a WARN (per the new-rule tier policy), but unlike most WARN\n"
+            "findings it indicates a *guaranteed* runtime failure — treat it as an\n"
+            "error.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d010"
         ),
     ),
 )

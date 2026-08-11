@@ -64,6 +64,15 @@
       "symbol": "AtlanError"
     },
     {
+      "kind": "enum_member",
+      "marker_via": "enum-member",
+      "message": "DataframeType.daft is deprecated; use DataframeType.pandas instead \u2014 will be removed in v4.0.0. It routes to the pandas/pyarrow path.",
+      "migration_target": true,
+      "module": "application_sdk.common.types",
+      "removal_version": "4.0.0",
+      "symbol": "DataframeType.daft"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "ContractValidationError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",

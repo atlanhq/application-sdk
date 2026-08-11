@@ -1,16 +1,30 @@
 #!/usr/bin/env python3
-"""Determine the check-run conclusion + summary body for the cross-repo e2e
-callback (tests-reusable.yaml's report-to-sdk job).
+"""Build the summary body for the cross-repo e2e callback (tests-reusable.yaml's
+report-to-sdk job).
 
-Moved out of an inlined `run:` block per docs/standards/ci.md: deciding the
-conclusion and picking which summary file to use are both branches, which
-belong in a tested driver rather than workflow YAML.
+Moved out of an inlined `run:` block per docs/standards/ci.md: picking which
+summary file to use is a branch, which belongs in a tested driver rather than
+workflow YAML.
 
 Prefers the e2e leg's already-rendered report (asset/lineage tables etc.,
 written by sdr-e2e's PR-comment step) over a plain fallback, which only
 applies when e2e was skipped or its artifact never materialised.
 
-Writes conclusion=<success|failure> and summary_file=<path> to $GITHUB_OUTPUT.
+BODY ONLY — this script does not decide anything. It used to also emit the
+callback's `conclusion`, computed from a strict subset of the Tests Gate's
+inputs (no discover-e2e, no image-build legs, no "discovery found suites but
+the matrix skipped" anomaly rule), which is exactly how a connector run whose
+Tests Gate was red completed the mirrored check on the dispatching SDK PR as
+green. The gate driver
+(.github/actions/verify-test-gate/verify_test_gate.py) is the single authority
+for that verdict; report-to-sdk feeds its `conclusion` output straight to
+complete_check_run.py.
+
+Do not reintroduce a verdict here. Two implementations of "did the connector
+tests pass" is the defect, not the inputs either one happened to read — see
+test_the_callback_reports_the_gates_verdict_not_its_own.
+
+Writes summary_file=<path> to $GITHUB_OUTPUT.
 """
 
 from __future__ import annotations
@@ -19,31 +33,11 @@ import argparse
 import os
 import sys
 
-PASSING_E2E_RESULTS = {"success", "skipped"}
-# Integration is skipped on PRs and when a connector has no integration suite,
-# so "skipped" is a pass for it (mirrors the e2e optional-by-skip treatment).
-PASSING_INTEGRATION_RESULTS = {"success", "skipped"}
 # The suite-detection job gates the integration `if`. A *failure* there drops
-# integration to a skip, which PASSING_INTEGRATION_RESULTS would read as a pass
-# — so a failed detection must be its own failure signal here, exactly as the
-# Tests Gate treats it. skipped (pull_request) and success are passes.
+# integration to a skip, so the rendered line must name the detection failure
+# rather than report a clean "skipped" for a tier that was actually dropped.
+# skipped (pull_request) and success are the benign values.
 PASSING_DETECT_INTEGRATION_RESULTS = {"success", "skipped"}
-
-
-def determine_conclusion(
-    unit_result: str,
-    integration_result: str,
-    detect_integration_result: str,
-    e2e_result: str,
-) -> str:
-    if (
-        unit_result == "success"
-        and detect_integration_result in PASSING_DETECT_INTEGRATION_RESULTS
-        and integration_result in PASSING_INTEGRATION_RESULTS
-        and e2e_result in PASSING_E2E_RESULTS
-    ):
-        return "success"
-    return "failure"
 
 
 def build_fallback_summary(
@@ -115,12 +109,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fallback-path", default="fallback-summary.md")
     args = parser.parse_args(argv)
 
-    conclusion = determine_conclusion(
-        args.unit_result,
-        args.integration_result,
-        args.detect_integration_result,
-        args.e2e_result,
-    )
     summary_file = resolve_summary_file(
         args.artifact_summary_path,
         args.fallback_path,
@@ -132,14 +120,13 @@ def main(argv: list[str] | None = None) -> int:
         args.integration_summary,
     )
 
-    lines = [f"conclusion={conclusion}", f"summary_file={summary_file}"]
+    line = f"summary_file={summary_file}"
     github_output = os.environ.get("GITHUB_OUTPUT", "")
     if github_output:
         with open(github_output, "a") as fh:
-            fh.write("\n".join(lines) + "\n")
+            fh.write(line + "\n")
     else:
-        for line in lines:
-            print(line)
+        print(line)
     return 0
 
 

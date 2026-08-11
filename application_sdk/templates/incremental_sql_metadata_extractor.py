@@ -776,6 +776,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 run_id=run_id,
                 application_name=app_name,
                 copy_workers=input.copy_workers,
+                upload_concurrency=input.upload_concurrency,
             )
 
             return WriteCurrentStateOutput(
@@ -903,6 +904,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             column_batch_size=input.column_batch_size,
             column_chunk_size=input.column_chunk_size,
             copy_workers=input.copy_workers,
+            upload_concurrency=input.upload_concurrency,
             prepone_marker_timestamp=input.prepone_marker_timestamp,
             prepone_marker_hours=input.prepone_marker_hours,
         )
@@ -1103,6 +1105,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 workflow_run_id=run_id,
                 current_state_s3_prefix=ctx.current_state_s3_prefix,
                 copy_workers=ctx.copy_workers,
+                upload_concurrency=ctx.upload_concurrency,
                 application_name=ctx.application_name,
             )
         )

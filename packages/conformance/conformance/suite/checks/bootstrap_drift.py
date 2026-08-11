@@ -36,6 +36,7 @@ from conformance.bootstrap.extract import (
     resolve_renovate_fallback_exit_zero,
 )
 from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
+from conformance.suite.checks._ast_common import safe_read_text
 from conformance.suite.schema.findings import Finding
 
 # Dest-path (repo-root-relative) -> template filename, for O(1) lookup in scan_path.
@@ -197,7 +198,9 @@ def _scan_managed_action_file(
             )
         ]
 
-    on_disk = path.read_text(encoding="utf-8")
+    on_disk = safe_read_text(path)
+    if on_disk is None:
+        return []
     canonical = render(template_name)
 
     if _strip_action_pins(on_disk) == _strip_action_pins(canonical):
@@ -240,7 +243,9 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
             )
         ]
 
-    on_disk = path.read_text(encoding="utf-8")
+    on_disk = safe_read_text(path)
+    if on_disk is None:
+        return []
 
     # For parameterised templates, extract the on-disk value so structural
     # drift is caught while per-repo value choices are preserved.
@@ -304,7 +309,9 @@ def _scan_renovate_json(path: Path, root: Path) -> list[Finding]:
             )
         ]
 
-    on_disk = path.read_text(encoding="utf-8")
+    on_disk = safe_read_text(path)
+    if on_disk is None:
+        return []
     canonical = render(_RENOVATE_JSON, automerge=extract_renovate_automerge(on_disk))
 
     if _strip_action_pins(on_disk) == _strip_action_pins(canonical):
@@ -350,7 +357,9 @@ def _scan_tests_yaml(path: Path, root: Path) -> list[Finding]:
             )
         ]
 
-    on_disk = path.read_text(encoding="utf-8")
+    on_disk = safe_read_text(path)
+    if on_disk is None:
+        return []
 
     # Extract per-repo customised values so structural drift is caught while
     # legitimate param choices (app-name, enable-e2e, services-script) are not.

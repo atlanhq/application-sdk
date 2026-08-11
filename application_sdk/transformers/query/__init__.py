@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import textwrap
 import warnings
 from datetime import UTC, datetime
@@ -42,6 +43,64 @@ warnings.warn(
 logger = get_logger(__name__)
 
 _SQL_KEYWORD_LITERALS = frozenset({"FALSE", "TRUE", "NULL"})
+
+# A whole value that is one double-quoted SQL identifier, interior quotes doubled
+# per the SQL escaping rule (``"a""b"`` denotes the column ``a"b``).  Anchored at
+# both ends so an *expression* that merely contains a quoted identifier
+# (``concat("a", b)``) does not match.
+_QUOTED_IDENTIFIER_RE = re.compile(r'^"(?:[^"]|"")*"$')
+
+
+def _is_quoted_identifier(value: str) -> bool:
+    """Whether *value* is, in its entirety, a double-quoted SQL identifier."""
+    return bool(_QUOTED_IDENTIFIER_RE.match(value))
+
+
+def _unquote_identifier(value: str) -> str:
+    """The column name a quoted SQL identifier denotes (``\"a\"\"b\"`` -> ``a\"b``)."""
+    return value[1:-1].replace('""', '"')
+
+
+def _resolution_key(value: Any) -> Any:
+    """The name *value* looks up when matched against the available columns.
+
+    A template that already carries SQL quotes inside the YAML value
+    (``source_query: '\"order\"'`` -- the remediation the P040 conformance rule
+    prescribes) denotes the column ``order``, so it must be matched under that
+    name.  Matching the raw text instead is why such a template resolved to
+    nothing and had its attribute dropped from published output entirely: the
+    quotes turned a loud ``ParserException`` into a silent missing attribute.
+    """
+    if isinstance(value, str) and _is_quoted_identifier(value):
+        return _unquote_identifier(value)
+    return value
+
+
+def _quote_bare_identifier(value: Any) -> Any:
+    """Quote *value* for the SELECT expression slot when it denotes a column.
+
+    Both call sites only pass a value that already resolved as a column *name*
+    (``source_query`` matched against the available columns, or the literal
+    branch's appended column), so every string that reaches here is an
+    identifier reference -- including names SQL cannot parse bare, such as
+    ``2024_total`` (which DuckDB reads as the expression ``2024 - total``),
+    hyphenated names, and Unicode names.  Gating quoting on an ASCII ``[A-Za-z_]``
+    shape left exactly those columns unquoted and broken, so any non-quoted
+    string is wrapped unconditionally, with interior quotes doubled per the SQL
+    escaping rule.
+
+    Idempotent, and that is the point: an already-quoted value re-wrapped emits
+    ``\"\"\"order\"\"\"`` -- a quoted identifier whose name is literally
+    ``\"order\"``, which DuckDB rejects with ``BinderException: Referenced column
+    \"\"order\"\" not found``.  So a quoted value passes through untouched and both
+    spellings render the same SQL.
+
+    Non-string values are returned unchanged.
+    """
+    if not isinstance(value, str) or _is_quoted_identifier(value):
+        return value
+    return f'"{value.replace(chr(34), chr(34) * 2)}"'
+
 
 _REMEDY_NON_STRING = (
     "A source_query must be a string; a YAML list or mapping is neither a column "
@@ -185,25 +244,51 @@ class QueryBasedTransformer(TransformerInterface):
         Returns:
             The processed column name, quoted if it contains dots
         """
+        if _is_quoted_identifier(column_name):
+            return column_name
         if "." in column_name:
             return f'"{column_name}"'
         return column_name
 
     def convert_to_sql_expression(
-        self, column: dict[str, str], is_literal: bool = False
+        self,
+        column: dict[str, str],
+        is_literal: bool = False,
+        quote_source_identifier: bool = False,
     ) -> str:
         """Process a single column definition into a SQL column expression.
 
+        The rendered form is ``{expression} AS {alias}``. DuckDB restricts only the
+        *expression* slot: a bare reserved keyword there is a parse error
+        (``SELECT column AS column`` raises ``ParserException``), while the alias
+        slot accepts every keyword tried (``SELECT x AS column`` parses). So the
+        quoting below targets the expression slot alone, and quoting is
+        behaviour-neutral because DuckDB keeps quoted identifiers
+        case-insensitive.
+
         Args:
             column: The column definition dictionary
+            is_literal: Whether the value is a literal. The literal branch puts
+                ``name`` in the expression slot too -- it references the column
+                :meth:`prepare_template_and_attributes` appends for that literal
+                -- so ``name`` is quoted there for the same reason.
+            quote_source_identifier: Whether ``source_query`` resolved as a plain
+                column *reference* (see :meth:`get_sql_column_expressions`) and may
+                therefore be quoted. Off for the ``source_columns``-driven route,
+                whose ``source_query`` is an arbitrary SQL expression: quoting a
+                bare identifier there would turn a zero-argument SQL keyword such
+                as ``current_date`` into a column lookup that resolves to nothing.
 
         Returns:
             A SQL column expression string
         """
         column["name"] = self.quote_column_name(column["name"])
         if is_literal:
-            return f"{column['name']} AS {column['name']}"
-        return f"{column['source_query']} AS {column['name']}"
+            return f"{_quote_bare_identifier(column['name'])} AS {column['name']}"
+        source = column["source_query"]
+        if quote_source_identifier:
+            source = _quote_bare_identifier(source)
+        return f"{source} AS {column['name']}"
 
     def get_sql_column_expressions(
         self,
@@ -247,12 +332,33 @@ class QueryBasedTransformer(TransformerInterface):
         column_names = list(dataframe.schema.names) + list(default_attributes.keys())
 
         for column in sql_template["columns"]:
-            if (
-                column.get("source_columns")
-                and (all(col in column_names for col in column["source_columns"]))
-                or column["source_query"] in column_names
-            ):
-                columns.append(self.convert_to_sql_expression(column))
+            # The two routes into the non-literal branch are kept apart because
+            # only one of them proves ``source_query`` is a column reference:
+            #
+            # * source_columns declared and all present -- source_query is an
+            #   arbitrary SQL expression over them, quoted at the author's
+            #   discretion;
+            # * source_query itself names an available column -- a plain
+            #   reference, which is exactly the case a bare DuckDB reserved
+            #   keyword (``column``, ``order``, ``qualify``) needs quoting for.
+            #
+            # Route precedence matches the original ``or``, so which expression a
+            # column renders to is unchanged; what is new is the quoting decision
+            # and matching an already-quoted value under the name it denotes.
+            via_source_columns = bool(column.get("source_columns")) and all(
+                col in column_names for col in column["source_columns"]
+            )
+            resolves_as_column_reference = (
+                not via_source_columns
+                and _resolution_key(column["source_query"]) in column_names
+            )
+            if via_source_columns or resolves_as_column_reference:
+                columns.append(
+                    self.convert_to_sql_expression(
+                        column,
+                        quote_source_identifier=resolves_as_column_reference,
+                    )
+                )
 
             elif (
                 isinstance(column["source_query"], float)

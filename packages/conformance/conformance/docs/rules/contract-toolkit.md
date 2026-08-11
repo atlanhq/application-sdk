@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**13 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts)
+**14 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -28,6 +28,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K011](#k011) | `AppIdMissingFromContract` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
 | [K012](#k012) | `GeneratePoeTaskMissing` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
 | [K013](#k013) | `ManifestNodeAppNameMisattributed` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
+| [K014](#k014) | `ReleaseModelUndeclared` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
 
 ---
 
@@ -582,5 +583,68 @@ would move where the node runs.
 **No suppression is available.** The finding is anchored on a generated `.json`
 artifact, which has no comment syntax to carry a directive -- as with K009, the only
 resolution is to fix the contract and regenerate. Never hand-edit `manifest.json`.
+
+---
+
+## K014 — `ReleaseModelUndeclared` {#k014}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.18.0
+
+> atlan.yaml declares no top-level release_model, so the app silently inherits the 'cd' default and auto-publishes on merge
+
+**Rationale:** release_model decides whether merging to main publishes the app to every tenant. The
+publish step reads it out of the committed atlan.yaml and defaults a missing key to 'cd'
+(.github/scripts/parse_atlan_yaml.py), so an app that never declares it auto-publishes
+to channel='all' on every merge -- not because anyone chose continuous delivery, but
+because the key was absent. That default is silent by construction: the app builds,
+tests and publishes successfully, so no gate has any reason to speak up, and the release
+model an app is actually running is invisible in review. A fleet sweep found 36 of 75
+connectors in exactly that state, none of them deliberately. This rule does not prefer
+either model -- 'cd' is a legitimate choice -- it only requires that the choice be
+written down, so it is reviewable and cannot be inherited by accident.
+
+The committed `atlan.yaml` has no usable top-level `release_model:` key, or declares a
+value outside the allowed set.
+
+`release_model` selects how the app reaches tenants:
+
+    cd      every merge to main publishes to channel='all'     semver  merges build
+only; a GitHub Release publishes to all
+
+A missing key is read as `cd` (`.github/scripts/parse_atlan_yaml.py`), so omitting it
+opts the app into fleet-wide publish-on-merge by default. Nothing else reports this: the
+omission breaks no build and fails no test, and the effective model never appears in a
+diff.
+
+**This rule takes no side between `cd` and `semver`.** It fires only on an *undeclared*
+or *invalid* value. Declaring `release_model: cd` explicitly satisfies it.
+
+`versioned` is a deprecated alias for `semver`, normalised on read; it is reported so it
+can be migrated.
+
+**Fix -- where the key goes depends on whether the contract emits atlan.yaml.**
+Determine that by running `pkl eval -m <out> contract/app.pkl` and checking whether
+`atlan.yaml` appears in the output. Do not infer it from the presence of
+`contract/app.pkl` or from which template the contract `amends` -- both are unreliable,
+and a `NativeApp.pkl` contract can still emit `atlan.yaml` through its own
+`additionalOutputFiles` block.
+
+*The contract emits it* -- declare it at the source, in the pkl `metadata` mapping,
+whose entries are emitted as top-level `atlan.yaml` keys (the same untyped hatch K011
+prescribes for `app_id`), then regenerate:
+
+    metadata {       ["release_model"] = "semver"     }
+
+If the contract instead builds `atlan.yaml` itself via an inline
+`additionalOutputFiles["atlan.yaml"]` mapping, add the key to that mapping. Either way,
+never hand-edit a generated `atlan.yaml` -- K005 guards its provenance banner and the
+next toolkit bump reverts the edit.
+
+*The contract does not emit it* -- `atlan.yaml` is hand-owned; add `release_model:` to
+it directly.
+
+**Suppress** with `# conformance: ignore[K014] <reason>` on the first line of
+`atlan.yaml` (or the line above the key). A suppression is rarely the right answer:
+declaring the value is one line and is the entire point of the rule.
 
 ---

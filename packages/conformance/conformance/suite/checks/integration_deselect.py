@@ -190,7 +190,7 @@ def _integration_tests(root: Path) -> list[IntegrationTest]:
     for path in _discover_tests(root):
         try:
             src = path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
         try:
             tree = ast.parse(src, filename=str(path))
@@ -268,7 +268,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
     """
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
     try:
         rel = path.relative_to(root)

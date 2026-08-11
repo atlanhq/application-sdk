@@ -23,6 +23,8 @@ from conformance.suite.checks.deprecation._manifest import (
     Manifest,
     load_manifest,
 )
+from conformance.suite.rules import get_rule
+from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
 
 def _tree_and_directives(src: str) -> tuple[ast.Module, dict]:
@@ -58,6 +60,18 @@ _MANIFEST = Manifest(
             message="upload_to_atlan is deprecated. Migrate to App.upload(...).",
             migration_target=True,
             removal_version=None,
+        ),
+        DeprecatedSymbol(
+            symbol="DataframeType.daft",
+            kind="enum_member",
+            module="application_sdk.common.types",
+            marker_via="enum-member",
+            message=(
+                "DataframeType.daft is deprecated; use DataframeType.pandas "
+                "instead — will be removed in v4.0.0."
+            ),
+            migration_target=True,
+            removal_version="4.0.0",
         ),
     ),
 )
@@ -112,6 +126,69 @@ def test_b001_fires_on_deprecated_method_call() -> None:
     findings = _b001(src)
     assert [f.rule_id for f in findings] == ["B001"]
     assert "upload_to_atlan" in findings[0].message
+
+
+def test_b001_fires_on_deprecated_enum_member() -> None:
+    src = (
+        "from application_sdk.common.types import DataframeType\n"
+        "t = DataframeType.daft\n"
+    )
+    findings = _b001(src)
+    assert [f.rule_id for f in findings] == ["B001"]
+    assert "DataframeType.daft" in findings[0].message
+    assert "DataframeType.pandas" in findings[0].message
+
+
+def test_b001_enum_member_respects_import_alias() -> None:
+    src = (
+        "from application_sdk.common.types import DataframeType as DfType\n"
+        "t = DfType.daft\n"
+    )
+    assert [f.rule_id for f in _b001(src)] == ["B001"]
+
+
+def test_b001_enum_member_matches_through_a_parent_package_reexport() -> None:
+    # The manifest records application_sdk.common.types; importing from the
+    # re-exporting parent must still match, as it does for classes.
+    src = "from application_sdk.common import DataframeType\nt = DataframeType.daft\n"
+    assert [f.rule_id for f in _b001(src)] == ["B001"]
+
+
+def test_b001_enum_member_matches_module_qualified_access() -> None:
+    src = (
+        "import application_sdk.common.types as types\n"
+        "t = types.DataframeType.daft\n"
+    )
+    assert [f.rule_id for f in _b001(src)] == ["B001"]
+
+
+def test_b001_silent_on_non_deprecated_enum_member() -> None:
+    src = (
+        "from application_sdk.common.types import DataframeType\n"
+        "t = DataframeType.pandas\n"
+    )
+    assert _b001(src) == []
+
+
+def test_b001_enum_member_is_module_aware() -> None:
+    """An app's own same-named enum must not pick up the SDK's deprecated members.
+
+    The member name alone (``daft``) is meaningless out of context, which is why
+    the manifest stores the qualified name and matching goes through the enum
+    class's import.
+    """
+    src = "from app.types import DataframeType\nt = DataframeType.daft\n"
+    assert _b001(src) == []
+
+
+def test_b001_enum_member_suppressed_inline() -> None:
+    src = (
+        "from application_sdk.common.types import DataframeType\n"
+        "t = DataframeType.daft  # conformance: ignore[B001] pinned to old reader\n"
+    )
+    findings = _b001(src)
+    assert len(findings) == 1
+    assert findings[0].suppressed is True
 
 
 def test_b001_suppressed_inline() -> None:
@@ -481,6 +558,90 @@ def test_extract_notices_walks_method_bodies() -> None:
     assert len(notices) == 1
 
 
+# ── __deprecated_members__ (the enum-member convention) ────────────────────────
+
+
+_ENUM_SRC = (
+    "from enum import Enum\n\n"
+    "class Codec(Enum):\n"
+    "    __deprecated_members__ = {\n"
+    '        "legacy": "Codec.legacy is deprecated; use Codec.modern — will be '
+    'removed in v5.0.0.",\n'
+    "    }\n\n"
+    '    modern = "modern"\n'
+    '    legacy = "legacy"\n'
+)
+
+
+def test_extractor_finds_deprecated_enum_member() -> None:
+    site = next(
+        s for s in extract_sites(ast.parse(_ENUM_SRC)) if s.kind == "enum_member"
+    )
+    assert site.symbol == "Codec.legacy"
+    assert site.marker_via == "enum-member"
+    assert site.removal_version_raw == "5.0.0"
+    assert site.has_migration_target is True
+
+
+def test_deprecated_members_mapping_is_not_itself_a_symbol() -> None:
+    # The dunder is class metadata, not a member: EnumMeta skips it and so must
+    # the extractor, or the manifest would carry a phantom symbol.
+    symbols = {s.symbol for s in extract_sites(ast.parse(_ENUM_SRC))}
+    assert "__deprecated_members__" not in symbols
+    assert "Codec.modern" not in symbols
+
+
+def test_enum_member_notice_is_subject_to_authoring_hygiene() -> None:
+    # The convention buys B002/B003 for free: an entry that names no removal
+    # version is malformed the same way a @deprecated message would be.
+    src = (
+        "from enum import Enum\n\n"
+        "class Codec(Enum):\n"
+        '    __deprecated_members__ = {"legacy": "Codec.legacy is deprecated."}\n\n'
+        '    legacy = "legacy"\n'
+    )
+    assert "B002" in _authoring_ids(src)
+
+
+def test_enum_member_notice_removal_can_fall_overdue() -> None:
+    src = (
+        "from enum import Enum\n\n"
+        "class Codec(Enum):\n"
+        "    __deprecated_members__ = {\n"
+        '        "legacy": "Codec.legacy is deprecated; use Codec.modern — will '
+        'be removed in v2.0.",\n'
+        "    }\n\n"
+        '    legacy = "legacy"\n'
+    )
+    assert "B003" in _authoring_ids(src, version="3.18.0")
+
+
+def test_extractor_ignores_non_literal_deprecated_members_entries() -> None:
+    # A computed key names no member we could report and a computed message has
+    # no notice text to grade, so neither is recorded.
+    src = (
+        "from enum import Enum\n\n"
+        "KEY = 'legacy'\n"
+        "class Codec(Enum):\n"
+        "    __deprecated_members__ = {KEY: 'gone', 'other': SOME_CONST}\n\n"
+        '    legacy = "legacy"\n'
+    )
+    assert [s for s in extract_sites(ast.parse(src)) if s.kind == "enum_member"] == []
+
+
+def test_sdk_manifest_carries_the_dataframe_type_member() -> None:
+    # End-to-end: the committed manifest is what B001 reads fleet-wide, so the
+    # convention is only real if the generated artifact carries the entry.
+    from conformance.suite.checks.deprecation._manifest import load_manifest
+
+    record = next(
+        s for s in load_manifest().symbols if s.symbol == "DataframeType.daft"
+    )
+    assert record.kind == "enum_member"
+    assert record.module == "application_sdk.common.types"
+    assert record.removal_version == "4.0.0"
+
+
 def test_load_manifest_warns_on_malformed_json(tmp_path, capsys) -> None:
     # A corrupted committed manifest must degrade to empty *and* surface a
     # stderr warning, so a packaging bug isn't silently invisible fleet-wide.
@@ -505,3 +666,478 @@ def test_parse_version_and_reached() -> None:
     assert version_reached((3, 2, 0), (3, 18, 0)) is True
     assert version_reached((4, 0), (3, 18, 0)) is False
     assert version_reached((3, 2), (3, 2, 0)) is True
+
+
+# ── B007 DaftOnlyDataframeApiUsage (consumer / app scope) ───────────────────────
+
+from conformance.suite.checks.deprecation._daft_runtime import (  # noqa: E402
+    scan_daft_runtime,
+)
+
+_SDK_IMPORT = "from application_sdk.io import ParquetFileReader\n"
+
+
+def _b007(src: str) -> list:
+    tree, directives = _tree_and_directives(src)
+    return scan_daft_runtime(tree, "x.py", directives)
+
+
+def test_b007_fires_on_count_rows() -> None:
+    src = _SDK_IMPORT + "n = dataframe.count_rows()\n"
+    findings = _b007(src)
+    assert [f.rule_id for f in findings] == ["B007"]
+    assert "count_rows" in findings[0].message
+    assert "len(frame)" in findings[0].message
+
+
+def test_b007_fires_on_to_pylist_on_reader_frame() -> None:
+    src = _SDK_IMPORT + "records = dataframe.to_pylist()\n"
+    findings = _b007(src)
+    assert [f.rule_id for f in findings] == ["B007"]
+    assert 'to_dict("records")' in findings[0].message
+
+
+def test_b007_exempts_to_pylist_on_pyarrow_table() -> None:
+    # pyarrow.Table.to_pylist() is a real API — the SDK itself uses it.
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "table = pa.Table.from_pandas(df)\n"
+        + "rows = table.to_pylist()\n"
+        + "direct = db.execute(sql).to_arrow_table().to_pylist()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_fires_on_names_attribute() -> None:
+    src = _SDK_IMPORT + "cols = dataframe.names\n"
+    findings = _b007(src)
+    assert [f.rule_id for f in findings] == ["B007"]
+    assert "frame.columns" in findings[0].message
+
+
+def test_b007_exempts_attribute_chain_names() -> None:
+    # pyarrow's schema.names and pandas' index.names are legitimate chains;
+    # self.names is the app's own attribute.
+    src = (
+        _SDK_IMPORT
+        + "a = dataframe.schema.names\n"
+        + "b = frame.index.names\n"
+        + "c = self.names\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_no_longer_owns_dataframetype_daft() -> None:
+    """The enum member moved to the generated manifest, so B007 must stay silent.
+
+    Leaving the hand-coded copy in place would double-report the one line
+    alongside B001 and reopen the drift the manifest's byte-gate prevents.
+    """
+    src = (
+        "from application_sdk.common.types import DataframeType\n"
+        "t = DataframeType.daft\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_silent_without_sdk_import() -> None:
+    # A standalone daft script is not consuming SDK reader frames.
+    src = "import daft\nn = df.count_rows()\ncols = df.names\n"
+    assert _b007(src) == []
+
+
+def test_b007_silent_on_unrelated_daft_attribute() -> None:
+    # .daft on a non-DataframeType receiver was never the enum alias, and is
+    # not one now that B001 owns the member.
+    src = _SDK_IMPORT + "x = config.daft\n"
+    assert _b007(src) == []
+
+
+def test_b007_suppressed_inline() -> None:
+    src = (
+        _SDK_IMPORT
+        + "# conformance: ignore[B007] receiver is a daft frame from a local path\n"
+        + "n = frame.count_rows()\n"
+    )
+    findings = _b007(src)
+    assert len(findings) == 1
+    assert findings[0].suppressed
+
+
+# ── Regression: the pyarrow exemption must not cross function scopes ─────────
+
+
+def test_b007_pyarrow_exemption_is_scoped_per_function() -> None:
+    """A pyarrow-bound `df` in one function must not exempt a real SDK reader
+    frame of the same name in another.
+
+    Collected module-wide, the guard erased the very findings it exists to
+    protect: `df`, `table`, `data`, `result` are exactly the names that recur
+    across functions in real connector modules.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def unrelated():\n"
+        + "    df = pa.table({})\n"
+        + "    return df.to_pylist()\n"
+        + "\n"
+        + "def process_reader_output(frame):\n"
+        + "    df = frame\n"
+        + "    return df.to_pylist()\n"
+    )
+    findings = _b007(src)
+    assert [f.rule_id for f in findings] == ["B007"]
+    assert findings[0].line == 10
+
+
+def test_b007_pyarrow_exemption_still_applies_within_its_own_scope() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def helper():\n"
+        + "    df = pa.table({})\n"
+        + "    return df.to_pylist()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_pyarrow_exemption_reaches_a_closure() -> None:
+    """A nested function can legitimately see an enclosing binding."""
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def outer():\n"
+        + "    table = pa.table({})\n"
+        + "\n"
+        + "    def inner():\n"
+        + "        return table.to_pylist()\n"
+        + "\n"
+        + "    return inner\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_rule_metadata() -> None:
+    """WARN is what keeps a new rule off the dogfooded gate — assert it per rule."""
+    rule = get_rule("B007")
+    assert rule.name == "DaftOnlyDataframeApiUsage"
+    assert rule.tier == EnforcementTier.WARN
+    assert rule.scope == RuleScope.APP
+    assert rule.rationale.strip()
+
+
+def test_b007_class_body_binding_does_not_leak_into_methods() -> None:
+    """Real Python scoping never lets a method see a class-body name.
+
+    Folding class bodies into the module scope let one `df = pa.table({})` in a
+    class body exempt every same-named receiver in every method of the file.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "class Foo:\n"
+        + "    df = pa.table({})\n"
+        + "\n"
+        + "    def method(self, frame):\n"
+        + "        df = frame\n"
+        + "        return df.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_rebinding_a_pyarrow_name_voids_the_exemption() -> None:
+    """The last binding before the use decides, not "bound anywhere in scope"."""
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f(frame):\n"
+        + "    df = pa.table({})\n"
+        + "    df = frame\n"
+        + "    return df.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_exemption_holds_before_a_later_rebind() -> None:
+    """Order-awareness must not break the ordinary in-scope exemption."""
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f(frame):\n"
+        + "    df = pa.table({})\n"
+        + "    rows = df.to_pylist()\n"
+        + "    df = frame\n"
+        + "    return rows\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_closure_defined_before_its_binding_is_exempt() -> None:
+    """A closure body runs at call time, not where it is written.
+
+    Applying the line filter when walking OUT to an enclosing scope flagged
+    correct code.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def outer():\n"
+        + "    def inner():\n"
+        + "        return table.to_pylist()\n"
+        + "    table = pa.table({})\n"
+        + "    return inner()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_tracks_every_rebinding_form() -> None:
+    """A stale pyarrow exemption must not survive a non-`Assign` rebinding.
+
+    Tracking only `ast.Assign` reopened the round-2 false-negative class through
+    walrus, loop and context-manager targets.
+    """
+    prelude = _SDK_IMPORT + "import pyarrow as pa\n\n"
+    for label, body in (
+        ("walrus", "    if (df := frame):\n        pass\n"),
+        ("for", "    for df in pages:\n        pass\n"),
+        ("with", "    with frame as df:\n        pass\n"),
+    ):
+        src = (
+            prelude
+            + "def f(frame, pages):\n"
+            + "    df = pa.table({})\n"
+            + body
+            + "    return df.to_pylist()\n"
+        )
+        assert [f.rule_id for f in _b007(src)] == ["B007"], label
+
+
+def test_b007_comprehension_over_pyarrow_tables_is_exempt() -> None:
+    """`to_pylist()` on a real pyarrow Table is the non-deprecated API.
+
+    Untracked binding forms defaulted to "not pyarrow-bound", which over-reported
+    a genuinely-pyarrow comprehension target.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f():\n"
+        + "    tables = [pa.table({}) for _ in range(3)]\n"
+        + "    return [t.to_pylist() for t in tables]\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_comprehension_over_reader_frames_still_fires() -> None:
+    """The exemption must not swallow the ordinary case."""
+    src = (
+        _SDK_IMPORT
+        + "def f(frames):\n"
+        + "    return [t.to_pylist() for t in frames]\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_pyarrow_iterable_in_a_sibling_scope_does_not_exempt() -> None:
+    """A pyarrow ``tables`` binding in one function exempts nothing in another.
+
+    The iterable-name lookup scanned every scope's bindings, so
+    ``tables = [pa.table({}) ...]`` in ``g`` cleared
+    ``[t.to_pylist() for t in tables]`` in ``f`` — where ``tables`` is an SDK
+    reader frame and the call is a real B007 violation. Bindings are collected
+    per scope precisely so generic names cannot leak exemptions across
+    functions; the lookup now walks only the comprehension's own scope chain.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def g():\n"
+        + "    tables = [pa.table({}) for _ in range(3)]\n"
+        + "    return tables\n"
+        + "\n"
+        + "def f(tables):\n"
+        + "    return [t.to_pylist() for t in tables]\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_parameter_shadowing_a_module_pyarrow_binding_does_not_exempt() -> None:
+    """A same-named function parameter kills an enclosing pyarrow exemption.
+
+    ``_pyarrow_bindings_by_scope`` collected assignments only, so walking
+    outward from ``f``'s body found the module-level
+    ``tables = [pa.table({}) ...]`` and cleared
+    ``[t.to_pylist() for t in tables]`` — even though the parameter ``tables``
+    shadows the global at runtime and holds whatever the caller passed (an SDK
+    reader frame, say). Parameters are now recorded as unknown/non-pyarrow
+    bindings in the function's scope, so the shadowing name voids the
+    exemption before the walk ever reaches the module binding.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "tables = [pa.table({}) for _ in range(3)]\n"
+        + "\n"
+        + "def f(tables):\n"
+        + "    return [t.to_pylist() for t in tables]\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_lambda_parameter_shadowing_a_module_pyarrow_binding_does_not_exempt() -> (
+    None
+):
+    """A same-named lambda parameter kills an enclosing pyarrow exemption.
+
+    ``ast.Lambda`` was absent from both ``_FUNCTION_SCOPES`` and
+    ``_SCOPE_NODES``, so a lambda parameter created no binding and the outward
+    walk reached the module-level ``tables = [pa.table({}) ...]`` — clearing
+    ``[t.to_pylist() for t in tables]`` even though the lambda's ``tables``
+    shadows the global exactly as a ``def`` parameter does. Lambdas now open a
+    scope and record their parameters as unknown/non-pyarrow.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "tables = [pa.table({}) for _ in range(3)]\n"
+        + "\n"
+        + "f = lambda tables: [t.to_pylist() for t in tables]\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_rebinding_a_parameter_to_pyarrow_restores_the_exemption() -> None:
+    """A parameter rebound to pyarrow inside the body is exempt from that line.
+
+    Parameters are recorded as unknown/non-pyarrow at the ``def`` line, which
+    sorts before every use — so a later ``tables = [pa.table({}) ...]`` inside
+    the body wins the own-scope last-binding-before-the-use rule, and the
+    shadow-then-rebind sequence ends pyarrow, exactly as the runtime does.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f(tables):\n"
+        + "    tables = [pa.table({}) for _ in range(3)]\n"
+        + "    return [t.to_pylist() for t in tables]\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_pyarrow_iterable_in_an_enclosing_scope_still_exempts() -> None:
+    """The enclosing chain is still honoured — only sibling scopes are cut off."""
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def outer():\n"
+        + "    tables = [pa.table({}) for _ in range(3)]\n"
+        + "\n"
+        + "    def inner():\n"
+        + "        return [t.to_pylist() for t in tables]\n"
+        + "\n"
+        + "    return inner\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_loop_over_a_pyarrow_iterable_is_exempt() -> None:
+    """`for t in [pa.table({})]` binds a real Table — same shape as a comprehension.
+
+    Hardcoding the loop branch to "never a producer call" contradicted the
+    comprehension branch ten lines below, which inspects the iterable and is
+    right. One helper now serves both.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f():\n"
+        + "    for t in [pa.table({})]:\n"
+        + "        return t.to_pylist()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_loop_over_reader_frames_still_fires() -> None:
+    src = (
+        _SDK_IMPORT
+        + "def f(pages):\n"
+        + "    for t in pages:\n"
+        + "        return t.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_chained_assignment_kills_a_stale_exemption() -> None:
+    """`a = df = frame` — the `len(targets) == 1` guard dropped the rebinding."""
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f(frame):\n"
+        + "    df = pa.table({})\n"
+        + "    a = df = frame\n"
+        + "    return df.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_tuple_unpacking_kills_a_stale_exemption() -> None:
+    """`df, other = frame, 1` — `target.id` silently dropped unpacking targets."""
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f(frame):\n"
+        + "    df = pa.table({})\n"
+        + "    df, other = frame, 1\n"
+        + "    return df.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_augmented_assignment_kills_a_stale_exemption() -> None:
+    """`df += frame` rebinds `df` to an unknown value — the exemption must die.
+
+    `ast.AugAssign` was the one binding form the walk never recorded, so a
+    pyarrow-bound `df` kept its exemption past the `+=` and the genuine SDK
+    reader frame on the next line went unreported.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f(frame):\n"
+        + "    df = pa.table({})\n"
+        + "    df += frame\n"
+        + "    return df.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_tuple_unpacking_pairs_element_wise() -> None:
+    """`df, other = pa.table({}), 1` binds a genuine Table to `df`."""
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "def f():\n"
+        + "    df, other = pa.table({}), 1\n"
+        + "    return df.to_pylist()\n"
+    )
+    assert _b007(src) == []
