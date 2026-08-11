@@ -183,6 +183,13 @@ production — and, usefully, a task with `heartbeat_timeout_seconds=None` still
 a stall watchdog.
 
 ```python
+@dataclass(frozen=True)
+class _Hold:
+    label: str
+    started_at: float
+    deadline: float | None   # None = unbounded
+
+
 class ProgressTracker:
     """Observed forward progress for one activity attempt."""
 
@@ -193,7 +200,7 @@ class ProgressTracker:
         self._clock = clock
         self._last_label: str = ""
         self._last_at: float = clock()
-        self._holds: dict[int, float | None] = {}  # token -> deadline (None = unbounded)
+        self._holds: dict[int, _Hold] = {}
         self._next_token: int = 0
 
     def mark_progress(self, label: str = "") -> None:
@@ -202,22 +209,33 @@ class ProgressTracker:
         if label:
             self._last_label = label
 
-    def enter_hold(self, deadline: float | None) -> int:
+    def enter_hold(self, label: str, timeout: float | None) -> int:
         """Vouch for an in-flight opaque operation. Returns a token."""
         token = self._next_token
         self._next_token += 1
-        self._holds[token] = deadline
+        now = self._clock()
+        self._holds[token] = _Hold(
+            label, now, None if timeout is None else now + timeout
+        )
         return token
 
     def exit_hold(self, token: int) -> None:
         # Keyed by token, not popped off a stack: concurrent holds in one
         # activity (asyncio.gather over several run_in_thread calls) must not
         # release each other's deadlines.
-        self._holds.pop(token, None)
+        hold = self._holds.pop(token, None)
+        if hold is not None:
+            # A completed operation *is* progress. The observed duration also
+            # feeds the warn-mode report: a long *unbounded* hold is a site that
+            # wants an explicit allowance (see Warn mode).
+            _observe_hold_closed(hold, duration=self._clock() - hold.started_at)
+            self.mark_progress(hold.label)
 
     def held(self) -> bool:
         now = self._clock()
-        return any(d is None or d > now for d in self._holds.values())
+        return any(
+            h.deadline is None or h.deadline > now for h in self._holds.values()
+        )
 
     def stalled_for(self) -> float:
         """Seconds since the last observable progress, 0 while vouched-for."""
@@ -239,16 +257,56 @@ while not stop_event.is_set():
     if budget_seconds is not None and stalled >= budget_seconds:
         logger.warning(
             "Task '%s' made no observable progress for %.0fs (budget %.0fs); last "
-            "signal was '%s' — failing the activity",
+            "signal was '%s'%s",
             task_name, stalled, budget_seconds, progress.last_label or "<none>",
+            " — failing the activity" if mode is Mode.ENFORCE else " (warn mode: not failing)",
         )
-        on_stall(stalled, progress.last_label)
-        return   # cancel-and-return: the activity's finally awaits this task
+        if mode is Mode.ENFORCE:
+            on_stall(stalled, progress.last_label)
+            return   # cancel-and-return: the activity's finally awaits this task
+        progress.mark_progress()   # re-arm so warn mode reports each gap once
 ```
 
 `on_stall` is injected by `activities.py`, the same way `heartbeat_fn` already is,
 so `heartbeat.py` stays free of activity/Temporal semantics and the watchdog is
 unit-testable without a worker.
+
+### Warn mode: the watchdog is its own audit tool
+
+The obvious question from any app author is *"how do I find every place in my
+codebase that needs a hold, and what allowance do I put on each one?"* Answering
+that with "audit your code" would reintroduce this ADR's own problem one level down:
+a per-site number, guessed up front, by hand.
+
+So the flag has **three states, not two** — `off`, `warn`, `enforce`:
+
+- **`off`** — hooks are inert, nothing observes anything. Behaviour identical to today.
+- **`warn`** — the watchdog runs and reports, but never fails the activity. This is
+  the audit tool.
+- **`enforce`** — as described above.
+
+Warn mode emits the two things an author needs, and they map to the two shapes that
+need action:
+
+1. **No-progress gaps with no hold in force** — task, last progress signal, gap
+   duration. These are the sites that need a beat or a hold.
+2. **Long *unbounded* holds** — recorded by `exit_hold` above. Without this, a
+   blocking call through `run_in_thread` would be invisible to the audit precisely
+   because it is auto-vouched-for; these are the sites that want an explicit
+   allowance instead of relying on the backstop.
+
+One run against a large tenant therefore produces a ranked work-list, and the author
+wraps the sites that exceeded the budget and ignores the rest — which is most of the
+app. The whole-codebase audit collapses into reading a report.
+
+This is not extra machinery: the rollout already gates opt-in on a large-tenant
+tail-profile run, and already needs stall telemetry to tell whether the change
+helped. Warn mode makes that same run the audit, and means **an app's first
+exposure to this design is a report, not a behaviour change.**
+
+The same telemetry answers all three open sizing questions at once: where holds go,
+what each allowance should be, and what the global `max_no_progress_seconds` default
+should be (Open question 1).
 
 ### Failing the activity, and what the failure looks like
 
@@ -297,7 +355,8 @@ Detection latency is `max_no_progress_seconds` plus at most one loop tick (10s).
    legitimate long blocking call is never false-killed and behaviour on upgrade is
    unchanged. An unbounded hold means the stall watchdog is inactive for the
    duration of the call and the 24h backstop is the only bound — a real, documented
-   residual, which the conformance rule below is what shrinks.
+   residual. Warn mode surfaces each one with its observed duration, and the
+   conformance rule keeps them visible afterwards.
 3. **Manual `context.heartbeat(...)` or `holding_progress(...)` (explicit, app
    action).** The residual: a custom async loop, or an opaque single `await`
    against the connector's own source client (see the asymmetry below — this is
@@ -366,6 +425,24 @@ because there is nothing to observe from outside a blocked thread. The ADR's
 position is to say so, and to let a human state the number at the one site that
 knows it — never to let the SDK guess it.
 
+### Choosing the allowance
+
+Asking an author for a number is only defensible if the question is answerable, so
+it has to be framed precisely. The allowance is **not** a prediction of how long the
+operation takes. It is *how long you would let this one operation run before you
+would rather it failed.* That is answerable at the call site in a way that "how long
+should this whole activity take?" never was, because it is a property of one
+operation against one resource rather than of a tenant's data volume.
+
+Two things make it safe to answer:
+
+- **Warn mode gives you the evidence.** Use the observed p99 for that site plus
+  headroom, rather than a number invented at the desk.
+- **The error is asymmetric, so err generous.** Too generous only delays detection
+  toward the backstop — mildly worse observability. Too tight kills a healthy run,
+  and with stall kills non-retryable and no checkpointing (REQ-1609) that costs the
+  whole activity. Anyone unsure should round up.
+
 ### The async escape hatch — and the asymmetry that makes it common
 
 **Q: "Making people use it *always* might become a problem."** This is the most
@@ -398,9 +475,10 @@ almost every connector**, because almost every connector makes at least one such
 opaque async call against its source. It is a *standard part of writing a
 long-running async task*, not a rare escape hatch. We make that acceptable by (a)
 keeping it a one-line context manager, (b) documenting it as expected rather than
-exceptional, and (c) having the conformance rule and the opt-in audit specifically
-hunt source-side opaque async calls. A forgotten hold false-kills at the tail (see
-*Migration*), so for such calls it is **required**, not advisory.
+exceptional, and (c) never asking anyone to find these by reading code — warn mode
+names the sites and sizes their allowances, and the conformance rule keeps them
+visible afterwards. A forgotten hold false-kills at the tail (see *Migration*), so
+for such calls it is **required**, not advisory.
 
 ## Bounding total time
 
@@ -623,18 +701,23 @@ its meaning and its 60s default; `start_to_close` keeps its 600s default. There 
 no coupled default bump, because no existing knob changes meaning. This is the main
 practical advantage over Option 5.
 
-**On opt-in, whether unchanged code survives depends on its shape.** For the last
-two rows, do-nothing code *will* start hitting stall kills, and that is the design
-working as intended — those paths emit nothing the SDK can see, i.e. a
-healthy-but-quiet task it cannot distinguish from a wedged one:
+**In warn mode: still nothing changes, but you get the work-list.** Warn mode is the
+intermediate state every app passes through, and it cannot fail an activity. The two
+at-risk shapes below show up as report lines instead of kills, which is what makes
+the migration a reading exercise rather than a code audit.
 
-| Existing code shape | Outcome on opt-in | Author action |
-| --- | --- | --- |
-| Streaming through SDK batch writers / stats / `ObjectStore` transfer | Covered — hooks mark progress | none |
-| Already calls `context.heartbeat()` | Covered — marks progress | none |
-| Opaque blocking call via `run_in_thread` | Covered — unbounded auto-hold | none; declare a hold to get a real bound |
-| **Custom async loop doing its own I/O, never through an instrumented SDK path** | **False-killed** if any gap > budget | add a beat or a hold |
-| **Opaque single `await` against the source (connector's own async client)** | **False-killed** at the tail | wrap in `holding_progress()` — expected in ~every connector |
+**In enforce mode, whether unchanged code survives depends on its shape.** For the
+last two rows, do-nothing code *will* hit stall kills, and that is the design working
+as intended — those paths emit nothing the SDK can see, i.e. a healthy-but-quiet task
+it cannot distinguish from a wedged one:
+
+| Existing code shape | Warn mode | Enforce mode | Author action |
+| --- | --- | --- | --- |
+| Streaming through SDK batch writers / stats / `ObjectStore` transfer | silent | Covered — hooks mark progress | none |
+| Already calls `context.heartbeat()` | silent | Covered — marks progress | none |
+| Opaque blocking call via `run_in_thread` | reported as a long unbounded hold | Covered — unbounded auto-hold; backstop is the only bound | declare an allowance to get a real bound |
+| **Custom async loop doing its own I/O, never through an instrumented SDK path** | reported as a no-progress gap | **False-killed** if any gap > budget | add a beat or a hold |
+| **Opaque single `await` against the source (connector's own async client)** | reported as a no-progress gap | **False-killed** at the tail | wrap in `holding_progress()` — expected in ~every connector |
 
 **The `start_to_close` 24h backstop is coupled to the same opt-in flip.** An app
 gets the 24h ceiling *and* the stall watchdog together, never one without the other:
@@ -652,23 +735,28 @@ stalls and no checkpointing, relocating it is worse than leaving it.
 1. **Fix the loop-starvation failures first.** Heartbeat timeout is today's
    dominant alert (Problem 2) and it is an ADR-0010 adoption gap, not a semantics
    gap. Audit and fix the blocking-on-the-loop sites before adding a second
-   mechanism on top. This is sequencing, not scope creep: the measurement in step 2
-   is unreadable while starvation dominates the signal.
-2. **Land the measurement before the mechanism.** CNCT-10's timeout-subtype
-   classification, plus a counter for stall kills and observed no-progress gap
-   distribution. Without a baseline there is no way to tell whether the flip helped,
-   and *"verify against a tail profile"* in step 5 is not checkable.
-3. **Ship the framework `mark_progress()` hooks** (writers, emission, transfer
-   loops) so the streaming majority is covered before anyone opts in. Inert while
-   the flag is off.
+   mechanism on top. This is sequencing, not scope creep: the warn-mode signal in
+   step 3 is unreadable while starvation dominates it.
+2. **Ship the framework `mark_progress()` hooks** (writers, emission, transfer
+   loops) so the streaming majority is covered before anyone observes anything.
+   Inert while the flag is off. Land CNCT-10's timeout-subtype classification
+   alongside, so stall kills are distinguishable from starvation kills in the
+   fleet-wide numbers.
+3. **Run every app in `warn` first.** Warn mode is both the measurement and the
+   audit: it produces the per-app work-list (no-progress gaps, long unbounded holds)
+   and the fleet-wide gap distribution that sets the
+   `max_no_progress_seconds` default. Nothing can be killed in this state, so it is
+   safe to turn on broadly and early — and it means the first thing an app team sees
+   is a report about their own code, not a behaviour change.
 4. **Ship the conformance rule and the toolkit floor.** Both are independent of the
    `@task` work and both deliver immediately: the floor stops the next app shipping
-   a 2h node timeout, and the rule finds the opaque-call sites step 5 has to audit.
-   Pair with the AE ask to drop its own default.
-5. **Gate behind a flag and flip per-app after verification** —
-   `progress_watchdog` on `@task` / `TaskMetadata`, defaulting **off**, plus an env
-   kill-switch. Per-app work is auditing the two at-risk shapes from *Migration* and
-   declaring holds, then verifying against a **large-tenant / tail profile**.
+   a 2h node timeout, and the rule keeps un-held opaque sites visible after the
+   warn-mode pass has cleared the backlog. Pair with the AE ask to drop its own
+   default.
+5. **Flip per-app to `enforce` once that app's warn report is clean** — i.e. its
+   remaining gaps are all inside declared holds or under budget, verified against a
+   **large-tenant / tail profile**, not a smoke test. The flag (`progress_watchdog`
+   on `@task` / `TaskMetadata`) carries an env kill-switch back to `warn`.
 6. **Couple the 24h `start_to_close` backstop (and its `schedule_to_close`
    product) to that same per-app flip.** The global default changes only at the end,
    once the flag is retired and the watchdog is universal; at that point the
@@ -688,6 +776,9 @@ removal is part of the work, not a follow-up.
   upgrade is behaviourally identical until an app opts in.
 - Stalls surface as a typed error naming the last progress signal, which is both
   better for the operator and what makes the rollout measurable.
+- The per-app migration is mechanical rather than manual: warn mode produces the
+  work-list and the evidence for each allowance, so nobody has to read a whole
+  codebase deciding where a hold belongs or invent a number for it.
 - Streaming connectors get correct behavior with no code changes.
 - Change is localized to `execution/heartbeat.py` (tracker + loop + hold plumbing),
   the `activities.py` wiring and cancellation branch, one new error leaf, and
@@ -710,8 +801,9 @@ removal is part of the work, not a follow-up.
 1. **The default for `max_no_progress_seconds`.** 300s was the earlier proposal;
    the FND-165 evidence (apps needing 1800s under the *easier* unconditional
    regime) argues for something larger, and a too-tight default is a false-kill
-   generator at the tail. Proposal: start at **900s**, and treat the observed
-   no-progress gap distribution from Rollout step 2 as the evidence that sets it.
+   generator at the tail. Proposal: start at **900s**, and let the gap distribution
+   from the warn-mode pass (Rollout step 3) set the final number — this question is
+   answered by data, not by argument, and warn mode is how we get it.
 2. **`schedule_to_close` vs capped attempts** for bounding the retry product
    (see *Bounding total time*).
 3. **Whether REQ-1609 (checkpointing) gates the per-app flip** or merely informs
