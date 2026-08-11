@@ -427,7 +427,7 @@ uvloop==0.22.1 ; sys_platform != 'win32'
     # via
     #   atlan-application-sdk
     #   uvicorn
-virtualenv==21.7.3
+virtualenv==21.7.4
     # via pre-commit
 watchfiles==1.2.0
     # via uvicorn
