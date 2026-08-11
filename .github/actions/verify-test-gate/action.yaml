@@ -71,8 +71,16 @@ outputs:
   conclusion:
     description: |
       The same verdict as `passed`, spelled as a GitHub Checks API conclusion
-      ("success" / "failure"). Lets the cross-repo callback complete the SDK-side
-      check run from this action directly, instead of re-deriving the verdict.
+      ("success" / "failure" / "cancelled"). Lets the cross-repo callback
+      complete the SDK-side check run from this action directly, instead of
+      re-deriving the verdict.
+
+      "cancelled" is emitted for a BLOCKED gate whose only non-passing results
+      are cancellations — a manual cancel, a superseded commit, or a
+      concurrency-group eviction. `passed` is still "false" there (an un-run
+      test must never green a merge), but reporting it as "failure" tells a
+      reviewer on the dispatching SDK PR that their change broke the connector,
+      which sends them into the wrong diff (FND-218).
     value: ${{ steps.gate.outputs.conclusion }}
   unit-status:
     description: Human-readable status for the unit row.

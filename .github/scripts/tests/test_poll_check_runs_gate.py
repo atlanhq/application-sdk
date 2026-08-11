@@ -302,6 +302,57 @@ def test_wait_for_checks_fails_on_bad_conclusion(monkeypatch):
     assert ok is False
 
 
+# --- the gate log must distinguish "never ran" from "failed" (FND-218) ------
+
+
+def test_the_failure_annotation_names_each_conclusion(monkeypatch, capsys):
+    # Bare names made a connector whose tests genuinely failed
+    # indistinguishable from one that was evicted before it got a runner —
+    # and those have opposite responses (read the diff vs. re-run).
+    def fake_run(cmd, **kwargs):
+        runs = [
+            {"name": NAMES[0], "status": "completed", "conclusion": "failure"},
+            {"name": NAMES[1], "status": "completed", "conclusion": "timed_out"},
+        ]
+        return _http_response(200, '"v1"', _check_runs_body(runs))
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    assert mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None) is False
+    out = capsys.readouterr().out
+    assert f"{NAMES[0]} (failure)" in out
+    assert f"{NAMES[1]} (timed_out)" in out
+
+
+def test_a_cancelled_check_gets_the_eviction_explanation(monkeypatch, capsys):
+    def fake_run(cmd, **kwargs):
+        runs = [
+            {"name": NAMES[0], "status": "completed", "conclusion": "cancelled"},
+            {"name": NAMES[1], "status": "completed", "conclusion": "success"},
+        ]
+        return _http_response(200, '"v1"', _check_runs_body(runs))
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    # Still blocks: an un-run connector test cannot green the merge.
+    assert mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None) is False
+    out = capsys.readouterr().out
+    assert "cancelled, not failed" in out
+    assert NAMES[0] in out
+    assert "Re-run rather than triage the diff." in out
+
+
+def test_no_eviction_explanation_when_nothing_was_cancelled(monkeypatch, capsys):
+    def fake_run(cmd, **kwargs):
+        runs = [
+            {"name": NAMES[0], "status": "completed", "conclusion": "failure"},
+            {"name": NAMES[1], "status": "completed", "conclusion": "success"},
+        ]
+        return _http_response(200, '"v1"', _check_runs_body(runs))
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    assert mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None) is False
+    assert "cancelled, not failed" not in capsys.readouterr().out
+
+
 def test_wait_for_checks_times_out_when_never_complete(monkeypatch):
     def fake_run(cmd, **kwargs):
         runs = [{"name": NAMES[0], "status": "in_progress"}]
