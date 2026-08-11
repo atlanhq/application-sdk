@@ -210,8 +210,27 @@ def cancelled_only(
     absence of failures. The "discovery succeeded but the matrix was skipped"
     anomaly produces an error while every result sits in ``_OK_OPTIONAL``;
     treating that as a cancellation would hide a real misconfiguration behind a
-    "just re-run" verdict — the opposite of what this distinction is for.
+    "just re-run" verdict — the opposite of what this distinction is for. The
+    anomaly is raised by ``evaluate`` independently of the raw job results, so a
+    cancellation elsewhere does not make it disappear: it must be excluded
+    explicitly, or a simultaneous cancellation would mask it.
     """
+    # The matrix-skipped anomaly fires on raw results that all sit in
+    # _OK_OPTIONAL, so it is invisible to the non_ok filter below. It is the one
+    # gate error that is never cancellation-attributable, so its presence means
+    # the block is not a pure cancellation — spell it "failure" and surface the
+    # misconfiguration, never "just re-run".
+    if (
+        discover_e2e == "success"
+        and e2e == "skipped"
+        and all(
+            result in _OK_OPTIONAL
+            for _annotation, _row, result in _install_path(
+                build_e2e_image, merge_e2e_image, prepare_tenant
+            )
+        )
+    ):
+        return False
     non_ok = [
         result
         for result in (

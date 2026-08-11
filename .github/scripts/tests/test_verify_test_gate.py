@@ -860,6 +860,27 @@ def test_cancelled_only_is_false_when_the_gate_passes() -> None:
     assert not cancelled_only("success", "success", "success", "success", "success")
 
 
+def test_a_cancellation_does_not_mask_the_matrix_skipped_anomaly() -> None:
+    # The anomaly error is raised by evaluate() independently of the raw job
+    # results, so a cancellation elsewhere does not make it go away. cancelled_only
+    # used to inspect raw results alone: a cancelled detection job coinciding with
+    # the anomaly (discovery green, matrix skipped, install path clean) returned
+    # True, and the gate spelled a genuine misconfiguration "just re-run".
+    assert not cancelled_only(
+        "success", "success", "success", "success", "skipped", "cancelled"
+    )
+    out = render("success", "success", "success", "success", "skipped", "cancelled")
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "failure", (
+        "the anomaly is not cancellation-attributable, so its presence must "
+        "spell failure and surface the misconfiguration — never a benign re-run"
+    )
+    errors = evaluate(
+        "success", "success", "success", "success", "skipped", "cancelled"
+    )
+    assert any("matrix was skipped" in e for e in errors)
+
+
 def test_main_annotates_the_cancellation_guidance(capsys) -> None:
     rc = main(
         [
