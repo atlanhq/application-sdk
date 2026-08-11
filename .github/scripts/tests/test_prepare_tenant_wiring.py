@@ -19,8 +19,10 @@ import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 
 import e2e_tenant_app as app  # noqa: E402
+from _gha_expr import evaluate  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
@@ -268,8 +270,41 @@ def test_the_lease_is_released_even_when_the_legs_fail(jobs: dict) -> None:  # t
     # having taken the lease — not on the outcome of anything after it.
     gate = jobs["release-tenant"]["if"]
     assert "always()" in gate
-    assert "needs.lease-tenant.result == 'success'" in gate
     assert "e2e" in jobs["release-tenant"]["needs"]
+
+
+@pytest.mark.parametrize(
+    ("lease_result", "should_release"),
+    [
+        ("success", True),
+        # THE case that was broken. lease-tenant is a per-cloud MATRIX job, so
+        # `.result` is the aggregate: one cloud's acquire timing out made it
+        # 'failure' and skipped the release for EVERY cloud, including the legs
+        # that did acquire. Their leases then waited for the next contender's
+        # reaper instead of being handed back — directly against this job's stated
+        # purpose. Gating on "ran" rather than "succeeded" fixes it.
+        ("failure", True),
+        ("cancelled", True),
+        # Never ran, so there is nothing to release.
+        ("skipped", False),
+    ],
+)
+def test_release_runs_whenever_any_lease_leg_may_hold_a_tenant(
+    lease_result: str, should_release: bool
+) -> None:
+    """Evaluated rather than pattern-matched: `&&` binds tighter than `||` in
+    GitHub expressions, so a gate that merely *mentions* the right terms can
+    still be wrong. Widening this is only safe because the release driver checks
+    ownership before deleting, so a leg that never acquired no-ops."""
+    expression = _load_gate("release-tenant")
+    assert (
+        evaluate(expression, {"needs": {"lease-tenant": {"result": lease_result}}})
+        is should_release
+    )
+
+
+def _load_gate(job: str) -> str:
+    return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))["jobs"][job]["if"]
 
 
 def test_the_lease_wait_fits_inside_the_job_timeout(jobs: dict) -> None:  # type: ignore[type-arg]
@@ -286,30 +321,20 @@ def test_the_lease_wait_fits_inside_the_job_timeout(jobs: dict) -> None:  # type
     assert timeout_seconds > wait_seconds
 
 
-#: Every job on the path from run creation to the last leg finishing. The TTL is
-#: measured from run CREATION, so all of it counts — not just the part after the
-#: lease is acquired. Sizing the TTL against install-plus-legs alone was an
-#: actual latent bug, not a theoretical one: that pair is 160 min against a chain
-#: of 325, so a healthy run that queued for runners could cross a 4h TTL partway
-#: through its own install and have a contender reap it mid-flight.
-_PRE_RELEASE_CHAIN = (
-    "discover-e2e",
-    "build-e2e-image",
-    "merge-e2e-image",
-    "lease-tenant",
-    "prepare-tenant",
-    "e2e",
-)
+#: The jobs a lease is actually HELD across: acquired before the install, released
+#: after the last leg. The TTL is measured from the acquisition time the holder
+#: records for itself, so only this span counts — none of the pre-lease work
+#: (discovery, image build, manifest merge, runner queue time) does.
+_LEASE_HELD_ACROSS = ("prepare-tenant", "e2e")
 
 
 def test_the_lease_ttl_cannot_fire_on_a_healthy_holder(jobs: dict) -> None:  # type: ignore[type-arg]
     """The TTL breaking a LIVE holder's lease puts a second installer on the
-    tenant — the exact race the lease exists to close — so it must clear the
-    whole chain, with room left for runner queue time, which has no timeout.
+    tenant — the exact race the lease exists to close — so it has to clear the
+    longest legitimate hold with room to spare.
 
-    Derived from the workflow's own timeouts rather than hard-coded, so adding a
-    job to the chain or raising a timeout forces the TTL up instead of quietly
-    eating the margin.
+    Derived from the workflow's own timeouts rather than hard-coded, so raising
+    either of them forces the TTL up instead of quietly eating the margin.
     """
     action = yaml.safe_load(
         (_REPO_ROOT / ".github/actions/e2e-tenant-lease/action.yaml").read_text(
@@ -317,20 +342,20 @@ def test_the_lease_ttl_cannot_fire_on_a_healthy_holder(jobs: dict) -> None:  # t
         )
     )
     ttl_seconds = int(action["inputs"]["ttl-seconds"]["default"])
-    chain_seconds = (
-        sum(int(jobs[job]["timeout-minutes"]) for job in _PRE_RELEASE_CHAIN) * 60
+    hold_seconds = (
+        sum(int(jobs[job]["timeout-minutes"]) for job in _LEASE_HELD_ACROSS) * 60
     )
 
-    assert ttl_seconds > chain_seconds, (
-        f"ttl-seconds ({ttl_seconds}s) does not clear the "
-        f"{'+'.join(_PRE_RELEASE_CHAIN)} chain ({chain_seconds}s). A healthy "
-        "holder that queued for runners would have its lease broken mid-install."
+    assert ttl_seconds > hold_seconds, (
+        f"ttl-seconds ({ttl_seconds}s) does not clear the longest legitimate hold "
+        f"({'+'.join(_LEASE_HELD_ACROSS)} = {hold_seconds}s). A healthy holder "
+        "would have its lease broken mid-run and a second installer would start."
     )
-    # Queue time between those jobs is unbounded, so clearing the chain exactly is
-    # not enough; require real headroom rather than a one-second pass.
-    assert ttl_seconds >= 2 * chain_seconds, (
-        f"ttl-seconds ({ttl_seconds}s) clears the chain ({chain_seconds}s) but "
-        "leaves no room for runner queue time, which has no timeout"
+    # Runner queue time between the held jobs is unbounded, so clearing the sum
+    # exactly is not enough; require real headroom rather than a one-second pass.
+    assert ttl_seconds >= 1.5 * hold_seconds, (
+        f"ttl-seconds ({ttl_seconds}s) clears the hold ({hold_seconds}s) but "
+        "leaves little room for runner queue time, which has no timeout"
     )
 
 

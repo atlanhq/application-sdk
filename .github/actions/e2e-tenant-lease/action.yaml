@@ -4,9 +4,12 @@ description: |
   against a shared tenant, replacing the ref-keyed concurrency groups that could
   only hold one pending run and silently evicted the rest (FND-218 / FND-250).
 
-  Consumed at @main by every contender ON PURPOSE: they all have to agree on the
-  ref layout and the ordering rule, so the protocol must not vary with whichever
-  ref a caller happened to check out. See e2e_tenant_lease.py for the protocol.
+  Exclusion is an atomic compare-and-swap: one fixed-name ref per tenant, where
+  GitHub's 422 on creating a ref that already exists IS the lock. Consumed at
+  @main by every contender ON PURPOSE — they all have to agree on that ref name,
+  so the protocol must not vary with whichever ref a caller happened to check
+  out. See e2e_tenant_lease.py, including why an ordered ticket queue was tried
+  first and does not work.
 
   Requires `contents: write` (to create and delete the ticket ref) and
   `actions: read` (to tell a live holder from a dead one). Without them the
@@ -37,28 +40,41 @@ inputs:
     default: "5400"
   poll-seconds:
     description: |
-      Gap between queue checks. Each poll costs two API calls, so this also sets
-      the draw on the 1000/hour GITHUB_TOKEN budget.
+      Gap between attempts. A waiting pass costs TWO API calls (read the lease
+      ref; check the holding run's status — the holder record is memoised by the
+      ref's target sha), and FOUR on the pass that takes the lease (plus a fifth
+      to reap a dead holder).
+
+      That budget is 1000 requests/hour per REPOSITORY, and every matrix leg of
+      every concurrent run shares it. So raise this rather than lower it when
+      several clouds contend: at 30s, one leg waiting the full 90min budget draws
+      ~360 calls, and three clouds waiting together draw ~1080 over that 90
+      minutes — about 720/hour, which is close enough to the ceiling to matter
+      once the rest of the run's API use is counted.
+
+      A rate-limit 403 no longer disables the lease: it is told apart from a
+      permission 403, backs off (honouring Retry-After), and fails loudly if it
+      never clears. Staying inside the budget is still much better than relying
+      on that.
     required: false
     default: "30"
   ttl-seconds:
     description: |
-      Run AGE at which a holder still reporting "in_progress" is treated as
-      wedged and its lease broken. Measured from run CREATION, not from when the
-      lease was taken — the lease is acquired several jobs in, and a run can also
-      sit waiting for runners first, so this has to clear the entire chain
-      (discovery + image build + manifest merge + the lease wait + install +
-      legs) with room for unbounded queue time on top. Sized against the
-      workflow's own job timeouts by a test, so adding a job or raising a timeout
-      forces this up rather than silently eating the margin.
+      How long a holder may HOLD the lease before a waiter treats it as wedged
+      and breaks it. Measured from the acquisition time the holder recorded in
+      its own holder record — so it is lease-hold time, not run age, and none of
+      the pre-lease span (discovery, image build, manifest merge, runner queue
+      time) counts against it.
 
-      Deliberately generous (12h against a ~5.5h chain). The operator-facing
-      signal for a stuck tenant is wait-seconds failing loudly, not this; all
-      this does is stop a ticket being immortal. Firing it early is the
-      expensive direction — it reaps a live mid-install ticket and puts a second
-      installer on the tenant, the exact race the lease closes. 0 disables it.
+      Must exceed the longest legitimate hold: the install plus the leg ceiling.
+      Sized against the workflow's own job timeouts by a test, so raising either
+      forces this up rather than silently eating the margin. Errs long on
+      purpose — breaking a live holder's lease puts a second installer on the
+      tenant, which is the race the lease exists to close, whereas breaking one
+      late costs a blocked tenant that a waiter is already reporting loudly.
+      0 disables the backstop.
     required: false
-    default: "43200"
+    default: "14400"
   on-timeout:
     description: |
       "fail" (default) — go red naming the holding run. "warn" — proceed
@@ -71,10 +87,17 @@ outputs:
     description: '"true" only when this run now holds the lease.'
     value: ${{ steps.lease.outputs.acquired }}
   state:
-    description: '"acquired", "disabled" (no ref-write permission) or "timeout".'
+    description: |
+      "acquired"; "disabled" (no ref-write permission — the run proceeds
+      unserialised); "timeout" (the tenant stayed busy); or "rate-limited" (the
+      API never cleared, which fails rather than proceeding unserialised).
+
+      Worth asserting in anger rather than trusting a green job: "disabled" is a
+      deliberate fail-open, so a lease that is not working at all still leaves
+      the job green with only a warning.
     value: ${{ steps.lease.outputs.state }}
   lease-ref:
-    description: The ticket ref this run owns.
+    description: The tenant's lease ref this run raced for.
     value: ${{ steps.lease.outputs.lease-ref }}
   holder-run-id:
     description: The run holding the lease when this one gave up waiting; else empty.
@@ -96,13 +119,14 @@ runs:
         POLL_SECONDS: ${{ inputs.poll-seconds }}
         TTL_SECONDS: ${{ inputs.ttl-seconds }}
         ON_TIMEOUT: ${{ inputs.on-timeout }}
-        # The tickets live in the repository the run belongs to, which is also
-        # the only repository whose run_ids are comparable — see the ordering
-        # note in e2e_tenant_lease.py.
+        # The lease lives in the repository the run belongs to. Every run that
+        # contends for a given app's tenant runs there too — a connector PR, a
+        # push, and a cross-repo dispatch from application-sdk all execute in the
+        # app repo. (The one exception, application-sdk's manual install
+        # workflow, is outside the lease domain: see FND-254.)
         LEASE_REPO: ${{ github.repository }}
         RUN_ID: ${{ github.run_id }}
         RUN_ATTEMPT: ${{ github.run_attempt }}
-        HEAD_SHA: ${{ github.sha }}
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
@@ -113,7 +137,6 @@ runs:
           --cloud "$CLOUD" \
           --run-id "$RUN_ID" \
           --run-attempt "$RUN_ATTEMPT" \
-          --sha "$HEAD_SHA" \
           --wait-seconds "$WAIT_SECONDS" \
           --poll-seconds "$POLL_SECONDS" \
           --ttl-seconds "$TTL_SECONDS" \
