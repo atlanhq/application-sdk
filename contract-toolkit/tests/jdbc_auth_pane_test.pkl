@@ -202,8 +202,35 @@ local nativeSingleAuthJdbcApp = (NativeApp) {
   }
 }
 
+/// Semicolon-delimited JDBC URL (Hive: `jdbc:hive2://host:port/db;k=v;k2=v2`).
+/// The flag has to reach every rendered `jdbcUrl` ui block — the per-mode
+/// conditions as well as the base — or the frontend parses the URL with the
+/// wrong separator and leaves the host/port/database fields empty.
+local semicolonJdbcApp = (jdbcApp) {
+  name = "jdbc-semicolon-test"
+  credentialUrlGroup = (jdbcApp.credentialUrlGroup!!) {
+    isDelimitedBySemicolons = true
+  }
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Credential"] {
+        inputs {
+          ["credential-guid"] = new App.CredentialInput {
+            credType = "atlan-connectors-jdbc-semicolon-test"
+          }
+        }
+      }
+    }
+  }
+}
+
 local credentialJson: String = jdbcApp.output.files["app/generated/atlan-connectors-jdbc-auth-test.json"].text
 local credential = new json.Parser { useMapping = true }.parse(credentialJson)
+
+local semicolonJson: String =
+  semicolonJdbcApp.output.files["app/generated/atlan-connectors-jdbc-semicolon-test.json"].text
+local semicolonProperties =
+  new json.Parser { useMapping = true }.parse(semicolonJson)["config"]["properties"]
 
 local singleAuthCredentialJson: String =
   singleAuthJdbcApp.output.files["app/generated/atlan-connectors-jdbc-single-auth-test.json"].text
@@ -248,5 +275,16 @@ facts {
     nativeSingleAuthProperties["basic"]["ui"]["hidden"] == true
     nativeSingleAuthProperties["jdbcUrl"]["properties"]["basic"]["ui"]["hidden"] == false
     nativeSingleAuthProperties["jdbcUrl"]["properties"]["auth-type"]["ui"]["hidden"] == true
+  }
+
+  ["isDelimitedBySemicolons reaches the base jdbcUrl ui and every condition"] {
+    semicolonProperties["jdbcUrl"]["ui"]["isDelimitedBySemicolons"] == true
+    semicolonProperties["jdbcUrl"]["conditions"]
+      .every((c) -> c["ui"]["isDelimitedBySemicolons"] == true)
+  }
+
+  ["isDelimitedBySemicolons is omitted, not emitted false, when unset"] {
+    !semicolonJson.contains("\"isDelimitedBySemicolons\": false")
+    !credentialJson.contains("isDelimitedBySemicolons")
   }
 }
