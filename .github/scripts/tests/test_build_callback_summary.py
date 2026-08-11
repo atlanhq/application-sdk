@@ -1,7 +1,7 @@
 """Tests for .github/scripts/build_callback_summary.py.
 
-Signature: determine_conclusion / build_fallback_summary / resolve_summary_file
-take (unit, integration, detect_integration, e2e, ...).
+Signature: build_fallback_summary / resolve_summary_file take
+(unit, integration, detect_integration, e2e, ...).
 
 Also guards the WIRING of the report-to-sdk job that runs this script, because
 the bug this file's script was at the centre of was not a bug in any function
@@ -27,73 +27,18 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _REUSABLE = _REPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
 
 
-def test_determine_conclusion_all_success():
-    assert (
-        mod.determine_conclusion("success", "success", "success", "success")
-        == "success"
-    )
+def test_the_script_emits_no_verdict():
+    """The removal, stated as a property rather than an absence.
 
-
-def test_determine_conclusion_integration_skipped_is_success():
-    # Integration skipped (PR / no suite) is a pass; on a PR detect-integration
-    # is skipped too — also a pass.
-    assert (
-        mod.determine_conclusion("success", "skipped", "skipped", "success")
-        == "success"
-    )
-
-
-def test_determine_conclusion_integration_skipped_no_suite_is_success():
-    # Non-PR, no integration suite: detect-integration succeeds, integration
-    # skips cleanly — a pass.
-    assert (
-        mod.determine_conclusion("success", "skipped", "success", "success")
-        == "success"
-    )
-
-
-def test_determine_conclusion_e2e_skipped_is_success():
-    assert (
-        mod.determine_conclusion("success", "success", "success", "skipped")
-        == "success"
-    )
-
-
-def test_determine_conclusion_unit_failed():
-    assert (
-        mod.determine_conclusion("failure", "success", "success", "success")
-        == "failure"
-    )
-
-
-def test_determine_conclusion_integration_failed():
-    assert (
-        mod.determine_conclusion("success", "failure", "success", "success")
-        == "failure"
-    )
-
-
-def test_determine_conclusion_detect_integration_failed():
-    # A detection failure drops integration to a skip; the callback must still
-    # report failure rather than a silent success.
-    assert (
-        mod.determine_conclusion("success", "skipped", "failure", "success")
-        == "failure"
-    )
-
-
-def test_determine_conclusion_e2e_failed():
-    assert (
-        mod.determine_conclusion("success", "success", "success", "failure")
-        == "failure"
-    )
-
-
-def test_determine_conclusion_unit_cancelled():
-    assert (
-        mod.determine_conclusion("cancelled", "skipped", "skipped", "skipped")
-        == "failure"
-    )
+    `determine_conclusion` was this script's own answer to "did the connector
+    tests pass", computed from four job results while the Tests Gate used nine
+    plus an anomaly rule — the divergence that let a red connector run report
+    green on the dispatching SDK PR. It outlived the fix only as a shim for
+    workflow/script ref skew, and every fleet caller now pins the reusable at
+    @main, so nothing reads it. A reintroduced verdict here is the bug class
+    returning, not a new feature.
+    """
+    assert not hasattr(mod, "determine_conclusion")
 
 
 def test_resolve_summary_file_prefers_artifact(tmp_path):
@@ -175,12 +120,19 @@ def test_main_writes_github_output(tmp_path, monkeypatch):
 
     assert rc == 0
     content = output_file.read_text()
-    assert "conclusion=success" in content
     assert f"summary_file={artifact}" in content
+    assert "conclusion=" not in content, (
+        "the callback's verdict comes from the Tests Gate driver; an output "
+        "named `conclusion` here is a second one waiting to be wired up"
+    )
 
 
-def test_main_detect_integration_failure_reports_failure(tmp_path, monkeypatch, capsys):
+def test_main_renders_detect_integration_failure_in_the_body(tmp_path, monkeypatch):
+    # A detection failure drops integration to a skip. main() must render that
+    # as the detection failure it was, not as a clean skip — the body is now
+    # this script's only product, so this is the wiring that matters.
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    fallback = tmp_path / "fallback.md"
 
     rc = mod.main(
         [
@@ -195,13 +147,12 @@ def test_main_detect_integration_failure_reports_failure(tmp_path, monkeypatch, 
             "--artifact-summary-path",
             str(tmp_path / "missing.md"),
             "--fallback-path",
-            str(tmp_path / "fallback.md"),
+            str(fallback),
         ]
     )
 
     assert rc == 0
-    out = capsys.readouterr().out
-    assert "conclusion=failure" in out
+    assert "suite detection failure" in fallback.read_text()
 
 
 def test_main_prints_when_no_github_output(tmp_path, monkeypatch, capsys):
@@ -226,8 +177,8 @@ def test_main_prints_when_no_github_output(tmp_path, monkeypatch, capsys):
 
     assert rc == 0
     out = capsys.readouterr().out
-    assert "conclusion=failure" in out
     assert "summary_file=" in out
+    assert "conclusion=" not in out
 
 
 # --- report-to-sdk wiring --------------------------------------------------
@@ -277,8 +228,9 @@ def test_the_callback_reports_the_gates_verdict_not_its_own(reusable) -> None:
         "'did the connector tests pass', and the two will drift."
     )
     assert "steps.report.outputs.conclusion" not in complete["run"], (
-        "build_callback_summary.py's conclusion is a deprecated back-compat "
-        "shim, not the verdict — see that script's module docstring."
+        "build_callback_summary.py emits no conclusion — it builds the body "
+        "only. Reading one back from it means someone reintroduced the second "
+        "verdict; see that script's module docstring."
     )
 
 

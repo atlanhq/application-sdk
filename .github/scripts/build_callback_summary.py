@@ -10,24 +10,21 @@ Prefers the e2e leg's already-rendered report (asset/lineage tables etc.,
 written by sdr-e2e's PR-comment step) over a plain fallback, which only
 applies when e2e was skipped or its artifact never materialised.
 
-`determine_conclusion` is NO LONGER the callback's verdict. It decided the
-conclusion from a strict subset of the Tests Gate's inputs — no discover-e2e,
-no image-build legs, no "discovery found suites but the matrix skipped" anomaly
-rule — so a connector run whose Tests Gate was red reported success on the
-dispatching SDK PR, which is the whole reason a triggered app's failure could go
-unnoticed there. The gate driver
-(.github/actions/verify-test-gate/verify_test_gate.py) is now the single
-authority for both, and report-to-sdk reads its `conclusion` output instead.
+BODY ONLY — this script does not decide anything. It used to also emit the
+callback's `conclusion`, computed from a strict subset of the Tests Gate's
+inputs (no discover-e2e, no image-build legs, no "discovery found suites but
+the matrix skipped" anomaly rule), which is exactly how a connector run whose
+Tests Gate was red completed the mirrored check on the dispatching SDK PR as
+green. The gate driver
+(.github/actions/verify-test-gate/verify_test_gate.py) is the single authority
+for that verdict; report-to-sdk feeds its `conclusion` output straight to
+complete_check_run.py.
 
-It survives here only as a transitional shim: this script is checked out from
-the DISPATCHING SDK ref while the workflow always comes from `main`, so a
-pre-fix `main` workflow can still be pairing itself with a post-fix copy of this
-script and reading `conclusion=` out of $GITHUB_OUTPUT. Delete it — along with
-the `conclusion=` output line and its tests — in the next release after this
-lands on `main`, once no `main` workflow reads it.
+Do not reintroduce a verdict here. Two implementations of "did the connector
+tests pass" is the defect, not the inputs either one happened to read — see
+test_the_callback_reports_the_gates_verdict_not_its_own.
 
-Writes conclusion=<success|failure> (deprecated, see above) and
-summary_file=<path> to $GITHUB_OUTPUT.
+Writes summary_file=<path> to $GITHUB_OUTPUT.
 """
 
 from __future__ import annotations
@@ -36,38 +33,11 @@ import argparse
 import os
 import sys
 
-PASSING_E2E_RESULTS = {"success", "skipped"}
-# Integration is skipped on PRs and when a connector has no integration suite,
-# so "skipped" is a pass for it (mirrors the e2e optional-by-skip treatment).
-PASSING_INTEGRATION_RESULTS = {"success", "skipped"}
 # The suite-detection job gates the integration `if`. A *failure* there drops
-# integration to a skip, which PASSING_INTEGRATION_RESULTS would read as a pass
-# — so a failed detection must be its own failure signal here, exactly as the
-# Tests Gate treats it. skipped (pull_request) and success are passes.
+# integration to a skip, so the rendered line must name the detection failure
+# rather than report a clean "skipped" for a tier that was actually dropped.
+# skipped (pull_request) and success are the benign values.
 PASSING_DETECT_INTEGRATION_RESULTS = {"success", "skipped"}
-
-
-def determine_conclusion(
-    unit_result: str,
-    integration_result: str,
-    detect_integration_result: str,
-    e2e_result: str,
-) -> str:
-    """DEPRECATED — the Tests Gate driver decides the callback's conclusion.
-
-    Kept only so a pre-fix `main` workflow paired with a post-fix copy of this
-    script still gets a `conclusion=` output. See the module docstring for the
-    removal trigger. Do not add inputs here: fix the gate driver instead, or the
-    two verdicts start diverging again.
-    """
-    if (
-        unit_result == "success"
-        and detect_integration_result in PASSING_DETECT_INTEGRATION_RESULTS
-        and integration_result in PASSING_INTEGRATION_RESULTS
-        and e2e_result in PASSING_E2E_RESULTS
-    ):
-        return "success"
-    return "failure"
 
 
 def build_fallback_summary(
@@ -139,12 +109,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fallback-path", default="fallback-summary.md")
     args = parser.parse_args(argv)
 
-    conclusion = determine_conclusion(
-        args.unit_result,
-        args.integration_result,
-        args.detect_integration_result,
-        args.e2e_result,
-    )
     summary_file = resolve_summary_file(
         args.artifact_summary_path,
         args.fallback_path,
@@ -156,14 +120,13 @@ def main(argv: list[str] | None = None) -> int:
         args.integration_summary,
     )
 
-    lines = [f"conclusion={conclusion}", f"summary_file={summary_file}"]
+    line = f"summary_file={summary_file}"
     github_output = os.environ.get("GITHUB_OUTPUT", "")
     if github_output:
         with open(github_output, "a") as fh:
-            fh.write("\n".join(lines) + "\n")
+            fh.write(line + "\n")
     else:
-        for line in lines:
-            print(line)
+        print(line)
     return 0
 
 
