@@ -18,7 +18,7 @@ sys.path.insert(
     0, str(Path(__file__).parent.parent.parent / "actions" / "verify-test-gate")
 )
 
-from verify_test_gate import evaluate, main, render  # noqa: E402
+from verify_test_gate import cancelled_only, evaluate, main, render  # noqa: E402
 
 # --- passing states --------------------------------------------------------
 
@@ -704,8 +704,18 @@ def test_conclusion_tracks_passed_across_every_scenario_in_this_module() -> None
     ]
     for scenario in scenarios:
         out = render(*scenario)
-        expected = "success" if out["passed"] == "true" else "failure"
-        assert out["conclusion"] == expected, f"disagreed on {scenario}"
+        # A blocked gate spells itself "cancelled" rather than "failure" when
+        # nothing actually failed (see the cancellation tests below) — so the
+        # invariant is that `conclusion` agrees with `passed` about PASS/BLOCK,
+        # not that BLOCK has exactly one spelling.
+        if out["passed"] == "true":
+            assert out["conclusion"] == "success", f"disagreed on {scenario}"
+        else:
+            assert out["conclusion"] in (
+                "failure",
+                "cancelled",
+            ), f"disagreed on {scenario}"
+            assert out["conclusion"] != "success", f"disagreed on {scenario}"
 
 
 def test_the_real_failure_this_change_was_written_for() -> None:
@@ -733,3 +743,185 @@ def test_the_real_failure_this_change_was_written_for() -> None:
         "must report the connector run's failure"
     )
     assert out["e2e-status"] == "❌ e2e image build failed"
+
+
+# --- cancellation is not failure (FND-218) ---------------------------------
+#
+# GitHub keeps at most ONE pending run per concurrency group, so a third
+# arrival cancels the queued one before it is ever given a runner. The gate
+# must still BLOCK (an un-run test cannot green a merge) but must not spell
+# that block "failure" — a mirrored failure on the dispatching SDK PR reads as
+# "your change broke the connector" and sends a reviewer into the wrong diff.
+
+
+def test_cancelled_integration_blocks_but_reports_cancelled() -> None:
+    out = render("success", "cancelled", "success", "skipped", "skipped")
+    assert out["passed"] == "false", "an un-run test must never green the gate"
+    assert out["conclusion"] == "cancelled"
+    assert out["overall-status"] == "🚫 Cancelled — no verdict, re-run"
+    assert out["integration-status"] == "🚫 Cancelled — not run"
+
+
+def test_cancelled_unit_reports_cancelled() -> None:
+    out = render("cancelled", "skipped", "skipped", "skipped", "skipped")
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "cancelled"
+    assert out["unit-status"] == "🚫 Cancelled — not run"
+
+
+def test_cancelled_e2e_leg_reports_cancelled() -> None:
+    out = render("success", "success", "success", "success", "cancelled")
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "cancelled"
+    assert out["e2e-status"] == "🚫 Cancelled — not run"
+
+
+def test_a_real_failure_alongside_a_cancellation_is_still_failure() -> None:
+    # The discriminator is "did anything actually fail", not "was anything
+    # cancelled". A cancelled sibling must not launder a genuine failure into
+    # a benign "just re-run" verdict.
+    out = render("success", "failure", "success", "success", "cancelled")
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "failure"
+
+
+@pytest.mark.parametrize(
+    "kwargs,row",
+    [
+        ({"build_e2e_image": "cancelled"}, "🚫 e2e image build cancelled — not run"),
+        (
+            {"merge_e2e_image": "cancelled"},
+            "🚫 e2e image manifest merge cancelled — not run",
+        ),
+        ({"prepare_tenant": "cancelled"}, "🚫 Tenant install cancelled — not run"),
+    ],
+)
+def test_cancelled_install_path_jobs_report_cancelled(kwargs, row) -> None:
+    out = render(
+        unit="success",
+        integration="success",
+        detect_integration="success",
+        discover_e2e="success",
+        e2e="skipped",
+        **kwargs,
+    )
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "cancelled"
+    assert out["e2e-status"] == row
+
+
+@pytest.mark.parametrize(
+    "kwargs,row",
+    [
+        (
+            {"detect_merge_queue": "cancelled"},
+            "🚫 Merge-queue detection cancelled — not run",
+        ),
+        (
+            {"detect_integration": "cancelled"},
+            "🚫 Integration-suite detection cancelled — not run",
+        ),
+    ],
+)
+def test_cancelled_detection_jobs_report_cancelled(kwargs, row) -> None:
+    defaults = {
+        "unit": "success",
+        "integration": "skipped",
+        "detect_integration": "success",
+        "discover_e2e": "skipped",
+        "e2e": "skipped",
+    }
+    out = render(**{**defaults, **kwargs})
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "cancelled"
+    assert out["integration-status"] == row
+
+
+def test_cancelled_discovery_reports_cancelled() -> None:
+    out = render("success", "success", "success", "cancelled", "skipped")
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "cancelled"
+    assert out["e2e-status"] == "🚫 e2e discovery cancelled — not run"
+
+
+def test_the_matrix_skipped_anomaly_is_not_laundered_as_a_cancellation() -> None:
+    # This anomaly errors while every result sits in the OK set, so a naive
+    # "no failures ⇒ cancelled" rule would report it as "just re-run" and hide
+    # a genuine misconfiguration. cancelled_only requires an actual
+    # cancellation to be present.
+    assert not cancelled_only("success", "success", "success", "success", "skipped")
+    out = render("success", "success", "success", "success", "skipped")
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "failure"
+
+
+def test_cancelled_only_is_false_when_the_gate_passes() -> None:
+    # No cancellation present, nothing blocking — there is nothing to explain.
+    assert not cancelled_only("success", "success", "success", "success", "success")
+
+
+def test_a_cancellation_does_not_mask_the_matrix_skipped_anomaly() -> None:
+    # The anomaly error is raised by evaluate() independently of the raw job
+    # results, so a cancellation elsewhere does not make it go away. cancelled_only
+    # used to inspect raw results alone: a cancelled detection job coinciding with
+    # the anomaly (discovery green, matrix skipped, install path clean) returned
+    # True, and the gate spelled a genuine misconfiguration "just re-run".
+    assert not cancelled_only(
+        "success", "success", "success", "success", "skipped", "cancelled"
+    )
+    out = render("success", "success", "success", "success", "skipped", "cancelled")
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "failure", (
+        "the anomaly is not cancellation-attributable, so its presence must "
+        "spell failure and surface the misconfiguration — never a benign re-run"
+    )
+    errors = evaluate(
+        "success", "success", "success", "success", "skipped", "cancelled"
+    )
+    assert any("matrix was skipped" in e for e in errors)
+
+
+def test_main_annotates_the_cancellation_guidance(capsys) -> None:
+    rc = main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "cancelled",
+            "--detect-integration",
+            "success",
+            "--discover-e2e",
+            "skipped",
+            "--e2e",
+            "skipped",
+        ]
+    )
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "conclusion=cancelled" in captured.out
+    assert "passed=false" in captured.out
+    # The per-job reason still fires; the guidance is additive, and follows it
+    # so the annotation list reads cause-then-verdict.
+    assert "integration tests did not succeed (result=cancelled)" in captured.err
+    assert "were cancelled, not failed" in captured.err
+    assert "Re-run rather than triage the diff." in captured.err
+
+
+def test_main_does_not_annotate_the_guidance_on_a_real_failure(capsys) -> None:
+    main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "failure",
+            "--detect-integration",
+            "success",
+            "--discover-e2e",
+            "skipped",
+            "--e2e",
+            "skipped",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert "conclusion=failure" in captured.out
+    assert "Re-run rather than triage" not in captured.err
