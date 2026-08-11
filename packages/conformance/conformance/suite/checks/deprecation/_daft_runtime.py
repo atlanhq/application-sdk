@@ -97,9 +97,12 @@ def _is_pyarrow_producer_call(node: ast.expr) -> bool:
     )
 
 
-#: Node types that open a new local binding scope.
-_FUNCTION_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef)
-_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+#: Node types that open a new local binding scope. ``ast.Lambda`` opens one
+#: too: its parameters bind in the lambda's scope, so a
+#: ``f = lambda tables: [t.to_pylist() for t in tables]`` shadows a module-level
+#: ``tables = [pa.table({}) ...]`` exactly as a ``def`` parameter does.
+_FUNCTION_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 
 
 class _ScopeMap:
@@ -280,8 +283,10 @@ def _pyarrow_bindings_by_scope(
         # last-binding-before-the-use rule and re-establishes the exemption
         # from that line on, matching the runtime shadow-then-rebind sequence.
         if isinstance(node, _FUNCTION_SCOPES):
+            # `ast.Lambda` has no positional-only args.
+            posonly = getattr(node.args, "posonlyargs", [])
             for arg in (
-                *node.args.posonlyargs,
+                *posonly,
                 *node.args.args,
                 *node.args.kwonlyargs,
                 *([node.args.vararg] if node.args.vararg else []),

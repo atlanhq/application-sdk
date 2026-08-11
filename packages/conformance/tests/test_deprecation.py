@@ -996,6 +996,29 @@ def test_b007_parameter_shadowing_a_module_pyarrow_binding_does_not_exempt() -> 
     assert [f.rule_id for f in _b007(src)] == ["B007"]
 
 
+def test_b007_lambda_parameter_shadowing_a_module_pyarrow_binding_does_not_exempt() -> (
+    None
+):
+    """A same-named lambda parameter kills an enclosing pyarrow exemption.
+
+    ``ast.Lambda`` was absent from both ``_FUNCTION_SCOPES`` and
+    ``_SCOPE_NODES``, so a lambda parameter created no binding and the outward
+    walk reached the module-level ``tables = [pa.table({}) ...]`` — clearing
+    ``[t.to_pylist() for t in tables]`` even though the lambda's ``tables``
+    shadows the global exactly as a ``def`` parameter does. Lambdas now open a
+    scope and record their parameters as unknown/non-pyarrow.
+    """
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "\n"
+        + "tables = [pa.table({}) for _ in range(3)]\n"
+        + "\n"
+        + "f = lambda tables: [t.to_pylist() for t in tables]\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
 def test_b007_rebinding_a_parameter_to_pyarrow_restores_the_exemption() -> None:
     """A parameter rebound to pyarrow inside the body is exempt from that line.
 
