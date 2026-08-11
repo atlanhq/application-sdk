@@ -103,6 +103,7 @@ from application_sdk.errors import (
     redact_secrets,
     safe_traceback,
 )
+from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
     AppTimeoutError,
     AuthError,
@@ -156,6 +157,36 @@ _PROBE_FAILURE_LEAVES: dict[str, type[AppError]] = {
 }
 
 
+# Field names every ``AppError`` declares on the base dataclass — the evidence
+# redactor skips these (they are handled individually) and redacts only the
+# per-leaf custom fields, mirroring what ``to_failure_details()`` treats as
+# evidence.
+_BASE_ERROR_FIELD_NAMES: frozenset[str] = frozenset(
+    f.name for f in dataclasses.fields(AppError)
+)
+
+
+@dataclasses.dataclass(kw_only=True)
+class _EnvelopeError(AppError):
+    """Reconstruction leaf for a wire ``code`` this consumer has no leaf for.
+
+    Routing (``category`` / ``audience``) is taken from the envelope, not from
+    class-level constants, so a newer producer's verdict keeps its original
+    routing instead of degrading to ``INTERNAL`` / ``APP_OWNER``.
+    """
+
+    category_override: FailureCategory
+    audience_override: Audience
+
+    @property
+    def category(self) -> FailureCategory:  # type: ignore[override]
+        return self.category_override
+
+    @property
+    def audience(self) -> Audience:  # type: ignore[override]
+        return self.audience_override
+
+
 def _root_cause(exc: BaseException) -> BaseException:
     """Walk ``__cause__`` to the innermost exception.
 
@@ -189,8 +220,25 @@ def _error_from_failure_details(details: FailureDetails) -> AppError:
     straight back onto the leaf's constructor. Keys the leaf does not declare
     are dropped rather than raising — a newer producer must not break an older
     consumer replaying its history.
+
+    An unknown ``code`` (a newer producer than this consumer) has no registered
+    leaf. Rebuilding it as ``InternalError`` would force ``INTERNAL`` /
+    ``APP_OWNER`` routing and silently re-route a customer-owned failure to
+    Atlan, so the unknown-code path instead preserves the envelope's own
+    ``category`` / ``audience`` / ``retryable`` on a generic reconstruction
+    leaf.
     """
-    leaf = _PROBE_FAILURE_LEAVES.get(details.code, InternalError)
+    leaf = _PROBE_FAILURE_LEAVES.get(details.code)
+    if leaf is None:
+        return _EnvelopeError(
+            category_override=details.category,
+            audience_override=details.audience,
+            message=details.message,
+            retryable=details.retryable,
+            suggested_action=details.suggested_action,
+            app_name=details.app_name,
+            run_id=details.run_id,
+        )
     declared = {f.name for f in dataclasses.fields(leaf)}
     evidence = {k: v for k, v in details.evidence.items() if k in declared}
     return leaf(
@@ -494,8 +542,12 @@ class SqlApp(App):
         """
         if prime_result.failure is not None:
             return _error_from_failure_details(prime_result.failure)
+        # Defence-in-depth: the fallback trusts a hand-built or pre-redaction-era
+        # replayed output whose producer may not have redacted. Re-redact at this
+        # trust boundary so a secret in error_message never reaches the verdict.
         return SqlApp._classify_probe_strings(
-            prime_result.error_type or "", prime_result.error_message or ""
+            prime_result.error_type or "",
+            redact_secrets(prime_result.error_message or ""),
         )
 
     @staticmethod
@@ -507,16 +559,39 @@ class SqlApp(App):
         ``SqlPandasResultError``, so by the time only a class name and a
         message survive there is nothing left to discriminate on (CNCT-197).
 
-        An already-typed root cause is returned as-is — if a connector took
-        the trouble to raise a typed ``AppError``, that verdict beats
-        anything string matching can infer.
+        An already-typed root cause keeps its verdict — if a connector took
+        the trouble to raise a typed ``AppError``, that beats anything string
+        matching can infer. But the typed path reaches ``to_failure_details()``
+        without the redaction the plain-driver path gets, so a connection
+        string in the message or a custom evidence field would serialise onto
+        the wire verbatim. Redact before returning, as the sibling string path
+        already does.
         """
         root = _root_cause(exc)
         if isinstance(root, AppError):
-            return root
+            return SqlApp._redact_typed_error(root)
         return SqlApp._classify_probe_strings(
             type(root).__name__, redact_secrets(str(root)), cause=root
         )
+
+    @staticmethod
+    def _redact_typed_error(err: AppError) -> AppError:
+        """Redact a connector-raised typed error's message and string evidence.
+
+        Only ``cause_repr`` is sanitised by ``to_failure_details()``; the
+        ``message`` and per-leaf evidence fields are not. Redact them in place
+        so the wire envelope (and the Temporal payload) never carries a secret
+        the producer embedded in a non-denylisted field. Non-string evidence
+        values are left untouched.
+        """
+        err.message = redact_secrets(err.message)
+        for f in dataclasses.fields(err):
+            if f.name in _BASE_ERROR_FIELD_NAMES:
+                continue
+            value = getattr(err, f.name)
+            if isinstance(value, str):
+                setattr(err, f.name, redact_secrets(value))
+        return err
 
     @staticmethod
     def _classify_probe_strings(
@@ -536,10 +611,12 @@ class SqlApp(App):
           (``Access denied``, MySQL code 1045,
           ``AuthenticationError`` class names).
         - ``SqlProbeTimeoutError`` for probe timeouts (``TimeoutError`` /
-          ``asyncio.TimeoutError`` / message contains ``timed out``). It
-          overrides ``AppTimeoutError``'s ``APP_OWNER`` default to USER: the
-          only timeouts that can reach here are the driver's and the socket's,
-          so the clock always ran out waiting for the customer's source.
+          ``asyncio.TimeoutError`` / message contains ``timed out``, and the
+          ODBC login-timeout shape ``HYT00`` / ``login timeout`` /
+          ``timeout expired``). It overrides ``AppTimeoutError``'s
+          ``APP_OWNER`` default to USER: the only timeouts that can reach here
+          are the driver's and the socket's, so the clock always ran out
+          waiting for the customer's source.
         - ``SourceUnavailableError`` for network / DNS / TLS /
           connection-refused failures — the customer-owned source is
           presumed reachable but didn't respond cleanly, so the failure
@@ -553,7 +630,17 @@ class SqlApp(App):
         """
         msg_lower = error_message.lower()
 
-        is_timeout = "timeout" in error_type.lower() or "timed out" in msg_lower
+        # ODBC renders SQLSTATE HYT00 as "Login timeout expired" — no "timeout"
+        # in the class name and no "timed out" in the message, so a generic
+        # substring check misses the production CNCT-197 shape. Match the
+        # driver phrasings explicitly.
+        is_timeout = (
+            "timeout" in error_type.lower()
+            or "timed out" in msg_lower
+            or "login timeout" in msg_lower
+            or "timeout expired" in msg_lower
+            or "hyt00" in msg_lower
+        )
         if is_timeout:
             return SqlProbeTimeoutError(
                 message=(

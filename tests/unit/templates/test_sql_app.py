@@ -2337,23 +2337,34 @@ class TestPrimeFailureClassification:
         assert "HYT00" in (result.error_message or "")
 
     async def test_login_timeout_routes_to_the_customer(self):
-        """The production case. An ODBC login timeout against a customer VPC
-        endpoint is a USER-owned, retryable source problem."""
+        """The production case. An ODBC login timeout (SQLSTATE HYT00, rendered
+        as "Login timeout expired") against a customer VPC endpoint is a
+        USER-owned, retryable probe timeout — not a generic source-unavailable.
+        The classifier must recognise the driver phrasing even though neither
+        the class name nor "timed out" appears in it."""
         from application_sdk.errors.categories import Audience, FailureCategory
-        from application_sdk.errors.leaves import SourceUnavailableError
 
         err = SqlApp._classify_prime_failure(await self._probe(OperationalError()))
 
-        assert isinstance(err, SourceUnavailableError)
-        assert err.category is FailureCategory.SOURCE_UNAVAILABLE
+        assert isinstance(err, SqlProbeTimeoutError)
+        assert err.code == "TIMEOUT_SQL_PROBE"
+        assert err.category is FailureCategory.TIMEOUT
         assert err.audience is Audience.USER
         assert err.effective_retryable is True
-        assert err.suggested_action and "DNS" in err.suggested_action
 
     @pytest.mark.parametrize(
         "driver_exc,expected_leaf",
         [
-            (OperationalError(), "SourceUnavailableError"),
+            # HYT00 "Login timeout expired" is a probe timeout, not generic
+            # source-unavailable.
+            (OperationalError(), "SqlProbeTimeoutError"),
+            (
+                OperationalError(
+                    "(pyodbc.OperationalError) ('08S01', '[Microsoft][ODBC Driver 18 "
+                    "for SQL Server]TCP Provider: The network connection was refused')"
+                ),
+                "SourceUnavailableError",
+            ),
             (OSError("[Errno -2] Name or service not known"), "SourceUnavailableError"),
             (
                 Exception("(pyodbc.Error) ('28000', 'Login failed for user')"),
@@ -2388,7 +2399,14 @@ class TestPrimeFailureClassification:
         from application_sdk.errors.categories import Audience
         from application_sdk.errors.leaves import SourceUnavailableError
 
-        result = await self._probe(OperationalError())
+        # A non-timeout network shape keeps the SourceUnavailableError leaf so
+        # its evidence (``source_type`` / ``network_error``) round-trips.
+        result = await self._probe(
+            OperationalError(
+                "(pyodbc.OperationalError) ('08S01', '[Microsoft][ODBC Driver 18 "
+                "for SQL Server]TCP Provider: The network connection was refused')"
+            )
+        )
         rehydrated = PrimeAuthOutput.model_validate_json(result.model_dump_json())
 
         err = SqlApp._classify_prime_failure(rehydrated)
@@ -2410,6 +2428,43 @@ class TestPrimeFailureClassification:
         assert isinstance(err, AuthError)
         assert err.message == "source rejected the login"
         assert err.auth_method == "odbc"
+
+    async def test_typed_root_cause_is_redacted_before_the_wire(self):
+        """The typed-``AppError`` path reaches ``to_failure_details()`` without
+        the redaction the plain-driver path gets. A connection string in the
+        message or a custom evidence field must be redacted before the verdict
+        serialises onto the activity result."""
+        from application_sdk.errors.leaves import AuthError
+
+        typed = AuthError(
+            message="login failed: PWD=SyntheticValue123",
+            auth_method="odbc",
+            failure_reason="server said PWD=SyntheticValue123",
+        )
+
+        result = await self._probe(typed)
+
+        assert result.failure is not None
+        wire = result.failure.model_dump_json()
+        assert "SyntheticValue123" not in wire
+        assert "PWD=***" in wire
+
+    def test_string_fallback_redacts_a_secret_bearing_message(self):
+        """A hand-built / pre-redaction-era output whose producer did not redact
+        must be re-redacted at the fallback trust boundary."""
+        from application_sdk.errors.leaves import SourceUnavailableError
+
+        legacy = PrimeAuthOutput(
+            success=False,
+            error_type="gaierror",
+            error_message="[Errno -2] Name or service not known PWD=SyntheticValue123",
+        )
+
+        err = SqlApp._classify_prime_failure(legacy)
+
+        assert isinstance(err, SourceUnavailableError)
+        assert "SyntheticValue123" not in (err.network_error or "")
+        assert "PWD=***" in (err.network_error or "")
 
     async def test_probe_never_puts_a_connection_string_on_the_wire(self):
         """CNCT-198's blast radius, reached through this path. The fix
@@ -2441,19 +2496,21 @@ class TestPrimeFailureClassification:
             SqlApp._classify_prime_failure(legacy), SourceUnavailableError
         )
 
-    def test_unknown_wire_code_degrades_to_internal(self):
-        """A newer producer must not crash an older consumer: an unknown code
-        and unknown evidence keys fall back instead of raising."""
-        from application_sdk.errors.categories import FailureCategory
-        from application_sdk.errors.leaves import InternalError
+    def test_unknown_wire_code_preserves_envelope_routing(self):
+        """A newer producer must not crash an older consumer, and must not have
+        its routing silently re-routed either: an unknown code rebuilds on a
+        generic reconstruction leaf that keeps the envelope's own category /
+        audience / retryable rather than forcing INTERNAL / APP_OWNER."""
+        from application_sdk.errors.categories import Audience, FailureCategory
         from application_sdk.errors.wire import FailureDetails
 
         unknown = PrimeAuthOutput(
             success=False,
             failure=FailureDetails(
-                category=FailureCategory.INTERNAL,
+                category=FailureCategory.SOURCE_UNAVAILABLE,
                 code="SOME_FUTURE_CODE",
-                retryable=False,
+                retryable=True,
+                audience=Audience.USER,
                 message="from a newer SDK",
                 evidence={"field_this_leaf_does_not_have": 1},
             ),
@@ -2461,7 +2518,11 @@ class TestPrimeFailureClassification:
 
         err = SqlApp._classify_prime_failure(unknown)
 
-        assert isinstance(err, InternalError)
+        # Not a registered leaf, but the envelope's routing survives.
+        assert type(err).__name__ == "_EnvelopeError"
+        assert err.category is FailureCategory.SOURCE_UNAVAILABLE
+        assert err.audience is Audience.USER
+        assert err.effective_retryable is True
         assert err.message == "from a newer SDK"
 
     async def test_unserialisable_verdict_does_not_crash_the_probe(self):
