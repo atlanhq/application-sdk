@@ -146,7 +146,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # (BLDX-1499).
     # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
-    # P029/P030 + P037/P038/P039: SDR-readiness — only apps declare
+    # P029/P030 + P037/P038/P039/P042: SDR-readiness — only apps declare
     # self_deployed_runtime; the SDK itself never does, so these are APP-scoped.
     # P032–P035: preflight-gate authoring — only apps register @task activities,
     # define Handler.preflight_check, construct PreflightCheck results, and declare
@@ -206,8 +206,31 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # T017: e2e agent_spec() override must inherit the per-leg deployment queue —
     # only connector apps subclass the e2e harness and (may) override agent_spec;
     # the SDK ships the env-derived default, it doesn't hard-code a connector queue.
+    # T020-T022: full-DAG e2e CI wiring — only connector apps call
+    # tests-reusable.yaml / the sdr-e2e action, ship tests/e2e/ suites the reusable
+    # discovers, and declare self_deployed_runtime in atlan.yaml. The SDK *is* the
+    # publisher of the reusable and the action, so none of the three grade it.
+    # T023/T024: e2e harness scaffold + run mode — only connector apps have a
+    # contract/app.pkl the toolkit generates _e2e_base/_e2e_credential/
+    # _e2e_substitutions from, and only they subclass the harness the SDK ships.
+    # B007: daft-only DataFrame APIs on SDK reader frames — only consumer apps
+    # call daft surfaces on frames the SDK hands them; the SDK's own transformer
+    # code is the pyarrow/pandas bridge itself (fleet SDR sweep).
+    # D010: query-transformer-without-duckdb — the app's lock must resolve
+    # duckdb; the SDK is the publisher of the [sql]/[incremental] extras.
+    # P040: transform-template reserved keywords — only connector apps ship
+    # transform YAML templates consumed by the query transformer.
+    # P041: hard preflight gate in an SDR app — gated on self_deployed_runtime,
+    # which the SDK never declares (fleet SDR sweep).
+    # P042: hand-rolled upload_to_atlan bridge in an SDR app — same gating as
+    # P030, which it was split out of.
     assert app_scoped == {
         "B001",
+        "B007",
+        "D010",
+        "P040",
+        "P041",
+        "P042",
         "C002",
         "D001",
         "D002",
@@ -268,6 +291,11 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "T016",
         "T017",
         "T018",
+        "T020",
+        "T021",
+        "T022",
+        "T023",
+        "T024",
         "O002",
         "O003",
         "O004",
@@ -384,6 +412,7 @@ def test_catalog_d_series_present() -> None:
         "D007",
         "D008",
         "D009",
+        "D010",
     }
     missing = expected - d_ids
     assert not missing, f"Missing D-series rules: {missing}"
@@ -421,6 +450,16 @@ def test_catalog_p_series_present() -> None:
     empty-defaulting input field), and P039 is SdrAgentJsonDroppedByInputContract
     (the generated extract-input contract silently drops the forwarded agent_json)
     — the follow-on SDR-readiness rules.
+    P040 is TransformTemplateReservedKeyword — an unquoted DuckDB reserved
+    keyword used as an identifier in a transform SQL template (ParserException
+    at runtime on the daft-less SDK >= 3.22 runtime; fleet SDR sweep).
+    P041 is SdrHardPreflightGate — an SDR app that unconditionally sets
+    preflight_gate_mode = "hard", aborting agent-mode workflows on
+    non-secret-config preflight failures (fleet SDR sweep).
+    P042 is SdrHandRolledUploadBridge — a working custom upload_to_atlan
+    standing in for App.upload(), split out of P030 so the "bytes move but the
+    SDK contract is reimplemented" shape carries its own severity, its own
+    remediation, and a retirement date (the v4.0 removal of upload_to_atlan).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -466,6 +505,9 @@ def test_catalog_p_series_present() -> None:
         "P037",
         "P038",
         "P039",
+        "P040",
+        "P041",
+        "P042",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -487,11 +529,14 @@ def test_catalog_t_series_present() -> None:
     marking), T002/T003 (SDR test-quality), T004 (dev-entrypoint), T005-T009
     (assertion/collection quality), T010-T013 (tier structure), T014/T015
     (coverage-config), T016/T017 (e2e-CI queue isolation), T018
-    (integration tier deselected by addopts), and T019 (asyncio test-loop scope
-    unset relative to a broadened fixture loop scope)."""
+    (integration tier deselected by addopts), T019 (asyncio test-loop scope
+    unset relative to a broadened fixture loop scope), T020-T022 (full-DAG e2e
+    must run through the reusable Tests workflow: no bespoke sdr-e2e workflow,
+    suites reachable in CI, two-store posture on SDR apps), and T023/T024 (e2e
+    harness scaffold generated from contract/app.pkl; RunMode declared)."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {f"T{n:03d}" for n in range(1, 20)}
+    expected = {f"T{n:03d}" for n in range(1, 25)}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
     extra = t_ids - expected
@@ -499,10 +544,18 @@ def test_catalog_t_series_present() -> None:
 
 
 def test_catalog_b_series_present() -> None:
-    """The B-series backwards-compatibility / deprecation rules are all present."""
+    """The B-series backwards-compatibility / deprecation rules are all present.
+
+    B007 is DaftOnlyDataframeApiUsage — daft-only DataFrame APIs
+    (count_rows/to_pylist/.names) that are dead on the daft-less SDK >= 3.22
+    runtime; third-party surfaces the generated deprecated-symbol manifest
+    cannot carry (fleet SDR sweep).  ``DataframeType.daft`` is the SDK's own
+    symbol, so it rides the generated manifest and B001 reports it — the
+    ownership split the B007 rule definition and remediation prose describe.
+    """
     rules = load_catalog()
     b_ids = {r.id for r in rules if r.id.startswith("B")}
-    expected = {"B001", "B002", "B003", "B004", "B005", "B006"}
+    expected = {"B001", "B002", "B003", "B004", "B005", "B006", "B007"}
     missing = expected - b_ids
     assert not missing, f"Missing B-series rules: {missing}"
     extra = b_ids - expected
@@ -684,6 +737,142 @@ def test_invalid_rule_id_raises() -> None:
             scope=RuleScope.BOTH,
             category="test",
         )
+
+
+# ── Rule retirement: until / superseded_by ──────────────────────────────────
+
+
+def _rule(**overrides) -> RuleDefinition:
+    """A minimal valid rule, for exercising the retirement fields."""
+    return RuleDefinition(
+        **{
+            "id": "E001",
+            "name": "R1",
+            "tier": EnforcementTier.WARN,
+            "mechanism": RuleMechanism.STATIC,
+            "scope": RuleScope.BOTH,
+            "category": "test",
+            **overrides,
+        }
+    )
+
+
+def test_superseded_by_accepts_a_rule_id() -> None:
+    assert _rule(superseded_by="P042").superseded_by == "P042"
+
+
+def test_superseded_by_accepts_an_sdk_marker() -> None:
+    assert _rule(superseded_by="sdk>=3.27.0").superseded_by == "sdk>=3.27.0"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "P42",  # malformed rule ID
+        "sdk >= 3.27.0",  # spaces
+        "sdk>3.27.0",  # wrong operator
+        "the daft fix",  # free text
+        "4.0.0",  # bare version, ambiguous with `until`
+    ],
+)
+def test_superseded_by_rejects_unactionable_markers(value: str) -> None:
+    """Free text here would be silently ignored by every reader."""
+    with pytest.raises(ValidationError, match="superseded_by"):
+        _rule(superseded_by=value)
+
+
+def test_superseded_by_cannot_name_the_rule_itself() -> None:
+    with pytest.raises(ValidationError, match="itself"):
+        _rule(id="P042", superseded_by="P042")
+
+
+def test_retirement_fields_default_to_none() -> None:
+    """Indefinite enforcement stays the default — retirement is opt-in."""
+    rule = _rule()
+    assert rule.until is None
+    assert rule.superseded_by is None
+
+
+def test_retirement_fields_reach_sarif_properties() -> None:
+    props = _rule(
+        since="0.18.0", until="0.30.0", superseded_by="sdk>=4.0.0"
+    ).to_reporting_descriptor()
+    assert props.properties["atlan/until"] == "0.30.0"
+    assert props.properties["atlan/supersededBy"] == "sdk>=4.0.0"
+    roundtripped = AtlanRuleProperties.from_properties(props.properties)
+    assert roundtripped.until == "0.30.0"
+    assert roundtripped.superseded_by == "sdk>=4.0.0"
+
+
+def test_retirement_properties_absent_when_unset() -> None:
+    """No keys at all for the common case, so reports stay readable."""
+    props = _rule().to_reporting_descriptor().properties
+    assert "atlan/until" not in props
+    assert "atlan/supersededBy" not in props
+
+
+def test_catalog_until_never_precedes_since() -> None:
+    """A rule cannot retire before it was introduced.
+
+    Checked here rather than in the model so the schema layer stays free of
+    upward imports to the check layer's version helpers.
+    """
+    from conformance.suite.checks._version import parse_version
+
+    for rule in load_catalog():
+        if rule.until is None or rule.since is None:
+            continue
+        until, since = parse_version(rule.until), parse_version(rule.since)
+        assert (
+            until is not None and since is not None
+        ), f"{rule.id}: since/until must be parseable versions"
+        assert (
+            until >= since
+        ), f"{rule.id}: until {rule.until} precedes since {rule.since}"
+
+
+def test_catalog_retired_rules_are_removed() -> None:
+    """The forcing function: a rule past its ``until`` must no longer ship.
+
+    ``since`` alone gives an interim net no way out — it becomes permanent by
+    construction. This is what makes ``until`` a commitment rather than a
+    comment: once the package version reaches it, this test fails until the
+    rule is actually deleted, the same way the deprecation drift gate fails on
+    a stale manifest.
+    """
+    from conformance.suite.checks._version import parse_version, version_reached
+
+    from conformance import __version__
+
+    current = parse_version(__version__)
+    assert current is not None, f"unparseable package version {__version__!r}"
+
+    overdue = [
+        f"{rule.id} (until {rule.until})"
+        for rule in load_catalog()
+        if rule.until is not None
+        and (parsed := parse_version(rule.until)) is not None
+        and version_reached(parsed, current)
+    ]
+    assert not overdue, (
+        f"Rules past their retirement version at {__version__}: {overdue}. "
+        "Delete the rule and its checker, or move `until` out with a recorded "
+        "reason."
+    )
+
+
+def test_catalog_superseding_rule_ids_exist() -> None:
+    """A ``superseded_by`` rule ID must name a rule that is actually in the catalog."""
+    rules = load_catalog()
+    known = {rule.id for rule in rules}
+    dangling = [
+        f"{rule.id} -> {rule.superseded_by}"
+        for rule in rules
+        if rule.superseded_by is not None
+        and not rule.superseded_by.startswith("sdk>=")
+        and rule.superseded_by not in known
+    ]
+    assert not dangling, f"superseded_by names an unknown rule: {dangling}"
 
 
 def test_validate_catalog_raises_on_duplicate() -> None:

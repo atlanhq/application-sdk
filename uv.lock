@@ -261,6 +261,13 @@ azure = [
     { name = "azure-storage-blob" },
     { name = "azure-storage-file-datalake" },
 ]
+daft = [
+    { name = "duckdb" },
+    { name = "duckdb-engine" },
+    { name = "pandas" },
+    { name = "pyarrow" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+]
 distributed-lock = [
     { name = "redis", extra = ["hiredis"] },
 ]
@@ -348,6 +355,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.10.0,<4.0.0" },
+    { name = "atlan-application-sdk", extras = ["sql"], marker = "extra == 'daft'" },
     { name = "atlan-application-sdk", extras = ["storage"], marker = "extra == 'incremental'" },
     { name = "azure-identity", specifier = ">=1.15.0" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.15.0" },
@@ -439,14 +447,16 @@ source = { directory = "packages/conformance" }
 dependencies = [
     { name = "jinja2" },
     { name = "jsonschema" },
+    { name = "packaging" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "atlan-application-sdk", marker = "extra == 'test'" },
+    { name = "atlan-application-sdk", extras = ["sql"], marker = "extra == 'test'" },
     { name = "jinja2", specifier = ">=3.1.0,<4.0.0" },
     { name = "jsonschema", specifier = ">=4.23.0,<5.0.0" },
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3.3,<10.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=1.4.0,<2.0.0" },

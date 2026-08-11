@@ -14,6 +14,7 @@ from ._directives import _IgnoreDirective, _parse_directives, parse_ignore_direc
 from ._discovery import EXCLUDE_DIRS, discover
 from ._findings import make_finding
 from ._imports import collect_import_origins, qualify_chained_attr_call
+from ._io import safe_read_json, safe_read_text
 from ._pytest_collection import (
     is_collectable_test_file,
     is_test_class,
@@ -23,6 +24,8 @@ from ._scope import SDK_PACKAGE_PREFIX, detect_scope, is_sdk_package_name
 from ._toml_suppress import _is_suppressed, make_toml_finding, parse_toml_suppressions
 
 __all__ = [
+    "safe_read_json",
+    "safe_read_text",
     "EXCLUDE_DIRS",
     "SDK_PACKAGE_PREFIX",
     "TOOL_VERSION",

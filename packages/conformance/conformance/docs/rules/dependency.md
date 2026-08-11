@@ -5,7 +5,7 @@
 
 # Dependency Rules (D-series)
 
-**9 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
+**10 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -24,6 +24,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [D007](#d007) | `NonStandardBuildBackend` | `warn` | `app` | `build-system` | yes | 0.5.0 |
 | [D008](#d008) | `WeakenedTypeChecking` | `warn` | `app` | `tooling-baseline` | yes | 0.5.0 |
 | [D009](#d009) | `RemoteDaprComponentFetch` | `block` | `app` | `dapr-components` | yes | 0.12.0 |
+| [D010](#d010) | `QueryTransformerWithoutDuckdb` | `warn` | `app` | `runtime-dependencies` | — | 0.18.0 |
 
 ---
 
@@ -220,5 +221,71 @@ there instead, e.g. `shutil.copytree(pathlib.Path(application_sdk.__file__).pare
 already be installed into the venv before the task runs (true both locally and in the
 Docker build, where `uv sync` precedes `poe download-components`). Inline suppression:
 `# conformance: ignore[D009] <reason>` on the line above the offending entry.
+
+---
+
+## D010 — `QueryTransformerWithoutDuckdb` {#d010}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `runtime-dependencies` · **Autofixable:** — · **Since:** 0.18.0
+
+> App imports the SDK query transformer but duckdb is not resolved (no [sql]/[incremental] extra, no direct dependency)
+
+**Rationale:** The SDK's query transformer (application_sdk.transformers.query, the transform_metadata
+path) executes its transform SQL through DuckDBConnectionManager, and duckdb ships only
+in the SDK's [sql] and [incremental] extras — never in core. An app that imports the
+query transformer on a plain atlan-application-sdk pin, with no extra at all, hits a
+guaranteed runtime ImportError ('duckdb is required for DuckDBConnectionManager') in
+EVERY transform — latent until the first real pipeline run, because imports alone
+succeed and mocked unit tests pass. The population that surfaced this was a different,
+SDK-owned shape: apps pinned to the deprecated [daft] extra, which resolved empty over
+3.22–3.27 (observed live on main for a document-store connector in fleet testing after
+an automated upgrade crossed the 3.22 line). That half is fixed at the root — [daft]
+aliases [sql] again from 3.28.0 — so this rule now covers the no-extras case it always
+also covered. Statically checkable: transformer-usage scan + lockfile/pyproject scan.
+
+An app whose source imports the SDK query transformer
+(`application_sdk.transformers.query` — the `transform_metadata` /
+`QueryBasedTransformer` path) must be able to import `duckdb` at runtime: the
+transformer executes its transform SQL through `DuckDBConnectionManager`, which raises
+`ImportError: duckdb is required for DuckDBConnectionManager` when the package is
+absent.
+
+`duckdb` is provided by the SDK's `[sql]` and `[incremental]` extras only — never by the
+core dependency set.  So the shape this rule describes is an app that imports the
+transformer on a **plain** `atlan-application-sdk` pin, with no extra at all: the
+failure is silent until the first real end-to-end transform, because imports succeed and
+unit tests that mock the transformer pass.
+
+**Not the `[daft]` case — that one was ours.**  Over SDK 3.22–3.27 the deprecated
+`[daft]` extra resolved to nothing, so apps that were following the SDK's own
+deprecation note were broken by an automated upgrade crossing the 3.22 line.  That is
+fixed at the root: from 3.28.0 `[daft]` aliases `[sql]` again, and a version bump alone
+resolves `duckdb` for every such app with no repo-side change.  If this rule fires on an
+app pinned to `[daft]`, upgrade the SDK rather than editing the app's extras.
+
+Resolution order of the check:
+
+* with a parseable `uv.lock` present, `duckdb` must be reachable   from the app's OWN
+production dependencies — the lock is walked   from the app's `[[package]]` entry along
+`dependencies` and the   `optional-dependencies` groups an incoming extra activates.
+`uv.lock` is a *universal* resolution graph covering dev groups   and every extra, so
+duckdb merely appearing somewhere in it does   NOT mean a default `uv sync --no-dev`
+installs it;   `[package.dev-dependencies]` is deliberately not traversed; * without a
+usable lock, the app's `pyproject.toml` must declare   `duckdb` directly or reference
+`atlan-application-sdk` with a   `sql` or `incremental` extra — in `[project]
+dependencies`   specifically.  Dependency groups and optional-dependency arrays do   not
+count: they are not installed by default.
+
+**Remediation:** change the SDK reference to `atlan-application-sdk[sql]` (or
+`[incremental]` for the incremental analytics stack) in `[project.dependencies]` and
+relock (`uv lock`).  That is the fix.
+
+Declaring `duckdb` directly is a discouraged fallback, not a co-equal option: it clears
+the finding, but it duplicates a pin the SDK's extras already manage, so the app now
+owns a version range it has to keep in step with the SDK's by hand.  Reach for it only
+where the extra genuinely cannot be used.
+
+This is a WARN (per the new-rule tier policy), but unlike most WARN findings it
+indicates a *guaranteed* runtime failure — treat it as an error.
 
 ---

@@ -244,6 +244,7 @@ orjson==3.11.9
     # via atlan-application-sdk
 packaging==26.3
     # via
+    #   atlan-application-sdk-conformance
     #   lazy-loader
     #   opentelemetry-instrumentation
     #   pytest

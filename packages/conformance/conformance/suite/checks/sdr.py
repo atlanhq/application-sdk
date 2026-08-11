@@ -1,7 +1,7 @@
-"""P-series SDR-readiness checks (P029, P030, P037, P038, P039).
+"""P-series SDR-readiness checks (P029, P030, P037, P038, P039, P041, P042).
 
 Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
-``atlan.yaml`` and verify five structural invariants:
+``atlan.yaml`` and verify seven structural invariants:
 
 * ``P029`` — an agent extraction manifest under ``app/generated/`` must surface
   ``agent_json`` AND ``extraction_method`` at the TOP LEVEL of
@@ -15,11 +15,25 @@ Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
 * ``P030`` — at least one Python source file (outside ``tests/``) must contain
   a ``self.upload(`` call so the ``ENABLE_ATLAN_UPLOAD`` path is reachable.
   Without it extraction "passes" but no assets transfer to the Atlan tenant
-  bucket in SDR deployments.  Only applies to apps that actually have a
+  bucket in SDR deployments.  Delegating to SDK ``SqlApp.run()`` does NOT
+  satisfy this — ``run()`` persists to the deployment store only, while the
+  publish stage reads the tenant bucket.  A custom ``upload_to_atlan`` bridge
+  whose body performs no storage/store-transfer call is a **no-op stub** and is
+  flagged specifically (the shape fleet remediation found behind a real
+  silent-zero-asset publish).  Only applies to apps that actually have a
   publish stage: an app whose ``contract/app.pkl`` sets
   ``pipeline.publish = null`` compiles to a ``manifest.json`` with no
   ``dag.publish`` node, and has nowhere for ``self.upload()`` to hand
   extracted assets off to — P030 is skipped for those apps.
+
+* ``P042`` — a custom ``upload_to_atlan`` bridge that DOES transfer, standing in
+  for ``self.upload()`` rather than alongside it.  Split out of P030 because the
+  two shapes are not the same failure: P030's is a silent zero-asset publish,
+  P042's is a working reimplementation of an SDK contract on a symbol the SDK
+  has deprecated for removal in v4.0.  They need separate severities and
+  separate remediation text, and P042 retires when that removal lands.  Both are
+  computed in :func:`_check_p030`, which is where the "is there any upload path"
+  question is answered once.
 
 * ``P037`` — an SDR app that resolves source credentials with a *custom*,
   GUID-only path (a hand-rolled vault read + ``resolve_credential_raw`` or a
@@ -52,6 +66,15 @@ Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
   ``*ExtractionInput`` family (which declares ``agent_json``) or set
   ``allow_unbounded_fields=True`` / ``extra="allow"`` are exempt.  WARN.
 
+* ``P041`` — an SDR app that unconditionally sets
+  ``preflight_gate_mode = "hard"``.  In agent mode, preflight checks that
+  depend on non-secret config (a database name for a schema-existence check)
+  fail spuriously because customers rightly mirror only secrets into the
+  secret store — a hard gate then aborts the whole workflow (observed for a
+  query-engine connector in fleet testing).  A run-mode-differentiated
+  conditional (``"soft" if ENABLE_ATLAN_UPLOAD else "hard"``) is not
+  flagged.  WARN (suggest-only).
+
 P026–P028 are reserved by a concurrent PR (GetattrOnTypedContractField,
 AppStateAsCrossTaskChannel, ManualQualifiedNameFString — PR #2417).
 
@@ -79,6 +102,8 @@ RULE_P030 = "P030"
 RULE_P037 = "P037"
 RULE_P038 = "P038"
 RULE_P039 = "P039"
+RULE_P041 = "P041"
+RULE_P042 = "P042"
 
 _SDR_FLAG_RE = re.compile(
     r"^self_deployed_runtime:\s*(true|false)\b",
@@ -95,7 +120,7 @@ def _is_sdr_app(root: Path) -> bool:
         return False
     try:
         text = atlan_yaml.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return False
     m = _SDR_FLAG_RE.search(text)
     return m is not None and m.group(1).lower() == "true"
@@ -137,7 +162,7 @@ def _app_has_publish_stage(manifests: list[Path]) -> bool:
     for manifest_path in manifests:
         try:
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return True
         if (data.get("dag") or {}).get("publish") is not None:
             return True
@@ -192,7 +217,7 @@ def _check_p029(manifests: list[Path], root: Path) -> list[Finding]:
     for manifest_path in manifests:
         try:
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             continue
         parsed_any = True
 
@@ -263,31 +288,482 @@ def _check_p029(manifests: list[Path], root: Path) -> list[Finding]:
     return findings
 
 
-def _check_p030(paths: list[Path]) -> list[Finding]:
-    """P030: at least one source file must contain self.upload(."""
+#: Method names an app uses for a custom deployment-store → tenant-bucket
+#: transfer bridge in place of the SDK-standard ``self.upload()``.
+_UPLOAD_BRIDGE_METHOD_NAMES = frozenset({"upload_to_atlan"})
+
+#: Verbs that, as a whole ``_``-separated token of the callee name, indicate a
+#: real storage/store transfer (ObjectStore/StorageClient uploads, file copies,
+#: put-object calls, store-to-store migrations).
+#:
+#: Matched on token boundaries, never as a bare substring: ``put`` is a
+#: substring of ``compute_summary``, ``output_stats`` and ``get_inputs``, and
+#: accepting those would let a genuine no-op stub containing any of them clear
+#: the finding — the exact silent-zero class this rule exists to catch.
+#: Verbs that mean "move bytes to a store" on their own, whatever the receiver.
+_UNAMBIGUOUS_TRANSFER_VERBS = frozenset({"upload"})
+
+#: Verbs that are storage-shaped only in context.  ``put_metric_data``,
+#: ``migrate_schema``, ``copy_on_write``, ``copy_paste``, ``transfer_encoding``
+#: and ``push_job`` are all compound names carrying one of these and none moves
+#: bytes anywhere — so a compound name must NOT clear the finding on its own.
+#: These require the CALL to name a recognised store (receiver or a keyword
+#: argument), at any token count.
+_AMBIGUOUS_TRANSFER_VERBS = frozenset(
+    {"copy", "transfer", "migrate", "put", "push", "sync", "write", "send"}
+)
+
+_STORAGE_TRANSFER_VERBS = _UNAMBIGUOUS_TRANSFER_VERBS | _AMBIGUOUS_TRANSFER_VERBS
+
+#: A *bare* verb (``put``, ``copy``, ``sync``, …) says nothing on its own —
+#: ``self._metrics.put(...)``, ``buffer.copy()`` and ``requests.put(url)`` are
+#: not transfers.  For those the receiver has to name a recognised store.
+_STORE_RECEIVER_MARKERS = (
+    "store",
+    "storage",
+    "bucket",
+    "objectstore",
+    "s3",
+    "gcs",
+    "blob",
+    "container",
+)
+
+
+def _names_a_store(identifier: str) -> bool:
+    """Whether one identifier segment names a store.
+
+    Whole-segment or suffix match, never a bare substring: ``_object_store`` and
+    ``upstream_store`` are stores, ``_store_of_names`` is a registry that merely
+    starts with the word.
+    """
+    seg = identifier.strip("_").lower()
+    return any(
+        seg == marker or seg.endswith(marker) for marker in _STORE_RECEIVER_MARKERS
+    )
+
+
+def _call_names_a_store(node: ast.Call) -> bool:
+    """Whether the call references a recognised store — by receiver or argument.
+
+    The receiver chain is the usual signal (``self._object_store.upload_prefix``).
+    Keyword arguments matter too, because the SDK's storage helpers are called
+    as bare functions: every green fleet bridge does
+    ``upload_file(key, tmp, store=upstream_store)`` /
+    ``storage_upload_file(..., store=...)``, which has no receiver at all.
+    """
+    parts: list[str] = []
+    cur: ast.AST | None = node.func
+    while cur is not None:
+        if isinstance(cur, ast.Attribute):
+            parts.append(cur.attr)
+            cur = cur.value
+        elif isinstance(cur, ast.Name):
+            parts.append(cur.id)
+            cur = None
+        elif isinstance(cur, ast.Call):
+            cur = cur.func
+        else:
+            cur = None
+    # Drop the callee itself — `upload_file` must not vouch for itself.
+    receiver_parts = parts[1:] if len(parts) > 1 else []
+    if any(_names_a_store(part) for part in receiver_parts):
+        return True
+
+    def arg_names_a_store(value: ast.expr) -> bool:
+        if isinstance(value, ast.Name):
+            return _names_a_store(value.id)
+        if isinstance(value, ast.Attribute):
+            return _names_a_store(value.attr)
+        return False
+
+    for kw in node.keywords:
+        if kw.arg and _names_a_store(kw.arg):
+            return True
+        if arg_names_a_store(kw.value):
+            return True
+    # Positional too: the SDK's own callers pass the store positionally
+    # (storage/reference.py, storage/batch.py), so a real bridge such as
+    # `transfer_directory(src, dst, store)` must not read as moving no bytes.
+    return any(arg_names_a_store(arg) for arg in node.args)
+
+
+def _is_storage_transfer_call(node: ast.Call) -> bool:
+    """Whether *node* is a real storage/store-transfer call.
+
+    Only the bare ``upload(...)`` / ``self.upload(...)`` — the SDK-standard
+    bridge call — clears on the name alone.  **Every** other name carrying a
+    transfer verb, compound or not, must additionally have the call reference a
+    store (see :func:`_call_names_a_store`).
+
+    That matters in both directions.  Clearing on any compound name containing a
+    verb let ``self._log.upload_metrics(...)``, ``self._telemetry.upload_stats()``,
+    ``put_metric_data``, ``migrate_schema``, ``copy_on_write``, ``copy_paste``,
+    ``transfer_encoding`` and ``push_job`` all pass a no-op stub.  Requiring a
+    *receiver* alone would misreport the green fleet bridges, which call the SDK
+    storage helpers as bare functions — ``upload_file(key, tmp, store=...)`` has
+    no receiver at all — which is why the keyword arguments count too.
+    """
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        name = func.attr
+    elif isinstance(func, ast.Name):
+        name = func.id
+    else:
+        return False
+
+    tokens = set(t for t in name.lower().split("_") if t)
+    if not (tokens & (_UNAMBIGUOUS_TRANSFER_VERBS | _AMBIGUOUS_TRANSFER_VERBS)):
+        return False
+    if tokens == _UNAMBIGUOUS_TRANSFER_VERBS:
+        return True  # the bare `upload(...)` / `self.upload(...)` SDK call
+    # A COMPOUND name carrying `upload` proves nothing on its own either:
+    # `self._log.upload_metrics(...)` and `self._telemetry.upload_stats()` are
+    # not transfers. Everything but the bare name goes through the receiver.
+    # An ambiguous verb says nothing on its own at ANY token count: compound
+    # names like `put_metric_data`, `migrate_schema`, `copy_on_write`,
+    # `copy_paste`, `transfer_encoding` and `push_job` are not storage. The
+    # receiver has to name a store.
+    return _call_names_a_store(node)
+
+
+def _is_abstract_body(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether the body is a pure declaration (abstract / placeholder).
+
+    ``raise NotImplementedError``, ``pass`` and ``...`` (with an optional
+    docstring) declare the contract for a subclass to implement; grading them as
+    no-op stubs puts a permanent spurious finding on every connector using the
+    declare-abstract/implement-in-subclass idiom.  They are excluded from the
+    bridge list entirely and fall through to the generic absence check, which
+    still fires correctly on an app carrying *only* the abstract stub.
+    """
+    body = list(node.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+    ):
+        if isinstance(body[0].value.value, str):
+            body = body[1:]  # drop the docstring
+    if not body:
+        return True
+    for stmt in body:
+        if isinstance(stmt, ast.Pass):
+            continue
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+            if stmt.value.value is Ellipsis:
+                continue
+        if isinstance(stmt, ast.Raise):
+            exc = stmt.exc
+            if isinstance(exc, ast.Call):
+                exc = exc.func
+            if isinstance(exc, ast.Name) and exc.id == "NotImplementedError":
+                continue
+            if isinstance(exc, ast.Attribute) and exc.attr == "NotImplementedError":
+                continue
+        return False
+    return True
+
+
+def _self_delegate_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Names of ``self.x(...)`` / ``cls.x(...)`` calls made in *node*'s body."""
+    out: set[str] = set()
+    for inner in ast.walk(node):
+        if (
+            isinstance(inner, ast.Call)
+            and isinstance(inner.func, ast.Attribute)
+            and isinstance(inner.func.value, ast.Name)
+            and inner.func.value.id in ("self", "cls")
+        ):
+            out.add(inner.func.attr)
+    return out
+
+
+#: How many ``self.x()`` hops to follow inside one class before giving up.
+#: A real bridge that fans out through a couple of private helpers is ordinary;
+#: unbounded recursion on a hostile file is not.
+_MAX_DELEGATION_DEPTH = 4
+
+
+def _delegates_to_transfer(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    table: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+) -> bool:
+    """Whether *node* reaches a storage transfer through same-class delegation.
+
+    Resolved transitively (depth-capped, cycle-safe) so a bridge that fans out
+    ``upload_to_atlan`` -> ``self._helper1()`` -> ``self._helper2()`` ->
+    ``self._object_store.upload_prefix()`` is graded on what it actually does.
+
+    An unresolvable callee — a helper inherited from a base class in another
+    file — is deliberately NOT assumed to transfer: treating every
+    ``self.x(...)`` as delegation would let ``compute_summary`` /
+    ``output_stats`` / ``get_inputs`` clear the finding, reopening the false
+    negative the token match exists to close. That limit is documented on
+    :func:`_find_upload_bridges`.
+    """
+    seen: set[str] = {node.name}
+    frontier = [(node, 0)]
+    while frontier:
+        current, depth = frontier.pop()
+        if depth >= _MAX_DELEGATION_DEPTH:
+            continue
+        for helper_name in _self_delegate_names(current):
+            if helper_name in seen:
+                continue
+            seen.add(helper_name)
+            helper = table.get(helper_name)
+            if helper is None:
+                continue
+            if any(
+                isinstance(inner, ast.Call) and _is_storage_transfer_call(inner)
+                for inner in ast.walk(helper)
+            ):
+                return True
+            frontier.append((helper, depth + 1))
+    return False
+
+
+def _find_upload_bridges(
+    paths: list[Path], root: Path
+) -> list[tuple[str, int, str, bool]]:
+    """Locate custom upload-bridge method definitions across the app source.
+
+    Returns ``(rel_file, lineno, name, is_noop)`` per defined bridge method,
+    where ``is_noop`` is True when neither the method body nor a same-class
+    method it delegates to performs a storage/store-transfer call — the no-op
+    stub shape.
+
+    Abstract declarations (``raise NotImplementedError`` / ``pass`` / ``...``)
+    are not bridges and are skipped entirely.  Delegation is resolved one level
+    into the same class, so a bridge whose body is
+    ``await self._relay_to_tenant_bucket(prefix)`` is graded on what the helper
+    actually does rather than on whether its *name* happens to contain a verb.
+
+    Known limit: a helper inherited from a base class in another file cannot be
+    resolved, and the bridge then reads as a no-op stub.  Assuming the opposite
+    would let any ``self.x(...)`` clear the finding — including
+    ``self.compute_summary()`` and ``self.get_inputs()`` — which is the false
+    negative this rule exists to prevent, and the standard inline directive
+    carries the author's justification.
+    """
+    bridges: list[tuple[str, int, str, bool]] = []
     for path in paths:
         try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError):
             continue
-        if "self.upload(" in text:
-            return []
+        try:
+            rel = str(path.relative_to(root))
+        except ValueError:
+            rel = str(path)
 
-    return [
+        # Method tables per class, for the one-level delegation lookback.
+        siblings: dict[int, dict[str, ast.FunctionDef | ast.AsyncFunctionDef]] = {}
+        for cls in ast.walk(tree):
+            if not isinstance(cls, ast.ClassDef):
+                continue
+            table: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+            for item in cls.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    table[item.name] = item
+            for item in cls.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    siblings[id(item)] = table
+
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name in _UPLOAD_BRIDGE_METHOD_NAMES
+            ):
+                continue
+            if _is_abstract_body(node):
+                continue
+
+            has_transfer = any(
+                isinstance(inner, ast.Call) and _is_storage_transfer_call(inner)
+                for inner in ast.walk(node)
+            )
+            if not has_transfer:
+                has_transfer = _delegates_to_transfer(node, siblings.get(id(node), {}))
+
+            bridges.append((rel, node.lineno, node.name, not has_transfer))
+    return bridges
+
+
+def _has_self_upload_call(paths: list[Path]) -> bool:
+    """Whether any app source file makes a real ``self.upload(...)`` call.
+
+    Detected on the AST, not as text: a raw ``"self.upload(" in text`` search
+    cannot tell a call from a *mention*, so a comment or docstring naming
+    ``self.upload(`` would clear the absence finding.  The population this rule
+    targets is precisely where such a comment is likely — fleet remediation
+    found a stub whose comment claimed the publish stage owned the transfer.
+
+    ``super().upload(...)`` counts too: an app that overrides ``upload`` to add
+    connector-specific logic and then defers to the SDK's real ``App.upload()``
+    has a structurally reachable transfer path — the same ``super()`` shape
+    T017 (``e2e_agent_spec``) already treats as first-class.
+    """
+    for path in paths:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "upload"
+            ):
+                continue
+            receiver = node.func.value
+            if isinstance(receiver, ast.Name) and receiver.id == "self":
+                return True
+            # super().upload(...) — deferring to the SDK's App.upload().
+            if (
+                isinstance(receiver, ast.Call)
+                and isinstance(receiver.func, ast.Name)
+                and receiver.func.id == "super"
+            ):
+                return True
+    return False
+
+
+def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
+    """P030 / P042: the tenant-bucket upload path must be reachable, and be ours.
+
+    ``self.upload()`` is the one shape that clears both rules.  Everything else
+    falls into one of three findings, and the split into two rule IDs is what
+    keeps them from sharing a severity and a remediation:
+
+    * **P030, no upload at all** — no source file makes a real
+      ``self.upload(...)`` call (matched on the AST, so a comment or docstring
+      mentioning it does not count) and no custom upload-bridge method
+      (``upload_to_atlan``) is defined.  The ENABLE_ATLAN_UPLOAD path is
+      unreachable; delegating to SDK ``SqlApp.run()`` does NOT count (it
+      persists to the deployment store only — publish reads the tenant bucket).
+    * **P030, no-op bridge stub** — an ``upload_to_atlan`` method IS defined but
+      neither its body nor a same-class method it delegates to performs a
+      storage/store-transfer call.  The stub looks like a bridge at review time
+      but moves no bytes; fleet remediation found one whose comment claimed the
+      publish stage owned the transfer.  Abstract declarations
+      (``raise NotImplementedError``/``pass``/``...``) are not stubs and are
+      excluded — a subclass may well implement the real thing.
+    * **P042, hand-rolled bridge in place of ``App.upload()``** — a
+      ``upload_to_atlan`` that DOES transfer, with no ``self.upload(`` anywhere.
+      Bytes move, so this is not the silent-zero-asset shape P030 describes; it
+      is a reimplementation of an SDK contract, on a symbol the SDK has
+      deprecated for removal in v4.0.
+
+    Why a working bridge does not buy silence: ``upload_to_atlan`` is the SDK's
+    own ``@deprecated`` symbol (``removal_version: 4.0.0``), so B001 already
+    flags call sites of it — leaving the P-series silent on the same repo would
+    make the suite contradict itself.  And a bridge cannot be equivalent:
+    ``App.upload()`` carries ADR-0014 dual-write routing, transformed-asset
+    validation, the canonical artifact prefix, ``@task`` retry/replay, and
+    underneath it the cross-pod deployment-store fallback, partial-local
+    reconcile, and SHA-256 sidecar dedup.  A green full-DAG e2e proves bytes
+    moved on that run, not that the app tracks the contract.
+
+    An app with ``self.upload(`` somewhere is flagged for neither absence nor
+    P042, but a no-op stub alongside it is still flagged (the stub is dead
+    weight that masks the real transfer path).
+    """
+    has_self_upload = _has_self_upload_call(paths)
+    bridges = _find_upload_bridges(paths, root)
+    findings: list[Finding] = []
+
+    # No-op stubs are flagged regardless of self.upload presence: a stub that
+    # moves no bytes is either the (real) silent-zero-asset bug or dead code
+    # masking the real transfer path.
+    for rel, lineno, name, is_noop in bridges:
+        if not is_noop:
+            continue
+        findings.append(
+            Finding(
+                rule_id=RULE_P030,
+                file=rel,
+                line=lineno,
+                column=1,
+                message=(
+                    f"{rel}:{lineno}: '{name}' is defined but its body performs no "
+                    "storage/store-transfer call — a no-op stub. In SDR mode the "
+                    "extracted assets never reach the Atlan tenant bucket, so the "
+                    "workflow reports 'success' with 0 assets published. Implement a "
+                    "key-preserving deployment-store→tenant-bucket transfer (preserve "
+                    "the workflows/{workflow_id}/{run_id}/ key layout) or call "
+                    "self.upload(...), and verify with a green full-DAG e2e proving "
+                    "assets land in Atlas."
+                ),
+            )
+        )
+
+    if has_self_upload:
+        # The sanctioned path is present, so there is no absence and no
+        # hand-rolled substitution — a bridge alongside it is redundant, not a
+        # replacement.  Any no-op stub keeps its own finding above.
+        return findings
+
+    # A transferring bridge with no self.upload() is the substitution shape.
+    # Reported per bridge and at the bridge, so the finding lands on the code
+    # that has to change rather than on atlan.yaml.  A no-op stub is NOT
+    # reported here — it already carries its own, sharper P030 above, and
+    # reporting both would double-count one method.
+    for rel, lineno, name, is_noop in bridges:
+        if is_noop:
+            continue
+        findings.append(
+            Finding(
+                rule_id=RULE_P042,
+                file=rel,
+                line=lineno,
+                column=1,
+                message=(
+                    f"{rel}:{lineno}: '{name}' performs the deployment-store→tenant-"
+                    "bucket transfer by hand and no self.upload(...) call exists in "
+                    "the app. Bytes do move, so this is not the silent-zero-asset "
+                    "shape P030 reports — it is a reimplementation of a contract the "
+                    "SDK owns, on a symbol the SDK has deprecated for removal in "
+                    "v4.0.0. App.upload() additionally does dual-write routing, "
+                    "transformed-asset validation, the canonical "
+                    "artifacts/apps/{app}/workflows/{workflow_id}/{run_id} prefix, "
+                    "@task retry/replay, the cross-pod deployment-store fallback for "
+                    "KEDA-scaled workers, partial-local reconcile, and SHA-256 "
+                    "sidecar dedup for idempotent replay. Migrate to "
+                    "await self.upload(...). A green full-DAG e2e shows the bridge "
+                    "worked on that run; it does not show the bridge tracks the "
+                    "contract, and it will not survive the v4.0 removal."
+                ),
+            )
+        )
+
+    if bridges:
+        # A bridge of either kind has already been reported at its definition —
+        # a second app-level absence finding would double-report it.
+        return findings
+
+    findings.append(
         Finding(
             rule_id=RULE_P030,
             file="atlan.yaml",
             line=1,
             column=1,
             message=(
-                "No self.upload() call found in any app source file. In SDR mode "
+                "No self.upload() call (and no custom upload_to_atlan transfer "
+                "bridge) found in any app source file. In SDR mode "
                 "ENABLE_ATLAN_UPLOAD gates whether extracted assets are transferred "
                 "to the Atlan tenant bucket — if the gate is structurally unreachable "
                 "the workflow completes with status 'success' but no assets land in "
-                "the bucket. Add await self.upload(...) to the entrypoint or run() method."
+                "the bucket. Delegating to SDK SqlApp.run() does NOT satisfy this: "
+                "run() persists to the deployment store only, while publish reads "
+                "the tenant bucket. Add await self.upload(...) to the entrypoint or "
+                "run() method, and never mark this finding a false positive without "
+                "a green full-DAG e2e proving assets land in Atlas."
             ),
         )
-    ]
+    )
+    return findings
 
 
 # ── P037: agent_json ignored by a custom GUID-only credential path ──────────
@@ -548,7 +1024,7 @@ def _manifest_carries_agent_routing(manifest_path: Path) -> bool:
     """Whether a manifest's extract args carry the ``{{agent-json}}`` placeholder."""
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
     dag = data.get("dag", {})
     args = dag.get("extract", {}).get("inputs", {}).get("args", {})
@@ -738,21 +1214,255 @@ def _check_p039(manifests: list[Path], root: Path) -> list[Finding]:
     return findings
 
 
+# ── P041: hard preflight gate in an SDR app ──────────────────────────────────
+
+#: The SDK ``App`` class attribute that opts preflight verdicts into aborting
+#: the run (``"hard"``) instead of logging-and-proceeding (``"soft"``).
+_PREFLIGHT_GATE_MODE_ATTR = "preflight_gate_mode"
+
+
+def _is_env_lookup_call(node: ast.Call) -> bool:
+    """Whether *node* calls a known environment-variable lookup.
+
+    Matches ``os.environ.get(...)``, ``os.getenv(...)``, and
+    ``os.environ.setdefault(...)`` — the shapes through which a deployment can
+    override the gate mode, per the rule's documentation.  Anything else
+    (``resolve_gate(...)``, ``config.get(...)``, …) returns a value this check
+    cannot see, so its arguments are not evidence of the runtime mode.
+    """
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        if func.attr == "getenv" and isinstance(func.value, ast.Name):
+            return func.value.id == "os"
+        if (
+            func.attr in {"get", "setdefault"}
+            and isinstance(func.value, ast.Attribute)
+            and func.value.attr == "environ"
+            and isinstance(func.value.value, ast.Name)
+        ):
+            return func.value.value.id == "os"
+    return False
+
+
+def _is_unconditional_hard(
+    value: ast.AST, constants: dict[str, object] | None = None
+) -> bool:
+    """Whether *value* yields ``"hard"`` on the always-on / default path.
+
+    Semantic rather than structural: exempting every non-``Constant`` node lets
+    an *inverted* ternary (``"hard" if ENABLE_ATLAN_UPLOAD else "soft"`` — hard
+    exactly when upload is on), a both-arms-hard ternary, and an env default of
+    ``"hard"`` all escape, which are the very postures the rule audits.
+
+    Safe is ``"hard"`` in the *else* arm only — the documented run-mode split
+    ``"soft" if ENABLE_ATLAN_UPLOAD else "hard"``.  A nested conditional in an
+    env-var default (``os.environ.get(VAR, "soft" if ... else "hard")``) is the
+    same posture spelled through the override and stays silent too.
+    """
+    if isinstance(value, ast.Constant):
+        return value.value == "hard"
+    if isinstance(value, ast.IfExp):
+        # Hard in the true arm (or in both) is unconditional-in-effect; hard
+        # only in the else arm is the recommended run-mode-differentiated split.
+        return _is_unconditional_hard(value.body, constants)
+    if isinstance(value, ast.Call):
+        # An env-var override: `os.environ.get("ATLAN_PREFLIGHT_GATE_MODE",
+        # "hard")` is hard on every deployment that does not set the var.
+        # Only the known env-lookup callees are read this way — for any other
+        # call the returned value is opaque to a static check, so a constant
+        # argument (a helper's `default="hard"`, say) proves nothing about the
+        # mode the app actually runs with.
+        if not _is_env_lookup_call(value):
+            return False
+        return any(
+            _is_unconditional_hard(arg, constants)
+            for arg in [*value.args[1:], *(kw.value for kw in value.keywords)]
+        )
+    if isinstance(value, ast.Name) and constants is not None:
+        # A module-level `MODE = "hard"` indirection is still always hard;
+        # only an unambiguous single binding is resolved (no flow analysis).
+        return constants.get(value.id) == "hard"
+    if isinstance(value, ast.BoolOp) and isinstance(value.op, ast.Or):
+        # `os.environ.get(VAR) or "hard"` — the or-default idiom, semantically
+        # identical to the `.get(VAR, "hard")` form above.
+        return _is_unconditional_hard(value.values[-1], constants)
+    return False
+
+
+def _string_constants(body: list[ast.stmt]) -> dict[str, object]:
+    """``NAME = "literal"`` bindings among the straight-line statements of *body*.
+
+    Used for module bodies AND class bodies: ``preflight_gate_mode`` is
+    conventionally a class attribute, so ``class C: MODE = "hard"`` followed by
+    ``preflight_gate_mode = MODE`` in the same body is at least as natural as
+    the module-level form.
+
+    Deliberately not constant propagation — only direct children of *body* are
+    considered, so control flow is straight-line and the last write wins. A name
+    ever assigned a computed value is dropped rather than guessed at.
+    """
+    seen: dict[str, object] = {}
+    poisoned: set[str] = set()
+    for stmt in body:
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target = stmt.targets[0]
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            target = stmt.target  # `MODE: str = "hard"`
+        else:
+            continue
+        if not isinstance(target, ast.Name):
+            continue
+        name = target.id
+        if isinstance(stmt.value, ast.Constant):
+            # Straight-line statements only, so the last write wins:
+            # `MODE = "soft"` then `MODE = "hard"` is deterministically hard.
+            seen[name] = stmt.value.value
+        else:
+            poisoned.add(name)  # a computed value — do not guess at it
+    return {k: v for k, v in seen.items() if k not in poisoned}
+
+
+def _gate_target_names(targets: list[ast.expr]) -> list[str]:
+    return [t.id for t in targets if isinstance(t, ast.Name)] + [
+        t.attr for t in targets if isinstance(t, ast.Attribute)
+    ]
+
+
+def _gate_assignments(stmts: list[ast.stmt]) -> list[tuple[ast.stmt, ast.expr]]:
+    """``(node, value)`` for each ``preflight_gate_mode`` assignment in *stmts*."""
+    out: list[tuple[ast.stmt, ast.expr]] = []
+    for stmt in stmts:
+        for node in ast.walk(stmt):
+            if isinstance(node, ast.Assign):
+                targets, value = list(node.targets), node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets, value = [node.target], node.value
+            else:
+                continue
+            if value is None:
+                continue
+            if _PREFLIGHT_GATE_MODE_ATTR in _gate_target_names(targets):
+                out.append((node, value))
+    return out
+
+
+def _run_mode_split_exempt(
+    tree: ast.Module, constants: dict[str, object] | None = None
+) -> set[int]:
+    """ids of gate assigns that are the ``else`` arm of an if/else run-mode split.
+
+    ``if ENABLE_ATLAN_UPLOAD: ... = "soft"`` / ``else: ... = "hard"`` is the
+    documented posture spelled across two statements instead of as a ternary —
+    an ordinary style choice once the branches grow past one line — and must not
+    be flagged.  The polarity check mirrors the ternary's: ``"hard"`` on the
+    *true* arm is the inverted posture and still fires, as does both-arms-hard.
+    """
+    exempt: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If) or not node.orelse:
+            continue
+        body = _gate_assignments(node.body)
+        orelse = _gate_assignments(node.orelse)
+        if not body or not orelse:
+            continue
+        if any(_is_unconditional_hard(value, constants) for _n, value in body):
+            continue  # hard on the true arm — inverted/both-hard, keep firing
+        for assign, value in orelse:
+            if _is_unconditional_hard(value, constants):
+                exempt.add(id(assign))
+    return exempt
+
+
+def _check_p041(paths: list[Path], root: Path) -> list[Finding]:
+    """P041: an SDR app must not hard-code ``preflight_gate_mode = "hard"``.
+
+    Flags an assignment to ``preflight_gate_mode`` (plain or annotated) whose
+    value is ``"hard"`` on the always-on or default path — see
+    :func:`_is_unconditional_hard`.  The documented run-mode-differentiated
+    posture (``"soft" if ENABLE_ATLAN_UPLOAD else "hard"``, env-overridable via
+    ``ATLAN_PREFLIGHT_GATE_MODE``) is never flagged, in either its ternary or
+    its ``if``/``else`` spelling.
+    """
+    findings: list[Finding] = []
+    for path in paths:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+        try:
+            rel = str(path.relative_to(root))
+        except ValueError:
+            rel = str(path)
+        module_constants = _string_constants(tree.body)
+        # `preflight_gate_mode` is conventionally a class attribute, so a
+        # same-class `MODE = "hard"` shadows the module-level one.
+        class_constants: dict[int, dict[str, object]] = {}
+        for cls in ast.walk(tree):
+            if not isinstance(cls, ast.ClassDef):
+                continue
+            merged = {**module_constants, **_string_constants(cls.body)}
+            for item in ast.walk(cls):
+                class_constants[id(item)] = merged
+        split_exempt = _run_mode_split_exempt(tree, module_constants)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets = list(node.targets)
+                value = node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+                value = node.value
+            else:
+                continue
+            if value is None:
+                continue
+            if _PREFLIGHT_GATE_MODE_ATTR not in _gate_target_names(targets):
+                continue
+            if id(node) in split_exempt:
+                continue
+            if _is_unconditional_hard(
+                value, class_constants.get(id(node), module_constants)
+            ):
+                findings.append(
+                    Finding(
+                        rule_id=RULE_P041,
+                        file=rel,
+                        line=node.lineno,
+                        column=1,
+                        message=(
+                            f"{rel}:{node.lineno}: preflight_gate_mode is "
+                            "unconditionally 'hard' in an SDR app. In agent mode the "
+                            "app resolves config through the customer's secret "
+                            "store, and non-secret values (e.g. a database name for "
+                            "a schema-existence check) are rightly not mirrored "
+                            "there — the preflight check then fails spuriously and "
+                            "the hard gate aborts the whole workflow. Derive the "
+                            "gate from the run mode instead (e.g. "
+                            "preflight_gate_mode = 'soft' if ENABLE_ATLAN_UPLOAD "
+                            "else 'hard') and keep it env-overridable via "
+                            "ATLAN_PREFLIGHT_GATE_MODE, until SDK-side run-mode-"
+                            "differentiated gate enforcement lands."
+                        ),
+                    )
+                )
+    return findings
+
+
 def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
     """No-op: the SDR checks require cross-artifact analysis; use scan_all."""
     return []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    """Check the SDR-readiness rules (P029, P030, P037, P038, P039) for the repo.
+    """Check the SDR-readiness rules (P029, P030, P037–P039, P041, P042).
 
     Parameters
     ----------
     paths:
         Python source files to inspect (as returned by :func:`discover`).
-        These are the files checked by P030 for a ``self.upload(`` call, by
-        P037 for the credential-resolution shape, and by P038 for the
-        object-store prefix rooting.
+        These are the files checked by P030/P042 for a ``self.upload(`` call /
+        upload-bridge shape, by P037 for the credential-resolution shape, by
+        P038 for the object-store prefix rooting, and by P041 for the
+        preflight-gate posture.
     root:
         Repo root — used to locate ``atlan.yaml`` and ``app/generated/`` (P039
         also inspects the generated ``_input.py`` contract models).
@@ -765,10 +1475,11 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     findings: list[Finding] = []
     findings.extend(_check_p029(manifests, root))
     if _app_has_publish_stage(manifests):
-        findings.extend(_check_p030(paths))
+        findings.extend(_check_p030(paths, root))
     findings.extend(_check_p037(paths, root))
     findings.extend(_check_p038(paths, root))
     findings.extend(_check_p039(manifests, root))
+    findings.extend(_check_p041(paths, root))
     return findings
 
 
@@ -776,9 +1487,10 @@ main = make_cli_main(
     scan_all=scan_all,
     description=(
         "SDR-readiness checks — manifest agent_json slot (P029), "
-        "upload call presence (P030), agent-aware credential resolution (P037), "
-        "object-store prefix rooting (P038), and agent_json input-contract "
-        "consumption (P039)."
+        "upload call presence / no-op bridge stubs (P030), agent-aware "
+        "credential resolution (P037), object-store prefix rooting (P038), "
+        "agent_json input-contract consumption (P039), and preflight-gate "
+        "posture (P041)."
     ),
 )
 

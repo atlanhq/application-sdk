@@ -28,13 +28,24 @@ dependencies = [
     "pydantic>=2.10.6,<3.0.0",
     "jsonschema>=4.23.0,<5.0.0",
     "jinja2>=3.1.0,<4.0.0",
+    # D010 evaluates PEP 508 markers on uv.lock edges. Without this the
+    # import silently falls back to "every marker contributes", which
+    # reinstates the bug the marker check exists to fix, undetectably.
+    # Uncapped above: Marker(text).evaluate() is stable across packaging 26.x,
+    # and capping here downgrades the shared repo environment for every
+    # consumer.
+    "packaging>=24.0",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest>=8.3.3,<10.0.0",
     "pytest-asyncio>=1.4.0,<2.0.0",
-    "atlan-application-sdk",
+    # [sql] pulls duckdb, which test_p040_keyword_set_matches_pinned_duckdb
+    # needs. Without it that drift guard is permanently SKIPPED in the only job
+    # that runs this package's tests, and the P040 reserved-keyword constant
+    # could silently diverge from the DuckDB it claims to describe.
+    "atlan-application-sdk[sql]",
 ]
 
 [project.scripts]

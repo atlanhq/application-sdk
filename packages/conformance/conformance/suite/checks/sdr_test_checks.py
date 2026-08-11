@@ -144,7 +144,7 @@ def _is_sdr_app(root: Path) -> bool:
         return False
     try:
         text = atlan_yaml.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return False
     m = _SDR_FLAG_RE.search(text)
     return m is not None and m.group(1).lower() == "true"
@@ -163,7 +163,7 @@ def _scan_file(path: Path, root: Path) -> tuple[list[Finding], bool]:
     """
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return [], False
 
     try:

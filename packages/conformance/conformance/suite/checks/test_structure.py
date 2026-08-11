@@ -161,7 +161,7 @@ def _scan_file(
         return None
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     try:
         tree = ast.parse(text, filename=str(path))
@@ -191,7 +191,7 @@ def _exempt_test_tiers(root: Path) -> frozenset[str]:
     pyproject = root / "pyproject.toml"
     try:
         data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
         return frozenset()
     if not isinstance(data, dict):
         return frozenset()
@@ -239,7 +239,7 @@ def _tier_missing_finding(rule_id: str, tier: str, root: Path) -> Finding:
     pyproject = root / "pyproject.toml"
     try:
         text = pyproject.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         text = ""
     suppressions = parse_toml_suppressions(text) if text else {}
     return make_toml_finding(
