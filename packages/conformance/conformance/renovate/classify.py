@@ -157,14 +157,15 @@ def derive_update_type(pr: RenovatePR) -> UpdateType:
 _BODY_TABLE_NAME_RE = re.compile(
     r"^\|\s*(?:\[(?P<linked>[^\]]+)\]|(?P<bare>[^|\[\]]+?))\s*(?:\(|\|)"
 )
-_BODY_TABLE_CHANGE_RE = re.compile(r"`(?P<from>[^`]+)`\s*->\s*`(?P<to>[^`]+)`")
+_BODY_TABLE_CHANGE_RE = re.compile(r"`(?P<from>[^`]+)`\s*(?:->|→)\s*`(?P<to>[^`]+)`")
 
 # Title fallback: "chore(deps): update dependency atlan-application-sdk to v3.27.0",
-# "chore(deps): update app-contract-toolkit to v0.18.1". Grouped titles without a
-# trailing version ("update non-critical python dependencies") deliberately don't
-# match — there is no version to report.
+# "chore(deps): update app-contract-toolkit to v0.18.1",
+# "chore(deps): update anthropics/claude-code-action action to v1.0.190". Grouped
+# titles without a trailing version ("update non-critical python dependencies")
+# deliberately don't match — there is no version to report.
 _TITLE_DEP_RE = re.compile(
-    r"update (?:dependency )?(?P<name>[A-Za-z0-9._/@-]+) to v?(?P<to>\d[\w.+-]*)",
+    r"update (?:dependency )?(?P<name>[A-Za-z0-9._/@-]+)(?: action)? to v?(?P<to>\d[\w.+-]*)",
     re.IGNORECASE,
 )
 

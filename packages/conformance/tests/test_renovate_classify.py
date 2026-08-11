@@ -608,3 +608,35 @@ def test_extract_deps_grouped_title_without_version_yields_empty() -> None:
         make_pr(body="", title="chore(deps): update non-critical python dependencies")
     )
     assert pr.deps == ()
+
+
+# Live Renovate bodies render the Change column with a Unicode arrow — captured
+# from PR #3117 on this repo (an `update … action to …` github-actions PR). The
+# parser must match what Renovate actually emits, not an idealized ASCII table.
+_LIVE_BODY_TABLE_UNICODE_ARROW = """\
+This PR contains the following updates:
+
+| Package | Type | Update | Change |
+|---|---|---|---|
+| [atlanhq/application-sdk](https://redirect.github.com/atlanhq/application-sdk) | action | patch | `v3.27.0` → `v3.27.1` |
+"""
+
+
+def test_extract_deps_from_live_body_table_unicode_arrow() -> None:
+    pr = classify(make_pr(body=_LIVE_BODY_TABLE_UNICODE_ARROW))
+    assert [(d.name, d.from_version, d.to_version) for d in pr.deps] == [
+        ("atlanhq/application-sdk", "v3.27.0", "v3.27.1")
+    ]
+
+
+def test_extract_deps_title_fallback_action_form() -> None:
+    # Live title of PR #3112: github-actions bumps say "update X action to vY".
+    pr = classify(
+        make_pr(
+            body="no table here",
+            title="chore(deps): update anthropics/claude-code-action action to v1.0.190",
+        )
+    )
+    assert [(d.name, d.from_version, d.to_version) for d in pr.deps] == [
+        ("anthropics/claude-code-action", "", "1.0.190")
+    ]
