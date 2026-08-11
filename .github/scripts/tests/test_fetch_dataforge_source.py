@@ -407,3 +407,64 @@ def test_field_maps_file_is_well_formed():
         for canonical, candidates in profile.items():
             assert canonical in fds._CANONICAL_KEYS, (source, canonical)
             assert isinstance(candidates, list) and candidates, (source, canonical)
+
+
+# ── OIDC path (DATFORG-88) ────────────────────────────────────────────────────
+
+
+def test_main_without_api_key_uses_oidc_and_endpoint(monkeypatch, capsys):
+    """No DATAFORGE_API_KEY -> exchange the runner's OIDC token and resolve
+    via /e2e-credentials with the resource pin — no legacy chain touched."""
+    monkeypatch.delenv("DATAFORGE_API_KEY", raising=False)
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://runner.example/token")
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "runner-req-token")
+
+    calls = {}
+    monkeypatch.setattr(fds, "_github_oidc_token", lambda audience="dataforge": "oidc-jwt")
+
+    def fake_exchange(base_url, oidc_token):
+        calls["exchange"] = (base_url, oidc_token)
+        return "service-token"
+
+    def fake_endpoint(base_url, bearer, datasource, env_tier="", resource_id="", credential_id=""):
+        calls["endpoint"] = {
+            "bearer": bearer, "datasource": datasource,
+            "resource_id": resource_id, "credential_id": credential_id,
+        }
+        return {"host": "h", "username": "u", "password": "p", "database": "d"}, "res-1"
+
+    monkeypatch.setattr(fds, "_exchange_for_service_token", fake_exchange)
+    monkeypatch.setattr(fds, "resolve_via_endpoint", fake_endpoint)
+
+    assert fds.main(["--datasource", "postgres", "--resource-id", "res-1"]) == 0
+    exports = json.loads(capsys.readouterr().out)
+    assert exports["E2E_POSTGRES_HOST"] == "h"
+    assert calls["exchange"][1] == "oidc-jwt"
+    assert calls["endpoint"]["bearer"] == "service-token"
+    assert calls["endpoint"]["resource_id"] == "res-1"
+    assert calls["endpoint"]["credential_id"] == ""
+
+
+def test_managed_mode_pin_becomes_credential_id(monkeypatch, capsys):
+    monkeypatch.delenv("DATAFORGE_API_KEY", raising=False)
+    monkeypatch.setattr(fds, "_github_oidc_token", lambda audience="dataforge": "oidc-jwt")
+    monkeypatch.setattr(fds, "_exchange_for_service_token", lambda b, o: "service-token")
+    seen = {}
+
+    def fake_endpoint(base_url, bearer, datasource, env_tier="", resource_id="", credential_id=""):
+        seen["resource_id"], seen["credential_id"] = resource_id, credential_id
+        return {"client_id": "c", "client_secret": "s"}, "cred-1"
+
+    monkeypatch.setattr(fds, "resolve_via_endpoint", fake_endpoint)
+    assert fds.main(["--datasource", "powerbi", "--mode", "managed", "--resource-id", "cred-1"]) == 0
+    assert seen == {"resource_id": "", "credential_id": "cred-1"}
+    json.loads(capsys.readouterr().out)
+
+
+def test_oidc_unavailable_is_actionable(monkeypatch, capsys):
+    monkeypatch.delenv("DATAFORGE_API_KEY", raising=False)
+    monkeypatch.delenv("ACTIONS_ID_TOKEN_REQUEST_URL", raising=False)
+    monkeypatch.delenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", raising=False)
+    assert fds.main(["--datasource", "postgres", "--resource-id", "r"]) == 1
+    err = capsys.readouterr().err
+    assert "id-token" in err and "DATAFORGE_API_KEY" in err

@@ -43,8 +43,21 @@ is the audited path for turning a JSON env map into redacted job env::
     python3 .../export_extra_env.py \
       --json "$DF_ENV_JSON" >> "$GITHUB_ENV"
 
-The dataforge API key arrives via the ``DATAFORGE_API_KEY`` env var, never
-argv (argv is visible in process listings and step logs).
+Authentication, in preference order:
+
+1. **GitHub OIDC (no stored secret)** — when ``DATAFORGE_API_KEY`` is unset
+   and the runner exposes ``ACTIONS_ID_TOKEN_REQUEST_URL`` (requires
+   ``permissions: id-token: write``): request the run's OIDC token with
+   ``audience=dataforge``, exchange it at ``POST /oauth/token`` (RFC 8693)
+   for a 1-hour SERVICE token, and resolve via
+   ``GET /api/v1/datasources/{ds}/credentials`` — the one REST path SERVICE
+   tokens are honored on. Requires a dataforge workload binding for the repo.
+2. **API key (legacy)** — ``DATAFORGE_API_KEY`` env var; resolves via the
+   resource/managed chains below. Kept for the transition and for callers
+   outside GitHub Actions.
+
+Tokens and keys arrive via env vars, never argv (argv is visible in process
+listings and step logs).
 """
 
 from __future__ import annotations
@@ -138,6 +151,93 @@ def _http_get(url: str, api_key: str) -> dict:
 
 def _http_post(url: str, api_key: str) -> dict:
     return _request("POST", url, api_key)
+
+
+# ── GitHub OIDC exchange (DATFORG-88) ─────────────────────────────────────────
+
+
+def _github_oidc_token(audience: str = "dataforge") -> str:
+    """Fetch this workflow run's OIDC token from the runner's token service."""
+    req_url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL", "").strip()
+    req_token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "").strip()
+    if not req_url or not req_token:
+        raise DataforgeSourceError(
+            "GitHub OIDC is unavailable — the job needs `permissions: "
+            "id-token: write` (or set DATAFORGE_API_KEY for legacy auth)"
+        )
+    sep = "&" if "?" in req_url else "?"
+    req = urllib.request.Request(
+        f"{req_url}{sep}audience={urllib.parse.quote(audience)}",
+        headers={"Authorization": f"Bearer {req_token}"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 — runner-provided https URL
+        return json.load(resp)["value"]
+
+
+def _exchange_for_service_token(base_url: str, oidc_token: str) -> str:
+    """RFC 8693 token exchange: runner OIDC token -> 1h dataforge SERVICE token."""
+    body = urllib.parse.urlencode(
+        {
+            "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+            "subject_token": oidc_token,
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "scope": "credentials:read",
+        }
+    ).encode()
+    req = urllib.request.Request(
+        f"{base_url}/oauth/token",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 — fixed https host
+            return json.load(resp)["access_token"]
+    except urllib.error.HTTPError as exc:
+        raise DataforgeSourceError(
+            f"dataforge token exchange failed: HTTP {exc.code} — is a workload "
+            "binding registered for this repo (issuer "
+            "token.actions.githubusercontent.com, subject repo:<org>/<repo>…)?"
+        ) from exc
+
+
+def resolve_via_endpoint(
+    base_url: str,
+    bearer: str,
+    datasource: str,
+    env_tier: str = "",
+    resource_id: str = "",
+    credential_id: str = "",
+) -> tuple[dict, str]:
+    """Resolve through GET /api/v1/datasources/{ds}/credentials (one call).
+
+    Pass resource_id (or credential_id) whenever available — a datasource can
+    carry several instances and the pin is what makes CI deterministic.
+    """
+    params = []
+    if env_tier:
+        params.append(f"env={urllib.parse.quote(env_tier)}")
+    if resource_id:
+        params.append(f"resource_id={urllib.parse.quote(resource_id)}")
+    if credential_id:
+        params.append(f"credential_id={urllib.parse.quote(credential_id)}")
+    url = f"{base_url}/api/v1/datasources/{urllib.parse.quote(datasource)}/credentials"
+    if params:
+        url += "?" + "&".join(params)
+    doc = _http_get(url, bearer)
+    fields = doc.get("fields") or {}
+    if not fields:
+        raise DataforgeSourceError(
+            f"datasource-credentials returned no fields for {datasource!r}"
+        )
+    missing = doc.get("mandatory_missing") or []
+    if missing:
+        print(  # noqa: T201
+            f"::warning::dataforge reports mandatory fields missing for "
+            f"{datasource}: {', '.join(missing)}",
+            file=sys.stderr,
+        )
+    return fields, str(doc.get("resolved_id") or "")
 
 
 # ── Resolution ────────────────────────────────────────────────────────────────
@@ -345,13 +445,26 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     api_key = os.environ.get("DATAFORGE_API_KEY", "").strip()
-    if not api_key:
-        print("::error::DATAFORGE_API_KEY is not set", file=sys.stderr)
-        return 1
-
     base_url = args.base_url.rstrip("/")
     try:
-        if args.mode == "resource":
+        if not api_key:
+            # OIDC end state: exchange the run's identity for a 1h
+            # credentials:read token and resolve via the one-call endpoint —
+            # no dataforge secret stored anywhere.
+            bearer = _exchange_for_service_token(
+                base_url, _github_oidc_token()
+            )
+            pin_resource = args.resource_id if args.mode == "resource" else ""
+            pin_credential = args.resource_id if args.mode == "managed" else ""
+            raw, resolved_id = resolve_via_endpoint(
+                base_url,
+                bearer,
+                args.datasource,
+                env_tier=args.env_tier,
+                resource_id=pin_resource,
+                credential_id=pin_credential,
+            )
+        elif args.mode == "resource":
             if not args.resource_id:
                 raise DataforgeSourceError(
                     "resource mode needs --resource-id (dataforge has no "

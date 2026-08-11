@@ -16,8 +16,13 @@ description: >
 
 inputs:
   api-key:
-    description: Dataforge API key (df_<id>_<secret>). Pass from secrets.
-    required: true
+    description: >
+      Dataforge API key (df_<id>_<secret>), legacy auth. Leave empty to use
+      the run's GitHub OIDC token instead (needs `permissions: id-token:
+      write` and a dataforge workload binding for the repo) — the end state
+      with no stored dataforge secret.
+    required: false
+    default: ""
   datasource:
     description: Dataforge datasource name (postgres, snowflake, powerbi, …).
     required: true

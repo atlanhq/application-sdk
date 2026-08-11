@@ -1366,6 +1366,10 @@ jobs:
       contents: read
       statuses: write
       packages: write
+      # For the dataforge fetch's OIDC path (no stored dataforge secret): the
+      # runner mints a per-run identity token the script exchanges for a 1h
+      # credentials:read token. Harmless when the dataforge inputs are unset.
+      id-token: write
     env:
       # SDR_TEST_TENANT / SDR_CLIENT_ID / SDR_CLIENT_SECRET / ATLAN_API_KEY /
       # ATLAN_BASE_URL are deliberately NOT set here any more. They are written
@@ -1481,7 +1485,12 @@ jobs:
       # has its explicit secrets win on key collisions — the migration escape
       # hatch documented on the dataforge-datasource input.
       - name: Fetch connector source credentials from dataforge
-        if: env.DATAFORGE_API_KEY != '' && inputs.dataforge-datasource != ''
+        # Runs whenever a datasource is declared. Auth is decided in the
+        # script: DATAFORGE_API_KEY when shared (legacy), else the run's
+        # GitHub OIDC token exchanged at dataforge (end state — no stored
+        # dataforge secret; needs the job's id-token permission and a
+        # dataforge workload binding for this repo).
+        if: inputs.dataforge-datasource != ''
         env:
           DF_DATASOURCE: ${{ inputs.dataforge-datasource }}
           DF_MODE: ${{ inputs.dataforge-mode }}
