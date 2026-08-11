@@ -414,6 +414,7 @@ class TestCreateCurrentStateSnapshot:
         previous_state_present: bool,
         get_backfill_tables_fn=None,
         stale_diff_dir_present: bool = False,
+        upload_concurrency: int | None = None,
     ) -> CurrentStateResult | None:
         with tempfile.TemporaryDirectory() as temp_dir:
             transformed = Path(temp_dir) / "transformed"
@@ -480,6 +481,12 @@ class TestCreateCurrentStateSnapshot:
                 # Simulate connection manager context-manager
                 mock_dbm.return_value.__enter__.return_value.connection = MagicMock()
 
+                snapshot_kwargs = (
+                    {"upload_concurrency": upload_concurrency}
+                    if upload_concurrency is not None
+                    else {}
+                )
+
                 if scope is None:
                     with pytest.raises(FileNotFoundError, match="No tables found"):
                         await create_current_state_snapshot(
@@ -492,6 +499,7 @@ class TestCreateCurrentStateSnapshot:
                             s3_prefix="persistent/oracle/conn/123",
                             run_id="run-abc",
                             get_backfill_tables_fn=get_backfill_tables_fn,
+                            **snapshot_kwargs,
                         )
                     return None
 
@@ -505,6 +513,7 @@ class TestCreateCurrentStateSnapshot:
                     s3_prefix="persistent/oracle/conn/123",
                     run_id="run-abc",
                     get_backfill_tables_fn=get_backfill_tables_fn,
+                    **snapshot_kwargs,
                 )
 
             # close_scope must always be called when scope is created
@@ -512,6 +521,7 @@ class TestCreateCurrentStateSnapshot:
             # upload_prefix called for current-state, plus diff if previous present
             expected_uploads = 2 if previous_state_present else 1
             assert mock_upload.await_count == expected_uploads
+            self._last_upload_calls = list(mock_upload.call_args_list)
 
             if previous_state_present:
                 mock_create_diff.assert_called_once()
@@ -553,6 +563,28 @@ class TestCreateCurrentStateSnapshot:
             "persistent/oracle/conn/123/runs/run-abc/incremental-diff"
         )
         assert result.incremental_diff_files == 7
+
+    async def test_upload_concurrency_defaults_to_four(self):
+        """No override → both uploads use upload_prefix's historical default."""
+        result = await self._run(scope_qns=["db/s/t1"], previous_state_present=True)
+        assert result is not None
+        assert len(self._last_upload_calls) == 2
+        for call in self._last_upload_calls:
+            assert call.kwargs["max_concurrency"] == 4
+
+    async def test_upload_concurrency_override_reaches_both_uploads(self):
+        """Explicit upload_concurrency reaches both the diff and current-state
+        upload_prefix calls -- the actual knob a large connection would raise
+        to shrink wall-clock time on the upload step."""
+        result = await self._run(
+            scope_qns=["db/s/t1"],
+            previous_state_present=True,
+            upload_concurrency=16,
+        )
+        assert result is not None
+        assert len(self._last_upload_calls) == 2
+        for call in self._last_upload_calls:
+            assert call.kwargs["max_concurrency"] == 16
 
     async def test_directory_prep_and_diff_clear_offloaded_to_thread(self):
         """Both tree removals inside the snapshot must be offloaded.
