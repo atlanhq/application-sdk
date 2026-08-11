@@ -22,6 +22,7 @@ from application_sdk.app.entrypoint import (
     entrypoint,
     get_entrypoint_metadata,
     primary_workflow_type,
+    workflow_type_class_segment,
     workflow_types_for,
 )
 from application_sdk.app.registry import AppMetadata, AppRegistry
@@ -114,9 +115,9 @@ class TestDecoratorAcceptsOverride:
             "Keifu Workflow",
             "Keifu\tWorkflow",
             "Keifu\nWorkflow",
-            "Keifu/Workflow",
             ":",
-            "Keifu.Workflow",
+            "::-_",
+            "Keifu\x00Workflow",
         ],
     )
     def test_rejects_unusable_override(self, bad: str) -> None:
@@ -126,17 +127,33 @@ class TestDecoratorAcceptsOverride:
             async def keifu(self: object, input: _QiInput) -> _QiOutput:
                 return _QiOutput()
 
-    def test_leading_digit_is_allowed(self) -> None:
-        """The type is embedded in _Workflow_<segment>, so a digit-first legacy
-        type is registerable — rejecting it would leave such an app no way out."""
+    @pytest.mark.parametrize(
+        "legacy_type",
+        [
+            "9to5Workflow",
+            "com.acme.MyWorkflow",
+            "io.temporal.SampleWorkflow",
+            "teradata-app:crawler",
+        ],
+        ids=["leading-digit", "java-fqn", "go-fqn", "colon"],
+    )
+    def test_accepts_the_shapes_a_migrating_app_must_preserve(
+        self, legacy_type: str
+    ) -> None:
+        """Temporal puts no charset limit on a workflow type.
 
-        @entrypoint(name="legacy", workflow_type="9to5Workflow")
+        Rejecting a shape Temporal accepts would leave an app migrating off a
+        Java or Go worker no way to keep its established type — the exact case
+        this feature exists for.
+        """
+
+        @entrypoint(name="legacy", workflow_type=legacy_type)
         async def legacy(self: object, input: _QiInput) -> _QiOutput:
             return _QiOutput()
 
         meta = get_entrypoint_metadata(legacy)
         assert meta is not None
-        assert meta.workflow_type == "9to5Workflow"
+        assert meta.workflow_type == legacy_type
 
     def test_rejects_non_string(self) -> None:
         with pytest.raises(EntryPointContractError):
@@ -149,6 +166,24 @@ class TestDecoratorAcceptsOverride:
 # ---------------------------------------------------------------------------
 # Name derivation
 # ---------------------------------------------------------------------------
+
+
+class TestClassSegment:
+    @pytest.mark.parametrize(
+        ("workflow_type", "expected"),
+        [
+            ("KeifuWorkflow", "KeifuWorkflow"),
+            ("query-intelligence:keifu", "query_intelligence_keifu"),
+            ("com.acme.MyWorkflow", "com_acme_MyWorkflow"),
+            ("9to5Workflow", "9to5Workflow"),
+        ],
+    )
+    def test_folds_to_a_usable_class_name(
+        self, workflow_type: str, expected: str
+    ) -> None:
+        segment = workflow_type_class_segment(workflow_type)
+        assert segment == expected
+        assert f"_Workflow_{segment}".isidentifier()
 
 
 class TestWorkflowTypesFor:

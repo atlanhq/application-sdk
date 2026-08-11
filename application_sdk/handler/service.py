@@ -1813,7 +1813,26 @@ def _register_workflow_routes(
         try:
             client = await _get_temporal_client()
 
-            input_type = getattr(app_cls, "_input_type", None)
+            # Resolve the default entry point off the app class rather than
+            # assuming the bare app name is registered. It only is when the app
+            # derives its entry point from run(); an @entrypoint app registers
+            # "{app}:{ep}", so dispatching the bare name started a type no worker
+            # claims and the run sat open until the execution timeout — a stall,
+            # not an error. Resolved from app_cls, not the registry by app_name,
+            # because the handler's app_name is caller-supplied and need not
+            # match the name the App class registered under.
+            from application_sdk.app.entrypoint import (  # noqa: PLC0415 — _resolve_default_entrypoint is private to app.entrypoint
+                _resolve_default_entrypoint,
+            )
+
+            ep = _resolve_default_entrypoint(
+                getattr(getattr(app_cls, "_app_metadata", None), "entry_points", {})
+            )
+            input_type = (
+                ep.input_type
+                if ep is not None
+                else getattr(app_cls, "_input_type", None)
+            )
             if input_type is None:
                 raise HTTPException(
                     status_code=500,
@@ -1854,7 +1873,9 @@ def _register_workflow_routes(
             set_correlation_context(CorrelationContext(correlation_id=correlation_id))
 
             handle = await client.start_workflow(
-                _workflow_config.app_name,
+                primary_workflow_type(app_cls._app_name, ep)
+                if ep is not None
+                else _workflow_config.app_name,
                 args=[input_data],
                 id=workflow_id,
                 task_queue=_workflow_config.task_queue,

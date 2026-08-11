@@ -196,8 +196,10 @@ class TemporalExecutorBackend:
             retry_policy: Retry policy for the workflow.
             execution_timeout: Optional timeout for the workflow execution.
             entry_point: Entry point name for multi-entry-point apps.
-                When provided, the workflow name is ``"{app_name}:{entry_point}"``.
-                When omitted, defaults to the app name (single-entry-point apps).
+                When provided, the workflow is dispatched on that entry point's
+                primary registered type — ``"{app_name}:{entry_point}"`` unless
+                the entry point declares a ``workflow_type`` override. When
+                omitted, defaults to the app name (single-entry-point apps).
         """
         from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
 
@@ -258,8 +260,10 @@ class TemporalExecutorBackend:
             context: App execution context.
             retry_policy: Retry policy for the workflow.
             entry_point: Entry point name for multi-entry-point apps.
-                When provided, the workflow name is ``"{app_name}:{entry_point}"``.
-                When omitted, defaults to the app name (single-entry-point apps).
+                When provided, the workflow is dispatched on that entry point's
+                primary registered type — ``"{app_name}:{entry_point}"`` unless
+                the entry point declares a ``workflow_type`` override. When
+                omitted, defaults to the app name (single-entry-point apps).
         """
         from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
 

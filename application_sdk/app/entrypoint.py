@@ -156,14 +156,23 @@ def workflow_type_class_segment(workflow_type: str) -> str:
     """Convert a Temporal workflow type into its generated-class name segment.
 
     Each registered type produces a dynamically generated ``_Workflow_<segment>``
-    class, so the type must survive this conversion as a valid identifier. Both
-    hyphens and colons are legal in a Temporal type but not in an identifier.
+    class, so the type must survive this conversion as a valid identifier.
+    Temporal itself puts no charset restriction on a workflow type, so every
+    character that cannot appear in an identifier is folded to ``_`` rather than
+    rejected — otherwise a legacy type registered by a Java or Go worker
+    (``com.acme.MyWorkflow``) could not be preserved, which is the case this
+    exists for. Distinct types that fold to one segment are rejected at
+    registration by :func:`build_workflow_type_index`, so the folding cannot
+    silently merge two workflows.
 
     Example::
 
         workflow_type_class_segment("query-intelligence:keifu") → "query_intelligence_keifu"
+        workflow_type_class_segment("com.acme.MyWorkflow")      → "com_acme_MyWorkflow"
     """
-    return workflow_type.replace("-", "_").replace(":", "_")
+    return "".join(
+        char if char.isalnum() or char == "_" else "_" for char in workflow_type
+    )
 
 
 def canonical_workflow_type(app_name: str, ep: EntryPointMetadata) -> str:
@@ -322,31 +331,39 @@ def _validate_entrypoint_signature(
 def _validate_workflow_type_override(ep_name: str, workflow_type: str) -> None:
     """Reject a workflow_type override that cannot be registered.
 
-    Deliberately looser than the entry-point name check: a colon is legal in a
-    Temporal type and is a real shape (``teradata-app:crawler``). The binding
-    constraint is that the type becomes a generated class name.
+    Deliberately looser than the entry-point name check. Temporal puts no
+    charset restriction on a workflow type, and the shapes a migrating app must
+    preserve are varied — ``teradata-app:crawler``, ``9to5Workflow``,
+    ``com.acme.MyWorkflow``. So this rejects only what carries no identifying
+    content at all; :func:`workflow_type_class_segment` folds the rest into a
+    usable class name, and :func:`build_workflow_type_index` rejects two types
+    that fold together.
     """
     if not isinstance(workflow_type, str):
         raise EntryPointContractError(
             f"Entry point '{ep_name}': workflow_type must be a string, got "
             f"{type(workflow_type).__name__}."
         )
-    if not workflow_type or workflow_type != workflow_type.strip():
+    if not workflow_type:
         raise EntryPointContractError(
-            f"Entry point '{ep_name}': workflow_type must be a non-empty string "
-            f"with no surrounding whitespace, got {workflow_type!r}."
+            f"Entry point '{ep_name}': workflow_type must be a non-empty string."
         )
-    # Test the real constraint: the type is embedded in ``_Workflow_<segment>``,
-    # so a leading digit is fine. Requiring the segment alone to be an identifier
-    # would reject a legacy type like "9to5Workflow" with no escape hatch.
-    segment = workflow_type_class_segment(workflow_type)
-    if not any(char.isalnum() for char in workflow_type) or not (
-        f"_Workflow_{segment}".isidentifier()
-    ):
+    # Whitespace and control characters fold to '_' like anything else, so they
+    # would be accepted silently. They are never part of an established type and
+    # a control character in a workflow type mangles logs and the Temporal UI.
+    if any(char.isspace() or not char.isprintable() for char in workflow_type):
+        raise EntryPointContractError(
+            f"Entry point '{ep_name}': workflow_type must not contain whitespace "
+            f"or control characters, got {workflow_type!r}."
+        )
+    # The type is embedded in ``_Workflow_<segment>``, so a leading digit is
+    # fine and every other character folds to '_'. What is left to reject is a
+    # type with no alphanumeric content, which folds to an indistinguishable
+    # run of underscores.
+    if not any(char.isalnum() for char in workflow_type):
         raise EntryPointContractError(
             f"Entry point '{ep_name}': workflow_type {workflow_type!r} is not a "
-            f"usable Temporal workflow type. Use letters, digits, hyphens, "
-            f"underscores and colons."
+            f"usable Temporal workflow type — it carries no letters or digits."
         )
 
 

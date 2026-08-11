@@ -5324,6 +5324,62 @@ class TestEventTriggerEndpoint:
         finally:
             self._teardown()
 
+    def test_event_dispatches_the_entry_points_registered_type(self) -> None:
+        # The event route used to start the bare app name unconditionally. That
+        # type is registered only when the app derives its entry point from
+        # run(); an @entrypoint app registers "{app}:{ep}", so the start
+        # succeeded, no worker claimed it, and the run sat open until the
+        # execution timeout. It must dispatch the entry point's primary
+        # registered type — including a workflow_type override.
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        try:
+            AppRegistry.reset()
+            TaskRegistry.reset()
+
+            class _EvEpApp(App):
+                name = "ev-ep"
+
+                @entrypoint(default=True, workflow_type="LegacyEventWorkflow")
+                async def ingest(self, input: _RoutingInput) -> _RoutingOutput:
+                    return _RoutingOutput()
+
+            trigger = EventTriggerConfig(
+                event_id="t1", event_type="topic", event_name="ev"
+            )
+            app = create_app_handler_service(
+                _TestHandler(),
+                app_name="ev-ep",
+                app_class=_EvEpApp,
+                temporal_host="t:7233",
+                event_triggers=[trigger],
+            )
+            mock_handle = MagicMock()
+            mock_handle.id = "wf-1"
+            mock_handle.result_run_id = "run-1"
+            mock_client = MagicMock()
+            mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(app)
+                response = client.post(
+                    "/events/v1/event/t1", json={"data": {"name": "x"}}
+                )
+            assert response.status_code == 200
+            dispatched = mock_client.start_workflow.await_args.args[0]
+            assert dispatched == "LegacyEventWorkflow"
+            registered = set(AppRegistry.get_instance().get("ev-ep").workflow_types)
+            assert dispatched in registered
+        finally:
+            self._teardown()
+
     def test_event_respects_event_supplied_correlation_id(self) -> None:
         # An event payload that carries correlation_id keeps it (caller wins),
         # mirroring the /workflows/v1/start contract.
