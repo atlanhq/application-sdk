@@ -33,6 +33,7 @@ import os
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 import orjson
 import pytest
@@ -43,6 +44,7 @@ from application_sdk.validation import validate_transformed_dir
 
 from .client import IntegrationTestClient
 from .comparison import compare_metadata, load_actual_output, load_expected_data
+from .invariants import check_invariants
 from .lazy import evaluate_if_lazy
 from .models import APIType, Scenario, ScenarioResult
 from .validation import format_validation_report, validate_with_pandera
@@ -222,6 +224,9 @@ class BaseIntegrationTest:
         server_host: Base URL of the app server (auto-discovered from env if not set).
         server_version: API version prefix (default: "v1").
         workflow_endpoint: Default endpoint for workflow API (default: "/start").
+        entrypoint: Default app ``@entrypoint`` for this suite's workflow
+            scenarios (e.g. "crawler"). Multi-entrypoint apps must set it here
+            or per-scenario; see ``Scenario.entrypoint``.
         timeout: Request timeout in seconds (default: 30).
         default_credentials: Extra credential fields merged with auto-discovered ones.
         default_metadata: Default metadata for preflight/workflow tests.
@@ -245,6 +250,10 @@ class BaseIntegrationTest:
     server_host: str = ""
     server_version: str = "v1"
     workflow_endpoint: str = "/start"
+    # Default app ``@entrypoint`` for this suite's workflow scenarios. A single
+    # scenario may override it via ``Scenario.entrypoint``. Left empty the app's
+    # own default entrypoint is started — correct only for single-entrypoint apps.
+    entrypoint: str = ""
     timeout: int = 30
 
     # Default values merged with auto-discovered credentials
@@ -525,6 +534,29 @@ class BaseIntegrationTest:
 
         return args
 
+    def _resolve_workflow_endpoint(self, scenario: Scenario) -> str:
+        """Endpoint for a workflow scenario, with the declared entrypoint applied.
+
+        Precedence: an explicit ``Scenario.endpoint`` wins outright — it is a
+        full override and may already carry its own query string. Otherwise the
+        suite's ``workflow_endpoint`` is used, with ``?entrypoint=<name>``
+        appended when the scenario or the class declares one.
+
+        Declaring the entrypoint rather than hardcoding the query string is what
+        makes a suite's coverage machine-readable: which product workflow a test
+        exercises is otherwise recoverable only by reading its source.
+        """
+        if scenario.endpoint:
+            return scenario.endpoint
+
+        endpoint = self.workflow_endpoint
+        entrypoint = scenario.entrypoint or self.entrypoint
+        if not entrypoint:
+            return endpoint
+
+        separator = "&" if "?" in endpoint else "?"
+        return f"{endpoint}{separator}entrypoint={quote(entrypoint, safe='')}"
+
     def _execute_scenario(self, scenario: Scenario) -> ScenarioResult:
         """Execute a single scenario and return the result.
 
@@ -556,7 +588,7 @@ class BaseIntegrationTest:
             logger.debug("Built args for %s", scenario.name)
 
             # Step 2: Call the API
-            endpoint = scenario.endpoint or self.workflow_endpoint
+            endpoint = self._resolve_workflow_endpoint(scenario)
             response = self.client.call_api(
                 api=scenario.api,
                 args=args,
@@ -616,7 +648,17 @@ class BaseIntegrationTest:
                 asset_base_path=asset_base_path,
             )
 
-            if needs_metadata or needs_pandera or needs_asset_validation:
+            # Declared transform-output invariants (contract checks).
+            needs_invariants = (
+                bool(scenario.invariants) and scenario.api_type == APIType.WORKFLOW
+            )
+
+            if (
+                needs_metadata
+                or needs_pandera
+                or needs_asset_validation
+                or needs_invariants
+            ):
                 self._ensure_workflow_completed(scenario, response)
 
             # Step 5: Validate metadata output if expected_data is set
@@ -630,6 +672,10 @@ class BaseIntegrationTest:
             # Step 7: Validate transformed assets against the pyatlan_v9 backbone
             if needs_asset_validation:
                 self._validate_assets(scenario, response, asset_base_path)
+
+            # Step 8: Enforce declared transform-output invariants
+            if needs_invariants:
+                self._validate_invariants(scenario, response, asset_base_path)
 
             logger.info("Scenario %s passed", scenario.name)
 
@@ -946,6 +992,66 @@ class BaseIntegrationTest:
         if strict:
             raise AssertionError(message)
         logger.warning("%s", message)
+
+    def _validate_invariants(
+        self,
+        scenario: Scenario,
+        response: dict[str, Any],
+        base_path: str,
+    ) -> None:
+        """Enforce the scenario's declared transform-output invariants.
+
+        Loads the completed workflow's transformed output and runs every declared
+        invariant against it. Unlike the warn-first asset backbone, a violated
+        invariant always raises: it was declared because it must hold.
+
+        Args:
+            scenario: The scenario with a non-empty ``invariants`` list.
+            response: The workflow start API response containing workflow_id/run_id.
+            base_path: Resolved extracted-output base directory.
+
+        Raises:
+            AssertionError: If any declared invariant is violated, or the output
+                path cannot be resolved.
+        """
+        data = response.get("data", {})
+        workflow_id = data.get("workflow_id")
+        run_id = data.get("run_id")
+        if not workflow_id or not run_id:
+            raise AssertionError(
+                f"Cannot check invariants for scenario '{scenario.name}': "
+                f"response missing workflow_id or run_id"
+            )
+        if not base_path:
+            raise AssertionError(
+                f"Cannot check invariants for scenario '{scenario.name}': "
+                f"extracted_output_base_path not set on scenario or test class"
+            )
+
+        transformed_path = os.path.join(
+            base_path, workflow_id, run_id, scenario.output_subdirectory
+        )
+        logger.info(
+            "Checking %d invariant(s) for scenario '%s' at %s",
+            len(scenario.invariants or []),
+            scenario.name,
+            transformed_path,
+        )
+        report = check_invariants(transformed_path, scenario.invariants or [])
+
+        if report.ok:
+            logger.info(
+                "Invariants passed for scenario '%s': %d entities, %d invariant(s)",
+                scenario.name,
+                report.total_entities,
+                len(scenario.invariants or []),
+            )
+            return
+
+        raise AssertionError(
+            f"Invariant check failed for scenario '{scenario.name}':\n\n"
+            + report.format_report()
+        )
 
     def _poll_workflow_completion(
         self,

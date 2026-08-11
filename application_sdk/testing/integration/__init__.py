@@ -110,6 +110,17 @@ from .comparison import (
     load_actual_output,
     load_expected_data,
 )
+from .invariants import (
+    AttributeNotNull,
+    Invariant,
+    InvariantReport,
+    NonEmptyOutput,
+    QualifiedNamePrefix,
+    RequiredAttributes,
+    UniqueQualifiedName,
+    check_invariants,
+    load_entities,
+)
 from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy
 from .models import APIType, Scenario, ScenarioResult
 from .runner import BaseIntegrationTest, generate_test_methods, parametrize_scenarios
@@ -175,6 +186,16 @@ __all__ = [
     "compare_metadata",
     "load_actual_output",
     "load_expected_data",
+    # Transform-output invariants
+    "Invariant",
+    "InvariantReport",
+    "UniqueQualifiedName",
+    "NonEmptyOutput",
+    "RequiredAttributes",
+    "QualifiedNamePrefix",
+    "AttributeNotNull",
+    "check_invariants",
+    "load_entities",
     # Client
     "IntegrationTestClient",
     # Runner

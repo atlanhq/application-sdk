@@ -1341,4 +1341,50 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/tests.md#t019"
         ),
     ),
+    RuleDefinition(
+        id="T020",
+        scope=RuleScope.APP,
+        name="UndeclaredWorkflowEntrypoint",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="test-coverage-attribution",
+        autofixable=False,
+        since="0.18.0",
+        rationale=(
+            "A Scenario with api=\"workflow\" means 'POST /workflows/v1/start'. It "
+            "does not say which @entrypoint gets started. On an app declaring more "
+            "than one, an undeclared scenario silently starts the app's default "
+            "entrypoint - so a suite believing it exercises the miner may in fact "
+            "be running the crawler, and passing. The second cost is attribution: "
+            "which product workflow a suite covers becomes recoverable only by "
+            "reading the test's source and resolving base-class defaults through "
+            "the MRO, so no tooling can report per-workflow integration coverage. "
+            "A survey of ten connectors found two tests out of roughly two thousand "
+            "stating it in any machine-readable form. Declaring it costs one line "
+            "and makes both problems go away."
+        ),
+        short_description=(
+            "Workflow scenario does not declare which app entrypoint it exercises"
+        ),
+        full_description=(
+            'A ``Scenario(api="workflow", ...)`` in an app that declares more\n'
+            "than one ``@entrypoint`` passes neither ``entrypoint=`` nor an\n"
+            "explicit ``endpoint=``, and its enclosing ``Test*`` class sets no\n"
+            "class-level ``entrypoint``.\n"
+            "\n"
+            "Only fires for multi-entrypoint apps - on a single-entrypoint app the\n"
+            "target is unambiguous and declaring it would be noise.\n"
+            "\n"
+            '**Remediation:** set ``entrypoint="crawler"`` (or whichever) on the\n'
+            "scenario, or a class-level ``entrypoint`` on the suite when every\n"
+            "scenario in it targets the same workflow.\n"
+            "\n"
+            "Suppress with ``# conformance: ignore[T020] <reason>`` on the\n"
+            "``Scenario(`` line.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/tests.md#t020"
+        ),
+    ),
 )
