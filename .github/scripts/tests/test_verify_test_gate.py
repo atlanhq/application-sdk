@@ -323,3 +323,413 @@ def test_main_omitting_detect_merge_queue_still_passes(capsys) -> None:
     )
     assert rc == 0
     assert "passed=true" in capsys.readouterr().out
+
+
+# --- the install path ------------------------------------------------------
+# build-e2e-image (per-arch matrix) → merge-e2e-image (manifest list) →
+# prepare-tenant → e2e. Every one of those gates the next job's `if`, and all
+# three are named in the e2e matrix's own `if`, so a failure in any of them
+# drops the matrix to a *skip*. The anomaly rule above already refused to green
+# that, but it reported the symptom ("matrix skipped") rather than the cause,
+# and the cause is what a reviewer needs: the first real occurrence was one
+# architecture's `FROM` failing on a single-arch base image. Trailing kwargs
+# defaulting to "skipped" for cross-repo @main back-compat, as with
+# detect-merge-queue.
+
+# (evaluate/render positional order after e2e: detect_merge_queue,
+# build_e2e_image, merge_e2e_image, prepare_tenant.)
+_GREEN_UPTO_E2E = ("success", "success", "success", "success")
+
+
+def test_image_legs_default_to_skipped() -> None:
+    # A caller that has not wired the jobs at all still passes.
+    assert evaluate("success", "success", "success", "success", "success") == []
+
+
+@pytest.mark.parametrize("result", ["success", "skipped"])
+def test_install_path_ok_states_pass(result) -> None:
+    # "success" = the install path ran; "skipped" = install path off / no e2e.
+    assert (
+        evaluate(
+            *_GREEN_UPTO_E2E,
+            "success",
+            "skipped",
+            result,
+            result,
+            result,
+        )
+        == []
+    )
+
+
+def test_failed_image_build_fails_the_gate_and_names_the_cause() -> None:
+    # The exact shape of the real failure: one arch leg died, the merge and the
+    # matrix skipped behind it, and everything else was green.
+    errors = evaluate(
+        "success",
+        "success",
+        "success",
+        "success",
+        "skipped",
+        "success",
+        "failure",
+        "skipped",
+    )
+    assert len(errors) == 1, (
+        "the image-build failure explains the skipped matrix, so the anomaly "
+        f"rule must not also fire and bury it: {errors}"
+    )
+    assert "e2e image build" in errors[0]
+
+
+def test_failed_manifest_merge_fails_the_gate_and_names_the_cause() -> None:
+    errors = evaluate(
+        "success",
+        "success",
+        "success",
+        "success",
+        "skipped",
+        "success",
+        "success",
+        "failure",
+    )
+    assert len(errors) == 1
+    assert "manifest merge" in errors[0]
+
+
+@pytest.mark.parametrize("result", ["failure", "cancelled", "timed_out"])
+def test_image_build_non_success_states_all_fail(result) -> None:
+    assert (
+        evaluate(
+            "success",
+            "success",
+            "success",
+            "success",
+            "skipped",
+            "success",
+            result,
+            "skipped",
+        )
+        != []
+    )
+
+
+def test_failed_tenant_install_fails_the_gate_and_names_the_cause() -> None:
+    # The third install-path job, and the one the e2e legs care most about: a
+    # failed install leaves the tenant on whatever it was running, so legs that
+    # ran anyway would silently test the wrong version.
+    errors = evaluate(
+        *_GREEN_UPTO_E2E,
+        "skipped",
+        "success",
+        "success",
+        "success",
+        "failure",
+    )
+    assert len(errors) == 1
+    assert "tenant install" in errors[0]
+
+
+def test_anomaly_rule_still_fires_when_the_install_path_is_clean() -> None:
+    # Unexplained skip (e.g. a caller re-wired the e2e `if`) — the anomaly rule
+    # is the only thing standing between that and a green gate, so suppressing
+    # it must be strictly conditional on an install-path job having actually
+    # failed.
+    errors = evaluate(
+        *_GREEN_UPTO_E2E,
+        "skipped",
+        "success",
+        "success",
+        "success",
+        "success",
+    )
+    assert len(errors) == 1
+    assert "matrix was skipped" in errors[0]
+
+
+def test_every_install_path_job_is_judged() -> None:
+    """Each of the three, one at a time, must fail the gate on its own.
+
+    They are exactly the jobs named in the e2e matrix's `if`; a job present
+    there but absent here is a skip the gate would read as benign.
+    """
+    for position in range(3):
+        results = ["success", "success", "success"]
+        results[position] = "failure"
+        errors = evaluate(*_GREEN_UPTO_E2E, "skipped", "success", *results)
+        assert len(errors) == 1, f"install-path job {position} is not judged"
+        assert "matrix was skipped" not in errors[0], (
+            "the anomaly rule fired instead of the specific job — the cause is "
+            "buried under the symptom again"
+        )
+
+
+def test_render_image_build_failure_shows_in_the_e2e_row() -> None:
+    out = render(
+        "success",
+        "success",
+        "success",
+        "success",
+        "skipped",
+        "success",
+        "failure",
+        "skipped",
+    )
+    assert out["passed"] == "false"
+    assert out["e2e-status"] == "❌ e2e image build failed", (
+        "the row must not read as a benign skip when the image build is why "
+        "nothing ran"
+    )
+
+
+def test_render_manifest_merge_failure_shows_in_the_e2e_row() -> None:
+    out = render(
+        "success",
+        "success",
+        "success",
+        "success",
+        "skipped",
+        "success",
+        "success",
+        "failure",
+    )
+    assert out["passed"] == "false"
+    assert out["e2e-status"] == "❌ e2e image manifest merge failed"
+
+
+def test_render_tenant_install_failure_shows_in_the_e2e_row() -> None:
+    out = render(
+        *_GREEN_UPTO_E2E,
+        "skipped",
+        "success",
+        "success",
+        "success",
+        "failure",
+    )
+    assert out["passed"] == "false"
+    assert out["e2e-status"] == "❌ Tenant install failed"
+
+
+def test_the_e2e_row_names_the_first_install_path_job_that_failed() -> None:
+    # When the build fails, everything behind it skips — but a cancelled run can
+    # fail several at once. The row names the earliest, which is the one worth
+    # looking at; the annotations still list them all.
+    out = render(
+        *_GREEN_UPTO_E2E,
+        "skipped",
+        "success",
+        "failure",
+        "cancelled",
+        "cancelled",
+    )
+    assert out["e2e-status"] == "❌ e2e image build failed"
+    assert (
+        len(
+            evaluate(
+                *_GREEN_UPTO_E2E,
+                "skipped",
+                "success",
+                "failure",
+                "cancelled",
+                "cancelled",
+            )
+        )
+        == 3
+    )
+
+
+def test_main_image_build_failure_annotates(capsys) -> None:
+    rc = main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "success",
+            "--detect-integration",
+            "success",
+            "--discover-e2e",
+            "success",
+            "--build-e2e-image",
+            "failure",
+            "--merge-e2e-image",
+            "skipped",
+            "--e2e",
+            "skipped",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "passed=false" in captured.out
+    assert "e2e image build" in captured.err
+
+
+def test_main_omitting_the_image_flags_still_passes(capsys) -> None:
+    # Cross-repo @main back-compat at the CLI boundary.
+    rc = main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "skipped",
+            "--detect-integration",
+            "skipped",
+            "--discover-e2e",
+            "skipped",
+            "--e2e",
+            "skipped",
+        ]
+    )
+    assert rc == 0
+    assert "passed=true" in capsys.readouterr().out
+
+
+# --- conclusion output (what the cross-repo callback reports) --------------
+# report-to-sdk completes the `Connector E2E run / <app>` check run on the
+# dispatching application-sdk PR with this value. It exists so that mapping the
+# verdict onto a Checks API conclusion happens HERE rather than in workflow YAML
+# — a `passed == 'true' && 'success' || 'failure'` expression in the callback
+# would be a second place the verdict is decided.
+
+
+def test_conclusion_is_success_when_the_gate_passes() -> None:
+    out = render("success", "skipped", "skipped", "skipped", "skipped")
+    assert out["passed"] == "true"
+    assert out["conclusion"] == "success"
+
+
+def test_conclusion_is_failure_when_the_gate_fails() -> None:
+    out = render("success", "success", "success", "success", "failure")
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "failure"
+
+
+def test_conclusion_tracks_passed_across_every_scenario_in_this_module() -> None:
+    """The two outputs are one verdict; nothing may make them disagree.
+
+    A future edit that adds a rule to `passed` but forgets `conclusion` would
+    reopen exactly the gap this change closed — the SDK-side check reporting
+    something other than what the gate decided.
+    """
+    scenarios = [
+        (
+            "success",
+            "success",
+            "success",
+            "success",
+            "success",
+            "success",
+            "success",
+            "success",
+        ),
+        (
+            "failure",
+            "success",
+            "success",
+            "skipped",
+            "skipped",
+            "skipped",
+            "skipped",
+            "skipped",
+        ),
+        (
+            "success",
+            "skipped",
+            "failure",
+            "skipped",
+            "skipped",
+            "skipped",
+            "skipped",
+            "skipped",
+        ),
+        (
+            "success",
+            "skipped",
+            "skipped",
+            "skipped",
+            "skipped",
+            "failure",
+            "skipped",
+            "skipped",
+        ),
+        (
+            "success",
+            "success",
+            "success",
+            "failure",
+            "skipped",
+            "success",
+            "skipped",
+            "skipped",
+        ),
+        (
+            "success",
+            "success",
+            "success",
+            "success",
+            "skipped",
+            "success",
+            "failure",
+            "skipped",
+        ),
+        (
+            "success",
+            "success",
+            "success",
+            "success",
+            "skipped",
+            "success",
+            "success",
+            "failure",
+        ),
+        (
+            "success",
+            "success",
+            "success",
+            "success",
+            "skipped",
+            "success",
+            "success",
+            "success",
+        ),
+        (
+            "success",
+            "success",
+            "success",
+            "success",
+            "cancelled",
+            "success",
+            "success",
+            "success",
+        ),
+    ]
+    for scenario in scenarios:
+        out = render(*scenario)
+        expected = "success" if out["passed"] == "true" else "failure"
+        assert out["conclusion"] == expected, f"disagreed on {scenario}"
+
+
+def test_the_real_failure_this_change_was_written_for() -> None:
+    """End to end, in the shape it actually occurred.
+
+    application-sdk#3074 dispatched e2e to atlan-openapi-app. Unit, integration
+    and discovery were green; the arm64 leg of the image build failed on a
+    single-arch base; merge and the matrix skipped behind it. The Tests Gate
+    failed — and the callback, judging a smaller input set, completed the
+    SDK-side check run as SUCCESS. Both must now read failure.
+    """
+    out = render(
+        unit="success",
+        integration="success",
+        detect_integration="success",
+        discover_e2e="success",
+        e2e="skipped",
+        detect_merge_queue="skipped",
+        build_e2e_image="failure",
+        merge_e2e_image="skipped",
+    )
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "failure", (
+        "this is the bug: the check run mirrored onto the dispatching SDK PR "
+        "must report the connector run's failure"
+    )
+    assert out["e2e-status"] == "❌ e2e image build failed"

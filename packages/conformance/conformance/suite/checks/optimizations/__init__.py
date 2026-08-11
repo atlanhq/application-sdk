@@ -18,6 +18,13 @@ Currently implemented:
   returns it but has no return annotation.
 * ``O004`` LegacyPyatlanAssetImport — app code importing the legacy
   ``pyatlan.model.assets`` package (rather than ``pyatlan_v9.model.assets``).
+* ``O005`` UnresolvedAppNamePlaceholder — a plain string literal still carrying
+  an unsubstituted ``{app_name}`` token (not a resolving f-string, not a
+  ``.format(app_name=...)`` receiver, not a docstring). An escaped-brace
+  f-string (``f"{{app_name}}"``) *is* flagged: the braces are not interpolated,
+  so the token survives verbatim into the runtime value.
+* ``O006`` DirectRocksdictImport — app code importing ``rocksdict`` directly
+  (rather than the SDK's ``SpillableDict``).
 
 Inline suppression
 ------------------
@@ -53,8 +60,10 @@ from conformance.suite.checks._ast_common import (
 )
 from conformance.suite.schema.findings import Finding
 
+from ._app_name_placeholder import check_o005
 from ._asset_mapper import check_o002, check_o003
 from ._pyatlan_v9 import check_o004
+from ._rocksdict import check_o006
 from ._stdlib_json import OrjsonOverStdlibJsonChecker, _collect_json_bindings
 
 SERIES = "O"
@@ -90,6 +99,8 @@ def scan_text(text: str, file: str) -> list[Finding]:
         + check_o002(tree, file, directives)
         + check_o003(tree, file, directives)
         + check_o004(tree, file, directives)
+        + check_o005(tree, file, directives)
+        + check_o006(tree, file, directives)
     )
 
 

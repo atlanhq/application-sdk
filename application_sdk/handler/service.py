@@ -54,6 +54,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 from temporalio.client import WorkflowFailureError
 
+from application_sdk.common.task_queue import (
+    resolve_manifest_tokens,
+    task_queue_from_env,
+)
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.errors import AppError
@@ -2034,10 +2038,64 @@ def _register_workflow_routes(
     # Manifest endpoint
     # ------------------------------------------------------------------
 
+    def _resolve_manifest_placeholders(raw: bytes, source: str) -> bytes:
+        """Substitute the manifest's ``{app_name}`` / ``{deployment_name}`` tokens.
+
+        Delegates to :func:`application_sdk.common.task_queue.resolve_manifest_tokens`,
+        handing it the queue this process was configured with — the same value
+        ``create_worker`` receives, in every mode. The served ``task_queue`` is
+        therefore *stamped from* what the worker polls rather than independently
+        re-derived from the same env and hoped to match. Re-deriving is what let
+        AE submit to a queue nothing polled (FND-195 / CONNECT-183).
+
+        An ``{app_name}`` token means the app's committed manifest predates the
+        toolkit's bake (#2271 / #2478) — worth a WARNING even when this fills it,
+        because any other writer of that DAG gets no such backstop. With nothing
+        to fill it from, the token is served as-is and logged at ERROR:
+        deliberately not papered over with ``constants.APPLICATION_NAME``'s
+        ``"default"``, since ``atlan-default-<deployment>`` reads as a legitimate
+        queue and hangs the run silently, whereas a literal ``{app_name}`` in the
+        DAG is greppable and immediately diagnosable.
+        """
+        resolution = resolve_manifest_tokens(
+            raw,
+            task_queue=_workflow_config.task_queue or None,
+            # _workflow_config.app_name is populated from app_class._app_name and
+            # is empty for a handler served without an app class; the app_name
+            # argument carries the same value in that case.
+            app_name=_workflow_config.app_name or app_name or None,
+            deployment_fallback=DEPLOYMENT_NAME or "default",
+        )
+        if resolution.unresolved_app_name:
+            # conformance: ignore[L009] not a request-boundary handler — the manifest is
+            # still served (the token is the diagnostic); this log is the operator's signal.
+            logger.error(
+                "Manifest for %s carries an unresolved {app_name} token and no app "
+                "name is available (neither a registered app class nor "
+                "ATLAN_APPLICATION_NAME), so the SDK is serving the literal token "
+                "rather than inventing a name that would look legitimate and be "
+                "polled by nobody. Failure attribution for runs started from this "
+                "manifest will be blank, and any task_queue the SDK could not stamp "
+                "(stamped queue: %r) targets no worker. Set ATLAN_APPLICATION_NAME "
+                "on the deployment, or regenerate the contract so the toolkit bakes "
+                "the app name.",
+                source,
+                resolution.task_queue,
+            )
+        elif resolution.had_app_name_token:
+            logger.warning(
+                "Manifest for %s shipped an unbaked {app_name} token; filled with "
+                "%r for this response. The committed manifest is stale — bump the "
+                "contract toolkit and regenerate contracts, since any writer of "
+                "this DAG that does not go through this route gets no such fallback.",
+                source,
+                resolution.app_name,
+            )
+        return resolution.raw
+
     async def _serve_entrypoint_manifest(
         entrypoint_name: str,
         fe_inputs: str | dict[str, Any] | None,
-        deployment: bytes,
     ) -> Response:
         """Read <entrypoint>/manifest.json, substitute placeholders, run the
         optional ``compute_manifest`` hook, and return the Response.
@@ -2078,10 +2136,9 @@ def _register_workflow_routes(
                     status_code=404,
                     detail=f"No manifest found for entrypoint {entrypoint_name!r}",
                 )
-        raw = ep_manifest.read_bytes()
-        # app_name is baked into the generated manifest by the contract toolkit
-        # (from the contract `name`); only the per-deployment token is substituted here.
-        raw = raw.replace(b"{deployment_name}", deployment)
+        raw = _resolve_manifest_placeholders(
+            ep_manifest.read_bytes(), f"entrypoint {entrypoint_name!r}"
+        )
 
         # Dynamic-manifest hook: if the app defines
         # `app.<entrypoint_snake>.core.compute_manifest`, hand the
@@ -2130,7 +2187,26 @@ def _register_workflow_routes(
                     type(computed).__name__,
                 )
                 raise HTTPException(status_code=500, detail="Internal server error")
-            raw = orjson.dumps(computed)
+            # Reconcile the hook's output, not just the static file. The hook
+            # *replaces* the manifest wholesale, so without this second pass
+            # everything it emits — a task_queue, a freshly generated node, a
+            # token it re-introduced — is served unreconciled, and FND-195's
+            # guarantee silently does not hold for exactly the apps that need it
+            # most: a bundle's marketplace entry points have their DAG computed
+            # per submission by this hook.
+            #
+            # Idempotent, so the pre-hook pass above stays (the hook should see
+            # resolved values it may key on): after that pass no template
+            # remains, so this one is a no-op unless the hook introduced
+            # something new. Note it catches unresolved *tokens*, not a hook
+            # that hardcodes a concrete-but-wrong queue — that string has no
+            # token to match, and normalising every `atlan-*` queue would
+            # rewrite the legitimate cross-app dispatch nodes this deliberately
+            # leaves alone. Conformance O005 is the guard for that shape.
+            raw = _resolve_manifest_placeholders(
+                orjson.dumps(computed),
+                f"entrypoint {entrypoint_name!r} (compute_manifest output)",
+            )
 
         return Response(content=raw, media_type="application/json")
 
@@ -2144,28 +2220,34 @@ def _register_workflow_routes(
         body dict. Everything downstream is identical and lives here once so the
         two methods cannot drift.
         """
-        deployment = (DEPLOYMENT_NAME or "default").encode()
-
         if entrypoint:
             # Guard 1 (400): reject obviously-malformed names before touching disk.
             if not _ENTRYPOINT_NAME_RE.match(entrypoint):
                 raise HTTPException(status_code=400, detail="Invalid entrypoint name")
-            return await _serve_entrypoint_manifest(entrypoint, fe_inputs, deployment)
+            return await _serve_entrypoint_manifest(entrypoint, fe_inputs)
 
         # No entrypoint param: single-entrypoint path
         if manifest is not None:
-            return Response(
-                content=manifest.model_dump_json(), media_type="application/json"
+            # Same reconciliation as the disk branches. A programmatic
+            # AppManifest is the one shape with no contract-toolkit bake behind
+            # it — the DAG was hand-built in Python — so every argument for
+            # "the toolkit already resolved this" is inapplicable here, and it
+            # is the branch most likely to carry an unresolved template rather
+            # than the least. Serving it verbatim also left this route with two
+            # behaviours across three manifest sources, which is the drift this
+            # module exists to remove (FND-195).
+            raw = _resolve_manifest_placeholders(
+                manifest.model_dump_json().encode(), "programmatic manifest"
             )
+            return Response(content=raw, media_type="application/json")
         manifest_path = CONTRACT_GENERATED_DIR / "manifest.json"
         if manifest_path.exists():
             # Disk: contract-generated file — serve raw bytes with placeholder
             # substitution. No parse/reserialize: the file is already valid JSON,
             # validated at build time by the contract tooling.
-            raw = manifest_path.read_bytes()
-            # app_name is baked into the manifest by the toolkit; only the
-            # per-deployment token is substituted here (see note above).
-            raw = raw.replace(b"{deployment_name}", deployment)
+            raw = _resolve_manifest_placeholders(
+                manifest_path.read_bytes(), "root manifest"
+            )
             return Response(content=raw, media_type="application/json")
 
         # Default-entrypoint fallback (aligns with PR #1965 semantics used
@@ -2227,7 +2309,7 @@ def _register_workflow_routes(
             )
         for cand in candidates:
             try:
-                return await _serve_entrypoint_manifest(cand, fe_inputs, deployment)
+                return await _serve_entrypoint_manifest(cand, fe_inputs)
             except HTTPException as exc:
                 if exc.status_code != 404:
                     raise
@@ -2455,7 +2537,10 @@ def create_app_handler_service(
         app_class: App class for workflow execution (enables /start, /stop, etc.).
         temporal_host: Temporal server address (e.g., "localhost:7233").
         temporal_namespace: Temporal namespace.
-        task_queue: Task queue name (default: "{app_name}-queue").
+        task_queue: Task queue name. Defaults to the deployment's canonical queue
+            (``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}``, see
+            :func:`application_sdk.common.task_queue.derive_task_queue`), falling
+            back to ``"{app_name}-queue"`` when that env is absent.
         data_converter: Optional custom Temporal DataConverter.
         secret_store: Optional secret store for credential resolution.
         storage: Optional obstore store for file uploads.
@@ -2497,7 +2582,16 @@ def create_app_handler_service(
     _workflow_config = WorkflowClientConfig(
         host=temporal_host,
         namespace=temporal_namespace,
-        task_queue=task_queue or f"{app_name}-queue",
+        # Env derivation before the {app_name}-queue default: this value is what
+        # the manifest route stamps into the DAG, so a handler constructed
+        # directly (without main.py passing the worker's queue through) must still
+        # land on the queue a worker started from the same env would poll — not on
+        # a fifth, locally-invented shape (FND-195).
+        task_queue=task_queue
+        or task_queue_from_env()
+        # Guarded on app_name: an unnamed handler would otherwise manufacture a
+        # bare "-queue", and the manifest route would stamp that into the DAG.
+        or (f"{app_name}-queue" if app_name else ""),
         app_name=getattr(app_class, "_app_name", "") if app_class is not None else "",
         app_class=app_class,
         data_converter=data_converter,

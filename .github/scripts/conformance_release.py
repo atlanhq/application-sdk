@@ -9,7 +9,8 @@ Usage:
     python conformance_release.py
 
 Exits 0 with "skip=true" written to GITHUB_OUTPUT when there are no
-unreleased commits touching packages/conformance/**. Exits non-zero on error.
+unreleased commits touching packages/conformance/** (lock files excluded — see
+PATHSPEC below). Exits non-zero on error.
 
 Environment:
     GITHUB_OUTPUT      - path to the GitHub Actions output file (optional for
@@ -29,7 +30,22 @@ VERSION_PY = "packages/conformance/conformance/__init__.py"
 CHANGELOG = "packages/conformance/CHANGELOG.md"
 RELEASE_NOTES_FILE = "/tmp/conformance-release-notes.md"
 TAG_PREFIX = "conformance-v"
-PATH_FILTER = "packages/conformance/**"
+PACKAGE_DIR = "packages/conformance"
+
+# Lock files under the package are regenerated wholesale by Renovate's
+# lockFileMaintenance and are not shipped in the wheel, so a commit that touches
+# nothing else is pure changelog noise — and on its own it was enough to count as
+# an "unreleased conformance commit" and trigger a version bump. Excluding them by
+# path rather than by commit subject keeps mixed commits intact: a PR that changes
+# a rule *and* refreshes uv.lock still appears. Real dependency changes move
+# packages/conformance/pyproject.toml, which stays in scope.
+# The `glob` magic makes `**/` match zero or more directories, so these cover both
+# packages/conformance/uv.lock and packages/conformance/conformance/package-lock.json.
+LOCK_FILES = ("uv.lock", "package-lock.json")
+PATHSPEC = [
+    f"{PACKAGE_DIR}/**",
+    *(f":(exclude,glob){PACKAGE_DIR}/**/{name}" for name in LOCK_FILES),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +84,7 @@ def tag_exists(tag):
 
 
 def commits_since_tag(tag):
-    """Return (subjects, bodies) for commits since tag touching packages/conformance/**."""
+    """Return (subjects, bodies) for commits since tag touching PATHSPEC."""
     subjects = _run(
         [
             "git",
@@ -76,7 +92,7 @@ def commits_since_tag(tag):
             f"{tag}..HEAD",
             "--format=%s",
             "--",
-            PATH_FILTER,
+            *PATHSPEC,
         ]
     )
     bodies = _run(
@@ -86,7 +102,7 @@ def commits_since_tag(tag):
             f"{tag}..HEAD",
             "--format=%B",
             "--",
-            PATH_FILTER,
+            *PATHSPEC,
         ]
     )
     return subjects, bodies
@@ -124,7 +140,7 @@ def get_commits(tag):
             f"{tag}..HEAD",
             "--format=%H%x00%s%x00%b%x1e",
             "--",
-            PATH_FILTER,
+            *PATHSPEC,
         ]
     )
     commits = []

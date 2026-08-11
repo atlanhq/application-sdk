@@ -5,7 +5,7 @@
 
 # Optimisation / Recommendation Rules (O-series)
 
-**4 rules** · Checker: `suite.checks.optimizations` (AST-based)
+**6 rules** · Checker: `suite.checks.optimizations` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -27,6 +27,8 @@ reassigned.
 | [O002](#o002) | `LegacyAssetSerialization` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 | [O003](#o003) | `UntypedAssetMapperReturn` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 | [O004](#o004) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
+| [O005](#o005) | `UnresolvedAppNamePlaceholder` | `warn` | `both` | `dag-write-path` | — | 0.18.0 |
+| [O006](#o006) | `DirectRocksdictImport` | `warn` | `app` | `canonical-dependency` | — | 0.18.0 |
 
 ---
 
@@ -141,5 +143,109 @@ NOT autofixable: the v9 models are not a drop-in rename — attribute names and 
 serialization API differ (use `asset.to_nested_bytes()` rather than `.dict()`), so each
 construction site needs review. Suppress with `# conformance: ignore[O004] <reason>`
 when a connector is intentionally pinned to the legacy `AtlasTransformer` surface.
+
+---
+
+## O005 — `UnresolvedAppNamePlaceholder` {#o005}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `dag-write-path` · **Autofixable:** — · **Since:** 0.18.0
+
+> Hardcoded '{app_name}' left unsubstituted in a plain string literal
+
+**Rationale:** A plain string literal carrying an unsubstituted '{app_name}' token freezes the literal
+token into whatever it's assigned to instead of the real app name — the exact shape that
+shipped a task queue no worker polls, hanging dbt:process to its 24h heartbeat backstop
+(CONNECT-183). The substitution was independently hand-rolled at least four times
+(Heracles, native-migration-app, atlan-local-marketplace-app CONNECT-191/#539,
+atlan-hightouch-app ARUN-1039), and one of those shipped a double prefix (DISTR-834). A
+canonical helper — application_sdk.common.task_queue (derive_task_queue,
+resolve_manifest_tokens) — lands in the SDK release that ships FND-195, so remediation
+then has a single target; this rule still checks the unresolved shape rather than a
+missing import, because the writers most worth catching are hand-authored templates that
+import nothing. WARN (not BLOCK): a template legitimately resolved by a caller in a
+different file cannot be seen from here, so each hit needs a human glance rather than an
+automatic fail.
+
+Flags a string `ast.Constant` containing the literal substring `{app_name}` when the
+token can actually **reach a value** — including the pieces of an escaped-brace
+f-string: `f"atlan-{{app_name}}-prod"` is *not* interpolated, its runtime value is the
+literal `atlan-{app_name}-prod`, so it freezes the token exactly like a plain literal. A
+token that only ever appears in prose or in a diagnostic cannot freeze into an
+identifier, and flagging it just teaches people to suppress the rule.
+
+Not flagged:
+
+* part of a *resolving* f-string (`f"...{app_name}..."` interpolates   at parse time and
+no `{app_name}` text survives into its pieces), * the receiver of a `.format(...)` call
+whose keywords include   `app_name=` (a proper, already-resolving substitution site), *
+**documentation** — the value of any bare string expression statement.   This covers
+module/class/function docstrings *and* PEP 257 attribute   docstrings, which are not the
+first statement of their class body, * **diagnostic text** — inside the arguments of a
+logging call,   `warnings.warn(...)`, or a `raise`; reporting on the token requires
+quoting it, * **a token sentinel or message constant** — bound to an `ALL_CAPS`   name
+where the literal is exactly the token (the token's own   definition, e.g.
+`APP_NAME_TOKEN`) or the name ends in a prose   segment (`_MESSAGE`, `START_MESSAGE`,
+`VALIDATION_RATIONALE`).
+
+The exclusions stay narrow: an `ALL_CAPS` name holding a real queue template
+(`TASK_QUEUE = "atlan-{app_name}-prod"`) is still flagged — and so is one whose name
+merely *contains* a prose fragment without a trailing boundary (`MESSAGE_QUEUE`,
+`HELP_QUEUE`) — as are keyword arguments, values at any depth in a DAG literal, and
+returned templates.
+
+Detection is shape-anchored rather than import-anchored, because the writers most worth
+catching are hand-authored templates outside the SDK that import nothing at all.
+Remediation: an f-string or `.format(app_name=...)` when the name is in scope; the
+shared `application_sdk.common.task_queue` helper (`derive_task_queue` /
+`resolve_manifest_tokens`) lands in the SDK release that ships FND-195 and is the
+canonical target once available.
+
+NOT autofixable: the correct fix depends on where `app_name` is actually available in
+scope — sometimes an f-string is right, sometimes the value needs threading in from a
+caller first. Suppress with `# conformance: ignore[O005] <reason>` for a template
+resolved by a caller in a different file than the one being scanned.
+
+---
+
+## O006 — `DirectRocksdictImport` {#o006}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.18.0
+
+> Imports rocksdict directly — prefer the SDK's SpillableDict (pickles values, no hand-rolled serialize/deserialize step)
+
+**Rationale:** SpillableDict (application_sdk.common.spillable_dict) already wraps rocksdict.Rdict as a
+MutableMapping and pickles values directly, so it carries none of the
+hand-rolled-serialization risk a from-scratch wrapper does. Two connectors
+(atlan-thoughtspot-app, atlan-aws-smus-app) independently hand-rolled the same
+RocksDB-backed DiskLookup with an asymmetric JSON serialize/deserialize step — put()
+special-cased str, get() unconditionally ran json.loads() — so a stored string that was
+also valid bare JSON (a numeric-looking name, 'true', 'null') silently came back as
+int/bool/None instead of str (CNCT-80, CNCT-191). WARN (not block) because a
+from-scratch wrapper may have a deliberate reason (custom RocksDB Options, a key type
+outside str/int/float/bool/bytes) that needs a human glance before migrating.
+
+Flags app code that imports the `rocksdict` package directly, in either import form:
+`from rocksdict import Rdict` or `import rocksdict`.  Detection is import-anchored (a
+direct `rocksdict` import is the unambiguous signal — nothing else pulls that dependency
+in).
+
+The SDK ships `application_sdk.common.spillable_dict.SpillableDict` — a
+`MutableMapping`-compatible, disk-backed dict built on the same `rocksdict.Rdict`, which
+pickles values directly rather than hand-rolling a serialize/deserialize step.  It
+exists specifically so connector apps stop reinventing this wrapper.
+
+Motivating incident: `atlan-thoughtspot-app` and `atlan-aws-smus-app` each independently
+wrote a `DiskLookup` class directly on `rocksdict.Rdict` with the identical bug — a
+value's `str` type was silently lost on a round-trip through JSON when the string
+happened to also be valid bare JSON.  Neither connector's hand-rolled wrapper was
+calling anything the SDK had a fleet-wide signal for at the time; this rule is that
+signal going forward.
+
+NOT autofixable: `SpillableDict`'s key type is restricted to `str | int | float | bool |
+bytes` and it has no equivalent to a custom `rocksdict.Options` tuning surface, so each
+call site needs review before migrating.  Suppress with `# conformance: ignore[O006]
+<reason>` when a from-scratch wrapper is deliberate (e.g. custom RocksDB tuning, or
+association-list output like `rocks_backed_dict.py`'s `append_to_key` that
+`SpillableDict` does not provide).
 
 ---

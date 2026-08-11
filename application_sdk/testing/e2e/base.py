@@ -44,6 +44,12 @@ from typing import Any, ClassVar
 import orjson
 import pytest
 
+from application_sdk.common.task_queue import (
+    QUEUE_PREFIX,
+    application_name_from_env,
+    deployment_name_from_env,
+    derive_task_queue,
+)
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
@@ -603,10 +609,15 @@ class BaseE2ETest:
         """
         if self.mode is RunMode.DIRECT:
             return None
-        app_name = os.environ.get("ATLAN_APPLICATION_NAME", "")
-        deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", "")
-        if app_name and deployment_name:
-            return AgentSpec(agent_name=f"{app_name}-{deployment_name}")
+        app_name = application_name_from_env()
+        deployment_name = deployment_name_from_env()
+        # Strip the prefix the canonical deriver adds rather than re-assembling
+        # the pair here: _extract_task_queue puts "atlan-" back on, and going
+        # through derive_task_queue keeps this mirror pinned to the worker's rule
+        # instead of being a second implementation of it (FND-195).
+        worker_queue = derive_task_queue(app_name, deployment_name)
+        if worker_queue is not None and worker_queue.startswith(QUEUE_PREFIX):
+            return AgentSpec(agent_name=worker_queue.removeprefix(QUEUE_PREFIX))
         # Local fallback: no CI-exported deployment env. Reproduce the exact
         # {connector}-{connection_name_prefix}-{run_id} shape connectors used to
         # hard-code in a working local override, so a local run lands on its own

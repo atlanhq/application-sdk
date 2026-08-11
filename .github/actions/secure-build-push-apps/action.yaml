@@ -187,8 +187,16 @@ runs:
         no-cache: ${{ inputs.no-cache }}
         no-cache-filters: ${{ inputs.no-cache-filters }}
         outputs: ${{ inputs.outputs }}
-        # Build only for the runner's native platform for scanning
-        platforms: linux/amd64
+        # Build only for the runner's native platform for scanning.
+        #
+        # Derived from `runner.arch` rather than hardcoded to linux/amd64, which
+        # is what this said while claiming to be native. Every caller ran on an
+        # x64 runner, so the two agreed and the lie was invisible — until a
+        # caller moved a leg to `ubuntu-24.04-arm`, where the hardcode silently
+        # builds amd64 under QEMU for the scan and then scans an image that is
+        # not the one being pushed. A step-level expression, not conditional
+        # shell, so it stays within docs/standards/ci.md.
+        platforms: ${{ runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64' }}
         provenance: ${{ inputs.provenance }}
         pull: ${{ inputs.pull }}
         sbom: ${{ inputs.sbom }}

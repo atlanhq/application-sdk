@@ -135,6 +135,85 @@ lines around `finding.line` in `finding.file` before proposing a fix.
   B001 deprecation nudge will steer the larger migration.  Classification is
   `"judgment"`.
 
+- **O006 DirectRocksdictImport** (canonical-dependency) — app code imports the
+  `rocksdict` package directly (`from rocksdict import Rdict`, `import
+  rocksdict`, or an aliased/submodule form) and hand-rolls its own RocksDB
+  wrapper.  The SDK already ships
+  `application_sdk.common.spillable_dict.SpillableDict` — a
+  `MutableMapping`-compatible dict built on the same `rocksdict.Rdict` — so the
+  finding is a nudge to stop reinventing the wrapper.  `SpillableDict` is **not**
+  a drop-in import swap, so this is never mechanical — judge the site first:
+
+  - **Values** — `SpillableDict` pickles values on write and unpickles on read,
+    so a hand-rolled JSON serialize/deserialize step (the shape that bit
+    CNCT-80/CNCT-191: `put()` special-cases `str`, `get()` unconditionally runs
+    `json.loads()`, and a stored string that is also valid bare JSON round-trips
+    as `int`/`bool`/`None`) is simply deleted, not translated.  If the wrapper's
+    only serialization is that hand-rolled JSON step, migrating to
+    `SpillableDict` removes the bug class outright.
+  - **Keys** — `SpillableDict` restricts keys to `str | int | float | bool |
+    bytes` and raises `TypeError` on anything else.  If the flagged wrapper keys
+    on a tuple, a `None`, or a custom object, a plain migration will not type —
+    either reshape the key into a supported primitive, or suppress with
+    `# conformance: ignore[O006] <reason naming the non-primitive key type>`
+    (routed to residue).
+  - **Options surface** — `SpillableDict` builds its own `rocksdict.Options`
+    internally and exposes no tuning surface.  A wrapper that passes a custom
+    `Options`/`BlockBasedOptions` (block cache, compaction style, prefix
+    extractors) has no equivalent knob — that is a deliberate-`Options` case,
+    so propose an inline `# conformance: ignore[O006] <reason>` naming the
+    tuning it depends on rather than migrating.
+  - **Association-list / merge semantics** — `SpillableDict.append_to_key` is a
+    read-modify-write list append (unpickle the whole list, append, repickle),
+    **not** RocksDB's atomic merge operator: it is not thread-safe and costs
+    O(K²) for K repeated appends to one key.  If the flagged wrapper relies on
+    a native `Rdict` merge/`append_to_key` for atomicity or for high-frequency
+    append throughput, that is a justified suppression —
+    `# conformance: ignore[O006] <reason>` naming the merge semantics
+    `SpillableDict` does not provide.
+
+  When none of those carve-outs applies (picklable values, keys already in
+  `str | int | float | bool | bytes`, no custom `Options`), draft the migration:
+  replace the `rocksdict` import and the hand-rolled wrapper class with
+  `from application_sdk.common.spillable_dict import SpillableDict`, route the
+  call sites through the `MutableMapping` API, and drop the now-dead
+  serialize/deserialize helpers.  Classification is `"judgment"` (the
+  key-type / `Options` / merge-semantics call requires reading the call site),
+  so the edit is routed to residue for human confirmation.
+- **O005 UnresolvedAppNamePlaceholder** (dag-write-path, CONNECT-183) — a plain
+  string literal (or an escaped-brace f-string, `f"atlan-{{app_name}}-prod"`,
+  whose braces are *not* interpolated) still carries an unsubstituted
+  `{app_name}` token, so the literal token freezes into whatever it is assigned
+  to instead of the real app name.  This is never a mechanical fix — the right
+  resolution depends on where `app_name` is actually available, so
+  classification is always `"judgment"`:
+  - If the app name is already in scope at the literal's site (a variable, a
+    parameter, a manifest field), draft the smallest resolution: an f-string
+    (`f"atlan-{app_name}-prod"`) or `"atlan-{app_name}-prod".format(app_name=...)`.
+    Keep every other placeholder in the template untouched — a second
+    unresolved token (e.g. `{dep}`) is out of O005's scope and must not be
+    "fixed" by binding it to something wrong.
+  - If the name is *not* in scope, the value must be threaded in from the
+    caller that has it — draft that threading, or note in residue that the
+    call graph needs a human (the rule is WARN-tier precisely because this
+    judgment cannot be automated).
+  - **Shared helper (FND-195):** `application_sdk.common.task_queue`
+    (`derive_task_queue` / `resolve_manifest_tokens`) is the canonical
+    remediation target, but it ships only with the SDK release that carries
+    FND-195 — do **not** draft an import of it into a repo pinned to an
+    earlier SDK (the import would not exist).  Prefer the in-scope f-string /
+    `.format(app_name=...)` fix there, and note the helper as the follow-up
+    once the SDK is bumped.
+  - **Legitimate cross-file resolution:** if the template is deliberately
+    resolved by a caller in a *different* file than the one scanned (the
+    rule's known blind spot), propose an inline
+    `# conformance: ignore[O005] <reason naming the resolving caller>` instead
+    of an edit, and route it to residue for human audit — an escaped-brace
+    f-string (`f"{{app_name}}"`) is almost never legitimate, since nothing
+    downstream can interpolate it either.
+  - Never "resolve" the token by hardcoding a concrete app name: that hides
+    the finding while freezing the wrong value into every other tenant.
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
 When `mode == "strict"` and the site legitimately needs stdlib `json` (e.g.

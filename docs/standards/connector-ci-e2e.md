@@ -282,6 +282,20 @@ A single always-on job (`connector-tests`) on apps-sdk PRs fans out to the conne
 
 > The two are deliberately split: the dispatch job can't stay pending for the whole (8+ min) connector run without polling, so a separate `run` check holds the "is it done?" state and is closed by a push callback. Both are owned by the fleet App so the cross-repo callback can complete them and they're attributed to the fleet App's check suite (not an arbitrary `github-actions` one). The `E2E Callback Watchdog` sweeps any `run` check left pending if a connector runner dies before its callback fires.
 
+**The `run` check reports the connector's Tests Gate verdict, and nothing else.**
+`report-to-sdk` runs the same [`verify-test-gate`](../../.github/actions/verify-test-gate/action.yaml)
+action as the connector's own `Tests Gate` job, over the same job results, and
+completes the check run with its `conclusion` output. This is a contract, not an
+implementation detail: a red connector run must be red on the SDK PR that
+triggered it. It was not always so — the callback used to derive its own verdict
+in `build_callback_summary.py` from a subset of the gate's inputs (no
+`discover-e2e`, none of the install-path jobs, no "discovery found suites but the
+matrix skipped" anomaly rule), so a connector run whose `Tests Gate` failed
+because its arm64 e2e image build failed still completed the SDK-side check as
+**success**. Both halves are pinned by `test_build_callback_summary.py`: the two
+jobs must feed one action, with identical inputs, and each must `need` every job
+it judges. If you add a job to the gate, add it to both.
+
 The `tests.yaml` job in each connector runs unit + integration tests unconditionally. The full-DAG `e2e` job inside `tests.yaml` runs only when the SDK PR carries the `e2e` label — controlled via the `run_e2e` workflow input (`"true"` / `"false"`) passed by the dispatcher.
 
 Mechanism: `codex-/return-dispatch@v4` in `e2e-apps/action.yaml` fires `workflow_dispatch` on the target repo, passing `application_sdk_ref` (the SDK PR's head SHA, used by the connector to re-pin the SDK before running tests), `run_e2e` (derived from whether the SDK PR has the `e2e` label), and `distinct_id` (the dispatching SHA — see below).
@@ -352,7 +366,40 @@ emulating costs several. On a path that runs on every install-path e2e, that is 
 whole design. arm64 runners are also ~20% cheaper per minute, so it is not a
 speed-for-money trade.
 
-Three things this shape makes load-bearing, each of which fails *silently*:
+Four things this shape makes load-bearing:
+
+- **The base image's architectures.** Every leg does `FROM` the runtime base, so
+  the base must serve every architecture the matrix builds. On an e2e-labelled
+  SDK PR that base is not the released `app-runtime-base:3` but a PR-scoped one
+  built by `build-sdk-base-image` in `pull_request.yaml` — a different workflow,
+  which stayed `linux/amd64` after this matrix went two-arch. The arm64 leg then
+  died on `no match for platform in manifest` before a line of the connector
+  Dockerfile ran, and the error names the base image rather than the workflow
+  that published it. This is the one item in this list that fails *loudly* —
+  it just fails somewhere that reads like it has nothing to do with the SDK PR.
+  `test_build_app_image_action.py` derives the required set from the matrix
+  itself, so a third architecture cannot leave the base behind.
+
+  **That base uses the same native-split shape**, for the same reasons: a
+  per-arch `build-sdk-base-image` matrix on native runners, combined by
+  `merge-sdk-base-image` with `imagetools create`. Adopting it required fixing
+  `secure-build-push-apps` first — its scan step hardcoded
+  `platforms: linux/amd64` beneath a comment claiming it used the runner's
+  native platform. On an x64 runner the two agreed, so the lie was invisible;
+  on `ubuntu-24.04-arm` it builds an emulated amd64 image for Trivy and then
+  pushes a different one, so the scan stops describing the artefact it gates.
+  It now follows `runner.arch`.
+
+  **Both base-image jobs are named in every downstream gate**, and that is the
+  same trap the e2e matrix documents: a failed arch leg leaves the merge
+  *skipped* rather than failed, and skipped is the benign value. Gating on the
+  merge alone would dispatch the connectors with `base_image_ref` pointing at a
+  manifest tag that was never created — every connector build then failing on a
+  missing image, one repo from the cause. `connector-tests` gates on both, and
+  `verify_connector_gate_upstream.py` additionally rejects the
+  build-succeeded-but-merge-skipped pair outright.
+
+The other three fail *silently*:
 
 - **The runner/platform pairing.** `platform: linux/arm64` on an x64 runner still
   succeeds — just emulated. Nothing goes red; the build is simply several times
