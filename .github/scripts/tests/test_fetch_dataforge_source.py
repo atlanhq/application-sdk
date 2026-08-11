@@ -300,6 +300,27 @@ def test_resolve_managed_unrotated_entries_fall_back_to_last_seen(monkeypatch):
     assert cred_id == "m-new-seen"
 
 
+def test_recency_compares_instants_across_mixed_utc_offsets():
+    """Regression for the lexicographic-string nit: RFC 3339 strings only order
+    by instant when every offset matches. 2026-08-09T20:00:00-05:00 is 01:00Z
+    Aug 10 — *newer* than 2026-08-09T23:00:00Z even though the string sorts
+    earlier. Selection must pick the true newest instant."""
+    older_instant_later_string = {
+        "ID": "m-zulu",
+        "RotatedAt": "2026-08-09T23:00:00Z",  # 23:00Z Aug 9
+        "LastSeenInVaultAt": "2026-08-10T00:00:00Z",
+    }
+    newer_instant_earlier_string = {
+        "ID": "m-offset",
+        "RotatedAt": "2026-08-09T20:00:00-05:00",  # = 01:00Z Aug 10 (newer)
+        "LastSeenInVaultAt": "2026-08-10T00:00:00Z",
+    }
+    winner = fds._select_credential(
+        [older_instant_later_string, newer_instant_earlier_string]
+    )
+    assert winner == "m-offset"
+
+
 def test_resolve_managed_no_active_entry_errors(monkeypatch):
     monkeypatch.setattr(fds, "_http_get", lambda url, key: {"items": []})
     with pytest.raises(fds.DataforgeSourceError, match="no active managed credential"):

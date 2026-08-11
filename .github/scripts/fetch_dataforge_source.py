@@ -57,6 +57,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -162,6 +163,24 @@ def resolve_resource(base_url: str, api_key: str, resource_id: str) -> dict:
     return data
 
 
+def _parse_ts(value: Any) -> datetime | None:
+    """Parse an RFC 3339 timestamp into an aware UTC datetime, else ``None``.
+
+    Comparing parsed instants (not raw strings) keeps the ordering correct even
+    if dataforge ever emits mixed UTC offsets — lexicographic order on RFC 3339
+    strings is only instant-order when every timestamp shares one offset.
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:  # naive → assume UTC rather than crash the lookup
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _recency_key(row: dict) -> tuple:
     """Newest-first ordering for a managed-credential list row.
 
@@ -172,13 +191,15 @@ def _recency_key(row: dict) -> tuple:
     first is what keeps a post-rotation lookup off the stale credential.
     ``RotatedAt`` is null until the first rotation; ``LastSeenInVaultAt`` is
     always populated, so it is the recency tiebreak (and the primary signal
-    for entries that have never been rotated). Missing/blank values sort
-    oldest. Returns a tuple ordered for ``sorted(..., reverse=True)``.
+    for entries that have never been rotated). Missing/unparseable values sort
+    oldest (``datetime.min``). Returns a tuple ordered for
+    ``sorted(..., reverse=True)``.
     """
-    rotated = str(row.get("RotatedAt") or "")
-    seen = str(row.get("LastSeenInVaultAt") or "")
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    rotated = _parse_ts(row.get("RotatedAt"))
+    seen = _parse_ts(row.get("LastSeenInVaultAt")) or floor
     # has_rotated ranks any real RotatedAt above an absent one (NULLS LAST).
-    return (1 if rotated else 0, rotated, seen)
+    return (1 if rotated else 0, rotated or floor, seen)
 
 
 def _select_credential(rows: list[dict]) -> str:
