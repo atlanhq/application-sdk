@@ -340,7 +340,7 @@ activity fails differently, no knob changes meaning, and the added cost is telem
 The same telemetry settles every sizing parameter at once — where holds go, what each
 allowance should be, what `max_no_progress_seconds` should be, and whether long stalls
 occur in practice at all (currently argued from recollection on both sides). None of
-those are design questions to be decided in review; see *Open questions*.
+those are design questions to be decided in review; see *What this needs agreement on*.
 
 ### Failing the activity, and what the failure looks like
 
@@ -520,19 +520,34 @@ Removing the duration knob removes the only wall-clock bound the system has, and
 the ADR must say what replaces it — "nothing" is not an answer that survives an
 incident.
 
-**Retries multiply the backstop.** `get_activity_options`
-(`execution/_temporal/activities.py:418-420`) returns only `start_to_close_timeout`
-and a retry policy — **no `schedule_to_close`**. With the default
-`retry_max_attempts=3`, a 24h backstop is a **72h** worst case per activity. Today
-that product is 30 minutes. Options, in preference order:
+**Retries multiply the backstop, and we are accepting that product as-is to start.**
+`get_activity_options` (`execution/_temporal/activities.py:418-420`) returns only
+`start_to_close_timeout` and a retry policy — **no `schedule_to_close`**. With the
+default `retry_max_attempts=3`, a 24h backstop is a **72h worst case per activity,
+where today that product is 30 minutes.** A `StartToClose` timeout is retryable in
+Temporal, so a wedge that survives to the ceiling three times really does consume the
+full 72h.
 
-1. **Set `schedule_to_close` as the real backstop** and let `start_to_close` bound
-   one attempt. The SDK already has precedent for a budget-shaped pair in
-   `gate_timeouts` (`app/base.py:1902`), which derives both from one budget and a
-   max-attempts count.
-2. Keep `start_to_close` only, and cap attempts at 1 for backstop-class tasks.
+**Decision: start there deliberately, rather than bounding it up front.** The number
+looks alarming in isolation, and is defensible for three reasons:
 
-Either way the ADR's claim must be about the *product*, not one attempt.
+1. **Nobody is blind for 72h.** From the first release the stall metric makes a wedge
+   visible within `max_no_progress_seconds` and alerts on it. The 72h is the outer
+   bound on *automatic* termination, not on *detection* — and it replaces a world where
+   a wedge is never diagnosed at all, only accidentally killed by a small ceiling.
+2. **The product collapses once an app enforces.** `TaskStalledError` is
+   non-retryable, so an enforcing app's wedge terminates on the first attempt at
+   `max_no_progress_seconds`, not at 3 × 24h. The 72h is the warn-mode worst case,
+   shrinking as apps enforce.
+3. **Bounding it now would be another guessed number.** Picking a `schedule_to_close`
+   budget today means guessing a total duration — the exact move this ADR exists to
+   remove. The warn-mode data gives a real distribution to size it from, if it turns
+   out to need sizing at all.
+
+If the data shows the product matters, the fix is already scoped: set
+`schedule_to_close` as the real backstop and let `start_to_close` bound one attempt,
+following the budget-shaped pair the SDK already uses in `gate_timeouts`
+(`app/base.py:1902`), or cap attempts at 1 for backstop-class tasks.
 
 **Retries without checkpointing are expensive.** REQ-1609 (activity-level
 checkpointing) is not a nice-to-have adjacent to this work: without it, a stall kill
@@ -805,16 +820,15 @@ checkable rather than aspirational.
    loops) so the streaming majority is covered before anything observes anything.
    Land CNCT-10's timeout-subtype classification alongside, so stall kills are
    distinguishable from starvation kills in the fleet-wide numbers.
-3. **Ship `warn` as the default, together with the `start_to_close` backstop and a
-   bounded retry product — no per-app step.** Warn mode cannot fail an activity, so it
-   needs no opt-in: on upgrade every app starts producing its own work-list
-   (no-progress gaps, long unbounded holds) and contributing to the fleet-wide gap
-   distribution that sets the `max_no_progress_seconds` value. The backstop ships here
-   because this is where the relief is (see *Migration*), which makes two things
-   prerequisites of this step rather than later work: **the retry product must be
-   bounded** (24h × 3 attempts is otherwise 72h — Open question 1), and **the stall
-   metric must be alertable**, since it stands in for the kill while nothing enforces.
-   `off` ships alongside as an env kill-switch.
+3. **Ship `warn` as the default, together with the 24h `start_to_close` backstop — no
+   per-app step.** Warn mode cannot fail an activity, so it needs no opt-in: on upgrade
+   every app starts producing its own work-list (no-progress gaps, long unbounded
+   holds) and contributing to the fleet-wide gap distribution that sets the
+   `max_no_progress_seconds` value. The backstop ships here because this is where the
+   relief is (see *Migration*), at the accepted 72h retry product (see *Bounding total
+   time*). One hard prerequisite of this step: **the stall metric must be alertable**,
+   since it stands in for the kill while nothing enforces. `off` ships alongside as an
+   env kill-switch.
 4. **Ship the conformance rule and the toolkit floor.** Both are independent of the
    `@task` work and both deliver immediately: the floor stops the next app shipping
    a 2h node timeout, and the rule keeps un-held opaque sites visible once teams
@@ -878,24 +892,28 @@ removal is part of the work, not a follow-up.
   whole activity.
 - During rollout the flag adds a temporary branch that must be removed.
 
-## Open questions
+## What this needs agreement on
 
-Blocking the first release (they ship with the backstop, per *Rollout* step 3):
+Not a list of decisions to make — two stated positions to accept or reject. Everything
+else in this ADR follows from them.
 
-1. **`schedule_to_close` vs capped attempts** for bounding the retry product. 24h × 3
-   attempts is otherwise 72h where today it is 30 minutes (see *Bounding total time*).
-   This was deferrable while the backstop was coupled to `enforce`; it is not now.
-2. **Sign-off on the AE ask** — dropping the workflow-node duration default is a
-   cross-team change, not an SDK one, and it needs an owner.
+1. **We start with a 24h attempt and the existing 3-attempt retry policy — a 72h
+   worst case per activity, where today it is 30 minutes.** Detection stays in minutes
+   via the stall metric, the product collapses to a single attempt wherever an app
+   enforces, and bounding it up front would mean guessing a total duration (see
+   *Bounding total time*).
+2. **We remove connector time-bounds from AE entirely** — no execution or run timeout
+   on connector DAG nodes, which are child-workflow invocations that Temporal requires
+   no timeout for. Duration becomes an alert, not a kill. The toolkit floor and the
+   conformance rule exist to stop the bound creeping back in per-app (see *The
+   Automation Engine layer*). This one needs a cross-team owner to land.
 
-Before any app enforces:
+One question arrives later, before any app moves to `enforce`: whether REQ-1609
+(checkpointing) gates it, or merely informs the retryability default. Warn mode never
+kills, so it does not block the first release.
 
-3. **Whether REQ-1609 (checkpointing) gates enforcement** or merely informs the
-   retryability default. Warn mode never kills, so this does not block the first
-   release.
-
-Not open questions — parameters set by measurement, recorded here so nobody tries to
-settle them by argument:
+Parameters set by measurement, recorded here so nobody tries to settle them by
+argument:
 
 - **`max_no_progress_seconds`.** Starts at **900s** (300s was an earlier proposal;
   FND-165's evidence of apps needing 1800s under the *easier* unconditional regime
