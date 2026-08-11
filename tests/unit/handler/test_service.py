@@ -5325,12 +5325,13 @@ class TestEventTriggerEndpoint:
             self._teardown()
 
     def test_event_dispatches_the_entry_points_registered_type(self) -> None:
-        # The event route used to start the bare app name unconditionally. That
-        # type is registered only when the app derives its entry point from
-        # run(); an @entrypoint app registers "{app}:{ep}", so the start
-        # succeeded, no worker claimed it, and the run sat open until the
-        # execution timeout. It must dispatch the entry point's primary
-        # registered type — including a workflow_type override.
+        """Event starts must use the entry point's registered workflow type.
+
+        The bare app name is registered only when the app derives its entry
+        point from run(); an @entrypoint app registers "{app}:{ep}", so the
+        start succeeded, no worker claimed it, and the run sat open until the
+        execution timeout.
+        """
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from application_sdk.app.base import App

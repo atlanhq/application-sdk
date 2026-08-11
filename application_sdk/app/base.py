@@ -1606,8 +1606,7 @@ class App(ABC):
 # Cache generated workflow classes keyed by (app_cls, entry_point_name,
 # workflow_type) so generate_workflow_class() is idempotent across repeated
 # calls (e.g. tests or worker re-creation) and never registers the same Temporal
-# workflow twice. The type is part of the key because one entry point carrying a
-# workflow_type override generates a distinct class per registered type.
+# workflow twice.
 _workflow_class_cache: dict[tuple[type, str, str], type] = {}
 
 
@@ -2051,11 +2050,8 @@ def generate_workflow_class(
         input_type_supports_gate,
     )
 
-    # Warn once per entry point, not once per registered type — an entry point
-    # with a workflow_type override generates a class for its alias too, and the
-    # same warning twice reads as two distinct entry points.
-    is_primary = workflow_name == primary_workflow_type(app_name, ep)
-    if is_primary and not input_type_supports_gate(input_type):
+    is_primary_registration = workflow_name == primary_workflow_type(app_name, ep)
+    if is_primary_registration and not input_type_supports_gate(input_type):
         _task_logger.warning(
             "Preflight gate will not run for entrypoint '%s' (%s): input type %s does "
             "not declare the credential-routing fields (extraction_method, "

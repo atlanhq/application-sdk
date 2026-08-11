@@ -80,6 +80,11 @@ def check_p016(
     directives_by_file:
         Parsed ``# conformance: ignore[...]`` directives, keyed by relative
         file path, so inline suppression works for code-side findings.
+
+    In single mode the route set is widened with the entry points whose
+    ``workflow_type`` override the manifest declares verbatim. Such a DAG node
+    carries no colon, so ``contract.routes`` cannot see it and the entry point
+    would otherwise read as unrouted against a node that in fact reaches it.
     """
     findings: list[Finding] = []
 
@@ -135,10 +140,6 @@ def check_p016(
 
     # ── Single-entry-point mode ──────────────────────────────────────────────
     if contract.mode == "single":
-        # An entry point with @entrypoint(workflow_type="Bare") is routed by that
-        # verbatim string, which carries no colon — so contract.routes cannot see
-        # it. Without this the DAG node reads as a foreign platform node and the
-        # entry point looks unrouted (CNCT-199).
         routes = contract.routes | {
             ep.name
             for ep in code.entrypoints

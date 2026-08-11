@@ -415,8 +415,6 @@ class TestAppRegistration:
             ) -> _QiOutput:  # pragma: no cover - not executed
                 return _QiOutput()
 
-        # getattr with a literal: a dunder spelled inline in a class body would
-        # be name-mangled to _TestAppRegistration__temporal_workflow_definition.
         registered = {
             getattr(wf_cls, "__temporal_workflow_definition").name
             for wf_cls in get_all_app_workflows()

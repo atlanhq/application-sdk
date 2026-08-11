@@ -212,6 +212,12 @@ def build_workflow_type_index(
     reads the same index — so what is registered and what can be resolved cannot
     drift apart.
 
+    Uniqueness is enforced on two axes. The Temporal type is the registration
+    key, but dispatch under the sandbox goes through the generated class name,
+    which folds both ``-`` and ``:`` to ``_``. So ``qi:bar`` and ``qi-bar`` are
+    distinct types whose classes would overwrite each other in the module
+    namespace, and one would silently run the other's entry point.
+
     Raises:
         EntryPointContractError: If two entry points claim the same type, or if
             two distinct types fold to the same generated class name. The first
@@ -220,10 +226,6 @@ def build_workflow_type_index(
             name is a key here.
     """
     index: dict[str, EntryPointMetadata] = {}
-    # Registration is unique on the type, but dispatch under Temporal's sandbox
-    # goes through the generated class name, which folds both '-' and ':' to
-    # '_'. So 'qi:bar' and 'qi-bar' are distinct types that would overwrite each
-    # other in the module namespace and silently run the wrong entry point.
     by_class_segment: dict[str, str] = {}
     for ep in entry_points.values():
         for workflow_type in workflow_types_for(app_name, ep):
@@ -338,6 +340,13 @@ def _validate_workflow_type_override(ep_name: str, workflow_type: str) -> None:
     content at all; :func:`workflow_type_class_segment` folds the rest into a
     usable class name, and :func:`build_workflow_type_index` rejects two types
     that fold together.
+
+    Two things are still refused. Whitespace and control characters would fold
+    to ``_`` like anything else and be accepted silently, yet they are never
+    part of an established type and a control character mangles logs and the
+    Temporal UI. A type with no alphanumeric content at all folds to an
+    indistinguishable run of underscores. A leading digit is fine — the type is
+    embedded in ``_Workflow_<segment>``.
     """
     if not isinstance(workflow_type, str):
         raise EntryPointContractError(
@@ -348,18 +357,11 @@ def _validate_workflow_type_override(ep_name: str, workflow_type: str) -> None:
         raise EntryPointContractError(
             f"Entry point '{ep_name}': workflow_type must be a non-empty string."
         )
-    # Whitespace and control characters fold to '_' like anything else, so they
-    # would be accepted silently. They are never part of an established type and
-    # a control character in a workflow type mangles logs and the Temporal UI.
     if any(char.isspace() or not char.isprintable() for char in workflow_type):
         raise EntryPointContractError(
             f"Entry point '{ep_name}': workflow_type must not contain whitespace "
             f"or control characters, got {workflow_type!r}."
         )
-    # The type is embedded in ``_Workflow_<segment>``, so a leading digit is
-    # fine and every other character folds to '_'. What is left to reject is a
-    # type with no alphanumeric content, which folds to an indistinguishable
-    # run of underscores.
     if not any(char.isalnum() for char in workflow_type):
         raise EntryPointContractError(
             f"Entry point '{ep_name}': workflow_type {workflow_type!r} is not a "

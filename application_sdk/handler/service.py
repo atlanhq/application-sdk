@@ -832,7 +832,10 @@ def _resolve_app_entrypoint(
     Args:
         app_name: Registered app name (from WorkflowClientConfig).
         selected_entrypoint: The ``?entrypoint=`` value, or ``None`` to use
-            the default.
+            the default. Resolved as an entry-point name first; on a miss it is
+            tried against the app's registered Temporal workflow types, since a
+            caller reading the manifest holds a workflow type rather than an
+            entry-point name and puts it in the legacy ``workflow_type`` field.
         unknown_ep_status: HTTP status to use when an explicitly named
             entrypoint does not exist.  ``400`` for /start (bad request),
             ``404`` for /input-contract (resource not found).
@@ -867,9 +870,6 @@ def _resolve_app_entrypoint(
 
     if selected_entrypoint:
         if selected_entrypoint not in entry_points:
-            # A caller holding a registered Temporal workflow type — the manifest
-            # carries that, not the entry-point name — is doing the obvious thing
-            # when it puts one in the legacy 'workflow_type' body field.
             by_workflow_type = app_meta.workflow_types.get(selected_entrypoint)
             if by_workflow_type is not None:
                 return app_meta, by_workflow_type
@@ -1813,14 +1813,6 @@ def _register_workflow_routes(
         try:
             client = await _get_temporal_client()
 
-            # Resolve the default entry point off the app class rather than
-            # assuming the bare app name is registered. It only is when the app
-            # derives its entry point from run(); an @entrypoint app registers
-            # "{app}:{ep}", so dispatching the bare name started a type no worker
-            # claims and the run sat open until the execution timeout — a stall,
-            # not an error. Resolved from app_cls, not the registry by app_name,
-            # because the handler's app_name is caller-supplied and need not
-            # match the name the App class registered under.
             from application_sdk.app.entrypoint import (  # noqa: PLC0415 — _resolve_default_entrypoint is private to app.entrypoint
                 _resolve_default_entrypoint,
             )

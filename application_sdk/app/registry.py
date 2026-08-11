@@ -1,5 +1,6 @@
 """App and Task discovery and registration."""
 
+import os
 import types
 import warnings
 from collections.abc import Mapping
@@ -518,11 +519,18 @@ def resolve_pool_queue(pool: str) -> str | None:
         pool: Validated lowercase kebab-case pool name
             (e.g. ``"heavy"``, ``"cold-tier"``).
 
+    Runs inside the Temporal workflow sandbox: ``_wrap_instance_tasks`` builds a
+    wrapper for every task at activation, and the wrapper factory resolves the
+    pool. ``os`` must therefore stay imported at module level. This module is a
+    sandbox passthrough, but passthrough is applied at import time — a deferred
+    ``import os`` inside this function runs while a workflow is executing and
+    resolves to the sandbox's restricted proxy, so ``os.environ.get`` raises
+    ``RestrictedWorkflowAccessError`` and every app declaring a ``@task(pool=...)``
+    fails its first workflow activation, whether or not that task is ever called.
+
     Returns:
         Resolved task-queue string, or ``None`` if unresolvable.
     """
-    import os  # noqa: PLC0415
-
     env_key = f"ATLAN_POOL_{pool.upper().replace('-', '_')}_QUEUE"
     explicit = os.environ.get(env_key)
     if explicit:

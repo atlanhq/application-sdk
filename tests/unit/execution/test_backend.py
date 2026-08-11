@@ -81,7 +81,6 @@ def _make_ep_meta(
         implicit=False,
         workflow_type=workflow_type,
     )
-    # ``name`` is a reserved MagicMock kwarg (it sets the repr), so assign it.
     ep_meta.name = name
     return ep_meta
 
