@@ -337,10 +337,10 @@ Two constraints come with defaulting it on:
 activity fails differently, no knob changes meaning, and the added cost is telemetry.
 `off` exists for anyone who needs even that gone.
 
-The same telemetry answers all three open sizing questions at once: where holds go,
-what each allowance should be, and what the global `max_no_progress_seconds` default
-should be (Open question 1) — and, per the RFC discussion, whether long stalls occur
-in practice at all, which is currently argued from recollection on both sides.
+The same telemetry settles every sizing parameter at once — where holds go, what each
+allowance should be, what `max_no_progress_seconds` should be, and whether long stalls
+occur in practice at all (currently argued from recollection on both sides). None of
+those are design questions to be decided in review; see *Open questions*.
 
 ### Failing the activity, and what the failure looks like
 
@@ -755,11 +755,37 @@ it cannot distinguish from a wedged one:
 | **Custom async loop doing its own I/O, never through an instrumented SDK path** | reported as a no-progress gap | **False-killed** if any gap > budget | add a beat or a hold |
 | **Opaque single `await` against the source (connector's own async client)** | reported as a no-progress gap | **False-killed** at the tail | wrap in `holding_progress()` — expected in ~every connector |
 
-**The `start_to_close` 24h backstop is coupled to `enforce`, not to warn.** An app
-gets the 24h ceiling *and* an enforcing stall watchdog together, never one without the
-other: the ceiling without a watchdog that can actually kill is the unsafe pairing
-from *Context*. Warn mode deliberately buys no ceiling relief — it only buys evidence.
-The global default changes at the very end, once the flag is retired.
+**The `start_to_close` backstop lands *with* warn mode, not after it.** This is a
+deliberate change of position and the one place this ADR accepts a real regression, so
+it deserves the argument in full.
+
+Coupling the backstop to `enforce` would mean warn mode delivers no relief at all:
+apps would still be killed at their guessed 2h/6h ceilings while the fleet gathers
+data, so every team keeps tuning numbers — precisely the loop FND-165 documents. The
+"no upgrade task" property would buy nobody anything.
+
+What coupling it to warn costs: today's small `start_to_close` is *accidentally* the
+only thing that kills a wedged activity. Raising it to 24h removes that accident, and
+warn mode cannot kill. So a wedge holds a worker slot until the backstop, and the
+containment is an alert on the stall metric plus a human, rather than an automatic
+kill. That is worse than today for a wedge, and better than today for every
+legitimate long run.
+
+Why it is an acceptable trade, and bounded:
+
+- The exposure scales with the **wedge rate**, which is the exact unknown warn mode
+  exists to measure. If wedges turn out to be common, the data says so within days and
+  enforcement follows; if they are rare — the position argued in the RFC thread — the
+  exposure was never real.
+- Detection does not regress even though containment does: a wedge is *visible* within
+  `max_no_progress_seconds` via the stall metric, where today nothing detects it at all
+  (it dies at `start_to_close` by luck, not by diagnosis).
+- Slot exhaustion needs roughly a hundred concurrent wedges on one worker. That is a
+  function of the same rate, and the metric is the early warning.
+
+The alert on the stall metric is therefore **not optional** while the fleet is in warn
+— it is what stands in for the kill. The global default change and retiring the flag
+still come at the very end.
 
 **Flipping to `enforce` must be verified against a large-tenant / tail profile, not a
 smoke test.** A small tenant's fast steps hide the very gaps that only open at the
@@ -779,11 +805,15 @@ checkable rather than aspirational.
    loops) so the streaming majority is covered before anything observes anything.
    Land CNCT-10's timeout-subtype classification alongside, so stall kills are
    distinguishable from starvation kills in the fleet-wide numbers.
-3. **Ship `warn` as the default — no per-app step.** Warn mode cannot fail an
-   activity, so it needs no opt-in: on upgrade every app starts producing its own
-   work-list (no-progress gaps, long unbounded holds) and contributing to the
-   fleet-wide gap distribution that sets the `max_no_progress_seconds` default.
-   This is deliberately *not* a step that requires ~20 teams to each do something.
+3. **Ship `warn` as the default, together with the `start_to_close` backstop and a
+   bounded retry product — no per-app step.** Warn mode cannot fail an activity, so it
+   needs no opt-in: on upgrade every app starts producing its own work-list
+   (no-progress gaps, long unbounded holds) and contributing to the fleet-wide gap
+   distribution that sets the `max_no_progress_seconds` value. The backstop ships here
+   because this is where the relief is (see *Migration*), which makes two things
+   prerequisites of this step rather than later work: **the retry product must be
+   bounded** (24h × 3 attempts is otherwise 72h — Open question 1), and **the stall
+   metric must be alertable**, since it stands in for the kill while nothing enforces.
    `off` ships alongside as an env kill-switch.
 4. **Ship the conformance rule and the toolkit floor.** Both are independent of the
    `@task` work and both deliver immediately: the floor stops the next app shipping
@@ -799,10 +829,9 @@ checkable rather than aspirational.
    gaps inside declared holds or under budget, verified against a **large-tenant /
    tail profile**, not a smoke test. The flag is `progress_watchdog` on `@task` /
    `TaskMetadata`.
-7. **Couple the 24h `start_to_close` backstop (and its `schedule_to_close`
-   product) to that same per-app flip.** The global default changes only at the end,
-   once the flag is retired and enforcement is universal; at that point the
-   per-task duration constants are retired.
+7. **Retire the flag and the per-task duration constants** once enforcement is
+   universal (or once the warn data justifies enforcing fleet-wide with a generous
+   budget, which may make step 6 a formality rather than twenty separate flips).
 
 Per the "delete v3-prep workarounds" discipline, the flag is temporary and its
 removal is part of the work, not a follow-up.
@@ -812,10 +841,12 @@ removal is part of the work, not a follow-up.
 **Positive:**
 - App authors stop guessing an unguessable duration; `start_to_close` becomes a
   set-and-forget backstop, at both the `@task` and AE layers.
-- Wedged-but-alive activities are detected in minutes, removing the slot-exhaustion
-  risk that blocks a large `start_to_close` default.
-- Crash/OOM detection latency is unchanged, and no existing knob changes meaning —
-  upgrade is behaviourally identical until an app opts in.
+- Wedged-but-alive activities are *detected* in minutes fleet-wide from the first
+  release, and *killed* in minutes wherever an app enforces.
+- Crash/OOM detection latency is unchanged, and no existing knob changes meaning.
+- Relief arrives on upgrade rather than after a per-app migration: the backstop lands
+  with warn mode, so legitimately long runs stop dying at a guessed ceiling
+  immediately.
 - Stalls surface as a typed error naming the last progress signal, which is both
   better for the operator and what makes the rollout measurable.
 - The per-app migration is mechanical rather than manual, and it is not on the
@@ -830,9 +861,15 @@ removal is part of the work, not a follow-up.
   one-line `mark_progress()` calls in existing SDK write/transfer loops.
 
 **Negative:**
-- Opaque single-operation calls must be audited and given a declared hold — a
-  one-time migration per app, and `holding_progress()` is expected in nearly every
-  connector rather than being a rare escape hatch.
+- **Wedge containment regresses while the fleet is in warn.** Today's small
+  `start_to_close` is accidentally the only thing that kills a wedged activity;
+  raising it to a backstop replaces that automatic kill with an alert and a human
+  until an app enforces. Accepted deliberately, bounded by measurement — see
+  *Migration*. It makes the stall-metric alert mandatory, not optional.
+- Opaque single-operation calls need a declared hold to get the stronger guarantee,
+  and `holding_progress()` is expected in nearly every connector rather than being a
+  rare escape hatch — though this is now optional work an app schedules for itself,
+  not a migration gate.
 - A third timeout-ish knob exists (`max_no_progress_seconds`), and the docs must be
   clear that it is *not* the beat interval and *not* a duration budget.
 - Cancelling the activity task from the watchdog carries the documented asyncio
@@ -843,18 +880,31 @@ removal is part of the work, not a follow-up.
 
 ## Open questions
 
-1. **The default for `max_no_progress_seconds`.** 300s was the earlier proposal;
-   the FND-165 evidence (apps needing 1800s under the *easier* unconditional
-   regime) argues for something larger, and a too-tight default is a false-kill
-   generator at the tail. Proposal: start at **900s**, and let the gap distribution
-   from the warn-mode pass (Rollout step 3) set the final number — this question is
-   answered by data, not by argument, and warn mode is how we get it.
-2. **`schedule_to_close` vs capped attempts** for bounding the retry product
-   (see *Bounding total time*).
-3. **Whether REQ-1609 (checkpointing) gates the per-app flip** or merely informs
-   the retryability default.
-4. **Sign-off on the AE ask** — dropping the workflow-node duration default is a
-   cross-team change, not an SDK one.
+Blocking the first release (they ship with the backstop, per *Rollout* step 3):
+
+1. **`schedule_to_close` vs capped attempts** for bounding the retry product. 24h × 3
+   attempts is otherwise 72h where today it is 30 minutes (see *Bounding total time*).
+   This was deferrable while the backstop was coupled to `enforce`; it is not now.
+2. **Sign-off on the AE ask** — dropping the workflow-node duration default is a
+   cross-team change, not an SDK one, and it needs an owner.
+
+Before any app enforces:
+
+3. **Whether REQ-1609 (checkpointing) gates enforcement** or merely informs the
+   retryability default. Warn mode never kills, so this does not block the first
+   release.
+
+Not open questions — parameters set by measurement, recorded here so nobody tries to
+settle them by argument:
+
+- **`max_no_progress_seconds`.** Starts at **900s** (300s was an earlier proposal;
+  FND-165's evidence of apps needing 1800s under the *easier* unconditional regime
+  argues for something larger, and a too-tight value is a false-kill generator at the
+  tail). The warn-mode gap distribution sets the final value before anything enforces.
+- **Per-site hold allowances.** Set from each site's observed p99 — see *Choosing the
+  allowance*.
+- **Whether long stalls occur at all**, and therefore whether fleet-wide enforcement
+  is warranted or a generous budget suffices.
 
 ## Related
 
