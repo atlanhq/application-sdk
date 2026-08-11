@@ -28,6 +28,7 @@ from conformance.renovate.models import (
     BlockingReason,
     Category,
     ChecksState,
+    PRDep,
     RenovatePR,
     UpdateType,
 )
@@ -38,6 +39,7 @@ _LABEL_CATEGORY_MAP: dict[str, Category] = {
     "update:github-actions": Category.GITHUB_ACTIONS,
     "contract-toolkit-update": Category.CONTRACT_TOOLKIT,
     "conformance-package-update": Category.CONFORMANCE_PACKAGE,
+    "sdk-package-update": Category.SDK_PACKAGE,
 }
 _LABEL_UPDATE_TYPE_MAP: dict[str, UpdateType] = {
     "update:major": UpdateType.MAJOR,
@@ -46,6 +48,11 @@ _LABEL_UPDATE_TYPE_MAP: dict[str, UpdateType] = {
     "update:digest": UpdateType.DIGEST,
     "update:pin": UpdateType.PIN,
 }
+
+# The runtime SDK package — matched in branch slugs (renovate/atlan-application-sdk-3.x)
+# and titles ("update dependency atlan-application-sdk to v3.27.0"). The negative
+# lookahead keeps atlan-application-sdk-conformance from matching.
+_SDK_PACKAGE_RE = re.compile(r"atlan-application-sdk(?!-conformance)")
 
 # Allowed file patterns for the auto-approve gate (mirrors renovate-auto-approve-reusable.yml).
 _DEP_FILE_RE = re.compile(
@@ -96,8 +103,14 @@ def categorize(pr: RenovatePR) -> Category:
         "conformance-package" in branch
         or "application-sdk-conformance" in branch
         or "conformance package" in title
+        or "application-sdk-conformance" in title
     ):
         return Category.CONFORMANCE_PACKAGE
+    # SDK check must come AFTER conformance: "atlan-application-sdk" is a
+    # prefix of "atlan-application-sdk-conformance", so the negative lookahead
+    # alone isn't enough for grouped-branch slugs that drop the suffix.
+    if _SDK_PACKAGE_RE.search(branch) or _SDK_PACKAGE_RE.search(title):
+        return Category.SDK_PACKAGE
 
     return Category.PYTHON_DEP
 
@@ -136,6 +149,80 @@ def derive_update_type(pr: RenovatePR) -> UpdateType:
     return update_type_from_body(pr.body)
 
 
+# Renovate PR body version-table row: first cell is the package (usually a
+# markdown link, sometimes bare text), and the Change cell renders the version
+# move as `old` -> `new`. Cell-internal parentheses (changelog links, "(source)")
+# and extra columns vary by manager, so match loosely: name from the first cell,
+# then the first backtick-quoted arrow pair anywhere on the same row.
+_BODY_TABLE_NAME_RE = re.compile(
+    r"^\|\s*(?:\[(?P<linked>[^\]]+)\]|(?P<bare>[^|\[\]]+?))\s*(?:\(|\|)"
+)
+_BODY_TABLE_CHANGE_RE = re.compile(r"`(?P<from>[^`]+)`\s*(?:->|→)\s*`(?P<to>[^`]+)`")
+
+# Title fallback: "chore(deps): update dependency atlan-application-sdk to v3.27.0",
+# "chore(deps): update app-contract-toolkit to v0.18.1",
+# "chore(deps): update anthropics/claude-code-action action to v1.0.190". Grouped
+# titles without a trailing version ("update non-critical python dependencies")
+# deliberately don't match — there is no version to report.
+_TITLE_DEP_RE = re.compile(
+    r"update (?:dependency )?(?P<name>[A-Za-z0-9._/@-]+)(?: action)? to v?(?P<to>\d[\w.+-]*)",
+    re.IGNORECASE,
+)
+
+
+def extract_deps(pr: RenovatePR) -> tuple[PRDep, ...]:
+    """Which packages this PR delivers, as (name, from, to) triples.
+
+    Body version-table first (authoritative — grouped PRs list every package
+    there and their titles carry no version), title parse as fallback for
+    bodies that are empty or unrecognisable. Lock-file-maintenance PRs have no
+    table and yield () — they deliver in-range bumps invisibly, which is
+    exactly why downstream freshness tooling needs the explicit deps on every
+    other category.
+    """
+    deps: list[PRDep] = []
+    seen: set[tuple[str, str]] = set()
+    for line in pr.body.splitlines():
+        name_m = _BODY_TABLE_NAME_RE.match(line.strip())
+        if not name_m:
+            continue
+        name = (name_m.group("linked") or name_m.group("bare") or "").strip()
+        # Skip the header row and separator rows.
+        if (
+            not name
+            or name.lower() in {"package", "dependency", "update"}
+            or set(name) <= {"-", ":"}
+        ):
+            continue
+        change_m = _BODY_TABLE_CHANGE_RE.search(line)
+        if not change_m:
+            continue
+        key = (name, change_m.group("to").strip())
+        if key in seen:
+            continue
+        seen.add(key)
+        deps.append(
+            PRDep(
+                name=name,
+                from_version=change_m.group("from").strip(),
+                to_version=change_m.group("to").strip(),
+            )
+        )
+    if deps:
+        return tuple(deps)
+
+    title_m = _TITLE_DEP_RE.search(pr.title)
+    if title_m:
+        return (
+            PRDep(
+                name=title_m.group("name"),
+                from_version="",
+                to_version=title_m.group("to"),
+            ),
+        )
+    return ()
+
+
 def auto_merge_expected(category: Category, update_type: UpdateType) -> bool:
     """
     Mirror renovate-config/default.json auto-merge policy.
@@ -143,6 +230,7 @@ def auto_merge_expected(category: Category, update_type: UpdateType) -> bool:
     lock-maintenance → always auto (uv.lock refresh, in-range)
     github-actions   → always auto (incl. major; validated by CI gate)
     contract-toolkit → auto for minor/patch; human for major
+    sdk-package      → always human (runtime SDK bumps are a deliberate merge)
     python-dep       → always human (edits pyproject.toml constraint → out-of-range)
     """
     if category == Category.LOCK_MAINTENANCE:
@@ -256,4 +344,5 @@ def classify(pr: RenovatePR) -> RenovatePR:
         auto_merge_expected=ame,
         blocking_reason=br,
         age_days=age,
+        deps=extract_deps(pr),
     )
