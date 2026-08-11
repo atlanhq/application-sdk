@@ -51,6 +51,16 @@ jobs:
             container:
               - 'Dockerfile'
               - 'entrypoint.sh'
+              # The action that BUILDS and SCANS that Dockerfile, so a change to
+              # how the image is produced re-runs the paths that produce it —
+              # the container Trivy scan and the PR base-image build. Same
+              # reasoning as the self-referential `ci:` entry below, and as
+              # `sdk:` listing the test-harness action dirs: without it, a change
+              # to the build/scan machinery merges without either ever running
+              # against it. That is not hypothetical — the per-arch split of
+              # build-sdk-base-image and the fix to this action's hardcoded scan
+              # platform both landed on a PR where these jobs skipped.
+              - '.github/actions/secure-build-push-apps/**'
             sdk:
               - 'application_sdk/**'
               - 'tests/**'

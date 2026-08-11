@@ -557,6 +557,35 @@ def test_the_connector_dispatch_gates_on_both_base_image_jobs() -> None:
         assert f"needs.{job}.result == 'skipped'" in gate
 
 
+def test_the_container_filter_covers_the_action_that_builds_the_image() -> None:
+    """Otherwise the base-image jobs skip on the PRs most likely to break them.
+
+    `build-sdk-base-image` and `trivy-container` are gated on the `container`
+    paths-filter. A PR that changes only the action doing the building and
+    scanning matches nothing in that filter, so both jobs skip and the change
+    merges without either ever running against it — which is exactly what
+    happened to the per-arch split and the scan-platform fix on their own PR.
+
+    Derived from the build step rather than hardcoded, so pointing the base
+    image at a different action moves this assertion with it.
+    """
+    action = _sdk_base_build_step()["uses"].rstrip("/").rsplit("/", 1)[-1]
+    filters = yaml.safe_load(
+        next(
+            step
+            for step in _pull_request_workflow()["jobs"]["changes"]["steps"]
+            if "paths-filter" in str(step.get("uses", ""))
+        )["with"]["filters"]
+    )
+    covered = [p for p in filters["container"] if action in p]
+    assert covered, (
+        f"the `container` filter does not mention {action!r}, the action "
+        "build-sdk-base-image uses. A PR changing only that action skips both "
+        f"the base-image build and the container scan. Add "
+        f"'.github/actions/{action}/**'."
+    )
+
+
 def test_the_scan_step_builds_the_runners_own_architecture() -> None:
     """Otherwise the native split moves the emulation into the Trivy scan.
 
