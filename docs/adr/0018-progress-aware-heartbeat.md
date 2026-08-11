@@ -369,10 +369,31 @@ Three details that matter:
   `non_retryable=not e.effective_retryable`. Factor it into a helper both branches
   call.
 
-**`TaskStalledError` is non-retryable by default.** A wedge usually re-wedges, and
-without activity-level checkpointing (REQ-1609) a retry restarts from zero — so an
-automatic retry mostly buys another full stall. This is a deliberate decision, cheap
-to revisit once REQ-1609 lands. See *Bounding total time*.
+**`TaskStalledError` is retryable.** The instinct is to make it non-retryable — a
+wedge re-wedges, and without checkpointing (REQ-1609) a retry restarts from zero. That
+instinct is wrong about what a stall usually *is*. Sort the causes:
+
+| Cause of the stall | Retry outcome |
+| --- | --- |
+| Source-side hang: dropped connection, source overloaded, socket read with no timeout, exhausted pool | **Usually succeeds.** The likely majority: apps whose error handling never surfaced a transient source problem, so the symptom is silence rather than an exception. |
+| Genuine code wedge: infinite retry loop, app-level deadlock | Re-stalls, costing up to 3 × `max_no_progress_seconds` (minutes) — not 3 × the backstop |
+| Timing-dependent deadlock on a shared resource | May well succeed on different timing |
+| Missing instrumentation (healthy, quiet, no hold declared) | **False kill, amplified** — retries waste the same partial work again |
+
+The dominant category is transient and self-heals on retry, and the failure the fleet
+actually sees today is exactly that shape: a source stops responding and the app has no
+way to say so. Refusing to retry would convert those into failed runs needing a manual
+re-run — which restarts from zero anyway, just slower and with a human in the loop. So
+non-retryable buys nothing there and costs a lot.
+
+That leaves the last row as the real risk, and it is bounded by process rather than by
+policy: eliminating missing instrumentation is precisely what the warn-mode pass does
+before an app enforces.
+
+A refinement worth considering later, not for v1: a stall *inside a lapsed hold* means
+the source exceeded an allowance a human declared for it — almost definitionally the
+transient case — whereas a stall with no hold at all is likelier to be missing
+instrumentation. The two could carry different retry policies.
 
 Detection latency is `max_no_progress_seconds` plus at most one loop tick (10s).
 
@@ -473,9 +494,9 @@ Two things make it safe to answer:
 - **Warn mode gives you the evidence.** Use the observed p99 for that site plus
   headroom, rather than a number invented at the desk.
 - **The error is asymmetric, so err generous.** Too generous only delays detection
-  toward the backstop — mildly worse observability. Too tight kills a healthy run,
-  and with stall kills non-retryable and no checkpointing (REQ-1609) that costs the
-  whole activity. Anyone unsure should round up.
+  toward the backstop — mildly worse observability. Too tight kills a healthy run, and
+  because stall kills retry, a too-tight allowance burns the same wasted work up to
+  three times before failing. Anyone unsure should round up.
 
 ### The async escape hatch — and the asymmetry that makes it common
 
@@ -535,10 +556,10 @@ looks alarming in isolation, and is defensible for three reasons:
    visible within `max_no_progress_seconds` and alerts on it. The 72h is the outer
    bound on *automatic* termination, not on *detection* — and it replaces a world where
    a wedge is never diagnosed at all, only accidentally killed by a small ceiling.
-2. **The product collapses once an app enforces.** `TaskStalledError` is
-   non-retryable, so an enforcing app's wedge terminates on the first attempt at
-   `max_no_progress_seconds`, not at 3 × 24h. The 72h is the warn-mode worst case,
-   shrinking as apps enforce.
+2. **The product collapses once an app enforces.** An enforcing app's wedge is caught
+   at `max_no_progress_seconds` per attempt, so the worst case becomes 3 × minutes
+   rather than 3 × 24h — roughly 45 minutes at a 900s budget. The 72h is the warn-mode
+   worst case, and it shrinks by three orders of magnitude as apps enforce.
 3. **Bounding it now would be another guessed number.** Picking a `schedule_to_close`
    budget today means guessing a total duration — the exact move this ADR exists to
    remove. The warn-mode data gives a real distribution to size it from, if it turns
@@ -549,13 +570,18 @@ If the data shows the product matters, the fix is already scoped: set
 following the budget-shaped pair the SDK already uses in `gate_timeouts`
 (`app/base.py:1902`), or cap attempts at 1 for backstop-class tasks.
 
-**Retries without checkpointing are expensive.** REQ-1609 (activity-level
-checkpointing) is not a nice-to-have adjacent to this work: without it, a stall kill
-at hour 5 of a 6-hour extraction restarts from zero. The watchdog makes failure
-*faster to detect* but not *cheaper to recover*, and a false kill at the tail is
-catastrophic rather than annoying. That is the main reason `TaskStalledError`
-defaults to non-retryable, and the main reason the tail-profile verification in
-*Rollout* is a gate rather than a suggestion.
+**Retries without checkpointing are expensive, but not uniquely so.** Without
+REQ-1609 (activity-level checkpointing), a stall kill at hour 5 of a 6-hour extraction
+restarts from zero. The watchdog makes failure *faster to detect* without making it
+*cheaper to recover*. This is the main reason the tail-profile verification in *Rollout*
+is a gate rather than a suggestion.
+
+It is worth being precise about what checkpointing does and does not gate, though.
+Restarting from zero is what already happens on every `StartToClose` retry today, and
+it is also what happens when a human re-runs a failed workflow — so it is not a cost
+this ADR introduces, and it is not an argument for refusing to retry stalls (see
+*Failing the activity*). REQ-1609 makes both the existing and the new paths cheaper.
+That downgrades it from a correctness gate to an efficiency one.
 
 **A run with no duration bound anywhere still needs a duration signal.** Once the
 AE layer drops its timeouts (below) and `start_to_close` is a 24h backstop, a run
@@ -804,10 +830,10 @@ still come at the very end.
 
 **Flipping to `enforce` must be verified against a large-tenant / tail profile, not a
 smoke test.** A small tenant's fast steps hide the very gaps that only open at the
-tail — the same tail that produced the original failures. Flipping on the strength of
-a small run would just relocate the tail failure, and with non-retryable stalls and no
-checkpointing, relocating it is worse than leaving it. Warn mode is what makes this
-checkable rather than aspirational.
+tail — the same tail that produced the original failures. Flipping on the strength of a
+small run would just relocate the tail failure, and because stall kills retry, an
+under-instrumented app would burn the same wasted work up to three times before failing.
+Warn mode is what makes this checkable rather than aspirational.
 
 ## Rollout
 
@@ -888,8 +914,9 @@ removal is part of the work, not a follow-up.
   clear that it is *not* the beat interval and *not* a duration budget.
 - Cancelling the activity task from the watchdog carries the documented asyncio
   protocol caveat.
-- Stall kills are non-retryable until REQ-1609 lands, so a false kill costs the
-  whole activity.
+- Stall kills retry, so a false kill in an under-instrumented app repeats the same
+  wasted work up to three times before failing. Warn mode exists to clear that
+  category before an app enforces.
 - During rollout the flag adds a temporary branch that must be removed.
 
 ## What this needs agreement on
@@ -908,9 +935,10 @@ else in this ADR follows from them.
    conformance rule exist to stop the bound creeping back in per-app (see *The
    Automation Engine layer*). This one needs a cross-team owner to land.
 
-One question arrives later, before any app moves to `enforce`: whether REQ-1609
-(checkpointing) gates it, or merely informs the retryability default. Warn mode never
-kills, so it does not block the first release.
+REQ-1609 (checkpointing) is no longer framed as a gate on either of these. Retrying
+from zero is what already happens on every `StartToClose` retry and on every manual
+re-run, so checkpointing makes the existing and the new paths cheaper without deciding
+whether the new path is correct (see *Bounding total time*).
 
 Parameters set by measurement, recorded here so nobody tries to settle them by
 argument:
@@ -931,7 +959,8 @@ argument:
   on it, and *Holds* explains why ADR-0010's per-operation timeout cannot be reused
   as a wall-clock bound.
 - **ADR-0017** — Native Execution Isolation (`run_best_effort` / `run_fault_isolated`).
-- **REQ-1609** — Activity-level checkpointing. Determines whether a stall kill is
-  cheap or catastrophic.
+- **REQ-1609** — Activity-level checkpointing. Governs how expensive a retry is —
+  including, but not only, a stall kill's retry. An efficiency dependency, not a
+  correctness one.
 - **CNCT-10** — Timeout-error subtype classification. The measurement dependency.
 - **FND-165** — The production evidence for both failure modes.
