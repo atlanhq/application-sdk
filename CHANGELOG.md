@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.27.1 (August 11, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.27.0...v3.27.1
+
+### Bug Fixes
+
+- stop casting all-null parquet columns to large_string (CNCT-80) (#3086) (by @zaman-atlan in [c1cbbe1](https://github.com/atlanhq/application-sdk/commit/c1cbbe1))
+- filesystem-resolve bundle marketplace entrypoints for input-contract and bare-manifest (#3090) (by @Aryamanz29 in [02bed05](https://github.com/atlanhq/application-sdk/commit/02bed05))
+- derive the queue name once, and stamp it into the served manifest (#3101) (by @cmgrote in [b1672ae](https://github.com/atlanhq/application-sdk/commit/b1672ae))
+
+
 ## v3.27.0 (August 07, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.26.1...v3.27.0
