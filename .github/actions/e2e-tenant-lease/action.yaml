@@ -43,12 +43,22 @@ inputs:
     default: "30"
   ttl-seconds:
     description: |
-      Age at which a holder still reporting "in_progress" is treated as wedged
-      and its lease broken. Must stay above the longest legitimate run (a 40min
-      install plus a 120min leg ceiling), or a slow-but-healthy run loses its
-      tenant mid-flight.
+      Run AGE at which a holder still reporting "in_progress" is treated as
+      wedged and its lease broken. Measured from run CREATION, not from when the
+      lease was taken — the lease is acquired several jobs in, and a run can also
+      sit waiting for runners first, so this has to clear the entire chain
+      (discovery + image build + manifest merge + the lease wait + install +
+      legs) with room for unbounded queue time on top. Sized against the
+      workflow's own job timeouts by a test, so adding a job or raising a timeout
+      forces this up rather than silently eating the margin.
+
+      Deliberately generous (12h against a ~5.5h chain). The operator-facing
+      signal for a stuck tenant is wait-seconds failing loudly, not this; all
+      this does is stop a ticket being immortal. Firing it early is the
+      expensive direction — it reaps a live mid-install ticket and puts a second
+      installer on the tenant, the exact race the lease closes. 0 disables it.
     required: false
-    default: "14400"
+    default: "43200"
   on-timeout:
     description: |
       "fail" (default) — go red naming the holding run. "warn" — proceed

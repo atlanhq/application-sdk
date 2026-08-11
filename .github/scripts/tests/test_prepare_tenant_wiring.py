@@ -286,21 +286,66 @@ def test_the_lease_wait_fits_inside_the_job_timeout(jobs: dict) -> None:  # type
     assert timeout_seconds > wait_seconds
 
 
-def test_the_lease_ttl_exceeds_the_longest_legitimate_run() -> None:
-    """A TTL below the real ceiling breaks a slow-but-healthy holder's lease
-    mid-install, which is worse than the contention it is guarding against."""
+#: Every job on the path from run creation to the last leg finishing. The TTL is
+#: measured from run CREATION, so all of it counts — not just the part after the
+#: lease is acquired. Sizing the TTL against install-plus-legs alone was an
+#: actual latent bug, not a theoretical one: that pair is 160 min against a chain
+#: of 325, so a healthy run that queued for runners could cross a 4h TTL partway
+#: through its own install and have a contender reap it mid-flight.
+_PRE_RELEASE_CHAIN = (
+    "discover-e2e",
+    "build-e2e-image",
+    "merge-e2e-image",
+    "lease-tenant",
+    "prepare-tenant",
+    "e2e",
+)
+
+
+def test_the_lease_ttl_cannot_fire_on_a_healthy_holder(jobs: dict) -> None:  # type: ignore[type-arg]
+    """The TTL breaking a LIVE holder's lease puts a second installer on the
+    tenant — the exact race the lease exists to close — so it must clear the
+    whole chain, with room left for runner queue time, which has no timeout.
+
+    Derived from the workflow's own timeouts rather than hard-coded, so adding a
+    job to the chain or raising a timeout forces the TTL up instead of quietly
+    eating the margin.
+    """
     action = yaml.safe_load(
         (_REPO_ROOT / ".github/actions/e2e-tenant-lease/action.yaml").read_text(
             encoding="utf-8"
         )
     )
     ttl_seconds = int(action["inputs"]["ttl-seconds"]["default"])
-    workflow_jobs = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
-    longest_run = (
-        int(workflow_jobs["prepare-tenant"]["timeout-minutes"])
-        + int(workflow_jobs["e2e"]["timeout-minutes"])
-    ) * 60
-    assert ttl_seconds > longest_run
+    chain_seconds = (
+        sum(int(jobs[job]["timeout-minutes"]) for job in _PRE_RELEASE_CHAIN) * 60
+    )
+
+    assert ttl_seconds > chain_seconds, (
+        f"ttl-seconds ({ttl_seconds}s) does not clear the "
+        f"{'+'.join(_PRE_RELEASE_CHAIN)} chain ({chain_seconds}s). A healthy "
+        "holder that queued for runners would have its lease broken mid-install."
+    )
+    # Queue time between those jobs is unbounded, so clearing the chain exactly is
+    # not enough; require real headroom rather than a one-second pass.
+    assert ttl_seconds >= 2 * chain_seconds, (
+        f"ttl-seconds ({ttl_seconds}s) clears the chain ({chain_seconds}s) but "
+        "leaves no room for runner queue time, which has no timeout"
+    )
+
+
+def test_the_lease_wait_budget_is_the_operator_facing_signal(jobs: dict) -> None:  # type: ignore[type-arg]
+    """The TTL is deliberately generous, so it must not be what tells a human the
+    tenant is stuck — the wait budget has to fail long before it, or a blocked run
+    sits silently for hours instead of reporting who holds the tenant."""
+    action = yaml.safe_load(
+        (_REPO_ROOT / ".github/actions/e2e-tenant-lease/action.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    wait_seconds = int(action["inputs"]["wait-seconds"]["default"])
+    ttl_seconds = int(action["inputs"]["ttl-seconds"]["default"])
+    assert wait_seconds < ttl_seconds
 
 
 def test_the_lease_and_install_fan_out_over_the_same_clouds(jobs: dict) -> None:  # type: ignore[type-arg]

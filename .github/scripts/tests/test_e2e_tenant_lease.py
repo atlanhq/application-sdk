@@ -657,3 +657,77 @@ def test_missing_token_is_a_clear_error(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     with pytest.raises(SystemExit, match="GH_TOKEN"):
         create_ticket(REPO, PREFIX, Ticket(1, 1), SHA)
+
+
+# --- input bounds ----------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_main_rejects_a_poll_interval_below_one(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    # 0 is a ZeroDivisionError in the attempt-count arithmetic and a negative one
+    # reaches sleep() as a ValueError. Both are loud rather than silently wrong,
+    # but both arrive as a traceback several steps from the input that caused it.
+    monkeypatch.setenv("GH_TOKEN", "x")
+    with pytest.raises(SystemExit, match="poll-seconds"):
+        main(_argv("acquire", "--poll-seconds", value))
+
+
+def test_main_rejects_a_negative_wait_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "x")
+    with pytest.raises(SystemExit, match="wait-seconds"):
+        main(_argv("acquire", "--wait-seconds", "-1"))
+
+
+def test_main_rejects_a_negative_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "x")
+    with pytest.raises(SystemExit, match="ttl-seconds"):
+        main(_argv("acquire", "--ttl-seconds", "-1"))
+
+
+def test_main_accepts_a_zero_wait_budget(
+    http: FakeHTTP, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Legitimate: "try once and tell me whether the tenant is free". Only
+    # poll-seconds has a floor of 1.
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    http.route("POST", "/git/refs", (201, {}))
+    http.route("GET", "/git/matching-refs/", (200, [_ref(100)]))
+    assert main(_argv("acquire", "--wait-seconds", "0")) == 0
+
+
+def test_main_validates_before_touching_the_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # With no token set, reaching the API would raise about GH_TOKEN instead — so
+    # this also pins that validation happens before any request.
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    with pytest.raises(SystemExit, match="poll-seconds"):
+        main(_argv("acquire", "--poll-seconds", "0"))
+
+
+def test_the_ttl_is_measured_from_run_creation_not_lease_acquisition(
+    http: FakeHTTP,
+) -> None:
+    """Pins the property the TTL default has to be sized against.
+
+    The lease is taken several jobs into a run, so a holder's run age already
+    includes discovery, the image build, the manifest merge and any runner queue
+    time before its install even starts. A TTL sized for install-plus-legs alone
+    would call this healthy holder wedged and reap it mid-install, putting a
+    second installer on the tenant — the race the lease exists to close.
+    """
+    # 5h is inside the legitimate chain: the workflow's own timeouts sum to 5h25m
+    # from run creation to the last leg finishing, before any runner queue time.
+    created = datetime.now(timezone.utc) - timedelta(hours=5)
+    http.route(
+        "GET",
+        "/actions/runs/",
+        (200, {"status": "in_progress", "created_at": created.isoformat()}),
+    )
+    # The superseded 4h default breaks this healthy holder's lease outright...
+    assert run_is_live(REPO, Ticket(1, 1), ttl_seconds=14400) is False
+    # ...and the shipped 12h default leaves it alone.
+    assert run_is_live(REPO, Ticket(1, 1), ttl_seconds=43200) is True

@@ -55,8 +55,18 @@ does not cover the case that matters most — a cancelled run whose release job
 never starts at all, since GitHub cancels queued jobs rather than running them.
 The reaper makes a leaked ticket self-healing: the next contender clears it on
 its first poll, so the worst case is one wasted poll interval, not a wedged
-tenant. A hard TTL on run *age* is kept as a second backstop for a run the
-Actions API will not report on.
+tenant.
+
+A hard TTL on run *age* is kept as a third-resort backstop, only for a run the
+Actions API keeps reporting as live forever. It is deliberately generous, because
+the two directions are not symmetric: firing it late costs a blocked tenant that
+a waiter is already complaining loudly about, whereas firing it early reaps a
+LIVE mid-install ticket and puts a second installer on the tenant — reintroducing
+exactly the race this module exists to close. It is also measured from run
+*creation*, not from acquisition, so it has to clear the whole chain ahead of the
+install (discovery, image build, manifest merge, the queue wait itself) plus
+runner queue time, which has no timeout at all. ``test_prepare_tenant_wiring.py``
+derives that bound from the workflow's own job timeouts so it cannot drift.
 
 Failure posture
 ---------------
@@ -338,10 +348,23 @@ def run_is_live(
 
 
 def _run_age_seconds(run_body: dict, *, now=None) -> float | None:
-    """Seconds since the run was created, or None if the API did not say.
+    """Seconds since the run was CREATED, or None if the API did not say.
+
+    Note what this is not: it is not how long the lease has been held. The lease
+    is taken several jobs into the run (discovery, then the per-arch image build,
+    then the manifest merge), and a run can also sit waiting for runners before
+    any of that. All of it counts here.
+
+    That is why the TTL has to be bounded by the whole chain and not by the
+    install-plus-legs span alone. Anchoring on creation and sizing the TTL for
+    only the part after acquisition would let the backstop fire on a *healthy*
+    holder that queued for a while — reaping a live mid-install ticket and
+    handing the tenant to a second installer, which is precisely the race the
+    lease exists to close. ``test_prepare_tenant_wiring.py`` derives the required
+    bound from the workflow's own job timeouts so it cannot drift out of date.
 
     Only the TTL backstop uses this, so clock skew between the runner and GitHub
-    is immaterial at the hours-long scale the TTL operates on. Queue ordering
+    is immaterial at the hours-long scale it operates on. Queue ordering
     deliberately does not depend on any clock — see the module docstring.
     """
     created = run_body.get("created_at")
@@ -490,10 +513,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ttl-seconds",
         type=int,
-        default=14400,
-        help="Age at which a still-'in_progress' holder is treated as wedged and "
-        "its lease broken. Must exceed the longest legitimate run (default 4h, "
-        "against a 40min install plus a 120min leg ceiling).",
+        default=43200,
+        help="Run AGE at which a still-'in_progress' holder is treated as wedged "
+        "and its lease broken. Measured from run creation, so it must exceed the "
+        "whole chain — discovery, image build, manifest merge, the lease wait "
+        "itself, the install and the legs — plus runner queue time, which has no "
+        "timeout at all. Default 12h against a ~5.5h chain. Deliberately "
+        "generous: the operator-facing signal for a stuck tenant is the wait "
+        "budget failing loudly after 90min, not this. All this does is stop a "
+        "ticket being immortal, and firing it early costs a concurrent install.",
     )
     parser.add_argument(
         "--on-timeout",
@@ -503,6 +531,27 @@ def main(argv: list[str] | None = None) -> int:
         "unserialised.",
     )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+
+    # Bounds-checked up front rather than left to fail at the point of use.
+    # poll_seconds=0 is a ZeroDivisionError in the attempt-count arithmetic and a
+    # negative one reaches sleep() as a ValueError — both loud rather than silently
+    # wrong, but both arrive as a traceback several steps from the input that
+    # caused them, which is a poor trade for one comparison. These come from
+    # action inputs with safe defaults, so this is a guard against a typo in a
+    # caller's YAML, not against hostile input.
+    if args.poll_seconds < 1:
+        raise SystemExit(
+            f"::error::--poll-seconds must be at least 1, got {args.poll_seconds}"
+        )
+    if args.wait_seconds < 0:
+        raise SystemExit(
+            f"::error::--wait-seconds cannot be negative, got {args.wait_seconds}"
+        )
+    if args.ttl_seconds < 0:
+        raise SystemExit(
+            f"::error::--ttl-seconds cannot be negative, got {args.ttl_seconds} "
+            "(0 disables the TTL backstop)"
+        )
 
     prefix = lease_prefix(args.app, args.cloud)
     ticket = Ticket(args.run_id, args.run_attempt)
