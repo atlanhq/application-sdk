@@ -16,7 +16,7 @@ that here:
   pre-fix source.
 * :class:`TestRealPsycopg2Premises` pins the two facts the fake stands in for
   against the real driver, so a psycopg2 upgrade that moves the seam is loud
-  rather than silent. It skips where psycopg2 is absent — see its docstring.
+  rather than silent.
 """
 
 from __future__ import annotations
@@ -43,6 +43,17 @@ from application_sdk.clients.sql_typecasters import (
 
 _HAS_PSYCOPG3 = importlib.util.find_spec("psycopg") is not None
 _HAS_PSYCOPG2 = importlib.util.find_spec("psycopg2") is not None
+
+# Bind the real driver modules once, at collection time. Tests below install
+# fake ``psycopg2`` modules in ``sys.modules`` and pop them again, which leaves
+# the real package importable but not necessarily re-bound to its C submodule —
+# so ``TestRealPsycopg2Premises`` must not re-import inside a test body.
+if _HAS_PSYCOPG2:
+    import psycopg2._psycopg as _real_psycopg2_c
+    import psycopg2.extensions as _real_psycopg2_ext
+else:  # pragma: no cover — psycopg2 is a test dep; only missing without a wheel
+    _real_psycopg2_c = None  # type: ignore[assignment]
+    _real_psycopg2_ext = None  # type: ignore[assignment]
 
 
 @pytest.fixture(autouse=True)
@@ -476,44 +487,36 @@ class TestRealPsycopg2Premises:
     re-creates it as a copy fails loudly here instead of silently reopening the
     original bug.
 
-    Caveat, stated rather than papered over: psycopg2 is not an
-    ``application-sdk`` dependency (the SDK ships psycopg3), so this class skips
-    in SDK CI today. It fires wherever the SDK's tests run against a psycopg2
-    install — add ``psycopg2-binary`` to the test group to make it live here.
+    psycopg2 is not an ``application-sdk`` runtime dependency — the SDK ships
+    psycopg3, and psycopg2 reaches production through connector apps. It is in
+    the ``test`` dependency group purely so these three assertions run in CI
+    rather than skipping; the ``skipif`` is a safety net for interpreters
+    without a wheel, not the expected state.
+
+    These read the module objects bound at collection time, and the directory
+    conftest restores ``encodings`` after every test, so neither the fakes above
+    nor an engine built in a sibling test file can decide the outcome here.
     """
 
     def test_encodings_is_the_dict_the_c_layer_reads(self) -> None:
-        import psycopg2._psycopg
-        import psycopg2.extensions as ext
-
         # ``psycopgmodule.c`` publishes its ``psycoEncodings`` as this attribute
         # and reads it back on every ``conn_set_encoding``. If it ever stops
         # being the same object, the in-place mutation silently stops working.
-        assert ext.encodings is psycopg2._psycopg.encodings
+        assert _real_psycopg2_ext.encodings is _real_psycopg2_c.encodings
 
     def test_unicode_maps_to_a_utf8_codec(self) -> None:
-        import psycopg2.extensions as ext
-
         # The Redshift path: server reports UNICODE, psycopg2 resolves a Python
         # codec by this name, and our rewrite only fires on utf-8 entries.
-        assert codecs.lookup(ext.encodings["UNICODE"]).name == "utf-8"
+        assert codecs.lookup(_real_psycopg2_ext.encodings["UNICODE"]).name == "utf-8"
 
-    def test_rewrite_takes_effect_on_the_real_map(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import psycopg2.extensions as ext
-
-        # Restore every entry the installer could touch. ``encodings`` is the
-        # live dict the C layer reads, so leaking a rewrite would contaminate
-        # the rest of the session.
-        for key, value in list(ext.encodings.items()):
-            if "utf" in value.lower() or key == "LATIN1":
-                monkeypatch.setitem(ext.encodings, key, value)
+    def test_rewrite_takes_effect_on_the_real_map(self) -> None:
+        encodings = _real_psycopg2_ext.encodings
 
         assert install_tolerant_connection_decoder() is True
-        assert ext.encodings["UNICODE"] == _TOLERANT_CODEC_NAME
+        assert encodings["UNICODE"] == _TOLERANT_CODEC_NAME
+        assert encodings["UTF8"] == _TOLERANT_CODEC_NAME
         # Non-utf-8 entries stay untouched, whatever the driver spells them.
-        assert codecs.lookup(ext.encodings["LATIN1"]).name == "iso8859-1"
+        assert codecs.lookup(encodings["LATIN1"]).name == "iso8859-1"
         # And the real map now decodes the production byte without raising.
-        decoder = codecs.getdecoder(ext.encodings["UNICODE"])
+        decoder = codecs.getdecoder(encodings["UNICODE"])
         assert decoder(b"a \x96 b")[0] == "a � b"

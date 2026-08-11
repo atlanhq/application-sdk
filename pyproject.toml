@@ -152,6 +152,14 @@ test = [
     "hypothesis>=6.114.0,<7.0.0",
     "trustme>=1.2.1,<2.0.0",
     "pyjwt[crypto]>=2.12.0",
+    # Test-only. The SDK ships psycopg3; psycopg2 reaches production through
+    # connector apps. It is here so tests/unit/clients/test_sql_typecasters.py
+    # can pin the psycopg2 facts the tolerant-decoder fix depends on (that
+    # `extensions.encodings` is the dict the C layer reads, and that UNICODE
+    # resolves to a utf-8 codec) against the real driver rather than a mock —
+    # a driver upgrade that moves that seam must fail loudly in CI. See
+    # CONAT-767. Never add this to [project.dependencies].
+    "psycopg2-binary>=2.9.12,<3.0.0",
 ]
 examples = [
     "snowflake-sqlalchemy>=1.7.0,<2.0.0",
