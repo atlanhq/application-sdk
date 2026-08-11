@@ -1,10 +1,22 @@
-"""Unit tests for tolerant UTF-8 SQL text decoders (WARE-970).
+"""Unit tests for tolerant UTF-8 SQL text decoders (CONAT-767, WARE-970).
 
 These tests do not spin up a real PostgreSQL/Redshift instance. They mock the
 DBAPI surface (psycopg2.extensions / psycopg.adapt.Loader) just enough to
 verify the registration mechanics and the decoder's tolerant behavior on the
-exact byte that triggered WARE-837 in production: ``0x96`` (Windows-1252
+exact byte that triggered the production failure: ``0x96`` (Windows-1252
 en-dash).
+
+Mocking the driver is what let the previous fix ship green while production kept
+failing: the tests asserted the decoder primitive and that ``register_type`` was
+called, never the path psycopg2 actually takes. Two guards against repeating
+that here:
+
+* :class:`TestConnectionLevelDecoder` drives the *public* hook and then decodes
+  exactly as ``conn_decode`` does, so it fails on the production frame against
+  pre-fix source.
+* :class:`TestRealPsycopg2Premises` pins the two facts the fake stands in for
+  against the real driver, so a psycopg2 upgrade that moves the seam is loud
+  rather than silent. It skips where psycopg2 is absent — see its docstring.
 """
 
 from __future__ import annotations
@@ -14,19 +26,33 @@ import importlib.util
 import sys
 import types
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from application_sdk.clients import sql_typecasters
 from application_sdk.clients.sql_typecasters import (
     _TOLERANT_CODEC_NAME,
     _decode_tolerant_utf8,
+    _redacted_excerpt,
+    _tolerant_utf8_decode,
     attach_tolerant_text_decoder,
     install_tolerant_connection_decoder,
     install_tolerant_text_decoder_hook,
 )
 
 _HAS_PSYCOPG3 = importlib.util.find_spec("psycopg") is not None
+_HAS_PSYCOPG2 = importlib.util.find_spec("psycopg2") is not None
+
+
+@pytest.fixture(autouse=True)
+def _reset_replacement_counter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate the process-global replacement counter between tests.
+
+    The counter drives log rate-limiting, so leaking it across tests would make
+    the observability assertions order-dependent.
+    """
+    monkeypatch.setattr(sql_typecasters, "_replacement_total", 0)
 
 
 class TestDecodeTolerantUtf8:
@@ -46,8 +72,8 @@ class TestDecodeTolerantUtf8:
 
     def test_replaces_lone_0x96_with_replacement_char(self) -> None:
         # 0x96 is the Windows-1252 en-dash. In strict UTF-8 it raises
-        # UnicodeDecodeError — the exact production failure in WARE-837.
-        # With errors='replace' we get U+FFFD instead.
+        # UnicodeDecodeError — the exact production failure this module exists
+        # for. With errors='replace' we get U+FFFD instead.
         result = _decode_tolerant_utf8(b"a \x96 b")
         assert result == "a � b"
         assert "�" in result
@@ -61,86 +87,124 @@ class TestDecodeTolerantUtf8:
     def test_passes_through_none(self) -> None:
         assert _decode_tolerant_utf8(None) is None
 
+    def test_codec_protocol_returns_consumed_length(self) -> None:
+        # The codec protocol contract: (decoded, bytes_consumed).
+        decoded, consumed = _tolerant_utf8_decode(b"a \x96 b")
+        assert decoded == "a � b"
+        assert consumed == 5
 
-class TestAttachPsycopg2:
-    """Verify the psycopg2 path registers tolerant typecasters on the connection."""
+    def test_preexisting_replacement_char_is_not_treated_as_a_failure(self) -> None:
+        # U+FFFD legitimately encoded as EF BF BD is valid UTF-8: it must round
+        # trip and must not trip the replacement warning.
+        with patch.object(sql_typecasters, "logger") as mock_logger:
+            assert _decode_tolerant_utf8(b"\xef\xbf\xbd") == "�"
+        mock_logger.warning.assert_not_called()
 
-    def _install_fake_psycopg2(
-        self,
-    ) -> tuple[MagicMock, types.ModuleType, types.ModuleType]:
-        """Install a fake ``psycopg2.extensions`` module in sys.modules.
 
-        Mirrors enough of the real API for ``_attach_psycopg2`` to import and
-        call: ``UNICODE.values``, ``UNICODEARRAY.values``, ``new_type``,
-        ``new_array_type``, ``register_type``.
-        """
-        fake_pkg = types.ModuleType("psycopg2")
-        fake_ext = types.ModuleType("psycopg2.extensions")
+def _warnings(mock_logger: MagicMock) -> list[str]:
+    """Render each ``logger.warning(fmt, *args)`` call the way the sink would."""
+    return [call.args[0] % call.args[1:] for call in mock_logger.warning.call_args_list]
 
-        fake_ext.UNICODE = MagicMock(values=(25, 1042, 1043))
-        fake_ext.UNICODEARRAY = MagicMock(values=(1009, 1014, 1015))
-        fake_ext.new_type = MagicMock(
-            side_effect=lambda oids, name, cb: ("type", name, cb)
-        )
-        fake_ext.new_array_type = MagicMock(
-            side_effect=lambda oids, name, base: ("array_type", name, base)
-        )
-        fake_ext.register_type = MagicMock()
 
-        fake_pkg.extensions = fake_ext  # type: ignore[attr-defined]
-        sys.modules["psycopg2"] = fake_pkg
-        sys.modules["psycopg2.extensions"] = fake_ext
+class TestReplacementObservability:
+    """The lossy path must not be silent (CONAT-767 review, blocking)."""
 
-        return fake_ext.register_type, fake_pkg, fake_ext
+    def test_first_replacement_logs_warning_with_byte_and_offset(self) -> None:
+        with patch.object(sql_typecasters, "logger") as mock_logger:
+            _decode_tolerant_utf8(b"SELECT * FROM t WHERE c = 'Q1 \x96 Q2'")
 
-    def teardown_method(self) -> None:
-        sys.modules.pop("psycopg2", None)
-        sys.modules.pop("psycopg2.extensions", None)
+        messages = _warnings(mock_logger)
+        assert len(messages) == 1
+        assert "0x96" in messages[0]  # which byte
+        assert " at offset 30 " in messages[0]  # where in the value
+        assert "[\\x96]" in messages[0]  # and it is visible in the excerpt
+        assert "1 replacement char(s) in this value" in messages[0]
 
-    def test_registers_tolerant_unicode_and_array_types_on_connection(self) -> None:
-        register_mock, _, fake_ext = self._install_fake_psycopg2()
+    def test_message_body_carries_the_context_not_kwargs(self) -> None:
+        """%-style body, no structured kwargs — the SDK logging convention."""
+        with patch.object(sql_typecasters, "logger") as mock_logger:
+            _decode_tolerant_utf8(b"a \x96 b")
 
-        # Build a fake connection whose class' module starts with 'psycopg2'
-        ConnClass = type("connection", (), {})
-        ConnClass.__module__ = "psycopg2.extensions"
-        conn = ConnClass()
+        call = mock_logger.warning.call_args_list[0]
+        assert call.kwargs == {}
+        assert call.args[0].count("%") == 6
 
-        attached = attach_tolerant_text_decoder(conn)
-        assert attached is True
+    def test_valid_utf8_logs_nothing(self) -> None:
+        with patch.object(sql_typecasters, "logger") as mock_logger:
+            for _ in range(50):
+                _decode_tolerant_utf8(b"SELECT * FROM caf\xc3\xa9")
+        mock_logger.warning.assert_not_called()
 
-        # Both the scalar and array tolerant types must be registered, scoped
-        # to *this* connection (second arg = conn).
-        assert register_mock.call_count == 2
-        for call in register_mock.call_args_list:
-            args, _kwargs = call
-            assert args[1] is conn
+    def test_repeated_replacements_are_rate_limited(self) -> None:
+        # A wholesale Windows-1252 column must be visible without flooding the
+        # log: powers of two only, so 100 bad values yield 1,2,4,8,16,32,64.
+        with patch.object(sql_typecasters, "logger") as mock_logger:
+            for _ in range(100):
+                _decode_tolerant_utf8(b"a \x96 b")
+        assert mock_logger.warning.call_count == 7
 
-        # And the names should make their purpose grep-able in stack dumps.
-        new_type_calls = fake_ext.new_type.call_args_list
-        assert any(c.args[1] == "TOLERANT_UNICODE" for c in new_type_calls)
-
-    def test_callback_replaces_invalid_byte_in_bytes_payload(self) -> None:
-        _, _, fake_ext = self._install_fake_psycopg2()
-
-        ConnClass = type("connection", (), {})
-        ConnClass.__module__ = "psycopg2.extensions"
-        conn = ConnClass()
-
-        attach_tolerant_text_decoder(conn)
-
-        # Capture the callback handed to new_type for UNICODE
-        cb = next(
-            c.args[2]
-            for c in fake_ext.new_type.call_args_list
-            if c.args[1] == "TOLERANT_UNICODE"
+    def test_cumulative_count_is_reported(self) -> None:
+        with patch.object(sql_typecasters, "logger") as mock_logger:
+            for _ in range(4):
+                _decode_tolerant_utf8(b"a \x96 b")
+        # 1st, 2nd, 4th value logged; the last one names the running total.
+        assert (
+            "4 value(s) affected in this process so far" in _warnings(mock_logger)[-1]
         )
 
-        # Bytes path: the WARE-837 byte must not raise and must yield U+FFFD.
-        assert cb(b"a \x96 b", MagicMock()) == "a � b"
-        # str path: should pass through unchanged.
-        assert cb("café", MagicMock()) == "café"
-        # NULL passthrough.
-        assert cb(None, MagicMock()) is None
+    def test_psycopg3_loader_path_is_also_observable(self) -> None:
+        # The psycopg3 loader shares the primitive, so it must warn too.
+        with patch.object(sql_typecasters, "logger") as mock_logger:
+            _decode_tolerant_utf8(memoryview(b"a \x96 b"))
+        assert mock_logger.warning.call_count == 1
+
+    def test_no_query_text_reaches_the_log(self) -> None:
+        with patch.object(sql_typecasters, "logger") as mock_logger:
+            _decode_tolerant_utf8(b"SELECT ssn FROM patients WHERE name='Ann\x96e'")
+
+        message = _warnings(mock_logger)[0]
+        for leaked in ("ssn", "patients", "Ann", "SELECT"):
+            assert leaked not in message
+
+
+class TestRedactedExcerpt:
+    """The log excerpt must be diagnostic without leaking query text."""
+
+    def test_masks_identifiers_and_literals(self) -> None:
+        raw = b"FROM Orders42 WHERE name = 'Acme\x96Corp'"
+        excerpt = _redacted_excerpt(raw, raw.index(b"\x96"))
+        # Nothing recoverable: letters collapse to a/A, digits to 0.
+        assert "Acme" not in excerpt
+        assert "Corp" not in excerpt
+        assert "Orders" not in excerpt
+        assert "42" not in excerpt
+
+    def test_brackets_the_offending_byte(self) -> None:
+        assert "[\\x96]" in _redacted_excerpt(b"ab\x96cd", 2)
+
+    def test_keeps_structural_punctuation(self) -> None:
+        # Punctuation distinguishes "inside a string literal" from structure,
+        # and carries no customer content.
+        excerpt = _redacted_excerpt(b"= 'x\x96y'", 4)
+        assert "'" in excerpt
+
+    def test_shows_neighbouring_high_bytes_as_hex(self) -> None:
+        # The tell for a wholesale Windows-1252 column: a run of high bytes.
+        excerpt = _redacted_excerpt(b"a\x92b\x96c\x93d", 3)
+        assert "\\x92" in excerpt
+        assert "\\x93" in excerpt
+
+    def test_elides_around_a_long_value(self) -> None:
+        raw = b"x" * 100 + b"\x96" + b"y" * 100
+        excerpt = _redacted_excerpt(raw, 100)
+        assert excerpt.startswith("…")
+        assert excerpt.endswith("…")
+        # Windowed, not the whole value.
+        assert len(excerpt) < 60
+
+    def test_handles_offending_byte_at_value_boundaries(self) -> None:
+        assert _redacted_excerpt(b"\x96abc", 0) == "[\\x96]aaa"
+        assert _redacted_excerpt(b"abc\x96", 3) == "aaa[\\x96]"
 
 
 @pytest.mark.skipif(
@@ -215,33 +279,26 @@ class TestAttachTolerantTextDecoderDispatch:
         "module_name",
         ["psycopg2", "psycopg2.extensions", "psycopg2.pool"],
     )
-    def test_dispatches_psycopg2_module_variants(
-        self, module_name: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        called: dict[str, Any] = {}
+    def test_psycopg2_needs_no_per_connection_work(self, module_name: str) -> None:
+        """psycopg2 is handled process-wide, not per connection.
 
-        def fake_attach_psycopg2(conn: Any) -> bool:
-            called["conn"] = conn
-            return True
-
-        monkeypatch.setattr(
-            "application_sdk.clients.sql_typecasters._attach_psycopg2",
-            fake_attach_psycopg2,
-        )
-
+        A Python typecaster over the text OIDs is unreachable for malformed
+        input (``typecast_cast`` calls ``conn_decode`` first), so the dispatcher
+        deliberately registers nothing here — the tolerance comes from
+        ``install_tolerant_connection_decoder``.
+        """
         ConnClass = type("connection", (), {})
         ConnClass.__module__ = module_name
         conn = ConnClass()
-        assert attach_tolerant_text_decoder(conn) is True
-        assert called["conn"] is conn
+        assert attach_tolerant_text_decoder(conn) is False
 
 
 class TestConnectionLevelDecoder:
     """The connection decoder, not the typecaster (CONAT-767).
 
-    ``_attach_psycopg2`` registers a Python typecaster over the text OIDs, but
-    psycopg2 strict-decodes the wire bytes to ``str`` in ``conn_decode`` *before*
-    calling any Python typecaster::
+    A Python typecaster over the text OIDs cannot help: psycopg2 strict-decodes
+    the wire bytes to ``str`` in ``conn_decode`` *before* calling any Python
+    typecaster::
 
         /* typecast.c :: typecast_cast */
         else if (self->pcast) {
@@ -264,15 +321,24 @@ class TestConnectionLevelDecoder:
     _RAW = b"SELECT * FROM caf\xc3\xa9 WHERE note = 'Q1 \x96 Q2'"
 
     def _install_fake_psycopg2(self) -> types.ModuleType:
-        """Install a fake ``psycopg2.extensions`` carrying the real encodings map."""
+        """Install a fake ``psycopg2.extensions`` carrying the real encodings map.
+
+        Values are copied from psycopg2 2.9.12's ``encodings`` dict as observed,
+        not from memory — ``LATIN1`` really is ``iso8859_1``, not ``latin_1``.
+        :class:`TestRealPsycopg2Premises` pins the ones that matter against the
+        installed driver where there is one.
+        """
         fake_pkg = types.ModuleType("psycopg2")
         fake_ext = types.ModuleType("psycopg2.extensions")
-        # The entries that matter, spelled as psycopg2 ships them.
         fake_ext.encodings = {  # type: ignore[attr-defined]
             "UNICODE": "utf_8",
             "UTF8": "utf_8",
-            "LATIN1": "latin_1",
+            "LATIN1": "iso8859_1",
+            "LATIN9": "iso8859_15",
             "SQL_ASCII": "ascii",
+            "SQLASCII": "ascii",
+            "EUC_JP": "euc_jp",
+            "BIG5": "big5",
         }
         fake_pkg.extensions = fake_ext  # type: ignore[attr-defined]
         sys.modules["psycopg2"] = fake_pkg
@@ -352,15 +418,102 @@ class TestConnectionLevelDecoder:
     def test_non_utf8_mappings_are_left_alone(self) -> None:
         fake_ext = self._install_fake_psycopg2()
         install_tolerant_connection_decoder()
-        assert fake_ext.encodings["LATIN1"] == "latin_1"  # type: ignore[attr-defined]
-        assert fake_ext.encodings["SQL_ASCII"] == "ascii"  # type: ignore[attr-defined]
+        encodings = fake_ext.encodings  # type: ignore[attr-defined]
+        assert encodings["LATIN1"] == "iso8859_1"
+        assert encodings["LATIN9"] == "iso8859_15"
+        assert encodings["SQL_ASCII"] == "ascii"
+        assert encodings["EUC_JP"] == "euc_jp"
+        assert encodings["BIG5"] == "big5"
+
+    def test_non_utf8_entries_are_not_looked_up(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The name prefilter must keep install time off the codec registry.
+
+        psycopg2 ships 92 entries; looking each one up would import every codec
+        in the map (EUC_JP, BIG5, KOI8, …) just to install this hook.
+        """
+        self._install_fake_psycopg2()
+        looked_up: list[str] = []
+        real_lookup = codecs.lookup
+
+        def spy(name: str) -> Any:
+            looked_up.append(name)
+            return real_lookup(name)
+
+        monkeypatch.setattr(sql_typecasters.codecs, "lookup", spy)
+        install_tolerant_connection_decoder()
+
+        assert "euc_jp" not in looked_up
+        assert "big5" not in looked_up
+        assert "iso8859_1" not in looked_up
+        assert "utf_8" in looked_up
 
     def test_is_idempotent(self) -> None:
         self._install_fake_psycopg2()
         assert install_tolerant_connection_decoder() is True
         assert install_tolerant_connection_decoder() is False
 
-    def test_no_op_without_psycopg2(self) -> None:
-        sys.modules.pop("psycopg2", None)
-        sys.modules.pop("psycopg2.extensions", None)
+    def test_no_op_without_psycopg2(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # ``None`` in sys.modules makes the import raise, which is the state we
+        # want to assert on regardless of whether psycopg2 is really installed.
+        monkeypatch.setitem(sys.modules, "psycopg2", None)
+        monkeypatch.setitem(sys.modules, "psycopg2.extensions", None)
         assert install_tolerant_connection_decoder() is False
+
+
+@pytest.mark.skipif(
+    not _HAS_PSYCOPG2,
+    reason="psycopg2 not installed (it is a connector-app dependency, not an SDK one)",
+)
+class TestRealPsycopg2Premises:
+    """Pin the two facts the fakes above stand in for, against the real driver.
+
+    Everything else in this file mocks psycopg2, which means it validates the
+    SDK's rewrite logic against an *assumption* about the driver — a milder
+    version of the failure mode this fix exists for. These two assertions are
+    the assumption itself, so a psycopg2 upgrade that renames the map or
+    re-creates it as a copy fails loudly here instead of silently reopening the
+    original bug.
+
+    Caveat, stated rather than papered over: psycopg2 is not an
+    ``application-sdk`` dependency (the SDK ships psycopg3), so this class skips
+    in SDK CI today. It fires wherever the SDK's tests run against a psycopg2
+    install — add ``psycopg2-binary`` to the test group to make it live here.
+    """
+
+    def test_encodings_is_the_dict_the_c_layer_reads(self) -> None:
+        import psycopg2._psycopg
+        import psycopg2.extensions as ext
+
+        # ``psycopgmodule.c`` publishes its ``psycoEncodings`` as this attribute
+        # and reads it back on every ``conn_set_encoding``. If it ever stops
+        # being the same object, the in-place mutation silently stops working.
+        assert ext.encodings is psycopg2._psycopg.encodings
+
+    def test_unicode_maps_to_a_utf8_codec(self) -> None:
+        import psycopg2.extensions as ext
+
+        # The Redshift path: server reports UNICODE, psycopg2 resolves a Python
+        # codec by this name, and our rewrite only fires on utf-8 entries.
+        assert codecs.lookup(ext.encodings["UNICODE"]).name == "utf-8"
+
+    def test_rewrite_takes_effect_on_the_real_map(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import psycopg2.extensions as ext
+
+        # Restore every entry the installer could touch. ``encodings`` is the
+        # live dict the C layer reads, so leaking a rewrite would contaminate
+        # the rest of the session.
+        for key, value in list(ext.encodings.items()):
+            if "utf" in value.lower() or key == "LATIN1":
+                monkeypatch.setitem(ext.encodings, key, value)
+
+        assert install_tolerant_connection_decoder() is True
+        assert ext.encodings["UNICODE"] == _TOLERANT_CODEC_NAME
+        # Non-utf-8 entries stay untouched, whatever the driver spells them.
+        assert codecs.lookup(ext.encodings["LATIN1"]).name == "iso8859-1"
+        # And the real map now decodes the production byte without raising.
+        decoder = codecs.getdecoder(ext.encodings["UNICODE"])
+        assert decoder(b"a \x96 b")[0] == "a � b"

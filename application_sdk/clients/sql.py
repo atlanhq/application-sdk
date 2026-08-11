@@ -129,10 +129,12 @@ class BaseSQLClient(ClientInterface):
                 pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
             )
 
-            # Install a tolerant UTF-8 text decoder on every new psycopg2/psycopg3
-            # connection so query-history rows containing non-UTF-8 bytes (e.g.
-            # 0x96 from Windows-1252 paste) yield U+FFFD instead of raising
-            # UnicodeDecodeError. Tracking: WARE-970.
+            # Install a tolerant UTF-8 text decoder for psycopg2/psycopg3 so
+            # query-history rows containing non-UTF-8 bytes (e.g. 0x96 from
+            # Windows-1252 paste) yield a logged U+FFFD instead of raising
+            # UnicodeDecodeError. psycopg3 is wired per connection; psycopg2 has
+            # to be remapped once per process, before any connection is opened —
+            # see sql_typecasters for why. Tracking: WARE-970, CONAT-767.
             install_tolerant_text_decoder_hook(self.engine)
 
             # Test connection briefly to validate credentials.
