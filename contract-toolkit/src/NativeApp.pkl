@@ -645,6 +645,15 @@ class AdvancedJDBCUrlGroup {
   /// Label on the URL text input row.
   urlLabel: String = "SQLAlchemy Connection URL"
 
+  /// Set for sources whose JDBC URL separates its parameters with `;` rather
+  /// than the `?a=&b=` query-string form — Hive, for example, connects with
+  /// `jdbc:hive2://host:port/db;k=v;k2=v2`. Emitted as
+  /// `ui.isDelimitedBySemicolons` in both the base `jdbcUrl.ui` block and every
+  /// per-mode/per-auth condition; the frontend's `AdvancedJDBCUrlGroup.vue`
+  /// reads it to rewrite the separators before parsing the URL. Omitted when
+  /// `false` (the default), so existing generated output is unchanged.
+  isDelimitedBySemicolons: Boolean = false
+
   /// Help text on the URL text input row.
   urlHelp: String?
 
@@ -2019,6 +2028,9 @@ local function renderJdbcBranch(
     ["protocol"] = group.protocol
     ["connectByPropertyId"] = "\(nsFor(mode)).connectBy"
     ["urlPartPropertyIdMapping"] = renderUrlPartMapping(jdbcOpt.urlPartMapping, nsFor(mode))
+    when (group.isDelimitedBySemicolons) {
+      ["isDelimitedBySemicolons"] = true
+    }
   }
 }
 
@@ -2182,6 +2194,9 @@ local function renderJdbcUrlField(
     ["connectByPropertyId"] = "credential-guid.connectBy"
     ["protocol"] = group.protocol
     ["urlPartPropertyIdMapping"] = new Mapping {}
+    when (group.isDelimitedBySemicolons) {
+      ["isDelimitedBySemicolons"] = true
+    }
   }
   ["anyOf"] = new Listing {
     for (authKey, _ in options) {
