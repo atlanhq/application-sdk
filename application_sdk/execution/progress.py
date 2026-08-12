@@ -44,6 +44,7 @@ pieces built on this one.
 
 from __future__ import annotations
 
+import itertools
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -140,6 +141,18 @@ class _Hold:
         return self.started_at + self.allowance_seconds
 
 
+# Hold tokens are process-wide unique, not per-tracker. A per-tracker counter
+# would let two concurrently bound trackers (a nested attempt, or a test binding
+# its own tracker inside an activity) both consider token 0 valid, so a consumer
+# that paired one tracker's enter_hold with another's exit_hold would silently
+# release the wrong hold. Drawing every token from one shared counter makes a
+# token collide with only its owning tracker, so a cross-tracker exit_hold hits
+# the unknown-token warning instead. `next()` on the counter is a single
+# thread-safe step, so allocation stays correct without taking each tracker's
+# lock.
+_token_counter = itertools.count()
+
+
 class ProgressTracker:
     """Observed forward progress for one activity attempt.
 
@@ -168,7 +181,6 @@ class ProgressTracker:
         self._last_label: str = ""
         self._last_at: float = clock()
         self._holds: dict[int, _Hold] = {}
-        self._next_token: int = 0
         # Mutations are not confined to the event loop: contextvars propagate
         # into `run_in_thread`, so framework hooks and `context.heartbeat()`
         # inside an offloaded blocking call reach this object from a worker
@@ -222,7 +234,12 @@ class ProgressTracker:
             An opaque token to pass to :meth:`exit_hold`. Holds are keyed by
             token, never popped off a stack, so concurrent holds in one
             activity — ``asyncio.gather`` over several ``run_in_thread``
-            calls — cannot release each other's deadlines.
+            calls — cannot release each other's deadlines. Tokens are drawn
+            from a process-wide counter rather than a per-tracker one, so a
+            token is unique across every live tracker: a consumer that pairs
+            this ``enter_hold`` with a *different* tracker's :meth:`exit_hold`
+            (a rebind in between) hits the unknown-token warning instead of
+            silently releasing that tracker's hold.
         """
         if timeout is not None and timeout < 0:
             logger.warning(
@@ -232,9 +249,8 @@ class ProgressTracker:
                 timeout,
             )
         now = self._clock()
+        token = next(_token_counter)
         with self._lock:
-            token = self._next_token
-            self._next_token += 1
             self._holds[token] = _Hold(
                 label=label, started_at=now, allowance_seconds=timeout
             )
