@@ -1356,8 +1356,14 @@ runs:
     # downloads this same artifact and posts the body verbatim on the
     # SDK PR (only the sticky marker line differs), so both PRs see
     # the same rendered report.
+    # Retry once: `upload-artifact` treats the artifact service's finalize 403
+    # as non-retryable and fails the step even though the bytes already landed,
+    # which on a gating path ejects the merge-queue entry. Still fatal if both
+    # attempts fail — a consumer in another repo depends on this artifact.
     - name: Upload test results
+      id: upload-e2e-results
       if: always()
+      continue-on-error: true
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         # artifact-suffix keeps parallel matrix legs from colliding on this
@@ -1366,6 +1372,18 @@ runs:
         name: sdr-integration-tests-${{ inputs.app-name }}${{ inputs.artifact-suffix != '' && format('-{0}', inputs.artifact-suffix) || '' }}-results
         path: results/
         retention-days: 14
+
+    - name: Upload test results (retry)
+      if: steps.upload-e2e-results.outcome == 'failure'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        # artifact-suffix keeps parallel matrix legs from colliding on this
+        # name (upload-artifact rejects duplicate names within a run); empty
+        # suffix preserves the historical single-artifact name.
+        name: sdr-integration-tests-${{ inputs.app-name }}${{ inputs.artifact-suffix != '' && format('-{0}', inputs.artifact-suffix) || '' }}-results
+        path: results/
+        retention-days: 14
+        overwrite: true
 
     # No explicit `createCommitStatus` step: the workflow job already
     # surfaces a check_run on the PR (e.g. `E2E Full Tests (system
