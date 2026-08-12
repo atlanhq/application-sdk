@@ -247,6 +247,32 @@ class TestConcurrentHolds:
         assert len(tokens) == 8 * 200
         assert len(set(tokens)) == len(tokens)
 
+    def test_last_at_never_regresses_under_concurrent_writes(self) -> None:
+        """The stall clock must never move backwards, even if a caller's clock
+        sample is stale relative to a write another thread already committed.
+
+        With the clock read inside the lock and the monotonic max() guard, a
+        thread that sampled an earlier time cannot overwrite a later
+        ``_last_at``. This pins the lenient-only accounting direction the
+        ``exit_hold`` docstring promises.
+        """
+        clock = FakeClock()
+        tracker = _tracker(clock)
+
+        # Establish a baseline at t=10.
+        clock.now = 1010.0
+        tracker.mark_progress("baseline")
+        assert tracker._last_at == 1010.0
+
+        # A stale clock reading (t=5) must not move _last_at backwards.
+        clock.now = 1005.0
+        tracker.mark_progress("stale")
+        assert tracker._last_at == 1010.0
+
+        # The stall clock is still anchored at t=10.
+        clock.now = 1015.0
+        assert tracker.stalled_for() == 5.0
+
 
 # ---------------------------------------------------------------------------
 # Closed-hold observations (the warn-mode audit seam)

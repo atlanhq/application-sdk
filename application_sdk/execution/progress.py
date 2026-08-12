@@ -153,9 +153,9 @@ class ProgressTracker:
                 warn mode can re-arm the stall clock after reporting a gap
                 without erasing the signal it just reported.
         """
-        now = self._clock()
         with self._lock:
-            self._last_at = now
+            now = self._clock()
+            self._last_at = max(self._last_at, now)
             if label:
                 self._last_label = label
 
@@ -214,11 +214,11 @@ class ProgressTracker:
                 accounting is then wrong in the *lenient* direction); it is
                 logged and otherwise ignored.
         """
-        now = self._clock()
         with self._lock:
+            now = self._clock()
             hold = self._holds.pop(token, None)
             if hold is not None:
-                self._last_at = now
+                self._last_at = max(self._last_at, now)
                 if hold.label:
                     self._last_label = hold.label
         if hold is None:
