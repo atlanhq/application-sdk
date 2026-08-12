@@ -101,6 +101,17 @@ config fetches tomorrow) just by catching this one marker, with no new per-domai
 `SecretStoreError` (so `except SecretStoreError:` still catches it) and `ColdStartRaceError`
 (so the retry helper does too).
 
+**Terminal vs transient — `DaprSidecarUnreachableError`.** `ColdStartRaceError` means "not
+reachable *yet*, still waiting". Its terminal counterpart is
+`DaprSidecarUnreachableError(ColdStartRaceError)`, raised by `retry_past_dapr_cold_start` only
+when the whole cold-start budget elapses without one usable answer — "waited the whole budget,
+*done* waiting". It stays a `ColdStartRaceError` subtype on purpose: the same
+`except ColdStartRaceError:` sites keep catching it and its category stays `DEPENDENCY_UNAVAILABLE`
+(so preflight-gate routing and `gate_broken` are unchanged), while its distinct type name and
+`code = DEPENDENCY_UNAVAILABLE_SIDECAR_UNREACHABLE` — plus `component` / `attempts` /
+`elapsed_seconds` — let an operator tell a persistent sidecar outage from a still-booting one. Catch
+`ColdStartRaceError` to retry the race; read the concrete subtype to report the fault.
+
 ### TaskStalledError — raised by the SDK, never by an app
 
 `TaskStalledError(AppTimeoutError)` is the failure the stall watchdog produces when an activity

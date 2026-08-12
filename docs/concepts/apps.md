@@ -412,7 +412,10 @@ raising a typed error whose category is plumbing-side (`RateLimitedError`,
 makes hard mode fail *closed* on a blip, which is the mirror-image bug.
 
 Two queryable events come out of the gate. The per-run **outcome** event carries `outcome`,
-`gate_mode`, `gate_classification` and the per-check `check_matrix`. A boot-time **posture** event
+`gate_mode`, `gate_classification` and the per-check `check_matrix`. On a `gate_broken` fail-open
+its `reason` names the *underlying* fault — the SDK unwraps Temporal's `ActivityError`/`ApplicationError`
+to the real error type (e.g. `DaprSidecarUnreachableError`), not the wrapper — so a persistent
+platform fault is separable from a transient blip on the dashboard. A boot-time **posture** event
 (`Preflight gate posture`) is emitted once per gate-registered app — soft ones included — carrying
 `app_name`, `gate_mode` and `gate_timeout_seconds`. The posture event is the denominator the outcome
 events cannot supply: an app that never reaches a verdict emits no outcome row at all, so "which

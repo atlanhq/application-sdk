@@ -129,8 +129,16 @@ def underlying_error_type(exc: BaseException) -> str:
     therefore the wrapper ("ActivityError"), not the fault. The first ``type``
     in the cause chain is the real reason — the same chain
     :func:`is_preflight_block` walks. Falls back to the top-level class name
-    when nothing in the chain carries a ``type`` (e.g. a bare
+    when nothing in the chain carries a string ``type`` (e.g. a bare
     ``ApplicationError`` with no ``type`` set, or a plain ``RuntimeError``).
+
+    The ``str`` guard matters: Temporal's own ``TimeoutError`` — raised into
+    this same fail-open path when the gate activity overruns its
+    start/schedule-to-close deadline — carries a ``type`` that is a
+    ``TimeoutType`` *enum*, not a string. Returning that raw would put an enum
+    object into ``reason``, a field every consumer reads as a string. Only a
+    string ``type`` (an ``ApplicationError``'s original class name) is a real
+    reason; anything else falls through to the class name.
 
     Used for the fail-open ``no_verdict`` outcome row's ``reason`` so a
     persistent platform fault reaches the dashboard as its real cause (e.g.
@@ -141,7 +149,7 @@ def underlying_error_type(exc: BaseException) -> str:
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         found = getattr(current, "type", None)
-        if found:
+        if isinstance(found, str) and found:
             return found
         nxt = getattr(current, "cause", None)
         current = nxt if nxt is not None else current.__cause__

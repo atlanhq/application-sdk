@@ -304,6 +304,29 @@ class TestUnderlyingErrorType:
 
         assert underlying_error_type(ValueError("x")) == "ValueError"
 
+    def test_ignores_non_string_type_from_temporal_timeout(self) -> None:
+        # Temporal's TimeoutError (raised on activity start/schedule-to-close
+        # overrun and caught by the same fail-open path) carries a TimeoutType
+        # enum as `.type`, not a string. It must not leak an enum object into
+        # `reason`; fall through to the class name instead.
+        from temporalio.exceptions import TimeoutType
+
+        from application_sdk.execution._temporal.preflight_gate import (
+            underlying_error_type,
+        )
+
+        class _TimeoutLike(Exception):
+            def __init__(self) -> None:
+                super().__init__("deadline exceeded")
+                self.type = TimeoutType.START_TO_CLOSE
+
+        # No string `type` in the chain -> fall through to the top-level class
+        # name (the wrapper, "ActivityError" in prod), a string — never the
+        # TimeoutType enum object.
+        result = underlying_error_type(_ActivityErrorStub(_TimeoutLike()))
+        assert result == "_ActivityErrorStub"
+        assert isinstance(result, str)
+
     def test_is_cycle_safe(self) -> None:
         from application_sdk.execution._temporal.preflight_gate import (
             underlying_error_type,
