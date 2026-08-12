@@ -1729,13 +1729,14 @@ jobs:
           sudo systemctl restart docker
 
       # dataforge's api host and the provisioned sources admit only the VPN
-      # egress IPs. This repo's own globalprotect-connect action, from the
-      # job.workflow_sha sparse checkout — same provenance pinning as the
-      # scripts. It derives a unique --local-hostname per run/job/attempt;
-      # the suffix adds the matrix dimension (GITHUB_JOB is the job KEY,
-      # identical across legs) so parallel legs cannot displace each
-      # other's GP session. The health probe targets the dataforge api host
-      # — the thing this tunnel actually has to reach.
+      # egress IPs. This repo's own globalprotect-connect action (unmodified),
+      # from the job.workflow_sha sparse checkout — same provenance pinning
+      # as the scripts. The health probe targets the dataforge api host —
+      # the thing this tunnel actually has to reach. KNOWN LIMIT: the
+      # action derives its GP client identity from run/job/attempt, and
+      # GITHUB_JOB is identical across matrix legs, so concurrent legs can
+      # displace each other's sessions — the fetch then falls back to repo
+      # creds by design. A better run strategy is tracked on FND-279.
       - name: Connect to GlobalProtect VPN (dataforge path)
         if: inputs.dataforge-datasource != ''
         continue-on-error: true
@@ -1745,7 +1746,6 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
           mothership-url: https://api.dataforge.atlan.dev
-          local-hostname-suffix: ${{ strategy.job-index }}
 
       # Dataforge-sourced connector credentials. The fetch's stdout is
       # captured into a shell variable — values never reach the log — and

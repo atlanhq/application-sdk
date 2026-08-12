@@ -21,10 +21,6 @@ inputs:
     description: "Maximum number of connection attempts"
     required: false
     default: "3"
-  local-hostname-suffix:
-    description: "Extra uniqueness appended to the derived --local-hostname. Needed for MATRIX jobs: GITHUB_JOB is the job key, identical across matrix legs, so without a per-leg suffix (e.g. strategy.job-index) concurrent legs sharing one GP account displace each other's sessions."
-    required: false
-    default: ""
 
 outputs:
   vpn-connected:
@@ -94,11 +90,6 @@ runs:
           # creds (this reviewer plus any other workflow) silently displace each
           # other's tunnels. Derive it from the run id / job / attempt.
           LOCAL_HOSTNAME="gha-${GITHUB_RUN_ID:-0}-${GITHUB_JOB:-job}-${GITHUB_RUN_ATTEMPT:-1}"
-          # Matrix legs share GITHUB_JOB (it is the job KEY), so a caller-
-          # provided per-leg suffix is the only thing keeping concurrent
-          # legs' GP sessions from displacing each other.
-          SUFFIX="${{ inputs.local-hostname-suffix }}"
-          [ -n "$SUFFIX" ] && LOCAL_HOSTNAME="${LOCAL_HOSTNAME}-${SUFFIX}"
           LOCAL_HOSTNAME=$(echo "$LOCAL_HOSTNAME" | tr -cd 'a-zA-Z0-9-' | cut -c1-63)
           echo "Using --local-hostname: ${LOCAL_HOSTNAME}"
 
