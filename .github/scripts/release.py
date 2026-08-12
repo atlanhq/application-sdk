@@ -12,32 +12,88 @@ import semver
 _SUBPKG_RE = re.compile(r"^[a-z]+\((contract-toolkit|conformance)\)!?:")
 
 
+def _git(*args: str, quiet: bool = False) -> str:
+    """Run git with an explicit argv list and return stdout, stripped.
+
+    Deliberately not `shell=True`. Command output interpolated into a shell
+    string is not guaranteed to be a single line, and a newline silently splits
+    one command into two — the second half is then executed as a command name.
+    An argv list makes a multi-line value a plain bad argument instead.
+
+    Args:
+        *args: Arguments passed to git.
+        quiet: Discard stderr. Only for probes whose failure is expected and
+            handled by the caller, so the log is not polluted with a `fatal:`
+            line describing a non-problem.
+    """
+    return (
+        subprocess.check_output(
+            ["git", *args],
+            stderr=subprocess.DEVNULL if quiet else None,
+        )
+        .decode()
+        .strip()
+    )
+
+
+def _resolve_rev_range() -> list[str]:
+    """Resolve the revision range to walk when determining the version bump.
+
+    Returns:
+        List[str]: `["<tag>..HEAD"]` when a released version tag exists,
+                   otherwise `["HEAD"]` to walk the full history.
+
+    The untagged case walks HEAD rather than deriving a start point from
+    `git rev-list --max-parents=0 HEAD`. That command emits one SHA *per root
+    commit*, so a repository whose history was grafted from more than one root
+    yields a multi-line value — which is not a usable revision. It also excludes
+    the root commit itself from the range, dropping it from the changelog.
+    """
+    try:
+        last_tag = _git(
+            "describe",
+            "--tags",
+            "--abbrev=0",
+            "--match=v[0-9]*",
+            "--exclude=*rc*",
+            quiet=True,
+        )
+    except subprocess.CalledProcessError:
+        # No release tag yet: a repo that has never been released, or whose
+        # tags all predate the `v*` convention.
+        logging.info("No release tag found - walking full history from HEAD")
+        return ["HEAD"]
+
+    logging.info(f"Last tag found: {last_tag}")
+    return [f"{last_tag}..HEAD"]
+
+
 def get_commits_since_last_tag() -> list[str]:
     """Get all commits since the last non release-candidate tag.
 
     Returns:
         List[str]:  List of commit messages since the last git non release-candidate tag.
-                    If no tags exist, returns commits since the initial commit.
+                    If no such tag exists, returns every commit reachable from HEAD.
     """
+    rev_range = _resolve_rev_range()
     try:
-        # Get the last non release-candidate tag or initial commit if no tags exist
-        last_tag_cmd = "git describe --tags --abbrev=0 --match='v[0-9]*' --exclude='*rc*' 2>/dev/null || git rev-list --max-parents=0 HEAD"
-        last_tag = subprocess.check_output(last_tag_cmd, shell=True).decode().strip()
-        logging.info(f"Last tag found: {last_tag}")
-
-        # Get all commits since that reference, excluding sub-packages that manage
+        # Get all commits in that range, excluding sub-packages that manage
         # their own versioning and changelogs (contract-toolkit, conformance).
-        cmd = (
-            f"git log {last_tag}..HEAD --pretty=format:%s%n%b"
-            " -- . ':(exclude)contract-toolkit' ':(exclude)packages/conformance'"
-        )
-        commits = subprocess.check_output(cmd, shell=True).decode().strip().split("\n")
+        commits = _git(
+            "log",
+            *rev_range,
+            "--pretty=format:%s%n%b",
+            "--",
+            ".",
+            ":(exclude)contract-toolkit",
+            ":(exclude)packages/conformance",
+        ).split("\n")
         # Filter out empty lines that may appear between commits
         commits = [commit for commit in commits if commit.strip()]
         # Drop sub-package scoped commits that slipped through the path filter
         # (e.g. a mixed PR whose squash subject is feat(conformance): …).
         commits = [c for c in commits if not _SUBPKG_RE.match(c.splitlines()[0])]
-        logging.info(f"Found {len(commits)} commits since last tag: {last_tag}")
+        logging.info(f"Found {len(commits)} commits in {' '.join(rev_range)}")
         return commits
 
     except subprocess.CalledProcessError as e:
