@@ -381,6 +381,13 @@ class CloudStore:
             Number of bytes uploaded.
         """
         path = Path(local_path)
+        # Hoisted out of the part loop; lazy for the same reason as the logger
+        # above — application_sdk.execution's package __init__ reaches back into
+        # storage.ops, which this module imports at top level.
+        from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: see comment above
+            current_progress_tracker,
+        )
+
         try:
             size = path.stat().st_size
             chunk = _compute_part_size(size, 8 * 1024 * 1024)
@@ -393,6 +400,13 @@ class CloudStore:
                         if not buf:
                             break
                         await writer.write(buf)
+                        # One part on its way to the external store. The
+                        # download side needs no hook here: _download_single
+                        # routes through download_file_chunked, which marks per
+                        # range GET.
+                        current_progress_tracker().mark_progress(
+                            "cloudstore.upload_part"
+                        )
         except StorageError:
             raise
         # conformance: ignore[E004] re-raise only; checks azure container-not-found then wraps in StorageConfigError/StorageError

@@ -114,6 +114,7 @@ from application_sdk.errors.leaves import (
 from application_sdk.errors.wire import secret_named_evidence_keys
 from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.execution.heartbeat import run_in_thread
+from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.contracts.sql_metadata import (
@@ -1560,6 +1561,18 @@ class SqlApp(App):
                     payload = await run_in_thread(_serialize_batch, batch)
                     f.write(payload)
                     count += len(batch)
+                    # One fetched page serialised and written is one observable
+                    # unit (ADR-0018). Marked here rather than per record: one
+                    # page is already the unit, and a mark per record would be a
+                    # hot-path cost for no extra signal.
+                    #
+                    # This is the whole reason the read side needs no hold — the
+                    # fetch → serialise → write cycle marks on every page, so
+                    # only a *single* cycle slower than max_no_progress_seconds
+                    # needs an explicit hold from the app. (FND-290's auto-hold
+                    # around the `run_in_thread` above already covers the
+                    # serialise leg of that cycle.)
+                    current_progress_tracker().mark_progress("extract.page")
         finally:
             await client.close()
 
@@ -1698,6 +1711,16 @@ class SqlApp(App):
         # whole transform, which stops the auto-heartbeat and gets a healthy
         # activity killed on heartbeat_timeout. Every SQL connector inherits
         # this method, so the fix applies fleet-wide (ADR-0010).
+        #
+        # No framework progress hook inside `_map_records`, deliberately
+        # (ADR-0018). The loop is line-by-line with no batch boundary to mark
+        # at, and the never-per-record rule forbids the only boundary it has.
+        # It does not need one: the whole map is a single `run_in_thread` hop,
+        # which FND-290 wraps in an unbounded auto-hold — so the stall watchdog
+        # is vouched for across the entire transform by mechanism 2 rather than
+        # mechanism 1. That leaves the 24h backstop as its only bound, which is
+        # the ADR's accepted residual for opaque offloaded work and is exactly
+        # what warn mode is meant to surface with an observed duration.
         count = await run_in_thread(_map_records)
 
         logger.info("Transformed %s: %d records", entity_type, count)

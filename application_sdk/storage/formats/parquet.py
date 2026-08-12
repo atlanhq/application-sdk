@@ -10,6 +10,7 @@ from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.contracts.types import FileReference
 from application_sdk.errors import AppError
 from application_sdk.execution.heartbeat import run_in_thread
+from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.storage.batch import delete_prefix as _delete_prefix
@@ -732,6 +733,11 @@ class ParquetFileWriter(Writer):
         # Write chunk using existing write_chunk method
         await self._write_chunk(chunk, chunk_file_path)
 
+        # The consolidation path never reaches Writer._flush_buffer, so it
+        # needs its own chunk boundary: accumulation can run for the whole
+        # `write_batches` stream before the first consolidation happens.
+        current_progress_tracker().mark_progress("writer.accumulate_chunk")
+
     async def _consolidate_current_folder(self):
         """Consolidate current temp folder using pyarrow."""
         if self.current_folder_records == 0 or self.current_temp_folder_path is None:
@@ -774,6 +780,13 @@ class ParquetFileWriter(Writer):
                 if not self.defer_uploads:
                     await _upload_file(consolidated_file_path, consolidated_file_path)
                 partitions += 1
+
+                # One consolidated file written (and uploaded) is one unit.
+                # Marking inside the loop rather than after it matters: a
+                # folder at the consolidation threshold can produce many files,
+                # and a slow store would otherwise make the whole consolidation
+                # one quiet window.
+                current_progress_tracker().mark_progress("writer.consolidate_chunk")
 
             # Update statistics
             self.chunk_count += 1
