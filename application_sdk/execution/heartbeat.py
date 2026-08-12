@@ -27,6 +27,7 @@ from collections.abc import Callable
 from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Protocol, TypeVar
 
+from application_sdk.execution.progress import ProgressTracker, ProgressWatchdogMode
 from application_sdk.observability import (
     resource_sampler as _resource_sampler,  # module alias kept so tests can patch _resource_sampler.sample()
 )
@@ -39,6 +40,14 @@ _MEMORY_WARN_THRESHOLD = 0.80
 _MEMORY_WARN_HYSTERESIS = (
     0.05  # re-arm only once ratio drops below threshold - hysteresis
 )
+
+#: Meter for signals this module owns. Deliberately not the Temporal meter: the
+#: stall watchdog has no Temporal dependency, so it also reports from local runs.
+_METER_NAME = "application_sdk.execution"
+
+#: Lazily created singletons — one instrument per process, built on first use so
+#: nothing is bound before ``run_main()`` configures the ``MeterProvider``.
+_INSTRUMENTS: dict[str, Any] = {}
 
 # Dedicated executor for blocking operations dispatched via run_in_thread().
 #
@@ -133,11 +142,153 @@ class NoopHeartbeatController:
         return self._details
 
 
+def _no_progress_gap_histogram() -> Any:
+    """Gap-duration histogram, created on first stall observation.
+
+    A histogram rather than a counter because the fleet-wide *distribution* of
+    no-progress gaps is what sizes ``max_no_progress_seconds`` before anything
+    enforces (ADR-0018 → *Decisions taken*).
+    """
+    if "no_progress_gap" not in _INSTRUMENTS:
+        from opentelemetry import (  # noqa: PLC0415 — cold path: only reached on a stall observation
+            metrics as _otel_metrics,
+        )
+
+        _INSTRUMENTS["no_progress_gap"] = _otel_metrics.get_meter(
+            _METER_NAME
+        ).create_histogram(
+            "task.no_progress_gap",
+            unit="s",
+            description=(
+                "Seconds a task attempt went without an observable progress "
+                "signal, recorded once per gap that exceeded "
+                "max_no_progress_seconds. Partitioned by task, the last "
+                "progress label seen, and the watchdog mode — so warn-mode "
+                "observations and enforced kills aggregate separately."
+            ),
+        )
+    return _INSTRUMENTS["no_progress_gap"]
+
+
+def _record_no_progress_gap(
+    task_name: str, stalled_for: float, last_label: str, mode: ProgressWatchdogMode
+) -> None:
+    """Record one no-progress gap. Never raises.
+
+    The metric is emitted in *both* warn and enforce mode: in warn mode it is
+    the whole point (nothing else reports the gap), and in enforce mode it is
+    what makes the kill rate measurable.
+    """
+    try:
+        _no_progress_gap_histogram().record(
+            stalled_for,
+            {
+                "task.name": task_name,
+                # A progress label identifies a call site, never a value — see
+                # ProgressTracker.enter_hold — so this stays bounded.
+                "progress.last_label": last_label,
+                "watchdog.mode": mode.value,
+            },
+        )
+    # Best-effort observability: a metric-backend problem must never fail the
+    # activity the watchdog is only observing.
+    except Exception:
+        logger.warning(
+            "Failed to record the no-progress gap metric for task '%s' (%.0fs gap); "
+            "the stall is still logged but will be missing from the fleet-wide "
+            "gap distribution",
+            task_name,
+            stalled_for,
+            exc_info=True,
+        )
+
+
+def _check_for_stall(
+    progress: ProgressTracker,
+    budget_seconds: float,
+    mode: ProgressWatchdogMode,
+    task_name: str,
+    on_stall: Callable[[float, str], None] | None,
+) -> bool:
+    """Report a no-progress gap if one is open. Returns True to stop the loop.
+
+    Called once per heartbeat tick, so detection latency is ``budget_seconds``
+    plus at most one tick.
+
+    Args:
+        progress: The attempt's tracker. ``stalled_for()`` already accounts for
+            holds, so a vouched-for operation reads as no gap at all.
+        budget_seconds: ``max_no_progress_seconds`` for this task.
+        mode: ``WARN`` reports; ``ENFORCE`` reports and fails the activity.
+        task_name: Task name, for the log and the metric.
+        on_stall: Injected by the activity layer to fail the attempt — the
+            watchdog itself stays free of activity/Temporal semantics. Only
+            called in ``ENFORCE``.
+
+    Returns:
+        ``True`` when the caller must return immediately: the watchdog *is*
+        ``heartbeat_task``, and the activity's ``finally`` sets ``stop_event``
+        and awaits it with a 1s bound, so it must not keep looping after
+        deciding to fail the attempt.
+    """
+    stalled = progress.stalled_for()
+    if stalled < budget_seconds:
+        return False
+
+    last_label = progress.last_label
+    _record_no_progress_gap(task_name, stalled, last_label, mode)
+
+    if mode is not ProgressWatchdogMode.ENFORCE or on_stall is None:
+        # INFO, never WARNING: under a fleet-wide default this is an expected
+        # observation, and emitting it at WARNING would manufacture exactly the
+        # alert noise ADR-0018 exists to reduce. Dashboards read the metric.
+        logger.info(
+            "Task '%s' made no observable progress for %.0fs (budget %.0fs); last "
+            "signal was '%s' — not failing (warn mode)",
+            task_name,
+            stalled,
+            budget_seconds,
+            last_label or "<none>",
+        )
+        # Re-arm so each gap is reported once rather than every tick. The empty
+        # label deliberately leaves last_label alone: the signal just reported
+        # is still the most useful thing to name in the next report.
+        progress.mark_progress()
+        return False
+
+    logger.warning(
+        "Task '%s' made no observable progress for %.0fs (budget %.0fs); last "
+        "signal was '%s' — failing the activity",
+        task_name,
+        stalled,
+        budget_seconds,
+        last_label or "<none>",
+    )
+    try:
+        on_stall(stalled, last_label)
+    # The watchdog must not keep beating for an attempt it has already decided
+    # to fail; the failure is handled by stopping the loop below.
+    except Exception:
+        logger.warning(
+            "Stall handler for task '%s' raised, so the attempt was not failed "
+            "in-process; stopping the heartbeat loop so Temporal's "
+            "heartbeat_timeout reclaims it instead",
+            task_name,
+            exc_info=True,
+        )
+    return True
+
+
 async def auto_heartbeat_loop(
     interval_seconds: float,
     heartbeat_fn: Callable[[], None],
     stop_event: asyncio.Event,
     task_name: str,
+    *,
+    progress: ProgressTracker | None = None,
+    max_no_progress_seconds: float | None = None,
+    watchdog_mode: ProgressWatchdogMode = ProgressWatchdogMode.OFF,
+    on_stall: Callable[[float, str], None] | None = None,
 ) -> None:
     """Background task that sends heartbeats at regular intervals.
 
@@ -148,15 +299,67 @@ async def auto_heartbeat_loop(
     They WILL FAIL for blocking I/O, CPU-bound computation, or long-running
     C extensions. Use run_in_thread() to wrap blocking operations.
 
+    When a ``progress`` tracker and a budget are supplied, the same loop also
+    runs the ADR-0018 **stall watchdog**. The beat itself stays
+    **unconditional** — it is the crash detector (OOM, SIGKILL, node loss,
+    partition, starved loop) and ``heartbeat_timeout`` keeps its meaning and its
+    60s default. The watchdog is a second, independent question asked on the
+    same tick: *has this attempt done anything observable lately?*
+
     Args:
         interval_seconds: How often to send heartbeats.
         heartbeat_fn: Function to call for each heartbeat.
         stop_event: Event to signal loop termination.
         task_name: Name of the task (for warning messages).
+        progress: The attempt's :class:`ProgressTracker`. ``None`` leaves the
+            watchdog inert.
+        max_no_progress_seconds: How long this task may go without an
+            observable progress signal. ``None`` leaves the watchdog inert.
+        watchdog_mode: ``OFF`` (inert), ``WARN`` (report only) or ``ENFORCE``
+            (report, then fail the attempt via ``on_stall``).
+        on_stall: Called as ``on_stall(stalled_for, last_label)`` when a stall
+            is enforced. Injected by the activity layer — the same way
+            ``heartbeat_fn`` already is — so this module stays free of
+            activity/Temporal semantics and the watchdog is unit-testable
+            without a worker.
     """
     warning_threshold = interval_seconds * 0.5
     _limit_bytes = parse_pod_memory_limit(os.environ.get("K8S_POD_MEMORY_LIMIT", ""))
     _memory_warn_active = False
+
+    watchdog_budget: float | None = (
+        max_no_progress_seconds
+        if progress is not None and watchdog_mode is not ProgressWatchdogMode.OFF
+        else None
+    )
+    if watchdog_budget is not None and watchdog_budget <= 0:
+        # Refuse rather than obey. A budget of zero makes every attempt stall on
+        # its first tick, so honouring it in enforce mode would turn one bad
+        # config value into a fleet-wide kill switch.
+        logger.warning(
+            "Stall watchdog for task '%s' was given a non-positive no-progress "
+            "budget (%.0fs); disabling the watchdog — set max_no_progress_seconds "
+            "to a real allowance, or the mode to 'off' to disable it deliberately",
+            task_name,
+            watchdog_budget,
+        )
+        watchdog_budget = None
+    if (
+        watchdog_budget is not None
+        and watchdog_mode is ProgressWatchdogMode.ENFORCE
+        and on_stall is None
+    ):
+        # A wiring bug, not a config choice. Downgrade rather than raise: the
+        # watchdog must never itself be the thing that fails an activity, and
+        # reporting is strictly better than going silent. Downgraded here rather
+        # than at the call site so the metric's mode attribute describes what
+        # the watchdog actually did.
+        logger.warning(
+            "Stall watchdog for task '%s' was asked to enforce but no on_stall "
+            "handler was injected; reporting gaps without failing the attempt",
+            task_name,
+        )
+        watchdog_mode = ProgressWatchdogMode.WARN
 
     while not stop_event.is_set():
         loop_start = time.monotonic()
@@ -229,6 +432,23 @@ async def auto_heartbeat_loop(
                     e,
                     exc_info=True,
                 )
+
+        # The stall watchdog runs last in the tick: the beat is the crash
+        # detector and goes out first, and an enforced stall returns from here,
+        # so putting it after the memory sample means the tick that kills a
+        # wedged attempt still carries that attempt's last memory observation.
+        if (
+            progress is not None
+            and watchdog_budget is not None
+            and _check_for_stall(
+                progress=progress,
+                budget_seconds=watchdog_budget,
+                mode=watchdog_mode,
+                task_name=task_name,
+                on_stall=on_stall,
+            )
+        ):
+            return
 
 
 async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
