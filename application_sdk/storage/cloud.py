@@ -245,8 +245,16 @@ class CloudStore:
         # ones via bounded parallel range GETs (each with its own timeout /
         # retry budget) so a slow-egress GB-class file doesn't die on one long
         # request. No hash — external stores skip the integrity sidecar
-        # protocol. (BLDX-1513)
-        await download_file_chunked(key, local_path, store=self._store, normalize=False)
+        # protocol, so sidecar_present=False saves a guaranteed-miss probe per
+        # file; the byte-count check against the declared size still runs.
+        # (BLDX-1513 / FND-306)
+        await download_file_chunked(
+            key,
+            local_path,
+            store=self._store,
+            normalize=False,
+            sidecar_present=False,
+        )
         _log().info("Downloaded key=%s local_path=%s", key, str(local_path))
         return [local_path]
 
@@ -295,6 +303,9 @@ class CloudStore:
                     normalize=False,
                     file_size=size,
                     etag=etag,
+                    # External bucket: the SDK never wrote sidecars here, so
+                    # skip the per-file probe that could only ever miss.
+                    sidecar_present=False,
                 )
                 return local_path
 

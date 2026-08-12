@@ -1673,8 +1673,15 @@ async def test_upload_file_does_not_delete_when_retain_local_copy_true(
         "application_sdk.storage.ops.obstore.open_writer_async",
         return_value=_DummyCM(),
     ):
+        # verify=False: open_writer_async is stubbed, so nothing actually
+        # lands in the store and the post-upload readback has nothing to find.
         digest = await upload_file(
-            "k", f, MagicMock(), retain_local_copy=True, normalize=False
+            "k",
+            f,
+            MagicMock(),
+            retain_local_copy=True,
+            normalize=False,
+            verify=False,
         )
     assert isinstance(digest, str)
     assert f.exists()
@@ -1927,6 +1934,9 @@ class TestUploadPartSizeConfiguration:
     *count* — not part size — decides whether an upload outruns a gateway idle
     timeout.  Deployments behind such a proxy need to raise the part size
     without a code change.
+
+    ``verify=False`` throughout: the writer is stubbed, so no object reaches
+    the store for the post-upload readback to find.
     """
 
     async def test_default_part_size_comes_from_constant(
@@ -1942,7 +1952,7 @@ class TestUploadPartSizeConfiguration:
         with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
             writer.return_value.__aenter__ = AsyncMock()
             writer.return_value.__aexit__ = AsyncMock(return_value=False)
-            await upload_file("k", f, store, normalize=False)
+            await upload_file("k", f, store, normalize=False, verify=False)
 
         assert writer.call_args.kwargs["buffer_size"] == 32 * 1024 * 1024
 
@@ -1965,7 +1975,12 @@ class TestUploadPartSizeConfiguration:
             writer.return_value.__aenter__ = AsyncMock()
             writer.return_value.__aexit__ = AsyncMock(return_value=False)
             await upload_file(
-                "k", f, store, chunk_size=5 * 1024 * 1024, normalize=False
+                "k",
+                f,
+                store,
+                chunk_size=5 * 1024 * 1024,
+                normalize=False,
+                verify=False,
             )
 
         assert writer.call_args.kwargs["buffer_size"] == 32 * 1024 * 1024
@@ -1988,7 +2003,12 @@ class TestUploadPartSizeConfiguration:
             writer.return_value.__aenter__ = AsyncMock()
             writer.return_value.__aexit__ = AsyncMock(return_value=False)
             await upload_file(
-                "k", f, store, chunk_size=5 * 1024 * 1024, normalize=False
+                "k",
+                f,
+                store,
+                chunk_size=5 * 1024 * 1024,
+                normalize=False,
+                verify=False,
             )
 
         assert writer.call_args.kwargs["buffer_size"] == 5 * 1024 * 1024
@@ -2006,6 +2026,6 @@ class TestUploadPartSizeConfiguration:
         with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
             writer.return_value.__aenter__ = AsyncMock()
             writer.return_value.__aexit__ = AsyncMock(return_value=False)
-            await upload_file("k", f, store, normalize=False)
+            await upload_file("k", f, store, normalize=False, verify=False)
 
         assert writer.call_args.kwargs["max_concurrency"] == 4

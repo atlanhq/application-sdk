@@ -257,12 +257,18 @@ class AtlanObservability(Generic[T], ABC):
         """
         from application_sdk.storage import upload_file  # noqa: PLC0415
 
+        # write_sidecar=False: telemetry exports are not artifacts anyone
+        # downloads through the SDK, and the ingestion pipelines that read this
+        # prefix enumerate it directly — a `.sha256` next to every rotated
+        # `.json.gz` would double the object count there for no verification
+        # anyone performs. The upload-side size validation still applies.
         try:
             try:
                 await upload_file(
                     remote_key,
                     local_path,
                     store=self._get_deployment_store(),
+                    write_sidecar=False,
                 )
             except Exception:
                 logging.warning(
@@ -275,6 +281,7 @@ class AtlanObservability(Generic[T], ABC):
                     remote_key,
                     local_path,
                     store=self._get_upstream_store(),
+                    write_sidecar=False,
                 )
 
             logging.debug("Exported records → %s", remote_key)

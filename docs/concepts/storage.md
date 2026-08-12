@@ -188,6 +188,52 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 | `ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS` | `30` | Heartbeat log interval during long transfers (`0` disables) |
 | `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES` | `8388608` (8 MiB) | Multipart part size for uploads. Raise it when the destination makes part *count* expensive (e.g. an S3 proxy fronting GCS, which emulates multipart with 32-source-capped `compose` round trips) |
 | `ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY` | `12` | Parts uploaded concurrently. Peak upload memory is roughly part size times this — lower it alongside a larger part size to hold memory steady |
+| `ATLAN_STORAGE_VERIFY_TRANSFERS` | `true` | Validate every transfer's bytes (see [Transfer integrity](#transfer-integrity)) |
+| `ATLAN_STORAGE_WRITE_SIDECARS` | `true` | Emit the `{key}.sha256` sidecar that downstream verification reads |
+
+---
+
+## Transfer integrity
+
+A producing app that dies part-way through a write — the motivating case was
+`ENOSPC` during a state carry-forward — leaves a *truncated* artifact in the
+object store and still reports success. The consuming app then downloads that
+file on every retry and fails inside its parser (`Malformed JSON … unexpected
+end of data`), burning the whole retry budget on a deterministically corrupt
+input and attributing the failure to the consumer instead of the producer.
+
+The SDK closes that loop at the byte layer both apps share, so every transfer
+path is covered by the same checks rather than each caller rolling its own:
+
+**On upload** (`upload_file`, and therefore `App.upload`, `FileReference`
+persist, `upload_prefix`, and the writer chunk uploads):
+
+1. the local file must not shrink between the opening `stat` and the read
+   reaching EOF — a file truncated under the reader would put a prefix of the
+   intended artifact in the store (`StorageIntegrityError`);
+2. a HEAD after the writer closes must report the byte count that was sent —
+   this is what catches a backend silently dropping the object (`StorageError`,
+   retryable);
+3. the SHA-256 computed during the upload pass is written to `{key}.sha256`.
+
+**On download** (`download_file` / `download_file_chunked`, and therefore
+`App.download`, `FileReference` materialize, `download_prefix`, and the
+incremental-state fetches):
+
+1. the bytes written to disk must match the size the store declared for the
+   object — a shortfall is a truncated transfer (`StorageError`, retryable);
+2. when `{key}.sha256` exists, the content must hash to it. A mismatch means
+   the stored object is corrupt at source and raises `StorageIntegrityError` —
+   **non-retryable**, naming the key and both digests, because a byte-stable
+   corrupt file fails identically on every attempt.
+
+Sidecars are SDK bookkeeping, never data: every listing helper
+(`list_data_keys`, `list_data_objects`, …) excludes them, and `download_prefix`
+consumes rather than mirrors them, so a directory handed to a reader that globs
+it never contains files the producer did not write.
+
+Objects written before this protocol existed, or by a non-SDK producer, simply
+have no sidecar; those downloads keep the size check and skip the digest check.
 
 ---
 

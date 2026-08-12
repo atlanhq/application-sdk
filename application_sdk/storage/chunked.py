@@ -20,7 +20,6 @@ the remote object is unchanged, which is what the etag match enforces.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import time
@@ -174,7 +173,14 @@ async def _fetch_chunk(
     progress: _ChunkProgress,
     progress_interval: float,
 ) -> None:
-    """Fetch one range and write it at its fixed offset; checkpoint + heartbeat."""
+    """Fetch one range and write it at its fixed offset; checkpoint + heartbeat.
+
+    Raises:
+        StorageError: If the store served fewer bytes than the requested range.
+            The file is pre-allocated to its full size, so a short range would
+            otherwise leave a hole of NUL bytes that reads back as a
+            plausible-looking file of exactly the right length.
+    """
     length = min(chunk_size_bytes, size - offset)
     async with sem:
         if etag is not None:
@@ -192,6 +198,16 @@ async def _fetch_chunk(
         else:
             raw = bytes(
                 await obstore.get_range_async(store, key, start=offset, length=length)
+            )
+        if len(raw) != length:
+            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                StorageError,
+            )
+
+            raise StorageError(
+                f"Short range read on chunked download of '{key}': requested "
+                f"{length} bytes at offset {offset}, received {len(raw)}.",
+                key=key,
             )
         # lseek+write instead of pwrite (Windows lacks pwrite). Safe only
         # because asyncio is single-threaded: no await between the two
@@ -301,6 +317,9 @@ async def download_file_chunked(
     file_size: int | None = None,
     etag: str | None = None,
     resume: bool | None = None,
+    verify: bool | None = None,
+    expected_sha256: str | None = None,
+    sidecar_present: bool | None = None,
 ) -> str | None:
     """Download *key* using parallel range GETs, writing chunks at fixed offsets.
 
@@ -358,14 +377,30 @@ async def download_file_chunked(
         resume: Resume an interrupted download from its checkpoint sidecar.
             ``None`` (default) follows ``ATLAN_STORAGE_RESUME_DOWNLOADS``
             (enabled unless set to ``"false"``).
+        verify: Validate the completed file against the digest its producer
+            recorded (FND-306).  ``None`` (default) follows
+            ``ATLAN_STORAGE_VERIFY_TRANSFERS``.  Unlike the single-stream path,
+            verifying here costs a re-read of the finished file (chunks land
+            out of order, so they cannot feed one hasher) — the re-read runs in
+            a worker thread so it never blocks the heartbeat loop.
+        expected_sha256: Digest to verify against.  Pass it when the caller
+            already holds the producer's digest — the sidecar lookup is then
+            skipped, saving a round trip.  ``None`` (default) fetches the
+            sidecar when verification is on.
+        sidecar_present: Whether ``{key}.sha256`` exists, when a prior listing
+            already established it.  Saves the existence probe on prefix
+            downloads, where the listing has already enumerated every sidecar.
 
     Returns:
         Hex-encoded SHA-256 digest if *compute_hash* is ``True``, else ``None``.
 
     Raises:
         StorageNotFoundError: If *key* does not exist.
-        StorageError: If a chunk download or the disk write fails, or the
-            object was rewritten during both the original and restarted attempt.
+        StorageError: If a chunk download or the disk write fails, a range came
+            back short, or the object was rewritten during both the original
+            and restarted attempt.
+        StorageIntegrityError: If the completed file does not match the digest
+            its producer recorded.
         ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: ops re-exports download_file_chunked for back-compat
@@ -388,6 +423,12 @@ async def download_file_chunked(
         from application_sdk.constants import STORAGE_RESUME_DOWNLOADS  # noqa: PLC0415
 
         resume = STORAGE_RESUME_DOWNLOADS
+
+    from application_sdk.storage import (  # noqa: PLC0415 — circular: ops imports this module at top level
+        integrity,
+    )
+
+    verifying = integrity.verification_enabled(verify)
 
     from application_sdk.constants import (  # noqa: PLC0415
         STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
@@ -437,7 +478,16 @@ async def download_file_chunked(
         if size <= chunk_size_bytes:
             state_path.unlink(missing_ok=True)
             return await download_file(
-                key, local_path, resolved, compute_hash=compute_hash, normalize=False
+                key,
+                local_path,
+                resolved,
+                compute_hash=compute_hash,
+                normalize=False,
+                # Resolved above — pass through so the delegate does not
+                # re-decide the kill-switch and an explicit verify=False holds.
+                verify=verifying,
+                expected_sha256=expected_sha256,
+                sidecar_present=sidecar_present,
             )
 
         done: set[int] = (
@@ -582,11 +632,32 @@ async def download_file_chunked(
                 size_bytes=progress.fetched_bytes,
             )
 
-            if not compute_hash:
+            # Every range was requested and every one returned its full
+            # length (enforced per chunk in _fetch_chunk), so the file is
+            # complete at the pre-allocated size. What that cannot tell us is
+            # whether the *object* was intact to begin with — that needs the
+            # producer's digest (FND-306). Look it up only now: a store-wide
+            # failure has already surfaced as a chunk error above, so anything
+            # that goes wrong here is genuinely sidecar-specific.
+            if verifying and expected_sha256 is None:
+                expected_sha256 = await integrity.read_expected_digest(
+                    resolved, key, sidecar_present=sidecar_present
+                )
+            if not compute_hash and expected_sha256 is None:
                 return None
 
-            h = hashlib.sha256()
-            with path.open("rb") as fh:
-                for chunk in iter(lambda: fh.read(1 << 20), b""):
-                    h.update(chunk)
-            return h.hexdigest()
+            # Chunks land out of order, so no single hasher can be fed during
+            # the transfer: verifying costs one re-read of the finished file.
+            # run_in_thread keeps it off the event loop — a multi-GiB re-read
+            # inline would stall the auto-heartbeat coroutine and get the
+            # activity retried for a transfer that actually succeeded.
+            digest = await integrity.sha256_file(path)
+            if verifying and expected_sha256 is not None:
+                integrity.check_transfer_digest(
+                    "download",
+                    key,
+                    expected=expected_sha256,
+                    actual=digest,
+                    local_path=path,
+                )
+            return digest if compute_hash else None
