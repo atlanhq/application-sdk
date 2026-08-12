@@ -3144,8 +3144,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `duration_ms: float` `= 0.0` — Wall-clock time spent on the probe connection + ``SELECT 1`` + close.
   - `success: bool` `= True` — Whether the probe completed cleanly. ``False`` means the probe
-  - `error_type: str | None` — Exception class name (e.g. ``OperationalError``) when ``success``
-  - `error_message: str | None` — Truncated exception message when ``success`` is ``False``.
+  - `failure: FailureDetails | None` — Typed classification of the probe failure, produced inside
+  - `error_type: str | None` — Exception class name of the probe failure's **root cause** (e.g.
+  - `error_message: str | None` — Truncated, secret-redacted message of the probe failure's **root
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `QueryBatchInput`
