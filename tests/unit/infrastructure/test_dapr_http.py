@@ -6,6 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.errors.categories import FailureCategory
+from application_sdk.errors.leaves import (
+    ColdStartRaceError,
+    DaprSidecarUnreachableError,
+)
 from application_sdk.infrastructure._dapr.http import (
     BINDING_PATH,
     METADATA_PATH,
@@ -837,17 +842,66 @@ class TestRetryPastDaprColdStart:
     async def test_gives_up_at_deadline(
         self, deterministic_dapr_cold_start_deadline
     ) -> None:
+        """On budget exhaustion the loop no longer re-raises the transient
+        ``ColdStartRaceError`` verbatim: it raises the terminal
+        ``DaprSidecarUnreachableError`` so a persistent platform fault stops
+        being reported as a transient cold-start race. It stays a
+        ``ColdStartRaceError`` subtype so every upstream ``except
+        ColdStartRaceError`` catch site is unaffected."""
         calls = {"n": 0}
 
         async def call() -> str:
             calls["n"] += 1
             raise SecretStoreUnavailableError("p")
 
-        with pytest.raises(SecretStoreUnavailableError):
+        with pytest.raises(DaprSidecarUnreachableError) as exc_info:
             await retry_past_dapr_cold_start(
                 call, description="test call", component="test-component"
             )
         assert calls["n"] == 2
+        assert isinstance(exc_info.value, ColdStartRaceError)
+
+    async def test_deadline_exhaustion_populates_diagnostic_fields(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        """The terminal error carries the diagnosis an operator needs — which
+        component, how many attempts, how long we waited — and routes exactly
+        like its parent (``DEPENDENCY_UNAVAILABLE`` → gate_broken), with its
+        own distinct code so it is greppable apart from a transient race."""
+
+        async def call() -> str:
+            raise SecretStoreUnavailableError("p")
+
+        with pytest.raises(DaprSidecarUnreachableError) as exc_info:
+            await retry_past_dapr_cold_start(
+                call, description="test call", component="test-component"
+            )
+        err = exc_info.value
+        assert err.component == "test-component"
+        assert err.attempts == 2
+        assert err.elapsed_seconds >= 10.0
+        assert err.code == "DEPENDENCY_UNAVAILABLE_SIDECAR_UNREACHABLE"
+        assert err.category == FailureCategory.DEPENDENCY_UNAVAILABLE
+
+    async def test_exhaustion_error_still_caught_as_coldstart(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        """Backward-compat guard for the subclass choice: the upstream secret
+        paths (``credentials/agent.py``, ``_dapr/credential_vault.py``)
+        re-wrap the exhausted retry via ``except ColdStartRaceError``. That
+        catch must keep firing on the new terminal type."""
+
+        async def call() -> str:
+            raise SecretStoreUnavailableError("p")
+
+        caught: ColdStartRaceError | None = None
+        try:
+            await retry_past_dapr_cold_start(
+                call, description="test call", component="test-component"
+            )
+        except ColdStartRaceError as exc:
+            caught = exc
+        assert isinstance(caught, DaprSidecarUnreachableError)
 
 
 class TestGetDaprComponentTypes:

@@ -119,6 +119,35 @@ def is_preflight_block(exc: BaseException | None) -> bool:
     return False
 
 
+def underlying_error_type(exc: BaseException) -> str:
+    """The class name of the underlying fault, seen through Temporal's
+    ActivityError/ApplicationError wrapping.
+
+    Temporal's default failure converter records a raised error as an
+    ``ApplicationError`` whose ``type`` is the original class name, then wraps
+    it in an ``ActivityError``. On the workflow side ``type(exc).__name__`` is
+    therefore the wrapper ("ActivityError"), not the fault. The first ``type``
+    in the cause chain is the real reason — the same chain
+    :func:`is_preflight_block` walks. Falls back to the top-level class name
+    when nothing in the chain carries a ``type`` (e.g. a bare
+    ``ApplicationError`` with no ``type`` set, or a plain ``RuntimeError``).
+
+    Used for the fail-open ``no_verdict`` outcome row's ``reason`` so a
+    persistent platform fault reaches the dashboard as its real cause (e.g.
+    ``DaprSidecarUnreachableError``) instead of an uninformative wrapper name.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        found = getattr(current, "type", None)
+        if found:
+            return found
+        nxt = getattr(current, "cause", None)
+        current = nxt if nxt is not None else current.__cause__
+    return type(exc).__name__
+
+
 def input_type_supports_gate(input_type: type) -> bool:
     """Whether an entrypoint's input type is gate-eligible.
 

@@ -172,6 +172,34 @@ class TestRunPreflightGate:
             == CLASSIFICATION_GATE_BROKEN
         )
 
+    async def test_fail_open_reason_names_the_underlying_error_not_the_wrapper(
+        self, safe_log
+    ) -> None:
+        # Temporal wraps the activity's error in an ActivityError, so the raw
+        # ``type(e).__name__`` on the no_verdict row is the useless wrapper name.
+        # The row must carry the real cause so the dashboard reads
+        # "DaprSidecarUnreachableError", not "ActivityError" — the whole point of
+        # naming a persistent sidecar fault instead of a transient race.
+        wrapped = ApplicationError(
+            "Dapr sidecar unreachable: component=objectstore not reachable "
+            "after 2 attempts over 120.0s",
+            type="DaprSidecarUnreachableError",
+        )
+        _, exec_patch = _exec(side_effect=_ActivityErrorStub(wrapped))
+        with _patched(True), exec_patch:
+            result = await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert result is None
+        no_verdict_call = next(
+            c
+            for c in safe_log.call_args_list
+            if c.kwargs.get("outcome") == "no_verdict"
+        )
+        assert no_verdict_call.kwargs.get("reason") == "DaprSidecarUnreachableError"
+        assert (
+            no_verdict_call.kwargs.get("gate_classification")
+            == CLASSIFICATION_GATE_BROKEN
+        )
+
     async def test_activity_timeouts_derive_from_the_app_budget(self, safe_log) -> None:
         # A slow source buys budget per app; both activity timeouts must move
         # with it, or raising start_to_close past the fixed 60s schedule cap
@@ -253,3 +281,35 @@ class TestEveryOutcomeCarriesTheCheckMatrix:
         # no checks to report and must not invent one.
         assert row[CHECK_MATRIX_KEY] == "[]"
         assert row["gate_classification"] == CLASSIFICATION_GATE_BROKEN
+
+
+class TestUnderlyingErrorType:
+    """``underlying_error_type`` sees the real fault through Temporal's wrapping."""
+
+    def test_returns_wrapped_application_error_type(self) -> None:
+        from application_sdk.execution._temporal.preflight_gate import (
+            underlying_error_type,
+        )
+
+        inner = ApplicationError("boom", type="DaprSidecarUnreachableError")
+        assert (
+            underlying_error_type(_ActivityErrorStub(inner))
+            == "DaprSidecarUnreachableError"
+        )
+
+    def test_falls_back_to_top_level_name_when_no_type_in_chain(self) -> None:
+        from application_sdk.execution._temporal.preflight_gate import (
+            underlying_error_type,
+        )
+
+        assert underlying_error_type(ValueError("x")) == "ValueError"
+
+    def test_is_cycle_safe(self) -> None:
+        from application_sdk.execution._temporal.preflight_gate import (
+            underlying_error_type,
+        )
+
+        looped = _ActivityErrorStub(ValueError("x"))
+        looped.cause = looped
+        looped.__cause__ = looped
+        assert underlying_error_type(looped) == "_ActivityErrorStub"
