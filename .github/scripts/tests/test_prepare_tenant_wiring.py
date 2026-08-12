@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 
 import e2e_tenant_app as app  # noqa: E402
-from _gha_expr import evaluate  # noqa: E402
+from _gha_expr import evaluate, evaluate_operand  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
@@ -699,6 +699,144 @@ def test_a_missing_tenant_id_is_rejected_before_anything_is_published(
             f"the tenant-ID gate must run before {later!r} — the whole point is "
             "rejecting the misconfiguration before any work or any publish"
         )
+
+
+# ── Two checks, at two altitudes, neither redundant (FND-203) ────────────────
+# The install path has one precondition ("a tenant_id can be resolved") that is
+# knowable in two halves at two different times, so it is checked twice. Nothing
+# in the workflow says that, and each check looks redundant next to the other —
+# which is exactly how one of them gets deleted.
+
+#: In discover-e2e, the first job on the e2e path. Catches "no tenant matrix
+#: shared with this repo at all", the openapi case: knowable from a secret's
+#: presence, so it costs seconds.
+_EARLY_CHECK = "Require the tenant matrix on the install path"
+
+#: In prepare-tenant, after tenant resolution. Catches "matrix present, this
+#: cloud's entry has no `tenant_id`" — invisible to the early check, which only
+#: ever sees whether the secret exists.
+_LATE_CHECK = "Require a tenant ID before publishing anything"
+
+
+def _named_step(jobs: dict, job: str, name: str) -> dict:  # type: ignore[type-arg]
+    matches = [s for s in jobs[job]["steps"] if str(s.get("name", "")) == name]
+    assert (
+        len(matches) == 1
+    ), f"expected exactly one {name!r} step in {job}, found {len(matches)}"
+    return matches[0]
+
+
+def test_both_install_preconditions_are_checked(jobs: dict) -> None:  # type: ignore[type-arg]
+    """Neither check subsumes the other, so removing either is a regression.
+
+    ``HAS_TENANT_MATRIX`` proves the secret *exists*; it says nothing about
+    whether the cloud's entry inside it carries a ``tenant_id``. So the early
+    check cannot cover the late one's case. And the late check cannot cover the
+    early one's cheaply: it runs after two per-arch image builds and a manifest
+    merge, which is the ~4 minutes of runner time FND-203 is about.
+
+    Dropping the early one restores the waste. Dropping the late one lets a run
+    with a matrix but no ``tenant_id`` for its cloud reach the publish and fail
+    inside the driver on an empty ``--tenant``, several steps past the cause.
+    """
+    _named_step(jobs, "discover-e2e", _EARLY_CHECK)
+    _named_step(jobs, "prepare-tenant", _LATE_CHECK)
+
+
+def test_the_install_path_precondition_is_checked_at_discovery(jobs: dict) -> None:  # type: ignore[type-arg]
+    step = _named_step(jobs, "discover-e2e", _EARLY_CHECK)
+    condition = " ".join(str(step["if"]).split())
+
+    assert "inputs.install-app-to-tenant" in condition, (
+        "the early check must fire only on the install path — a caller that never "
+        "installs is entitled to the single-tenant fallback, which is what the "
+        "'Warn that the cross-CSP matrix is unavailable' step covers instead"
+    )
+    assert "env.HAS_TENANT_MATRIX == ''" in condition, (
+        "the early check must key on the tenant-matrix signal; a step `if:` cannot "
+        "read the `secrets` context directly, which is why the job carries it as env"
+    )
+    assert "exit 1" in step["run"], (
+        "the early check must FAIL the run. A warning would let it go on to spend "
+        "two image builds discovering the same thing in prepare-tenant."
+    )
+
+
+def test_the_early_check_precedes_every_step_that_costs_anything(jobs: dict) -> None:  # type: ignore[type-arg]
+    """Placement is the entire value: a correct check in the wrong place saves
+    nothing. It must precede the checkout and both discovery invocations, so the
+    job fails in seconds rather than after the tree is fetched and globbed."""
+    steps = jobs["discover-e2e"]["steps"]
+    labels = [str(step.get("name") or step.get("uses", "")) for step in steps]
+    position = labels.index(_EARLY_CHECK)
+
+    first_uses = next(
+        index for index, step in enumerate(steps) if step.get("uses") is not None
+    )
+    assert position < first_uses, (
+        f"the early check runs after {labels[first_uses]!r}; it needs no checkout "
+        "and no action, so nothing may precede it except the distinct-id breadcrumb"
+    )
+    for later in ("Discover suites", "Discover clouds"):
+        assert position < labels.index(later)
+
+
+@pytest.mark.parametrize(
+    "secret,expected",
+    [
+        ("", ""),
+        ('{"aws":{"tenant":"t","tenant_id":"i"}}', "true"),
+    ],
+)
+def test_the_early_checks_signal_is_empty_exactly_when_the_secret_is(
+    jobs: dict,  # type: ignore[type-arg]
+    secret: str,
+    expected: str,
+) -> None:
+    """The signal must resolve to '' — not 'false' — when the secret is absent.
+
+    The check reads ``env.HAS_TENANT_MATRIX == ''``, so a plausible-looking
+    simplification of the expression to a bare ``secrets.X != ''`` would render
+    the signal ``'false'``, never match, and disable the check silently. That is
+    the failure mode worth a test: the loud direction (losing the job-level env
+    entirely, making the comparison always true) fails every install-path run on
+    its first use.
+    """
+    env = jobs["discover-e2e"].get("env") or {}
+    assert "HAS_TENANT_MATRIX" in env, (
+        "discover-e2e no longer carries HAS_TENANT_MATRIX at JOB level, so the "
+        "early check's `if:` cannot see it — a step condition cannot read `secrets`"
+    )
+    resolved = evaluate_operand(
+        env["HAS_TENANT_MATRIX"], {"secrets": {"E2E_TENANT_MATRIX_JSON": secret}}
+    )
+    assert resolved == expected
+
+
+@pytest.mark.parametrize(
+    "discovery,builds",
+    [("failure", False), ("success", True)],
+)
+def test_a_failed_discovery_skips_the_image_builds(
+    jobs: dict,  # type: ignore[type-arg]
+    discovery: str,
+    builds: bool,
+) -> None:
+    """What converts the early failure into an actual saving.
+
+    Failing discover-e2e only avoids the two builds because build-e2e-image gates
+    on discover-e2e having SUCCEEDED. Widen that to `always()` or to
+    `result != 'skipped'` — both of which read as harmless robustness — and the
+    builds run anyway, at which point the early check saves nothing at all.
+    """
+    ran = evaluate(
+        jobs["build-e2e-image"]["if"],
+        {
+            "inputs": {"install-app-to-tenant": True},
+            "needs": {"discover-e2e": {"result": discovery, "outputs": {"count": "2"}}},
+        },
+    )
+    assert ran is builds
 
 
 def test_job_timeout_stays_above_the_scripts_own_waits(jobs: dict) -> None:  # type: ignore[type-arg]
