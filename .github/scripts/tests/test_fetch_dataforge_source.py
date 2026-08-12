@@ -420,16 +420,22 @@ def test_main_without_api_key_uses_oidc_and_endpoint(monkeypatch, capsys):
     monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "runner-req-token")
 
     calls = {}
-    monkeypatch.setattr(fds, "_github_oidc_token", lambda audience="dataforge": "oidc-jwt")
+    monkeypatch.setattr(
+        fds, "_github_oidc_token", lambda audience="dataforge": "oidc-jwt"
+    )
 
     def fake_exchange(base_url, oidc_token):
         calls["exchange"] = (base_url, oidc_token)
         return "service-token"
 
-    def fake_endpoint(base_url, bearer, datasource, env_tier="", resource_id="", credential_id=""):
+    def fake_endpoint(
+        base_url, bearer, datasource, env_tier="", resource_id="", credential_id=""
+    ):
         calls["endpoint"] = {
-            "bearer": bearer, "datasource": datasource,
-            "resource_id": resource_id, "credential_id": credential_id,
+            "bearer": bearer,
+            "datasource": datasource,
+            "resource_id": resource_id,
+            "credential_id": credential_id,
         }
         return {"host": "h", "username": "u", "password": "p", "database": "d"}, "res-1"
 
@@ -447,16 +453,27 @@ def test_main_without_api_key_uses_oidc_and_endpoint(monkeypatch, capsys):
 
 def test_managed_mode_pin_becomes_credential_id(monkeypatch, capsys):
     monkeypatch.delenv("DATAFORGE_API_KEY", raising=False)
-    monkeypatch.setattr(fds, "_github_oidc_token", lambda audience="dataforge": "oidc-jwt")
-    monkeypatch.setattr(fds, "_exchange_for_service_token", lambda b, o: "service-token")
+    monkeypatch.setattr(
+        fds, "_github_oidc_token", lambda audience="dataforge": "oidc-jwt"
+    )
+    monkeypatch.setattr(
+        fds, "_exchange_for_service_token", lambda b, o: "service-token"
+    )
     seen = {}
 
-    def fake_endpoint(base_url, bearer, datasource, env_tier="", resource_id="", credential_id=""):
+    def fake_endpoint(
+        base_url, bearer, datasource, env_tier="", resource_id="", credential_id=""
+    ):
         seen["resource_id"], seen["credential_id"] = resource_id, credential_id
         return {"client_id": "c", "client_secret": "s"}, "cred-1"
 
     monkeypatch.setattr(fds, "resolve_via_endpoint", fake_endpoint)
-    assert fds.main(["--datasource", "powerbi", "--mode", "managed", "--resource-id", "cred-1"]) == 0
+    assert (
+        fds.main(
+            ["--datasource", "powerbi", "--mode", "managed", "--resource-id", "cred-1"]
+        )
+        == 0
+    )
     assert seen == {"resource_id": "", "credential_id": "cred-1"}
     json.loads(capsys.readouterr().out)
 

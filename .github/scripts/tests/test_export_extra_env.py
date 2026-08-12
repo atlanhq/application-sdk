@@ -519,9 +519,9 @@ def test_composite_action_invokes_this_script_at_a_real_path(action: str):
     action_dir = _REPO_ROOT / ".github" / "actions" / action
     action_yaml = (action_dir / "action.yaml").read_text()
 
-    assert re.search(
-        r"^  extra-env:", action_yaml, re.M
-    ), f"{action}/action.yaml no longer declares the extra-env input"
+    assert re.search(r"^  extra-env:", action_yaml, re.M), (
+        f"{action}/action.yaml no longer declares the extra-env input"
+    )
 
     match = re.search(
         r"\$\{\{ github\.action_path \}\}/(\S+?export_extra_env\.py)", action_yaml
@@ -529,9 +529,9 @@ def test_composite_action_invokes_this_script_at_a_real_path(action: str):
     assert match, f"{action}/action.yaml no longer invokes export_extra_env.py"
 
     resolved = (action_dir / match.group(1)).resolve()
-    assert (
-        resolved == _MODULE_PATH
-    ), f"{action} resolves export_extra_env.py to {resolved}, not {_MODULE_PATH}"
+    assert resolved == _MODULE_PATH, (
+        f"{action} resolves export_extra_env.py to {resolved}, not {_MODULE_PATH}"
+    )
     assert resolved.is_file()
 
 
@@ -858,9 +858,9 @@ def test_a_prose_excluded_file_that_starts_invoking_stops_being_excluded(
     workflows = tmp_path / ".github" / "workflows"
     workflows.mkdir(parents=True)
     excluded = workflows / "scripts-tests.yaml"
-    assert (
-        excluded.relative_to(tmp_path).as_posix() in _PROSE_ONLY_FILES
-    ), "premise: this path is the excluded one"
+    assert excluded.relative_to(tmp_path).as_posix() in _PROSE_ONLY_FILES, (
+        "premise: this path is the excluded one"
+    )
     monkeypatch.setitem(globals(), "_REPO_ROOT", tmp_path)
 
     # A comment-only mention: excluded, and discovery finds no call site at all.

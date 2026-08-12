@@ -451,9 +451,7 @@ def main(argv: list[str] | None = None) -> int:
             # OIDC end state: exchange the run's identity for a 1h
             # credentials:read token and resolve via the one-call endpoint —
             # no dataforge secret stored anywhere.
-            bearer = _exchange_for_service_token(
-                base_url, _github_oidc_token()
-            )
+            bearer = _exchange_for_service_token(base_url, _github_oidc_token())
             pin_resource = args.resource_id if args.mode == "resource" else ""
             pin_credential = args.resource_id if args.mode == "managed" else ""
             raw, resolved_id = resolve_via_endpoint(
