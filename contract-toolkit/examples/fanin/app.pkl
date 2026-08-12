@@ -1,20 +1,24 @@
 /// Minimal example demonstrating DAG dependencies.
 ///
-/// With 2+ entries in `dependsOn`, the renderer emits AE's fan-in shape:
+/// `dependsOn` is fail-fast at every list length — every entry it emits carries
+/// `tag: "success"`, so a node is scheduled only once its parent(s) SUCCEED:
 ///
-///     "depends_on": {
+///     dependsOn { "extract" }      → {"node_id": "extract", "tag": "success"}
+///
+///     dependsOn { "left"; "right" } → {
 ///       "and_conditions": [
 ///         {"node_id": "left",  "tag": "success"},
 ///         {"node_id": "right", "tag": "success"}
 ///       ]
 ///     }
 ///
-/// `tag: "success"` gates `join` on BOTH parents reaching SUCCESS.
+/// To opt out and depend on a parent purely for *ordering* — run once it settles,
+/// whatever the outcome — omit the tag via `dependsOnCondition` (see `audit` and
+/// `mixed-gate` below). An untagged node condition is satisfied by SUCCESS or
+/// FAILURE, but not by a SKIPPED parent.
 ///
 /// For tags, OR conditions, or nested conditions, use the explicit
 /// `dependsOnCondition` API instead of overloading `dependsOn`.
-///
-/// See also: `trino/app.pkl` for the single-parent `dependsOn` pattern.
 amends "../../src/App.pkl"
 
 import "../../src/Connectors.pkl"
@@ -86,6 +90,28 @@ extraNodes {
           nodeId = "right"
           tag = "failure"
         }
+      }
+    }
+  }
+  // Ordering-only opt-out: `dependsOn { "join" }` would gate this on `join`
+  // succeeding. An untagged `dependsOnCondition` keeps the sequencing without
+  // the success gate, so the audit still runs when `join` fails.
+  ["audit"] = new DAGNode {
+    displayName = "Audit After Join Settles"
+    workflowType = "AuditWorkflow"
+    args {}
+    dependsOnCondition = new DependencyCondition { nodeId = "join" }
+  }
+  // Per-parent gating, which the `dependsOn` shorthand cannot express: `left`
+  // must succeed, `right` only has to reach a terminal state.
+  ["mixed-gate"] = new DAGNode {
+    displayName = "Left Must Succeed, Right Must Settle"
+    workflowType = "MixedGateWorkflow"
+    args {}
+    dependsOnCondition = new DependencyCondition {
+      andConditions {
+        new DependencyCondition { nodeId = "left"; tag = "success" }
+        new DependencyCondition { nodeId = "right" }
       }
     }
   }

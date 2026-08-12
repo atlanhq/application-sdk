@@ -870,10 +870,11 @@ open class DAGNode {
   taskQueue: String?
   args: Mapping<String, Any>
 
-  /// Upstream dependencies for this node. Emission shape is chosen
-  /// automatically based on list length:
+  /// Upstream dependencies for this node. Both forms gate on the parent(s)
+  /// reaching SUCCESS — a failed or skipped parent does not schedule this
+  /// node. Emission shape is chosen automatically based on list length:
   ///
-  ///   `dependsOn { "a" }`  → `"depends_on": {"node_id": "a"}`
+  ///   `dependsOn { "a" }`  → `"depends_on": {"node_id": "a", "tag": "success"}`
   ///
   ///   `dependsOn { "a"; "b" }` → ```
   ///     "depends_on": {
@@ -885,7 +886,9 @@ open class DAGNode {
   ///   ```
   ///
   /// The 2+ entry form maps to AE's `and_conditions` fan-in: the node is
-  /// scheduled only after ALL listed parents succeed.
+  /// scheduled only after ALL listed parents succeed. Use
+  /// `dependsOnCondition` instead if a node genuinely needs to run
+  /// regardless of the parent's outcome (e.g. a cleanup/notify step).
   dependsOn: Listing<String>?
 
   /// Explicit AE dependency condition for tags, OR, or nested logic. Mutually
@@ -2640,10 +2643,13 @@ local function renderNode(node: DAGNode): Mapping<String, Any> =
     ["task_queue"] = node.taskQueue ?? "atlan-\(node.appName)-{deployment_name}"
     ["args"] = renderNodeArgs(node)
   }
-  // Single parent → depends_on: {node_id}. Multi-parent → depends_on: {and_conditions: [...]}.
+  // Single parent → depends_on: {node_id, tag: "success"}. Multi-parent →
+  // depends_on: {and_conditions: [...]}. Both forms gate on the parent(s)
+  // succeeding — a failed/skipped parent must not schedule this node.
   when (node.dependsOn != null && node.dependsOn.length == 1) {
     ["depends_on"] = new Mapping {
       ["node_id"] = node.dependsOn.first
+      ["tag"] = "success"
     }
   }
   when (node.dependsOn != null && node.dependsOn.length > 1) {
