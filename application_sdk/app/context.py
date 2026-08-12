@@ -2,6 +2,7 @@
 """Execution context for Apps."""
 
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -435,6 +436,8 @@ class TaskExecutionContext:
     - heartbeat(): Send manual heartbeats with progress details
     - get_last_heartbeat_details(): Get last heartbeat for resume on retry
     - run_in_thread(): Run blocking operations without breaking heartbeats
+    - holding_progress(): Vouch for one opaque call the SDK cannot see into,
+      so the stall watchdog does not read it as a stall
 
     This context is only available inside @task methods, not in run().
     Access via self.task_context in your task methods.
@@ -600,3 +603,55 @@ class TaskExecutionContext:
         )
 
         return await run_in_thread(func, *args, **kwargs)
+
+    def holding_progress(
+        self, label: str, *, timeout: float | None
+    ) -> AbstractAsyncContextManager[None]:
+        """Vouch for one opaque operation for as long as you would let it run.
+
+        Pauses the ADR-0018 stall watchdog for the duration of a call the SDK
+        cannot see into, and records the completed call as progress on exit.
+        Covers both shapes of opaque work — an ``await`` against your own async
+        client, and a blocking call offloaded through :meth:`run_in_thread`::
+
+            # async: your own client, which the SDK cannot see into
+            async with self.task_context.holding_progress(
+                "snapshot metadata query", timeout=1800
+            ):
+                rows = await long_single_query(...)
+
+            # blocking: the same wrapper around the offload
+            async with self.task_context.holding_progress(
+                "full table scan", timeout=7200
+            ):
+                rows = await self.task_context.run_in_thread(cursor.execute, sql)
+
+        Expect to need this in almost every connector: streaming reads that
+        interleave fetch and write are already covered by the write side, but a
+        genuinely opaque *single* call — one large metadata query, one slow
+        list/export — emits nothing until it completes and would otherwise read
+        as a stall.
+
+        Args:
+            label: The call site being vouched for. Must identify a *site* —
+                never interpolate a query, a key, a credential or a customer
+                value into it.
+            timeout: How long you would let this one operation run before you
+                would rather it failed — **not** a prediction of how long it
+                takes. Keyword-only and required: the SDK never defaults this
+                number. ``timeout=None`` declares an unbounded hold, leaving the
+                duration backstop as the only bound. Err generous — too tight
+                kills a healthy run, and stall kills retry.
+
+        Returns:
+            An async context manager. Use it with ``async with``.
+
+        See Also:
+            ``docs/adr/0018-progress-aware-heartbeat.md`` → *Holds* and
+            *Choosing the allowance*.
+        """
+        from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            holding_progress,
+        )
+
+        return holding_progress(label, timeout=timeout)

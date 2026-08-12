@@ -489,13 +489,22 @@ One mechanism covers both blocking and async opaque work:
 
 ```python
 # async: the connector's own client
-async with self.context.holding_progress("snapshot metadata query", timeout=1800):
+async with self.holding_progress("snapshot metadata query", timeout=1800):
     rows = await long_single_query(...)
 
 # blocking: the same wrapper around the offload
-async with self.context.holding_progress("full table scan", timeout=7200):
-    rows = await self.context.run_in_thread(cursor.execute, sql)
+async with self.holding_progress("full table scan", timeout=7200):
+    rows = await self.run_in_thread(cursor.execute, sql)
 ```
+
+It lives on `TaskExecutionContext` next to `run_in_thread`, with the same
+`App`-level shorthand (`self.holding_progress(...)` /
+`self.task_context.holding_progress(...)`), and as a module-level
+`application_sdk.execution.progress.holding_progress` for app code that sits
+outside the app class. `timeout` is keyword-only and **required**: declaring
+nothing is spelled `timeout=None`, so an unbounded hold is a statement in the
+source rather than an omission, and no default can quietly reintroduce a
+derived duration.
 
 An earlier draft of this ADR proposed *deriving* the hold's bound from the
 `timeout=` kwarg the call already carries, on the theory that ADR-0010 already
