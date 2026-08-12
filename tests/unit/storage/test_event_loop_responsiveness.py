@@ -138,6 +138,7 @@ class TestJsonReaderResponsiveness:
         frames, ticks = await count_ticks_during(_drain)
 
         assert [len(f) for f in frames] == [10, 10]
+        assert calls["n"] == 20, "the patched orjson.loads path never ran"
         assert_stayed_responsive(ticks, "JsonFileReader._get_batched_dataframe")
 
     async def test_whole_file_read_does_not_block_the_loop(
@@ -162,6 +163,7 @@ class TestJsonReaderResponsiveness:
         frame, ticks = await count_ticks_during(reader._get_dataframe)
 
         assert len(frame) == 5
+        assert slowed["done"], "the read path never ran"
         assert_stayed_responsive(ticks, "JsonFileReader._get_dataframe")
 
 
