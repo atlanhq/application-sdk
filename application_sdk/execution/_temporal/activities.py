@@ -143,6 +143,11 @@ def create_activity_from_task(
             TemporalHeartbeatController,
             auto_heartbeat_loop,
         )
+        from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            ProgressTracker,
+            reset_progress_tracker,
+            set_progress_tracker,
+        )
 
         app_registry = AppRegistry.get_instance()
         app_metadata = app_registry.get(context.app_name)
@@ -193,6 +198,15 @@ def create_activity_from_task(
             heartbeat_controller=heartbeat_controller,
         )
         app_instance._task_context = task_exec_context
+
+        # One tracker per attempt, bound to the context before anything can
+        # report progress into it. Created unconditionally — deliberately not
+        # gated on heartbeat_timeout_seconds, since the stall watchdog is what
+        # bounds a wedged attempt on a task that has heartbeating disabled.
+        # The binding is what makes it reachable from the framework hooks,
+        # `run_in_thread` and `holding_progress()`, none of which is handed a
+        # reference (ADR-0018 → *Feeding the tracker*).
+        tracker_token = set_progress_tracker(ProgressTracker())
 
         stop_event = asyncio.Event()
         heartbeat_task = None
@@ -346,6 +360,11 @@ def create_activity_from_task(
                         logger.debug(
                             "Heartbeat task did not cancel cleanly", exc_info=True
                         )
+
+            # Unbind in the same context that bound it, so a caller that invokes
+            # the activity body directly (a local run, a unit test) is left with
+            # whatever tracker it had, rather than this attempt's.
+            reset_progress_tracker(tracker_token)
 
             app_instance._task_context = None
             app_instance._context = None

@@ -24,12 +24,22 @@ Two signals feed it (see ADR-0018 → *Feeding the tracker*):
   at the one call site that knows, or declares nothing and gets an unbounded
   hold that the duration backstop owns.
 
+Both signals are produced deep inside code that has no reference to the
+tracker — the SDK's transfer loops, a blocking call offloaded through
+``run_in_thread``, an app's own ``holding_progress`` block. They reach the
+current attempt's tracker through the ContextVar in this module:
+:func:`current_progress_tracker` for consumers, and
+:func:`set_progress_tracker` / :func:`reset_progress_tracker` for
+``activities.py``, which owns one tracker per activity attempt.
+
 The watchdog that consumes the tracker lives in
 :func:`~application_sdk.execution.heartbeat.auto_heartbeat_loop` and runs in one
-of the three :class:`ProgressWatchdogMode` states. The ContextVar plumbing that
-makes the tracker reachable from app code (FND-287), the framework hooks
-(FND-288) and the warn-mode telemetry that consumes :class:`ClosedHold`
-(FND-292) are separate pieces built on this one.
+of the three :class:`ProgressWatchdogMode` states. It is handed the tracker by
+injection rather than reading the ContextVar, so it stays unit-testable without
+an activity. The framework hooks (FND-288), the ``run_in_thread`` auto-holds
+(FND-290), the public ``holding_progress()`` context manager (FND-291) and the
+warn-mode telemetry that consumes :class:`ClosedHold` (FND-292) are separate
+pieces built on this one.
 """
 
 from __future__ import annotations
@@ -37,6 +47,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 
 from application_sdk.contracts.base import SerializableEnum
@@ -325,3 +336,121 @@ class ProgressTracker:
                 closed.duration_seconds,
                 exc_info=True,
             )
+
+
+class _InertProgressTracker(ProgressTracker):
+    """The no-tracker case, as a well-defined no-op.
+
+    Returned by :func:`current_progress_tracker` when no activity attempt owns
+    the current context: a local run, a unit test, an HTTP handler, the SDK's
+    own transfer loops called from a script. Progress signals from those callers
+    are recorded nowhere and no watchdog observes them, so the honest answer to
+    *"is anything vouching for this?"* and *"how long has it been quiet?"* is
+    ``False`` and ``0.0`` — not the process's uptime.
+
+    Existing as a null object rather than letting the accessor return ``None``
+    is deliberate: every consumer of the tracker is a paired
+    ``enter_hold`` / ``exit_hold`` or a bare ``mark_progress`` buried in a hot
+    loop, and a ``None`` check at each of those sites is the exact thing that
+    gets half-written. It mirrors ``NoopHeartbeatController``'s role on the
+    heartbeat path.
+
+    The mutators are overridden rather than inherited because this instance is a
+    process-wide singleton: inherited ``enter_hold`` would accumulate a hold per
+    never-exited token for the life of the process, and inherited
+    ``mark_progress`` would take a shared lock on every framework-hook call made
+    outside an activity.
+    """
+
+    def mark_progress(self, label: str = "") -> None:
+        """Discard the signal — nothing is observing this context."""
+
+    def enter_hold(self, label: str, timeout: float | None) -> int:
+        """Vouch for nothing, and hand back a token no real tracker can own.
+
+        Real tokens are non-negative, so if a consumer ever pairs this
+        ``enter_hold`` with a *real* tracker's ``exit_hold`` — the ContextVar
+        having been set in between — the mismatch is logged rather than silently
+        releasing somebody else's hold.
+        """
+        return -1
+
+    def exit_hold(self, token: int) -> None:
+        """Release nothing, and stay quiet: there was no hold to release."""
+
+    def held(self) -> bool:
+        """Always ``False`` — an inert tracker vouches for nothing."""
+        return False
+
+    def stalled_for(self) -> float:
+        """Always ``0.0`` — nothing is watching, so nothing is stalled."""
+        return 0.0
+
+
+_INERT_TRACKER = _InertProgressTracker()
+
+_progress_tracker: ContextVar[ProgressTracker | None] = ContextVar(
+    "progress_tracker", default=None
+)
+
+
+def current_progress_tracker() -> ProgressTracker:
+    """Get the :class:`ProgressTracker` for the current activity attempt.
+
+    The read seam for every progress producer — the framework hooks, the
+    ``run_in_thread`` auto-hold, ``holding_progress()`` — none of which is
+    handed the tracker by its caller.
+
+    Reachable from anywhere inside the attempt, including from a worker thread:
+    ``run_in_thread`` propagates the calling context via
+    ``contextvars.copy_context()``, so blocking work offloaded through it reads
+    the same tracker as the coroutine that offloaded it. Mutations inside that
+    thread stay in the thread's copy of the context (copy semantics), but the
+    tracker *object* is shared, so progress marked from the thread lands on the
+    attempt's tracker.
+
+    Returns:
+        The current attempt's tracker, or an inert one when no attempt owns this
+        context (local runs, unit tests, non-activity callers). Never ``None``
+        and never raises, so a caller outside an activity behaves exactly as it
+        did before this plumbing existed.
+
+    Note:
+        Callers that pair ``enter_hold`` with ``exit_hold`` must hold on to the
+        object this returns and call both on it, rather than calling this twice.
+        Re-reading picks up whatever tracker the context has by then, which for
+        a hold spanning a context change would release the wrong deadline.
+    """
+    tracker = _progress_tracker.get()
+    return _INERT_TRACKER if tracker is None else tracker
+
+
+def set_progress_tracker(tracker: ProgressTracker) -> Token[ProgressTracker | None]:
+    """Bind ``tracker`` as the current attempt's tracker.
+
+    Called once per activity attempt by
+    ``application_sdk.execution._temporal.activities``, which owns the
+    tracker's lifetime. Each activity runs as its own asyncio task with its own
+    copy of the context, so concurrent activities in one worker bind their own
+    tracker and never observe each other's.
+
+    Args:
+        tracker: The tracker for this attempt.
+
+    Returns:
+        A token to pass to :func:`reset_progress_tracker` when the attempt ends.
+    """
+    return _progress_tracker.set(tracker)
+
+
+def reset_progress_tracker(token: Token[ProgressTracker | None]) -> None:
+    """Unbind the tracker :func:`set_progress_tracker` bound.
+
+    Must be called in the same context that set it (in practice, the activity
+    body's ``finally``). Restores whatever was bound before, so a nested attempt
+    — or a test that binds its own tracker — leaves the caller's binding intact.
+
+    Args:
+        token: The token returned by :func:`set_progress_tracker`.
+    """
+    _progress_tracker.reset(token)
