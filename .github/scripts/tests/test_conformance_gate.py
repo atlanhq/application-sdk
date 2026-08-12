@@ -62,7 +62,22 @@ _FAIL = "Conformance gate failed"
 #: vocabulary.  Both must fail closed rather than fall through the branch.
 _SUITE_RESULTS = ("success", "skipped", "failure", "cancelled", "", "neutral")
 
-#: (suite result, exit-zero) -> the single step that must fire.
+#: How `inputs.exit-zero` can arrive, and what it MEANS.  A `type: boolean`
+#: workflow_call input is coerced to a real boolean, so the first two are what
+#: production actually passes.  The string forms are here because a bare
+#: `inputs.exit-zero` is a cast-to-boolean and GHA treats the string 'false' as
+#: TRUTHY — so if the coercion ever stopped holding, the naive condition would
+#: read "false" as "advisory" and every hard-gate caller would silently stop
+#: enforcing while its required check went green.  That direction is much worse
+#: than the other, hence the `!= 'false'` term in the workflow and these rows.
+_EXIT_ZERO_VALUES: tuple[tuple[Any, bool], ...] = (
+    (False, False),
+    (True, True),
+    ("false", False),
+    ("true", True),
+)
+
+#: (suite result, exit-zero means advisory) -> the single step that must fire.
 _EXPECTED: dict[tuple[str, bool], str] = {
     ("success", False): _PASS_CLEAN,
     ("success", True): _PASS_CLEAN,
@@ -96,24 +111,24 @@ def gate_steps() -> dict[str, dict[str, Any]]:
     return steps
 
 
-def _contexts(suite_result: str, exit_zero: bool) -> dict[str, Any]:
+def _contexts(suite_result: str, exit_zero: Any) -> dict[str, Any]:
     return {
         "needs": {"suite": {"result": suite_result}},
         "inputs": {"exit-zero": exit_zero},
     }
 
 
-def _cases() -> Iterator[tuple[str, bool, str]]:
+def _cases() -> Iterator[tuple[str, Any, str]]:
     for suite_result in _SUITE_RESULTS:
-        for exit_zero in (False, True):
-            yield suite_result, exit_zero, _EXPECTED[(suite_result, exit_zero)]
+        for exit_zero, is_advisory in _EXIT_ZERO_VALUES:
+            yield suite_result, exit_zero, _EXPECTED[(suite_result, is_advisory)]
 
 
 @pytest.mark.parametrize(("suite_result", "exit_zero", "expected"), list(_cases()))
 def test_exactly_one_branch_fires(
     gate_steps: dict[str, dict[str, Any]],
     suite_result: str,
-    exit_zero: bool,
+    exit_zero: Any,
     expected: str,
 ) -> None:
     """Every (result × exit-zero) pair selects one branch — never zero, never two.
@@ -153,9 +168,7 @@ def test_advisory_pass_is_announced(gate_steps: dict[str, dict[str, Any]]) -> No
     assert "GITHUB_STEP_SUMMARY" in run, "advisory pass must write the run summary"
 
 
-def test_gate_still_always_runs_after_the_whole_suite(
-    gate_steps: dict[str, dict[str, Any]],  # noqa: ARG001 — module fixture loads the file
-) -> None:
+def test_gate_still_always_runs_after_the_whole_suite() -> None:
     """`if: always()` + `needs: [suite]` is what makes this a viable required check.
 
     Drop `always()` and the gate goes 'skipped' whenever a leg fails, which in a

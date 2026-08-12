@@ -590,8 +590,19 @@ jobs:
       # advisory.  Deliberately loud: a green required check is the one outcome
       # nobody re-reads, so the reason it is green goes in an annotation and the
       # run summary rather than in this job's log alone.
+      # `!= 'false'` is not redundant paranoia.  A bare `inputs.exit-zero` is a
+      # cast-to-boolean, and in GitHub expressions the STRING 'false' is truthy
+      # — the classic workflow footgun.  A `type: boolean` workflow_call input
+      # is coerced to a real boolean today (sdk-gate.yaml passes `force-all` as
+      # an expression and line ~398 relies on `!inputs.force-all`), so this term
+      # is inert.  It is here because the two directions are not equally bad: if
+      # that ever stops holding, without this term every HARD-gate caller
+      # silently becomes advisory and the suite stops enforcing anything, with
+      # a green check saying otherwise.  One term buys that away.
       - name: "Conformance gate passed (advisory — exit-zero)"
-        if: inputs.exit-zero && needs.suite.result == 'failure'
+        if: >-
+          inputs.exit-zero && inputs.exit-zero != 'false'
+          && needs.suite.result == 'failure'
         env:
           SUITE_RESULT: ${{ needs.suite.result }}
         run: |
@@ -611,7 +622,8 @@ jobs:
       - name: "Conformance gate failed"
         if: >-
           !(needs.suite.result == 'success' || needs.suite.result == 'skipped'
-          || (inputs.exit-zero && needs.suite.result == 'failure'))
+          || (inputs.exit-zero && inputs.exit-zero != 'false'
+              && needs.suite.result == 'failure'))
         env:
           SUITE_RESULT: ${{ needs.suite.result }}
         run: |
