@@ -406,7 +406,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: tests-unit-${{ github.ref }}
+      # See the integration job below for why the group is run-unique off the
+      # PR path. Same hazard, same fix — this job was cancelled alongside it.
+      group: tests-unit-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
       cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
     permissions:
       pull-requests: write  # connector-unit-tests comments the coverage delta
@@ -616,7 +618,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
-      group: tests-integration-${{ github.ref }}
+      # On a PR ref the group is deliberately SHARED across the PR's commits —
+      # that is what makes cancel-in-progress supersede the previous run.
+      #
+      # Off the PR path there is nothing to serialise: this job is self-contained
+      # (testcontainers / services-script on its own runner, no tenant, no shared
+      # external resource). A shared group there is not merely useless, it is
+      # actively harmful, because GitHub keeps only ONE pending run per group —
+      # a third arrival evicts the queued one with conclusion `cancelled`.
+      #
+      # That is precisely what a cross-repo dispatch delivers: on the
+      # workflow_dispatch path github.ref is the CONNECTOR's ref (always
+      # refs/heads/main), never the application-sdk commit under test, so N
+      # concurrent SDK runs all landed in one group. application-sdk's merge queue
+      # builds several entries speculatively at once and each dispatches into every
+      # connector, so a batch of queued PRs reliably evicted each other's runs —
+      # Tests Gate then failed, report-to-sdk reported failure on the SDK SHA, and
+      # the merge-queue entry was ejected with no test having actually run.
+      #
+      # Keying on run_id off the PR path gives every run its own group.
+      group: tests-integration-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
       cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
     permissions:
       pull-requests: write
@@ -1045,6 +1066,63 @@ jobs:
           IMAGE: ${{ needs.build-e2e-image.outputs.image-base }}
         run: echo "tag=${IMAGE##*:}" >> "$GITHUB_OUTPUT"
 
+  # ── Queue for the (app, cloud) tenant ────────────────────────────────────
+  # A tenant is a shared MUTABLE resource: prepare-tenant installs a version onto
+  # it and every leg below then asserts it is testing that version (FND-31). So
+  # exclusive access has to span from the install to the last leg — and that is
+  # something `concurrency:` structurally cannot do, for two separate reasons:
+  #
+  #   * It is per-JOB. A group on prepare-tenant is released when that job ends,
+  #     which is before any leg has started. The old comment on that job admitted
+  #     as much ("another run can still install between this job and the legs").
+  #   * It holds exactly ONE pending run per group. A third arrival does not
+  #     queue — it cancels the run that was waiting, before that run is ever
+  #     given a runner, with no log output at all. That is FND-218: a merge-queue
+  #     batch whose "connector test failures" were all evictions.
+  #
+  # So the lease is a single fixed-name ref per tenant, taken by an atomic
+  # compare-and-swap (GitHub's 422 on creating a ref that already exists IS the
+  # lock), held for the whole run, with dead holders reaped by whoever notices
+  # (FND-250). It runs AFTER the image is built and merged so the tenant is not
+  # held hostage to a build, and it is released by release-tenant below.
+  #
+  # An earlier version ordered per-run ticket refs by run_id instead, and both
+  # contenders acquired on its first concurrent run: run_id is creation order, not
+  # the order runs reach this job, and a total order gives fairness rather than
+  # exclusion. Exclusion needs an atomic primitive — see the module docstring.
+  #
+  # Same gate and same cloud matrix as prepare-tenant: no install, no contention
+  # worth serialising — the legs of a non-installing run cannot lose a version
+  # race because nothing changes the version under them.
+  lease-tenant:
+    name: Tenant lease (${{ matrix.cloud || 'default' }})
+    needs: [discover-e2e, merge-e2e-image]
+    if: inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success'
+    strategy:
+      # One cloud's queue being stuck must not cancel the others.
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-count != '0' && needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
+    runs-on: ubuntu-latest
+    # Above the action's own 90-minute wait budget, so a run that queues for the
+    # full budget still reaches the script's own error — which names the holding
+    # run — instead of being replaced by a bare "job cancelled after Nm".
+    timeout-minutes: 100
+    permissions:
+      # Ref writes create and delete the lease ticket. Scoped to THIS job on
+      # purpose: the long-running e2e legs below keep read-only contents, so the
+      # write capability lives only in a job that runs no test code.
+      contents: write
+      # Tell a live holder from a dead one, which is what makes a cancelled run's
+      # abandoned ticket self-healing.
+      actions: read
+    steps:
+      - name: Acquire the tenant lease
+        uses: atlanhq/application-sdk/.github/actions/e2e-tenant-lease@main
+        with:
+          mode: acquire
+          app: ${{ inputs.app-name }}
+          cloud: ${{ matrix.cloud }}
+
   # ── Install the app under test onto each cloud's tenant ──────────────────
   # One leg per CLOUD, not per suite × cloud: the installation is tenant-scoped
   # (one per app per tenant), so installing once per cloud is both sufficient and
@@ -1055,8 +1133,32 @@ jobs:
   # legs can never disagree about which clouds are in play.
   prepare-tenant:
     name: Prepare tenant (${{ matrix.cloud || 'default' }})
-    needs: [discover-e2e, merge-e2e-image]
-    if: inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success'
+    needs: [discover-e2e, merge-e2e-image, lease-tenant]
+    # Gated on lease-tenant having RUN, not on it having succeeded, and then each
+    # leg confirms its OWN cloud's lease in its first step.
+    #
+    # `needs.lease-tenant.result` is the matrix AGGREGATE, so `== 'success'` means
+    # "some cloud's lease succeeded", never "this leg's did". Observed live: one
+    # cloud's acquire failed on a transient TLS error and the aggregate then
+    # skipped the install for the two clouds whose leases HAD been taken — a run
+    # holding two tenants that installed onto neither.
+    #
+    # `always()` is what makes the widening actually do anything, and it is easy
+    # to omit: without a status-check function GitHub applies an implicit
+    # success() over every `needs` entry and skips the job BEFORE this `if:` is
+    # consulted, so a failed lease leg would still skip the install everywhere
+    # and the per-cloud verify step below would never run. Same shape and same
+    # reason as the e2e legs' gate — see test_e2e_tolerates_skipped_but_not_failed_prepare.
+    #
+    # Because always() lifts that implicit success(), discover-e2e and
+    # merge-e2e-image have to be named explicitly here; they were previously
+    # carried by the implicit check.
+    if: |
+      always() &&
+      inputs.install-app-to-tenant &&
+      needs.discover-e2e.result == 'success' &&
+      needs.merge-e2e-image.result == 'success' &&
+      needs.lease-tenant.result != 'skipped'
     strategy:
       # One cloud's tenant being uninstallable must not cancel the others; the
       # legs for that cloud fail on their own version check.
@@ -1084,17 +1186,17 @@ jobs:
     # was about to print — the diagnosis-hostile failure this job exists to avoid.
     timeout-minutes: 40
     concurrency:
-      # Keyed on the TENANT (app + cloud), not the ref: the installation is
-      # tenant-scoped, so two runs installing different versions concurrently
-      # would race and the loser is silently what the tenant ends up running.
-      # cancel-in-progress:false because cancelling mid-install leaves the tenant
-      # in whatever state LM reached.
+      # Run-unique, i.e. deliberately NOT a serialising group. Tenant exclusion
+      # is the lease's job now (lease-tenant above), and the lease is strictly
+      # better at it: it spans this job AND the legs, and it queues rather than
+      # evicting all but one waiter.
       #
-      # This narrows the race; it does not close it. GitHub has no cross-job
-      # lease, so another run can still install between this job and the legs
-      # below — which is exactly why each leg re-verifies the version rather than
-      # trusting this job's outcome.
-      group: e2e-prepare-tenant-${{ inputs.app-name }}-${{ matrix.cloud || 'default' }}
+      # Keying this on the tenant as well would actively hurt. Two runs that both
+      # hold no lease yet would still stack up here one-deep, and a third would
+      # be evicted with no log — reintroducing the FND-218 failure inside the fix
+      # for it. Left run-unique so this job never waits on anything except the
+      # lease it already holds.
+      group: e2e-prepare-tenant-${{ github.run_id }}-${{ matrix.cloud || 'default' }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -1114,15 +1216,48 @@ jobs:
       # fetched. Sparse + pinned to job.workflow_sha for the same reason as the
       # equivalent checkout in the e2e job: a PR editing these scripts must run
       # its own version, not main's.
+      #
+      # The lease driver is fetched here too, and the lease check below invokes it
+      # directly rather than through the composite action. `uses:` cannot take an
+      # expression, so an action reference can only ever be @main — which means a
+      # PR that adds a mode to the driver would call a main that does not have it
+      # yet and die at argument parsing, and a PR that changes the driver would
+      # silently exercise main's copy instead of its own. Both directions of that
+      # stale window are closed by running the checked-out driver.
       - name: Fetch SDK CI scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/e2e-tenant-lease
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
+
+      # Before anything touches the tenant: confirm THIS leg holds THIS cloud's
+      # lease. The job's `if:` can only see the lease matrix aggregate, so it
+      # cannot tell "my cloud's lease succeeded" from "some cloud's did" — this is
+      # what makes the install's precondition true per cloud. Fails the leg rather
+      # than installing into a race.
+      #
+      # It follows the two checkouts because neither touches the tenant; nothing
+      # between here and the install may be reordered above it.
+      - name: Confirm this run holds the tenant lease
+        env:
+          APP: ${{ inputs.app-name }}
+          CLOUD: ${{ matrix.cloud }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/actions/e2e-tenant-lease/e2e_tenant_lease.py \
+            --mode verify \
+            --repo "$GITHUB_REPOSITORY" \
+            --app "$APP" \
+            --cloud "$CLOUD" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
 
       # Two invocations, mask pass first — see the equivalent step in the e2e job
       # for why registering the matrix blob as a secret does not redact the values
@@ -1286,11 +1421,20 @@ jobs:
     # version check self-skips. A silently passing wrong-version run: precisely
     # what FND-31 exists to make impossible. Adding the intermediate merge job
     # introduced that; naming both needs closes it.
-    needs: [discover-e2e, build-e2e-image, merge-e2e-image, prepare-tenant]
+    #
+    # lease-tenant is gated here for exactly the reason build-e2e-image is. A
+    # failed lease leaves prepare-tenant SKIPPED (its own `if` is not satisfied),
+    # and 'skipped' is the benign value below — so omitting it would let every leg
+    # run against a tenant nobody installed onto, with expected-app-version empty
+    # so the version check self-skips. A silently passing wrong-version run, from
+    # the job added to make wrong-version runs impossible.
+    needs:
+      [discover-e2e, build-e2e-image, merge-e2e-image, lease-tenant, prepare-tenant]
     if: |
       always() &&
       needs.discover-e2e.result == 'success' &&
       needs.discover-e2e.outputs.count != '0' &&
+      (needs.lease-tenant.result == 'success' || needs.lease-tenant.result == 'skipped') &&
       (needs.prepare-tenant.result == 'success' || needs.prepare-tenant.result == 'skipped') &&
       (needs.build-e2e-image.result == 'success' || needs.build-e2e-image.result == 'skipped') &&
       (needs.merge-e2e-image.result == 'success' || needs.merge-e2e-image.result == 'skipped')
@@ -1303,9 +1447,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
-      # Per-leg group so matrix legs run concurrently (a shared group would
-      # serialise them). cancel-in-progress:false keeps re-runs from cancelling.
-      group: tests-e2e-${{ github.ref }}-${{ matrix.name }}
+      # Run-unique, so no e2e leg ever queues behind or cancels another. It used
+      # to be keyed on github.ref, which on the cross-repo dispatch path is this
+      # repo's refs/heads/main for EVERY run — so all concurrent dispatches
+      # collapsed into one group, and a group holds only one pending run: a third
+      # dispatch cancelled the queued one before it was ever given a runner, with
+      # no log to say so (FND-218).
+      #
+      # Serialising tenant access is the lease's job now (lease-tenant), and the
+      # lease does it properly — across the install and the legs, with a queue
+      # instead of a single slot. That leaves this group with nothing to
+      # serialise, so it identifies the run and nothing else.
+      #
+      # cancel-in-progress stays false, and deliberately so: cancelling a leg
+      # mid-flight abandons a live Automation Engine run, and there is no cleanup
+      # path for the tenant state it leaves behind. Turning it on needs that
+      # cleanup path first (FND-252) — test_label_trigger_gates.py pins this so
+      # the decision cannot be taken by accident, and it has already caught one
+      # attempt. The cost of leaving it false is a superseded commit's leg running
+      # to the 120-minute ceiling while holding the tenant lease.
+      group: tests-e2e-${{ github.run_id }}-${{ matrix.name }}
       cancel-in-progress: false
     permissions:
       pull-requests: write
@@ -1519,6 +1680,47 @@ jobs:
           # Dockerfile that declares no such secret mount simply ignores it.
           git-token: ${{ secrets.ORG_PAT_GITHUB }}
 
+  # ── Hand the tenant to whoever is next in the queue ──────────────────────
+  # Prompt release, not the mechanism that makes the lease safe. GitHub cancels
+  # queued jobs rather than running them, so on a cancelled run this job never
+  # starts at all and `if: always()` does not help — which is why liveness is
+  # derived from the holder's run status instead, and any later contender reaps a
+  # ticket whose run is over. This job just means the next run waits seconds
+  # rather than one poll interval.
+  #
+  # It never fails the workflow: the driver returns 0 whether or not a ticket was
+  # there to delete, so a release hiccup cannot redden a run whose tests passed.
+  release-tenant:
+    name: Release tenant lease (${{ matrix.cloud || 'default' }})
+    needs: [discover-e2e, lease-tenant, prepare-tenant, e2e]
+    # Gated on lease-tenant having RUN, not on it having succeeded. `.result` on a
+    # matrix job is the aggregate, so `== 'success'` meant one cloud's acquire
+    # timing out skipped the release for EVERY cloud — including the legs that did
+    # acquire, whose leases would then wait for the next contender's reaper
+    # instead of being handed back. That directly contradicts this job's own
+    # reason for existing.
+    #
+    # Safe to widen because the release driver checks ownership before deleting:
+    # a leg that never acquired reads a lease that is not its own (or none at all)
+    # and no-ops. Not gated on the legs' outcome either — a failed leg must still
+    # give the tenant back.
+    if: always() && needs.lease-tenant.result != 'skipped'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-count != '0' && needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Release the tenant lease
+        uses: atlanhq/application-sdk/.github/actions/e2e-tenant-lease@main
+        with:
+          mode: release
+          app: ${{ inputs.app-name }}
+          cloud: ${{ matrix.cloud }}
+
   # ── Callback: report the result back to the application-sdk PR/commit ────
   # that dispatched this run. application-sdk's e2e-apps composite
   # (wait-mode: callback) creates an in_progress check run on its own SHA
@@ -1544,6 +1746,7 @@ jobs:
         discover-e2e,
         build-e2e-image,
         merge-e2e-image,
+        lease-tenant,
         prepare-tenant,
         e2e,
       ]
@@ -1655,14 +1858,15 @@ jobs:
           discover-e2e-result: ${{ needs.discover-e2e.result }}
           build-e2e-image-result: ${{ needs.build-e2e-image.result }}
           merge-e2e-image-result: ${{ needs.merge-e2e-image.result }}
+          lease-tenant-result: ${{ needs.lease-tenant.result }}
           prepare-tenant-result: ${{ needs.prepare-tenant.result }}
           e2e-result: ${{ needs.e2e.result }}
 
-      # Body only — the `conclusion` this step still emits is ignored (see the
-      # completion step). Its CLI is deliberately left untouched: this script is
-      # checked out from the DISPATCHING SDK ref, which can be older than the
-      # workflow (always @main), so a new flag here would make every in-flight
-      # SDK PR's callback die on `unrecognized arguments`.
+      # Body only — this step emits no verdict; the completion step below takes
+      # the gate's. Its CLI stays frozen: this script is checked out from the
+      # DISPATCHING SDK ref, which can be older than the workflow (always
+      # @main), so a new flag here would make every in-flight SDK PR's callback
+      # die on `unrecognized arguments`.
       - name: Build summary
         id: report
         env:
@@ -1799,6 +2003,7 @@ jobs:
         discover-e2e,
         build-e2e-image,
         merge-e2e-image,
+        lease-tenant,
         prepare-tenant,
         e2e,
       ]
@@ -1819,11 +2024,13 @@ jobs:
       # passed. Integration skipped (PR / no suite) is a pass; unit must succeed.
       # detect-integration is gated too: a *failed* detection (not a PR skip)
       # fails the gate, so a checkout/glob flake can't silently skip integration
-      # and green the required check. The three install-path jobs (image build,
-      # manifest merge, tenant install) are gated for the same reason — they are
-      # exactly what the e2e matrix's own `if` requires, so a failure in any of
-      # them drops e2e to a skip. Passing them in names the cause instead of
-      # leaving the driver to infer it from the skip.
+      # and green the required check. The four install-path jobs (image build,
+      # manifest merge, tenant lease, tenant install) are gated for the same
+      # reason — they are exactly what the e2e matrix's own `if` requires, so a
+      # failure in any of them drops e2e to a skip. Passing them in names the
+      # cause instead of leaving the driver to infer it from the skip, which
+      # matters most for the lease: "the tenant was busy" and "your change is
+      # broken" call for opposite responses.
       - name: Evaluate Tests Gate
         id: gate
         if: always()
@@ -1836,6 +2043,7 @@ jobs:
           discover-e2e-result: ${{ needs.discover-e2e.result }}
           build-e2e-image-result: ${{ needs.build-e2e-image.result }}
           merge-e2e-image-result: ${{ needs.merge-e2e-image.result }}
+          lease-tenant-result: ${{ needs.lease-tenant.result }}
           prepare-tenant-result: ${{ needs.prepare-tenant.result }}
           e2e-result: ${{ needs.e2e.result }}
 

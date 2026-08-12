@@ -264,20 +264,22 @@ class TestAsyncDaprClientBinding:
         body = mock_http.post.call_args[1]["json"]
         assert "data" not in body
 
-    async def test_invoke_binding_invalid_utf8_falls_back_to_replacement(
-        self, mock_client
-    ):
-        """Invalid UTF-8 bytes should decode with replacement characters."""
-        client, mock_http = mock_client
-        mock_http.post.return_value = MagicMock(
-            status_code=200, content=b"", headers={}, raise_for_status=MagicMock()
+    async def test_invoke_binding_invalid_utf8_raises(self, mock_client):
+        """BLDX-1619: invalid UTF-8 must fail loudly, not decode lossily.
+
+        See tests/unit/infrastructure/test_dapr_binding_payload.py for the
+        full contract.
+        """
+        from application_sdk.infrastructure._dapr._dapr_errors import (
+            DaprBinaryPayloadError,
         )
 
-        await client.invoke_binding("my-binding", "create", data=b"\xff\xfe")
+        client, mock_http = mock_client
 
-        body = mock_http.post.call_args[1]["json"]
-        assert isinstance(body["data"], str)
-        assert "\ufffd" in body["data"]  # replacement character
+        with pytest.raises(DaprBinaryPayloadError):
+            await client.invoke_binding("my-binding", "create", data=b"\xff\xfe")
+
+        mock_http.post.assert_not_called()
 
 
 class TestAsyncDaprClientMetadata:

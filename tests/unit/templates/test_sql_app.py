@@ -11,6 +11,7 @@ import pytest
 
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.errors.categories import Audience
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionTaskInput,
@@ -26,6 +27,7 @@ from application_sdk.templates.sql_app_errors import (
     MapProcedureUnimplementedError,
     MapSchemaUnimplementedError,
     MapTableUnimplementedError,
+    SqlProbeTimeoutError,
 )
 
 # ---------------------------------------------------------------------------
@@ -2085,11 +2087,10 @@ class TestPrimeSqlAuth:
     async def test_prime_timeout_raises_app_timeout_error(
         self, error_type, error_message
     ):
-        """Probe failures classified as timeouts must surface as
-        ``AppTimeoutError`` — NOT ``AuthError`` — so the on-call's
-        ``suggested_action`` is "check network reachability" rather
-        than "run ACCOUNT UNLOCK". Pinned by application-sdk#1835
-        mothership comment-3287630230 (HIGH).
+        """Probe failures classified as timeouts must surface as a timeout
+        — NOT ``AuthError`` — so the on-call's ``suggested_action`` is
+        "check network reachability" rather than "run ACCOUNT UNLOCK".
+        Pinned by application-sdk#1835 mothership comment-3287630230 (HIGH).
         """
         from application_sdk.errors.leaves import AppTimeoutError
 
@@ -2124,6 +2125,12 @@ class TestPrimeSqlAuth:
         # field — driver message is inlined into ``message`` instead.
         assert error_message in err.message
         assert err.suggested_action and "network reachability" in err.suggested_action
+        # Routes to the customer, not Atlan. Only the driver's and the
+        # socket's clocks can reach this branch, so the source owns the
+        # timeout — AppTimeoutError's APP_OWNER default would be wrong.
+        assert isinstance(err, SqlProbeTimeoutError)
+        assert err.audience is Audience.USER
+        assert err.effective_retryable is True
 
     @pytest.mark.parametrize(
         "error_type,error_message",
@@ -2230,5 +2237,716 @@ class TestPrimeSqlAuth:
         err = exc_info.value
         assert "unclassified" in err.message.lower()
         assert (
-            err.suggested_action and "_classify_prime_failure" in err.suggested_action
+            err.suggested_action and "_classify_probe_strings" in err.suggested_action
         )
+
+
+# ---------------------------------------------------------------------------
+# Probe failure classification through the real client (CNCT-197)
+# ---------------------------------------------------------------------------
+
+
+# Deliberately named as sqlalchemy/pyodbc would name it: the class name is
+# what the classifier discriminates on, so a test-shaped name would not
+# reproduce production. HYT00 is the ODBC SQLSTATE for "login timeout expired".
+class OperationalError(Exception):
+    _HYT00 = (
+        "(pyodbc.OperationalError) ('HYT00', '[HYT00] [Microsoft][ODBC Driver 18 "
+        "for SQL Server]Login timeout expired (0) (SQLDriverConnect)')"
+    )
+
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(message or self._HYT00)
+
+
+def _wrapping_client(raises: Exception) -> Any:
+    """A real ``BaseSQLClient`` with only its transport stubbed.
+
+    ``FakeSQLClient`` raises straight out of ``get_results``, which is what let
+    CNCT-197 ship green: the SDK's own catch-all rewrap was never in the path,
+    so the classifier only ever saw driver-shaped inputs it cannot see in
+    production. Stubbing one layer lower keeps the rewrap under test.
+    """
+    from application_sdk.clients.sql import BaseSQLClient
+
+    class _Client(BaseSQLClient):
+        async def _execute_async_read_operation(self, query, chunksize):
+            raise raises
+
+        async def close(self):
+            pass
+
+    return _Client()
+
+
+class TestPrimeFailureClassification:
+    """CNCT-197 — the classifier must see the failure, not the wrapper.
+
+    ``BaseSQLClient.get_results`` rewraps every driver exception as
+    ``SqlPandasResultError``, whose message is a fixed string. Only a class
+    name and a message cross the activity boundary, so classifying there made
+    every probe failure — credential rejection, DNS failure, TLS error,
+    connect timeout — land on ``InternalError`` / ``APP_OWNER`` /
+    non-retryable. A customer-owned source problem was reported to the
+    Automation Engine as an Atlan internal fault, with no ``suggested_action``.
+
+    The fix classifies inside ``prime_sql_auth``, where the live exception and
+    its ``__cause__`` chain still exist, and carries the verdict on
+    ``PrimeAuthOutput.failure``.
+    """
+
+    @staticmethod
+    def _input() -> ExtractionTaskInput:
+        return ExtractionTaskInput(
+            workflow_id="wf-test",
+            output_path="/tmp/test",
+            output_prefix="/tmp",
+            exclude_filter="",
+            include_filter="",
+            temp_table_regex="",
+        )
+
+    @classmethod
+    async def _probe(cls, driver_exc: Exception) -> PrimeAuthOutput:
+        app = SqlApp.__new__(SqlApp)
+        app._app_name = "test-app"
+        client = _wrapping_client(driver_exc)
+        with patch.object(
+            SqlApp, "_init_sql_client", new=AsyncMock(return_value=client)
+        ):
+            return await app.prime_sql_auth(cls._input())
+
+    async def test_get_results_flattens_every_driver_error(self):
+        """The premise. Unchanged SDK behaviour, and the reason the fix has to
+        classify before the activity boundary rather than after it."""
+        from application_sdk.clients.sql_errors import SqlPandasResultError
+
+        client = _wrapping_client(OperationalError())
+
+        with pytest.raises(SqlPandasResultError) as ei:
+            await client.get_results("SELECT 1")
+
+        assert str(ei.value) == "Error reading data from SQL into a pandas DataFrame"
+        assert isinstance(ei.value.__cause__, OperationalError)
+
+    async def test_probe_reports_root_cause_not_the_wrapper(self):
+        result = await self._probe(OperationalError())
+
+        assert result.success is False
+        assert result.error_type == "OperationalError"
+        assert "HYT00" in (result.error_message or "")
+
+    async def test_login_timeout_routes_to_the_customer(self):
+        """The production case. An ODBC login timeout (SQLSTATE HYT00, rendered
+        as "Login timeout expired") against a customer VPC endpoint is a
+        USER-owned, retryable probe timeout — not a generic source-unavailable.
+        The classifier must recognise the driver phrasing even though neither
+        the class name nor "timed out" appears in it."""
+        from application_sdk.errors.categories import Audience, FailureCategory
+
+        err = SqlApp._classify_prime_failure(await self._probe(OperationalError()))
+
+        assert isinstance(err, SqlProbeTimeoutError)
+        assert err.code == "TIMEOUT_SQL_PROBE"
+        assert err.category is FailureCategory.TIMEOUT
+        assert err.audience is Audience.USER
+        assert err.effective_retryable is True
+
+    @pytest.mark.parametrize(
+        "driver_exc,expected_leaf",
+        [
+            # HYT00 "Login timeout expired" is a probe timeout, not generic
+            # source-unavailable.
+            (OperationalError(), "SqlProbeTimeoutError"),
+            (
+                OperationalError(
+                    "(pyodbc.OperationalError) ('08S01', '[Microsoft][ODBC Driver 18 "
+                    "for SQL Server]TCP Provider: The network connection was refused')"
+                ),
+                "SourceUnavailableError",
+            ),
+            (OSError("[Errno -2] Name or service not known"), "SourceUnavailableError"),
+            (
+                Exception("(pyodbc.Error) ('28000', 'Login failed for user')"),
+                "AuthError",
+            ),
+            (TimeoutError("probe deadline exceeded"), "SqlProbeTimeoutError"),
+            (Exception("something no driver has produced before"), "InternalError"),
+        ],
+    )
+    async def test_each_failure_shape_reaches_its_own_verdict(
+        self, driver_exc, expected_leaf
+    ):
+        """Every one of these classified as ``InternalError`` before the fix,
+        because the wrapper collapsed them into a single shape."""
+        err = SqlApp._classify_prime_failure(await self._probe(driver_exc))
+        assert type(err).__name__ == expected_leaf
+
+    async def test_failed_probe_reports_failure_status(self):
+        """The output used to serialize as
+        ``{"status": "success", "success": false}`` — self-contradictory."""
+        from application_sdk.contracts.base import OutputStatus
+
+        result = await self._probe(OperationalError())
+
+        assert result.success is False
+        assert result.status is OutputStatus.FAILURE
+
+    async def test_verdict_survives_the_activity_boundary(self):
+        """``prime_sql_auth`` is a Temporal activity, so ``run()`` classifies
+        from a deserialized copy. The typed verdict and its evidence must
+        round-trip."""
+        from application_sdk.errors.categories import Audience
+        from application_sdk.errors.leaves import SourceUnavailableError
+
+        # A non-timeout network shape keeps the SourceUnavailableError leaf so
+        # its evidence (``source_type`` / ``network_error``) round-trips.
+        result = await self._probe(
+            OperationalError(
+                "(pyodbc.OperationalError) ('08S01', '[Microsoft][ODBC Driver 18 "
+                "for SQL Server]TCP Provider: The network connection was refused')"
+            )
+        )
+        rehydrated = PrimeAuthOutput.model_validate_json(result.model_dump_json())
+
+        err = SqlApp._classify_prime_failure(rehydrated)
+
+        assert isinstance(err, SourceUnavailableError)
+        assert err.audience is Audience.USER
+        assert err.source_type == "sql"
+        assert err.network_error == result.error_message
+
+    async def test_typed_root_cause_is_respected_as_is(self):
+        """A connector that raises its own typed ``AppError`` keeps its
+        verdict — string matching never gets to second-guess it."""
+        from application_sdk.errors.leaves import AuthError
+
+        typed = AuthError(message="source rejected the login", auth_method="odbc")
+
+        err = SqlApp._classify_prime_failure(await self._probe(typed))
+
+        assert isinstance(err, AuthError)
+        assert err.message == "source rejected the login"
+        assert err.auth_method == "odbc"
+
+    async def test_typed_root_cause_is_redacted_before_the_wire(self):
+        """The typed-``AppError`` path reaches ``to_failure_details()`` without
+        the redaction the plain-driver path gets. A connection string in the
+        message or a custom evidence field must be redacted before the verdict
+        serialises onto the activity result."""
+        from application_sdk.errors.leaves import AuthError
+
+        typed = AuthError(
+            message="login failed: PWD=SyntheticValue123",
+            auth_method="odbc",
+            failure_reason="server said PWD=SyntheticValue123",
+        )
+
+        result = await self._probe(typed)
+
+        assert result.failure is not None
+        wire = result.failure.model_dump_json()
+        assert "SyntheticValue123" not in wire
+        assert "PWD=***" in wire
+
+    async def test_typed_error_redacts_a_secret_bearing_suggested_action(self):
+        """``suggested_action`` is a base field serialised verbatim by
+        ``to_failure_details()`` — a producer that embeds a secret in the
+        remediation hint must not leak it onto the wire just because the
+        field lives on the base dataclass rather than in evidence."""
+        from application_sdk.errors.leaves import AuthError
+
+        typed = AuthError(
+            message="source rejected the login",
+            suggested_action="rotate the credential PWD=SyntheticValue123 now",
+        )
+
+        result = await self._probe(typed)
+
+        assert result.failure is not None
+        wire = result.failure.model_dump_json()
+        assert "SyntheticValue123" not in wire
+        assert "PWD=***" in wire
+
+    async def test_typed_error_redacts_nested_evidence_values(self):
+        """Structured evidence is copied onto the envelope as-is — a secret
+        inside a nested dict or list is invisible to key-name denylists, so
+        the redactor must recurse into container values, not just direct
+        string fields."""
+        from dataclasses import dataclass
+
+        from application_sdk.errors.leaves import AuthError
+
+        @dataclass(kw_only=True)
+        class _NestedEvidenceError(AuthError):
+            details: dict | None = None
+            attempts: list | None = None
+
+        typed = _NestedEvidenceError(
+            message="source rejected the login",
+            details={
+                "connection": "SERVER=h;PWD=SyntheticValue123",
+                "inner": {"dsn": "UID=sa;PWD=SyntheticValue123"},
+            },
+            attempts=["first: PWD=SyntheticValue123"],
+        )
+
+        result = await self._probe(typed)
+
+        assert result.failure is not None
+        wire = result.failure.model_dump_json()
+        assert "SyntheticValue123" not in wire
+        assert "PWD=***" in wire
+
+    async def test_namedtuple_evidence_does_not_crash_the_probe(self):
+        """A NamedTuple takes positional fields, not an iterable —
+        ``type(value)(<generator>)`` crashes a 2+-field one (``TypeError``)
+        and silently retypes a 1-field one (its sole field becomes the
+        redacted *list*). The ``TypeError`` escapes the probe's
+        ``except ValidationError`` degrade, crashing the activity — and a
+        crashed probe is retried, stacking ``failed_login_attempts`` on the
+        source. The redactor must rebuild namedtuples with positional
+        expansion so the shape survives; assert the wire shape directly, not
+        just secret-absence."""
+        import json
+        from dataclasses import dataclass
+        from typing import NamedTuple
+
+        from application_sdk.errors.leaves import AuthError
+
+        class _Pair(NamedTuple):
+            dsn: str
+            driver: str
+
+        class _Solo(NamedTuple):
+            dsn: str
+
+        @dataclass(kw_only=True)
+        class _NamedTupleEvidenceError(AuthError):
+            pair: object = None
+            solo: object = None
+
+        typed = _NamedTupleEvidenceError(
+            message="source rejected the login",
+            pair=_Pair(dsn="UID=sa;PWD=SyntheticValue123", driver="odbc"),
+            solo=_Solo(dsn="PWD=SyntheticValue123"),
+        )
+
+        result = await self._probe(typed)
+
+        assert result.failure is not None
+        wire = result.failure.model_dump_json()
+        assert "SyntheticValue123" not in wire
+        assert "PWD=***" in wire
+        evidence = json.loads(wire)["evidence"]
+        # 1-field namedtuple keeps its scalar shape — not the silent
+        # ``_Solo(dsn=[...])`` retype the iterable-rebuild produced.
+        assert evidence["solo"] == ["PWD=***"]
+        # 2+-field namedtuple rebuilds with both fields positionally.
+        assert evidence["pair"] == ["UID=sa;PWD=***", "odbc"]
+
+    async def test_cyclic_evidence_does_not_crash_the_probe(self):
+        """A self-referential evidence container recurses forever — the
+        ``RecursionError`` escapes the probe's ``except ValidationError``
+        degrade and crashes the activity, which is retried and stacks
+        ``failed_login_attempts``. The redactor must prune the cycle (same
+        id-tracking pattern ``_root_cause`` uses for ``__cause__``) — and
+        pruning must null the back-edge, not drop the field, so a lossy
+        implementation cannot pass. Covers both the dict and the list
+        self-cycle (each exercises its own guarded branch)."""
+        import json
+        from dataclasses import dataclass
+
+        from application_sdk.errors.leaves import AuthError
+
+        @dataclass(kw_only=True)
+        class _CyclicEvidenceError(AuthError):
+            details: dict | None = None
+            items: list | None = None
+
+        cyclic: dict = {"dsn": "PWD=SyntheticValue123"}
+        cyclic["self"] = cyclic
+        cyclic_list: list = ["PWD=SyntheticValue123"]
+        cyclic_list.append(cyclic_list)
+
+        typed = _CyclicEvidenceError(
+            message="source rejected the login",
+            details=cyclic,
+            items=cyclic_list,
+        )
+
+        result = await self._probe(typed)
+
+        assert result.failure is not None
+        wire = result.failure.model_dump_json()
+        assert "SyntheticValue123" not in wire
+        assert "PWD=***" in wire
+        evidence = json.loads(wire)["evidence"]
+        # The dict back-edge is pruned to null, the value redacted.
+        assert evidence["details"]["self"] is None
+        assert evidence["details"]["dsn"] == "PWD=***"
+        # The list self-cycle prunes its back-edge to null too.
+        assert evidence["items"] == ["PWD=***", None]
+
+    async def test_deeply_nested_evidence_truncates_past_the_depth_cap(self):
+        """The cycle guard bounds revisits but not depth: a pathologically
+        deep acyclic structure overflows the stack with a ``RecursionError``
+        that escapes the probe's degrade. The redactor caps depth and
+        truncates past it rather than crashing."""
+        from dataclasses import dataclass
+
+        from application_sdk.errors.leaves import AuthError
+
+        @dataclass(kw_only=True)
+        class _DeepEvidenceError(AuthError):
+            details: dict | None = None
+
+        deep: dict = {}
+        node = deep
+        for _ in range(100):
+            node["next"] = {}
+            node = node["next"]
+        node["dsn"] = "PWD=SyntheticValue123"
+
+        typed = _DeepEvidenceError(
+            message="source rejected the login",
+            details=deep,
+        )
+
+        result = await self._probe(typed)
+
+        assert result.failure is not None
+        # Secret never reaches the wire (it sits past the cap, truncated).
+        assert "SyntheticValue123" not in result.failure.model_dump_json()
+
+    def test_string_fallback_redacts_a_secret_bearing_message(self):
+        """A hand-built / pre-redaction-era output whose producer did not redact
+        must be re-redacted at the fallback trust boundary."""
+        from application_sdk.errors.leaves import SourceUnavailableError
+
+        legacy = PrimeAuthOutput(
+            success=False,
+            error_type="gaierror",
+            error_message="[Errno -2] Name or service not known PWD=SyntheticValue123",
+        )
+
+        err = SqlApp._classify_prime_failure(legacy)
+
+        assert isinstance(err, SourceUnavailableError)
+        assert "SyntheticValue123" not in (err.network_error or "")
+        assert "PWD=***" in (err.network_error or "")
+
+    async def test_probe_never_puts_a_connection_string_on_the_wire(self):
+        """CNCT-198's blast radius, reached through this path. The fix
+        promotes the root driver message onto the activity result, so it is
+        redacted at the point of capture rather than by a later layer."""
+        dsn = (
+            "DRIVER={ODBC Driver 18 for SQL Server};SERVER=host.example.com,1433;"
+            "UID=sa;PWD=SyntheticValue123;Encrypt=yes"
+        )
+
+        result = await self._probe(OperationalError(f"login failed: {dsn}"))
+
+        assert "SyntheticValue123" not in (result.error_message or "")
+        assert result.failure is not None
+        assert "SyntheticValue123" not in result.failure.model_dump_json()
+
+    def test_string_fallback_still_classifies_legacy_outputs(self):
+        """Activity results written by an older SDK carry no ``failure``.
+        Temporal replays them, so the string path has to keep working."""
+        from application_sdk.errors.leaves import SourceUnavailableError
+
+        legacy = PrimeAuthOutput(
+            success=False,
+            error_type="gaierror",
+            error_message="[Errno -2] Name or service not known",
+        )
+
+        assert isinstance(
+            SqlApp._classify_prime_failure(legacy), SourceUnavailableError
+        )
+
+    def test_unknown_wire_code_preserves_envelope_routing(self):
+        """A newer producer must not crash an older consumer, and must not have
+        its routing silently re-routed either: an unknown code rebuilds on a
+        generic reconstruction leaf that keeps the envelope's own category /
+        audience / retryable rather than forcing INTERNAL / APP_OWNER."""
+        from application_sdk.errors.categories import Audience, FailureCategory
+        from application_sdk.errors.wire import FailureDetails
+
+        unknown = PrimeAuthOutput(
+            success=False,
+            failure=FailureDetails(
+                category=FailureCategory.SOURCE_UNAVAILABLE,
+                code="SOME_FUTURE_CODE",
+                retryable=True,
+                audience=Audience.USER,
+                message="from a newer SDK",
+                evidence={"field_this_leaf_does_not_have": 1},
+            ),
+        )
+
+        err = SqlApp._classify_prime_failure(unknown)
+
+        # Not a registered leaf, but the envelope's routing survives.
+        assert type(err).__name__ == "_EnvelopeError"
+        assert err.category is FailureCategory.SOURCE_UNAVAILABLE
+        assert err.audience is Audience.USER
+        assert err.effective_retryable is True
+        assert err.message == "from a newer SDK"
+
+    def test_unknown_wire_code_reconstruction_round_trips(self):
+        """Regression: the base ``to_failure_details()`` reads ``audience``
+        class-level (``type(self).audience``), which returns the raw property
+        object on the reconstruction leaf and raises ValidationError on
+        serialize. The reconstructed unknown-code error must serialise back to
+        an envelope that keeps category / audience / retryable — and also the
+        producer's fine-grained ``code``, ``cause_repr`` and ``evidence``, so
+        re-serialisation does not strip the diagnostic context a newer
+        producer attached."""
+        from application_sdk.errors.categories import Audience, FailureCategory
+        from application_sdk.errors.wire import FailureDetails
+
+        unknown = PrimeAuthOutput(
+            success=False,
+            failure=FailureDetails(
+                category=FailureCategory.SOURCE_UNAVAILABLE,
+                code="SOME_FUTURE_CODE",
+                retryable=True,
+                audience=Audience.USER,
+                message="from a newer SDK",
+                evidence={"future_field": "future-value"},
+                cause_repr="FutureError: something new broke",
+            ),
+        )
+
+        err = SqlApp._classify_prime_failure(unknown)
+        details = err.to_failure_details()
+
+        assert details.category is FailureCategory.SOURCE_UNAVAILABLE
+        assert details.audience is Audience.USER
+        assert details.retryable is True
+        # Diagnostic context survives re-serialisation, not just routing.
+        assert details.code == "SOME_FUTURE_CODE"
+        assert details.cause_repr == "FutureError: something new broke"
+        assert details.evidence == {"future_field": "future-value"}
+        # And the re-serialised envelope reconstructs to the same routing.
+        assert err.category is details.category
+        assert err.audience is details.audience
+
+    async def test_unserialisable_verdict_does_not_crash_the_probe(self):
+        """A crashed prime activity is retried, and retrying is what stacks
+        ``failed_login_attempts`` on the source — the exact cycle this task
+        exists to break. A connector error whose evidence key the
+        ``FailureDetails`` denylist rejects must degrade, not raise."""
+        from dataclasses import dataclass
+
+        from application_sdk.contracts.base import OutputStatus
+        from application_sdk.errors.leaves import AuthError
+
+        @dataclass(kw_only=True)
+        class _AppAuthError(AuthError):
+            api_key: str | None = None  # denylisted evidence key
+
+        result = await self._probe(
+            _AppAuthError(message="rejected", api_key="synthetic")
+        )
+
+        assert result.success is False
+        assert result.status is OutputStatus.FAILURE
+        assert result.error_type == "_AppAuthError"
+
+    async def test_denylisted_evidence_degrades_without_losing_the_verdict(self):
+        """The degrade must drop *evidence*, never routing. Falling back to
+        ``error_type`` / ``error_message`` re-derives the verdict from a class
+        name (``_AppAuthError``) that matches no string hint, so an explicit
+        AUTH / USER verdict would silently inverted into INTERNAL / APP_OWNER —
+        the exact CNCT-197 misrouting the typed path exists to prevent."""
+        from dataclasses import dataclass
+
+        from application_sdk.errors.categories import Audience, FailureCategory
+        from application_sdk.errors.leaves import AuthError
+
+        @dataclass(kw_only=True)
+        class _AppAuthError(AuthError):
+            api_key: str | None = None  # denylisted evidence key
+            auth_method: str | None = "odbc"  # keepable evidence
+
+        result = await self._probe(
+            _AppAuthError(message="rejected", api_key="synthetic")
+        )
+
+        assert result.failure is not None
+        assert result.failure.category is FailureCategory.AUTH
+        assert result.failure.audience is Audience.USER
+        assert result.failure.code == AuthError.code
+        # The offending key is gone; the innocent evidence beside it survives.
+        assert "api_key" not in result.failure.evidence
+        assert result.failure.evidence.get("auth_method") == "odbc"
+        assert "synthetic" not in result.failure.model_dump_json()
+
+        # And the degraded envelope still rebuilds as the connector's verdict.
+        err = SqlApp._classify_prime_failure(
+            PrimeAuthOutput.model_validate_json(result.model_dump_json())
+        )
+        assert isinstance(err, AuthError)
+        assert err.audience is Audience.USER
+
+    async def test_degrade_drops_all_evidence_before_giving_up_the_verdict(self):
+        """Second tier of the degrade: when stripping the denylisted keys is
+        not enough, drop evidence entirely rather than surrender the typed
+        routing. Today's envelope only rejects secret-named keys, so tier 1
+        always clears it — the rejection is injected here so the ladder is
+        exercised rather than assumed, and so a future validator that refuses
+        an evidence *value* costs the verdict its context, not its routing."""
+        from dataclasses import dataclass
+
+        from pydantic import ValidationError
+
+        from application_sdk.errors.categories import Audience, FailureCategory
+        from application_sdk.errors.leaves import AuthError
+        from application_sdk.errors.wire import FailureDetails
+
+        @dataclass(kw_only=True)
+        class _AppAuthError(AuthError):
+            api_key: str | None = None
+            auth_method: str | None = "odbc"
+
+        def _rejects_any_evidence(**kwargs: Any) -> FailureDetails:
+            if kwargs.get("evidence"):
+                raise ValidationError.from_exception_data(
+                    "FailureDetails",
+                    [
+                        {
+                            "type": "value_error",
+                            "loc": ("evidence",),
+                            "input": kwargs["evidence"],
+                            "ctx": {"error": ValueError("evidence not accepted")},
+                        }
+                    ],
+                )
+            return FailureDetails(**kwargs)
+
+        with patch(
+            "application_sdk.templates.sql_app.FailureDetails",
+            side_effect=_rejects_any_evidence,
+        ):
+            result = await self._probe(
+                _AppAuthError(message="rejected", api_key="synthetic")
+            )
+
+        assert result.failure is not None
+        assert result.failure.category is FailureCategory.AUTH
+        assert result.failure.audience is Audience.USER
+        assert result.failure.message == "rejected"
+        assert result.failure.evidence == {}
+
+    def test_reconstruction_redacts_a_secret_in_a_replayed_envelope(self):
+        """Reconstruction is an unredacted trust boundary. A pre-redaction-era
+        envelope replayed from Temporal history — or a hand-built output —
+        carries whatever its producer wrote. The denylist only rejects
+        secret-named *keys*, so a DSN in a nested evidence value, in
+        ``message`` or in ``suggested_action`` reaches the reconstruction leaf
+        and re-serialises onto the wire verbatim unless re-redacted here."""
+        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.errors.leaves import SourceUnavailableError
+        from application_sdk.errors.wire import FailureDetails
+
+        dsn = "UID=sa;PWD=SyntheticValue123"
+        legacy = PrimeAuthOutput(
+            success=False,
+            failure=FailureDetails(
+                category=FailureCategory.SOURCE_UNAVAILABLE,
+                code=SourceUnavailableError.code,
+                retryable=True,
+                audience=Audience.USER,
+                message=f"connect failed: {dsn}",
+                suggested_action=f"retry with {dsn}",
+                evidence={"network_error": f"refused for {dsn}"},
+            ),
+        )
+
+        err = SqlApp._classify_prime_failure(legacy)
+        wire = err.to_failure_details().model_dump_json()
+
+        assert "SyntheticValue123" not in wire
+        assert "PWD=***" in wire
+
+    def test_reconstruction_redacts_nested_and_unknown_code_envelopes(self):
+        """Same boundary, unknown-code branch: the generic reconstruction leaf
+        copies the producer's ``evidence`` and ``cause_repr`` wholesale, so a
+        secret nested inside a container value survives re-serialisation unless
+        the walker recurses over the reconstructed evidence too."""
+        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.errors.wire import FailureDetails
+
+        dsn = "UID=sa;PWD=SyntheticValue123"
+        unknown = PrimeAuthOutput(
+            success=False,
+            failure=FailureDetails(
+                category=FailureCategory.SOURCE_UNAVAILABLE,
+                code="SOME_FUTURE_CODE",
+                retryable=True,
+                audience=Audience.USER,
+                message="from a newer SDK",
+                evidence={"attempts": [{"dsn": dsn}]},
+                cause_repr=f"FutureError: {dsn}",
+            ),
+        )
+
+        err = SqlApp._classify_prime_failure(unknown)
+        wire = err.to_failure_details().model_dump_json()
+
+        assert "SyntheticValue123" not in wire
+        assert "PWD=***" in wire
+        # Redaction must not cost the envelope its routing or its shape.
+        assert err.audience is Audience.USER
+        assert err.to_failure_details().code == "SOME_FUTURE_CODE"
+
+    def test_reconstruction_drops_evidence_keys_shadowing_base_fields(self):
+        """Regression: ``declared`` on a known leaf includes inherited
+        ``AppError`` fields (``message``, ``retryable``, …). An evidence key
+        that shadows one was splatted alongside the explicit constructor arg
+        and crashed reconstruction with ``TypeError: got multiple values`` —
+        failing ``run()`` with a bare TypeError instead of the classified
+        error. Base-field-shadowing keys are now dropped, mirroring the
+        serializer, which never serialises base fields as evidence."""
+        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.errors.leaves import SourceUnavailableError
+        from application_sdk.errors.wire import FailureDetails
+
+        shadowed = PrimeAuthOutput(
+            success=False,
+            failure=FailureDetails(
+                category=FailureCategory.SOURCE_UNAVAILABLE,
+                code=SourceUnavailableError.code,
+                retryable=True,
+                audience=Audience.USER,
+                message="the envelope message",
+                evidence={"message": "a shadowing evidence value"},
+            ),
+        )
+
+        err = SqlApp._classify_prime_failure(shadowed)
+
+        # Reconstructs instead of raising; the envelope message wins and the
+        # shadowing evidence key is gone from the re-serialised wire form.
+        assert isinstance(err, SourceUnavailableError)
+        assert err.message == "the envelope message"
+        assert (
+            "a shadowing evidence value"
+            not in err.to_failure_details().model_dump_json()
+        )
+
+    async def test_timeout_verdict_keeps_its_audience_across_the_wire(self):
+        """The probe-specific timeout leaf must rebuild as itself, not as the
+        base ``AppTimeoutError`` — the whole point of the leaf is its USER
+        audience override, and only the wire code carries it."""
+        result = await self._probe(TimeoutError("probe deadline exceeded"))
+        rehydrated = PrimeAuthOutput.model_validate_json(result.model_dump_json())
+
+        err = SqlApp._classify_prime_failure(rehydrated)
+
+        assert isinstance(err, SqlProbeTimeoutError)
+        assert err.audience is Audience.USER
+        assert err.operation == "prime_sql_auth"

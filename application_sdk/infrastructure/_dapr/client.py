@@ -451,6 +451,10 @@ class DaprBinding:
         metadata: dict[str, str] | None = None,
     ) -> BindingResponse:
         """Invoke the binding via Dapr."""
+        from application_sdk.infrastructure._dapr._dapr_errors import (  # noqa: PLC0415 — avoid circular import on module load
+            DaprBinaryPayloadError,
+        )
+
         try:
             result = await self._client.invoke_binding(
                 binding_name=self._binding_name,
@@ -462,6 +466,10 @@ class DaprBinding:
                 data=result.data if result.data else None,
                 metadata=dict(result.metadata) if result.metadata else {},
             )
+        # A payload the HTTP API cannot carry is the caller's own input error,
+        # not a binding failure — wrapping it would bury the remedy.
+        except DaprBinaryPayloadError:
+            raise
         # conformance: ignore[E004] re-raises as typed BindingError with cause chain; traceback preserved
         except Exception as e:
             raise BindingError(

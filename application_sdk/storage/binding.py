@@ -25,8 +25,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Mapping
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -34,8 +35,61 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
+#: ``{secret_name: {key: value}}`` — the shape Dapr's secret API returns, keyed
+#: by the ``secretKeyRef.name`` that asked for it.  Built by ``main.py`` from a
+#: component's ``auth.secretStore`` and passed into the (synchronous) resolvers.
+SecretMap = Mapping[str, Mapping[str, str]]
+
 # Matches un-substituted Helm / Mustache template placeholders (e.g. {{tenant}}).
 _TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{\{[^}]+\}\}")
+
+#: Process-wide cache of the secrets ``main._create_infrastructure`` fetched
+#: from the Dapr sidecar at startup, keyed by binding component name.  Sync
+#: consumers constructed after startup — ``DaprCredentialVault.__init__`` is
+#: the canonical case — cannot call the sidecar themselves, so they re-run
+#: ``is_binding_configured`` without a ``secrets`` argument.  Without this
+#: cache that second call would fall back to env-only resolution and reach a
+#: different "is the upstream store usable" verdict than the one main.py made
+#: with the sidecar-fetched secrets — the exact broken-vs-absent divergence
+#: BLDX-1619 fixes at the resolver layer.
+#:
+#: Lifecycle: entries are written once per process by ``_create_infrastructure``
+#: (via :func:`set_fetched_binding_secrets`) before any sync consumer runs, and
+#: are never evicted — the values are the process's startup-fetched secrets and
+#: stay valid for the process's lifetime.  Tests that exercise the startup
+#: wiring in isolation should call :func:`_reset_fetched_binding_secrets` in
+#: teardown so one test's publishes do not leak into the next.
+_FETCHED_BINDING_SECRETS: dict[str, SecretMap] = {}
+
+
+def set_fetched_binding_secrets(name: str, secrets: SecretMap) -> None:
+    """Publish the secrets startup fetched for *name* to later sync callers.
+
+    Called by ``main._create_infrastructure`` after ``_fetch_binding_secrets``
+    so sync consumers that run later (and therefore cannot call the Dapr secret
+    API themselves) resolve the binding against the same secret values the
+    startup resolver used.  Without this, ``DaprCredentialVault.__init__``
+    re-runs ``is_binding_configured`` env-only and, on the secure k8s path
+    (``secretKeyRef`` + ``auth.secretStore``, env vars deliberately absent),
+    concludes the upstream store is unusable while main.py resolved it fine.
+    """
+    _FETCHED_BINDING_SECRETS[name] = secrets
+
+
+def _get_fetched_binding_secrets(name: str) -> SecretMap | None:
+    """Return the startup-fetched secrets for *name*, or ``None`` if none."""
+    return _FETCHED_BINDING_SECRETS.get(name)
+
+
+def _reset_fetched_binding_secrets() -> None:
+    """Clear the startup-fetched secrets cache.
+
+    Test-only: production code writes entries once at process startup and
+    never needs to clear them.  Tests that exercise the startup wiring call
+    this in teardown so one test's publishes do not leak into the next.
+    """
+    _FETCHED_BINDING_SECRETS.clear()
+
 
 # GCP service account JSON fields injected from Kubernetes secret via Helm.
 GCS_SERVICE_ACCOUNT_FIELDS: tuple[str, ...] = (
@@ -128,44 +182,61 @@ def _endpoint_is_aws(endpoint: str) -> bool:
     return host.endswith((".amazonaws.com", ".amazonaws.com.cn"))
 
 
-def _resolve_metadata_value(item: dict) -> str:
-    """Resolve a single Dapr metadata item to its string value.
+def _secret_ref_target(ref: dict) -> tuple[str, str]:
+    """Return the ``(secret_name, key)`` a Dapr ``secretKeyRef`` points at."""
+    secret_name = str(ref.get("name", ""))
+    return secret_name, str(ref.get("key") or secret_name)
 
-    Supports plain ``value`` fields and ``secretKeyRef`` references.
-    For ``secretKeyRef``, the secret is resolved from environment variables
-    using the ref's ``key`` (falling back to ``name``).  This mirrors the
-    behaviour of the ``secretstores.local.env`` Dapr component used in
-    Docker Compose / SDR deployments where secrets are injected as env vars.
+
+def _resolve_secret_ref(ref: dict, secrets: SecretMap | None) -> str | None:
+    """Resolve a Dapr ``secretKeyRef``, or ``None`` when no source holds it.
+
+    A component's ``auth.secretStore`` is authoritative, so *secrets* — the
+    bundle ``main.py`` fetched from that store — wins.  Environment variables
+    stay as the fallback: they are what ``secretstores.local.env`` resolves to
+    in Docker Compose / SDR-local runs, and they are all the synchronous call
+    sites (observability exporter, credential utils) can reach.
     """
+    secret_name, key = _secret_ref_target(ref)
+    if not key:
+        return None
+    if secrets:
+        bundle = secrets.get(secret_name)
+        if bundle is not None and key in bundle:
+            return bundle[key]
+    return os.environ.get(key)
+
+
+def _resolve_metadata_value(item: dict, secrets: SecretMap | None = None) -> str:
+    """Resolve a single Dapr metadata item to its string value."""
     if "value" in item:
         return str(item["value"])
 
     secret_ref = item.get("secretKeyRef")
     if secret_ref:
-        env_key = secret_ref.get("key") or secret_ref.get("name", "")
-        if env_key:
-            return os.environ.get(env_key, "")
+        return _resolve_secret_ref(secret_ref, secrets) or ""
 
     return ""
 
 
-def _parse_dapr_metadata(metadata_list: list[dict[str, str]]) -> dict[str, str]:
-    """Convert Dapr metadata list format to a flat dict.
-
-    Handles both plain ``value`` entries and ``secretKeyRef`` entries
-    (resolved via environment variables).
-    """
+def _parse_dapr_metadata(
+    metadata_list: list[dict[str, str]], secrets: SecretMap | None = None
+) -> dict[str, str]:
+    """Convert Dapr metadata list format to a flat dict."""
     return {
-        item["name"]: _resolve_metadata_value(item) for item in (metadata_list or [])
+        item["name"]: _resolve_metadata_value(item, secrets)
+        for item in (metadata_list or [])
     }
 
 
-def _find_broken_metadata_fields(metadata_list: list[dict]) -> list[str]:
+def _find_broken_metadata_fields(
+    metadata_list: list[dict], secrets: SecretMap | None = None
+) -> list[str]:
     """Return names of metadata fields that clearly cannot be resolved.
 
     A field is considered broken when:
     - Its ``value`` contains an un-substituted template placeholder (e.g. ``{{tenant}}``)
-    - It has a ``secretKeyRef`` whose referenced env var is not set
+    - It has a ``secretKeyRef`` that neither *secrets* nor the environment holds
     """
     broken: list[str] = []
     for item in metadata_list or []:
@@ -175,16 +246,78 @@ def _find_broken_metadata_fields(metadata_list: list[dict]) -> list[str]:
                 broken.append(field_name)
         elif "secretKeyRef" in item:
             ref = item["secretKeyRef"]
-            env_key = ref.get("key") or ref.get("name", "")
-            if env_key and os.environ.get(env_key) is None:
+            _, key = _secret_ref_target(ref)
+            if key and _resolve_secret_ref(ref, secrets) is None:
                 broken.append(field_name)
     return broken
+
+
+def _find_component(name: str, components_dir: Path | str) -> dict | None:
+    """Return the Dapr Component document named *name*, or ``None``."""
+    import yaml  # noqa: PLC0415 — defensive: keep inline
+
+    for yaml_file in sorted(Path(components_dir).glob("*.yaml")):
+        with yaml_file.open() as fh:
+            doc = yaml.safe_load(fh)
+        if (
+            doc
+            and doc.get("kind") == "Component"
+            and doc.get("metadata", {}).get("name") == name
+        ):
+            return doc
+    return None
+
+
+@dataclass(frozen=True)
+class BindingSecretRefs:
+    """Which secrets a Dapr component needs, and which store holds them."""
+
+    #: ``auth.secretStore`` on the component, or ``None`` when it declares none
+    #: (env-var resolution is then the only channel).
+    secret_store: str | None = None
+    #: ``(secret_name, key)`` for every ``secretKeyRef`` in the component.
+    refs: list[tuple[str, str]] = field(default_factory=list)
+
+    @property
+    def secret_names(self) -> list[str]:
+        """Distinct secret names to fetch, in declaration order."""
+        return list(dict.fromkeys(secret_name for secret_name, _ in self.refs))
+
+
+def read_binding_secret_refs(
+    name: str,
+    *,
+    components_dir: Path | str = Path("./components"),
+) -> BindingSecretRefs:
+    """Report the ``secretKeyRef`` entries of the component named *name*.
+
+    Callers that can reach the Dapr sidecar (``main.py``, after
+    ``wait_for_dapr_sidecar()``) use this to fetch the secrets and pass them
+    back in as the ``secrets`` argument of the store-creation functions.
+
+    An absent component yields an empty result rather than an error — the
+    caller's own resolver reports absence with the right ``required`` semantics.
+    """
+    component = _find_component(name, components_dir)
+    if component is None:
+        return BindingSecretRefs()
+
+    metadata = component.get("spec", {}).get("metadata") or []
+    return BindingSecretRefs(
+        secret_store=(component.get("auth") or {}).get("secretStore") or None,
+        refs=[
+            _secret_ref_target(item["secretKeyRef"])
+            for item in metadata
+            if "secretKeyRef" in item
+        ],
+    )
 
 
 def is_binding_configured(
     name: str,
     *,
     components_dir: Path | str = Path("./components"),
+    secrets: SecretMap | None = None,
 ) -> bool:
     """Return True if a usable Dapr component named *name* exists.
 
@@ -193,32 +326,31 @@ def is_binding_configured(
     you only need to detect binding presence without the cost of initialising
     cloud SDK clients.
 
-    Returns False when the component is absent, has an unsupported binding
-    type, or has unresolvable metadata (template placeholders / missing env
-    vars for secretKeyRef entries).
-    """
-    import yaml  # noqa: PLC0415 — defensive: keep inline
+    When *secrets* is ``None`` the resolver falls back to the startup-fetched
+    cache populated by ``main._create_infrastructure`` (see
+    :func:`set_fetched_binding_secrets`), so a sync consumer that runs after
+    startup — for example ``DaprCredentialVault.__init__`` — reaches the same
+    verdict the startup resolver reached with the sidecar-fetched secrets,
+    rather than re-deriving a different one env-only.
 
-    components_path = Path(components_dir)
-    for yaml_file in sorted(components_path.glob("*.yaml")):
-        with yaml_file.open() as fh:
-            doc = yaml.safe_load(fh)
-        if (
-            doc
-            and doc.get("kind") == "Component"
-            and doc.get("metadata", {}).get("name") == name
-        ):
-            spec = doc.get("spec", {})
-            binding_type = spec.get("type", "")
-            store_kind = BINDING_TYPE_MAP.get(binding_type)
-            if store_kind is None:
-                return False
-            if store_kind != "local":
-                raw_metadata = spec.get("metadata", [])
-                if _find_broken_metadata_fields(raw_metadata):
-                    return False
-            return True
-    return False
+    Returns False when the component is absent, has an unsupported binding
+    type, or has unresolvable metadata (template placeholders, or
+    ``secretKeyRef`` entries that neither *secrets* nor the environment holds).
+    """
+    component = _find_component(name, components_dir)
+    if component is None:
+        return False
+
+    spec = component.get("spec", {})
+    store_kind = BINDING_TYPE_MAP.get(spec.get("type", ""))
+    if store_kind is None:
+        return False
+    if store_kind == "local":
+        return True
+    effective_secrets = (
+        secrets if secrets is not None else _get_fetched_binding_secrets(name)
+    )
+    return not _find_broken_metadata_fields(spec.get("metadata", []), effective_secrets)
 
 
 def _build_s3_config(
@@ -282,15 +414,18 @@ def _build_s3_config(
     # obstore sends x-amz-tagging by default; many S3-compatible stores (B2,
     # R2, GCS-S3-interop) hard-reject the header.  Auto-disable it for any
     # non-AWS endpoint.  An explicit disableTagging field always takes precedence.
+    # Never log the resolved endpoint: on the secure k8s path it can come from
+    # the secret store, and emitting it would leak the value to WARNING logs.
     if _nonempty(meta, "disableTagging"):
         if _coerce_bool(meta["disableTagging"]):
             config["aws_disable_tagging"] = "true"
         elif not _endpoint_is_aws(endpoint):
             _get_logger().warning(
-                "disableTagging=false on non-AWS endpoint '%s' — obstore will send "
-                "x-amz-tagging which many S3-compatible stores (B2, R2, GCS-interop) "
-                "reject; set disableTagging=true to suppress the header",
-                endpoint or "(none)",
+                "disableTagging=false on a non-AWS endpoint (endpoint_configured=%s) "
+                "— obstore will send x-amz-tagging which many S3-compatible stores "
+                "(B2, R2, GCS-interop) reject; set disableTagging=true to suppress "
+                "the header",
+                bool(endpoint),
             )
     elif not _endpoint_is_aws(endpoint):
         config["aws_disable_tagging"] = "true"
@@ -585,6 +720,7 @@ def create_store_from_binding_with_put_attrs(
     name: str,
     *,
     components_dir: Path | str = Path("./components"),
+    secrets: SecretMap | None = None,
 ) -> tuple[ObjectStore, dict[str, str] | None]:
     """Create an obstore store and any associated put attributes from a Dapr binding.
 
@@ -597,7 +733,9 @@ def create_store_from_binding_with_put_attrs(
     honour ``storageClass`` and similar per-write attributes without threading
     them through every call site.
     """
-    store, put_attrs = _create_store_core(name, components_dir=components_dir)
+    store, put_attrs = _create_store_core(
+        name, components_dir=components_dir, secrets=secrets
+    )
     return store, put_attrs
 
 
@@ -605,15 +743,22 @@ def _create_store_core(
     name: str,
     *,
     components_dir: Path | str = Path("./components"),
+    secrets: SecretMap | None = None,
 ) -> tuple[ObjectStore, dict[str, str] | None]:
     """Core implementation shared by the public binding-creation functions.
 
     Returns *(store, put_attributes)* where *put_attributes* is a dict of
     obstore put-option overrides (e.g. ``{"Storage-Class": "STANDARD_IA"}``)
     to apply on every write, or ``None`` when no overrides are needed.
-    """
-    import yaml  # noqa: PLC0415 — defensive: keep inline
 
+    When *secrets* is ``None`` the resolver falls back to the startup-fetched
+    cache populated by ``main._create_infrastructure`` (see
+    :func:`set_fetched_binding_secrets`), so a sync caller that runs after
+    startup — for example the observability exporter or
+    ``credentials/utils.py`` — resolves against the same secret values the
+    startup resolver used, rather than re-deriving a different result
+    env-only.  Mirrors :func:`is_binding_configured`.
+    """
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         StorageBindingBrokenError,
         StorageBindingNotFoundError,
@@ -621,18 +766,7 @@ def _create_store_core(
     )
 
     components_path = Path(components_dir)
-    component: dict | None = None
-
-    for yaml_file in sorted(components_path.glob("*.yaml")):
-        with yaml_file.open() as fh:
-            doc = yaml.safe_load(fh)
-        if (
-            doc
-            and doc.get("kind") == "Component"
-            and doc.get("metadata", {}).get("name") == name
-        ):
-            component = doc
-            break
+    component = _find_component(name, components_path)
 
     if component is None:
         raise StorageBindingNotFoundError(
@@ -649,27 +783,34 @@ def _create_store_core(
             f"Unsupported binding type: {binding_type!r} (component={name})"
         )
 
+    effective_secrets = (
+        secrets if secrets is not None else _get_fetched_binding_secrets(name)
+    )
+
     raw_metadata = spec.get("metadata", [])
     if store_kind != "local":
-        broken_fields = _find_broken_metadata_fields(raw_metadata)
+        broken_fields = _find_broken_metadata_fields(raw_metadata, effective_secrets)
         if broken_fields:
             raise StorageBindingBrokenError(
                 "Dapr component '%s' has unresolvable metadata "
-                "(template placeholders or missing env vars): %s"
+                "(template placeholders, or secretKeyRef entries absent from "
+                "both the fetched secret store and the environment): %s"
                 % (name, ", ".join(broken_fields)),
                 binding_name=name,
                 broken_fields=broken_fields,
             )
 
-    meta = _parse_dapr_metadata(raw_metadata)
+    meta = _parse_dapr_metadata(raw_metadata, effective_secrets)
     # Log binding resolution so objectstore routing can be verified in CI logs.
+    # Never log the resolved endpoint/accountName: on the secure k8s path that
+    # value comes from the secret store and would leak to INFO logs.
     endpoint = meta.get("endpoint", meta.get("accountName", ""))
     logger.info(
-        "create_store_from_binding: name=%r type=%r store_kind=%r endpoint=%r",
+        "create_store_from_binding: name=%r type=%r store_kind=%r endpoint_configured=%s",
         name,
         binding_type,
         store_kind,
-        endpoint or "(none)",
+        bool(endpoint),
     )
 
     if store_kind == "local":
@@ -749,6 +890,7 @@ def create_store_from_binding(
     name: str,
     *,
     components_dir: Path | str = Path("./components"),
+    secrets: SecretMap | None = None,
 ) -> ObjectStore:
     """Create an obstore store from a Dapr component binding YAML file.
 
@@ -779,6 +921,9 @@ def create_store_from_binding(
     Args:
         name: The Dapr component name (e.g. ``"objectstore"``).
         components_dir: Directory containing Dapr component YAML files.
+        secrets: Secrets already fetched from the component's
+            ``auth.secretStore``, as ``{secret_name: {key: value}}``.  Takes
+            precedence over environment variables when it holds the ref.
 
     Returns:
         A configured obstore store instance.
@@ -787,7 +932,7 @@ def create_store_from_binding(
         StorageConfigError: If no matching component is found, the
             binding type is not supported, or a required option is invalid.
     """
-    store, _ = _create_store_core(name, components_dir=components_dir)
+    store, _ = _create_store_core(name, components_dir=components_dir, secrets=secrets)
     return store
 
 
@@ -795,6 +940,7 @@ def create_store_from_binding_optional(
     name: str,
     *,
     components_dir: Path | str = Path("./components"),
+    secrets: SecretMap | None = None,
 ) -> ObjectStore | None:
     """Create an obstore store from a Dapr component binding, or ``None`` if absent.
 
@@ -806,6 +952,8 @@ def create_store_from_binding_optional(
     Args:
         name: The Dapr component name (e.g. ``"atlan-objectstore"``).
         components_dir: Directory containing Dapr component YAML files.
+        secrets: Secrets already fetched from the component's
+            ``auth.secretStore`` — see :func:`create_store_from_binding`.
 
     Returns:
         A configured obstore store instance, or ``None`` if no component
@@ -815,7 +963,7 @@ def create_store_from_binding_optional(
         StorageConfigError: If the component exists but is genuinely
             misconfigured (unsupported binding type, missing required options,
             etc.).  Note that *broken* components — those with template
-            placeholders or unresolvable ``secretKeyRef`` env vars — are
+            placeholders or unresolvable ``secretKeyRef`` entries — are
             treated as absent and return ``None`` with a warning instead of
             raising.
     """
@@ -825,7 +973,9 @@ def create_store_from_binding_optional(
     )
 
     try:
-        return create_store_from_binding(name, components_dir=components_dir)
+        return create_store_from_binding(
+            name, components_dir=components_dir, secrets=secrets
+        )
     except StorageBindingNotFoundError:
         _get_logger().warning(
             "Dapr component '%s' not found — treating as absent", name, exc_info=True
@@ -847,22 +997,26 @@ def _create_store_from_binding_optional_with_put_attrs(
     *,
     components_dir: Path | str = Path("./components"),
     required: bool = False,
+    secrets: SecretMap | None = None,
 ) -> tuple[ObjectStore, dict[str, str] | None] | tuple[None, None]:
     """Create an obstore store and put attributes from a Dapr binding, or ``(None, None)`` if absent.
 
     Internal helper for infrastructure-wiring code (``main.py``).
 
-    A missing component logs at INFO (absent is the normal non-SDR path).
-    A broken component (template placeholders, unresolvable secretKeyRef) logs
-    at WARNING and is treated as absent.
+    When ``required=False`` a missing component logs at INFO (absent is the
+    normal non-SDR path) and a broken one logs at WARNING; both yield
+    ``(None, None)``.  When ``required=True`` neither is tolerated: a
+    deployment that asked for this binding must not silently route elsewhere.
 
     Args:
         name: The Dapr component name (e.g. ``"atlan-objectstore"``).
         components_dir: Directory containing Dapr component YAML files.
-        required: When ``True``, re-raises ``StorageBindingNotFoundError``
-            instead of returning ``(None, None)``.  Use when the binding is
-            mandatory (e.g. upstream store in SDR mode) so the failure surfaces
-            at construction time rather than later in the preflight probe.
+        required: When ``True``, re-raises instead of returning
+            ``(None, None)``.  Use when the binding is mandatory (e.g. upstream
+            store in SDR mode) so the failure surfaces at construction time
+            rather than as a silent write to the wrong bucket.
+        secrets: Secrets already fetched from the component's
+            ``auth.secretStore`` — see :func:`create_store_from_binding`.
 
     Returns:
         ``(store, put_attributes)`` on success, or ``(None, None)`` if the
@@ -871,10 +1025,11 @@ def _create_store_from_binding_optional_with_put_attrs(
     Raises:
         StorageBindingNotFoundError: If the component is absent and
             ``required=True``.
+        StorageBindingBrokenError: If the component has unresolvable
+            configuration and ``required=True``.
         StorageConfigError: If the component exists but is genuinely
             misconfigured (unsupported binding type, missing required options,
-            etc.).  Broken components are treated as absent and return
-            ``(None, None)`` with a warning instead of raising.
+            etc.).
     """
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         StorageBindingBrokenError,
@@ -883,7 +1038,7 @@ def _create_store_from_binding_optional_with_put_attrs(
 
     try:
         return create_store_from_binding_with_put_attrs(
-            name, components_dir=components_dir
+            name, components_dir=components_dir, secrets=secrets
         )
     except StorageBindingNotFoundError:
         if required:
@@ -896,6 +1051,8 @@ def _create_store_from_binding_optional_with_put_attrs(
         )
         return None, None
     except StorageBindingBrokenError as exc:
+        if required:
+            raise
         _get_logger().warning(
             "Dapr component '%s' has unresolvable configuration "
             "(broken fields: %s) — treating as absent",

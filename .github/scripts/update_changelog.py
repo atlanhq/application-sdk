@@ -10,11 +10,66 @@ changelog format.
 Usage: python update_changelog.py <current_version> <new_version>
 """
 
+import json
 import os
 import re
 import subprocess
 import sys
 from datetime import datetime
+
+
+def _get_repo() -> tuple[str, str]:
+    """Read the repo from the environment so this script works for any
+    downstream app (GITHUB_REPOSITORY is always set in GitHub Actions; default
+    to application-sdk for local runs)."""
+    owner, repo = os.environ.get("GITHUB_REPOSITORY", "atlanhq/application-sdk").split(
+        "/", 1
+    )
+    return owner, repo
+
+
+def _gh_api_commits(path: str) -> list[dict]:
+    """Call `gh api <path>` (paginating) and return the decoded JSON list.
+
+    The path must resolve to a JSON array of commit objects. Raises
+    RuntimeError when the call fails or the token is missing — a changelog
+    written from zero commits is silently empty, and an empty first-release
+    changelog ships looking like a success.
+    """
+    if not os.environ.get("GH_TOKEN") and not os.environ.get("GITHUB_TOKEN"):
+        raise RuntimeError(
+            "GH_TOKEN is not set — cannot list commits for the changelog. "
+            "Set GH_TOKEN (the release workflow does) and re-run."
+        )
+
+    result = subprocess.run(
+        ["gh", "api", "--paginate", path],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"gh api {path} failed: {result.stderr.strip()}")
+
+    # --paginate concatenates one JSON array per page, so decode line by line.
+    commits = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line:
+            commits.extend(json.loads(line))
+    return commits
+
+
+def _format_commits(commits: list[dict]) -> list[str]:
+    """Render commit objects as `sha7|author|subject` lines (oldest first)."""
+    lines = []
+    for commit in reversed(commits):
+        author = (commit.get("author") or {}).get("login") or (
+            commit.get("commit", {}).get("author") or {}
+        ).get("name", "")
+        subject = commit.get("commit", {}).get("message", "").split("\n")[0]
+        lines.append(f"{commit['sha'][:7]}|{author}|{subject}")
+    return lines
 
 
 def get_commits_since_last_tag(current_version):
@@ -26,43 +81,45 @@ def get_commits_since_last_tag(current_version):
 
     Returns:
         list: A list of commit messages
+
+    When the tag exists, uses the compare API (`v{current}...HEAD`). When it
+    does not — a repository's first release — enumerates the full history via
+    the commits API instead. The previous fallback built a range from
+    `git rev-list --max-parents=0 HEAD`, which emits one SHA per root commit:
+    on a multi-root repo the multi-line value makes the compare call fail
+    (net/url: invalid control character), and the old `[]`-on-error path then
+    shipped the first-ever release with an empty changelog and a green
+    workflow. On a single-root untagged repo it silently omitted the root
+    commit from the range.
     """
     tag = f"v{current_version}"
 
     # Check if tag exists
     result = subprocess.run(["git", "tag", "-l", tag], capture_output=True, text=True)
 
+    owner, repo = _get_repo()
+
     if tag in result.stdout:
-        range_spec = f"{tag}...HEAD"
-    else:
-        old_tag = subprocess.check_output(
-            ["git", "rev-list", "--max-parents=0", "HEAD"],
+        # Standard pipe '|' delimiter to avoid encoding issues.
+        jq_filter = '.commits[] | "\\(.sha[0:7])|\\(.author.login // .commit.author.name)|\\(.commit.message | split("\\n")[0])"'
+        result = subprocess.run(
+            [
+                "gh",
+                "api",
+                f"repos/{owner}/{repo}/compare/{tag}...HEAD",
+                "--jq",
+                jq_filter,
+            ],
+            capture_output=True,
             text=True,
-        ).strip()
-        range_spec = f"{old_tag}...HEAD"
+            encoding="utf-8",
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"gh api compare failed: {result.stderr.strip()}")
+        return result.stdout.strip().split("\n") if result.stdout.strip() else []
 
-    # Read the repo from the environment so this script works for any downstream app
-    # (GITHUB_REPOSITORY is always set in GitHub Actions; default to application-sdk for local runs)
-    owner, repo = os.environ.get("GITHUB_REPOSITORY", "atlanhq/application-sdk").split(
-        "/", 1
-    )
-    compare_path = f"repos/{owner}/{repo}/compare/{range_spec}"
-
-    # Use a standard pipe '|' delimiter to avoid encoding issues.
-    jq_filter = '.commits[] | "\\(.sha[0:7])|\\(.author.login // .commit.author.name)|\\(.commit.message | split("\\n")[0])"'
-
-    result = subprocess.run(
-        ["gh", "api", compare_path, "--jq", jq_filter],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-
-    if result.returncode != 0:
-        print(f"Error calling GitHub API: {result.stderr}")
-        return []
-
-    return result.stdout.strip().split("\n") if result.stdout.strip() else []
+    # Untagged: first release — walk every commit reachable from HEAD.
+    return _format_commits(_gh_api_commits(f"repos/{owner}/{repo}/commits?sha=HEAD"))
 
 
 def categorize_commits(commits):
@@ -77,9 +134,7 @@ def categorize_commits(commits):
     """
     categories = {"features": [], "fixes": [], "chores": [], "other": []}
 
-    owner, repo = os.environ.get("GITHUB_REPOSITORY", "atlanhq/application-sdk").split(
-        "/", 1
-    )
+    owner, repo = _get_repo()
 
     for commit in commits:
         if not commit:
@@ -118,9 +173,7 @@ def get_full_changelog_url(current_version, new_version):
     """
     Generate the full changelog URL for GitHub comparison.
     """
-    owner, repo = os.environ.get("GITHUB_REPOSITORY", "atlanhq/application-sdk").split(
-        "/", 1
-    )
+    owner, repo = _get_repo()
     return (
         f"https://github.com/{owner}/{repo}/compare/v{current_version}...v{new_version}"
     )

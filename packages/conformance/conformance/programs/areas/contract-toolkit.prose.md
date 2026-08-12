@@ -20,7 +20,10 @@ description: >
   and regenerating — all verified by the pkl-eval gate.  K013 (a DAG node running a
   toolkit-owned workflow but still attributed to automation-engine) is fixed in
   contract/app.pkl -- by switching to the built-in node class or setting appName
-  explicitly -- and verified by the pkl-eval gate.  K009, K011, and K012 are
+  explicitly -- and verified by the pkl-eval gate.  K014 (atlan.yaml declares no
+  release_model, so the app inherits the publish-on-merge default) is fixed either
+  in the contract or in a hand-owned atlan.yaml, decided by whether the contract
+  actually emits that file.  K009, K011, and K012 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
 
@@ -39,10 +42,10 @@ All K-series rules are WARN-tier **except K009, K011, and K012 (BLOCK)**.  So in
 placeholder), K011 (missing `app_id`), or K012 (missing `generate` poe task)
 finding is present — those are FAILING results that fail the gate and must be
 remediated in default mode.  In **strict** mode the fingerprint-set also includes the
-unsuppressed WARNING results (K003/K004/K005/K007/K008/K010), which is where the
+unsuppressed WARNING results (K003/K004/K005/K007/K008/K010/K014), which is where the
 rest of K-series remediation runs.
 
-The active scope decides which rules can appear: K001–K013 are all `scope=APP`,
+The active scope decides which rules can appear: K001–K014 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
 the SDK repo sees 0 findings.
 
@@ -98,7 +101,9 @@ K007–K011, K013), the `pkl-eval` gate runs `pkl eval` to verify the contract c
 and regenerated cleanly.  **K006 and K012 are the exceptions**: K006's fix is a
 plain Python edit and K012's is a `pyproject.toml` edit (both see below), neither
 involving `.pkl` or generated artifacts, so both are verified by the standard
-test-suite gate instead of `pkl-eval`.
+test-suite gate instead of `pkl-eval`.  **K014 is either**, decided per repo: the
+contract route regenerates and is verified by `pkl-eval`; the hand-owned-atlan.yaml
+route touches no `.pkl` and is verified by the test-suite gate.
 
 The freshness rules (K003/K004/K005) are remediated by running a pkl command
 (`pkl project resolve` and/or `pkl eval -m . contract/app.pkl`), so they are
@@ -494,12 +499,78 @@ note to regenerate locally; never hand-edit `manifest.json`.
 
 ---
 
+**K014 ReleaseModelUndeclared** — `atlan.yaml` declares no top-level
+`release_model`, or declares an invalid/deprecated value.  A missing key is read
+as `cd`, so the app auto-publishes to `channel='all'` on every merge without
+anyone having chosen that.  **WARN-tier** (strict mode only).
+`classification = "judgment"` — the *value* is a release-policy decision owned by
+the app team, not derivable from the repo.
+
+**The rule takes no side between `cd` and `semver`.**  Never silently pick
+`semver` for an app that has not asked for it: switching an app to `semver` stops
+merges publishing to tenants, so an app whose team is not yet cutting GitHub
+Releases would silently lose its delivery path.  An invalid value is mechanical
+(correct it to the intended model); a *missing* value needs the owner's intent, so
+prefer residue with the question unless the intent is already recorded in the repo
+(e.g. a release policy doc, or the contract already declaring it — see step 1).
+
+*Procedure:*
+
+1. **Check the contract first.**  If `contract/app.pkl` already declares
+   `["release_model"]` and only the committed `atlan.yaml` lacks the rendered key,
+   the intent is settled: regenerate (step 3) and stop.  This is a pure staleness
+   fix with no policy decision.
+2. **Determine where the key belongs — by observation, not inference.**  Run
+   `pkl eval -m <tmpdir> contract/app.pkl` and check whether `atlan.yaml` appears
+   in the output.
+
+   **Do not** infer this from the presence of `contract/app.pkl`, nor from which
+   template the contract `amends`.  Both are unreliable: most contracts do *not*
+   emit `atlan.yaml`, and a `NativeApp.pkl` contract can still emit one through
+   its own `additionalOutputFiles` block.  Getting this backwards is itself the
+   bug — putting the key in a generated `atlan.yaml` means the next toolkit bump
+   silently reverts it.
+
+   - **The eval emits `atlan.yaml`** → the file is generated.  Declare the key in
+     the pkl `metadata` mapping (the same untyped hatch K011 uses for `app_id`):
+
+     ```
+     metadata {
+       ["release_model"] = "semver"
+     }
+     ```
+
+     If the contract instead builds `atlan.yaml` itself via an inline
+     `additionalOutputFiles["atlan.yaml"]` mapping, add the key inside *that*
+     mapping — a top-level `metadata` block will not reach it.  **requires `pkl`.**
+   - **The eval does not emit `atlan.yaml`** → the file is hand-owned.  Add
+     `release_model:` to it directly, near `build_tag:`.  Does **not** require
+     `pkl`, and no regeneration step applies.
+3. If the contract route was taken, regenerate with `pkl eval -m . contract/app.pkl`
+   (or `uv run poe generate`) and set `touched_files` the K003-step-4 way so a gate
+   rejection reverts every regenerated artifact.  **Never hand-edit a generated
+   `atlan.yaml`** — K005 guards its provenance banner.
+4. **Abort to residue if the committed `atlan.yaml` is already drifted** from a
+   fresh eval beyond the one key being added.  Regenerating a drifted file sweeps
+   unrelated reversions into a fix labelled "declare release_model" — the same
+   failure class K005 and the freshness rules exist to prevent.  Report the drift
+   instead; it needs an owner decision per field.
+5. Suppression (strict mode): `# conformance: ignore[K014] <reason>` on the first
+   line of `atlan.yaml` or the line above the key.  Rarely right — declaring the
+   value is one line.  Route to residue.
+
+If `pkl` is unavailable, the emission test in step 2 cannot be run; route to
+residue rather than guessing which file to edit.
+
+---
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline suppression comment — `// conformance: ignore[Kxxx]
 <8–40 word justification>` for the `.pkl`-source / `PklProject`-anchored rules
 (K001–K005, K007, K008, K010; `//` comments) or `# conformance: ignore[Kxxx]
 <8–40 word justification>` for the artifact/Python-anchored rules (K006 Python,
-K009 text artifact; `#` comments) — on the violating line or the comment-only
+K009 text artifact, K014 `atlan.yaml`; `#` comments) — on the violating line or
+the comment-only
 line directly above it when a legitimate exception exists (e.g. a K001 finding on
 a contract intentionally kept at the legacy module during a phased migration with
 a tracked follow-on ticket).  Route every suppression to residue for human audit.

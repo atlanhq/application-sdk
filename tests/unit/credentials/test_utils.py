@@ -2,7 +2,146 @@ import base64
 import os
 from unittest.mock import AsyncMock, patch
 
-from application_sdk.credentials.utils import resolve_credential_file
+import pytest
+
+from application_sdk.credentials.errors import CredentialParseError
+from application_sdk.credentials.utils import (
+    parse_credentials_extra,
+    resolve_credential_file,
+)
+
+
+class TestParseCredentialsExtra:
+    """The single decoder for the credential ``extra`` field.
+
+    ``extra`` arrives in two legal shapes — a nested object, or that object
+    serialized to a JSON string — because its producers straddle the v2/v3
+    contract boundary. Every consumer routes through this function precisely
+    so a shape one caller accepts cannot be a shape another caller drops.
+
+    Two policies, one decoder. ``strict=True`` (runtime clients) fails loudly:
+    a connector cannot build a DSN from an unusable ``extra``, and a typed
+    error beats an ``AttributeError`` three frames later. ``strict=False``
+    (the flattener) returns ``{}``: it runs where no caller can distinguish
+    a malformed credential from an absent one, so it must not raise.
+    """
+
+    # -- shapes accepted identically in both modes --------------------------
+
+    @pytest.mark.parametrize("strict", [True, False])
+    def test_dict_extra_returned_as_is(self, strict):
+        extra = {"host": "h", "port": 1521}
+        assert parse_credentials_extra({"extra": extra}, strict=strict) == extra
+
+    @pytest.mark.parametrize("strict", [True, False])
+    def test_json_string_extra_decoded(self, strict):
+        assert parse_credentials_extra(
+            {"extra": '{"host": "h", "port": 1521}'}, strict=strict
+        ) == {"host": "h", "port": 1521}
+
+    @pytest.mark.parametrize("strict", [True, False])
+    def test_both_shapes_decode_identically(self, strict):
+        """The parity that the whole two-shape tolerance exists to provide."""
+        as_dict = parse_credentials_extra(
+            {"extra": {"host": "h", "sid": "DB1"}}, strict=strict
+        )
+        as_string = parse_credentials_extra(
+            {"extra": '{"host": "h", "sid": "DB1"}'}, strict=strict
+        )
+        assert as_string == as_dict
+
+    @pytest.mark.parametrize("strict", [True, False])
+    def test_absent_extra_is_empty_dict(self, strict):
+        assert parse_credentials_extra({"username": "u"}, strict=strict) == {}
+
+    @pytest.mark.parametrize("strict", [True, False])
+    def test_null_extra_is_empty_dict(self, strict):
+        """An explicit JSON null is 'no extra', not a value to hand back.
+
+        Returning ``None`` here handed every caller an ``AttributeError`` on
+        the next ``.get()``.
+        """
+        assert parse_credentials_extra({"extra": None}, strict=strict) == {}
+
+    @pytest.mark.parametrize("strict", [True, False])
+    def test_empty_string_extra_is_empty_dict(self, strict):
+        assert parse_credentials_extra({"extra": ""}, strict=strict) == {}
+
+    # -- where the two policies diverge -------------------------------------
+
+    def test_strict_raises_on_undecodable_string(self):
+        with pytest.raises(CredentialParseError) as exc_info:
+            parse_credentials_extra({"extra": "{not-json"})
+        assert exc_info.value.credential_name == "extra"
+
+    def test_lenient_returns_empty_on_undecodable_string(self):
+        assert parse_credentials_extra({"extra": "{not-json"}, strict=False) == {}
+
+    def test_strict_raises_on_non_object_json(self):
+        """A JSON array decodes cleanly but is not an object.
+
+        The declared return type is ``dict``; handing back a list produced an
+        ``AttributeError`` in the caller instead of a typed credential error.
+        """
+        with pytest.raises(CredentialParseError):
+            parse_credentials_extra({"extra": '["a", "b"]'})
+
+    def test_lenient_returns_empty_on_non_object_json(self):
+        assert parse_credentials_extra({"extra": '["a", "b"]'}, strict=False) == {}
+
+    def test_strict_raises_on_non_mapping_value(self):
+        with pytest.raises(CredentialParseError):
+            parse_credentials_extra({"extra": 7})
+
+    def test_lenient_returns_empty_on_non_mapping_value(self):
+        assert parse_credentials_extra({"extra": 7}, strict=False) == {}
+
+    def test_strict_is_the_default(self):
+        """Callers that omit the flag get the loud policy."""
+        with pytest.raises(CredentialParseError):
+            parse_credentials_extra({"extra": "{not-json"})
+
+    # -- the lenient path must never be silent ------------------------------
+
+    @pytest.mark.parametrize(
+        "extra",
+        ["{not-json", '["a", "b"]', 7],
+        ids=["undecodable", "json_array", "non_mapping"],
+    )
+    def test_lenient_drop_is_logged(self, extra):
+        """A swallowed `extra` leaves a trace or the next defect is invisible.
+
+        Silence is what let a dropped `extra` reach production: the credential
+        looked complete, the connectivity check just failed. The lenient caller
+        has no exception to surface, so this log line is the only signal.
+        """
+        with patch("application_sdk.credentials.utils.logger") as mock_logger:
+            assert parse_credentials_extra({"extra": extra}, strict=False) == {}
+
+        mock_logger.warning.assert_called_once()
+        message = mock_logger.warning.call_args.args[0]
+        assert "extra" in message
+
+    def test_lenient_drop_log_excludes_credential_material(self):
+        """The reason is loggable; the value never is."""
+        secret = "s3cr3t-token-value"
+        with patch("application_sdk.credentials.utils.logger") as mock_logger:
+            parse_credentials_extra(
+                {"extra": f'{{"token": "{secret}", BROKEN'}, strict=False
+            )
+
+        rendered = " ".join(str(a) for a in mock_logger.warning.call_args.args)
+        assert secret not in rendered
+
+    def test_usable_extra_logs_nothing(self):
+        """No warning on the happy path — this runs on every credential load."""
+        with patch("application_sdk.credentials.utils.logger") as mock_logger:
+            parse_credentials_extra({"extra": '{"host": "h"}'}, strict=False)
+            parse_credentials_extra({"extra": {"host": "h"}}, strict=False)
+            parse_credentials_extra({}, strict=False)
+            parse_credentials_extra({"extra": None}, strict=False)
+
+        mock_logger.warning.assert_not_called()
 
 
 class TestResolveCredentialFile:

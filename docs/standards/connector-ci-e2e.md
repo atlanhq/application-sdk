@@ -292,9 +292,11 @@ in `build_callback_summary.py` from a subset of the gate's inputs (no
 `discover-e2e`, none of the install-path jobs, no "discovery found suites but the
 matrix skipped" anomaly rule), so a connector run whose `Tests Gate` failed
 because its arm64 e2e image build failed still completed the SDK-side check as
-**success**. Both halves are pinned by `test_build_callback_summary.py`: the two
-jobs must feed one action, with identical inputs, and each must `need` every job
-it judges. If you add a job to the gate, add it to both.
+**success**. That second verdict is gone — `build_callback_summary.py` builds the
+check-run body and emits no `conclusion` at all. Every half is pinned by
+`test_build_callback_summary.py`: the script must expose no verdict, the two jobs
+must feed one action with identical inputs, and each must `need` every job it
+judges. If you add a job to the gate, add it to both.
 
 The `tests.yaml` job in each connector runs unit + integration tests unconditionally. The full-DAG `e2e` job inside `tests.yaml` runs only when the SDK PR carries the `e2e` label — controlled via the `run_e2e` workflow input (`"true"` / `"false"`) passed by the dispatcher.
 

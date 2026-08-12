@@ -7,7 +7,21 @@ description: |
 
 inputs:
   add-report-comment-to-pr:
-    description: Whether to add a comment to the PR with the Trivy scan results
+    description: |
+      Whether to post the scan reports as PR comments. Reporting only — it has
+      no bearing on whether findings gate the check; that is `fail-on-findings`.
+      Comments are additionally skipped on any event other than `pull_request`,
+      because a `merge_group` entry has no PR of its own worth annotating.
+    required: false
+    default: 'true'
+
+  fail-on-findings:
+    description: |
+      Whether to fail the job on HIGH/CRITICAL vulnerabilities that have a fix
+      available, or on any detected secret. This is the enforcement switch, and
+      it is deliberately separate from the reporting one above: the two shared a
+      single input until FND-256, so turning comments off would have silently
+      turned the security gate off with them.
     required: false
     default: 'true'
 
@@ -81,46 +95,74 @@ runs:
         sarif_file: 'trivy-secret-results.sarif'
         category: 'trivy-secret'
 
+    # ── Reporting ────────────────────────────────────────────────────────────
+    # Everything from here to the enforcement block exists only to render the
+    # JSON reports into PR comments, so all of it carries the same gate. The
+    # `pull_request` half of that gate keeps the work out of `merge_group`
+    # entries, where the comment would land on an already-approved PR that is
+    # seconds from merging.
+    #
+    # Every reporting step is `continue-on-error` because this job is a
+    # required status check: a transient GitHub API or TLS error while posting
+    # a decorative comment used to fail the check outright, which ejects the
+    # entry from the merge queue and throws away every other check in it
+    # (FND-256). The preparation steps have the same failure shape one step
+    # earlier — a `pip install` blip or a malformed JSON render must not eject
+    # the PR either. Reporting must never be able to do that; enforcement below
+    # is what is allowed to fail the job.
+
     - name: Set up Python
-      if: inputs.add-report-comment-to-pr == 'true'
+      if: inputs.add-report-comment-to-pr == 'true' && github.event_name == 'pull_request'
+      continue-on-error: true
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
         python-version: '3.14'
 
     - name: Install Dependencies
-      if: inputs.add-report-comment-to-pr == 'true'
+      if: inputs.add-report-comment-to-pr == 'true' && github.event_name == 'pull_request'
+      continue-on-error: true
       shell: bash
       run: |
         pip install mdutils
 
     - name: Convert Vulnerability Scan Results to Markdown
-      if: inputs.add-report-comment-to-pr == 'true'
+      if: inputs.add-report-comment-to-pr == 'true' && github.event_name == 'pull_request'
+      continue-on-error: true
       shell: bash
       run: |
         python .github/scripts/trivy-to-markdown.py trivy-vuln-results.json trivy-vuln-results.md Vulnerability
 
     - name: Convert Secret Scan Results to Markdown
-      if: inputs.add-report-comment-to-pr == 'true'
+      if: inputs.add-report-comment-to-pr == 'true' && github.event_name == 'pull_request'
+      continue-on-error: true
       shell: bash
       run: |
         python .github/scripts/trivy-to-markdown.py trivy-secret-results.json trivy-secret-results.md Secret
 
     - name: Comment on PR with Vulnerability Scan Results
-      if: inputs.add-report-comment-to-pr == 'true'
+      if: inputs.add-report-comment-to-pr == 'true' && github.event_name == 'pull_request'
+      continue-on-error: true
       uses: mshick/add-pr-comment@ec328af66588ab8f77cdeb2c264f14aba45bbf59 # v3
       with:
         message-id: trivy-vuln
         message-path: trivy-vuln-results.md
 
     - name: Comment on PR with Secret Scan Results
-      if: inputs.add-report-comment-to-pr == 'true'
+      if: inputs.add-report-comment-to-pr == 'true' && github.event_name == 'pull_request'
+      continue-on-error: true
       uses: mshick/add-pr-comment@ec328af66588ab8f77cdeb2c264f14aba45bbf59 # v3
       with:
         message-id: trivy-secret
         message-path: trivy-secret-results.md
 
+    # ── Enforcement ──────────────────────────────────────────────────────────
+    # The only steps permitted to fail this job, and the reason it is a required
+    # check. Gated on `fail-on-findings`, never on the reporting switch, and
+    # never on the event name: a `merge_group` entry gets exactly the same gate
+    # as the PR did.
+
     - name: Fail on High/Critical Vulnerabilities (with fix available)
-      if: inputs.add-report-comment-to-pr == 'true'
+      if: inputs.fail-on-findings == 'true'
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         scan-type: 'fs'
@@ -134,7 +176,7 @@ runs:
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
     - name: Fail on Any Secrets Found
-      if: inputs.add-report-comment-to-pr == 'true'
+      if: inputs.fail-on-findings == 'true'
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         scan-type: 'fs'

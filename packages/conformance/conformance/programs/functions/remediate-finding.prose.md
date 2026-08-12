@@ -59,6 +59,16 @@ wider than `contract/*.pkl` — `pkl project resolve`/`pkl eval` also write
 `app/generated/`, `atlan.yaml`, or `app.yaml`; see `areas/contract-toolkit.prose.md`
 for how `touched_files` accounts for that full set.
 
+**K014 is the one K-series rule that may write `atlan.yaml` directly** — and only
+after establishing, by running `pkl eval -m <tmpdir> contract/app.pkl` and
+inspecting the output, that the contract does **not** emit `atlan.yaml`.  When the
+contract does emit it, the file is a generated artifact and the general
+never-hand-edit-a-generated-artifact rule applies unchanged: the edit goes in the
+contract and `atlan.yaml` is rewritten by regeneration, not by this function.  See
+`areas/contract-toolkit.prose.md`'s K014 procedure — the emission test is
+mandatory, because neither the presence of `contract/app.pkl` nor the contract's
+`amends` line reliably predicts the answer.
+
 For C002 findings (and C003's absent-`.gitignore` case) only, invoking
 `atlan-application-sdk-conformance bootstrap` is also permitted, despite it
 writing under `.github/` and `.gitignore`. This is not a carve-out of the

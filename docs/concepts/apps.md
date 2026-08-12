@@ -286,6 +286,30 @@ from application_sdk.storage import verify_object_store_access, ObjectStorePrefl
 Both symbols are exported from `application_sdk.storage`. The function is normally called by
 the SDK boot path — connectors do not need to call it manually.
 
+### SDR: Binding Secret Resolution (`auth.secretStore` + `secretKeyRef`)
+
+Dapr component YAMLs for the deployment and upstream object stores can carry credentials
+either inline (``value:``) or via a ``secretKeyRef:`` that names a secret in the component's
+``auth.secretStore``.  On the secure k8s SDR path the chart deliberately omits the matching
+environment variables and resolves credentials only through the secret store.
+
+At startup ``_create_infrastructure`` (in ``application_sdk.main``) reads each store's
+``secretKeyRef`` entries via ``read_binding_secret_refs``, fetches the referenced secrets from
+the Dapr sidecar (``_fetch_binding_secrets``), and hands them to the synchronous store
+factories (``create_store_from_binding*``) as the ``secrets=`` keyword.  The same secrets are
+also published to a process-wide registry (``set_fetched_binding_secrets``) so sync consumers
+constructed later — ``DaprCredentialVault.__init__`` is the canonical case — resolve the
+binding against the same values instead of falling back to env-only resolution and reaching
+a different verdict.
+
+Resolution order per field: the fetched secret map wins; environment variables are the
+fallback (Docker Compose / ``secretstores.local.env`` shape); a ``secretKeyRef`` that neither
+source holds marks the binding broken (``StorageBindingBrokenError``).
+
+The ``secrets=`` parameter is keyword-only and optional, so existing call sites and the
+public sync API are unchanged.  Secret values are never logged — the startup resolution log
+emits ``endpoint_configured=<bool>`` rather than the resolved endpoint.
+
 ### SDR: Interactive Activity Timeouts
 
 The three interactive SDR operations (`sdr:test_auth`, `sdr:preflight_check`, `sdr:fetch_metadata`)

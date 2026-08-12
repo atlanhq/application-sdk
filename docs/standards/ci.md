@@ -190,3 +190,107 @@ sparse-checkout it into a side path and invoke from there — the
 
 The driver runs from the consumer's working directory, so it acts on the
 consumer's files; `.sdk-scripts` only holds SDK code and must never be staged.
+
+## `concurrency:` is not a lock, and not a queue
+
+**Rule:** never use a `concurrency:` group to protect a shared external resource
+(a tenant, a fixed environment, a singleton deployment). Use it only to
+supersede or de-duplicate *runs of the same thing*.
+
+Two independent limits make it unfit as a lock:
+
+* **It is per-job.** The group is released when the job ends. Anything the job
+  set up for later jobs to use — an install, a seeded database — is unprotected
+  from the moment that job finishes.
+* **It holds ONE pending run.** `cancel-in-progress: false` reads like a queue
+  but is a waiting room with a single chair. A third arrival does not wait: it
+  *evicts* the run that was waiting, which is reported as `cancelled` having
+  never been given a runner, so there is no log blob at all (`gh api
+  .../jobs/<id>/logs` → 404). A few-second job lifetime with no logs is the
+  signature.
+
+That combination caused FND-218: batching more than two PRs into the merge queue
+self-inflicted roughly a two-in-three ejection rate, and because the connector
+callback mirrored `cancelled` as `failure`, it read on the dispatching PR as
+"your change broke the connector".
+
+**Do not key a group on `github.ref` for anything a merge queue or a cross-repo
+dispatch can reach.** On a cross-repo `workflow_dispatch`, `github.ref` is the
+*callee's* ref — always `refs/heads/main` — never the dispatching commit. So a
+ref-keyed group collapses every concurrent dispatch into one group, and the
+one-pending-slot rule then evicts all but two. Key on `github.run_id` off the PR
+path:
+
+```yaml
+concurrency:
+  group: thing-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+```
+
+On a real PR ref the shared group is the point (supersede the previous commit);
+everywhere else the run must be independent.
+
+**For a shared resource, take a lease instead.** The `(app, cloud)` tenant lease
+in [`e2e-tenant-lease`](../../.github/actions/e2e-tenant-lease/) is the worked
+example (FND-250). It needs no lock server:
+
+* One ref per resource, with a **fixed** name:
+  `refs/e2e-tenant-lease/<app>/<cloud>/holder`. `POST /git/refs` on a name that
+  already exists returns 422, and that is an atomic test-and-set evaluated by
+  GitHub — of N simultaneous callers exactly one gets 201. That 422 *is* the
+  lock, not an error path bolted onto one.
+* The ref points at a **blob** holding the holder's identity (run id, attempt,
+  acquisition time). A ref can target a blob, which is what lets a single atomic
+  creation both take the lease and record who took it. Waiters read it to tell a
+  live holder from a dead one.
+* Liveness is the holder's run status, not a heartbeat. A lease whose run is
+  `completed` is reaped by whoever notices. This is the part `if: always()`
+  cannot do: GitHub *cancels* queued jobs rather than running them, so a
+  cancelled run's release job never starts.
+* Release must **check ownership first**. A fixed name is a name you can delete
+  someone else's lease with.
+
+**Release cannot be made fully atomic, and that is an accepted trade-off, not an
+oversight.** The check-then-delete above is inherently racy: the refs API offers
+*no* conditional delete, so between the final ownership read and the `DELETE` a
+replacement holder can acquire the ref, and the delete would take the new
+holder's lease. The implementation re-reads the target immediately before the
+delete, which narrows the window to one round-trip but cannot close it. The
+deliberate decision is to **rely on the TTL as the load-bearing bound** rather
+than chase a stronger primitive: the only interleaving that loses is a TTL
+breaking a lease whose run is *still live*, and sizing the TTL above the longest
+legitimate hold makes that window unreachable in practice. The alternative —
+deleting only via a storage/API primitive that supports delete-if-current-target
+— does not exist on `git/refs`, so proactive release stays best-effort and the
+next acquirer's reaping of completed holders is the actual safety net.
+
+**Do not build exclusion out of an ordering rule.** The first version of this
+lease was an ordered queue: every run created a ticket ref named after itself,
+and the lease belonged to whichever live ticket sorted lowest by
+`(run_id, run_attempt)`. It failed on its first concurrent run — both contenders
+acquired and both installed onto the same tenant. Two reasons, and both
+generalise:
+
+* `run_id` increases with run *creation*, which is **not** the order runs reach a
+  given job. In the observed failure the lower-id run got there 15 seconds later.
+* A total order gives FIFO *fairness*, not *exclusion*. A run that checks only
+  the tickets ordered ahead of it never notices that a run behind it already
+  holds the lease.
+
+Ordering-based exclusion is only sound if every contender's ticket exists before
+any contender decides, and nothing enforces that. Use an atomic primitive and
+derive nothing from ids. The cost is fairness — acquisition becomes a scramble,
+so bound starvation with the wait budget below rather than with a queue position.
+
+Three consequences to design for:
+
+* A waiting run occupies a runner, so give the wait a budget and fail loudly past
+  it, **naming the holder**. A contention outcome must never be phrased as a test
+  failure.
+* Ref writes need `contents: write`, so put acquire/release in their own small
+  jobs and leave the jobs that execute test code read-only.
+* If the lease fails open when it cannot be taken (the right default when a
+  separate assertion already catches the underlying hazard), then a broken lease
+  looks exactly like a working one — green, with a warning. **Assert the acquire
+  step's `state` output in anger** when verifying, rather than concluding from an
+  absence of red.

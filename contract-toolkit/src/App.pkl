@@ -613,6 +613,16 @@ class AdvancedJDBCUrlGroup {
 
   urlLabel: String = "SQLAlchemy Connection URL"
 
+  /// Set for sources whose JDBC URL separates its parameters with `;` rather
+  /// than the `?a=&b=` query-string form — Hive, for example, connects with
+  /// `jdbc:hive2://host:port/db;k=v;k2=v2`.
+  ///
+  /// Renders as `ui.isDelimitedBySemicolons`, which the frontend's
+  /// `AdvancedJDBCUrlGroup.vue` reads to rewrite the separators before parsing
+  /// the URL. Without it a semicolon-delimited URL entered in URL mode does not
+  /// parse, and the host/port/database fields it feeds stay empty.
+  isDelimitedBySemicolons: Boolean = false
+
   urlHelp: String?
 
   urlPlaceholder: String?
@@ -689,6 +699,10 @@ open class DAGNode {
   taskQueue: String?
   args: Mapping<String, Any>
 
+  /// Upstream dependencies for this node. Gates on the parent(s) reaching
+  /// SUCCESS — a failed or skipped parent does not schedule this node.
+  /// Use `dependsOnCondition` instead if a node genuinely needs to run
+  /// regardless of the parent's outcome (e.g. a cleanup/notify step).
   dependsOn: Listing<String>?
 
   dependsOnCondition: DependencyCondition?
@@ -1803,6 +1817,9 @@ local function renderJdbcBranch(
     ["protocol"] = group.protocol
     ["connectByPropertyId"] = "\(nsFor(mode)).connectBy"
     ["urlPartPropertyIdMapping"] = renderUrlPartMapping(jdbcOpt.urlPartMapping, nsFor(mode))
+    when (group.isDelimitedBySemicolons) {
+      ["isDelimitedBySemicolons"] = true
+    }
   }
 }
 
@@ -1944,6 +1961,9 @@ local function renderJdbcUrlField(
     ["connectByPropertyId"] = "credential-guid.connectBy"
     ["protocol"] = group.protocol
     ["urlPartPropertyIdMapping"] = new Mapping {}
+    when (group.isDelimitedBySemicolons) {
+      ["isDelimitedBySemicolons"] = true
+    }
   }
   ["anyOf"] = new Listing {
     for (authKey, _ in options) {
@@ -2398,9 +2418,13 @@ local function renderNode(node: DAGNode): Mapping<String, Any> =
     ["task_queue"] = node.taskQueue ?? "atlan-\(node.appName)-{deployment_name}"
     ["args"] = renderNodeArgs(node)
   }
+  // Single parent → depends_on: {node_id, tag: "success"}. Multi-parent →
+  // depends_on: {and_conditions: [...]}. Both forms gate on the parent(s)
+  // succeeding — a failed/skipped parent must not schedule this node.
   when (node.dependsOn != null && node.dependsOn.length == 1) {
     ["depends_on"] = new Mapping {
       ["node_id"] = node.dependsOn.first
+      ["tag"] = "success"
     }
   }
   when (node.dependsOn != null && node.dependsOn.length > 1) {
