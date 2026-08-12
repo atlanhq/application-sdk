@@ -1,7 +1,9 @@
 # ADR-0018: Progress-Aware Stall Watchdog and Duration-Backstop Timeouts
 
 ## Status
-**Proposed**
+**Accepted** — signed off in review on application-sdk PR #2865 (FND-38), including
+both positions in *Decisions taken*. Implementation lands in the stages described in
+*Rollout*.
 
 ## Context
 
@@ -340,7 +342,7 @@ activity fails differently, no knob changes meaning, and the added cost is telem
 The same telemetry settles every sizing parameter at once — where holds go, what each
 allowance should be, what `max_no_progress_seconds` should be, and whether long stalls
 occur in practice at all (currently argued from recollection on both sides). None of
-those are design questions to be decided in review; see *What this needs agreement on*.
+those are design questions — they are measurements; see *Decisions taken*.
 
 ### Failing the activity, and what the failure looks like
 
@@ -919,10 +921,9 @@ removal is part of the work, not a follow-up.
   category before an app enforces.
 - During rollout the flag adds a temporary branch that must be removed.
 
-## What this needs agreement on
+## Decisions taken
 
-Not a list of decisions to make — two stated positions to accept or reject. Everything
-else in this ADR follows from them.
+Two positions carried the review, and everything else in this ADR follows from them.
 
 1. **We start with a 24h attempt and the existing 3-attempt retry policy — a 72h
    worst case per activity, where today it is 30 minutes.** Detection stays in minutes
