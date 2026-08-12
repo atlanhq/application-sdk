@@ -100,6 +100,23 @@ Sleeper = Callable[[float], None]
 
 SUMMARY_MARKERS = ("<!-- SDK_REVIEW -->", "<!-- TEST_SDK_REVIEW -->")
 
+# The only login whose verdict comments this script may act on. The fast path's
+# job-level `if:` already pins the *triggering* comment to this author, but the
+# script also re-lists every PR comment — to find the newest summary for
+# supersede detection, and (on the slow path, COMMENT_BODY empty) to re-read the
+# verdict itself. That read path must apply the same author check, or a forged
+# `<!-- SDK_REVIEW -->` comment from anyone else would be treated as a verdict
+# and could drive the atlan-ci APPROVE.
+VERDICT_AUTHOR = "mothership-ai[bot]"
+
+
+def _is_verdict_comment(comment: dict) -> bool:
+    """A comment counts as a verdict only from the reviewer bot, with a marker."""
+    if (comment.get("user") or {}).get("login") != VERDICT_AUTHOR:
+        return False
+    return any(marker in (comment.get("body") or "") for marker in SUMMARY_MARKERS)
+
+
 VERDICT_RE = re.compile(r"<!--\s*VERDICT:\s*([A-Z_]+)\s*-->")
 # Fallback for legacy comments predating the structured marker: "### Verdict:
 # READY TO MERGE" in prose, which normalises to READY_TO_MERGE.
@@ -237,10 +254,16 @@ class Client:
         return items
 
     def _summary_comments(self) -> list[dict]:
+        """Verdict comments only: reviewer-bot-authored AND carrying a marker.
+
+        A marker alone is not proof of authorship, so a forged verdict comment
+        from any other login is filtered out here — covering both
+        `newest_summary_comment_id()` and `latest_summary_body()` at once.
+        """
         return [
             comment
             for comment in self._paginated(f"issues/{self.pr_number}/comments")
-            if any(marker in (comment.get("body") or "") for marker in SUMMARY_MARKERS)
+            if _is_verdict_comment(comment)
         ]
 
     def newest_summary_comment_id(self) -> int:
