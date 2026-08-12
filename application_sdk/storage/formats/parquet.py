@@ -1,8 +1,9 @@
 import inspect
 import os
+import threading
 import uuid
 import warnings
-from collections.abc import AsyncGenerator, AsyncIterator, Generator
+from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
 from typing import TYPE_CHECKING, cast
 
 from application_sdk.common.file_ops import SafeFileOps
@@ -30,6 +31,108 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     import pandas as pd
     import pyarrow as pa
+    import pyarrow.parquet as pq
+
+#: Directory under a writer's output path that holds accumulation chunks until
+#: they are consolidated. Each writer owns a token-named subdirectory of it —
+#: see :meth:`ParquetFileWriter._get_temp_base_path`.
+_TEMP_ACCUMULATION_DIRNAME = "temp_accumulation"
+
+
+class _ThreadConfinedParquetReader:
+    """Owns one ``ParquetFile`` handle on behalf of the thread decoding from it.
+
+    :meth:`ParquetFileReader._get_batched_dataframe` offloads each decode step
+    to a worker thread and ``await``\\ s it, so every step is a cancellation
+    point — and a worker thread cannot be killed (ADR-0010). Closing the handle
+    from the event loop's ``finally`` therefore raced an orphaned worker still
+    inside ``next(batches)``, closing a handle pyarrow was decoding from.
+
+    The race is removed by construction here: the handle is opened inside the
+    worker and closed by whichever side observes the stop request last, which
+    in the cancellation case is always the orphan itself. :meth:`stop` — the
+    only entry point the event loop uses — closes inline *only* when it can
+    prove no worker is inside a step, and never blocks otherwise. That keeps
+    the original reason the close was never offloaded intact: an ``await`` in a
+    ``finally`` can itself be cancelled and leak the handle, and closing a
+    parquet reader is one cheap syscall, so there is nothing worth offloading.
+    """
+
+    def __init__(self, file_path: str, chunk_size: int) -> None:
+        self._file_path = file_path
+        self._chunk_size = chunk_size
+        # Guards the handle. Contended only between one worker thread and the
+        # event loop's non-blocking probe in stop(); the generator awaits each
+        # step, so two workers are never inside next_frame() at once.
+        self._lock = threading.Lock()
+        self._parquet_file: "pq.ParquetFile | None" = None
+        self._batches: "Iterator[pa.RecordBatch] | None" = None
+        self._stopped = False
+
+    def next_frame(self) -> "pd.DataFrame | None":
+        """Open on first call, then decode one batch. Runs in a worker thread.
+
+        Returns ``None`` once the file is exhausted or a close has been
+        requested, having closed the handle before returning.
+        """
+        try:
+            with self._lock:
+                if self._stopped:
+                    return None
+                if self._batches is None:
+                    import pyarrow.parquet as pq  # noqa: PLC0415 — optional dep: pyarrow.parquet
+
+                    self._parquet_file = pq.ParquetFile(self._file_path)
+                    self._batches = self._parquet_file.iter_batches(
+                        batch_size=self._chunk_size
+                    )
+                try:
+                    batch = next(self._batches, None)
+                except BaseException:
+                    self._close_locked()
+                    raise
+                if batch is None:
+                    self._close_locked()
+                    return None
+                return batch.to_pandas()
+        finally:
+            # stop() can land after this thread has already passed the
+            # `_stopped` check above, so re-check once the lock is released:
+            # whichever side observes the request last performs the close, and
+            # close() is idempotent so both observing it is harmless.
+            if self._stopped:
+                self.close()
+
+    def close(self) -> None:
+        """Close the handle, waiting for any in-flight step to finish first.
+
+        Blocking, so it is for worker threads only — the event loop calls
+        :meth:`stop`.
+        """
+        with self._lock:
+            self._close_locked()
+
+    def stop(self) -> None:
+        """Request the close from the event loop without ever blocking it.
+
+        Closes inline when the lock is free, which is every non-cancellation
+        exit. When a worker holds it — the orphaned-after-cancellation case —
+        the flag set here is what makes that worker close its own handle on
+        the way out.
+        """
+        self._stopped = True
+        if self._lock.acquire(blocking=False):
+            try:
+                self._close_locked()
+            finally:
+                self._lock.release()
+
+    def _close_locked(self) -> None:
+        """Close and forget the handle. Caller must hold ``self._lock``."""
+        self._stopped = True
+        parquet_file, self._parquet_file, self._batches = self._parquet_file, None, None
+        if parquet_file is not None:
+            parquet_file.close()
 
 
 def _normalize_all_null_string_columns(table: "pa.Table") -> "pa.Table":
@@ -353,8 +456,6 @@ class ParquetFileReader(Reader):
         - Only reads files in the specified directory
         """
         try:
-            import pyarrow.parquet as pq  # noqa: PLC0415 — optional dep: pyarrow.parquet
-
             # Ensure files are available (local or downloaded)
             parquet_files = await _download_files(
                 self.path, PARQUET_FILE_EXTENSION, self.file_names
@@ -371,26 +472,19 @@ class ParquetFileReader(Reader):
                 # Both are blocking, and at batch_size=100k the per-batch cost
                 # is far past the heartbeat interval — offload each step so the
                 # loop stays free to beat between batches (ADR-0010).
-                pf = await run_in_thread(pq.ParquetFile, parquet_file)
+                # The handle lives inside the worker rather than in this frame:
+                # every ``await`` below is a cancellation point, and a worker
+                # thread cannot be killed, so a close issued from here could
+                # land while an orphan was still decoding (FND-315).
+                reader = _ThreadConfinedParquetReader(parquet_file, chunk_size)
                 try:
-                    batches = pf.iter_batches(batch_size=chunk_size)
-
-                    def _next_frame() -> "pd.DataFrame | None":
-                        batch = next(batches, None)  # noqa: B023 — consumed within this iteration
-                        return None if batch is None else batch.to_pandas()
-
                     while True:
-                        frame = await run_in_thread(_next_frame)
+                        frame = await run_in_thread(reader.next_frame)
                         if frame is None:
                             break
                         yield frame
                 finally:
-                    # Closed inline, not via run_in_thread: an ``await`` in a
-                    # finally can itself be cancelled, which would leak the
-                    # handle on activity cancellation or generator close.
-                    # Closing a parquet reader is one cheap syscall, so there
-                    # is nothing here worth offloading.
-                    pf.close()
+                    reader.stop()
         # See _get_dataframe: preserve an already-typed AppError.
         except AppError:
             raise
@@ -538,6 +632,23 @@ class ParquetFileWriter(Writer):
         self.temp_folder_index = 0  # Current temp folder index
         self.temp_folders_created: list[int] = []  # Track temp folders for cleanup
         self.current_temp_folder_path: str | None = None  # Current temp folder path
+        # Token that scopes the accumulation tree to this writer instance.
+        #
+        # Cancelling an activity leaves the orphaned `_convert_and_write`
+        # worker alive (a thread cannot be killed, ADR-0010) and still writing
+        # `chunk-{n}` files. Every part of the old path was attempt-independent
+        # — `temp_accumulation/folder-{i}`, with `temp_folder_index` reset to 0
+        # both here and in `_cleanup_temp_folders` — so a retry landed on the
+        # exact directory that orphan was writing into: its file count shifted
+        # the retry's `chunk-{n}` numbering (mixing the orphan's partial output
+        # into a consolidation, or skipping the retry's own), and the retry's
+        # cleanup could rmtree a live directory (FND-315).
+        #
+        # Scoped per writer instance rather than per activity attempt: it is
+        # strictly stronger (two writers inside one attempt are covered too)
+        # and it needs no activity context in `storage/`, which would deepen
+        # the layering debt tracked in FND-316.
+        self._temp_run_id = uuid.uuid4().hex[:8]
 
         if self.chunk_start:
             self.chunk_count = self.chunk_start + self.chunk_count
@@ -658,10 +769,18 @@ class ParquetFileWriter(Writer):
 
     # Consolidation helper methods
 
+    def _get_temp_base_path(self) -> str:
+        """Root of this writer's accumulation tree.
+
+        Token-scoped, so no two writers — and therefore no two activity
+        attempts — can ever share an accumulation directory. See
+        ``_temp_run_id`` for why that matters.
+        """
+        return os.path.join(self.path, _TEMP_ACCUMULATION_DIRNAME, self._temp_run_id)
+
     def _get_temp_folder_path(self, folder_index: int) -> str:
         """Generate temp folder path consistent with existing structure."""
-        temp_base_path = os.path.join(self.path, "temp_accumulation")
-        return os.path.join(temp_base_path, f"folder-{folder_index}")
+        return os.path.join(self._get_temp_base_path(), f"folder-{folder_index}")
 
     def _get_consolidated_file_path(self, folder_index: int, chunk_part: int) -> str:
         """Generate final consolidated file path using existing path_gen logic."""
@@ -818,7 +937,12 @@ class ParquetFileWriter(Writer):
             raise
 
     async def _cleanup_temp_folders(self):
-        """Clean up all temp folders after consolidation."""
+        """Clean up this writer's temp folders after consolidation.
+
+        Only ever removes paths under this writer's own token-scoped tree, so
+        it cannot delete a directory an orphaned worker from a cancelled
+        attempt is still writing into.
+        """
         try:
             # Add current folder to cleanup list if it exists
             if self.current_temp_folder_path is not None:
@@ -827,20 +951,48 @@ class ParquetFileWriter(Writer):
             # Clean up all temp folders
             for folder_index in self.temp_folders_created:
                 temp_folder = self._get_temp_folder_path(folder_index)
-                if SafeFileOps.exists(temp_folder):
+                if not SafeFileOps.exists(temp_folder):
+                    continue
+                try:
                     # Offloaded: an accumulation folder holds a run's worth of
                     # parquet chunks, and rmtree on the event loop stalls every
                     # other coroutine — including the auto-heartbeat.
-                    await run_in_thread(
-                        SafeFileOps.rmtree, temp_folder, ignore_errors=True
+                    await run_in_thread(SafeFileOps.rmtree, temp_folder)
+                except OSError:
+                    # No `ignore_errors=True` any more. It was load-bearing
+                    # only while attempts shared this tree, where a vanished
+                    # directory meant a sibling attempt had deleted it — the
+                    # very failure it hid (FND-315). Within a writer-scoped
+                    # tree, a failure here is a real one (full disk, permission
+                    # change, a file still held open) and worth reporting.
+                    logger.warning(
+                        "Failed to remove parquet accumulation folder %s; "
+                        "it will be left on local disk",
+                        temp_folder,
+                        exc_info=True,
                     )
 
-            # Clean up base temp directory if it exists and is empty
-            temp_base_path = os.path.join(self.path, "temp_accumulation")
-            if SafeFileOps.exists(temp_base_path) and not SafeFileOps.listdir(
-                temp_base_path
+            # Clean up this writer's temp root, then the shared parent, each
+            # only when empty — a sibling writer's tree is never removed here.
+            for directory in (
+                self._get_temp_base_path(),
+                os.path.join(self.path, _TEMP_ACCUMULATION_DIRNAME),
             ):
-                SafeFileOps.rmdir(temp_base_path)
+                if SafeFileOps.exists(directory) and not SafeFileOps.listdir(directory):
+                    try:
+                        SafeFileOps.rmdir(directory)
+                    except OSError:
+                        # A concurrent writer can create its own token directory
+                        # between the emptiness check and the rmdir, which is
+                        # exactly the outcome the check wanted. Debug, not
+                        # warning: an empty directory left behind costs nothing
+                        # and the next writer to finish removes it.
+                        logger.debug(
+                            "Left %s in place; another writer claimed it "
+                            "between the emptiness check and removal",
+                            directory,
+                            exc_info=True,
+                        )
 
             # Reset state
             self.temp_folders_created.clear()

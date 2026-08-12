@@ -671,13 +671,16 @@ class TestParquetFileWriterConsolidation:
             typename="test_type",
         )
 
-        # Test temp folder path generation
+        # Test temp folder path generation. The writer's own token sits
+        # between the shared "temp_accumulation" root and the folder, so no
+        # two writers can share an accumulation directory (FND-315).
         temp_path = parquet_output._get_temp_folder_path(0)
         expected_path = os.path.join(
             base_output_path,
             "test_suffix",
             "test_type",
             "temp_accumulation",
+            parquet_output._temp_run_id,
             "folder-0",
         )
         assert temp_path == expected_path
