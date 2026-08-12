@@ -585,8 +585,28 @@ async def download_file_chunked(
             if not compute_hash:
                 return None
 
-            h = hashlib.sha256()
-            with path.open("rb") as fh:
-                for chunk in iter(lambda: fh.read(1 << 20), b""):
-                    h.update(chunk)
-            return h.hexdigest()
+            def _digest() -> str:
+                h = hashlib.sha256()
+                with path.open("rb") as fh:
+                    for chunk in iter(lambda: fh.read(1 << 20), b""):
+                        h.update(chunk)
+                return h.hexdigest()
+
+            # Offloaded: this re-reads and digests the whole downloaded file
+            # with no await in between, so on a multi-GB download it holds the
+            # event loop — and the enclosing activity's auto-heartbeat — for
+            # the full read+hash. Same treatment as
+            # ``storage.reference._sha256_hex_file_async`` (ADR-0010, P031).
+            # Imported lazily, and it has to be: this module is in
+            # `storage/__init__`'s eager chain, so importing
+            # `application_sdk.execution.heartbeat` at module scope runs
+            # `execution/__init__` -> Temporal activity utils ->
+            # `application_sdk.app` -> back to a still-initialising
+            # `contracts.base`, raising ImportError. The cycle is via
+            # `execution/__init__`, not a direct storage -> execution edge.
+            # See `storage/batch.py` for the full chain.
+            from application_sdk.execution.heartbeat import (  # noqa: PLC0415
+                run_in_thread,
+            )
+
+            return await run_in_thread(_digest)
