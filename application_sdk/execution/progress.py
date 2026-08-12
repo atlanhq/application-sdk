@@ -29,8 +29,8 @@ tracker — the SDK's transfer loops, a blocking call offloaded through
 ``run_in_thread``, an app's own ``holding_progress`` block. They reach the
 current attempt's tracker through the ContextVar in this module:
 :func:`current_progress_tracker` for consumers, and
-:func:`set_progress_tracker` / :func:`reset_progress_tracker` for
-``activities.py``, which owns one tracker per activity attempt.
+:func:`bind_progress_tracker` for ``activities.py``, which owns one tracker per
+activity attempt.
 
 The watchdog that consumes the tracker lives in
 :func:`~application_sdk.execution.heartbeat.auto_heartbeat_loop` and runs in one
@@ -46,8 +46,9 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable
-from contextvars import ContextVar, Token
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from application_sdk.contracts.base import SerializableEnum
@@ -425,32 +426,36 @@ def current_progress_tracker() -> ProgressTracker:
     return _INERT_TRACKER if tracker is None else tracker
 
 
-def set_progress_tracker(tracker: ProgressTracker) -> Token[ProgressTracker | None]:
-    """Bind ``tracker`` as the current attempt's tracker.
+@contextmanager
+def bind_progress_tracker(tracker: ProgressTracker) -> Iterator[ProgressTracker]:
+    """Bind ``tracker`` as the current attempt's tracker for the block's extent.
 
-    Called once per activity attempt by
-    ``application_sdk.execution._temporal.activities``, which owns the
-    tracker's lifetime. Each activity runs as its own asyncio task with its own
-    copy of the context, so concurrent activities in one worker bind their own
-    tracker and never observe each other's.
+    Entered once per activity attempt by
+    ``application_sdk.execution._temporal.activities``, which owns the tracker's
+    lifetime. Each activity runs as its own asyncio task with its own copy of
+    the context, so concurrent activities in one worker bind their own tracker
+    and never observe each other's.
+
+    A block rather than a ``set``/``reset`` pair, because a bind that outlives
+    its attempt is a silent bug of exactly the wrong shape: the next caller in
+    that context reports progress into a finished attempt's tracker, and pairing
+    an ``enter_hold`` across the boundary releases the wrong deadline. Nothing
+    here can leave a binding behind, and there is no token for a caller to
+    mislay — the pairing is not something a call site can get wrong.
+
+    Restores whatever was bound before, so a nested bind — or a test binding its
+    own tracker — leaves the caller's binding intact.
 
     Args:
         tracker: The tracker for this attempt.
 
-    Returns:
-        A token to pass to :func:`reset_progress_tracker` when the attempt ends.
+    Yields:
+        The same ``tracker``, so the owner can hold on to it for the pieces that
+        take it by injection rather than through the ContextVar (the stall
+        watchdog in ``auto_heartbeat_loop``).
     """
-    return _progress_tracker.set(tracker)
-
-
-def reset_progress_tracker(token: Token[ProgressTracker | None]) -> None:
-    """Unbind the tracker :func:`set_progress_tracker` bound.
-
-    Must be called in the same context that set it (in practice, the activity
-    body's ``finally``). Restores whatever was bound before, so a nested attempt
-    — or a test that binds its own tracker — leaves the caller's binding intact.
-
-    Args:
-        token: The token returned by :func:`set_progress_tracker`.
-    """
-    _progress_tracker.reset(token)
+    token = _progress_tracker.set(tracker)
+    try:
+        yield tracker
+    finally:
+        _progress_tracker.reset(token)

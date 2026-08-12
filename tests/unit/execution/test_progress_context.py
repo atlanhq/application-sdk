@@ -14,6 +14,10 @@ half-right and still look fine:
 3. Outside an activity the accessor is inert rather than absent: local runs,
    unit tests and non-activity callers behave exactly as they did before this
    plumbing existed.
+
+The binding itself is a block, so "bound but never unbound" is not a state a
+call site can reach — but the block still has to unbind on every path, including
+off the event loop and out of a raise, and that is pinned here.
 """
 
 from __future__ import annotations
@@ -39,9 +43,8 @@ from application_sdk.execution._temporal.activities import (
 from application_sdk.execution.heartbeat import NoopHeartbeatController, run_in_thread
 from application_sdk.execution.progress import (
     ProgressTracker,
+    bind_progress_tracker,
     current_progress_tracker,
-    reset_progress_tracker,
-    set_progress_tracker,
 )
 
 
@@ -72,6 +75,24 @@ def _task_context(app_name: str, task_name: str, *, heartbeating: bool) -> TaskC
         heartbeat_timeout_seconds=60 if heartbeating else None,
         auto_heartbeat_seconds=10 if heartbeating else None,
     )
+
+
+def _register_trivial_app() -> ActivityFn:
+    """Register an app whose task does nothing, and return its activity.
+
+    For the tests that care only about what happens *around* the task body —
+    the binding's lifetime on each exit path.
+    """
+
+    class _CleanApp(App):
+        @task(timeout_seconds=60)
+        async def greet(self, input: _ProgIn) -> _ProgOut:
+            return _ProgOut(greeting="ok")
+
+        async def run(self, input: _ProgIn) -> _ProgOut:
+            return await self.greet(input)
+
+    return _activity_for("_clean-app", "greet")
 
 
 def _task_execution_context() -> TaskExecutionContext:
@@ -148,32 +169,39 @@ class TestNoTrackerBound:
 
 
 class TestBinding:
-    def test_bound_tracker_is_returned(self) -> None:
+    def test_the_block_yields_and_binds_the_same_tracker(self) -> None:
         tracker = ProgressTracker()
-        token = set_progress_tracker(tracker)
-        try:
-            assert current_progress_tracker() is tracker
-        finally:
-            reset_progress_tracker(token)
 
-    def test_reset_restores_the_previous_binding(self) -> None:
+        with bind_progress_tracker(tracker) as bound:
+            assert bound is tracker
+            assert current_progress_tracker() is tracker
+
+    def test_exit_restores_the_previous_binding(self) -> None:
         outer = ProgressTracker()
         inner = ProgressTracker()
-        outer_token = set_progress_tracker(outer)
-        try:
-            inner_token = set_progress_tracker(inner)
-            assert current_progress_tracker() is inner
-            reset_progress_tracker(inner_token)
-            assert current_progress_tracker() is outer
-        finally:
-            reset_progress_tracker(outer_token)
 
-    def test_reset_restores_the_inert_tracker(self) -> None:
+        with bind_progress_tracker(outer):
+            with bind_progress_tracker(inner):
+                assert current_progress_tracker() is inner
+            assert current_progress_tracker() is outer
+
+    def test_exit_restores_the_inert_tracker(self) -> None:
         tracker = ProgressTracker()
-        reset_progress_tracker(set_progress_tracker(tracker))
+
+        with bind_progress_tracker(tracker):
+            pass
 
         assert current_progress_tracker() is not tracker
         assert current_progress_tracker().stalled_for() == 0.0
+
+    def test_a_raising_block_still_unbinds(self) -> None:
+        """The property the block exists for: no path leaves a binding behind."""
+        tracker = ProgressTracker()
+
+        with pytest.raises(ValueError, match="boom"), bind_progress_tracker(tracker):
+            raise ValueError("boom")
+
+        assert current_progress_tracker() is not tracker
 
 
 class TestReachableFromRunInThread:
@@ -182,11 +210,9 @@ class TestReachableFromRunInThread:
     @pytest.mark.asyncio
     async def test_module_level_run_in_thread(self) -> None:
         tracker = ProgressTracker()
-        token = set_progress_tracker(tracker)
-        try:
+
+        with bind_progress_tracker(tracker):
             seen = await run_in_thread(_read_tracker_deep)
-        finally:
-            reset_progress_tracker(token)
 
         assert seen is tracker
         # The context is copied into the thread, but the tracker object is
@@ -197,11 +223,9 @@ class TestReachableFromRunInThread:
     @pytest.mark.asyncio
     async def test_task_execution_context_run_in_thread(self) -> None:
         tracker = ProgressTracker()
-        token = set_progress_tracker(tracker)
-        try:
+
+        with bind_progress_tracker(tracker):
             seen = await _task_execution_context().run_in_thread(_read_tracker_deep)
-        finally:
-            reset_progress_tracker(token)
 
         assert seen is tracker
         assert tracker.last_label == "from_thread"
@@ -219,28 +243,28 @@ class TestReachableFromRunInThread:
             await asyncio.sleep(0)
             return current_progress_tracker()
 
-        token = set_progress_tracker(tracker)
-        try:
+        with bind_progress_tracker(tracker):
             assert await _opaque_call() is tracker
-        finally:
-            reset_progress_tracker(token)
 
     @pytest.mark.asyncio
-    async def test_rebinding_inside_the_thread_does_not_leak_back(self) -> None:
-        """Copy semantics: a rebind inside the thread stays in the thread."""
+    async def test_binding_inside_the_thread_is_confined_to_it(self) -> None:
+        """A nested bind off the event loop restores, and never reaches back."""
         outer = ProgressTracker()
         thread_local = ProgressTracker()
 
-        def _rebind() -> ProgressTracker:
-            set_progress_tracker(thread_local)
-            return current_progress_tracker()
+        def _rebind() -> tuple[ProgressTracker, ProgressTracker]:
+            with bind_progress_tracker(thread_local):
+                inside = current_progress_tracker()
+            return inside, current_progress_tracker()
 
-        token = set_progress_tracker(outer)
-        try:
-            assert await run_in_thread(_rebind) is thread_local
+        with bind_progress_tracker(outer):
+            inside, after_exit = await run_in_thread(_rebind)
+
+            assert inside is thread_local
+            # Restored within the thread's copy of the context...
+            assert after_exit is outer
+            # ...and the caller's binding was never touched.
             assert current_progress_tracker() is outer
-        finally:
-            reset_progress_tracker(token)
 
 
 class TestActivityBinding:
@@ -338,15 +362,7 @@ class TestActivityBinding:
 
     @pytest.mark.asyncio
     async def test_tracker_is_unbound_after_the_activity_returns(self) -> None:
-        class _CleanApp(App):
-            @task(timeout_seconds=60)
-            async def greet(self, input: _ProgIn) -> _ProgOut:
-                return _ProgOut(greeting="ok")
-
-            async def run(self, input: _ProgIn) -> _ProgOut:
-                return await self.greet(input)
-
-        activity_fn = _activity_for("_clean-app", "greet")
+        activity_fn = _register_trivial_app()
         before = current_progress_tracker()
 
         await activity_fn(
@@ -371,6 +387,67 @@ class TestActivityBinding:
         with pytest.raises(ValueError, match="ordinary failure"):
             await activity_fn(
                 _task_context("_boom-app", "boom", heartbeating=False),
+                _ProgIn(name="x"),
+            )
+
+        assert current_progress_tracker() is before
+
+    @pytest.mark.asyncio
+    async def test_tracker_is_unbound_when_heartbeat_setup_raises(self) -> None:
+        """A raise before the body starts must not leak the binding.
+
+        `asyncio.create_task` fails when the loop is closing — a worker being
+        torn down mid-dispatch. The dead attempt's tracker would otherwise stay
+        bound to the context the worker keeps using.
+        """
+        activity_fn = _register_trivial_app()
+        before = current_progress_tracker()
+
+        with (
+            mock.patch.object(
+                activities_module.asyncio,
+                "create_task",
+                side_effect=RuntimeError("event loop is closed"),
+            ),
+            pytest.raises(RuntimeError, match="event loop is closed"),
+        ):
+            await activity_fn(
+                _task_context("_clean-app", "greet", heartbeating=True),
+                _ProgIn(name="x"),
+            )
+
+        assert current_progress_tracker() is before
+
+    @pytest.mark.asyncio
+    async def test_tracker_is_unbound_when_cancelled_during_cleanup(self) -> None:
+        """`CancelledError` in the cleanup path must not skip the unbind.
+
+        It is a `BaseException`, so the heartbeat cleanup's `except (TimeoutError,
+        Exception)` does not catch it and it propagates straight out of the
+        activity's `finally` — past anything sequenced after the await.
+        """
+        activity_fn = _register_trivial_app()
+        before = current_progress_tracker()
+
+        async def cancelling_loop(
+            *,
+            interval_seconds: float,
+            heartbeat_fn: Callable[[], None],
+            stop_event: asyncio.Event,
+            task_name: str,
+        ) -> None:
+            await stop_event.wait()
+            raise asyncio.CancelledError
+
+        with (
+            mock.patch(
+                "application_sdk.execution.heartbeat.auto_heartbeat_loop",
+                new=cancelling_loop,
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await activity_fn(
+                _task_context("_clean-app", "greet", heartbeating=True),
                 _ProgIn(name="x"),
             )
 
