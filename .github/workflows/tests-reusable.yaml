@@ -248,9 +248,12 @@ on:
           the fetch runs AFTER the E2E_SOURCE_ENV_JSON export and overwrites
           it on success; the whole dataforge chain (VPN, fetch) is
           continue-on-error, so when dataforge is unavailable the repo's own
-          creds — or the connector's hermetic source — carry the run. Empty
-          (the default) disables the fetch entirely; existing callers are
-          unaffected.
+          creds — or the connector's hermetic source — carry the run.
+          READ-ONLY against the source: the job only fetches credentials —
+          it never seeds, curates, or mutates the instance. Curating the
+          dataset is the instance owner's one-time setup (see the
+          connector's e2e README). Empty (the default) disables the fetch
+          entirely; existing callers are unaffected.
       dataforge-mode:
         required: false
         type: string
