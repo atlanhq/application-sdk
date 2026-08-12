@@ -485,3 +485,20 @@ def test_oidc_unavailable_is_actionable(monkeypatch, capsys):
     assert fds.main(["--datasource", "postgres", "--resource-id", "r"]) == 1
     err = capsys.readouterr().err
     assert "id-token" in err and "DATAFORGE_API_KEY" in err
+
+
+def test_oauth_base_url_targets_app_host(monkeypatch):
+    """The exchange must hit the app host — the api. host 404s /oauth/token."""
+    monkeypatch.delenv("DATAFORGE_OAUTH_BASE_URL", raising=False)
+    assert (
+        fds._oauth_base_url("https://api.dataforge.atlan.dev")
+        == "https://dataforge.atlan.dev"
+    )
+    # Explicit override wins; non-api hosts pass through unchanged.
+    monkeypatch.setenv("DATAFORGE_OAUTH_BASE_URL", "https://oauth.example/")
+    assert (
+        fds._oauth_base_url("https://api.dataforge.atlan.dev")
+        == "https://oauth.example"
+    )
+    monkeypatch.delenv("DATAFORGE_OAUTH_BASE_URL", raising=False)
+    assert fds._oauth_base_url("https://dataforge.local") == "https://dataforge.local"

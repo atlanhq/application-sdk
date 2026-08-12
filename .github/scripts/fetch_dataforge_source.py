@@ -174,6 +174,21 @@ def _github_oidc_token(audience: str = "dataforge") -> str:
         return json.load(resp)["value"]
 
 
+def _oauth_base_url(base_url: str) -> str:
+    """The OAuth endpoints live on the APP host, not the api. host.
+
+    dataforge's ingress serves /api/* on api.dataforge.atlan.dev but mounts
+    /oauth/token only on the app host (dataforge.atlan.dev) — POSTing the
+    exchange to the api host 404s at the ingress. Derive by dropping the
+    "api." label; override explicitly with DATAFORGE_OAUTH_BASE_URL for
+    non-standard deployments.
+    """
+    override = os.environ.get("DATAFORGE_OAUTH_BASE_URL", "").strip()
+    if override:
+        return override.rstrip("/")
+    return base_url.replace("://api.", "://", 1)
+
+
 def _exchange_for_service_token(base_url: str, oidc_token: str) -> str:
     """RFC 8693 token exchange: runner OIDC token -> 1h dataforge SERVICE token."""
     body = urllib.parse.urlencode(
@@ -185,7 +200,7 @@ def _exchange_for_service_token(base_url: str, oidc_token: str) -> str:
         }
     ).encode()
     req = urllib.request.Request(
-        f"{base_url}/oauth/token",
+        f"{_oauth_base_url(base_url)}/oauth/token",
         data=body,
         method="POST",
         headers={"Content-Type": "application/x-www-form-urlencoded"},
