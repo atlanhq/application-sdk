@@ -22,6 +22,7 @@ import functools
 import math
 import multiprocessing
 import os
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -471,6 +472,22 @@ async def auto_heartbeat_loop(
 _THREAD_HOLD_PREFIX = "run_in_thread."
 _ISOLATED_HOLD_PREFIX = "run_fault_isolated."
 
+#: What a dotted Python qualname can contain, and nothing else: identifier
+#: characters, the dots joining them, and the angle brackets CPython puts around
+#: ``<lambda>`` and ``<locals>``. A name carrying anything outside this — a
+#: space, a quote, a path separator, a newline — is not a code identifier, so it
+#: is not something this label may repeat.
+_CALLABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.<>]+$")
+
+#: Longest callable name kept in a label. Real qualnames are short; the deepest
+#: shape in the SDK's own tests (a lambda nested in a test method) is under 90.
+_MAX_CALLABLE_NAME_LENGTH = 120
+
+#: Stand-in for a callable whose name is unusable. A stable constant, so a name
+#: this function refuses adds exactly one series to a metric rather than one per
+#: distinct value.
+_UNNAMEABLE_CALLABLE = "<callable>"
+
 
 def _offloaded_callable_name(func: Callable[..., Any]) -> str:
     """Name the offloaded callable, for its auto-hold label.
@@ -488,15 +505,35 @@ def _offloaded_callable_name(func: Callable[..., Any]) -> str:
     does), a callable *instance* has one only on its class, and a ``Mock``
     fabricates a child mock for whatever attribute is asked of it, which would
     otherwise put a repr into a label.
+
+    The name is then checked against what a qualname can actually look like, and
+    replaced with :data:`_UNNAMEABLE_CALLABLE` if it is not. ``__qualname__`` is
+    an ordinary writable attribute, so "it comes from code" is a convention
+    rather than a guarantee — a decorator, a factory or a dynamically-built
+    class can set it to anything, including a per-call value. That matters here
+    and not at a normal call site: this string lands in the stall log and in the
+    ``last_label`` *metric attribute*, where a per-call value is unbounded
+    series cardinality and a long one is dead weight on every stall report. This
+    is defence in depth, not a live threat — but the guarantee this function
+    advertises is cheap to actually enforce.
     """
     target: Any = func
     while isinstance(target, functools.partial):
         target = target.func
     for attribute in ("__qualname__", "__name__"):
         name = getattr(target, attribute, None)
-        if isinstance(name, str) and name:
+        if isinstance(name, str) and _is_usable_callable_name(name):
             return name
-    return type(target).__name__
+    fallback = type(target).__name__
+    return fallback if _is_usable_callable_name(fallback) else _UNNAMEABLE_CALLABLE
+
+
+def _is_usable_callable_name(name: str) -> bool:
+    """Whether ``name`` is short enough and shaped like a dotted qualname."""
+    return (
+        0 < len(name) <= _MAX_CALLABLE_NAME_LENGTH
+        and _CALLABLE_NAME_PATTERN.match(name) is not None
+    )
 
 
 async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:

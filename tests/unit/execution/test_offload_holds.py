@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 from typing import Any
@@ -52,6 +53,7 @@ from tests.unit.conftest import RecordingProgressTracker
 
 THREAD_PREFIX = "run_in_thread."
 ISOLATED_PREFIX = "run_fault_isolated."
+UNNAMEABLE = "<callable>"
 
 
 @dataclass
@@ -327,7 +329,10 @@ class TestTheHoldIsAlwaysReleased:
             release.wait(timeout=5)
 
         offload = asyncio.create_task(run_in_thread(_blocking))
-        await asyncio.to_thread(started.wait, 5)
+        # Asserted, not awaited-and-discarded: a `wait` that timed out on a
+        # contended runner would cancel before the offload owned its hold, and
+        # the test would pass without ever exercising the release it exists for.
+        assert await asyncio.to_thread(started.wait, 5), "offload never started"
         offload.cancel()
         with pytest.raises(asyncio.CancelledError):
             await offload
@@ -358,7 +363,10 @@ class TestTheHoldIsAlwaysReleased:
             return "fast"
 
         slow = asyncio.create_task(run_in_thread(_slow))
-        await asyncio.to_thread(slow_running.wait, 5)
+        # Asserted for the same reason as the cancellation test: if the slow
+        # offload never got going, "the fast release left a hold standing" would
+        # be checking nothing.
+        assert await asyncio.to_thread(slow_running.wait, 5), "slow never started"
 
         assert await run_in_thread(_fast) == "fast"
         assert (
@@ -477,6 +485,113 @@ class TestTheHoldLabel:
         assert label.startswith(THREAD_PREFIX)
         assert label.endswith(expected)
         assert "id=" not in label, "a repr, not an identifier, reached the label"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "hostile_qualname",
+        [
+            "extract for example_tenant",
+            "query('SELECT * FROM orders')",
+            "/local/tmp/artifacts/run-1/chunk-0.parquet",
+            "fetch\nrows",
+            "scan_" + "x" * 200,
+        ],
+        ids=["spaces", "quoted-value", "path", "newline", "too-long"],
+    )
+    async def test_a_name_that_is_not_an_identifier_never_reaches_the_label(
+        self, tracker: RecordingProgressTracker, hostile_qualname: str
+    ) -> None:
+        """``__qualname__`` is writable, so "it comes from code" needs enforcing.
+
+        A decorator, a factory or a dynamically-built class can set it to
+        anything, including a per-call value. Everywhere else that is harmless;
+        here the string lands in the ``last_label`` metric attribute, where a
+        per-call value is unbounded series cardinality and a 200-character one is
+        dead weight on every stall report.
+
+        Both name attributes are poisoned, so the label falls through to the
+        callable's *type* name — still a real identifier, and still useful.
+        """
+
+        def _named() -> str:
+            return "done"
+
+        _named.__qualname__ = hostile_qualname
+        _named.__name__ = hostile_qualname
+
+        await run_in_thread(_named)
+
+        label = tracker.holds[0].label
+        assert hostile_qualname not in label
+        assert label == f"{THREAD_PREFIX}function"
+
+    @pytest.mark.asyncio
+    async def test_an_unnameable_callable_collapses_to_one_constant(
+        self, tracker: RecordingProgressTracker
+    ) -> None:
+        """The bottom rung: every name a callable has is unusable.
+
+        Reached only by a callable whose *class* was also given a junk name, so
+        it is a backstop rather than a path real code takes. It matters that the
+        backstop is a single constant: one refused label must add one metric
+        series, not one per distinct junk value — otherwise refusing the name
+        would cost exactly what keeping it did.
+        """
+
+        class _Hostile:
+            def __call__(self) -> str:
+                return "done"
+
+        _Hostile.__qualname__ = "callable for example_tenant"
+        _Hostile.__name__ = "callable for example_tenant"
+
+        await run_in_thread(_Hostile())
+
+        assert tracker.holds[0].label == f"{THREAD_PREFIX}{UNNAMEABLE}"
+
+    @pytest.mark.asyncio
+    async def test_a_hostile_qualname_falls_back_to_the_plain_name(
+        self, tracker: RecordingProgressTracker
+    ) -> None:
+        """Degrade one rung at a time, not straight to the constant.
+
+        ``__qualname__`` and ``__name__`` are set independently, so a callable
+        can carry an unusable one and a perfectly good other. Naming the site is
+        the whole point of the label, so a real identifier beats the stable
+        constant whenever one is available.
+        """
+
+        def _named() -> str:
+            return "done"
+
+        _named.__qualname__ = "extract for example_tenant"
+
+        await run_in_thread(_named)
+
+        assert tracker.holds[0].label == f"{THREAD_PREFIX}_named"
+
+    @pytest.mark.asyncio
+    async def test_a_deeply_nested_qualname_is_still_kept(
+        self, tracker: RecordingProgressTracker
+    ) -> None:
+        """The length cap must not refuse names real code produces.
+
+        A lambda nested inside a test method already carries its whole enclosing
+        scope, which is the longest shape the SDK's own suite generates — if the
+        cap cannot admit that, it is set too low to be useful.
+        """
+
+        def _outer() -> Callable[[], str]:
+            def _deeply_nested_inner_helper_with_a_long_name() -> str:
+                return "done"
+
+            return _deeply_nested_inner_helper_with_a_long_name
+
+        await run_in_thread(_outer())
+
+        label = tracker.holds[0].label
+        assert label.endswith("_deeply_nested_inner_helper_with_a_long_name")
+        assert UNNAMEABLE not in label
 
 
 # ---------------------------------------------------------------------------
