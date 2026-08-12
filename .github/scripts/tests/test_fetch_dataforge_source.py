@@ -487,18 +487,19 @@ def test_oidc_unavailable_is_actionable(monkeypatch, capsys):
     assert "id-token" in err and "DATAFORGE_API_KEY" in err
 
 
-def test_oauth_base_url_targets_app_host(monkeypatch):
-    """The exchange must hit the app host — the api. host 404s /oauth/token."""
+def test_oauth_base_urls_api_host_first_with_app_fallback(monkeypatch):
+    """API host first (VPN-reachable), app host as the 404 fallback."""
     monkeypatch.delenv("DATAFORGE_OAUTH_BASE_URL", raising=False)
-    assert (
-        fds._oauth_base_url("https://api.dataforge.atlan.dev")
-        == "https://dataforge.atlan.dev"
-    )
-    # Explicit override wins; non-api hosts pass through unchanged.
+    assert fds._oauth_base_urls("https://api.dataforge.atlan.dev") == [
+        "https://api.dataforge.atlan.dev",
+        "https://dataforge.atlan.dev",
+    ]
+    # Explicit override pins one host; non-api hosts have no fallback twin.
     monkeypatch.setenv("DATAFORGE_OAUTH_BASE_URL", "https://oauth.example/")
-    assert (
-        fds._oauth_base_url("https://api.dataforge.atlan.dev")
-        == "https://oauth.example"
-    )
+    assert fds._oauth_base_urls("https://api.dataforge.atlan.dev") == [
+        "https://oauth.example"
+    ]
     monkeypatch.delenv("DATAFORGE_OAUTH_BASE_URL", raising=False)
-    assert fds._oauth_base_url("https://dataforge.local") == "https://dataforge.local"
+    assert fds._oauth_base_urls("https://dataforge.local") == [
+        "https://dataforge.local"
+    ]
