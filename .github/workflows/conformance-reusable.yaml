@@ -228,9 +228,16 @@ on:
         type: boolean
       exit-zero:
         description: >
-          When true, the detect command exits 0 even when blocking violations are
-          found.  The SARIF invocation.exitCode still records the real result so
-          Security-tab tracking is unaffected; only the CI job exit code changes.
+          Declares conformance ADVISORY for this run: nothing the suite reports
+          may block the merge.  Two effects, both needed for that promise to
+          hold.  (1) The detect command exits 0 even when blocking violations are
+          found — the SARIF invocation.exitCode still records the real result so
+          Security-tab tracking is unaffected.  (2) The `Conformance Gate` job
+          tolerates a FAILED suite leg (FND-199): with exit-zero a violation can
+          no longer fail a leg, so a failed leg is by construction a crash or a
+          setup-step failure — never a rule verdict — and blocking on it would
+          enforce, at random, exactly what this input says not to enforce.  A
+          CANCELLED run still fails the gate in both modes.
           Use during soft-enforcement rollouts where violations should be observed
           but must not block merges.  Default: false (hard gate).
         required: false
@@ -521,26 +528,93 @@ jobs:
   # Always runs so it can be marked a required check without ever becoming
   # "skipped" and blocking the merge queue.  A matrix job's aggregate result is
   # 'failure' if any leg fails, so a single `needs: [suite]` covers all series.
+  # It is 'cancelled' if a run was cancelled, 'skipped' if every series
+  # self-skipped (nothing relevant changed), 'success' otherwise.
+  #
+  # ── Why the gate reads `exit-zero` too (FND-199) ──────────────────────────
+  #
+  # That aggregate is 'failure' if any leg failed for ANY reason — including
+  # reasons that evaluated no rule at all.  The D-series leg is the only one
+  # that materialises the caller's environment, and its `uv sync` dies on a
+  # dependency with no manylinux wheel (python-ldap, mysqlclient, psycopg2 from
+  # source, sasl), on a private index 401, on a network flake.  detect never
+  # runs; zero rules are graded.
+  #
+  # Reading only the aggregate made that asymmetric for soft-enforcement
+  # callers: with `exit-zero: true` a rule *violation* could never fail the gate
+  # (detect exits 0) while a *crash* still did.  So `exit-zero` — which declares
+  # conformance advisory for the run — is honoured here as well.  It loosens no
+  # rule enforcement: under exit-zero detect CANNOT exit nonzero on findings, so
+  # a 'failure' aggregate is by construction a crash or a setup-step failure.
+  # The crashed leg stays red and visible on the PR and the gate says so out
+  # loud in an annotation and the run summary; it just does not block the merge.
+  #
+  # 'cancelled' still fails in BOTH modes — a cancelled run graded nothing and
+  # must never report green into a merge queue.  Hard-gate callers
+  # (`exit-zero: false`) are unchanged: a crashed leg still fails closed,
+  # because the D series carries BLOCK-tier rules (D001, D009) that genuinely
+  # were not evaluated.  Such a caller repairs the leg — see the `apt-packages`
+  # input — rather than being handed a green gate.
+  #
+  # Three `if:`-gated straight-line steps rather than one `if [[ ... ]]`:
+  # docs/standards/ci.md bans branching shell in a workflow.  The usual remedy —
+  # move the branch into .github/scripts/ — is the wrong trade HERE, and only
+  # here.  This is a REUSABLE workflow, so `uses: ./…` and $GITHUB_ACTION_PATH
+  # resolve against the CALLER's checkout (which is why run-conformance-detect
+  # is vendored into app repos); reaching an SDK script needs the `.sdk-scripts`
+  # sparse-checkout dance, i.e. two network checkouts.  This job currently
+  # checks nothing out and therefore cannot fail for any reason except its own
+  # verdict — a property worth keeping in the one job whose red blocks every
+  # merge, and the exact class of incidental-crash-blocks-merge that FND-199 is
+  # about.  A 4-value enum does not justify importing that risk.
+  #
+  # The failing step's `if:` is the exact negation of the two passing ones, so
+  # the job cannot fall through all three and pass by accident.
+  # test_conformance_gate.py lifts all three conditions out of this file and
+  # evaluates them over every (result × exit-zero) pair, which is what makes
+  # this branch as testable as a script would have been.
   gate:
     name: "Conformance Gate"
     runs-on: ubuntu-latest
     needs: [suite]
     if: always()
     steps:
-      - name: "Evaluate conformance results"
+      - name: "Conformance gate passed"
+        if: needs.suite.result == 'success' || needs.suite.result == 'skipped'
+        env:
+          SUITE_RESULT: ${{ needs.suite.result }}
+        run: |
+          echo "Conformance gate passed (suite result: $SUITE_RESULT)."
+
+      # Reached only when a leg failed AND the caller declared conformance
+      # advisory.  Deliberately loud: a green required check is the one outcome
+      # nobody re-reads, so the reason it is green goes in an annotation and the
+      # run summary rather than in this job's log alone.
+      - name: "Conformance gate passed (advisory — exit-zero)"
+        if: inputs.exit-zero && needs.suite.result == 'failure'
         env:
           SUITE_RESULT: ${{ needs.suite.result }}
         run: |
           set -euo pipefail
-          # Fail closed on anything that is not a clean pass. The matrix job's
-          # aggregate result is 'failure' if any leg failed, 'cancelled' if a
-          # run was cancelled, 'skipped' if every series self-skipped (nothing
-          # relevant changed), 'success' otherwise. Only success|skipped pass —
-          # 'cancelled' must NOT slip through (the old contains(...,'failure')
-          # rule let it).
-          if [[ "$SUITE_RESULT" == "success" || "$SUITE_RESULT" == "skipped" ]]; then
-            echo "Conformance gate passed (suite result: $SUITE_RESULT)."
-          else
-            echo "::error::Conformance gate FAILED — suite result: $SUITE_RESULT."
-            exit 1
-          fi
+          echo "::warning title=Conformance leg failed (advisory)::A conformance leg failed, but this caller runs with exit-zero (soft enforcement), so the required gate is not blocking. Under exit-zero a rule violation cannot fail a leg — open the red 'Conformance / …' leg, it crashed before grading anything (most often the Dependencies leg's uv sync)."
+          {
+            echo "### Conformance Gate: passed (advisory)"
+            echo
+            echo "Suite result: \`$SUITE_RESULT\`, tolerated because this caller passes \`exit-zero: true\`."
+            echo
+            echo "Under \`exit-zero\` a rule violation cannot fail a leg, so a failed leg means the leg"
+            echo "itself crashed and **its rules never ran** — commonly the Dependencies leg's \`uv sync\`"
+            echo "on a dependency with no manylinux wheel. Open the red leg above; if it needs system"
+            echo "headers, pass them via the \`apt-packages\` input."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Conformance gate failed"
+        if: >-
+          !(needs.suite.result == 'success' || needs.suite.result == 'skipped'
+          || (inputs.exit-zero && needs.suite.result == 'failure'))
+        env:
+          SUITE_RESULT: ${{ needs.suite.result }}
+        run: |
+          set -euo pipefail
+          echo "::error::Conformance gate FAILED — suite result: $SUITE_RESULT."
+          exit 1

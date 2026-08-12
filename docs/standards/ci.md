@@ -191,6 +191,21 @@ sparse-checkout it into a side path and invoke from there — the
 The driver runs from the consumer's working directory, so it acts on the
 consumer's files; `.sdk-scripts` only holds SDK code and must never be staged.
 
+**Exception: an always-required gate job.** The pattern costs two network
+checkouts, and every one of them is a way for the job to fail for reasons that
+have nothing to do with its verdict. In a job that is a *required* check and
+runs `if: always()`, that trade is backwards: a checkout flake there blocks
+every merge in the repo. Keep such a job dependency-free and put its branch in
+sibling steps' `if:` expressions instead, with each step's `run:` straight-line
+— the conditions are still testable, by lifting them out of the YAML and
+evaluating them with
+[`_gha_expr.py`](../../.github/scripts/tests/_gha_expr.py) (worked example:
+[`test_conformance_gate.py`](../../.github/scripts/tests/test_conformance_gate.py),
+which also asserts the conditions *partition* the space, so the job can never
+fall through every branch and report green having decided nothing). FND-199 is
+the case that set this: the whole ticket was an incidental failure turning a
+required check red.
+
 ## `concurrency:` is not a lock, and not a queue
 
 **Rule:** never use a `concurrency:` group to protect a shared external resource
