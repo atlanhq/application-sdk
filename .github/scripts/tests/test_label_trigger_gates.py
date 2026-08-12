@@ -29,15 +29,16 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _gha_expr import evaluate  # noqa: E402
+from _gha_expr import evaluate
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github/workflows"

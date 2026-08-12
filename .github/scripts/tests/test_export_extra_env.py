@@ -519,7 +519,7 @@ def test_composite_action_invokes_this_script_at_a_real_path(action: str):
     action_dir = _REPO_ROOT / ".github" / "actions" / action
     action_yaml = (action_dir / "action.yaml").read_text()
 
-    assert re.search(r"^  extra-env:", action_yaml, re.M), (
+    assert re.search(r"^  extra-env:", action_yaml, re.MULTILINE), (
         f"{action}/action.yaml no longer declares the extra-env input"
     )
 

@@ -30,7 +30,7 @@ import os
 import re
 import subprocess
 import sys
-from typing import Callable, Optional
+from collections.abc import Callable
 
 RunFn = Callable[[list], str]
 
@@ -142,7 +142,7 @@ def discover_fleet(
     return sorted(fleet)
 
 
-def main(argv: Optional[list] = None, run: RunFn = _run_gh) -> int:
+def main(argv: list | None = None, run: RunFn = _run_gh) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

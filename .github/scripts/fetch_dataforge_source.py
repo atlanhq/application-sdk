@@ -43,21 +43,17 @@ is the audited path for turning a JSON env map into redacted job env::
     python3 .../export_extra_env.py \
       --json "$DF_ENV_JSON" >> "$GITHUB_ENV"
 
-Authentication, in preference order:
+Authentication is **GitHub OIDC only — no stored dataforge secret**: the
+script requests the run's OIDC token with ``audience=dataforge`` (requires
+``permissions: id-token: write``), exchanges it at ``POST /oauth/token``
+(RFC 8693) for a 1-hour SERVICE token, and resolves via
+``GET /api/v1/datasources/{ds}/credentials`` — the one REST path SERVICE
+tokens are honored on. Requires a dataforge workload binding for the repo.
+This makes the script CI-only by design; for local runs, use the connector's
+in-test resolver with a personal dataforge me-key instead.
 
-1. **GitHub OIDC (no stored secret)** — when ``DATAFORGE_API_KEY`` is unset
-   and the runner exposes ``ACTIONS_ID_TOKEN_REQUEST_URL`` (requires
-   ``permissions: id-token: write``): request the run's OIDC token with
-   ``audience=dataforge``, exchange it at ``POST /oauth/token`` (RFC 8693)
-   for a 1-hour SERVICE token, and resolve via
-   ``GET /api/v1/datasources/{ds}/credentials`` — the one REST path SERVICE
-   tokens are honored on. Requires a dataforge workload binding for the repo.
-2. **API key (legacy)** — ``DATAFORGE_API_KEY`` env var; resolves via the
-   resource/managed chains below. Kept for the transition and for callers
-   outside GitHub Actions.
-
-Tokens and keys arrive via env vars, never argv (argv is visible in process
-listings and step logs).
+Tokens arrive via env vars, never argv (argv is visible in process listings
+and step logs).
 """
 
 from __future__ import annotations
@@ -70,7 +66,6 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -93,7 +88,7 @@ def _request(method: str, url: str, api_key: str) -> dict:
         url, method=method, headers={"Authorization": f"Bearer {api_key}"}
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 — https API host from trusted config
+        with urllib.request.urlopen(req, timeout=30) as resp:
             return json.load(resp)
     except urllib.error.HTTPError as exc:
         # Do NOT echo the response body: nothing upstream enforces that a
@@ -136,7 +131,7 @@ def _error_class(exc: urllib.error.HTTPError) -> str:
     try:
         body = exc.read().decode("utf-8", "replace")
         parsed = json.loads(body)
-    except Exception:  # noqa: S110 — non-JSON / unreadable body → generic class
+    except Exception:
         return "request_failed"
     candidate = ""
     if isinstance(parsed, dict):
@@ -149,10 +144,6 @@ def _http_get(url: str, api_key: str) -> dict:
     return _request("GET", url, api_key)
 
 
-def _http_post(url: str, api_key: str) -> dict:
-    return _request("POST", url, api_key)
-
-
 # ── GitHub OIDC exchange (DATFORG-88) ─────────────────────────────────────────
 
 
@@ -163,14 +154,15 @@ def _github_oidc_token(audience: str = "dataforge") -> str:
     if not req_url or not req_token:
         raise DataforgeSourceError(
             "GitHub OIDC is unavailable — the job needs `permissions: "
-            "id-token: write` (or set DATAFORGE_API_KEY for legacy auth)"
+            "id-token: write`. This script is CI-only; for local runs use "
+            "the connector's in-test resolver with a personal me-key."
         )
     sep = "&" if "?" in req_url else "?"
     req = urllib.request.Request(
         f"{req_url}{sep}audience={urllib.parse.quote(audience)}",
         headers={"Authorization": f"Bearer {req_token}"},
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 — runner-provided https URL
+    with urllib.request.urlopen(req, timeout=30) as resp:
         return json.load(resp)["value"]
 
 
@@ -214,7 +206,7 @@ def _exchange_for_service_token(base_url: str, oidc_token: str) -> str:
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 — fixed https host
+            with urllib.request.urlopen(req, timeout=30) as resp:
                 return json.load(resp)["access_token"]
         except urllib.error.HTTPError as exc:
             last_exc = exc
@@ -263,7 +255,7 @@ def resolve_via_endpoint(
         )
     missing = doc.get("mandatory_missing") or []
     if missing:
-        print(  # noqa: T201
+        print(
             f"::warning::dataforge reports mandatory fields missing for "
             f"{datasource}: {', '.join(missing)}",
             file=sys.stderr,
@@ -272,123 +264,6 @@ def resolve_via_endpoint(
 
 
 # ── Resolution ────────────────────────────────────────────────────────────────
-
-
-def resolve_resource(base_url: str, api_key: str, resource_id: str) -> dict:
-    """Return the raw connection map for a provisioned resource."""
-    doc = _http_get(f"{base_url}/api/v1/resources/{resource_id}", api_key)
-    status = doc.get("status", "UNKNOWN")
-    if status != "PROVISIONED":
-        raise DataforgeSourceError(
-            f"dataforge resource {resource_id} is {status}, not PROVISIONED — "
-            "resume it (POST /api/v1/resources/{id}/resume) or re-provision "
-            "before running e2e"
-        )
-    data = (doc.get("artifacts") or {}).get("data") or {}
-    if not data:
-        raise DataforgeSourceError(
-            f"dataforge resource {resource_id} returned no plaintext artifacts "
-            "— aisdlc-category resources are vault-only by design; the e2e "
-            "resource must be provisioned with category 'ci'"
-        )
-    return data
-
-
-def _parse_ts(value: Any) -> datetime | None:
-    """Parse an RFC 3339 timestamp into an aware UTC datetime, else ``None``.
-
-    Comparing parsed instants (not raw strings) keeps the ordering correct even
-    if dataforge ever emits mixed UTC offsets — lexicographic order on RFC 3339
-    strings is only instant-order when every timestamp shares one offset.
-    """
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:  # naive → assume UTC rather than crash the lookup
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def _recency_key(row: dict) -> tuple:
-    """Newest-first ordering for a managed-credential list row.
-
-    Mirrors dataforge's own credential-first router ordering
-    (``rotated_at DESC NULLS LAST, last_seen_in_vault_at DESC``) so the entry
-    this script picks is the same "newest active" one dataforge would propose.
-    A rotation repoints ``RotatedAt`` at the fresh entry, so sorting by it
-    first is what keeps a post-rotation lookup off the stale credential.
-    ``RotatedAt`` is null until the first rotation; ``LastSeenInVaultAt`` is
-    always populated, so it is the recency tiebreak (and the primary signal
-    for entries that have never been rotated). Missing/unparseable values sort
-    oldest (``datetime.min``). Returns a tuple ordered for
-    ``sorted(..., reverse=True)``.
-    """
-    floor = datetime.min.replace(tzinfo=timezone.utc)
-    rotated = _parse_ts(row.get("RotatedAt"))
-    seen = _parse_ts(row.get("LastSeenInVaultAt")) or floor
-    # has_rotated ranks any real RotatedAt above an absent one (NULLS LAST).
-    return (1 if rotated else 0, rotated or floor, seen)
-
-
-def _select_credential(rows: list[dict]) -> str:
-    """Pick the credential ID the docs promise: the newest active entry.
-
-    Among the active rows, prefer one whose last connectivity test passed —
-    but never fail the lookup over TestStatus alone (untested is common for
-    fresh entries) — and within that group take the newest by recency, so a
-    rotation (which leaves the old + new entries both active and passing until
-    the old one is decommissioned) resolves to the fresh credential, not to
-    whichever the API happened to return first.
-    """
-    passing = [row for row in rows if row.get("TestStatus") == "passing"]
-    pool = passing if passing else rows
-    return max(pool, key=_recency_key)["ID"]
-
-
-def resolve_managed(
-    base_url: str,
-    api_key: str,
-    datasource: str,
-    credential_id: str = "",
-    env_tier: str = "",
-    instance_name: str = "",
-) -> tuple[dict, str]:
-    """Return (raw field map, credential id) for a vault-managed credential."""
-    if not credential_id:
-        query = f"datasource={urllib.parse.quote(datasource)}"
-        if env_tier:
-            query += f"&env={urllib.parse.quote(env_tier)}"
-        listing = _http_get(f"{base_url}/api/v1/managed-credentials?{query}", api_key)
-        # PascalCase keys: entity.ManagedCredential carries no json tags.
-        rows = [
-            row
-            for row in listing.get("items") or []
-            if row.get("LifecycleStatus") == "active"
-            and (not instance_name or row.get("InstanceName") == instance_name)
-        ]
-        if not rows:
-            raise DataforgeSourceError(
-                f"no active managed credential in dataforge for datasource="
-                f"{datasource!r}"
-                + (f" env={env_tier!r}" if env_tier else "")
-                + (f" instance={instance_name!r}" if instance_name else "")
-                + " — add one in the dataforge vault or pass a credential UUID"
-            )
-        credential_id = _select_credential(rows)
-
-    reveal = _http_post(
-        f"{base_url}/api/v1/managed-credentials/{credential_id}/reveal", api_key
-    )
-    fields = reveal.get("fields") or {}
-    if not fields:
-        raise DataforgeSourceError(
-            f"managed credential {credential_id} revealed no fields — the vault "
-            "item may be orphaned; check dataforge's managed-credentials page"
-        )
-    return fields, credential_id
 
 
 # ── Normalization ─────────────────────────────────────────────────────────────
@@ -467,7 +342,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mode", choices=("resource", "managed"), default="resource")
     parser.add_argument("--resource-id", default="")
     parser.add_argument("--env-tier", default="")
-    parser.add_argument("--instance-name", default="")
     parser.add_argument("--output-prefix", default="")
     parser.add_argument("--field-map", default="")
     parser.add_argument(
@@ -475,42 +349,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    api_key = os.environ.get("DATAFORGE_API_KEY", "").strip()
     base_url = args.base_url.rstrip("/")
     try:
-        if not api_key:
-            # OIDC end state: exchange the run's identity for a 1h
-            # credentials:read token and resolve via the one-call endpoint —
-            # no dataforge secret stored anywhere.
-            bearer = _exchange_for_service_token(base_url, _github_oidc_token())
-            pin_resource = args.resource_id if args.mode == "resource" else ""
-            pin_credential = args.resource_id if args.mode == "managed" else ""
-            raw, resolved_id = resolve_via_endpoint(
-                base_url,
-                bearer,
-                args.datasource,
-                env_tier=args.env_tier,
-                resource_id=pin_resource,
-                credential_id=pin_credential,
-            )
-        elif args.mode == "resource":
-            if not args.resource_id:
-                raise DataforgeSourceError(
-                    "resource mode needs --resource-id (dataforge has no "
-                    "name-keyed resource lookup; pin the UUID in the "
-                    "DATAFORGE_RESOURCE_ID secret)"
-                )
-            raw = resolve_resource(base_url, api_key, args.resource_id)
-            resolved_id = args.resource_id
-        else:
-            raw, resolved_id = resolve_managed(
-                base_url,
-                api_key,
-                args.datasource,
-                credential_id=args.resource_id,
-                env_tier=args.env_tier,
-                instance_name=args.instance_name,
-            )
+        # OIDC only: exchange the run's identity for a 1h credentials:read
+        # token and resolve via the one-call endpoint — no dataforge secret
+        # stored anywhere.
+        bearer = _exchange_for_service_token(base_url, _github_oidc_token())
+        pin_resource = args.resource_id if args.mode == "resource" else ""
+        pin_credential = args.resource_id if args.mode == "managed" else ""
+        raw, resolved_id = resolve_via_endpoint(
+            base_url,
+            bearer,
+            args.datasource,
+            env_tier=args.env_tier,
+            resource_id=pin_resource,
+            credential_id=pin_credential,
+        )
         exports = normalize(
             raw, args.datasource, load_field_maps(args.field_map), args.output_prefix
         )

@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from marketplace_publish_body import (  # noqa: E402
+from marketplace_publish_body import (
     PublishBodyError,
     PublishRequest,
     build,
@@ -144,7 +144,7 @@ def test_field_set_matches_the_release_workflow() -> None:
     workflow_keys = set(re.findall(r'body\["(\w+)"\]', workflow))
     workflow_keys |= {
         key
-        for key in re.findall(r'^\s{14}"(\w+)":', workflow, re.M)
+        for key in re.findall(r'^\s{14}"(\w+)":', workflow, re.MULTILINE)
         # The literal dict is indented 14 spaces inside the heredoc; filter to the
         # publish-body keys we know it declares there.
         if key in {"app_id", "image", "version", "branch", "repo", "source"}

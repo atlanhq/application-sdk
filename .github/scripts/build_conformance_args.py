@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     # action reads stdout via `mapfile`, not application logging — so callers
     # that enable ruff's T201 (no bare prints) don't need a per-repo pyproject.toml
     # ignore for this bootstrap-managed file.
-    print("\n".join(detect_args))  # noqa: T201
+    print("\n".join(detect_args))
     return 0
 
 

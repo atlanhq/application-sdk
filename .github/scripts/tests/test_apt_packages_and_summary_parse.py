@@ -281,5 +281,5 @@ def test_summary_extraction_survives_color_and_absence(
         f"extraction pipeline failed under set -e (the dataplex regression):\n"
         f"stderr: {proc.stderr}"
     )
-    match = re.search(r"^PARSED=(.*)$", proc.stdout, re.M)
+    match = re.search(r"^PARSED=(.*)$", proc.stdout, re.MULTILINE)
     assert match and match.group(1) == expected, proc.stdout

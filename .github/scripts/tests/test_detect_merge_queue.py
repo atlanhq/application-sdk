@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from detect_merge_queue import detect, governs_branch, main, ref_matches  # noqa: E402
+from detect_merge_queue import detect, governs_branch, main, ref_matches
 
 REPO = "atlanhq/atlan-example-app"
 

@@ -192,170 +192,42 @@ def test_error_body_non_json_yields_generic_class(monkeypatch):
 # ── Resolution: resource mode ─────────────────────────────────────────────────
 
 
-def test_resolve_resource_happy(monkeypatch):
-    monkeypatch.setattr(fds, "_http_get", lambda url, key: _resource_doc())
-    assert fds.resolve_resource("https://b", "k", "res-1") == _POSTGRES_DATA
+def test_main_without_oidc_env_fails_before_any_request(monkeypatch, capsys):
+    """No runner OIDC endpoint -> actionable error, zero network calls."""
+    monkeypatch.delenv("ACTIONS_ID_TOKEN_REQUEST_URL", raising=False)
+    monkeypatch.delenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", raising=False)
 
+    def boom(*a, **k):  # any HTTP call would be a bug
+        raise AssertionError("no request may be made without OIDC env")
 
-def test_resolve_resource_requires_provisioned(monkeypatch):
-    monkeypatch.setattr(fds, "_http_get", lambda url, key: _resource_doc("PAUSED"))
-    with pytest.raises(fds.DataforgeSourceError, match="PAUSED"):
-        fds.resolve_resource("https://b", "k", "res-1")
-
-
-def test_resolve_resource_vault_only_is_actionable(monkeypatch):
-    monkeypatch.setattr(fds, "_http_get", lambda url, key: _resource_doc(data={}))
-    with pytest.raises(fds.DataforgeSourceError, match="category 'ci'"):
-        fds.resolve_resource("https://b", "k", "res-1")
-
-
-# ── Resolution: managed mode ──────────────────────────────────────────────────
-
-_MANAGED_ITEMS = {
-    "items": [
-        {"ID": "m-dead", "LifecycleStatus": "decommissioned", "TestStatus": "passing"},
-        {"ID": "m-untested", "LifecycleStatus": "active", "TestStatus": "untested"},
-        {
-            "ID": "m-good",
-            "LifecycleStatus": "active",
-            "TestStatus": "passing",
-            "RotatedAt": "2026-08-01T00:00:00Z",
-            "LastSeenInVaultAt": "2026-08-02T00:00:00Z",
-        },
-    ]
-}
-
-
-def test_resolve_managed_filters_decommissioned_and_prefers_passing(monkeypatch):
-    monkeypatch.setattr(fds, "_http_get", lambda url, key: _MANAGED_ITEMS)
-    revealed = {}
-
-    def fake_post(url, key):
-        revealed["url"] = url
-        return {"fields": {"host": "h", "password": "p"}}
-
-    monkeypatch.setattr(fds, "_http_post", fake_post)
-    fields, cred_id = fds.resolve_managed("https://b", "k", "powerbi")
-    assert cred_id == "m-good"
-    assert "m-good/reveal" in revealed["url"]
-    assert fields == {"host": "h", "password": "p"}
-
-
-def test_resolve_managed_rotation_picks_newest_passing_entry(monkeypatch):
-    """A rotation leaves old + new entries both active+passing until the old
-    one is decommissioned. Selection must land on the newest (highest
-    RotatedAt), not whichever the API returned first."""
-    rotated = {
-        "items": [
-            {
-                "ID": "m-stale",
-                "LifecycleStatus": "active",
-                "TestStatus": "passing",
-                "RotatedAt": "2026-07-01T00:00:00Z",
-                "LastSeenInVaultAt": "2026-08-10T00:00:00Z",
-            },
-            {
-                "ID": "m-fresh",
-                "LifecycleStatus": "active",
-                "TestStatus": "passing",
-                "RotatedAt": "2026-08-09T00:00:00Z",
-                "LastSeenInVaultAt": "2026-08-10T00:00:00Z",
-            },
-        ]
-    }
-    monkeypatch.setattr(fds, "_http_get", lambda url, key: rotated)
-    monkeypatch.setattr(
-        fds, "_http_post", lambda url, key: {"fields": {"host": "h", "password": "p"}}
-    )
-    _, cred_id = fds.resolve_managed("https://b", "k", "snowflake")
-    assert cred_id == "m-fresh"
-
-
-def test_resolve_managed_unrotated_entries_fall_back_to_last_seen(monkeypatch):
-    """Entries never rotated (RotatedAt null) rank below rotated ones and are
-    ordered among themselves by LastSeenInVaultAt (always populated)."""
-    items = {
-        "items": [
-            {
-                "ID": "m-old-seen",
-                "LifecycleStatus": "active",
-                "TestStatus": "passing",
-                "RotatedAt": None,
-                "LastSeenInVaultAt": "2026-08-01T00:00:00Z",
-            },
-            {
-                "ID": "m-new-seen",
-                "LifecycleStatus": "active",
-                "TestStatus": "passing",
-                "RotatedAt": None,
-                "LastSeenInVaultAt": "2026-08-10T00:00:00Z",
-            },
-        ]
-    }
-    monkeypatch.setattr(fds, "_http_get", lambda url, key: items)
-    monkeypatch.setattr(
-        fds, "_http_post", lambda url, key: {"fields": {"host": "h", "password": "p"}}
-    )
-    _, cred_id = fds.resolve_managed("https://b", "k", "snowflake")
-    assert cred_id == "m-new-seen"
-
-
-def test_recency_compares_instants_across_mixed_utc_offsets():
-    """Regression for the lexicographic-string nit: RFC 3339 strings only order
-    by instant when every offset matches. 2026-08-09T20:00:00-05:00 is 01:00Z
-    Aug 10 — *newer* than 2026-08-09T23:00:00Z even though the string sorts
-    earlier. Selection must pick the true newest instant."""
-    older_instant_later_string = {
-        "ID": "m-zulu",
-        "RotatedAt": "2026-08-09T23:00:00Z",  # 23:00Z Aug 9
-        "LastSeenInVaultAt": "2026-08-10T00:00:00Z",
-    }
-    newer_instant_earlier_string = {
-        "ID": "m-offset",
-        "RotatedAt": "2026-08-09T20:00:00-05:00",  # = 01:00Z Aug 10 (newer)
-        "LastSeenInVaultAt": "2026-08-10T00:00:00Z",
-    }
-    winner = fds._select_credential(
-        [older_instant_later_string, newer_instant_earlier_string]
-    )
-    assert winner == "m-offset"
-
-
-def test_resolve_managed_no_active_entry_errors(monkeypatch):
-    monkeypatch.setattr(fds, "_http_get", lambda url, key: {"items": []})
-    with pytest.raises(fds.DataforgeSourceError, match="no active managed credential"):
-        fds.resolve_managed("https://b", "k", "tableau")
-
-
-def test_resolve_managed_empty_reveal_errors(monkeypatch):
-    monkeypatch.setattr(fds, "_http_post", lambda url, key: {"fields": {}})
-    with pytest.raises(fds.DataforgeSourceError, match="revealed no fields"):
-        fds.resolve_managed("https://b", "k", "powerbi", credential_id="m-1")
-
-
-# ── Entry point ───────────────────────────────────────────────────────────────
-
-
-def test_main_missing_api_key_fails_before_any_request(monkeypatch, capsys):
-    monkeypatch.delenv("DATAFORGE_API_KEY", raising=False)
+    monkeypatch.setattr(fds, "_http_get", boom)
     assert fds.main(["--datasource", "postgres", "--resource-id", "r"]) == 1
-    assert "DATAFORGE_API_KEY" in capsys.readouterr().err
-
-
-def test_main_resource_mode_requires_resource_id(monkeypatch, capsys):
-    monkeypatch.setenv("DATAFORGE_API_KEY", "df_x_y")
-    assert fds.main(["--datasource", "postgres"]) == 1
-    assert "DATAFORGE_RESOURCE_ID" in capsys.readouterr().err
+    assert "id-token" in capsys.readouterr().err
 
 
 def test_main_stdout_is_pure_json_and_output_file_gets_resolved_id(
     monkeypatch, tmp_path, capsys
 ):
     """stdout must be command-substitution-safe: one JSON object, nothing else."""
-    monkeypatch.setenv("DATAFORGE_API_KEY", "df_x_y")
     out_file = tmp_path / "gh_output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out_file))
-    monkeypatch.setattr(fds, "_http_get", lambda url, key: _resource_doc())
+    monkeypatch.setattr(
+        fds, "_github_oidc_token", lambda audience="dataforge": "oidc-jwt"
+    )
+    monkeypatch.setattr(fds, "_exchange_for_service_token", lambda b, o: "svc")
+    monkeypatch.setattr(
+        fds,
+        "resolve_via_endpoint",
+        lambda *a, **k: (
+            {
+                "host": "db.example.internal",
+                "username": "u",
+                "password": "s3cret",
+                "database": "d",
+            },
+            "res-1",
+        ),
+    )
 
     assert fds.main(["--datasource", "postgres", "--resource-id", "res-1"]) == 0
     captured = capsys.readouterr()
@@ -403,10 +275,9 @@ def test_field_maps_file_is_well_formed():
 # ── OIDC path (DATFORG-88) ────────────────────────────────────────────────────
 
 
-def test_main_without_api_key_uses_oidc_and_endpoint(monkeypatch, capsys):
-    """No DATAFORGE_API_KEY -> exchange the runner's OIDC token and resolve
-    via /e2e-credentials with the resource pin — no legacy chain touched."""
-    monkeypatch.delenv("DATAFORGE_API_KEY", raising=False)
+def test_main_uses_oidc_and_endpoint(monkeypatch, capsys):
+    """main() exchanges the runner's OIDC token and resolves via the
+    datasource-credentials endpoint with the resource pin."""
     monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://runner.example/token")
     monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "runner-req-token")
 
@@ -443,7 +314,6 @@ def test_main_without_api_key_uses_oidc_and_endpoint(monkeypatch, capsys):
 
 
 def test_managed_mode_pin_becomes_credential_id(monkeypatch, capsys):
-    monkeypatch.delenv("DATAFORGE_API_KEY", raising=False)
     monkeypatch.setattr(
         fds, "_github_oidc_token", lambda audience="dataforge": "oidc-jwt"
     )
@@ -470,12 +340,11 @@ def test_managed_mode_pin_becomes_credential_id(monkeypatch, capsys):
 
 
 def test_oidc_unavailable_is_actionable(monkeypatch, capsys):
-    monkeypatch.delenv("DATAFORGE_API_KEY", raising=False)
     monkeypatch.delenv("ACTIONS_ID_TOKEN_REQUEST_URL", raising=False)
     monkeypatch.delenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", raising=False)
     assert fds.main(["--datasource", "postgres", "--resource-id", "r"]) == 1
     err = capsys.readouterr().err
-    assert "id-token" in err and "DATAFORGE_API_KEY" in err
+    assert "id-token" in err and "CI-only" in err
 
 
 def test_oauth_base_urls_api_host_first_with_app_fallback(monkeypatch):

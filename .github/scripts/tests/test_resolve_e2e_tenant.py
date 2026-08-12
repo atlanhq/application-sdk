@@ -18,7 +18,7 @@ _MODULE_PATH = _SCRIPTS_DIR / "resolve_e2e_tenant.py"
 # the script's own directory).
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from resolve_e2e_tenant import TenantMatrixError, main, resolve  # noqa: E402
+from resolve_e2e_tenant import TenantMatrixError, main, resolve
 
 _MATRIX = {
     "aws": {

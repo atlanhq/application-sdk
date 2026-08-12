@@ -49,7 +49,7 @@ from pathlib import Path
 # Reuse the exact regeneration primitive + output list the renovate sync uses,
 # so "regenerate" means the same thing in both places.
 sys.path.insert(0, str(Path(__file__).parent))
-from renovate_pkl_sync import OUTPUT_PATHS, regenerate  # noqa: E402
+from renovate_pkl_sync import OUTPUT_PATHS, regenerate
 
 
 def _changed_output_paths() -> list[str] | None:

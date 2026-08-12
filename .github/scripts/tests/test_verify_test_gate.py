@@ -18,7 +18,7 @@ sys.path.insert(
     0, str(Path(__file__).parent.parent.parent / "actions" / "verify-test-gate")
 )
 
-from verify_test_gate import cancelled_only, evaluate, main, render  # noqa: E402
+from verify_test_gate import cancelled_only, evaluate, main, render
 
 # --- passing states --------------------------------------------------------
 

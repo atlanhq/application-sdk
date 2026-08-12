@@ -1,7 +1,7 @@
 import argparse
 import json
 from enum import Enum
-from typing import Any, Dict
+from typing import Any
 
 from mdutils.mdutils import MdUtils
 
@@ -15,7 +15,7 @@ class Severity(str, Enum):
 
 
 def convert_trivy_to_markdown(
-    trivy_data: Dict[str, Any],
+    trivy_data: dict[str, Any],
     report_type: str,
 ) -> str:
     """Convert Trivy scan data to Markdown format.
@@ -64,11 +64,7 @@ def convert_trivy_to_markdown(
     if results_data is None:
         if is_vuln_report and is_secret_report:
             summary_table_items.extend(["No targets scanned", "-", "-", "-"])
-        elif is_vuln_report:
-            summary_table_items.extend(
-                [f"`{artifact_name}`", artifact_type, "Scan Error?"]
-            )
-        elif is_secret_report:
+        elif is_vuln_report or is_secret_report:
             summary_table_items.extend(
                 [f"`{artifact_name}`", artifact_type, "Scan Error?"]
             )

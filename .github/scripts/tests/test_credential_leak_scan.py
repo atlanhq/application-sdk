@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "credential-leak-gate"))
 
-import scan  # noqa: E402
+import scan
 
 
 def _write(root: Path, rel: str, body: str) -> None:

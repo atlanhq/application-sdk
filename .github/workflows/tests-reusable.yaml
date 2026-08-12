@@ -239,9 +239,10 @@ on:
         type: string
         default: ""
         description: |
-          Dataforge datasource name (postgres, snowflake, powerbi, …). When set
-          (and DATAFORGE_API_KEY is shared), the e2e job fetches this
-          connector's SOURCE credentials from dataforge at run time — instead
+          Dataforge datasource name (postgres, snowflake, powerbi, …). When
+          set, the e2e job fetches this connector's SOURCE credentials from
+          dataforge at run time (per-run GitHub OIDC exchange — no stored
+          dataforge secret; needs a dataforge workload binding) — instead
           of, or in addition to, the static E2E_SOURCE_ENV_JSON secret — and
           exports them as E2E_SOURCE_* plus E2E_<DATASOURCE>_* env before the
           secrets bundle is written. DATAFORGE-FIRST with automatic fallback:
@@ -397,15 +398,6 @@ on:
           JSON rather than KEY=VALUE lines because a key-pair PEM or
           service-account key is multi-line. Connectors with a hermetic
           container source (the mysql shape) need none of this.
-      DATAFORGE_API_KEY:
-        required: false
-        description: |
-          Dataforge API key (df_<id>_<secret>) the e2e job fetches SOURCE
-          credentials with when dataforge-datasource is set. Reads are
-          audited server-side per key owner. Mint from a dedicated
-          low-privilege dataforge user (any authenticated role can read
-          resource artifacts / reveal managed credentials by product
-          decision), and record a rotation owner — keys never expire.
       DATAFORGE_RESOURCE_ID:
         required: false
         description: |
@@ -1614,8 +1606,6 @@ jobs:
       GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
       # See the integration job: needed as env for the step-level `if:` gates.
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
-      # Same reason: the dataforge fetch step gates on the key being shared.
-      DATAFORGE_API_KEY: ${{ secrets.DATAFORGE_API_KEY }}
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
       GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
@@ -1760,9 +1750,9 @@ jobs:
       # handed to export_extra_env.py, whose mask-first two-pass protocol is
       # the audited path into $GITHUB_ENV. One fetch feeds both passes, so
       # the masked strings and the written strings can never diverge. Auth is
-      # decided in the script: DATAFORGE_API_KEY when shared (legacy), else
-      # the run's GitHub OIDC token exchanged at dataforge (needs the job's
-      # id-token permission and a dataforge workload binding for the repo).
+      # the run's GitHub OIDC token exchanged at dataforge — no stored
+      # dataforge secret (needs the job's id-token permission and a
+      # dataforge workload binding for the repo).
       - name: Fetch connector source credentials from dataforge
         if: inputs.dataforge-datasource != ''
         continue-on-error: true

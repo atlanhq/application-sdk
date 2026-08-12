@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import e2e_tenant_api as api  # noqa: E402
+import e2e_tenant_api as api
 
 _TENANT = "https://example-tenant.atlan.test"
 _SECRET = "super-secret-value"

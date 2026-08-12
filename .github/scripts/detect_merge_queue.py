@@ -54,7 +54,7 @@ import fnmatch
 import json
 import subprocess
 import sys
-from typing import Callable
+from collections.abc import Callable
 
 RunFn = Callable[[list], str]
 
@@ -94,7 +94,7 @@ def _run_gh(args: list) -> str:
 
 def _normalise(ref: str) -> str:
     """Reduce a ref to its short branch name (``refs/heads/main`` -> ``main``)."""
-    return ref[len(_REFS_HEADS) :] if ref.startswith(_REFS_HEADS) else ref
+    return ref.removeprefix(_REFS_HEADS)
 
 
 def ref_matches(patterns: list, base_ref: str, default_branch: str) -> bool:

@@ -17,7 +17,7 @@ sys.path.insert(
     0, str(Path(__file__).parent.parent.parent / "actions" / "discover-e2e-suites")
 )
 
-from discover_e2e_suites import (  # noqa: E402
+from discover_e2e_suites import (
     DEFAULT_CLOUDS,
     discover,
     main,

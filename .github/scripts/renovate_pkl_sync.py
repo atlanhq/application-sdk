@@ -70,7 +70,7 @@ from pathlib import Path
 # Placement of eval output is family-dependent and shared with
 # regenerate_contract.py / check_generated_freshness.py — see that module.
 sys.path.insert(0, str(Path(__file__).parent))
-from pkl_contract_layout import (  # noqa: E402
+from pkl_contract_layout import (
     GENERATED_DIR,
     ROOT_FILES,
     baseline_contract_ref,

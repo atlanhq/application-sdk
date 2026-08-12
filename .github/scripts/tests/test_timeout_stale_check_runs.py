@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import timeout_stale_check_runs as mod
 
 REPO = "atlanhq/application-sdk"
-NOW = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
 PREFIX = "Connector E2E run / "
 
 

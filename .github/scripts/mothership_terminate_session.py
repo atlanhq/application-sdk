@@ -32,7 +32,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
-from typing import Callable
+from collections.abc import Callable
 
 TIMEOUT_SECONDS = 30
 BODY_PREVIEW_CHARS = 500

@@ -21,8 +21,8 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 
-import e2e_tenant_app as app  # noqa: E402
-from _gha_expr import evaluate, evaluate_operand  # noqa: E402
+import e2e_tenant_app as app
+from _gha_expr import evaluate, evaluate_operand
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
