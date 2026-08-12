@@ -23,7 +23,7 @@ from __future__ import annotations
 import base64
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -32,7 +32,7 @@ sys.path.insert(
     0, str(Path(__file__).parent.parent.parent / "actions" / "e2e-tenant-lease")
 )
 
-from e2e_tenant_lease import (
+from e2e_tenant_lease import (  # noqa: E402
     Holder,
     RateLimited,
     _denied,
@@ -393,7 +393,7 @@ def _live(status: str = "in_progress", created_at: str | None = None):
 #: A run that started at POSIX 900, i.e. just before the holders below acquire at
 #: 1000. Spelled as the ISO string GitHub actually returns.
 _RUN_STARTED_900 = (
-    datetime.fromtimestamp(900, tz=UTC).isoformat().replace("+00:00", "Z")
+    datetime.fromtimestamp(900, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 )
 
 

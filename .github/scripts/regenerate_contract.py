@@ -64,7 +64,7 @@ from pathlib import Path
 # Placement of eval output is family-dependent and shared with
 # renovate_pkl_sync.py / check_generated_freshness.py — see that module.
 sys.path.insert(0, str(Path(__file__).parent))
-from pkl_contract_layout import (
+from pkl_contract_layout import (  # noqa: E402
     GENERATED_DIR,
     ROOT_FILES,
     run_post_generate,

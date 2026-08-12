@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "actions" / "sdr-e2e"))
 
-from select_dapr_components import (
+from select_dapr_components import (  # noqa: E402
     MissingUpstreamComponentError,
     _resolve_app_components_dir,
     main,

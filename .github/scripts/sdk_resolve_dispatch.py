@@ -37,7 +37,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 HEALTH_RETRIES = 5
@@ -481,7 +481,7 @@ def _parse_iso8601_epoch(value: str) -> float | None:
     try:
         return (
             datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
-            .replace(tzinfo=UTC)
+            .replace(tzinfo=timezone.utc)
             .timestamp()
         )
     except (ValueError, TypeError):

@@ -17,7 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import assert_image_platforms as ap
+import assert_image_platforms as ap  # noqa: E402
 
 _BOTH = "linux/amd64,linux/arm64"
 

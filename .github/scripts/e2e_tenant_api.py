@@ -301,14 +301,14 @@ class TenantClient:
         """
         url = f"{self.base_url}{path}"
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(url, data=data, method=method)
+        req = urllib.request.Request(url, data=data, method=method)  # noqa: S310 — https URL: base validated by validate_tenant_base_url + a module-owned path constant filled through path_segment
         req.add_header("Authorization", f"Bearer {self.bearer}")
         req.add_header("Accept", "application/json")
         req.add_header("User-Agent", _USER_AGENT)
         if data is not None:
             req.add_header("Content-Type", "application/json")
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — see above
                 return Response(status=resp.status, body=_parse(resp.read()))
         except urllib.error.HTTPError as exc:
             return Response(status=exc.code, body=_parse(exc.read()))
@@ -370,12 +370,12 @@ def mint_oauth_token(base_url: str, client_id: str, client_secret: str) -> str:
             "client_secret": client_secret,
         }
     ).encode()
-    req = urllib.request.Request(url, data=payload, method="POST")
+    req = urllib.request.Request(url, data=payload, method="POST")  # noqa: S310 — https URL: base validated above
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
     req.add_header("Accept", "application/json")
     req.add_header("User-Agent", _USER_AGENT)
     try:
-        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:  # noqa: S310 — see above
             parsed = _parse(resp.read())
     except urllib.error.HTTPError as exc:
         # The error body can echo request parameters, so report only the status.

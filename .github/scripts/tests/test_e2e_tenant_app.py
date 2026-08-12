@@ -19,8 +19,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import e2e_tenant_app as app
-from e2e_tenant_api import Response, TenantApiError, TenantClient
+import e2e_tenant_app as app  # noqa: E402
+from e2e_tenant_api import Response, TenantApiError, TenantClient  # noqa: E402
 
 _TENANT = "https://example-tenant.atlan.test"
 _APP_ID = "019d1f6b-6fea-7db3-96d8-e61e159d0351"

@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "actions" / "sdr-e2e"))
 
-from build_compose_chain import build_compose_files, main
+from build_compose_chain import build_compose_files, main  # noqa: E402
 
 
 def test_base_and_sdk_only_when_no_app_overlay_and_no_two_store(

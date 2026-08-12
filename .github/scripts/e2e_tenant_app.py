@@ -466,7 +466,8 @@ def _normalize_repo_url(value: str) -> str:
     only decides whether to refuse, never what to publish).
     """
     normalized = value.strip().lower().rstrip("/")
-    normalized = normalized.removesuffix(".git")
+    if normalized.endswith(".git"):
+        normalized = normalized[: -len(".git")]
     return normalized.rstrip("/")
 
 

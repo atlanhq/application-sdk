@@ -242,6 +242,7 @@ def _run_open_removal_pr(monkeypatch, tmp_path, **env):
 
     def runner(cmd, check=False, capture_output=False, text=False, env=None):
         calls.append((cmd, env))
+        return None
 
     rec.open_removal_pr("o/r", ["CVE-1"], "2026-07-16", 1, runner)
     return calls

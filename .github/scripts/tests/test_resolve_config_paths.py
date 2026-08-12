@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "actions" / "sdr-e2e"))
 
-from resolve_config_paths import main, resolve_paths
+from resolve_config_paths import main, resolve_paths  # noqa: E402
 
 
 def _mkdir(root: Path, rel: str) -> Path:

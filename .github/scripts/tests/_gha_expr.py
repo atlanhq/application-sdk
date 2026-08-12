@@ -24,8 +24,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable, Iterable, Sequence
-from typing import Any
+from typing import Any, Callable, Iterable, Sequence
 
 __all__ = [
     "UnknownContext",

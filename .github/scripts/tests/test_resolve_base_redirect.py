@@ -19,6 +19,7 @@ import sys
 import urllib.error
 import urllib.parse
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -35,10 +36,10 @@ DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
 
 
-def digests(harbor: str | None, ghcr: str | None):
+def digests(harbor: Optional[str], ghcr: Optional[str]):
     """Build a ``resolve_digest`` stub returning fixed digests per registry."""
 
-    def resolve(repo: str, _tag: str) -> str | None:
+    def resolve(repo: str, _tag: str) -> Optional[str]:
         return harbor if repo == HARBOR else ghcr
 
     return resolve
@@ -301,7 +302,7 @@ def test_credentials_are_withheld_from_a_ghcr_lookalike_host(tmp_path, monkeypat
 
 
 def test_token_realm_on_another_host_does_not_receive_credentials(monkeypatch):
-    sent: list[tuple[str, str | None]] = []
+    sent: list[tuple[str, Optional[str]]] = []
 
     def fake_urlopen(request, timeout=None):
         host, path = route(request)

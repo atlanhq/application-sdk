@@ -187,7 +187,7 @@ class TestRun:
         assert not comment_out.exists()
 
 
-class TestMain:
+class TestMain(object):
     def test_writes_github_output_and_comment(self, tmp_path: Path, monkeypatch):
         changed = _write_changed_files(tmp_path, ["entrypoint.sh"])
         comment_out = tmp_path / "comment.md"

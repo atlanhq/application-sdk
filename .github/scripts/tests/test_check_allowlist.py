@@ -108,8 +108,9 @@ class TestGateFails:
         monkeypatch.setenv("FAIL_ON_FINDINGS", "true")
         with patch(
             "sys.argv", ["check_allowlist.py", "--trivy-results", str(trivy_file)]
-        ), pytest.raises(SystemExit) as exc:
-            check_allowlist.main()
+        ):
+            with pytest.raises(SystemExit) as exc:
+                check_allowlist.main()
         assert exc.value.code == 1
 
     def test_expired_allowlist_entry_fails(
@@ -124,8 +125,9 @@ class TestGateFails:
         monkeypatch.setenv("FAIL_ON_FINDINGS", "true")
         with patch(
             "sys.argv", ["check_allowlist.py", "--trivy-results", str(trivy_file)]
-        ), pytest.raises(SystemExit) as exc:
-            check_allowlist.main()
+        ):
+            with pytest.raises(SystemExit) as exc:
+                check_allowlist.main()
         assert exc.value.code == 1
 
     def test_non_blocking_mode_warns_not_fails(
@@ -175,8 +177,9 @@ class TestGateEdgeCases:
         monkeypatch.chdir(tmp_path)
         with patch(
             "sys.argv", ["check_allowlist.py", "--trivy-results", str(bad_trivy)]
-        ), pytest.raises(SystemExit) as exc:
-            check_allowlist.main()
+        ):
+            with pytest.raises(SystemExit) as exc:
+                check_allowlist.main()
         assert exc.value.code != 0
 
     def test_malformed_allowlist_json_exits_nonzero(
@@ -189,8 +192,9 @@ class TestGateEdgeCases:
         monkeypatch.chdir(tmp_path)
         with patch(
             "sys.argv", ["check_allowlist.py", "--trivy-results", str(trivy_file)]
-        ), pytest.raises(SystemExit) as exc:
-            check_allowlist.main()
+        ):
+            with pytest.raises(SystemExit) as exc:
+                check_allowlist.main()
         assert exc.value.code != 0
 
     def test_missing_trivy_results_exits_nonzero(
@@ -203,8 +207,9 @@ class TestGateEdgeCases:
         with patch(
             "sys.argv",
             ["check_allowlist.py", "--trivy-results", str(tmp_path / "missing.json")],
-        ), pytest.raises(SystemExit) as exc:
-            check_allowlist.main()
+        ):
+            with pytest.raises(SystemExit) as exc:
+                check_allowlist.main()
         assert exc.value.code != 0
 
     def test_low_severity_not_reported(

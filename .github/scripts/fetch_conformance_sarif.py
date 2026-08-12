@@ -64,7 +64,7 @@ ARTIFACT_SUFFIX = "-sarif"
 
 def run_gh(args: list[str]) -> tuple[int, str]:
     """Invoke ``gh`` and return ``(returncode, stdout)``. Stderr is inherited."""
-    proc = subprocess.run(
+    proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
         ["gh", *args], capture_output=True, text=True
     )
     if proc.stderr:

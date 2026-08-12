@@ -9,7 +9,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from write_dapr_components import _COMPONENTS, main, write_components
+from write_dapr_components import _COMPONENTS, main, write_components  # noqa: E402
 
 # The names the SDK resolves at startup; objectstore is the one whose absence
 # crashed CI (StorageBindingNotFoundError [AAF-STR-003]).

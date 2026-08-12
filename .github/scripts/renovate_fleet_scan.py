@@ -30,8 +30,8 @@ import os
 import sys
 import urllib.error
 import urllib.request
-from collections.abc import Callable
 from pathlib import Path
+from typing import Callable, Optional
 
 GRAPHQL_URL = "https://api.github.com/graphql"
 PAGE_SIZE = 100
@@ -86,7 +86,7 @@ reviews(first: 50) {
 PostFn = Callable[[str, dict], dict]
 
 
-def resolve_scope(org: str, repo: str | None) -> str:
+def resolve_scope(org: str, repo: Optional[str]) -> str:
     """Single-repo mode (repo set) scopes to that repo; otherwise scope to the whole org."""
     return f"repo:{repo}" if repo else f"org:{org}"
 
@@ -105,7 +105,7 @@ def build_search_query(scope: str, extra: str) -> str:
     return f"{scope} is:pr {authors} {extra}".strip()
 
 
-def build_graphql_payload(search_query: str, fields: str, after: str | None) -> dict:
+def build_graphql_payload(search_query: str, fields: str, after: Optional[str]) -> dict:
     after_arg = f", after: {json.dumps(after)}" if after else ""
     query = f"""
     query {{
@@ -153,8 +153,8 @@ def fetch_all_prs(
     """Paginate a GraphQL PR search to completion. Raises on a GraphQL 'errors' response,
     or if the result was silently truncated by the search API's ~1000-item hard cap."""
     nodes: list[dict] = []
-    issue_count: int | None = None
-    after: str | None = None
+    issue_count: Optional[int] = None
+    after: Optional[str] = None
     for _ in range(MAX_PAGES):
         payload = build_graphql_payload(search_query, fields, after)
         data = post(token, payload)
@@ -302,7 +302,7 @@ def run(
     return open_grouped, merged_grouped
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

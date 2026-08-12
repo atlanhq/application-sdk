@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _gha_expr import (
+from _gha_expr import (  # noqa: E402
     UnknownContext,
     UnsupportedExpression,
     evaluate,

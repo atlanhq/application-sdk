@@ -58,8 +58,8 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Callable, Optional
 
 # The base image, as apps reference it (Harbor) and as CI retrieves it (GHCR).
 HARBOR_REPO = "registry.atlan.com/public/app-runtime-base"
@@ -272,7 +272,7 @@ def _bearer_token(
     token: str,
     *,
     expected_host: str,
-) -> str | None:
+) -> Optional[str]:
     """Exchange registry credentials for a pull-scoped bearer token.
 
     The realm is attacker-influenced in principle — it arrives in the registry's
@@ -313,7 +313,7 @@ def registry_digest(
     *,
     user: str = "",
     token: str = "",
-) -> str | None:
+) -> Optional[str]:
     """Resolve the manifest digest a registry currently serves for *tag*.
 
     Performs the standard Docker Registry v2 token dance: an unauthenticated
@@ -334,7 +334,7 @@ def registry_digest(
     path = repo.partition("/")[2]
     url = f"https://{host}/v2/{path}/manifests/{urllib.parse.quote(tag)}"
 
-    def fetch(auth: str | None) -> str | None:
+    def fetch(auth: Optional[str]) -> Optional[str]:
         request = urllib.request.Request(url, method="GET")
         request.add_header("Accept", _ACCEPT)
         if auth:
@@ -393,7 +393,7 @@ def decide(
     harbor_repo: str = HARBOR_REPO,
     ghcr_repo: str = GHCR_REPO,
     supported_tags: tuple[str, ...] = SUPPORTED_TAGS,
-    resolve_digest: Callable[[str, str], str | None] = lambda repo, tag: None,
+    resolve_digest: Callable[[str, str], Optional[str]] = lambda repo, tag: None,
 ) -> Decision:
     """Decide the ``build-contexts`` value for an opted-in build.
 
@@ -529,7 +529,7 @@ def main(argv: list[str] | None = None) -> int:
     token = os.environ.get("GHCR_TOKEN", "")
     user = os.environ.get("GHCR_USER", "x-access-token")
 
-    def resolve_digest(repo: str, tag: str) -> str | None:
+    def resolve_digest(repo: str, tag: str) -> Optional[str]:
         # Host equality, not a prefix test on the reference: only the real GHCR
         # gets the credential. Harbor's public project is pulled anonymously.
         is_ghcr = registry_host(repo) == GHCR_HOST

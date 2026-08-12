@@ -21,11 +21,11 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 def now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -135,7 +135,7 @@ def sweep(
 ) -> list[str]:
     """Time out stale check runs across every open PR. Returns the list of
     'name (PR #n)' descriptions that were timed out, for logging."""
-    now = now or datetime.now(UTC)
+    now = now or datetime.now(timezone.utc)
     max_age = timedelta(minutes=max_age_minutes)
     timed_out = []
 

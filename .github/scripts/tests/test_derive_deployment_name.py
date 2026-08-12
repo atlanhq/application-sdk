@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "actions" / "sdr-e2e"))
 
-from derive_deployment_name import derive, main
+from derive_deployment_name import derive, main  # noqa: E402
 
 
 def test_no_suffix_keeps_single_suite_shape() -> None:
