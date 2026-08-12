@@ -337,3 +337,130 @@ def test_oauth_base_urls_api_host_first_with_app_fallback(monkeypatch):
     assert fds._oauth_base_urls("https://dataforge.local") == [
         "https://dataforge.local"
     ]
+
+
+# ── Token-exchange 404 fallback (the deploy-ordering hedge) ───────────────────
+
+
+class _FakeResponse:
+    """Minimal urlopen context manager returning a fixed JSON payload."""
+
+    def __init__(self, payload: dict):
+        self._payload = json.dumps(payload).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        return self._payload
+
+
+def _exchange_stub(monkeypatch, outcomes):
+    """Stub urlopen to play *outcomes* (payload dicts or exceptions) in order,
+    recording the requested URLs."""
+    urls = []
+
+    def fake_urlopen(req, timeout=0):
+        urls.append(req.full_url)
+        outcome = outcomes[len(urls) - 1]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return _FakeResponse(outcome)
+
+    monkeypatch.delenv("DATAFORGE_OAUTH_BASE_URL", raising=False)
+    monkeypatch.setattr(fds.urllib.request, "urlopen", fake_urlopen)
+    return urls
+
+
+def test_exchange_falls_back_to_app_host_on_api_404(monkeypatch):
+    """api 404 (host doesn't route /oauth yet) -> retry the app host, whose
+    success returns its token."""
+    urls = _exchange_stub(
+        monkeypatch,
+        [_http_error(404, b"{}"), {"access_token": "svc-from-app"}],
+    )
+    token = fds._exchange_for_service_token("https://api.dataforge.atlan.dev", "oidc")
+    assert token == "svc-from-app"
+    assert urls == [
+        "https://api.dataforge.atlan.dev/oauth/token",
+        "https://dataforge.atlan.dev/oauth/token",
+    ]
+
+
+def test_exchange_all_candidates_404_raises(monkeypatch):
+    """Every candidate 404 -> DataforgeSourceError naming the last HTTP code,
+    with the workload-binding hint."""
+    urls = _exchange_stub(
+        monkeypatch, [_http_error(404, b"{}"), _http_error(404, b"{}")]
+    )
+    with pytest.raises(fds.DataforgeSourceError, match="HTTP 404"):
+        fds._exchange_for_service_token("https://api.dataforge.atlan.dev", "oidc")
+    assert urls == [
+        "https://api.dataforge.atlan.dev/oauth/token",
+        "https://dataforge.atlan.dev/oauth/token",
+    ]
+
+
+def test_exchange_non_404_does_not_fall_back(monkeypatch):
+    """A non-404 answer IS the exchange's real answer (bad grant, forbidden) —
+    surface it immediately instead of retrying the app host."""
+    urls = _exchange_stub(monkeypatch, [_http_error(403, b"{}")])
+    with pytest.raises(fds.DataforgeSourceError, match="HTTP 403"):
+        fds._exchange_for_service_token("https://api.dataforge.atlan.dev", "oidc")
+    assert urls == ["https://api.dataforge.atlan.dev/oauth/token"]
+
+
+def test_exchange_unexpected_response_shape_raises(monkeypatch):
+    """Valid JSON without access_token -> body-free DataforgeSourceError, not a
+    raw KeyError traceback."""
+    _exchange_stub(monkeypatch, [{"token_type": "bearer"}])
+    with pytest.raises(fds.DataforgeSourceError, match="token exchange failed"):
+        fds._exchange_for_service_token("https://api.dataforge.atlan.dev", "oidc")
+
+
+# ── Endpoint response-shape validation ─────────────────────────────────────────
+
+
+def _endpoint_doc_stub(monkeypatch, doc):
+    monkeypatch.setattr(fds, "_http_get", lambda url, bearer: doc)
+
+
+def test_endpoint_rejects_top_level_json_list(monkeypatch):
+    """Valid JSON of the wrong shape must not escape as a raw AttributeError —
+    it collapses into a fixed, body-free DataforgeSourceError."""
+    _endpoint_doc_stub(monkeypatch, ["not", "a", "dict"])
+    with pytest.raises(fds.DataforgeSourceError, match="unexpected response shape"):
+        fds.resolve_via_endpoint("https://b", "k", "postgres")
+
+
+def test_endpoint_rejects_list_fields(monkeypatch):
+    _endpoint_doc_stub(monkeypatch, {"fields": ["host", "port"]})
+    with pytest.raises(fds.DataforgeSourceError, match="unexpected response shape"):
+        fds.resolve_via_endpoint("https://b", "k", "postgres")
+
+
+def test_endpoint_rejects_non_list_mandatory_missing(monkeypatch):
+    _endpoint_doc_stub(
+        monkeypatch, {"fields": {"host": "h"}, "mandatory_missing": "password"}
+    )
+    with pytest.raises(fds.DataforgeSourceError, match="unexpected response shape"):
+        fds.resolve_via_endpoint("https://b", "k", "postgres")
+
+
+def test_endpoint_rejects_non_string_mandatory_missing_items(monkeypatch):
+    _endpoint_doc_stub(
+        monkeypatch, {"fields": {"host": "h"}, "mandatory_missing": [{"f": 1}]}
+    )
+    with pytest.raises(fds.DataforgeSourceError, match="unexpected response shape"):
+        fds.resolve_via_endpoint("https://b", "k", "postgres")
+
+
+def test_endpoint_accepts_missing_optional_keys(monkeypatch):
+    """Absent optional keys are fine — only present-but-wrong-typed keys fail."""
+    _endpoint_doc_stub(monkeypatch, {"fields": {"host": "h"}})
+    fields, resolved_id = fds.resolve_via_endpoint("https://b", "k", "postgres")
+    assert fields == {"host": "h"}
+    assert resolved_id == ""

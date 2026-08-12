@@ -239,6 +239,37 @@ def _exchange_for_service_token(base_url: str, oidc_token: str) -> str:
     ) from last_exc
 
 
+def _validate_endpoint_doc(doc: Any, datasource: str) -> dict:
+    """Narrow shape check on the datasource-credentials response.
+
+    ``_http_get`` returns ``json.load`` unvalidated, so a 200 whose body is
+    valid JSON of the wrong *shape* (a list, a scalar, a dict whose ``fields``
+    is a list) would otherwise escape downstream as a raw
+    ``AttributeError``/``TypeError`` traceback — which ``main()`` does not
+    convert, so it prints unstructured under ``continue-on-error``. Re-raise
+    shape violations as ``DataforgeSourceError`` with a fixed, body-free
+    message (field values are never echoed). Deliberately narrow — not a broad
+    ``except Exception`` — so programming errors still surface.
+    """
+    if not isinstance(doc, dict):
+        raise DataforgeSourceError(
+            f"datasource-credentials returned an unexpected response shape "
+            f"for {datasource!r}"
+        )
+    fields_ok = isinstance(doc.get("fields", {}), dict)
+    missing_raw = doc.get("mandatory_missing", [])
+    missing_ok = isinstance(missing_raw, list) and all(
+        isinstance(item, str) for item in missing_raw
+    )
+    resolved_ok = isinstance(doc.get("resolved_id"), (str, type(None)))
+    if not (fields_ok and missing_ok and resolved_ok):
+        raise DataforgeSourceError(
+            f"datasource-credentials returned an unexpected response shape "
+            f"for {datasource!r}"
+        )
+    return doc
+
+
 def resolve_via_endpoint(
     base_url: str,
     bearer: str,
@@ -262,7 +293,7 @@ def resolve_via_endpoint(
     url = f"{base_url}/api/v1/datasources/{urllib.parse.quote(datasource)}/credentials"
     if params:
         url += "?" + "&".join(params)
-    doc = _http_get(url, bearer)
+    doc = _validate_endpoint_doc(_http_get(url, bearer), datasource)
     fields = doc.get("fields") or {}
     if not fields:
         raise DataforgeSourceError(
