@@ -190,7 +190,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.27.1"
+version = "3.27.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -213,9 +213,9 @@ dependencies = [
     { name = "temporalio" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/78/fb/c28d1db1cec4fee8d7d5a904c8c40883631eb406aa4b7dbe35b358997dc8/atlan_application_sdk-3.27.1.tar.gz", hash = "sha256:5dcec0613f66624f348e204eb62604ee3b9a0089460581a06b19b1c65ab05e64", size = 5089863, upload-time = "2026-08-11T01:54:52.091Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/2d/31ea1fe0f728ee276133cecc1da32ac9e5ccf7c6de695962ae91f6e87923/atlan_application_sdk-3.27.2.tar.gz", hash = "sha256:65e0cccaf984593b9591c4fbafe18ae2dd0c8bc860d0e1347c3bf247d98d43ca", size = 5395398, upload-time = "2026-08-12T12:36:56.648Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/11/0b/7996d534a04df2a7909a35dd31ddc4c232a012c538bf9d9b59cae10a66b0/atlan_application_sdk-3.27.1-py3-none-any.whl", hash = "sha256:b96fa68850817c35b1dcab23b7e42a34a6fab6d9ba38b1f71fba7de9ea79389e", size = 1056232, upload-time = "2026-08-11T01:54:49.938Z" },
+    { url = "https://files.pythonhosted.org/packages/41/ab/fcb57248ab68ff45bd4c7ab7ebe4c5d770579e98653f1663e6a6bc31c90b/atlan_application_sdk-3.27.2-py3-none-any.whl", hash = "sha256:6b21453042662bb86e8266db157a76f208831915eb810e1a03f75fffa6b44557", size = 1078133, upload-time = "2026-08-12T12:36:55.145Z" },
 ]
 
 [package.optional-dependencies]
@@ -3163,14 +3163,14 @@ wheels = [
 
 [[package]]
 name = "typing-inspection"
-version = "0.4.3"
+version = "0.4.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6d/bc/4eae18cd40c65798a16267572ba346c11f599d44b01603dbd843342042bc/typing_inspection-0.4.3.tar.gz", hash = "sha256:c5f9ec1530b5c1e2c9bc34a84d9a3466ed1b2f3f2fa9f901368d9c5596210e4d", size = 76711, upload-time = "2026-08-10T09:39:18.063Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a3/26/b09b8010994eccc3c09092e6b34058f36a460eea2d4c3e8b910c695975a0/typing_inspection-0.4.4.tar.gz", hash = "sha256:547274fa6b0a561ccf549cc9524b999a578e737d015d8709d021f9d0d13bea47", size = 76928, upload-time = "2026-08-12T12:37:25.997Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/42/f7/7a3935abdebd5cf18705a5f0335dd6a3a18bef3baa7cb9edc3b6b9922cc8/typing_inspection-0.4.3-py3-none-any.whl", hash = "sha256:5f42b23858a91e0b4ef521f5418f03a0da3c9216fd2995ef5e73463100e676cd", size = 14693, upload-time = "2026-08-10T09:39:16.693Z" },
+    { url = "https://files.pythonhosted.org/packages/67/81/4add07e5172b7ac40d8ed5ff580409a7801a4fe26d529bdd915401dabfbe/typing_inspection-0.4.4-py3-none-any.whl", hash = "sha256:65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147", size = 14750, upload-time = "2026-08-12T12:37:24.648Z" },
 ]
 
 [[package]]
