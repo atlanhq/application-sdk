@@ -1,3 +1,4 @@
+import argparse
 import logging
 import re
 import subprocess
@@ -36,6 +37,25 @@ def _git(*args: str, quiet: bool = False) -> str:
     )
 
 
+def last_release_tag() -> str | None:
+    """Return the most recent non release-candidate version tag, or None.
+
+    None means the repository has never been released — it has no tag matching
+    `v[0-9]*`, or all of its tags predate that convention.
+    """
+    try:
+        return _git(
+            "describe",
+            "--tags",
+            "--abbrev=0",
+            "--match=v[0-9]*",
+            "--exclude=*rc*",
+            quiet=True,
+        )
+    except subprocess.CalledProcessError:
+        return None
+
+
 def _resolve_rev_range() -> list[str]:
     """Resolve the revision range to walk when determining the version bump.
 
@@ -49,18 +69,8 @@ def _resolve_rev_range() -> list[str]:
     yields a multi-line value — which is not a usable revision. It also excludes
     the root commit itself from the range, dropping it from the changelog.
     """
-    try:
-        last_tag = _git(
-            "describe",
-            "--tags",
-            "--abbrev=0",
-            "--match=v[0-9]*",
-            "--exclude=*rc*",
-            quiet=True,
-        )
-    except subprocess.CalledProcessError:
-        # No release tag yet: a repo that has never been released, or whose
-        # tags all predate the `v*` convention.
+    last_tag = last_release_tag()
+    if last_tag is None:
         logging.info("No release tag found - walking full history from HEAD")
         return ["HEAD"]
 
@@ -217,6 +227,46 @@ def update_pyproject_version(new_version: str) -> None:
         raise
 
 
+def apply_first_release_floor(
+    new_version: str, floor: str | None, has_release_tag: bool
+) -> str:
+    """Raise a repository's *first* release to at least `floor`.
+
+    Apps are scaffolded at 0.1.0, so a plain conventional-commit bump would
+    publish their first ever release as 0.2.0 and trickle up from there. A
+    first release is a 1.0.0 event, so on the first release only, anything
+    below the floor is raised to it.
+
+    Args:
+        new_version (str): Version produced by the conventional-commit bump.
+        floor (str | None): Minimum version for a first release. None or empty
+            disables the floor entirely (the SDK's own release passes nothing).
+        has_release_tag (bool): Whether the repository has been released before.
+
+    Returns:
+        str: `floor` when this is a first release and the computed bump is below
+             it, otherwise `new_version` unchanged.
+
+    A floor, not an assignment: repositories already at or past it must keep
+    bumping normally. 13 of the 36 currently-untagged apps sit at exactly 1.0.0
+    in pyproject.toml, and forcing the version to 1.0.0 there would produce a
+    bump PR that does not change the version at all.
+    """
+    if not floor or has_release_tag:
+        return new_version
+
+    if semver.VersionInfo.parse(floor) <= semver.VersionInfo.parse(new_version):
+        logging.info(
+            f"First release, but {new_version} already meets the {floor} floor - leaving as is"
+        )
+        return new_version
+
+    logging.info(
+        f"First release for this repository - raising {new_version} to {floor}"
+    )
+    return floor
+
+
 def main():
     """Main entry point for the version update process.
 
@@ -224,19 +274,41 @@ def main():
     1. Gets current version
     2. Retrieves commits since last tag
     3. Calculates version bump
-    4. Updates pyproject.toml with new version
+    4. Applies the first-release floor, if one was requested
+    5. Updates pyproject.toml with new version
     """
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
     )
     logging.info("Starting version update process")
 
-    current_branch = str(sys.argv[1])
-    current_version = str(sys.argv[2])
+    parser = argparse.ArgumentParser(description="Bump the project version.")
+    parser.add_argument(
+        "branch", help="Branch being released (only 'main' is supported)"
+    )
+    parser.add_argument("current_version", help="Current version from pyproject.toml")
+    parser.add_argument(
+        "--first-release-version",
+        default="",
+        help=(
+            "Minimum version for a repository's first release, i.e. one with no "
+            "v* tag yet. Empty (the default) disables the floor and uses the "
+            "plain conventional-commit bump."
+        ),
+    )
+    args = parser.parse_args()
+
+    current_branch = args.branch
+    current_version = args.current_version
     commits = get_commits_since_last_tag()
 
     new_version = calculate_version_bump(
         current_version=current_version, commits=commits, current_branch=current_branch
+    )
+    new_version = apply_first_release_floor(
+        new_version,
+        floor=args.first_release_version,
+        has_release_tag=last_release_tag() is not None,
     )
 
     update_pyproject_version(new_version=new_version)

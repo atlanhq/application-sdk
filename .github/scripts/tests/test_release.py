@@ -329,3 +329,71 @@ class TestUntaggedRepo:
         """The tagged path is unchanged: walk from the last release tag."""
         monkeypatch.chdir(git_repo)
         assert release._resolve_rev_range() == ["v1.0.0..HEAD"]
+
+    def test_last_release_tag_is_none_when_untagged(
+        self, multi_root_untagged_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(multi_root_untagged_repo)
+        assert release.last_release_tag() is None
+
+    def test_last_release_tag_returns_the_tag_when_tagged(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(git_repo)
+        assert release.last_release_tag() == "v1.0.0"
+
+
+# ---------------------------------------------------------------------------
+# apply_first_release_floor — apps' first release is a 1.0.0 event
+# ---------------------------------------------------------------------------
+
+
+class TestApplyFirstReleaseFloor:
+    def test_first_release_below_floor_is_raised(self) -> None:
+        """An app scaffolded at 0.1.0 releases as 1.0.0, not 0.2.0."""
+        assert (
+            release.apply_first_release_floor(
+                "0.2.0", floor="1.0.0", has_release_tag=False
+            )
+            == "1.0.0"
+        )
+
+    def test_first_release_already_at_floor_bumps_normally(self) -> None:
+        """A floor, not an assignment.
+
+        13 of the 36 currently-untagged apps sit at exactly 1.0.0. Forcing the
+        floor there would emit a bump PR that does not change the version.
+        """
+        assert (
+            release.apply_first_release_floor(
+                "1.0.1", floor="1.0.0", has_release_tag=False
+            )
+            == "1.0.1"
+        )
+
+    def test_first_release_past_floor_bumps_normally(self) -> None:
+        assert (
+            release.apply_first_release_floor(
+                "2.3.1", floor="1.0.0", has_release_tag=False
+            )
+            == "2.3.1"
+        )
+
+    def test_already_released_repo_is_untouched(self) -> None:
+        """Only the *first* release gets the floor — later ones bump normally."""
+        assert (
+            release.apply_first_release_floor(
+                "0.2.0", floor="1.0.0", has_release_tag=True
+            )
+            == "0.2.0"
+        )
+
+    @pytest.mark.parametrize("floor", ["", None])
+    def test_empty_floor_disables_the_behaviour(self, floor: str | None) -> None:
+        """The SDK's own release passes no floor and must be unaffected."""
+        assert (
+            release.apply_first_release_floor(
+                "0.2.0", floor=floor, has_release_tag=False
+            )
+            == "0.2.0"
+        )
