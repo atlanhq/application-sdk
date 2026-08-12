@@ -1134,9 +1134,31 @@ jobs:
   prepare-tenant:
     name: Prepare tenant (${{ matrix.cloud || 'default' }})
     needs: [discover-e2e, merge-e2e-image, lease-tenant]
-    # lease-tenant gates the install rather than merely preceding it: installing
-    # without the lease is the race this whole path exists to close.
-    if: inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success' && needs.lease-tenant.result == 'success'
+    # Gated on lease-tenant having RUN, not on it having succeeded, and then each
+    # leg confirms its OWN cloud's lease in its first step.
+    #
+    # `needs.lease-tenant.result` is the matrix AGGREGATE, so `== 'success'` means
+    # "some cloud's lease succeeded", never "this leg's did". Observed live: one
+    # cloud's acquire failed on a transient TLS error and the aggregate then
+    # skipped the install for the two clouds whose leases HAD been taken — a run
+    # holding two tenants that installed onto neither.
+    #
+    # `always()` is what makes the widening actually do anything, and it is easy
+    # to omit: without a status-check function GitHub applies an implicit
+    # success() over every `needs` entry and skips the job BEFORE this `if:` is
+    # consulted, so a failed lease leg would still skip the install everywhere
+    # and the per-cloud verify step below would never run. Same shape and same
+    # reason as the e2e legs' gate — see test_e2e_tolerates_skipped_but_not_failed_prepare.
+    #
+    # Because always() lifts that implicit success(), discover-e2e and
+    # merge-e2e-image have to be named explicitly here; they were previously
+    # carried by the implicit check.
+    if: |
+      always() &&
+      inputs.install-app-to-tenant &&
+      needs.discover-e2e.result == 'success' &&
+      needs.merge-e2e-image.result == 'success' &&
+      needs.lease-tenant.result != 'skipped'
     strategy:
       # One cloud's tenant being uninstallable must not cancel the others; the
       # legs for that cloud fail on their own version check.
@@ -1194,15 +1216,48 @@ jobs:
       # fetched. Sparse + pinned to job.workflow_sha for the same reason as the
       # equivalent checkout in the e2e job: a PR editing these scripts must run
       # its own version, not main's.
+      #
+      # The lease driver is fetched here too, and the lease check below invokes it
+      # directly rather than through the composite action. `uses:` cannot take an
+      # expression, so an action reference can only ever be @main — which means a
+      # PR that adds a mode to the driver would call a main that does not have it
+      # yet and die at argument parsing, and a PR that changes the driver would
+      # silently exercise main's copy instead of its own. Both directions of that
+      # stale window are closed by running the checked-out driver.
       - name: Fetch SDK CI scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/e2e-tenant-lease
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
+
+      # Before anything touches the tenant: confirm THIS leg holds THIS cloud's
+      # lease. The job's `if:` can only see the lease matrix aggregate, so it
+      # cannot tell "my cloud's lease succeeded" from "some cloud's did" — this is
+      # what makes the install's precondition true per cloud. Fails the leg rather
+      # than installing into a race.
+      #
+      # It follows the two checkouts because neither touches the tenant; nothing
+      # between here and the install may be reordered above it.
+      - name: Confirm this run holds the tenant lease
+        env:
+          APP: ${{ inputs.app-name }}
+          CLOUD: ${{ matrix.cloud }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/actions/e2e-tenant-lease/e2e_tenant_lease.py \
+            --mode verify \
+            --repo "$GITHUB_REPOSITORY" \
+            --app "$APP" \
+            --cloud "$CLOUD" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
 
       # Two invocations, mask pass first — see the equivalent step in the e2e job
       # for why registering the matrix blob as a secret does not redact the values

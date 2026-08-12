@@ -250,7 +250,152 @@ def test_prepare_tenant_is_gated_on_the_lease(jobs: dict) -> None:  # type: igno
     # Installing without the lease is precisely the race the lease closes, so
     # this is a gate and not merely an ordering edge.
     assert "lease-tenant" in jobs["prepare-tenant"]["needs"]
-    assert "needs.lease-tenant.result == 'success'" in jobs["prepare-tenant"]["if"]
+    assert "needs.lease-tenant.result != 'skipped'" in jobs["prepare-tenant"]["if"]
+
+
+def test_prepare_tenant_confirms_its_own_clouds_lease_before_installing(
+    jobs: dict,  # type: ignore[type-arg]
+) -> None:
+    """The job's `if:` can only see the lease matrix AGGREGATE, so it cannot tell
+    "my cloud's lease succeeded" from "some cloud's did". Observed live: one
+    cloud's acquire failed on a transient TLS error and the aggregate skipped the
+    install for the two clouds whose leases HAD been taken — a run holding two
+    tenants that installed onto neither.
+
+    So the gate is widened to "the lease job ran" and each leg confirms its own
+    tenant. That verify step must come FIRST, before anything touches the tenant.
+    """
+    steps = jobs["prepare-tenant"]["steps"]
+    verify_at = _index_of(steps, "e2e_tenant_lease.py")
+    assert verify_at is not None, (
+        "prepare-tenant no longer confirms it holds its cloud's lease, so the "
+        "install's precondition is back to the matrix aggregate"
+    )
+    assert "--mode verify" in steps[verify_at]["run"]
+    assert steps[verify_at]["env"]["CLOUD"] == "${{ matrix.cloud }}"
+    assert steps[verify_at]["env"]["APP"] == "${{ inputs.app-name }}"
+
+    # Every step before it must be inert with respect to the tenant. Checkouts
+    # qualify; anything that resolves credentials, publishes or installs does not.
+    for step in steps[:verify_at]:
+        assert "checkout" in str(step.get("uses", "")), (
+            f"{step.get('name') or step.get('uses')} runs before the lease is "
+            "confirmed; only steps that cannot touch the tenant may precede it"
+        )
+
+
+def test_prepare_tenant_verifies_with_its_own_driver_not_mains(jobs: dict) -> None:  # type: ignore[type-arg]
+    """`uses:` cannot take an expression, so an action reference is always @main.
+
+    That opens a stale window in both directions: a PR adding a mode to the driver
+    would call a main without it and die at argument parsing, and a PR changing the
+    driver would exercise main's copy rather than its own. Invoking the driver
+    checked out at job.workflow_sha closes both, and is the pattern the sibling
+    SDK scripts in this job already use.
+    """
+    steps = jobs["prepare-tenant"]["steps"]
+    checkout_at = _index_of(steps, "application-sdk-scripts")
+    verify_at = _index_of(steps, "e2e_tenant_lease.py")
+    assert checkout_at is not None and verify_at is not None
+    assert checkout_at < verify_at, "the driver must be fetched before it is run"
+
+    fetch = steps[checkout_at]
+    assert fetch["with"]["ref"] == "${{ job.workflow_sha }}"
+    assert ".github/actions/e2e-tenant-lease" in fetch["with"]["sparse-checkout"], (
+        "the sparse checkout must include the lease action, or the verify step "
+        "cannot run this ref's driver"
+    )
+    assert (
+        "application-sdk-scripts/.github/actions/e2e-tenant-lease"
+        in (steps[verify_at]["run"])
+    )
+
+
+def _index_of(steps: list, needle: str) -> int | None:  # type: ignore[type-arg]
+    for index, step in enumerate(steps):
+        haystack = (
+            f"{step.get('uses', '')} {step.get('run', '')} {step.get('with', {})}"
+        )
+        if needle in haystack:
+            return index
+    return None
+
+
+def test_prepare_tenant_overrides_the_implicit_success_over_needs(jobs: dict) -> None:  # type: ignore[type-arg]
+    """Without a status-check function the widened gate below is INERT.
+
+    GitHub applies an implicit success() over every `needs` entry and skips the
+    job before the `if:` is consulted, so on a failed lease leg prepare-tenant
+    would still be skipped for every cloud and the per-cloud verify step would
+    never run — the exact misbehaviour the widening exists to fix, passing its own
+    expression test because a pure evaluator cannot model a needs-level skip.
+
+    This is the same assertion `test_e2e_tolerates_skipped_but_not_failed_prepare`
+    already makes for the legs. It is here because the gap it catches shipped once.
+    """
+    condition = " ".join(jobs["prepare-tenant"]["if"].split())
+    assert "always()" in condition or "!cancelled()" in condition, (
+        "prepare-tenant's `if:` has no status-check function, so GitHub's "
+        "implicit success() over `needs` skips the job whenever ANY lease leg "
+        "fails. The `!= 'skipped'` clause is dead without it."
+    )
+
+
+def test_prepare_tenant_names_every_need_it_requires(jobs: dict) -> None:  # type: ignore[type-arg]
+    """always() lifts the implicit success() over ALL needs, so anything that must
+    have succeeded has to be named — otherwise widening the lease gate silently
+    also stopped requiring discovery and the image."""
+    condition = " ".join(jobs["prepare-tenant"]["if"].split())
+    for job in ("discover-e2e", "merge-e2e-image"):
+        assert f"needs.{job}.result == 'success'" in condition, (
+            f"missing `needs.{job}.result == 'success'`. With always() present, "
+            "this is the only thing still requiring it."
+        )
+
+
+@pytest.mark.parametrize(
+    ("lease_result", "should_install"),
+    [
+        ("success", True),
+        # The case that was broken: another cloud's lease failed. This leg must
+        # still get the chance to install, and its verify step decides.
+        ("failure", True),
+        ("cancelled", True),
+        ("skipped", False),
+    ],
+)
+def test_install_runs_whenever_the_lease_job_ran(
+    lease_result: str, should_install: bool
+) -> None:
+    """Note the limit of this test, which is why the two above it exist: the
+    evaluator models the `if:` expression only, not GitHub's needs-level skip. It
+    passed on a gate that could never actually run."""
+    expression = _load_gate("prepare-tenant")
+    contexts = {
+        "inputs": {"install-app-to-tenant": True},
+        "needs": {
+            "discover-e2e": {"result": "success"},
+            "merge-e2e-image": {"result": "success"},
+            "lease-tenant": {"result": lease_result},
+        },
+    }
+    assert evaluate(expression, contexts) is should_install
+
+
+@pytest.mark.parametrize("blocker", ["discover-e2e", "merge-e2e-image"])
+def test_install_does_not_run_without_its_upstreams(blocker: str) -> None:
+    # always() would otherwise let the install proceed with no image to install.
+    expression = _load_gate("prepare-tenant")
+    contexts = {
+        "inputs": {"install-app-to-tenant": True},
+        "needs": {
+            "discover-e2e": {"result": "success"},
+            "merge-e2e-image": {"result": "success"},
+            "lease-tenant": {"result": "success"},
+        },
+    }
+    contexts["needs"][blocker] = {"result": "failure"}
+    assert evaluate(expression, contexts) is False
 
 
 def test_the_legs_refuse_to_run_on_a_failed_lease(jobs: dict) -> None:  # type: ignore[type-arg]
