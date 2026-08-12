@@ -424,12 +424,13 @@ jobs:
   #     build-sdk-base-image is skipped here, so base_image_ref is omitted
   #     and connectors build FROM the released base.
   #   pull_request + 'e2e' label — opt-in during PR development; also used
-  #     to release-gate the release PR before merging. The connector-side
-  #     e2e job serialises itself via its own concurrency group — but that
-  #     serialisation is one-deep, not a queue: GitHub holds a single pending
-  #     run per group, so a THIRD simultaneous e2e-labelled PR evicts the
-  #     waiting one as `cancelled`. Keep concurrent e2e-labelled PRs to two
-  #     until that path has a real lease (see FND-218).
+  #     to release-gate the release PR before merging. Tenant access on the
+  #     connector side is serialised by the (app, cloud) lease in
+  #     tests-reusable's lease-tenant job, which is a real queue: concurrent
+  #     e2e-labelled PRs wait their turn instead of the third one being
+  #     silently evicted as `cancelled` (FND-218 / FND-250). No cap on how
+  #     many can be in flight — a run that waits longer than the lease budget
+  #     fails saying the tenant was busy, naming the run that holds it.
   #     On this path base_image_ref is the freshly-built PR base image, so
   #     the connector is rebuilt on top of the SDK PR's runtime image.
   connector-tests:

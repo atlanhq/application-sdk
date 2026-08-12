@@ -1,0 +1,151 @@
+name: E2E tenant lease
+description: |
+  Acquire or release the (app, cloud) tenant lease that serialises e2e runs
+  against a shared tenant, replacing the ref-keyed concurrency groups that could
+  only hold one pending run and silently evicted the rest (FND-218 / FND-250).
+
+  Exclusion is an atomic compare-and-swap: one fixed-name ref per tenant, where
+  GitHub's 422 on creating a ref that already exists IS the lock. Consumed at
+  @main by every contender ON PURPOSE — they all have to agree on that ref name,
+  so the protocol must not vary with whichever ref a caller happened to check
+  out. See e2e_tenant_lease.py, including why an ordered ticket queue was tried
+  first and does not work.
+
+  Requires `contents: write` (to create and delete the ticket ref) and
+  `actions: read` (to tell a live holder from a dead one). Without them the
+  action warns and disables the lease rather than failing — each e2e leg
+  re-asserts the installed version independently (FND-31), so the lease reduces
+  contention rather than being the thing that makes a wrong-version run
+  detectable.
+
+inputs:
+  mode:
+    description: |
+      "acquire", "verify" or "release".
+
+      "verify" confirms this run currently holds the lease and fails the step if
+      not. It exists because a matrix job cannot depend on its own leg of an
+      upstream matrix job — `needs.lease-tenant.result` is the AGGREGATE across
+      clouds, so it says "some cloud's lease succeeded", never "mine did". The
+      install therefore gates on the lease job having RUN and confirms its own
+      tenant with this.
+    required: true
+  app:
+    description: App under test; one half of the lease key.
+    required: true
+  cloud:
+    description: |
+      Cloud whose tenant this is; the other half of the lease key. Empty is
+      valid and means the single-tenant fallback path, keyed as "default".
+    required: false
+    default: ""
+  wait-seconds:
+    description: |
+      How long to queue for the tenant before giving up. Default 90min: long
+      enough to sit behind one full install-plus-legs run ahead in the queue,
+      short enough that a wedged tenant is reported the same working day.
+    required: false
+    default: "5400"
+  poll-seconds:
+    description: |
+      Gap between attempts. A waiting pass costs TWO API calls (read the lease
+      ref; check the holding run's status — the holder record is memoised by the
+      ref's target sha), and FOUR on the pass that takes the lease (plus a fifth
+      to reap a dead holder).
+
+      That budget is 1000 requests/hour per REPOSITORY, and every matrix leg of
+      every concurrent run shares it. So raise this rather than lower it when
+      several clouds contend: at 30s, one leg waiting the full 90min budget draws
+      ~360 calls, and three clouds waiting together draw ~1080 over that 90
+      minutes — about 720/hour, which is close enough to the ceiling to matter
+      once the rest of the run's API use is counted.
+
+      A rate-limit 403 no longer disables the lease: it is told apart from a
+      permission 403, backs off (honouring Retry-After), and fails loudly if it
+      never clears. Staying inside the budget is still much better than relying
+      on that.
+    required: false
+    default: "30"
+  ttl-seconds:
+    description: |
+      How long a holder may HOLD the lease before a waiter treats it as wedged
+      and breaks it. Measured from the acquisition time the holder recorded in
+      its own holder record — so it is lease-hold time, not run age, and none of
+      the pre-lease span (discovery, image build, manifest merge, runner queue
+      time) counts against it.
+
+      Must exceed the longest legitimate hold: the install plus the leg ceiling.
+      Sized against the workflow's own job timeouts by a test, so raising either
+      forces this up rather than silently eating the margin. Errs long on
+      purpose — breaking a live holder's lease puts a second installer on the
+      tenant, which is the race the lease exists to close, whereas breaking one
+      late costs a blocked tenant that a waiter is already reporting loudly.
+      0 disables the backstop.
+    required: false
+    default: "14400"
+  on-timeout:
+    description: |
+      "fail" (default) — go red naming the holding run. "warn" — proceed
+      unserialised.
+    required: false
+    default: fail
+
+outputs:
+  acquired:
+    description: '"true" only when this run now holds the lease.'
+    value: ${{ steps.lease.outputs.acquired }}
+  state:
+    description: |
+      "acquired"; "disabled" (no ref-write permission — the run proceeds
+      unserialised); "timeout" (the tenant stayed busy); or "rate-limited" (the
+      API never cleared, which fails rather than proceeding unserialised).
+
+      Worth asserting in anger rather than trusting a green job: "disabled" is a
+      deliberate fail-open, so a lease that is not working at all still leaves
+      the job green with only a warning.
+    value: ${{ steps.lease.outputs.state }}
+  lease-ref:
+    description: The tenant's lease ref this run raced for.
+    value: ${{ steps.lease.outputs.lease-ref }}
+  holder-run-id:
+    description: The run holding the lease when this one gave up waiting; else empty.
+    value: ${{ steps.lease.outputs.holder-run-id }}
+
+runs:
+  using: composite
+  steps:
+    - name: ${{ inputs.mode == 'release' && 'Release' || inputs.mode == 'verify' && 'Confirm' || 'Acquire' }} the tenant lease
+      id: lease
+      shell: bash
+      # Inputs routed through env rather than inline ${{ }} so nothing
+      # interpolates into the command line (docs/standards/ci.md).
+      env:
+        MODE: ${{ inputs.mode }}
+        APP: ${{ inputs.app }}
+        CLOUD: ${{ inputs.cloud }}
+        WAIT_SECONDS: ${{ inputs.wait-seconds }}
+        POLL_SECONDS: ${{ inputs.poll-seconds }}
+        TTL_SECONDS: ${{ inputs.ttl-seconds }}
+        ON_TIMEOUT: ${{ inputs.on-timeout }}
+        # The lease lives in the repository the run belongs to. Every run that
+        # contends for a given app's tenant runs there too — a connector PR, a
+        # push, and a cross-repo dispatch from application-sdk all execute in the
+        # app repo. (The one exception, application-sdk's manual install
+        # workflow, is outside the lease domain: see FND-254.)
+        LEASE_REPO: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        python3 "${{ github.action_path }}/e2e_tenant_lease.py" \
+          --mode "$MODE" \
+          --repo "$LEASE_REPO" \
+          --app "$APP" \
+          --cloud "$CLOUD" \
+          --run-id "$RUN_ID" \
+          --run-attempt "$RUN_ATTEMPT" \
+          --wait-seconds "$WAIT_SECONDS" \
+          --poll-seconds "$POLL_SECONDS" \
+          --ttl-seconds "$TTL_SECONDS" \
+          --on-timeout "$ON_TIMEOUT"

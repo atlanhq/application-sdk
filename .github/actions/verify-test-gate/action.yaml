@@ -53,10 +53,19 @@ inputs:
       build-e2e-image-result.
     required: false
     default: skipped
+  lease-tenant-result:
+    description: |
+      needs.lease-tenant.result (queues for the shared (app, cloud) tenant
+      before anything installs onto it). A failure here means the tenant was
+      busy, not that the change is broken, so it must be named rather than left
+      to surface as the downstream "matrix skipped" anomaly (FND-250). Same
+      reasoning and same default as build-e2e-image-result.
+    required: false
+    default: skipped
   prepare-tenant-result:
     description: |
       needs.prepare-tenant.result (installs the image under test onto each
-      cloud's tenant). The last of the three install-path jobs the e2e matrix
+      cloud's tenant). The last of the four install-path jobs the e2e matrix
       gates on. Same reasoning and same default as build-e2e-image-result.
     required: false
     default: skipped
@@ -110,6 +119,7 @@ runs:
         DISCOVER_E2E_RESULT: ${{ inputs.discover-e2e-result }}
         BUILD_E2E_IMAGE_RESULT: ${{ inputs.build-e2e-image-result }}
         MERGE_E2E_IMAGE_RESULT: ${{ inputs.merge-e2e-image-result }}
+        LEASE_TENANT_RESULT: ${{ inputs.lease-tenant-result }}
         PREPARE_TENANT_RESULT: ${{ inputs.prepare-tenant-result }}
         E2E_RESULT: ${{ inputs.e2e-result }}
       run: |
@@ -122,5 +132,6 @@ runs:
           --discover-e2e "$DISCOVER_E2E_RESULT" \
           --build-e2e-image "$BUILD_E2E_IMAGE_RESULT" \
           --merge-e2e-image "$MERGE_E2E_IMAGE_RESULT" \
+          --lease-tenant "$LEASE_TENANT_RESULT" \
           --prepare-tenant "$PREPARE_TENANT_RESULT" \
           --e2e "$E2E_RESULT" >> "$GITHUB_OUTPUT"
