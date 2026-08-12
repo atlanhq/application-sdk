@@ -358,6 +358,8 @@ extend-select = [
 "application_sdk/testing/integration/models.py" = ["E402"]
 # Post-importorskip imports required so the test module skips cleanly when rocksdict is absent.
 "tests/unit/common/test_spillable_dict.py" = ["E402"]
+# sys.path bootstrap required so the test module can import the sibling script it tests.
+".github/scripts/tests/test_fetch_dataforge_source.py" = ["E402"]
 
 [tool.uv]
 default-groups = ["dev", "test"]
