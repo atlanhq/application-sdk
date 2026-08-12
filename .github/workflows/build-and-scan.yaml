@@ -172,8 +172,8 @@ jobs:
 
       - name: Install Trivy
         # Install via the official setup-trivy action with a PINNED version —
-        # the same recipe already used by scheduled-trivy-scan.yml and the
-        # sdk-trivy-scan composite (same action SHA, same v0.70.0 pin). This
+        # the same recipe already used by the sdk-trivy-scan composite (same
+        # action SHA, same v0.70.0 pin). This
         # replaces a hand-rolled install that resolved the version from
         # api.github.com/.../trivy/releases/latest at scan time: when that call
         # returned anything but the expected JSON (a transient GitHub API 5xx,

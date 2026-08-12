@@ -58,17 +58,19 @@ EXEMPT = {
     ): "manually dispatched report; not on a PR or merge_group path",
 }
 
-# Files that are not valid YAML today, so their steps cannot be inspected.
-# This is a quarantine list, not an allowance: the test below asserts it does not
-# grow, and each entry is a bug to fix rather than a shape to copy.
+# Files that are not valid YAML, so their steps cannot be inspected. Empty, and
+# meant to stay that way: an unparseable workflow is invisible to every guard in
+# this suite, and GitHub cannot run it either. Kept as a mechanism rather than
+# deleted because `test_no_new_unparseable_workflow_yaml` asserts in both
+# directions — nothing new may land here, and anything listed that starts parsing
+# (or is removed from the repo) must be taken off the list.
 #
-# scheduled-trivy-scan.yml: the `read -r -d '' DESCRIPTION << DESC_EOF` heredoc
-# body sits at column 0, which terminates the enclosing `run: |` block scalar, so
-# the markdown after it parses as YAML (`**Service:**` reads as an alias). GitHub
-# cannot parse it either — it lists the workflow by path instead of by `name:`
-# and every run fails. It has no upload-artifact step, so nothing is skipped
-# here by quarantining it.
-UNPARSEABLE = {"workflows/scheduled-trivy-scan.yml"}
+# Its one occupant, scheduled-trivy-scan.yml, was deleted rather than repaired:
+# it had never parsed since being added, so its scan had never run once, and
+# `daily-security-scan.yml` already covers the same image + deps scan hourly with
+# CVE dedup. Repairing the YAML would have activated a duplicate ticket-filing
+# scan that has no dedup of its own.
+UNPARSEABLE: set[str] = set()
 
 
 def _yaml_files() -> list[Path]:
