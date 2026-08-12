@@ -717,6 +717,12 @@ _EARLY_CHECK = "Require the tenant matrix on the install path"
 #: ever sees whether the secret exists.
 _LATE_CHECK = "Require a tenant ID before publishing anything"
 
+#: The distinct-id breadcrumb, the one step allowed to precede the early check.
+#: It is a free ``echo`` — the workflow header comment names it as the only thing
+#: ahead of the gate, so a costly ``run:`` inserted before the check must trip the
+#: placement test rather than slip past a narrower first-``uses:`` comparison.
+_DISTINCT_ID_BREADCRUMB = "distinct-id ${{ inputs.distinct-id }}"
+
 
 def _named_step(jobs: dict, job: str, name: str) -> dict:  # type: ignore[type-arg]
     matches = [s for s in jobs[job]["steps"] if str(s.get("name", "")) == name]
@@ -762,10 +768,39 @@ def test_the_install_path_precondition_is_checked_at_discovery(jobs: dict) -> No
     )
 
 
+@pytest.mark.parametrize("install", [True, False])
+@pytest.mark.parametrize("signal", ["", "true"])
+def test_the_early_check_fires_only_on_the_install_path_without_a_matrix(
+    jobs: dict,  # type: ignore[type-arg]
+    install: bool,
+    signal: str,
+) -> None:
+    """The full condition, evaluated — substring asserts cannot see a broken gate.
+
+    Matching on the two operand substrings stays green under an edit that keeps
+    both while wrecking the logic (an appended ``|| true``, regrouped operators).
+    Evaluating the whole expression across the install × signal truth table pins
+    what the gate actually does: fire only when installing with no matrix.
+    """
+    step = _named_step(jobs, "discover-e2e", _EARLY_CHECK)
+    fires = evaluate(
+        step["if"],
+        {
+            "inputs": {"install-app-to-tenant": install},
+            "env": {"HAS_TENANT_MATRIX": signal},
+        },
+    )
+    assert fires is (install and signal == "")
+
+
 def test_the_early_check_precedes_every_step_that_costs_anything(jobs: dict) -> None:  # type: ignore[type-arg]
     """Placement is the entire value: a correct check in the wrong place saves
     nothing. It must precede the checkout and both discovery invocations, so the
-    job fails in seconds rather than after the tree is fetched and globbed."""
+    job fails in seconds rather than after the tree is fetched and globbed.
+
+    Measuring only against the first ``uses:`` step would miss a costly ``run:``
+    step inserted ahead of the check, so everything before it must be the named
+    distinct-id breadcrumb — the one free ``echo`` the workflow header allows."""
     steps = jobs["discover-e2e"]["steps"]
     labels = [str(step.get("name") or step.get("uses", "")) for step in steps]
     position = labels.index(_EARLY_CHECK)
@@ -777,6 +812,16 @@ def test_the_early_check_precedes_every_step_that_costs_anything(jobs: dict) -> 
         f"the early check runs after {labels[first_uses]!r}; it needs no checkout "
         "and no action, so nothing may precede it except the distinct-id breadcrumb"
     )
+
+    preceding = steps[:position]
+    assert [str(step.get("name", "")) for step in preceding] == [
+        _DISTINCT_ID_BREADCRUMB
+    ], (
+        "a step that is not the distinct-id breadcrumb runs before the early "
+        "check; anything with a `uses:` or a costly `run:` ahead of it delays the "
+        "failure past the point where it saves the two image builds"
+    )
+
     for later in ("Discover suites", "Discover clouds"):
         assert position < labels.index(later)
 
