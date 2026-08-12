@@ -459,7 +459,7 @@ jobs:
                       tool_versions.add(driver["version"])
 
                   # Build rule catalog from the embedded descriptors — carry
-                  # tier/category/series/since/description/rationale so
+                  # tier/impact/category/series/since/description/rationale so
                   # connector-pulse never needs to re-fetch the rule metadata
                   # (or bundle its own static copy) separately.
                   for rule in driver.get("rules", []):
@@ -469,6 +469,7 @@ jobs:
                           rule_catalog[rid] = {
                               "name":             rule.get("name", ""),
                               "tier":             props.get("atlan/tier", ""),
+                              "impact":           props.get("atlan/impact", ""),
                               "category":         props.get("atlan/category", ""),
                               "series":           props.get("atlan/series", ""),
                               "since":            props.get("atlan/since", ""),

@@ -5,6 +5,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    RuleImpact,
     RuleMechanism,
     RuleScope,
 )
@@ -16,6 +17,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="UnpinnedActionReference",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.CUSTOMER,
         category="supply-chain",
         autofixable=True,
         orthogonal_gate="skip",
@@ -43,6 +45,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="BootstrapWorkflowDrift",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.OPERATIONAL,
         category="ci-consistency",
         autofixable=True,
         orthogonal_gate="skip",
@@ -70,6 +73,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="GitignoreMissingEntry",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.HYGIENE,
         category="ci-consistency",
         # False rather than a per-finding-shape split: this ID covers two
         # cases with different remediability (see full_description) — the

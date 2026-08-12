@@ -98,6 +98,34 @@ class RuleScope(str, Enum):
 # ---------------------------------------------------------------------------
 
 
+class RuleImpact(str, Enum):
+    """Customer-impact criticality of a rule (FND-221).
+
+    Orthogonal to :class:`EnforcementTier`: tier is the *enforcement lifecycle*
+    (new rules land WARN and graduate to BLOCK), impact is the *severity of the
+    behaviour the rule guards against*.  A warn-tier rule can carry customer
+    impact — the tier only says the gate doesn't fail on it yet.
+
+    * ``CUSTOMER`` — the violated pattern's direct failure mode is
+      customer-visible: silent data loss or wrong metadata, a production crash
+      or stuck workflow, or a security exposure (leaked/hardcoded credential,
+      supply-chain, root container).
+    * ``OPERATIONAL`` — no direct customer path, but degrades reliability work:
+      blinds incident response (lost tracebacks, unlogged errors) or breaks the
+      release/publish pipeline; indirect customer impact.
+    * ``HYGIENE`` — style, performance, or consistency; no plausible
+      customer-facing path.
+
+    Surfaced as ``atlan/impact`` in SARIF rule properties and rolled up on the
+    Fleet Drift conformance dashboard ("which violations can become customer
+    issues, and how many apps are exposed?").
+    """
+
+    CUSTOMER = "customer"
+    OPERATIONAL = "operational"
+    HYGIENE = "hygiene"
+
+
 class Disposition(str, Enum):
     """The three-state outcome for a single conformance result.
 

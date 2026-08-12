@@ -13,24 +13,24 @@ Suppress a finding on the violating line or the line directly above it:
 # conformance: ignore[D002] intentional: pinned to pre-release for hotfix
 ```
 
-| ID | Name | Tier | Scope | Category | Autofixable | Since |
-|---|---|---|---|---|---|---|
-| [D001](#d001) | `UnpinnedSdkDependency` | `block` | `app` | `dependency-pinning` | yes | 0.4.0 |
-| [D002](#d002) | `RedeclaredSdkManagedDependency` | `warn` | `app` | `dependency-pinning` | yes | 0.4.0 |
-| [D003](#d003) | `UnusedDependency` | `warn` | `both` | `dependency-hygiene` | — | 0.5.0 |
-| [D004](#d004) | `RedeclaredSdkManagedDependencyInGroups` | `warn` | `app` | `dependency-pinning` | yes | 0.5.0 |
-| [D005](#d005) | `UnknownSdkExtra` | `warn` | `app` | `dependency-pinning` | — | 0.5.0 |
-| [D006](#d006) | `IncompatibleRequiresPython` | `warn` | `app` | `python-version` | yes | 0.5.0 |
-| [D007](#d007) | `NonStandardBuildBackend` | `warn` | `app` | `build-system` | yes | 0.5.0 |
-| [D008](#d008) | `WeakenedTypeChecking` | `warn` | `app` | `tooling-baseline` | yes | 0.5.0 |
-| [D009](#d009) | `RemoteDaprComponentFetch` | `block` | `app` | `dapr-components` | yes | 0.12.0 |
-| [D010](#d010) | `QueryTransformerWithoutDuckdb` | `warn` | `app` | `runtime-dependencies` | — | 0.18.0 |
+| ID | Name | Tier | Impact | Scope | Category | Autofixable | Since |
+|---|---|---|---|---|---|---|---|
+| [D001](#d001) | `UnpinnedSdkDependency` | `block` | `operational` | `app` | `dependency-pinning` | yes | 0.4.0 |
+| [D002](#d002) | `RedeclaredSdkManagedDependency` | `warn` | `hygiene` | `app` | `dependency-pinning` | yes | 0.4.0 |
+| [D003](#d003) | `UnusedDependency` | `warn` | `hygiene` | `both` | `dependency-hygiene` | — | 0.5.0 |
+| [D004](#d004) | `RedeclaredSdkManagedDependencyInGroups` | `warn` | `hygiene` | `app` | `dependency-pinning` | yes | 0.5.0 |
+| [D005](#d005) | `UnknownSdkExtra` | `warn` | `hygiene` | `app` | `dependency-pinning` | — | 0.5.0 |
+| [D006](#d006) | `IncompatibleRequiresPython` | `warn` | `operational` | `app` | `python-version` | yes | 0.5.0 |
+| [D007](#d007) | `NonStandardBuildBackend` | `warn` | `hygiene` | `app` | `build-system` | yes | 0.5.0 |
+| [D008](#d008) | `WeakenedTypeChecking` | `warn` | `hygiene` | `app` | `tooling-baseline` | yes | 0.5.0 |
+| [D009](#d009) | `RemoteDaprComponentFetch` | `block` | `customer` | `app` | `dapr-components` | yes | 0.12.0 |
+| [D010](#d010) | `QueryTransformerWithoutDuckdb` | `warn` | `customer` | `app` | `runtime-dependencies` | — | 0.18.0 |
 
 ---
 
 ## D001 — `UnpinnedSdkDependency` {#d001}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
+**Tier:** `block` · **Impact:** `operational` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Application SDK dependency is missing or its version specifier is not bounded on both ends
 
@@ -49,7 +49,7 @@ the SDK are also exempt — packages whose `[project].name` starts with
 
 ## D002 — `RedeclaredSdkManagedDependency` {#d002}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Dependency redeclared in the app's pyproject.toml is already managed by the SDK
 
@@ -70,7 +70,7 @@ the runtime environment, this rule is skipped silently.
 
 ## D003 — `UnusedDependency` {#d003}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `dependency-hygiene` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `both` · **Category:** `dependency-hygiene` · **Autofixable:** — · **Since:** 0.5.0
 
 > A package declared in [project.dependencies] is never imported in source
 
@@ -104,7 +104,7 @@ synced environment for this reason.  See BLDX-1462.
 
 ## D004 — `RedeclaredSdkManagedDependencyInGroups` {#d004}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.5.0
 
 > SDK-managed dependency redeclared in a [dependency-groups] table
 
@@ -125,7 +125,7 @@ this rule is skipped silently. Cite: BLDX-1410.
 
 ## D005 — `UnknownSdkExtra` {#d005}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** — · **Since:** 0.5.0
 
 > Reference to an atlan-application-sdk extra the SDK does not publish
 
@@ -145,7 +145,7 @@ findings route to residue rather than auto-fix.  Cite: BLDX-1410.
 
 ## D006 — `IncompatibleRequiresPython` {#d006}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `python-version` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `python-version` · **Autofixable:** yes · **Since:** 0.5.0
 
 > App requires-python lower bound is below the SDK's minimum supported Python version
 
@@ -165,7 +165,7 @@ from installed metadata, so this rule needs no resolved environment. Cite: BLDX-
 
 ## D007 — `NonStandardBuildBackend` {#d007}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `build-system` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `build-system` · **Autofixable:** yes · **Since:** 0.5.0
 
 > Build backend is not Hatchling
 
@@ -183,7 +183,7 @@ uniform; a different backend diverges from that baseline.  A pyproject with no
 
 ## D008 — `WeakenedTypeChecking` {#d008}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `tooling-baseline` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `tooling-baseline` · **Autofixable:** yes · **Since:** 0.5.0
 
 > pyright typeCheckingMode is weaker than the SDK baseline 'standard'
 
@@ -201,7 +201,7 @@ scope (they can be legitimate).  Cite: BLDX-1410.
 
 ## D009 — `RemoteDaprComponentFetch` {#d009}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dapr-components` · **Autofixable:** yes · **Since:** 0.12.0
+**Tier:** `block` · **Impact:** `customer` · **Scope:** `app` · **Category:** `dapr-components` · **Autofixable:** yes · **Since:** 0.12.0
 
 > A poe task fetches Dapr component YAMLs from GitHub instead of the installed application-sdk wheel
 
@@ -226,7 +226,7 @@ Docker build, where `uv sync` precedes `poe download-components`). Inline suppre
 
 ## D010 — `QueryTransformerWithoutDuckdb` {#d010}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `runtime-dependencies` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Impact:** `customer` · **Scope:** `app` · **Category:** `runtime-dependencies` · **Autofixable:** — · **Since:** 0.18.0
 
 > App imports the SDK query transformer but duckdb is not resolved (no [sql]/[incremental] extra, no direct dependency)
 

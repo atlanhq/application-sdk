@@ -21,56 +21,56 @@ When a domain series takes over an area, the rule is retired in place (kept docu
 no longer firing) and the new rule gets a fresh id — the original id is never reused or
 reassigned.
 
-| ID | Name | Tier | Scope | Category | Autofixable | Since |
-|---|---|---|---|---|---|---|
-| [P001](#p001) | `UnboundedContractFields` | `block` | `both` | `contract-payload-safety` | — | 0.3.0 |
-| [P002](#p002) | `CategoryFieldOverride` | `block` | `both` | `category-immutability` | — | 0.3.0 |
-| [P003](#p003) | `ErrorCodePrefixMismatch` | `block` | `both` | `error-code-shape` | — | 0.3.0 |
-| [P004](#p004) | `DirectTemporalImport` | `warn` | `app` | `orchestration-seam` | — | 0.5.0 |
-| [P005](#p005) | `PrivateOrchestrationInternalImport` | `warn` | `app` | `orchestration-seam` | — | 0.5.0 |
-| [P006](#p006) | `TemporalImportOutsideAdapter` | `warn` | `sdk` | `orchestration-seam` | — | 0.5.0 |
-| [P007](#p007) | `RawTemporalInPublicSurface` | `warn` | `sdk` | `orchestration-seam` | — | 0.5.0 |
-| [P008](#p008) | `FrameworkTransferInsideTask` | `warn` | `app` | `storage-seam` | — | 0.6.0 |
-| [P009](#p009) | `ManualObjectStoreConstruction` | `warn` | `app` | `storage-seam` | — | 0.6.0 |
-| [P010](#p010) | `ManualFileReferenceConstruction` | `warn` | `app` | `storage-seam` | — | 0.6.0 |
-| [P011](#p011) | `RawBytesInContract` | `warn` | `app` | `storage-seam` | — | 0.6.0 |
-| [P012](#p012) | `FilePathStringInContract` | `warn` | `app` | `storage-seam` | — | 0.6.0 |
-| [P013](#p013) | `UntypedEntrypointBoundary` | `block` | `app` | `typed-contract-boundary` | — | 0.6.0 |
-| [P014](#p014) | `UntypedTaskBoundary` | `block` | `app` | `typed-contract-boundary` | — | 0.6.0 |
-| [P015](#p015) | `UnmodeledBoundedContractField` | `warn` | `app` | `contract-modeling` | — | 0.6.0 |
-| [P016](#p016) | `EntryPointContractCodeDrift` | `block` | `app` | `entrypoint-alignment` | — | 0.6.0 |
-| [P017](#p017) | `ManualWorkerBootstrap` | `warn` | `app` | `entrypoint-conformance` | — | 0.6.0 |
-| [P018](#p018) | `ManualServerBootstrap` | `warn` | `app` | `entrypoint-conformance` | — | 0.6.0 |
-| [P019](#p019) | `RawHttpToAtlan` | `warn` | `both` | `client-seam` | — | 0.7.0 |
-| [P020](#p020) | `NonDeterministicPrimitiveInWorkflow` | `warn` | `both` | `determinism` | — | 0.8.0 |
-| [P021](#p021) | `SideEffectIoInWorkflow` | `warn` | `both` | `determinism` | — | 0.8.0 |
-| [P022](#p022) | `UnawaitedCoroutine` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
-| [P023](#p023) | `BlockingCallInAsyncDef` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
-| [P024](#p024) | `SyncAtlanClientInApp` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
-| [P025](#p025) | `AppNameContractCodeDrift` | `block` | `app` | `app-name-alignment` | — | 0.9.0 |
-| [P026](#p026) | `GetattrOnTypedContractField` | `warn` | `app` | `typed-contract-boundary` | — | 0.9.0 |
-| [P027](#p027) | `AppStateAsCrossTaskChannel` | `warn` | `app` | `state-seam` | — | 0.9.0 |
-| [P028](#p028) | `ManualQualifiedNameFString` | `warn` | `app` | `asset-modeling` | — | 0.9.0 |
-| [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
-| [P030](#p030) | `SdrUploadNotCalled` | `warn` | `app` | `sdr-readiness` | — | 0.9.0 |
-| [P031](#p031) | `SharedDefaultExecutorOffload` | `warn` | `both` | `async-correctness` | — | 0.13.0 |
-| [P032](#p032) | `ReservedPreflightActivityName` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
-| [P033](#p033) | `DuplicateInWorkflowPreflight` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
-| [P034](#p034) | `UntypedPreflightCheckFailure` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
-| [P035](#p035) | `PreflightMetadataContractParity` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
-| [P036](#p036) | `HandRolledProcessIsolation` | `warn` | `both` | `async-correctness` | — | 0.15.0 |
-| [P037](#p037) | `SdrAgentJsonNotConsumed` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
-| [P038](#p038) | `SdrArtifactMisrooted` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
-| [P039](#p039) | `SdrAgentJsonDroppedByInputContract` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
-| [P040](#p040) | `TransformTemplateReservedKeyword` | `warn` | `app` | `transform-templates` | — | 0.18.0 |
-| [P041](#p041) | `SdrHardPreflightGate` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
-| [P042](#p042) | `SdrHandRolledUploadBridge` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
+| ID | Name | Tier | Impact | Scope | Category | Autofixable | Since |
+|---|---|---|---|---|---|---|---|
+| [P001](#p001) | `UnboundedContractFields` | `block` | `customer` | `both` | `contract-payload-safety` | — | 0.3.0 |
+| [P002](#p002) | `CategoryFieldOverride` | `block` | `operational` | `both` | `category-immutability` | — | 0.3.0 |
+| [P003](#p003) | `ErrorCodePrefixMismatch` | `block` | `operational` | `both` | `error-code-shape` | — | 0.3.0 |
+| [P004](#p004) | `DirectTemporalImport` | `warn` | `hygiene` | `app` | `orchestration-seam` | — | 0.5.0 |
+| [P005](#p005) | `PrivateOrchestrationInternalImport` | `warn` | `hygiene` | `app` | `orchestration-seam` | — | 0.5.0 |
+| [P006](#p006) | `TemporalImportOutsideAdapter` | `warn` | `hygiene` | `sdk` | `orchestration-seam` | — | 0.5.0 |
+| [P007](#p007) | `RawTemporalInPublicSurface` | `warn` | `hygiene` | `sdk` | `orchestration-seam` | — | 0.5.0 |
+| [P008](#p008) | `FrameworkTransferInsideTask` | `warn` | `hygiene` | `app` | `storage-seam` | — | 0.6.0 |
+| [P009](#p009) | `ManualObjectStoreConstruction` | `warn` | `hygiene` | `app` | `storage-seam` | — | 0.6.0 |
+| [P010](#p010) | `ManualFileReferenceConstruction` | `warn` | `operational` | `app` | `storage-seam` | — | 0.6.0 |
+| [P011](#p011) | `RawBytesInContract` | `warn` | `customer` | `app` | `storage-seam` | — | 0.6.0 |
+| [P012](#p012) | `FilePathStringInContract` | `warn` | `customer` | `app` | `storage-seam` | — | 0.6.0 |
+| [P013](#p013) | `UntypedEntrypointBoundary` | `block` | `operational` | `app` | `typed-contract-boundary` | — | 0.6.0 |
+| [P014](#p014) | `UntypedTaskBoundary` | `block` | `operational` | `app` | `typed-contract-boundary` | — | 0.6.0 |
+| [P015](#p015) | `UnmodeledBoundedContractField` | `warn` | `hygiene` | `app` | `contract-modeling` | — | 0.6.0 |
+| [P016](#p016) | `EntryPointContractCodeDrift` | `block` | `operational` | `app` | `entrypoint-alignment` | — | 0.6.0 |
+| [P017](#p017) | `ManualWorkerBootstrap` | `warn` | `hygiene` | `app` | `entrypoint-conformance` | — | 0.6.0 |
+| [P018](#p018) | `ManualServerBootstrap` | `warn` | `hygiene` | `app` | `entrypoint-conformance` | — | 0.6.0 |
+| [P019](#p019) | `RawHttpToAtlan` | `warn` | `hygiene` | `both` | `client-seam` | — | 0.7.0 |
+| [P020](#p020) | `NonDeterministicPrimitiveInWorkflow` | `warn` | `customer` | `both` | `determinism` | — | 0.8.0 |
+| [P021](#p021) | `SideEffectIoInWorkflow` | `warn` | `customer` | `both` | `determinism` | — | 0.8.0 |
+| [P022](#p022) | `UnawaitedCoroutine` | `warn` | `customer` | `both` | `async-correctness` | — | 0.8.0 |
+| [P023](#p023) | `BlockingCallInAsyncDef` | `warn` | `operational` | `both` | `async-correctness` | — | 0.8.0 |
+| [P024](#p024) | `SyncAtlanClientInApp` | `warn` | `hygiene` | `both` | `async-correctness` | — | 0.8.0 |
+| [P025](#p025) | `AppNameContractCodeDrift` | `block` | `operational` | `app` | `app-name-alignment` | — | 0.9.0 |
+| [P026](#p026) | `GetattrOnTypedContractField` | `warn` | `hygiene` | `app` | `typed-contract-boundary` | — | 0.9.0 |
+| [P027](#p027) | `AppStateAsCrossTaskChannel` | `warn` | `operational` | `app` | `state-seam` | — | 0.9.0 |
+| [P028](#p028) | `ManualQualifiedNameFString` | `warn` | `customer` | `app` | `asset-modeling` | — | 0.9.0 |
+| [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `operational` | `app` | `sdr-readiness` | — | 0.9.0 |
+| [P030](#p030) | `SdrUploadNotCalled` | `warn` | `operational` | `app` | `sdr-readiness` | — | 0.9.0 |
+| [P031](#p031) | `SharedDefaultExecutorOffload` | `warn` | `hygiene` | `both` | `async-correctness` | — | 0.13.0 |
+| [P032](#p032) | `ReservedPreflightActivityName` | `warn` | `operational` | `app` | `preflight-gate` | — | 0.15.0 |
+| [P033](#p033) | `DuplicateInWorkflowPreflight` | `warn` | `operational` | `app` | `preflight-gate` | — | 0.15.0 |
+| [P034](#p034) | `UntypedPreflightCheckFailure` | `warn` | `operational` | `app` | `preflight-gate` | — | 0.15.0 |
+| [P035](#p035) | `PreflightMetadataContractParity` | `warn` | `operational` | `app` | `preflight-gate` | — | 0.15.0 |
+| [P036](#p036) | `HandRolledProcessIsolation` | `warn` | `hygiene` | `both` | `async-correctness` | — | 0.15.0 |
+| [P037](#p037) | `SdrAgentJsonNotConsumed` | `warn` | `operational` | `app` | `sdr-readiness` | — | 0.16.0 |
+| [P038](#p038) | `SdrArtifactMisrooted` | `warn` | `operational` | `app` | `sdr-readiness` | — | 0.16.0 |
+| [P039](#p039) | `SdrAgentJsonDroppedByInputContract` | `warn` | `operational` | `app` | `sdr-readiness` | — | 0.16.0 |
+| [P040](#p040) | `TransformTemplateReservedKeyword` | `warn` | `operational` | `app` | `transform-templates` | — | 0.18.0 |
+| [P041](#p041) | `SdrHardPreflightGate` | `warn` | `operational` | `app` | `sdr-readiness` | — | 0.18.0 |
+| [P042](#p042) | `SdrHandRolledUploadBridge` | `warn` | `operational` | `app` | `sdr-readiness` | — | 0.18.0 |
 
 ---
 
 ## P001 — `UnboundedContractFields` {#p001}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `contract-payload-safety` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Impact:** `customer` · **Scope:** `both` · **Category:** `contract-payload-safety` · **Autofixable:** — · **Since:** 0.3.0
 
 > Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety
 
@@ -95,7 +95,7 @@ sanctioned use is the justified inline suppression above — see BLDX-1428.
 
 ## P002 — `CategoryFieldOverride` {#p002}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `category-immutability` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Impact:** `operational` · **Scope:** `both` · **Category:** `category-immutability` · **Autofixable:** — · **Since:** 0.3.0
 
 > AppError subclass redeclares the `category` ClassVar — drifts the canonical taxonomy
 
@@ -126,7 +126,7 @@ sanctioned use is the justified inline suppression `# conformance: ignore[P002]
 
 ## P003 — `ErrorCodePrefixMismatch` {#p003}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `error-code-shape` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Impact:** `operational` · **Scope:** `both` · **Category:** `error-code-shape` · **Autofixable:** — · **Since:** 0.3.0
 
 > AppError subclass code missing or doesn't start with the parent leaf's category prefix
 
@@ -153,7 +153,7 @@ typed-error-prescription §4 and BLDX-1431.
 
 ## P004 — `DirectTemporalImport` {#p004}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
 
 > App imports 'temporalio' directly instead of the SDK orchestration seam
 
@@ -179,7 +179,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P005 — `PrivateOrchestrationInternalImport` {#p005}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
 
 > App imports SDK-private orchestration internals instead of the public seam
 
@@ -204,7 +204,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P006 — `TemporalImportOutsideAdapter` {#p006}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `sdk` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
 
 > SDK imports 'temporalio' outside the execution/_temporal adapter
 
@@ -230,7 +230,7 @@ refactored.  Suppress a deliberate exception with `# conformance: ignore[P006]
 
 ## P007 — `RawTemporalInPublicSurface` {#p007}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `sdk` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
 
 > SDK public API re-exports or exposes a raw 'temporalio' type
 
@@ -254,7 +254,7 @@ Suppress a reviewed exception with `# conformance: ignore[P007] <reason>`.
 
 ## P008 — `FrameworkTransferInsideTask` {#p008}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
 
 > App calls self.upload()/self.download() inside a @task method
 
@@ -286,7 +286,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P009 — `ManualObjectStoreConstruction` {#p009}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
 
 > App constructs its own cloud client or object store instead of the SDK storage seam
 
@@ -314,7 +314,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P010 — `ManualFileReferenceConstruction` {#p010}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
 
 > FileReference constructed with SDK-managed durability fields (storage_path/is_durable/file_count)
 
@@ -341,7 +341,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P011 — `RawBytesInContract` {#p011}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Impact:** `customer` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
 
 > Input/Output contract field annotated bytes/bytearray/memoryview — risks the 2MB payload limit
 
@@ -368,7 +368,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P012 — `FilePathStringInContract` {#p012}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Impact:** `customer` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
 
 > Input/Output contract field is a `str` path that should be a durable FileReference
 
@@ -398,7 +398,7 @@ visible in SARIF.
 
 ## P013 — `UntypedEntrypointBoundary` {#p013}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `block` · **Impact:** `operational` · **Scope:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** — · **Since:** 0.6.0
 
 > @entrypoint (or implicit run()) input/output is not an SDK Input/Output subclass
 
@@ -429,7 +429,7 @@ conformance: ignore[P013] <reason>` at the method definition.
 
 ## P014 — `UntypedTaskBoundary` {#p014}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `block` · **Impact:** `operational` · **Scope:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** — · **Since:** 0.6.0
 
 > @task input/output is not an SDK Input/Output subclass
 
@@ -459,7 +459,7 @@ conformance: ignore[P014] <reason>` at the method definition.
 
 ## P015 — `UnmodeledBoundedContractField` {#p015}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-modeling` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `contract-modeling` · **Autofixable:** — · **Since:** 0.6.0
 
 > Input/Output contract field uses a container of primitives/Any — replace with a typed nested model
 
@@ -492,7 +492,7 @@ conformance: ignore[P015] <reason>` when a typed replacement is not feasible.
 
 ## P016 — `EntryPointContractCodeDrift` {#p016}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `entrypoint-alignment` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `block` · **Impact:** `operational` · **Scope:** `app` · **Category:** `entrypoint-alignment` · **Autofixable:** — · **Since:** 0.6.0
 
 > Entry-point names in @entrypoint code do not match app/generated/ contract dirs
 
@@ -567,7 +567,7 @@ stays visible in SARIF.
 
 ## P017 — `ManualWorkerBootstrap` {#p017}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `entrypoint-conformance` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `entrypoint-conformance` · **Autofixable:** — · **Since:** 0.6.0
 
 > App manually constructs a Temporal worker or client instead of using the SDK launcher
 
@@ -604,7 +604,7 @@ unavoidable exception outside that exemption and stays visible in SARIF.
 
 ## P018 — `ManualServerBootstrap` {#p018}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `entrypoint-conformance` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `entrypoint-conformance` · **Autofixable:** — · **Since:** 0.6.0
 
 > App manually constructs a FastAPI/uvicorn HTTP server instead of using the SDK launcher
 
@@ -632,7 +632,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P019 — `RawHttpToAtlan` {#p019}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `client-seam` · **Autofixable:** — · **Since:** 0.7.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `both` · **Category:** `client-seam` · **Autofixable:** — · **Since:** 0.7.0
 
 > Raw HTTP request to an Atlan endpoint (/api/meta, /api/service) instead of the pyatlan client
 
@@ -671,7 +671,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P020 — `NonDeterministicPrimitiveInWorkflow` {#p020}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Impact:** `customer` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
 
 > Non-deterministic time/uuid/sleep/random call in workflow-context code
 
@@ -704,7 +704,7 @@ exception with `# conformance: ignore[P020] <reason>`.
 
 ## P021 — `SideEffectIoInWorkflow` {#p021}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Impact:** `customer` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
 
 > File / network / env / process I/O in workflow-context code
 
@@ -729,7 +729,7 @@ conformance: ignore[P021] <reason>`.
 
 ## P022 — `UnawaitedCoroutine` {#p022}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Impact:** `customer` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
 
 > A same-class async method is called without await (dropped coroutine)
 
@@ -753,7 +753,7 @@ false-positive-free.  Land as `WARN`; suppress with `# conformance: ignore[P022]
 
 ## P023 — `BlockingCallInAsyncDef` {#p023}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
 
 > Event-loop re-entry bridge or blocking sync call inside an async def
 
@@ -790,7 +790,7 @@ to residue.  Land as `WARN`; suppress with `# conformance: ignore[P023] <reason>
 
 ## P024 — `SyncAtlanClientInApp` {#p024}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
 
 > Synchronous pyatlan AtlanClient used instead of the async client
 
@@ -820,7 +820,7 @@ suppress with `# conformance: ignore[P024] <reason>`.
 
 ## P025 — `AppNameContractCodeDrift` {#p025}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `app-name-alignment` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Impact:** `operational` · **Scope:** `app` · **Category:** `app-name-alignment` · **Autofixable:** — · **Since:** 0.9.0
 
 > App name in code, atlan.yaml, or .env.example do not agree
 
@@ -887,7 +887,7 @@ Suppress with `# conformance: ignore[P025] <reason>` on the App class definition
 
 ## P026 — `GetattrOnTypedContractField` {#p026}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** — · **Since:** 0.9.0
 
 > getattr() with a default on a typed entrypoint/task contract param — defeats the typed boundary
 
@@ -912,7 +912,7 @@ Fix: use attribute access (`param.field`).  Suppress with `# conformance: ignore
 
 ## P027 — `AppStateAsCrossTaskChannel` {#p027}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `state-seam` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `state-seam` · **Autofixable:** — · **Since:** 0.9.0
 
 > get_app_state(KEY) with no matching set_app_state(KEY) writer anywhere — dead cross-task side channel
 
@@ -940,7 +940,7 @@ scanned source.
 
 ## P028 — `ManualQualifiedNameFString` {#p028}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-modeling` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Impact:** `customer` · **Scope:** `app` · **Category:** `asset-modeling` · **Autofixable:** — · **Since:** 0.9.0
 
 > Asset qualifiedName composed by hand with an f-string instead of via pyatlan asset creators
 
@@ -969,7 +969,7 @@ ignore[P028] <reason>` where a raw qualifiedName string is genuinely required.
 
 ## P029 — `SdrManifestMissingAgentJson` {#p029}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Impact:** `operational` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
 
 > SDR agent manifest must surface agent_json + extraction_method at the top level of dag.extract.inputs.args
 
@@ -1025,7 +1025,7 @@ alone does not clear the   runtime failure.
 
 ## P030 — `SdrUploadNotCalled` {#p030}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
 
 > SDR app has no self.upload() call in source — ENABLE_ATLAN_UPLOAD path unreachable
 
@@ -1099,7 +1099,7 @@ absence of `self.upload()` is by design, not a gap.
 
 ## P031 — `SharedDefaultExecutorOffload` {#p031}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.13.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.13.0
 
 > Thread offload onto asyncio's shared default executor instead of run_in_thread()
 
@@ -1133,7 +1133,7 @@ Land as `WARN`; suppress a reviewed exception with `# conformance: ignore[P031]
 
 ## P032 — `ReservedPreflightActivityName` {#p032}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
 
 > An app @task registers the 'preflight' activity name reserved by the SDK gate
 
@@ -1156,7 +1156,7 @@ resolvable and is not flagged.
 
 ## P033 — `DuplicateInWorkflowPreflight` {#p033}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
 
 > App defines Handler.preflight_check and a separate preflight-named @task that will drift
 
@@ -1177,7 +1177,7 @@ Remediation: delete the app-owned preflight activity and keep the single
 
 ## P034 — `UntypedPreflightCheckFailure` {#p034}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
 
 > PreflightCheck(passed=False) constructed without a typed error= — untyped failure
 
@@ -1201,7 +1201,7 @@ zero. A locally-defined, non-SDK class named `PreflightCheck` is not flagged.
 
 ## P035 — `PreflightMetadataContractParity` {#p035}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
 
 > A preflight_check metadata key is not declared on any entrypoint Input contract
 
@@ -1232,7 +1232,7 @@ into extra keys via either `model_config` form: `ConfigDict(extra="allow")` or
 
 ## P036 — `HandRolledProcessIsolation` {#p036}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.15.0
 
 > Bare ProcessPoolExecutor / multiprocessing child instead of the run_fault_isolated() / run_best_effort() seam
 
@@ -1268,7 +1268,7 @@ never touches the worker) with `# conformance: ignore[P036] <reason>`.
 
 ## P037 — `SdrAgentJsonNotConsumed` {#p037}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR app resolves credentials by credential_guid only and never routes through an agent-aware resolver — agent_json is ignored
 
@@ -1316,7 +1316,7 @@ the agent-aware call.
 
 ## P038 — `SdrArtifactMisrooted` {#p038}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR object-store prefix rooted from the empty-defaulting input application_name field instead of APPLICATION_NAME
 
@@ -1362,7 +1362,7 @@ empty-defaulting workflow arg.
 
 ## P039 — `SdrAgentJsonDroppedByInputContract` {#p039}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR generated extract-input contract drops the forwarded agent_json (bare Input subclass, no agent_json field, extra fields rejected)
 
@@ -1409,7 +1409,7 @@ counterexample connectors in fleet testing do.
 
 ## P040 — `TransformTemplateReservedKeyword` {#p040}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `transform-templates` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `transform-templates` · **Autofixable:** — · **Since:** 0.18.0
 
 > Transform SQL template references an unquoted DuckDB reserved keyword in source_query
 
@@ -1483,7 +1483,7 @@ render identically, so the upgrade is the fix and the template edit is unnecessa
 
 ## P041 — `SdrHardPreflightGate` {#p041}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.18.0
 
 > SDR app hard-codes preflight_gate_mode = 'hard' — non-secret-config preflight failures abort agent-mode workflows
 
@@ -1562,7 +1562,7 @@ it inline with the reason.
 
 ## P042 — `SdrHandRolledUploadBridge` {#p042}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.18.0
 
 > SDR app performs the tenant-bucket transfer through a hand-rolled upload_to_atlan bridge instead of App.upload()
 

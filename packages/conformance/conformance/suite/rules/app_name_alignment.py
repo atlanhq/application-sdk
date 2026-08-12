@@ -41,6 +41,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    RuleImpact,
     RuleMechanism,
     RuleScope,
 )
@@ -52,6 +53,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="AppNameContractCodeDrift",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.OPERATIONAL,
         category="app-name-alignment",
         autofixable=False,
         since="0.9.0",

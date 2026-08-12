@@ -21,16 +21,16 @@ When a domain series takes over an area, the rule is retired in place (kept docu
 no longer firing) and the new rule gets a fresh id — the original id is never reused or
 reassigned.
 
-| ID | Name | Tier | Scope | Category | Autofixable | Since |
-|---|---|---|---|---|---|---|
-| [S001](#s001) | `HardcodedCredential` | `warn` | `both` | `credential-storage` | — | 0.4.0 |
-| [S002](#s002) | `RawEnvCredentialAccess` | `warn` | `app` | `credential-resolution` | — | 0.4.0 |
+| ID | Name | Tier | Impact | Scope | Category | Autofixable | Since |
+|---|---|---|---|---|---|---|---|
+| [S001](#s001) | `HardcodedCredential` | `warn` | `customer` | `both` | `credential-storage` | — | 0.4.0 |
+| [S002](#s002) | `RawEnvCredentialAccess` | `warn` | `customer` | `app` | `credential-resolution` | — | 0.4.0 |
 
 ---
 
 ## S001 — `HardcodedCredential` {#s001}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `credential-storage` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Impact:** `customer` · **Scope:** `both` · **Category:** `credential-storage` · **Autofixable:** — · **Since:** 0.4.0
 
 > String literal assigned to a credential-named variable/argument — a hardcoded secret
 
@@ -58,7 +58,7 @@ suppressed inline with a justification: `# conformance: ignore[S001] <reason>`
 
 ## S002 — `RawEnvCredentialAccess` {#s002}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `credential-resolution` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Impact:** `customer` · **Scope:** `app` · **Category:** `credential-resolution` · **Autofixable:** — · **Since:** 0.4.0
 
 > Credential-named environment variable read directly via os.getenv/os.environ
 

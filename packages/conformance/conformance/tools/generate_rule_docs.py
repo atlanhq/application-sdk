@@ -378,14 +378,16 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
         lines.append("")
 
     # Summary table
-    lines.append("| ID | Name | Tier | Scope | Category | Autofixable | Since |")
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append(
+        "| ID | Name | Tier | Impact | Scope | Category | Autofixable | Since |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|")
     for rule in rules:
         anchor = _rule_anchor(rule)
         since = rule.since or "—"
         lines.append(
             f"| [{rule.id}](#{anchor}) | `{rule.name}` | {_tier_badge(rule.tier)}"
-            f" | `{rule.scope.value}` | `{rule.category}`"
+            f" | `{rule.impact.value}` | `{rule.scope.value}` | `{rule.category}`"
             f" | {_bool_icon(rule.autofixable)} | {since} |"
         )
     lines.append("")
@@ -404,6 +406,7 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
         # Metadata row
         lines.append(
             f"**Tier:** {_tier_badge(rule.tier)} · "
+            f"**Impact:** `{rule.impact.value}` · "
             f"**Scope:** `{rule.scope.value}` · "
             f"**Category:** `{rule.category}` · "
             f"**Autofixable:** {autofixable} · "

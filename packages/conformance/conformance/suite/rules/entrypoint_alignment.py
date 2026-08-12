@@ -26,6 +26,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    RuleImpact,
     RuleMechanism,
     RuleScope,
 )
@@ -37,6 +38,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="EntryPointContractCodeDrift",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.OPERATIONAL,
         category="entrypoint-alignment",
         autofixable=False,
         since="0.6.0",

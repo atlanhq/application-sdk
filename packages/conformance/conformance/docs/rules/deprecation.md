@@ -21,21 +21,21 @@ When a domain series takes over an area, the rule is retired in place (kept docu
 no longer firing) and the new rule gets a fresh id — the original id is never reused or
 reassigned.
 
-| ID | Name | Tier | Scope | Category | Autofixable | Since |
-|---|---|---|---|---|---|---|
-| [B001](#b001) | `DeprecatedSdkSymbolUsage` | `warn` | `app` | `deprecated-symbol-usage` | — | 0.5.0 |
-| [B002](#b002) | `MalformedDeprecationNotice` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
-| [B003](#b003) | `OverdueDeprecationRemoval` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
-| [B004](#b004) | `UnmarkedDeprecationClaim` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
-| [B005](#b005) | `NonAdditiveContractChange` | `block` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
-| [B006](#b006) | `StaleContractLedger` | `block` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
-| [B007](#b007) | `DaftOnlyDataframeApiUsage` | `warn` | `app` | `daft-removal` | — | 0.18.0 |
+| ID | Name | Tier | Impact | Scope | Category | Autofixable | Since |
+|---|---|---|---|---|---|---|---|
+| [B001](#b001) | `DeprecatedSdkSymbolUsage` | `warn` | `hygiene` | `app` | `deprecated-symbol-usage` | — | 0.5.0 |
+| [B002](#b002) | `MalformedDeprecationNotice` | `warn` | `hygiene` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
+| [B003](#b003) | `OverdueDeprecationRemoval` | `warn` | `hygiene` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
+| [B004](#b004) | `UnmarkedDeprecationClaim` | `warn` | `hygiene` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
+| [B005](#b005) | `NonAdditiveContractChange` | `block` | `customer` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
+| [B006](#b006) | `StaleContractLedger` | `block` | `operational` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
+| [B007](#b007) | `DaftOnlyDataframeApiUsage` | `warn` | `operational` | `app` | `daft-removal` | — | 0.18.0 |
 
 ---
 
 ## B001 — `DeprecatedSdkSymbolUsage` {#b001}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `deprecated-symbol-usage` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `deprecated-symbol-usage` · **Autofixable:** — · **Since:** 0.5.0
 
 > Imports, subclasses, or calls an SDK symbol the SDK has marked deprecated
 
@@ -74,7 +74,7 @@ produce false negatives.  All are suppressible with `# conformance: ignore[B001]
 
 ## B002 — `MalformedDeprecationNotice` {#b002}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
 
 > A deprecation notice must name both a migration target and a removal version
 
@@ -99,7 +99,7 @@ class emitting `DeprecationWarning` from `__init__` / `__init_subclass__`).
 
 ## B003 — `OverdueDeprecationRemoval` {#b003}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
 
 > A deprecation's stated removal version has already been reached by the SDK
 
@@ -121,7 +121,7 @@ cannot be determined the check is skipped (overdue-ness is undecidable).
 
 ## B004 — `UnmarkedDeprecationClaim` {#b004}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
 
 > A symbol's docstring claims deprecation but it carries no @deprecated / DeprecationWarning marker
 
@@ -146,7 +146,7 @@ biased toward low false positives at WARN.
 
 ## B005 — `NonAdditiveContractChange` {#b005}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `contract-backwards-compatibility` · **Autofixable:** — · **Since:** 0.7.0
+**Tier:** `block` · **Impact:** `customer` · **Scope:** `both` · **Category:** `contract-backwards-compatibility` · **Autofixable:** — · **Since:** 0.7.0
 
 > An entrypoint contract field was removed or had its type changed
 
@@ -189,7 +189,7 @@ status, and commit the updated ledger in the same PR.
 
 ## B006 — `StaleContractLedger` {#b006}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `contract-backwards-compatibility` · **Autofixable:** — · **Since:** 0.7.0
+**Tier:** `block` · **Impact:** `operational` · **Scope:** `both` · **Category:** `contract-backwards-compatibility` · **Autofixable:** — · **Since:** 0.7.0
 
 > An entrypoint contract field is missing from contract_schema.lock.json
 
@@ -224,7 +224,7 @@ before the first deploy.
 
 ## B007 — `DaftOnlyDataframeApiUsage` {#b007}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `daft-removal` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `daft-removal` · **Autofixable:** — · **Since:** 0.18.0
 
 > Calls a daft-only DataFrame API (count_rows/to_pylist/.names) — dead on the daft-less SDK runtime
 

@@ -37,6 +37,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    RuleImpact,
     RuleMechanism,
     RuleScope,
 )
@@ -48,6 +49,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="FrameworkTransferInsideTask",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.HYGIENE,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -91,6 +93,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="ManualObjectStoreConstruction",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.HYGIENE,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -129,6 +132,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="ManualFileReferenceConstruction",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.OPERATIONAL,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -167,6 +171,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="RawBytesInContract",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.CUSTOMER,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -202,6 +207,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="FilePathStringInContract",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.CUSTOMER,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",

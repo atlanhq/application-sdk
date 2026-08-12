@@ -22,6 +22,7 @@ from typing import Any
 
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    RuleImpact,
     RuleMechanism,
     RuleScope,
 )
@@ -51,6 +52,14 @@ class AtlanRuleProperties(BaseModel):
     Defaulted at the SARIF-projection layer so reading an older or hand-authored
     report that predates the field is tolerant; the authoring layer
     (``catalog.RuleDefinition.scope``) is where the field is required.
+    """
+
+    impact: RuleImpact = RuleImpact.HYGIENE
+    """``customer``, ``operational``, or ``hygiene`` — the customer-impact
+    criticality of the behaviour the rule guards against (FND-221).
+    Defaulted at the SARIF-projection layer so reading an older or
+    hand-authored report that predates the field is tolerant; the authoring
+    layer (``catalog.RuleDefinition.impact``) is where the field is required.
     """
 
     category: str
@@ -98,6 +107,7 @@ class AtlanRuleProperties(BaseModel):
             "atlan/tier": self.tier.value,
             "atlan/mechanism": self.mechanism.value,
             "atlan/scope": self.scope.value,
+            "atlan/impact": self.impact.value,
             "atlan/category": self.category,
             "atlan/autofixable": self.autofixable,
         }
@@ -122,6 +132,7 @@ class AtlanRuleProperties(BaseModel):
             tier=EnforcementTier(props["atlan/tier"]),
             mechanism=RuleMechanism(props["atlan/mechanism"]),
             scope=RuleScope(props.get("atlan/scope", RuleScope.BOTH.value)),
+            impact=RuleImpact(props.get("atlan/impact", RuleImpact.HYGIENE.value)),
             category=props["atlan/category"],
             autofixable=bool(props.get("atlan/autofixable", False)),
             orthogonal_gate=props.get("atlan/orthogonalGate"),

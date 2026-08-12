@@ -13,27 +13,27 @@ Suppress a finding on the violating line or the line directly above it:
 // conformance: ignore[K001] intentional: phased migration tracked in BLDX-XXXX
 ```
 
-| ID | Name | Tier | Scope | Category | Autofixable | Since |
-|---|---|---|---|---|---|---|
-| [K001](#k001) | `ContractAmendsLegacyModule` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
-| [K002](#k002) | `LegacyContractApi` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
-| [K003](#k003) | `ContractLockDrift` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
-| [K004](#k004) | `MissingGeneratedArtifact` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
-| [K005](#k005) | `GeneratedArtifactBannerStripped` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
-| [K006](#k006) | `ManifestContractFieldMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.13.0 |
-| [K007](#k007) | `ToolkitVersionOutdated` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
-| [K008](#k008) | `ToolkitSourceNonCanonical` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
-| [K009](#k009) | `UnresolvedScaffoldPlaceholder` | `block` | `app` | `contract-toolkit` | — | 0.12.0 |
-| [K010](#k010) | `E2EScaffoldingMissing` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
-| [K011](#k011) | `AppIdMissingFromContract` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
-| [K012](#k012) | `GeneratePoeTaskMissing` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
-| [K013](#k013) | `ManifestNodeAppNameMisattributed` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
+| ID | Name | Tier | Impact | Scope | Category | Autofixable | Since |
+|---|---|---|---|---|---|---|---|
+| [K001](#k001) | `ContractAmendsLegacyModule` | `warn` | `hygiene` | `app` | `contract-toolkit` | — | 0.9.0 |
+| [K002](#k002) | `LegacyContractApi` | `warn` | `hygiene` | `app` | `contract-toolkit` | — | 0.9.0 |
+| [K003](#k003) | `ContractLockDrift` | `warn` | `operational` | `app` | `contract-toolkit` | — | 0.9.0 |
+| [K004](#k004) | `MissingGeneratedArtifact` | `warn` | `operational` | `app` | `contract-toolkit` | — | 0.9.0 |
+| [K005](#k005) | `GeneratedArtifactBannerStripped` | `warn` | `hygiene` | `app` | `contract-toolkit` | — | 0.9.0 |
+| [K006](#k006) | `ManifestContractFieldMismatch` | `warn` | `operational` | `app` | `contract-toolkit` | — | 0.13.0 |
+| [K007](#k007) | `ToolkitVersionOutdated` | `warn` | `hygiene` | `app` | `contract-toolkit` | — | 0.12.0 |
+| [K008](#k008) | `ToolkitSourceNonCanonical` | `warn` | `operational` | `app` | `contract-toolkit` | — | 0.12.0 |
+| [K009](#k009) | `UnresolvedScaffoldPlaceholder` | `block` | `customer` | `app` | `contract-toolkit` | — | 0.12.0 |
+| [K010](#k010) | `E2EScaffoldingMissing` | `warn` | `operational` | `app` | `contract-toolkit` | — | 0.12.0 |
+| [K011](#k011) | `AppIdMissingFromContract` | `block` | `operational` | `app` | `contract-toolkit` | — | 0.14.0 |
+| [K012](#k012) | `GeneratePoeTaskMissing` | `block` | `operational` | `app` | `contract-toolkit` | — | 0.14.0 |
+| [K013](#k013) | `ManifestNodeAppNameMisattributed` | `warn` | `operational` | `app` | `contract-toolkit` | — | 0.18.0 |
 
 ---
 
 ## K001 — `ContractAmendsLegacyModule` {#k001}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
 
 > Contract amends NativeApp.pkl or NativeAppBundle.pkl — migrate to App.pkl
 
@@ -82,7 +82,7 @@ migration tracked in a follow-on ticket).
 
 ## K002 — `LegacyContractApi` {#k002}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
 
 > Contract uses NativeApp-only APIs (flatManifestArgs, workflowTypeOverride, or legacy imports) removed in App.pkl
 
@@ -147,7 +147,7 @@ comment-only line directly above it.
 
 ## K003 — `ContractLockDrift` {#k003}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
 
 > contract/PklProject pin does not match the resolved version in PklProject.deps.json — re-resolve the lock
 
@@ -192,7 +192,7 @@ is justified.
 
 ## K004 — `MissingGeneratedArtifact` {#k004}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
 
 > contract/app.pkl exists but an expected generated artifact (atlan.yaml / manifest.json / _input.py) is missing — regenerate
 
@@ -224,7 +224,7 @@ means the contract was never generated (or an output was deleted).
 
 ## K005 — `GeneratedArtifactBannerStripped` {#k005}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
 
 > A generated text artifact (atlan.yaml / app/generated/*.py) is missing its AUTO-GENERATED provenance banner — likely hand-edited
 
@@ -265,7 +265,7 @@ proves full freshness.
 
 ## K006 — `ManifestContractFieldMismatch` {#k006}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.13.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.13.0
 
 > app/generated/**/manifest.json references an $.extract.outputs.<field> the entrypoint's Output contract does not declare
 
@@ -314,7 +314,7 @@ and deliberately deferred.
 
 ## K007 — `ToolkitVersionOutdated` {#k007}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
 
 > app-contract-toolkit dependency resolves to a version below the latest published one — bump and regenerate
 
@@ -344,7 +344,7 @@ comment-only line directly above it) when a deliberate lag is justified.
 
 ## K008 — `ToolkitSourceNonCanonical` {#k008}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
 
 > app-contract-toolkit is sourced from a non-canonical base URI (fork / local path / wrong host)
 
@@ -374,7 +374,7 @@ comment-only line directly above it).
 
 ## K009 — `UnresolvedScaffoldPlaceholder` {#k009}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `block` · **Impact:** `customer` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
 
 > Generated artifact contains an unresolved single-brace scaffold placeholder ({app_name}, {name}, …) — upgrade the toolkit and regenerate
 
@@ -414,7 +414,7 @@ in a `.json` output has no comment syntax to suppress and must be regenerated.
 
 ## K010 — `E2EScaffoldingMissing` {#k010}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
 
 > Single-entrypoint contract/app.pkl exists but generated app/generated/_e2e_base.py is missing
 
@@ -442,7 +442,7 @@ single-entrypoint path.
 
 ## K011 — `AppIdMissingFromContract` {#k011}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.14.0
+**Tier:** `block` · **Impact:** `operational` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.14.0
 
 > atlan.yaml is present but declares no top-level app_id — the marketplace publish will 404
 
@@ -485,7 +485,7 @@ app that still ships an `atlan.yaml`.
 
 ## K012 — `GeneratePoeTaskMissing` {#k012}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.14.0
+**Tier:** `block` · **Impact:** `operational` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.14.0
 
 > pyproject.toml defines no [tool.poe.tasks.generate] task — the SDK Certify step will abort the publish
 
@@ -523,7 +523,7 @@ published through the marketplace pipeline.
 
 ## K013 — `ManifestNodeAppNameMisattributed` {#k013}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Impact:** `operational` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.18.0
 
 > Generated manifest DAG node declares an app_name that disagrees with the app its workflow type or task queue says runs it
 

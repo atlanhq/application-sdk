@@ -13,19 +13,19 @@ Suppress a finding on the violating line or the line directly above it:
 # conformance: ignore[I001] SDK builds the base image, not consuming it
 ```
 
-| ID | Name | Tier | Scope | Category | Autofixable | Since |
-|---|---|---|---|---|---|---|
-| [I001](#i001) | `DockerfileWrongBaseImage` | `block` | `app` | `dockerfile-base` | yes | 0.5.0 |
-| [I002](#i002) | `DockerfileEntrypointOverride` | `block` | `app` | `dockerfile-entrypoint` | yes | 0.5.0 |
-| [I003](#i003) | `DockerfileAppModuleMissing` | `block` | `app` | `dockerfile-env` | — | 0.5.0 |
-| [I004](#i004) | `DockerfileAppModeHardcoded` | `block` | `app` | `dockerfile-env` | yes | 0.5.0 |
-| [I005](#i005) | `DockerfileRootUser` | `block` | `app` | `dockerfile-security` | yes | 0.5.0 |
+| ID | Name | Tier | Impact | Scope | Category | Autofixable | Since |
+|---|---|---|---|---|---|---|---|
+| [I001](#i001) | `DockerfileWrongBaseImage` | `block` | `operational` | `app` | `dockerfile-base` | yes | 0.5.0 |
+| [I002](#i002) | `DockerfileEntrypointOverride` | `block` | `customer` | `app` | `dockerfile-entrypoint` | yes | 0.5.0 |
+| [I003](#i003) | `DockerfileAppModuleMissing` | `block` | `operational` | `app` | `dockerfile-env` | — | 0.5.0 |
+| [I004](#i004) | `DockerfileAppModeHardcoded` | `block` | `operational` | `app` | `dockerfile-env` | yes | 0.5.0 |
+| [I005](#i005) | `DockerfileRootUser` | `block` | `customer` | `app` | `dockerfile-security` | yes | 0.5.0 |
 
 ---
 
 ## I001 — `DockerfileWrongBaseImage` {#i001}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-base` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `block` · **Impact:** `operational` · **Scope:** `app` · **Category:** `dockerfile-base` · **Autofixable:** yes · **Since:** 0.5.0
 
 > Final-stage FROM does not use the approved base image registry.atlan.com/public/app-runtime-base:3
 
@@ -52,7 +52,7 @@ line before the FROM instruction.
 
 ## I002 — `DockerfileEntrypointOverride` {#i002}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-entrypoint` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `block` · **Impact:** `customer` · **Scope:** `app` · **Category:** `dockerfile-entrypoint` · **Autofixable:** yes · **Since:** 0.5.0
 
 > CMD or ENTRYPOINT is overridden; the base image entrypoint manages daprd and graceful drain and must not be replaced
 
@@ -75,7 +75,7 @@ environment where daprd is required.  Inline suppression: `# conformance: ignore
 
 ## I003 — `DockerfileAppModuleMissing` {#i003}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-env` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `block` · **Impact:** `operational` · **Scope:** `app` · **Category:** `dockerfile-env` · **Autofixable:** — · **Since:** 0.5.0
 
 > ENV ATLAN_APP_MODULE is not set; the runtime needs this to locate and instantiate the application class
 
@@ -96,7 +96,7 @@ the Dockerfile.
 
 ## I004 — `DockerfileAppModeHardcoded` {#i004}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-env` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `block` · **Impact:** `operational` · **Scope:** `app` · **Category:** `dockerfile-env` · **Autofixable:** yes · **Since:** 0.5.0
 
 > ENV ATLAN_APP_MODE is hardcoded in the Dockerfile; runtime mode must be supplied at deploy time, not baked into the image
 
@@ -116,7 +116,7 @@ different environments.  Set `ATLAN_APP_MODE` in the deployment manifest (Kubern
 
 ## I005 — `DockerfileRootUser` {#i005}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-security` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `block` · **Impact:** `customer` · **Scope:** `app` · **Category:** `dockerfile-security` · **Autofixable:** yes · **Since:** 0.5.0
 
 > USER root or USER 0 in the final stage sets the container user to root, violating the non-root execution policy
 

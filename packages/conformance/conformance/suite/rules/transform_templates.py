@@ -30,6 +30,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    RuleImpact,
     RuleMechanism,
     RuleScope,
 )
@@ -41,6 +42,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="TransformTemplateReservedKeyword",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.OPERATIONAL,
         category="transform-templates",
         autofixable=False,
         orthogonal_gate="tests",

@@ -21,20 +21,20 @@ When a domain series takes over an area, the rule is retired in place (kept docu
 no longer firing) and the new rule gets a fresh id — the original id is never reused or
 reassigned.
 
-| ID | Name | Tier | Scope | Category | Autofixable | Since |
-|---|---|---|---|---|---|---|
-| [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `both` | `canonical-dependency` | — | 0.3.0 |
-| [O002](#o002) | `LegacyAssetSerialization` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
-| [O003](#o003) | `UntypedAssetMapperReturn` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
-| [O004](#o004) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
-| [O005](#o005) | `UnresolvedAppNamePlaceholder` | `warn` | `both` | `dag-write-path` | — | 0.18.0 |
-| [O006](#o006) | `DirectRocksdictImport` | `warn` | `app` | `canonical-dependency` | — | 0.18.0 |
+| ID | Name | Tier | Impact | Scope | Category | Autofixable | Since |
+|---|---|---|---|---|---|---|---|
+| [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `hygiene` | `both` | `canonical-dependency` | — | 0.3.0 |
+| [O002](#o002) | `LegacyAssetSerialization` | `warn` | `hygiene` | `app` | `asset-mapper` | — | 0.8.0 |
+| [O003](#o003) | `UntypedAssetMapperReturn` | `warn` | `hygiene` | `app` | `asset-mapper` | — | 0.8.0 |
+| [O004](#o004) | `LegacyPyatlanAssetImport` | `warn` | `hygiene` | `app` | `asset-mapper` | — | 0.8.0 |
+| [O005](#o005) | `UnresolvedAppNamePlaceholder` | `warn` | `customer` | `both` | `dag-write-path` | — | 0.18.0 |
+| [O006](#o006) | `DirectRocksdictImport` | `warn` | `hygiene` | `app` | `canonical-dependency` | — | 0.18.0 |
 
 ---
 
 ## O001 — `OrjsonOverStdlibJson` {#o001}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `both` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.3.0
 
 > json.dumps()/json.loads() — prefer orjson (a core SDK dependency, ~10x faster)
 
@@ -63,7 +63,7 @@ rejects some inputs stdlib accepts.  A blind `json.`→`orjson.` swap silently c
 
 ## O002 — `LegacyAssetSerialization` {#o002}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
 
 > Asset serialised with .dict() — prefer the v9 asset.to_nested_bytes() API
 
@@ -88,7 +88,7 @@ a known false-positive — suppress with `# conformance: ignore[O002] <reason>`.
 
 ## O003 — `UntypedAssetMapperReturn` {#o003}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
 
 > Function builds a pyatlan asset but has no return annotation — annotate it with the asset type
 
@@ -114,7 +114,7 @@ conformance: ignore[O003] <reason>` when an untyped return is intentional.
 
 ## O004 — `LegacyPyatlanAssetImport` {#o004}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
 
 > Imports pyatlan.model.assets (non-v9) — prefer pyatlan_v9.model.assets
 
@@ -148,7 +148,7 @@ when a connector is intentionally pinned to the legacy `AtlasTransformer` surfac
 
 ## O005 — `UnresolvedAppNamePlaceholder` {#o005}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `dag-write-path` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Impact:** `customer` · **Scope:** `both` · **Category:** `dag-write-path` · **Autofixable:** — · **Since:** 0.18.0
 
 > Hardcoded '{app_name}' left unsubstituted in a plain string literal
 
@@ -209,7 +209,7 @@ resolved by a caller in a different file than the one being scanned.
 
 ## O006 — `DirectRocksdictImport` {#o006}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Impact:** `hygiene` · **Scope:** `app` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.18.0
 
 > Imports rocksdict directly — prefer the SDK's SpillableDict (pickles values, no hand-rolled serialize/deserialize step)
 

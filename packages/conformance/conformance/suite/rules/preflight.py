@@ -20,6 +20,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    RuleImpact,
     RuleMechanism,
     RuleScope,
 )
@@ -36,6 +37,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="ReservedPreflightActivityName",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.OPERATIONAL,
         category="preflight-gate",
         autofixable=False,
         orthogonal_gate="tests",
@@ -70,6 +72,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="DuplicateInWorkflowPreflight",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.OPERATIONAL,
         category="preflight-gate",
         autofixable=False,
         orthogonal_gate="tests",
@@ -102,6 +105,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="UntypedPreflightCheckFailure",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.OPERATIONAL,
         category="preflight-gate",
         autofixable=False,
         orthogonal_gate="tests",
@@ -137,6 +141,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="PreflightMetadataContractParity",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.OPERATIONAL,
         category="preflight-gate",
         autofixable=False,
         orthogonal_gate="tests",

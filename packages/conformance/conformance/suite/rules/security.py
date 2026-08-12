@@ -22,6 +22,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    RuleImpact,
     RuleMechanism,
     RuleScope,
 )
@@ -33,6 +34,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="HardcodedCredential",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.CUSTOMER,
         category="credential-storage",
         autofixable=False,
         since="0.4.0",
@@ -73,6 +75,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="RawEnvCredentialAccess",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.CUSTOMER,
         category="credential-resolution",
         autofixable=False,
         since="0.4.0",

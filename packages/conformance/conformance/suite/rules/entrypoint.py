@@ -27,6 +27,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    RuleImpact,
     RuleMechanism,
     RuleScope,
 )
@@ -38,6 +39,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="ManualWorkerBootstrap",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.HYGIENE,
         category="entrypoint-conformance",
         autofixable=False,
         orthogonal_gate="tests",
@@ -91,6 +93,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="ManualServerBootstrap",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.HYGIENE,
         category="entrypoint-conformance",
         autofixable=False,
         orthogonal_gate="tests",

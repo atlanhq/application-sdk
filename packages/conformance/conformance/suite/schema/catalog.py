@@ -22,6 +22,7 @@ from typing import Any, Literal
 
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    RuleImpact,
     RuleMechanism,
     RuleScope,
 )
@@ -62,6 +63,14 @@ class RuleDefinition(BaseModel):
     """Where the rule applies — ``sdk``, ``app``, or ``both``.  Required (no
     default) so every rule must declare its surface explicitly; the meta-test
     ``test_catalog_all_have_scope`` enforces this for present and future rules."""
+
+    impact: RuleImpact
+    """Customer-impact criticality — ``customer``, ``operational``, or
+    ``hygiene`` (FND-221).  Required (no default) so every rule must declare
+    its severity explicitly, same discipline as ``scope``; the meta-test
+    ``test_catalog_all_have_impact`` enforces this for present and future
+    rules, and ``test_catalog_customer_impact_rules_are_the_expected_set``
+    pins the ``customer`` set so it only changes deliberately."""
 
     category: str
     """Rule family, e.g. ``"silent-swallow"``."""
@@ -138,6 +147,8 @@ class RuleDefinition(BaseModel):
                 data["mechanism"] = RuleMechanism(data["mechanism"].lower())
             if "scope" in data and isinstance(data["scope"], str):
                 data["scope"] = RuleScope(data["scope"].lower())
+            if "impact" in data and isinstance(data["impact"], str):
+                data["impact"] = RuleImpact(data["impact"].lower())
         return data
 
     @model_validator(mode="after")
@@ -174,6 +185,7 @@ class RuleDefinition(BaseModel):
             tier=self.tier,
             mechanism=self.mechanism,
             scope=self.scope,
+            impact=self.impact,
             category=self.category,
             autofixable=self.autofixable,
             orthogonal_gate=self.orthogonal_gate,

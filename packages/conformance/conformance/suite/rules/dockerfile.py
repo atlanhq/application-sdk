@@ -34,6 +34,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    RuleImpact,
     RuleMechanism,
     RuleScope,
 )
@@ -45,6 +46,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="DockerfileWrongBaseImage",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.OPERATIONAL,
         category="dockerfile-base",
         autofixable=True,
         since="0.5.0",
@@ -89,6 +91,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="DockerfileEntrypointOverride",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.CUSTOMER,
         category="dockerfile-entrypoint",
         autofixable=True,
         since="0.5.0",
@@ -128,6 +131,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="DockerfileAppModuleMissing",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.OPERATIONAL,
         category="dockerfile-env",
         autofixable=False,
         since="0.5.0",
@@ -165,6 +169,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="DockerfileAppModeHardcoded",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.OPERATIONAL,
         category="dockerfile-env",
         autofixable=True,
         since="0.5.0",
@@ -201,6 +206,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="DockerfileRootUser",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
+        impact=RuleImpact.CUSTOMER,
         category="dockerfile-security",
         autofixable=True,
         since="0.5.0",

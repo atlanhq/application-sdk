@@ -10,6 +10,7 @@ from conformance.suite.schema import load_catalog
 from conformance.suite.schema.catalog import RuleDefinition, validate_catalog
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    RuleImpact,
     RuleMechanism,
     RuleScope,
 )
@@ -83,8 +84,128 @@ def test_scope_is_required_field() -> None:
             name="NoScope",
             tier=EnforcementTier.WARN,
             mechanism=RuleMechanism.STATIC,
+            impact=RuleImpact.HYGIENE,
             category="test",
         )
+
+
+def test_catalog_all_have_impact() -> None:
+    """Every rule must declare a valid RuleImpact (customer / operational / hygiene)."""
+    rules = load_catalog()
+    bad = [rule.id for rule in rules if not isinstance(rule.impact, RuleImpact)]
+    assert not bad, f"Rules with invalid/missing impact: {bad}"
+
+
+def test_impact_is_required_field() -> None:
+    """``impact`` has no default: constructing a rule without it must fail.
+
+    Same discipline as ``scope`` — a new rule that forgets ``impact=`` cannot
+    even be constructed, which is what makes ``test_catalog_all_have_impact``
+    an enforceable guarantee (FND-221).
+    """
+    with pytest.raises(ValidationError):
+        RuleDefinition(  # pyright: ignore[reportCallIssue]  # impact deliberately omitted
+            id="E999",
+            name="NoImpact",
+            tier=EnforcementTier.WARN,
+            mechanism=RuleMechanism.STATIC,
+            scope=RuleScope.BOTH,
+            category="test",
+        )
+
+
+def test_catalog_customer_impact_rules_are_the_expected_set() -> None:
+    """Pin the ``customer``-impact set so it only changes deliberately (FND-221).
+
+    ``customer`` means the violated pattern's *direct failure mode* is
+    customer-visible — not merely "this is bad practice".  The set breaks down
+    as:
+
+    * **Security exposure** — S001/S002 (hardcoded / raw-env credentials),
+      L010 (credential in log output), E017 (secret-named evidence key),
+      C001 (unpinned CI action → supply chain), I005 (container runs as root).
+    * **Silent data loss / hidden errors** — E001/E002/E006 (swallowed
+      exceptions), E007/E009/E020 (errors converted to return values →
+      a partial crawl published as complete), E010 (gather exceptions
+      unexamined), E014 (loop-control swallow).
+    * **Production crash / stuck runs** — E011 (logging filter can crash the
+      caller), L012/L013 (stdlib log calls that raise at runtime),
+      P020/P021 (workflow non-determinism → stuck/failed replays),
+      P022 (dropped coroutine → work silently never happens),
+      D009 (production runtime fetches Dapr components from GitHub),
+      D010 (query transformer without duckdb resolved → transform path is
+      dead in the built image; unit CI can't see it),
+      I002 (entrypoint override breaks daprd lifecycle + graceful drain).
+    * **Wrong data shipped** — P028 (hand-rolled qualifiedName → wrong asset
+      identity), O005/K009 (unresolved ``{app_name}``-style placeholder →
+      misrooted DAG writes / broken generated artifact),
+      B005 (non-additive contract change breaks consumers),
+      P001/P011/P012 (payload-safety opt-outs → failed or lossy transfers).
+
+    Borderlines deliberately kept **operational** (see FND-221): P013/P014
+    (untyped boundaries remove a safety net rather than fail directly),
+    K006 (manifest/contract mismatch surfaces at certify), P023 (event-loop
+    blocking degrades rather than breaks), P040 (reserved-keyword template
+    breaks loudly in any e2e run), E019 (leaked exception text in a contract
+    field is a hygiene/attribution problem at the boundary).
+    """
+    rules = load_catalog()
+    customer = {r.id for r in rules if r.impact == RuleImpact.CUSTOMER}
+    assert customer == {
+        "B005",
+        "C001",
+        "D009",
+        "D010",
+        "E001",
+        "E002",
+        "E006",
+        "E007",
+        "E009",
+        "E010",
+        "E011",
+        "E014",
+        "E017",
+        "E020",
+        "I002",
+        "I005",
+        "K009",
+        "L010",
+        "L012",
+        "L013",
+        "O005",
+        "P001",
+        "P011",
+        "P012",
+        "P020",
+        "P021",
+        "P022",
+        "P028",
+        "S001",
+        "S002",
+    }, customer
+
+
+def test_impact_emitted_in_sarif_properties() -> None:
+    """The rule's impact is surfaced as ``atlan/impact`` in SARIF properties."""
+    descriptor = get_rule("S001").to_reporting_descriptor()
+    assert descriptor.properties["atlan/impact"] == "customer"
+    descriptor = get_rule("E005").to_reporting_descriptor()
+    assert descriptor.properties["atlan/impact"] == "operational"
+    descriptor = get_rule("L001").to_reporting_descriptor()
+    assert descriptor.properties["atlan/impact"] == "hygiene"
+
+
+def test_impact_tolerant_when_reading_old_reports() -> None:
+    """``from_properties`` on a pre-impact report defaults to ``hygiene``,
+    so older SARIF artifacts stay parseable (projection-layer tolerance,
+    mirroring ``scope``)."""
+    props = AtlanRuleProperties(
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="test",
+    ).to_properties()
+    del props["atlan/impact"]
+    assert AtlanRuleProperties.from_properties(props).impact == RuleImpact.HYGIENE
 
 
 def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
@@ -712,6 +833,7 @@ def test_duplicate_id_raises() -> None:
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         scope=RuleScope.BOTH,
+        impact=RuleImpact.HYGIENE,
         category="test",
     )
     r2 = RuleDefinition(
@@ -720,6 +842,7 @@ def test_duplicate_id_raises() -> None:
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         scope=RuleScope.BOTH,
+        impact=RuleImpact.HYGIENE,
         category="test",
     )
     with pytest.raises(ValueError, match="duplicate rule ID"):
@@ -735,6 +858,7 @@ def test_invalid_rule_id_raises() -> None:
             tier=EnforcementTier.BLOCK,
             mechanism=RuleMechanism.STATIC,
             scope=RuleScope.BOTH,
+            impact=RuleImpact.HYGIENE,
             category="test",
         )
 
@@ -751,6 +875,7 @@ def _rule(**overrides) -> RuleDefinition:
             "tier": EnforcementTier.WARN,
             "mechanism": RuleMechanism.STATIC,
             "scope": RuleScope.BOTH,
+            "impact": RuleImpact.HYGIENE,
             "category": "test",
             **overrides,
         }
@@ -883,6 +1008,7 @@ def test_validate_catalog_raises_on_duplicate() -> None:
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         scope=RuleScope.BOTH,
+        impact=RuleImpact.HYGIENE,
         category="test",
     )
     r2 = RuleDefinition(
@@ -891,6 +1017,7 @@ def test_validate_catalog_raises_on_duplicate() -> None:
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         scope=RuleScope.BOTH,
+        impact=RuleImpact.HYGIENE,
         category="test",
     )
     with pytest.raises(ValueError, match="duplicate rule ID"):
