@@ -76,6 +76,7 @@ from typing import Any, Generic, TypeVar
 
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.contracts.types import FileReference
+from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.rolling_errors import (
     InvalidRollingFileWriterError,
@@ -532,6 +533,15 @@ class RollingFileWriter(Generic[T]):
                 exc_info=True,
             )
             raise
+
+        # One rolled chunk on disk is one observable unit (ADR-0018). This class
+        # is not a `Writer` subclass, so it does not inherit
+        # `Writer._flush_buffer`'s hook — and since it is the *recommended*
+        # replacement for the v4.0-deprecated writers, leaving it unhooked would
+        # mean the migration target had less stall coverage than what it
+        # replaces. Marked before `on_chunk_complete` so a slow callback is
+        # measured as the quiet window it is.
+        current_progress_tracker().mark_progress("writer.rolling_flush")
 
         completed_index = self._chunk_index
         self._chunk_index += 1

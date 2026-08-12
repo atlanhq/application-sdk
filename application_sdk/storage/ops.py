@@ -565,6 +565,12 @@ async def upload_file(
         STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
     )
 
+    # Hoisted out of the part loop so the lazy import is paid once per upload
+    # rather than once per part.
+    from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: application_sdk.execution's package __init__ reaches back into storage.ops
+        current_progress_tracker,
+    )
+
     last_progress = started
     bytes_sent = 0
     try:
@@ -584,6 +590,15 @@ async def upload_file(
                         h.update(chunk)
                     await writer.write(chunk)
                     bytes_sent += len(chunk)
+                    # One multipart part on its way to the store is one
+                    # observable unit (ADR-0018). Marking per part rather than
+                    # per file is what keeps a single multi-GB upload — the
+                    # common shape for a large connector's parquet output —
+                    # from looking like one long quiet window to the stall
+                    # watchdog. Unconditional, unlike the progress *log* below:
+                    # a mark is two stores under an uncontended lock, so it
+                    # needs no interval gate.
+                    current_progress_tracker().mark_progress("storage.upload_part")
                     if _progress_interval > 0:
                         now = time.monotonic()
                         if now - last_progress >= _progress_interval:
@@ -743,6 +758,12 @@ async def download_file(
             STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
         )
 
+        # Hoisted out of the stream loop so the lazy import is paid once per
+        # download rather than once per chunk.
+        from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: application_sdk.execution's package __init__ reaches back into storage.ops
+            current_progress_tracker,
+        )
+
         last_progress = started
         with os.fdopen(fd, "wb") as fh:
             async for chunk in result.stream(min_chunk_size=min_chunk_size):
@@ -751,6 +772,9 @@ async def download_file(
                 bytes_written += len(raw)
                 if h is not None:
                     h.update(raw)
+                # One streamed chunk landed on disk — see the matching mark in
+                # upload_file for why this is per chunk and ungated.
+                current_progress_tracker().mark_progress("storage.download_chunk")
                 if _progress_interval > 0:
                     now = time.monotonic()
                     if now - last_progress >= _progress_interval:

@@ -20,6 +20,7 @@ from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
 from application_sdk.contracts.types import FileReference
 from application_sdk.execution.heartbeat import run_in_thread
+from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.storage.formats.utils import (
@@ -689,6 +690,14 @@ class Writer(ABC):
 
                 self.current_buffer_size = 0
 
+                # One buffer chunk on disk is one observable unit of work
+                # (ADR-0018). This is the single chunk boundary every writer
+                # subclass shares — JsonFileWriter and the non-consolidating
+                # ParquetFileWriter path both reach it — so a long
+                # `write_batches` stream stays visible to the stall watchdog
+                # without any per-record cost.
+                current_progress_tracker().mark_progress("writer.flush_buffer")
+
                 # Record chunk metrics
                 self.metrics.record_metric(
                     name="chunks_written",
@@ -768,6 +777,13 @@ class Writer(ABC):
             # to a no-op so the statistics sidecar travels via close()'s
             # returned FileReference instead of inline.
             await self._upload_file(output_file_name)
+
+            # The statistics sidecar is the last thing a writer emits, and
+            # `close()` runs `_finalize()` (parquet consolidation, remaining
+            # uploads) immediately before it. Marking here means the quiet
+            # window the watchdog measures starts from the end of the writer's
+            # work rather than from its last buffer chunk.
+            current_progress_tracker().mark_progress("writer.statistics")
 
             return statistics
         # conformance: ignore[E004] re-raises as typed FormatStatisticsWriteError; no information is discarded

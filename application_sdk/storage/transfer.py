@@ -44,6 +44,7 @@ from application_sdk.common._listing import safe_list_directory
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.execution.heartbeat import run_in_thread
+from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.observability.logger_adaptor import get_logger
 
 # Sidecar suffix / predicate and the batch key listers are owned by
@@ -132,12 +133,21 @@ async def _upload_one(
         local_digest = await _sha256_file_async(local_file)
         remote_digest = await _get_remote_sha256(store, store_key)
         if remote_digest == local_digest:
+            # A skip is still one file resolved. Directory uploads that skip
+            # thousands of hash-matching files on an idempotent retry are doing
+            # real work (a digest and a sidecar GET each) and must not read as
+            # a stall.
+            current_progress_tracker().mark_progress("storage.upload_file")
             return False, "skipped:hash_match"
         sha256 = await upload_file(store_key, local_file, store, normalize=False)
     else:
         sha256 = await upload_file(store_key, local_file, store, normalize=False)
 
     await _put_remote_sha256(store, store_key, sha256)
+    # Per-file boundary, on top of the per-part marks inside upload_file: this
+    # is the label an operator wants in a stall message, since it says the
+    # attempt was moving whole files rather than stuck mid-transfer on one.
+    current_progress_tracker().mark_progress("storage.upload_file")
     return True, "uploaded"
 
 
@@ -185,6 +195,9 @@ async def _upload_from_store(
     if await _cross_store_sha256_match(
         source_store, source_key, target_store, target_key
     ):
+        # Two sidecar GETs per key: a fallback reconcile over a large prefix
+        # that skips everything is still forward progress.
+        current_progress_tracker().mark_progress("storage.copy_file")
         return False, "skipped:hash_match"
 
     fd, tmp_path_str = tempfile.mkstemp()
@@ -201,6 +214,7 @@ async def _upload_from_store(
         )
         sha256 = await upload_file(target_key, tmp, target_store, normalize=False)
         await _put_remote_sha256(target_store, target_key, sha256)
+        current_progress_tracker().mark_progress("storage.copy_file")
         return True, "uploaded"
     finally:
         tmp.unlink(missing_ok=True)
@@ -236,6 +250,9 @@ async def _download_one(
         if remote_digest is not None:
             local_digest = await _sha256_file_async(local_file)
             if local_digest == remote_digest:
+                # See _upload_one: a hash-match skip is one file resolved, and
+                # the prefix download loop below runs these sequentially.
+                current_progress_tracker().mark_progress("storage.download_file")
                 return False, "skipped:hash_match"
 
     local_file.parent.mkdir(parents=True, exist_ok=True)
@@ -248,6 +265,7 @@ async def _download_one(
         etag=etag,
         resume=resume,
     )
+    current_progress_tracker().mark_progress("storage.download_file")
     return True, "downloaded"
 
 

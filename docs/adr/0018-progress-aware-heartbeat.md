@@ -413,11 +413,57 @@ Detection latency is `max_no_progress_seconds` plus at most one loop tick (10s).
 ### Feeding the tracker (three mechanisms, most-automatic first)
 
 1. **Framework hooks (automatic, no app action).** Call `mark_progress()` wherever
-   the SDK already loops over units of work: the batched output writers, the
-   record/statistics emission path, and the `ObjectStore` transfer loops
-   (`storage/transfer.py`, `storage/chunked.py`, `storage/file_ref_sync.py`). This
-   covers the streaming majority — the bulk of connector runtime — with no code
-   change in the app.
+   the SDK already loops over units of work. This covers the streaming majority —
+   the bulk of connector runtime — with no code change in the app. Each hook
+   reaches the attempt's tracker through `current_progress_tracker()` (FND-287),
+   which outside an activity returns the inert tracker — so every hook below is a
+   no-op until `activities.py` binds one. As landed (FND-288), the hooked set is:
+
+   | Where | Unit | Label |
+   | --- | --- | --- |
+   | `storage/formats/__init__.py` — `Writer._flush_buffer` | one buffer chunk written | `writer.flush_buffer` |
+   | `storage/formats/__init__.py` — `Writer._write_statistics` | statistics sidecar emitted at `close()` | `writer.statistics` |
+   | `storage/formats/parquet.py` — `_write_chunk_to_temp_folder` | one accumulated chunk | `writer.accumulate_chunk` |
+   | `storage/formats/parquet.py` — `_consolidate_current_folder` | one consolidated file | `writer.consolidate_chunk` |
+   | `storage/rolling.py` — `RollingFileWriter._flush_locked` | one rolled chunk | `writer.rolling_flush` |
+   | `storage/ops.py` — `upload_file` / `download_file` | one multipart part / streamed chunk | `storage.upload_part`, `storage.download_chunk` |
+   | `storage/chunked.py` — `_fetch_chunk` | one range GET at its offset | `storage.download_range` |
+   | `storage/transfer.py` — `_upload_one` / `_upload_from_store` / `_download_one` | one file transferred *or* skipped on a hash match | `storage.upload_file`, `storage.copy_file`, `storage.download_file` |
+   | `storage/cloud.py` — `CloudStore.upload` | one part to an external store | `cloudstore.upload_part` |
+   | `storage/file_ref_sync.py` — `_replace_refs` | one `FileReference` persisted / materialised | `file_ref.persist`, `file_ref.materialize` |
+   | `templates/sql_app.py` — `_extract_entity` | one fetched page written to raw JSONL | `extract.page` |
+   | `templates/sql_metadata_extractor.py` — `fetch_databases` / `fetch_schemas` / `fetch_tables` / `fetch_columns` | one fetched page | `fetch_*.page` |
+
+   Two grains on purpose: **per part/chunk** inside the byte loops, so a single
+   multi-GB object is never one long quiet window, and **per file** at the
+   orchestration boundaries, so `last_label` tells an operator *which* loop went
+   quiet rather than only that bytes were moving. A hash-match skip counts as
+   progress — an idempotent retry over a large prefix pays a digest and a sidecar
+   GET per file, and reading that as silence would manufacture a stall.
+
+   `storage/ops.py`, `storage/rolling.py`, `storage/cloud.py` and the template page
+   loops are additions to this ADR's original three-file sketch, each because a
+   single step there can outlast the budget with nothing else to carry its signal:
+   `ops` owns the actual byte loops the other modules delegate to;
+   `RollingFileWriter` is the *recommended* replacement for the v4.0-deprecated
+   writers and is not a `Writer` subclass, so it inherits no hook; and the
+   `fetch_*` page loops accumulate in memory rather than streaming to a writer, so
+   there is no write side to cover for them.
+
+   **Where mechanism 1 stops and mechanism 2 starts.** A hook only helps a loop
+   that yields *and* has a boundary worth marking. `SqlApp._transform_entity` has
+   neither: rollout step 1 (FND-282) offloaded its whole record map into a single
+   `run_in_thread` hop, and the loop inside is line-by-line with no batch
+   boundary — the only boundary available is the per-record one this rule
+   forbids. It needs no hook, because the auto-hold below vouches for the entire
+   offloaded call. Coverage there is mechanism 2, and the residual is the 24h
+   backstop that warn mode is meant to surface.
+
+   The general rule: **a synchronous loop that holds the event loop cannot be
+   fixed with a mark** — the watchdog coroutine cannot tick to read one. That is
+   loop starvation, `heartbeat_timeout`'s job, and an ADR-0010 offload is the
+   fix. Offload first, then decide whether the offloaded call wants a hook
+   (a yielding batch loop) or a hold (one opaque hop).
 2. **`run_in_thread` auto-holds (automatic for blocking work).** Anything offloaded
    through `run_in_thread` is wrapped in an **unbounded** hold by the SDK, so a
    legitimate long blocking call is never false-killed and behaviour on upgrade is
