@@ -126,6 +126,36 @@ class TestRuntimeAndGateViewsAgree:
             },
         )
 
+    def test_gate_values_match_runtime_resolved_values(self, extra_shape):
+        """Key presence is the contract; this locks the values down too.
+
+        Both views serialize from the same `creds_dict`, so agreement here is
+        structural rather than coincidental — but nothing enforced it, and a
+        future change to `_serialize_credential_value` could hand the gate a
+        differently-rendered `port` than the DSN gets.
+        """
+        creds = {
+            "username": "u",
+            "password": "p",
+            "host": "h",
+            "extra": extra_shape({"port": 1521, "sid": "DB1"}),
+        }
+        extra = (
+            json.loads(creds["extra"])
+            if isinstance(creds["extra"], str)
+            else creds["extra"]
+        )
+        pairs = {p["key"]: p["value"] for p in flatten_credentials_to_pairs(creds)}
+
+        for param in _ExtraParamClient.DB_CONFIG.required:
+            # The runtime lens: top level first, then `extra` (clients/sql.py).
+            runtime_value = creds.get(param) or extra.get(param)
+            gate_value = pairs.get(param, pairs.get(f"extra.{param}"))
+            assert gate_value == str(runtime_value), (
+                f"{param!r}: runtime resolves {runtime_value!r} but the gate "
+                f"view carries {gate_value!r}"
+            )
+
 
 class TestGateViewNeverRaises:
     """The gate view is built where no caller can act on a parse failure.

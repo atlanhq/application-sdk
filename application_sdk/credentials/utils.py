@@ -30,9 +30,21 @@ def parse_credentials_extra(
     ``extra`` is stored in two legal shapes — a nested object, or that same
     object serialized to a JSON string — because its producers (the Atlan UI,
     Heracles, Argo templates, agent JSON) straddle the v2/v3 credential
-    contract boundary. This is the **only** decoder for that field: every
-    consumer routes through it so that a shape one code path accepts cannot
-    be a shape another code path silently drops.
+    contract boundary. A reader that handles only one shape silently drops
+    whatever the other shape carried, so the credential-resolution and
+    gate-flattening paths share this decoder rather than shape-matching
+    locally: ``clients/sql.py`` and
+    :func:`~application_sdk.handler.contracts.flatten_credentials_to_pairs`.
+
+    It is **not** yet the only reader of ``extra`` in the SDK. These still
+    parse it independently and remain to be routed through here:
+
+    * ``storage/cloud.py`` — decodes both shapes, but with its own error type
+      and an additional ``extras`` alias key.
+    * ``credentials/agent.py`` (secret-reference collection and substitution)
+      and ``infrastructure/_dapr/credential_vault.py`` (secret substitution)
+      — ``isinstance(extra, dict)`` only, so a JSON-string ``extra`` is
+      skipped rather than decoded.
 
     Always returns a mapping. Absent, null, and empty ``extra`` are all "no
     extra" — handing back the raw ``None`` instead only moved the failure to
@@ -58,7 +70,10 @@ def parse_credentials_extra(
     """
     extra: Any = credentials.get("extra")
 
-    if extra is None or extra == "":
+    # ``isinstance`` before the emptiness test: ``extra`` is arbitrarily typed
+    # here, and a bare ``== ""`` on a container that overloads equality returns
+    # a container rather than a bool, raising on the truthiness check.
+    if extra is None or (isinstance(extra, str) and not extra):
         return {}
 
     if isinstance(extra, dict):
