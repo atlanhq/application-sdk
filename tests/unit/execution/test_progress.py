@@ -1,0 +1,372 @@
+"""Unit tests for application_sdk.execution.progress.
+
+No worker, no event loop, no patched global clock: the tracker takes its clock
+by injection precisely so tests can drive time without touching
+``time.monotonic`` (which an asyncio loop shares — patching it globally makes
+the loop itself misbehave).
+"""
+
+from __future__ import annotations
+
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+
+from application_sdk.execution.progress import ClosedHold, ProgressTracker
+
+# ---------------------------------------------------------------------------
+# Test doubles
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FakeClock:
+    """A monotonic clock the test advances explicitly."""
+
+    now: float = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@dataclass
+class HoldRecorder:
+    """Collects the ClosedHold observations the tracker reports."""
+
+    closed: list[ClosedHold] = field(default_factory=list)
+
+    def __call__(self, hold: ClosedHold) -> None:
+        self.closed.append(hold)
+
+
+def _tracker(clock: FakeClock, recorder: HoldRecorder | None = None) -> ProgressTracker:
+    return ProgressTracker(clock=clock, on_hold_closed=recorder)
+
+
+# ---------------------------------------------------------------------------
+# Progress signal
+# ---------------------------------------------------------------------------
+
+
+class TestMarkProgress:
+    def test_stall_clock_starts_at_construction(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+
+        assert tracker.stalled_for() == 0.0
+        clock.advance(42.0)
+        assert tracker.stalled_for() == 42.0
+
+    def test_mark_progress_resets_the_stall_clock(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+
+        clock.advance(30.0)
+        tracker.mark_progress("write_batch")
+        assert tracker.stalled_for() == 0.0
+
+        clock.advance(5.0)
+        assert tracker.stalled_for() == 5.0
+
+    def test_label_is_remembered(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+
+        assert tracker.last_label == ""
+        tracker.mark_progress("write_batch")
+        assert tracker.last_label == "write_batch"
+
+    def test_unlabelled_progress_re_arms_without_erasing_the_label(self) -> None:
+        """Warn mode re-arms after reporting a gap; the reported label must survive."""
+        clock = FakeClock()
+        tracker = _tracker(clock)
+        tracker.mark_progress("transfer_chunk")
+
+        clock.advance(900.0)
+        tracker.mark_progress()
+
+        assert tracker.stalled_for() == 0.0
+        assert tracker.last_label == "transfer_chunk"
+
+
+# ---------------------------------------------------------------------------
+# Holds
+# ---------------------------------------------------------------------------
+
+
+class TestUnboundedHold:
+    def test_vouches_indefinitely(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+        tracker.enter_hold("full table scan", None)
+
+        clock.advance(6 * 60 * 60)
+
+        assert tracker.held() is True
+        assert tracker.stalled_for() == 0.0
+
+    def test_exit_resumes_the_stall_clock_from_zero(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+        token = tracker.enter_hold("full table scan", None)
+
+        clock.advance(3600.0)
+        tracker.exit_hold(token)
+
+        assert tracker.held() is False
+        assert tracker.stalled_for() == 0.0
+        assert tracker.last_label == "full table scan"
+
+        clock.advance(10.0)
+        assert tracker.stalled_for() == 10.0
+
+
+class TestBoundedHold:
+    def test_vouches_until_the_allowance_is_spent(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+        tracker.enter_hold("snapshot metadata query", 1800.0)
+
+        clock.advance(1799.0)
+        assert tracker.held() is True
+        assert tracker.stalled_for() == 0.0
+
+    def test_lapsed_hold_resumes_the_stall_clock_from_its_deadline(self) -> None:
+        """Kill time for a wedged held call is allowance + budget, not allowance.
+
+        The allowance vouched for everything up to the deadline, so the stall
+        clock counts from the deadline — not from the last progress signal
+        before the hold, which would fire the instant the allowance lapsed.
+        """
+        clock = FakeClock()
+        tracker = _tracker(clock)
+        tracker.mark_progress("write_batch")
+        tracker.enter_hold("snapshot metadata query", 1800.0)
+
+        clock.advance(1800.0 + 700.0)
+
+        assert tracker.held() is False
+        assert tracker.stalled_for() == 700.0
+
+    def test_progress_inside_a_lapsed_hold_wins_over_the_deadline(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+        tracker.enter_hold("paged export", 60.0)
+
+        clock.advance(100.0)
+        tracker.mark_progress("fetch_page")
+        clock.advance(5.0)
+
+        assert tracker.stalled_for() == 5.0
+
+    def test_zero_allowance_does_not_forgive_the_quiet_before_it(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+        tracker.mark_progress("write_batch")
+        clock.advance(10.0)
+        tracker.enter_hold("no allowance at all", 0.0)
+
+        assert tracker.held() is False
+        assert tracker.stalled_for() == 10.0
+
+    def test_negative_allowance_is_already_exhausted(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+        tracker.mark_progress("write_batch")
+        clock.advance(10.0)
+        tracker.enter_hold("typo", -5.0)
+
+        assert tracker.held() is False
+        assert tracker.stalled_for() == 10.0
+
+
+class TestConcurrentHolds:
+    def test_tokens_are_distinct(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+
+        first = tracker.enter_hold("query a", None)
+        second = tracker.enter_hold("query b", None)
+
+        assert first != second
+
+    def test_exiting_one_hold_does_not_release_another(self) -> None:
+        """Keyed by token, not popped off a stack: gather() over two offloads."""
+        clock = FakeClock()
+        tracker = _tracker(clock)
+        short = tracker.enter_hold("quick query", 60.0)
+        tracker.enter_hold("slow query", 7200.0)
+
+        clock.advance(30.0)
+        tracker.exit_hold(short)
+
+        clock.advance(1000.0)
+        assert tracker.held() is True
+        assert tracker.stalled_for() == 0.0
+
+    def test_stall_waits_for_the_last_deadline_to_lapse(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+        tracker.enter_hold("quick query", 60.0)
+        tracker.enter_hold("slow query", 600.0)
+
+        clock.advance(300.0)
+        assert tracker.stalled_for() == 0.0
+
+        clock.advance(400.0)  # now 700s in: both deadlines are behind us
+        assert tracker.stalled_for() == 100.0
+
+    def test_reverse_order_exit_is_fine(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+        first = tracker.enter_hold("query a", None)
+        second = tracker.enter_hold("query b", None)
+
+        tracker.exit_hold(first)
+        assert tracker.held() is True
+        tracker.exit_hold(second)
+        assert tracker.held() is False
+
+    def test_token_allocation_is_thread_safe(self) -> None:
+        """contextvars reach worker threads, so holds can be entered off-loop.
+
+        Two holds sharing a token would let one release the other's deadline.
+        """
+        tracker = ProgressTracker(clock=time.monotonic)
+
+        def enter_many() -> list[int]:
+            return [tracker.enter_hold("offloaded call", None) for _ in range(200)]
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            batches = [pool.submit(enter_many) for _ in range(8)]
+            tokens = [token for batch in batches for token in batch.result()]
+
+        assert len(tokens) == 8 * 200
+        assert len(set(tokens)) == len(tokens)
+
+
+# ---------------------------------------------------------------------------
+# Closed-hold observations (the warn-mode audit seam)
+# ---------------------------------------------------------------------------
+
+
+class TestClosedHoldObservations:
+    def test_unbounded_hold_reports_its_observed_duration(self) -> None:
+        clock = FakeClock()
+        recorder = HoldRecorder()
+        tracker = _tracker(clock, recorder)
+        token = tracker.enter_hold("full table scan", None)
+
+        clock.advance(4200.0)
+        tracker.exit_hold(token)
+
+        assert recorder.closed == [
+            ClosedHold(
+                label="full table scan",
+                duration_seconds=4200.0,
+                allowance_seconds=None,
+            )
+        ]
+        observed = recorder.closed[0]
+        assert observed.bounded is False
+        assert observed.lapsed is False
+
+    def test_bounded_hold_within_allowance_is_not_lapsed(self) -> None:
+        clock = FakeClock()
+        recorder = HoldRecorder()
+        tracker = _tracker(clock, recorder)
+        token = tracker.enter_hold("snapshot metadata query", 1800.0)
+
+        clock.advance(120.0)
+        tracker.exit_hold(token)
+
+        observed = recorder.closed[0]
+        assert observed.allowance_seconds == 1800.0
+        assert observed.bounded is True
+        assert observed.lapsed is False
+
+    def test_bounded_hold_past_its_allowance_is_lapsed(self) -> None:
+        clock = FakeClock()
+        recorder = HoldRecorder()
+        tracker = _tracker(clock, recorder)
+        token = tracker.enter_hold("snapshot metadata query", 60.0)
+
+        clock.advance(61.0)
+        tracker.exit_hold(token)
+
+        assert recorder.closed[0].lapsed is True
+
+    def test_unknown_token_reports_nothing(self) -> None:
+        clock = FakeClock()
+        recorder = HoldRecorder()
+        tracker = _tracker(clock, recorder)
+
+        tracker.exit_hold(9999)
+
+        assert recorder.closed == []
+
+    def test_double_exit_reports_once_and_does_not_reset_progress(self) -> None:
+        clock = FakeClock()
+        recorder = HoldRecorder()
+        tracker = _tracker(clock, recorder)
+        token = tracker.enter_hold("full table scan", None)
+
+        clock.advance(10.0)
+        tracker.exit_hold(token)
+        clock.advance(25.0)
+        tracker.exit_hold(token)
+
+        assert len(recorder.closed) == 1
+        assert tracker.stalled_for() == 25.0
+
+    def test_observer_failure_never_breaks_the_caller(self) -> None:
+        clock = FakeClock()
+
+        def explode(_: ClosedHold) -> None:
+            raise RuntimeError("metric backend down")
+
+        tracker = ProgressTracker(clock=clock, on_hold_closed=explode)
+        token = tracker.enter_hold("full table scan", None)
+
+        clock.advance(5.0)
+        tracker.exit_hold(token)  # must not raise
+
+        assert tracker.stalled_for() == 0.0
+
+    def test_no_observer_is_fine(self) -> None:
+        clock = FakeClock()
+        tracker = ProgressTracker(clock=clock)
+        token = tracker.enter_hold("full table scan", None)
+
+        clock.advance(5.0)
+        tracker.exit_hold(token)
+
+        assert tracker.held() is False
+
+
+# ---------------------------------------------------------------------------
+# Clock injection
+# ---------------------------------------------------------------------------
+
+
+class TestClockInjection:
+    def test_defaults_to_time_monotonic(self) -> None:
+        tracker = ProgressTracker()
+
+        assert tracker._clock is time.monotonic
+        assert tracker.stalled_for() >= 0.0
+
+    def test_no_global_clock_is_read(self) -> None:
+        """The injected clock is the only time source the tracker consults."""
+        clock = FakeClock()
+        tracker = _tracker(clock)
+        tracker.mark_progress("write_batch")
+
+        real_before = time.monotonic()
+        while time.monotonic() - real_before < 0.01:
+            pass
+
+        assert tracker.stalled_for() == 0.0
