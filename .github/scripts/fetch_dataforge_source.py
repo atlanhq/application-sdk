@@ -174,19 +174,25 @@ def _github_oidc_token(audience: str = "dataforge") -> str:
         return json.load(resp)["value"]
 
 
-def _oauth_base_url(base_url: str) -> str:
-    """The OAuth endpoints live on the APP host, not the api. host.
+def _oauth_base_urls(base_url: str) -> list[str]:
+    """Candidate hosts for /oauth/token, tried in order.
 
-    dataforge's ingress serves /api/* on api.dataforge.atlan.dev but mounts
-    /oauth/token only on the app host (dataforge.atlan.dev) — POSTing the
-    exchange to the api host 404s at the ingress. Derive by dropping the
-    "api." label; override explicitly with DATAFORGE_OAUTH_BASE_URL for
-    non-standard deployments.
+    CI runners reach the API host over the VPN (its IP whitelist admits the
+    GP egress IPs) but the app host sits behind Cloudflare, which rejects
+    datacenter egress even with the tunnel up. The API host only routes
+    /oauth once dataforge#742 is deployed — so try it first and fall back to
+    the app host on 404, which keeps the fetch working on both sides of that
+    deploy (and on developer laptops, where the app host IS reachable).
+    DATAFORGE_OAUTH_BASE_URL pins a single host explicitly.
     """
     override = os.environ.get("DATAFORGE_OAUTH_BASE_URL", "").strip()
     if override:
-        return override.rstrip("/")
-    return base_url.replace("://api.", "://", 1)
+        return [override.rstrip("/")]
+    candidates = [base_url]
+    app_host = base_url.replace("://api.", "://", 1)
+    if app_host != base_url:
+        candidates.append(app_host)
+    return candidates
 
 
 def _exchange_for_service_token(base_url: str, oidc_token: str) -> str:
@@ -199,21 +205,31 @@ def _exchange_for_service_token(base_url: str, oidc_token: str) -> str:
             "scope": "credentials:read",
         }
     ).encode()
-    req = urllib.request.Request(
-        f"{_oauth_base_url(base_url)}/oauth/token",
-        data=body,
-        method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 — fixed https host
-            return json.load(resp)["access_token"]
-    except urllib.error.HTTPError as exc:
-        raise DataforgeSourceError(
-            f"dataforge token exchange failed: HTTP {exc.code} — is a workload "
-            "binding registered for this repo (issuer "
-            "token.actions.githubusercontent.com, subject repo:<org>/<repo>…)?"
-        ) from exc
+    last_exc: urllib.error.HTTPError | None = None
+    for oauth_base in _oauth_base_urls(base_url):
+        req = urllib.request.Request(
+            f"{oauth_base}/oauth/token",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 — fixed https host
+                return json.load(resp)["access_token"]
+        except urllib.error.HTTPError as exc:
+            last_exc = exc
+            # 404 = this host doesn't route /oauth (ingress, not the grant
+            # handler) — try the next candidate. Anything else is a real
+            # answer from the exchange; surface it.
+            if exc.code == 404:
+                continue
+            break
+    assert last_exc is not None
+    raise DataforgeSourceError(
+        f"dataforge token exchange failed: HTTP {last_exc.code} — is a workload "
+        "binding registered for this repo (issuer "
+        "token.actions.githubusercontent.com, subject repo:<org>/<repo>…)?"
+    ) from last_exc
 
 
 def resolve_via_endpoint(
