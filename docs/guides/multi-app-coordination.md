@@ -57,7 +57,7 @@ A two-phase manifest looks like:
           "output_path": "$.extract.outputs.output_path"
         }
       },
-      "depends_on": { "node_id": "extract" }
+      "depends_on": { "node_id": "extract", "tag": "success" }
     }
   }
 }

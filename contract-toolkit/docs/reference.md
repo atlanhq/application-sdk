@@ -1585,16 +1585,19 @@ time instead of at AE parse time.
 
 `dependsOn` emits two shapes based on list length:
 
-- 1 entry → `"depends_on": {"node_id": "..."}` (fires on the parent's SUCCESS *or* FAILURE)
+- 1 entry → `"depends_on": {"node_id": "...", "tag": "success"}`
+  (node is scheduled only when the parent reaches SUCCESS)
 - 2+ entries → `"depends_on": {"and_conditions": [{"node_id": "...", "tag": "success"}, ...]}`
   (strict AND-fan-in: node is scheduled only when every listed parent reaches SUCCESS)
 
-The `tag: "success"` in the multi-parent shape is honored by AE's condition evaluator
-(`automation_engine/workflows/graph.py`), which gates on
-`WorkflowRunNodeStatus.SUCCESS`. Because single-parent emission omits `tag`, adding a
-second entry to an existing `dependsOn` is not a pure additive change — it switches the
-node from "fire on any completion" to "fire only on all-success". Call this out in the
-app PR that introduces the second entry. See `examples/fanin/` for a minimal example.
+Both shapes carry `tag: "success"`. AE's condition evaluator
+(`automation_engine/workflows/graph.py`) honors it by gating on
+`WorkflowRunNodeStatus.SUCCESS`, so a failed or skipped parent leaves the dependent
+node Skipped rather than scheduling it. Adding an entry to an existing `dependsOn` is
+therefore purely additive: it widens the set of parents that must succeed without
+changing the gate itself. A node that genuinely must run regardless of its parent's
+outcome needs `dependsOnCondition` with an explicit tag (or the run-level
+`workflow_complete` tag) instead. See `examples/fanin/` for a minimal example.
 
 Pkl listing amendment matters for pre-built nodes. Nodes such as `PublishNode`,
 `QueryIntelligenceNode`, and `LineageNode` define defaults like
@@ -2791,7 +2794,7 @@ behavior.
           "connection_entity": "{{connection}}"
         }
       },
-      "depends_on": { "node_id": "extract" }
+      "depends_on": { "node_id": "extract", "tag": "success" }
     }
   }
 }
