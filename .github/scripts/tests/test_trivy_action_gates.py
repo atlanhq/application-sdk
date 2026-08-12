@@ -13,10 +13,11 @@ a single `add-report-comment-to-pr` input, which produced two distinct failures:
    gone red; the check would simply have stopped checking.
 
 So the contract this file pins is a separation, not a behaviour: reporting may be
-skipped and may fail harmlessly, enforcement may do neither. Both halves are
-GitHub-evaluated `if:` expressions and `continue-on-error` flags that no runner
-is available to exercise here, so each gate is lifted verbatim out of the YAML
-and evaluated against synthetic contexts — the same approach as
+skipped and may fail harmlessly — every reporting step, from Python setup to the
+comment post, is `continue-on-error` — while enforcement may do neither. Both
+halves are GitHub-evaluated `if:` expressions and `continue-on-error` flags that
+no runner is available to exercise here, so each gate is lifted verbatim out of
+the YAML and evaluated against synthetic contexts — the same approach as
 test_label_trigger_gates.py, and for the same reason: a presence check proves a
 term is there, not that it is wired in at the right precedence.
 """
@@ -56,11 +57,11 @@ _ENFORCEMENT_STEPS = (
     "Fail on Any Secrets Found",
 )
 
-#: The two steps whose failure must not fail the job.
-_NON_FATAL_STEPS = (
-    "Comment on PR with Vulnerability Scan Results",
-    "Comment on PR with Secret Scan Results",
-)
+#: The steps whose failure must not fail the job: all of reporting. The comment
+#: posts are the FND-256 case; the four preparation steps share the failure
+#: shape one step earlier (a `pip install` blip would eject the PR before the
+#: enforcement scans even run), so the invariant pins them too.
+_NON_FATAL_STEPS = _REPORTING_STEPS
 
 #: Events that reach the trivy job. `merge_group` is the one that motivated
 #: FND-256; `pull_request` is where the comment is actually wanted.
@@ -176,11 +177,12 @@ def test_enforcement_gate_never_mentions_the_reporting_input(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", _NON_FATAL_STEPS)
-def test_comment_steps_cannot_fail_the_required_check(name: str) -> None:
+def test_reporting_steps_cannot_fail_the_required_check(name: str) -> None:
     step = _step(name)
     assert step.get("continue-on-error") is True, (
-        f"{name!r} must be continue-on-error: a transient API error while "
-        "posting a comment would otherwise eject the PR from the merge queue"
+        f"{name!r} must be continue-on-error: a transient failure anywhere in "
+        "reporting — a comment post, a pip install, a markdown render — would "
+        "otherwise eject the PR from the merge queue"
     )
 
 

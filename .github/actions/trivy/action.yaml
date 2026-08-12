@@ -102,33 +102,39 @@ runs:
     # entries, where the comment would land on an already-approved PR that is
     # seconds from merging.
     #
-    # The two comment steps are `continue-on-error` because this job is a
+    # Every reporting step is `continue-on-error` because this job is a
     # required status check: a transient GitHub API or TLS error while posting
     # a decorative comment used to fail the check outright, which ejects the
     # entry from the merge queue and throws away every other check in it
-    # (FND-256). Reporting must never be able to do that; enforcement below is
-    # what is allowed to fail the job.
+    # (FND-256). The preparation steps have the same failure shape one step
+    # earlier — a `pip install` blip or a malformed JSON render must not eject
+    # the PR either. Reporting must never be able to do that; enforcement below
+    # is what is allowed to fail the job.
 
     - name: Set up Python
       if: inputs.add-report-comment-to-pr == 'true' && github.event_name == 'pull_request'
+      continue-on-error: true
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
         python-version: '3.14'
 
     - name: Install Dependencies
       if: inputs.add-report-comment-to-pr == 'true' && github.event_name == 'pull_request'
+      continue-on-error: true
       shell: bash
       run: |
         pip install mdutils
 
     - name: Convert Vulnerability Scan Results to Markdown
       if: inputs.add-report-comment-to-pr == 'true' && github.event_name == 'pull_request'
+      continue-on-error: true
       shell: bash
       run: |
         python .github/scripts/trivy-to-markdown.py trivy-vuln-results.json trivy-vuln-results.md Vulnerability
 
     - name: Convert Secret Scan Results to Markdown
       if: inputs.add-report-comment-to-pr == 'true' && github.event_name == 'pull_request'
+      continue-on-error: true
       shell: bash
       run: |
         python .github/scripts/trivy-to-markdown.py trivy-secret-results.json trivy-secret-results.md Secret
