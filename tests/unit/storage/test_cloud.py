@@ -16,6 +16,13 @@ from application_sdk.storage.errors import (
 )
 
 
+def _async_return(value):
+    async def _inner(*_args, **_kwargs):
+        return value
+
+    return _inner
+
+
 class TestInferAuthType:
     def test_s3(self):
         assert _infer_auth_type({"s3_bucket": "my-bucket"}) == "s3"
@@ -519,6 +526,13 @@ class TestCloudStorePutAttributes:
             patch(
                 "obstore.open_writer_async", return_value=mock_writer
             ) as mock_writer_call,
+            # The post-upload integrity readback would call head_async on the
+            # mocked store; stub it out — attribute forwarding is what's under
+            # test here, not the FND-306 readback (covered in test_integrity).
+            patch(
+                "application_sdk.storage.ops.get_file_meta",
+                new=_async_return((5, "etag")),
+            ),
         ):
             mock_store = MagicMock()
             put_attrs = {"Storage-Class": "STANDARD_IA"}

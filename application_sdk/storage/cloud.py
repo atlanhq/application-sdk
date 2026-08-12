@@ -56,12 +56,11 @@ from application_sdk.storage.errors import (
     StorageNotFoundError,
 )
 from application_sdk.storage.ops import (
-    _azure_container_not_found_message,
-    _compute_part_size,
-    _is_azure_container_not_found,
+    BoundStore,
     _list_items,
     _safe_join_under,
     download_file_chunked,
+    upload_file,
 )
 
 # Lazy import: direct get_logger() at module load would create a circular
@@ -384,6 +383,17 @@ class CloudStore:
     ) -> int:
         """Upload a local file to the cloud store by streaming without buffering.
 
+        Routes through the shared :func:`~application_sdk.storage.ops.upload_file`
+        primitive so the FND-306 write-side validations hold on external stores
+        exactly as they do on the tenant store: a file truncated under the
+        reader raises ``StorageIntegrityError`` rather than landing a partial
+        artifact, and a post-write HEAD confirms the store recorded the bytes
+        that were sent (a silently-dropped object becomes a ``StorageError``).
+        The key is used exactly as supplied (no normalisation) and no
+        ``.sha256`` sidecar is written — external customer buckets do not
+        participate in the SDK sidecar protocol (mirrors the download path's
+        ``sidecar_present=False``).
+
         Args:
             local_path: Path to the local file.
             key: Destination object key.
@@ -394,25 +404,19 @@ class CloudStore:
         path = Path(local_path)
         try:
             size = path.stat().st_size
-            chunk = _compute_part_size(size, 8 * 1024 * 1024)
-            async with obs.open_writer_async(
-                self._store, key, buffer_size=chunk, attributes=self._put_attributes
-            ) as writer:
-                with path.open("rb") as fh:
-                    while True:
-                        buf = fh.read(chunk)
-                        if not buf:
-                            break
-                        await writer.write(buf)
-        except StorageError:
-            raise
-        # conformance: ignore[E004] re-raise only; checks azure container-not-found then wraps in StorageConfigError/StorageError
-        except Exception as exc:
-            if _is_azure_container_not_found(exc):
-                raise StorageConfigError(
-                    _azure_container_not_found_message(key)
-                ) from exc
+        # conformance: ignore[E004] re-raise only; a missing/unreadable source file is wrapped in StorageError, matching the pre-FND-306 contract
+        except OSError as exc:
             raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
+        # BoundStore carries the credential-level put attributes (e.g. an S3
+        # storageClass) into the primitive; compute_hash=False skips hashing
+        # and implies write_sidecar=False.
+        await upload_file(
+            key,
+            path,
+            BoundStore(self._store, self._put_attributes),
+            normalize=False,
+            compute_hash=False,
+        )
         _log().info("Uploaded key=%s bytes=%d", key, size)
         return size
 
@@ -443,8 +447,10 @@ class CloudStore:
         """Upload all files in a local directory to the cloud store.
 
         Note: Unlike ``batch.upload_prefix``, this uploads to an *external*
-        store without SHA-256 hashing or key normalization — those features
-        are specific to the tenant's internal storage layer.
+        store without SHA-256 sidecars or key normalization — those features
+        are specific to the tenant's internal storage layer.  The byte-level
+        validations (truncation, post-write readback) still apply, via
+        :meth:`upload`.
 
         Args:
             local_dir: Local directory to upload from.

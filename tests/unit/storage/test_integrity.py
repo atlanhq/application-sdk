@@ -338,6 +338,28 @@ class TestUploadValidation:
         ):
             await upload_file("off/x.json", f, store, normalize=False, verify=False)
 
+    async def test_sidecar_write_skips_a_sidecar_key(self, store) -> None:
+        """``{key}.sha256.sha256`` must never be written — a sidecar is SDK
+        bookkeeping, not a user artifact, and looking one up is a guaranteed
+        miss on every read."""
+        await integrity.write_digest_sidecar(store, "a/b.json.sha256", "deadbeef")
+        assert (
+            await _get_bytes("a/b.json.sha256.sha256", store, normalize=False) is None
+        )
+
+    async def test_sidecar_write_skips_transfer_state_key(self, store) -> None:
+        """The resumable-download checkpoint is local-only bookkeeping rewritten
+        in place; it never carries a digest sidecar either."""
+        await integrity.write_digest_sidecar(
+            store, "a/b.parquet.transfer-state", "deadbeef"
+        )
+        assert (
+            await _get_bytes(
+                "a/b.parquet.transfer-state.sha256", store, normalize=False
+            )
+            is None
+        )
+
 
 def _async_return(value):
     async def _inner(*_args, **_kwargs):
