@@ -6,28 +6,25 @@ Connector e2e needs source credentials, and dataforge is where CI sources live:
 either a *provisioned resource* (a postgres/mysql/… instance created once,
 human-approved, ``category: "ci"`` so the lifecycle reaper skips it) or a
 *managed credential* (a 1Password-backed vault entry — the only home for SaaS
-sources like powerbi/snowflake that cannot be provisioned). Dataforge has no
-source-name-keyed one-shot credentials endpoint, so this script implements the
-two lookups:
+sources like powerbi/snowflake that cannot be provisioned). Resolution is one
+call: ``GET /api/v1/datasources/{ds}/credentials`` (pin an instance with
+``resource_id`` / a vault entry with ``credential_id``).
 
-* ``resource`` mode — ``GET /api/v1/resources/{id}`` -> ``artifacts.data``
-  (plaintext is only served for non-aisdlc categories).
-* ``managed`` mode — ``POST /api/v1/managed-credentials/{id}/reveal``, or when
-  no id is pinned, ``GET /api/v1/managed-credentials?datasource=X`` filtered
-  client-side to ``LifecycleStatus == "active"`` (the list endpoint does NOT
-  exclude decommissioned rows), preferring ``TestStatus == "passing"`` and
-  then the *newest* entry (``RotatedAt`` descending, then
-  ``LastSeenInVaultAt`` descending — the ordering dataforge's own
-  credential-first router uses), then reveal. List items are PascalCase (the
-  Go entity has no json tags); ``RevealResult.fields`` is a flat,
-  vault-controlled, free-form map.
-
-Raw field names vary per source (SQL modules emit host/port/database/username/
-password; snowflake emits account/warehouse/…; powerbi emits tenant_id/
-client_id/client_secret), so the raw map is normalized against
-``dataforge_field_maps.json`` into a canonical ``E2E_SOURCE_*`` set plus
-prefixed per-source aliases (``E2E_POSTGRES_HOST``, …) and two JSON escape
-hatches (``E2E_SOURCE_RAW_JSON`` / ``E2E_SOURCE_EXTRA_JSON``).
+Field contract: **verbatim pass-through — this script does not interpret
+fields**. Every scalar the datasource carries is exported as
+``E2E_<DS>_<FIELD>`` exactly as dataforge returns it (``host`` ->
+``E2E_POSTGRES_HOST``, ``iam_role_arn`` -> ``E2E_POSTGRES_IAM_ROLE_ARN``,
+``client_secret`` -> ``E2E_POWERBI_CLIENT_SECRET``), plus
+``E2E_SOURCE_DATASOURCE`` (the workflow's source-selection breadcrumb) and
+two JSON escape hatches (``E2E_SOURCE_RAW_JSON`` for the scalar map,
+``E2E_SOURCE_EXTRA_JSON`` for nested values). Mapping fields onto connector
+config is the CONNECTOR's job, in its own secrets script / resolver — that is
+where its auth variants (basic, IAM role, key-pair, OAuth) already live, so
+there is no central per-connector map to maintain in the SDK and no canonical
+host/username/password shape imposed on sources that have neither. Field
+*semantics* (which fields a datasource must carry) belong to dataforge's own
+per-datasource curation profiles — the endpoint's ``mandatory_missing`` is
+computed there, server-side.
 
 Security contract
 -----------------
@@ -66,14 +63,9 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path
 from typing import Any
 
 DEFAULT_BASE_URL = "https://api.dataforge.atlan.dev"
-_FIELD_MAPS_PATH = Path(__file__).parent / "dataforge_field_maps.json"
-
-# The five concepts almost every connector's secrets-script / harness reads.
-_CANONICAL_KEYS = ("host", "port", "database", "username", "password")
 
 
 class DataforgeSourceError(RuntimeError):
@@ -287,46 +279,24 @@ def _env_name(prefix: str, key: str) -> str:
     return f"{prefix}_{re.sub(r'[^A-Za-z0-9]', '_', key).upper()}"
 
 
-def load_field_maps(override_json: str = "") -> dict:
-    maps = json.loads(_FIELD_MAPS_PATH.read_text())
-    if override_json.strip():
-        override = json.loads(override_json)
-        if not isinstance(override, dict):
-            raise DataforgeSourceError("--field-map must be a JSON object")
-        maps["_override"] = override
-    return maps
-
-
-def normalize(
-    raw: dict, datasource: str, field_maps: dict, output_prefix: str = ""
+def build_exports(
+    raw: dict, datasource: str, output_prefix: str = ""
 ) -> dict[str, str]:
-    """Build the flat env map: canonical + prefixed aliases + JSON escape hatches."""
+    """Verbatim pass-through: every raw scalar becomes E2E_<PREFIX>_<FIELD>.
+
+    No canonical shape, no field interpretation — a basic-auth postgres
+    exports E2E_POSTGRES_HOST/…/PASSWORD because those are its field names;
+    an IAM-role source exports E2E_<DS>_IAM_ROLE_ARN/… because those are
+    its. The connector's own secrets script maps them onto its config,
+    where its auth variants already live.
+    """
     scalars, extras = _flatten(raw)
     prefix = "E2E_" + re.sub(
         r"[^A-Za-z0-9]", "_", (output_prefix or datasource).upper()
     )
-
-    # Candidate lists: per-repo override > per-datasource entry > _default.
-    profile: dict[str, list[str]] = dict(field_maps.get("_default", {}))
-    profile.update(field_maps.get(datasource, {}))
-    profile.update(field_maps.get("_override", {}))
-
-    lowered = {key.lower(): value for key, value in scalars.items()}
     exports: dict[str, str] = {}
-    for canonical in _CANONICAL_KEYS:
-        value = ""
-        for candidate in profile.get(canonical, [canonical]):
-            if lowered.get(candidate.lower(), "") != "":
-                value = lowered[candidate.lower()]
-                break
-        exports[f"E2E_SOURCE_{canonical.upper()}"] = value
-        exports[_env_name(prefix, canonical)] = value
-
-    # Prefixed alias for every raw scalar so connectors can read source-shaped
-    # names directly (E2E_POWERBI_TENANT_ID, E2E_SNOWFLAKE_WAREHOUSE, …).
     for key, value in scalars.items():
-        exports.setdefault(_env_name(prefix, key), value)
-
+        exports[_env_name(prefix, key)] = value
     exports["E2E_SOURCE_DATASOURCE"] = datasource
     exports["E2E_SOURCE_RAW_JSON"] = json.dumps(scalars, sort_keys=True)
     exports["E2E_SOURCE_EXTRA_JSON"] = json.dumps(extras, sort_keys=True)
@@ -343,7 +313,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--resource-id", default="")
     parser.add_argument("--env-tier", default="")
     parser.add_argument("--output-prefix", default="")
-    parser.add_argument("--field-map", default="")
     parser.add_argument(
         "--base-url", default=os.environ.get("DATAFORGE_BASE_URL", DEFAULT_BASE_URL)
     )
@@ -365,9 +334,7 @@ def main(argv: list[str] | None = None) -> int:
             resource_id=pin_resource,
             credential_id=pin_credential,
         )
-        exports = normalize(
-            raw, args.datasource, load_field_maps(args.field_map), args.output_prefix
-        )
+        exports = build_exports(raw, args.datasource, args.output_prefix)
     except DataforgeSourceError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1

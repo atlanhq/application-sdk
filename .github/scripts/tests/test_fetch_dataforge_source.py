@@ -1,6 +1,6 @@
 """Tests for fetch_dataforge_source.py — resolution, normalization, emission.
 
-The script's security contract is split: IT only fetches and normalizes,
+The script's security contract is split: IT only fetches and re-shapes,
 printing a JSON env map to stdout; masking and ``$GITHUB_ENV`` writes belong
 to export_extra_env.py's audited two-pass call sites. So these tests cover the
 resolution chains (resource / managed), the field normalization, and the
@@ -45,58 +45,51 @@ def _resource_doc(status="PROVISIONED", data=_POSTGRES_DATA):
     return {"id": "res-1", "status": status, "artifacts": {"data": data}}
 
 
-# ── Normalization ─────────────────────────────────────────────────────────────
+# ── Export map (verbatim pass-through) ───────────────────────────────────────
 
 
-def test_normalize_postgres_shape_emits_canonical_and_prefixed():
-    maps = fds.load_field_maps()
-    out = fds.normalize(_POSTGRES_DATA, "postgres", maps)
-
-    assert out["E2E_SOURCE_HOST"] == "db.example.internal"
-    assert out["E2E_SOURCE_PORT"] == "5432"
-    assert out["E2E_SOURCE_DATABASE"] == "dataforge"
-    assert out["E2E_SOURCE_USERNAME"] == "df_user"
-    assert out["E2E_SOURCE_PASSWORD"] == "s3cret"
-    # Prefixed aliases — the contract connector secrets-scripts already read.
+def test_exports_every_raw_scalar_verbatim_prefixed():
+    out = fds.build_exports(_POSTGRES_DATA, "postgres")
+    # Field names come straight from dataforge — no interpretation.
     assert out["E2E_POSTGRES_HOST"] == "db.example.internal"
+    assert out["E2E_POSTGRES_PORT"] == "5432"
+    assert out["E2E_POSTGRES_DATABASE"] == "dataforge"
+    assert out["E2E_POSTGRES_USERNAME"] == "df_user"
     assert out["E2E_POSTGRES_PASSWORD"] == "s3cret"
-    # Every raw scalar gets a prefixed alias too.
     assert out["E2E_POSTGRES_JDBC_URL"].startswith("jdbc:postgresql://")
+    # No canonical shape is imposed.
+    assert not any(k.startswith("E2E_SOURCE_HOST") for k in out)
 
 
-def test_normalize_snowflake_account_maps_to_host():
-    maps = fds.load_field_maps()
+def test_non_basic_auth_shapes_pass_through_unmangled():
+    """IAM-role/key-pair/OAuth sources have no username/password to fake."""
     raw = {
-        "account": "org-acct",
-        "username": "svc",
-        "password": "pw",
-        "warehouse": "WH1",
+        "iam_role_arn": "arn:aws:iam::1:role/e2e",
+        "external_id": "ext-1",
+        "region": "us-east-1",
+        "host": "db.internal",
+        "database": "app",
     }
-    out = fds.normalize(raw, "snowflake", maps)
-    assert out["E2E_SOURCE_HOST"] == "org-acct"
-    assert out["E2E_SOURCE_DATABASE"] == "WH1"
-    assert out["E2E_SNOWFLAKE_WAREHOUSE"] == "WH1"
+    out = fds.build_exports(raw, "postgres")
+    assert out["E2E_POSTGRES_IAM_ROLE_ARN"] == "arn:aws:iam::1:role/e2e"
+    assert out["E2E_POSTGRES_EXTERNAL_ID"] == "ext-1"
+    assert "E2E_POSTGRES_PASSWORD" not in out  # nothing invented
 
 
-def test_normalize_powerbi_saas_shape():
-    maps = fds.load_field_maps()
+def test_saas_shape_passes_through():
     raw = {
         "tenant_id": "t-1",
         "client_id": "c-1",
         "client_secret": "cs-1",
         "workspace_id": "w-1",
     }
-    out = fds.normalize(raw, "powerbi", maps)
-    assert out["E2E_SOURCE_USERNAME"] == "c-1"
-    assert out["E2E_SOURCE_PASSWORD"] == "cs-1"
-    assert out["E2E_SOURCE_DATABASE"] == "w-1"
-    assert out["E2E_SOURCE_HOST"] == ""  # no such concept; empty, not absent
+    out = fds.build_exports(raw, "powerbi")
     assert out["E2E_POWERBI_TENANT_ID"] == "t-1"
+    assert out["E2E_POWERBI_CLIENT_SECRET"] == "cs-1"
 
 
 def test_nested_values_go_to_extra_json_and_raw_holds_scalars():
-    maps = fds.load_field_maps()
-    out = fds.normalize(_POSTGRES_DATA, "postgres", maps)
+    out = fds.build_exports(_POSTGRES_DATA, "postgres")
     extra = json.loads(out["E2E_SOURCE_EXTRA_JSON"])
     assert extra == {"iam": {"enabled": False}, "metadata": {"request_id": "r-1"}}
     raw = json.loads(out["E2E_SOURCE_RAW_JSON"])
@@ -104,22 +97,20 @@ def test_nested_values_go_to_extra_json_and_raw_holds_scalars():
     assert "iam" not in raw
 
 
-def test_field_map_override_wins():
-    maps = fds.load_field_maps('{"host": ["weird_endpoint"]}')
-    out = fds.normalize({"weird_endpoint": "h1", "host": "wrong"}, "postgres", maps)
-    assert out["E2E_SOURCE_HOST"] == "h1"
-
-
 def test_env_names_are_sanitized_and_output_prefix_respected():
-    maps = fds.load_field_maps()
-    out = fds.normalize({"https-url": "https://x"}, "metabase", maps, "META_BASE")
+    out = fds.build_exports({"https-url": "https://x"}, "metabase", "META_BASE")
     assert out["E2E_META_BASE_HTTPS_URL"] == "https://x"
+
+
+def test_datasource_breadcrumb_is_exported():
+    """tests-reusable's source-selection notice keys off this."""
+    out = fds.build_exports(_POSTGRES_DATA, "postgres")
+    assert out["E2E_SOURCE_DATASOURCE"] == "postgres"
 
 
 def test_all_values_are_strings():
     """export_extra_env.parse rejects non-scalars — the hand-off must be safe."""
-    maps = fds.load_field_maps()
-    out = fds.normalize(_POSTGRES_DATA, "postgres", maps)
+    out = fds.build_exports(_POSTGRES_DATA, "postgres")
     assert all(isinstance(v, str) for v in out.values())
 
 
@@ -258,18 +249,6 @@ def test_tests_reusable_call_site_captures_stdout():
         "via command substitution — echoing it to the log would print every "
         "credential value unmasked"
     )
-
-
-def test_field_maps_file_is_well_formed():
-    maps = json.loads((_SCRIPTS_DIR / "dataforge_field_maps.json").read_text())
-    assert "_default" in maps
-    for source, profile in maps.items():
-        if source.startswith("_comment"):
-            continue
-        assert isinstance(profile, dict), source
-        for canonical, candidates in profile.items():
-            assert canonical in fds._CANONICAL_KEYS, (source, canonical)
-            assert isinstance(candidates, list) and candidates, (source, canonical)
 
 
 # ── OIDC path (DATFORG-88) ────────────────────────────────────────────────────

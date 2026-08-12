@@ -244,8 +244,10 @@ on:
           dataforge at run time (per-run GitHub OIDC exchange — no stored
           dataforge secret; needs a dataforge workload binding) — instead
           of, or in addition to, the static E2E_SOURCE_ENV_JSON secret — and
-          exports them as E2E_SOURCE_* plus E2E_<DATASOURCE>_* env before the
-          secrets bundle is written. DATAFORGE-FIRST with automatic fallback:
+          exports every raw field VERBATIM as E2E_<DATASOURCE>_<FIELD> env
+          before the secrets bundle is written (no canonical shape imposed:
+          the connector's own secrets script maps fields onto its config,
+          whatever its auth variant). DATAFORGE-FIRST with automatic fallback:
           the fetch runs AFTER the E2E_SOURCE_ENV_JSON export and overwrites
           it on success; the whole dataforge chain (VPN, fetch) is
           continue-on-error, so when dataforge is unavailable the repo's own
