@@ -465,6 +465,80 @@ def _compute_part_size(file_size: int, chunk_size: int) -> int:
     return max(chunk_size, math.ceil(file_size / 9900))
 
 
+async def _finalize_upload_integrity(
+    key: str,
+    path: Path,
+    store: BoundStore | ObjectStore | None,
+    resolved: ObjectStore,
+    *,
+    declared_size: int,
+    bytes_sent: int,
+    digest: str | None,
+    verify: bool | None,
+    write_sidecar: bool | None,
+) -> None:
+    """Validate a completed upload, then record its digest (FND-306).
+
+    Kept out of :func:`upload_file`'s body: the transport there (part sizing,
+    the streaming loop, error translation, cleanup) and this validation
+    sequence change for unrelated reasons, and the next edit to either should
+    review on its own.
+
+    The order is load-bearing. The local-truncation check comes first because
+    it invalidates the object itself; the readback next; and the sidecar only
+    after both pass — a sidecar must never advertise a digest for an object
+    this same upload just rejected, or a downstream reader would "verify" a
+    corrupt file successfully.
+
+    Args:
+        key: Normalised destination key, as written.
+        path: Local source file.
+        store: Caller's store argument — passed to the sidecar write so a
+            ``BoundStore``'s put attributes still apply.
+        resolved: Underlying store, for the readback HEAD.
+        declared_size: ``st_size`` observed before the read began.
+        bytes_sent: Bytes actually streamed to the store.
+        digest: Streaming SHA-256, or ``None`` when hashing was off.
+        verify: Per-call verification flag (``None`` → env default).
+        write_sidecar: Per-call sidecar flag (``None`` → env default).
+
+    Raises:
+        StorageIntegrityError: If the local file shrank while being read.
+        StorageError: If the object is absent afterwards, or is not the size
+            that was sent.
+    """
+    if integrity.verification_enabled(verify):
+        integrity.check_local_file_stable(
+            key, path, declared_size=declared_size, bytes_read=bytes_sent
+        )
+        remote_meta = await get_file_meta(key, resolved, normalize=False)
+        if remote_meta is None:
+            # The writer reported success but the object is not there. The
+            # zero-byte case is the known one (some S3-style backends drop
+            # empty objects), and a size comparison would pass it — 0 sent,
+            # 0 found — so absence is checked separately from length.
+            from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+
+            raise StorageError(
+                f"Upload of '{key}' reported success but the object is absent "
+                f"from the store afterwards ({bytes_sent} bytes sent from "
+                f"{path}). Some S3-style backends silently drop empty objects; "
+                f"others need read-your-writes consistency that this store "
+                f"does not offer.",
+                key=key,
+            )
+        integrity.check_transfer_size(
+            "upload",
+            key,
+            expected=bytes_sent,
+            actual=remote_meta[0],
+            local_path=path,
+        )
+
+    if digest is not None and integrity.sidecar_writes_enabled(write_sidecar):
+        await integrity.write_digest_sidecar(store, key, digest)
+
+
 async def upload_file(
     key: str,
     local_path: str | Path,
@@ -685,41 +759,17 @@ async def upload_file(
     )
     digest = h.hexdigest() if h is not None else None
 
-    # ── Integrity: validate the write before anyone can consume it (FND-306) ──
-    # Ordered deliberately: the local-truncation check first (it invalidates the
-    # object itself), then the readback, and only then the sidecar — a sidecar
-    # must never advertise a digest for an object that failed validation, or a
-    # downstream reader would "verify" a corrupt file successfully.
-    if integrity.verification_enabled(verify):
-        integrity.check_local_file_stable(
-            key, path, declared_size=file_size, bytes_read=bytes_sent
-        )
-        remote_meta = await get_file_meta(key, resolved, normalize=False)
-        if remote_meta is None:
-            # The writer reported success but the object is not there. The
-            # zero-byte case is the known one (some S3-style backends drop
-            # empty objects), and a size comparison would pass it — 0 sent,
-            # 0 found — so absence is checked separately from length.
-            from application_sdk.storage.errors import StorageError  # noqa: PLC0415
-
-            raise StorageError(
-                f"Upload of '{key}' reported success but the object is absent "
-                f"from the store afterwards ({bytes_sent} bytes sent from "
-                f"{path}). Some S3-style backends silently drop empty objects; "
-                f"others need read-your-writes consistency that this store "
-                f"does not offer.",
-                key=key,
-            )
-        integrity.check_transfer_size(
-            "upload",
-            key,
-            expected=bytes_sent,
-            actual=remote_meta[0],
-            local_path=path,
-        )
-
-    if digest is not None and integrity.sidecar_writes_enabled(write_sidecar):
-        await integrity.write_digest_sidecar(store, key, digest)
+    await _finalize_upload_integrity(
+        key,
+        path,
+        store,
+        resolved,
+        declared_size=file_size,
+        bytes_sent=bytes_sent,
+        digest=digest,
+        verify=verify,
+        write_sidecar=write_sidecar,
+    )
 
     if not retain_local_copy:
         from application_sdk.constants import TEMPORARY_PATH  # noqa: PLC0415

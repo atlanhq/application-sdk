@@ -235,6 +235,22 @@ it never contains files the producer did not write.
 Objects written before this protocol existed, or by a non-SDK producer, simply
 have no sidecar; those downloads keep the size check and skip the digest check.
 
+### What this does not prove
+
+The sidecar attests to **the bytes the SDK read at upload time**, not to the
+artifact being semantically complete. A producer that wrote a truncated file to
+disk and *then* uploaded it gets a sidecar recording the truncated content as
+the expected digest, and every downstream check passes — exactly the intended
+bytes moved, as far as the transfer layer can tell.
+
+Closing that half is the producer's job: fail hard on write errors, and delete
+partial output rather than upload it. That is tracked against the connector
+apps. What the transfer layer buys against a mid-write producer failure is
+narrower, and still worth having: a file truncated *while the upload reads it*
+is caught; any corruption after a good upload is caught on the next download
+rather than surfacing as a parser error; and the failure is attributed to the
+artifact and its producing key instead of to whichever consumer opened it.
+
 ---
 
 ## Backend Selection

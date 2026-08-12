@@ -352,6 +352,13 @@ async def download_file_chunked(
     discarded and the download restarts fresh **once** against the new
     generation; a second 412 raises.
 
+    **Resume requires a pinned generation (FND-306).** Resume is honoured only
+    when an etag is known. Without one the range GETs are unpinned, so reusing
+    a previous attempt's chunks could splice two generations of a rewritten
+    object into a file of exactly the right length — and on a download with no
+    sidecar, nothing downstream could tell. An unpinned download therefore
+    always starts fresh.
+
     **Resume (BLDX-1523):** when *resume* is enabled, completed chunk indices
     are checkpointed to a ``{local_path}.transfer-state`` sidecar after every
     chunk write, and an interrupted download leaves the partial file + sidecar
@@ -500,6 +507,23 @@ async def download_file_chunked(
                 sidecar_present=sidecar_present,
             )
 
+        # Resume needs something that pins the object generation. The etag is
+        # that something: every range GET carries If-Match, so chunks cannot
+        # come from two generations. Without one — a store whose HEAD returns
+        # no e_tag, or a caller that supplied file_size without an etag — the
+        # range GETs are unpinned, and reusing a previous attempt's chunks
+        # would silently splice the old generation onto the new one if the
+        # object were rewritten in between. The result is a file of exactly
+        # the right length that reads as a clean transfer.
+        #
+        # The digest check added in FND-306 catches that, but only where a
+        # sidecar exists; on a bare download of an object nobody wrote a
+        # sidecar for, nothing would. So an unpinned download always starts
+        # fresh: correctness over the bandwidth a resume would have saved, in
+        # the one case where a mistake is undetectable.
+        can_resume = resume and etag is not None
+        if resume and etag is None:
+            state_path.unlink(missing_ok=True)
         done: set[int] = (
             _load_and_validate_checkpoint(
                 state_path,
@@ -509,7 +533,7 @@ async def download_file_chunked(
                 etag=etag,
                 path=path,
             )
-            if resume
+            if can_resume
             else set()
         )
         resuming = bool(done)
@@ -576,7 +600,9 @@ async def download_file_chunked(
                     etag=etag,
                     fd=fd,
                     sem=sem,
-                    resume=resume,
+                    # can_resume, not resume: checkpointing an unpinned
+                    # download only strands a sidecar no attempt may use.
+                    resume=can_resume,
                     state_path=state_path,
                     state_base=state_base,
                     progress=progress,
@@ -609,7 +635,14 @@ async def download_file_chunked(
                 error_class=_exc_class_name(exc),
             )
             if _handle_chunk_failure(
-                exc, key=key, path=path, resume=resume, attempt=attempt
+                # can_resume: with nothing pinning the generation the partial
+                # file can never be reused, so it is garbage — delete it rather
+                # than leave it for an attempt that will start over anyway.
+                exc,
+                key=key,
+                path=path,
+                resume=can_resume,
+                attempt=attempt,
             ):
                 # First 412: restart fresh once against the new generation.
                 file_size = None

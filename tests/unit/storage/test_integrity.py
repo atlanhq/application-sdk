@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import obstore
+import orjson
 import pytest
 
 from application_sdk.storage import batch, integrity, transfer
@@ -27,6 +28,7 @@ from application_sdk.storage.ops import (
     _put,
     download_file,
     download_file_chunked,
+    get_file_meta,
     upload_file,
 )
 
@@ -74,6 +76,102 @@ async def _corrupt_object(store, key: str, content: bytes) -> None:
 # ---------------------------------------------------------------------------
 # Digest helpers
 # ---------------------------------------------------------------------------
+
+
+class TestStorageIntegrityErrorContract:
+    """The wire contract the docstring promises, pinned directly.
+
+    Everything else exercises this type through a transfer; nothing asserted
+    the code / retryability / audience a consumer's failure handling keys off.
+    """
+
+    def test_error_code_and_classification(self) -> None:
+        from application_sdk.errors import STORAGE_INTEGRITY, Audience, FailureCategory
+
+        err = StorageIntegrityError("boom", key="a/b.json")
+        assert err.DEFAULT_ERROR_CODE is STORAGE_INTEGRITY
+        assert err.error_code.code == "AAF-STR-007"
+        assert err.category is FailureCategory.DATA_INTEGRITY
+        assert err.audience is Audience.APP_OWNER
+        assert err.effective_retryable is False
+
+    def test_catchable_as_storage_error(self) -> None:
+        # Domain parent second in the MRO so existing `except StorageError:`
+        # blocks keep firing; categorical parent first so category resolves
+        # to DATA_INTEGRITY rather than DEPENDENCY_UNAVAILABLE.
+        with pytest.raises(StorageError):
+            raise StorageIntegrityError("boom", key="a/b.json")
+
+    def test_evidence_reaches_the_wire_envelope(self) -> None:
+        err = StorageIntegrityError(
+            "boom",
+            key="a/b.json",
+            local_path="/tmp/x",
+            check="digest",
+            expectation="aaa",
+            observed="bbb",
+        )
+        evidence = err.to_failure_details().evidence
+        assert evidence["key"] == "a/b.json"
+        assert evidence["expectation"] == "aaa"
+        assert evidence["observed"] == "bbb"
+        assert evidence["check"] == "digest"
+
+    def test_exported_from_the_storage_package(self) -> None:
+        import application_sdk.storage as storage_pkg
+
+        assert storage_pkg.StorageIntegrityError is StorageIntegrityError
+
+
+class TestListDataObjects:
+    """The listing that feeds every sidecar-aware transfer decision."""
+
+    async def test_pairs_each_object_with_its_sidecar_flag(
+        self, store, tmp_path
+    ) -> None:
+        await _seed(store, tmp_path, "d/with.json", b'{"a": 1}')
+        # A data object with no sidecar beside it (a non-SDK producer's file).
+        await _put("d/without.json", b'{"b": 2}', store, normalize=False)
+
+        objects = await batch.list_data_objects("d/", store, normalize=False)
+
+        by_key = {o.key: o for o in objects}
+        assert set(by_key) == {"d/with.json", "d/without.json"}
+        assert by_key["d/with.json"].has_sidecar is True
+        assert by_key["d/without.json"].has_sidecar is False
+
+    async def test_excludes_sidecars_from_the_returned_objects(
+        self, store, tmp_path
+    ) -> None:
+        """Sidecars are bookkeeping: they must never appear as data objects,
+        or a prefix download would mirror them to disk."""
+        await _seed(store, tmp_path, "d/a.json", b'{"a": 1}')
+        objects = await batch.list_data_objects("d/", store, normalize=False)
+        assert [o.key for o in objects] == ["d/a.json"]
+
+    async def test_carries_size_and_etag_from_the_listing(
+        self, store, tmp_path
+    ) -> None:
+        """Size and etag come free with the listing — that is what lets a
+        prefix download chunk and version-pin without a per-file HEAD."""
+        content = b'{"a": 1}'
+        await _seed(store, tmp_path, "d/a.json", content)
+        (obj,) = await batch.list_data_objects("d/", store, normalize=False)
+        assert obj.size == len(content)
+        assert obj.etag is None or isinstance(obj.etag, str)
+
+    async def test_empty_prefix_returns_nothing(self, store) -> None:
+        assert await batch.list_data_objects("nothing/", store, normalize=False) == []
+
+    async def test_agrees_with_list_data_keys_with_meta(self, store, tmp_path) -> None:
+        """The older tuple helper is expressed in terms of this one; if they
+        ever disagree, one of the two listing filters has drifted."""
+        await _seed(store, tmp_path, "d/a.json", b'{"a": 1}')
+        await _put("d/b.json", b'{"b": 2}', store, normalize=False)
+
+        objects = await batch.list_data_objects("d/", store, normalize=False)
+        tuples = await batch.list_data_keys_with_meta("d/", store, normalize=False)
+        assert [(o.key, o.size, o.etag) for o in objects] == tuples
 
 
 class TestSidecarNaming:
@@ -210,6 +308,53 @@ class TestReadExpectedDigest:
     async def test_never_looks_up_a_sidecar_for_a_sidecar(self, store) -> None:
         assert await integrity.read_expected_digest(store, "a/b.json.sha256") is None
 
+    @pytest.mark.parametrize(
+        "garbage",
+        [b"not-a-digest", b"", b"deadbeef", b"z" * 64],
+        ids=["prose", "empty", "too-short", "non-hex"],
+    )
+    async def test_malformed_sidecar_is_treated_as_absent(
+        self, store, tmp_path, garbage
+    ) -> None:
+        """Only our own format is trustworthy as an expectation.
+
+        A stray file at ``{key}.sha256`` — another tool's metadata, a
+        half-written sidecar — must not fail a *healthy* artifact with a
+        non-retryable corruption error. Not verifying one file is the lesser
+        harm, and it is logged.
+        """
+        art = await _seed(store, tmp_path, "bad/data.json", b'{"a": 1}')
+        await _put(art.key + ".sha256", garbage, store, normalize=False)
+
+        assert await integrity.read_expected_digest(store, art.key) is None
+
+        # And the download of that healthy object still succeeds.
+        dest = tmp_path / "out.json"
+        await download_file(art.key, dest, store, normalize=False)
+        assert dest.read_bytes() == art.content
+
+    async def test_uppercase_digest_is_normalised_not_rejected(
+        self, store, tmp_path
+    ) -> None:
+        """Hex is case-insensitive, so an uppercase sidecar describes the same
+        bytes. Returning it raw would fail a healthy artifact against our
+        lowercase ``hexdigest()`` — a false corruption report, which is the
+        worst possible outcome for this feature.
+        """
+        art = await _seed(store, tmp_path, "ok/data.json", b'{"a": 1}')
+        await _put(
+            art.key + ".sha256",
+            f"  {art.digest.upper()}\n".encode(),
+            store,
+            normalize=False,
+        )
+        assert await integrity.read_expected_digest(store, art.key) == art.digest
+
+        # The end-to-end proof: the download must succeed, not raise.
+        dest = tmp_path / "out.json"
+        await download_file(art.key, dest, store, normalize=False)
+        assert dest.read_bytes() == art.content
+
 
 class TestComparators:
     def test_size_mismatch_is_a_retryable_dependency_error(self) -> None:
@@ -276,6 +421,20 @@ class TestUploadValidation:
         f.write_bytes(b"{}")
         await upload_file("ns/x.json", f, store, normalize=False, write_sidecar=False)
         assert await _get_bytes("ns/x.json.sha256", store, normalize=False) is None
+
+    async def test_sidecar_suppressed_by_the_env_kill_switch(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        """The deployment-wide escape hatch, exercised through the same
+        resolution path the default takes — a per-call ``write_sidecar=False``
+        would not prove the env var is wired up at all."""
+        monkeypatch.setattr("application_sdk.constants.STORAGE_WRITE_SIDECARS", False)
+        f = tmp_path / "x.json"
+        f.write_bytes(b"{}")
+        await upload_file("env/x.json", f, store, normalize=False)
+        assert await _get_bytes("env/x.json.sha256", store, normalize=False) is None
+        # The object itself still landed, and was still size-validated.
+        assert await _get_bytes("env/x.json", store, normalize=False) == b"{}"
 
     async def test_local_truncation_mid_upload_raises(self, store, tmp_path) -> None:
         """The file shrinks between the opening stat and the read reaching EOF,
@@ -584,6 +743,104 @@ class TestChunkedDownloadValidation:
         # The chunk failure handler wraps it as the generic chunked-download
         # error; the short-read diagnosis survives as the cause.
         assert "Short range read" in str(exc.value.cause)
+
+    async def test_unpinned_download_never_resumes_from_a_checkpoint(
+        self, store, tmp_path
+    ) -> None:
+        """With no etag, nothing pins the object generation.
+
+        Reusing a previous attempt's chunks could splice a rewritten object's
+        new bytes onto the old ones — a file of exactly the right length that
+        reads as a clean transfer. The digest check catches that only where a
+        sidecar exists; on a bare download nothing would. So an unpinned
+        download starts fresh and leaves no checkpoint behind.
+        """
+        await _put("np/data.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "o.bin"
+        state = Path(str(out) + ".transfer-state")
+
+        # A checkpoint from a hypothetical earlier attempt, matching this
+        # object's generation as far as an unpinned download could tell.
+        out.write_bytes(b"\x00" * len(self.CONTENT))
+        state.write_bytes(
+            orjson.dumps(
+                {
+                    "key": "np/data.bin",
+                    "file_size": len(self.CONTENT),
+                    "chunk_size": 512,
+                    "etag": None,
+                    "done": [0, 1, 2],
+                }
+            )
+        )
+
+        await download_file_chunked(
+            "np/data.bin",
+            out,
+            store,
+            chunk_size_bytes=512,
+            normalize=False,
+            file_size=len(self.CONTENT),
+            etag=None,
+            resume=True,
+        )
+
+        # Every chunk re-fetched: the NULs the checkpoint claimed were done
+        # are gone, and no checkpoint survives.
+        assert out.read_bytes() == self.CONTENT
+        assert not state.exists()
+
+    async def test_pinned_download_still_resumes(self, store, tmp_path) -> None:
+        """The complement: an etag pins the generation, so resume stays on —
+        this is the BLDX-1523 behaviour the fix above must not have broken."""
+        await _put("p/data.bin", self.CONTENT, store, normalize=False)
+        meta = await get_file_meta("p/data.bin", store, normalize=False)
+        assert meta is not None
+        _, etag = meta
+        if etag is None:
+            pytest.skip("store does not provide etags; nothing to pin")
+
+        out = tmp_path / "o.bin"
+        state = Path(str(out) + ".transfer-state")
+        out.write_bytes(b"\x00" * len(self.CONTENT))
+        state.write_bytes(
+            orjson.dumps(
+                {
+                    "key": "p/data.bin",
+                    "file_size": len(self.CONTENT),
+                    "chunk_size": 512,
+                    "etag": etag,
+                    "done": [0],
+                }
+            )
+        )
+
+        fetched: list[int] = []
+        real_get = obstore.get_async
+
+        async def counting_get(st, key, **kw):
+            rng = (kw.get("options") or {}).get("range")
+            if rng:
+                fetched.append(rng[0])
+            return await real_get(st, key, **kw)
+
+        with patch(
+            "application_sdk.storage.chunked.obstore.get_async", new=counting_get
+        ):
+            await download_file_chunked(
+                "p/data.bin",
+                out,
+                store,
+                chunk_size_bytes=512,
+                normalize=False,
+                file_size=len(self.CONTENT),
+                etag=etag,
+                resume=True,
+            )
+
+        # Chunk 0 was checkpointed as done, so it must not be re-fetched.
+        assert 0 not in fetched
+        assert fetched, "no ranges fetched at all — resume swallowed the download"
 
     async def test_small_file_delegation_still_verifies(self, store, tmp_path) -> None:
         """Below the chunking threshold the call delegates to ``download_file``

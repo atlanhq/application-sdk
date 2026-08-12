@@ -44,6 +44,26 @@ Both checks are governed by ``ATLAN_STORAGE_VERIFY_TRANSFERS`` (see
 :data:`~application_sdk.constants.STORAGE_VERIFY_TRANSFERS`); sidecar *emission*
 is separately governed by ``ATLAN_STORAGE_WRITE_SIDECARS``.
 
+What this does NOT prove
+------------------------
+The sidecar attests to **the bytes the SDK read at upload time**, not to the
+artifact being semantically complete. A producer that wrote a truncated file to
+disk and *then* handed it to ``upload_file`` gets a sidecar recording the
+truncated content as the expected digest, and every downstream check passes: as
+far as the transfer layer can tell, exactly the intended bytes moved.
+
+Closing that half needs the producer to fail hard on its own write errors and
+delete partial output rather than upload it — the producer-side half of FND-306,
+tracked against the connector apps. What the machinery here does buy against a
+mid-write producer failure is narrower and still worth having:
+
+* a file truncated *while the upload is reading it* is caught (local-shrink);
+* any corruption after a good upload — a rewrite, a partial restore, a
+  half-completed multipart — is caught on the next download instead of
+  surfacing as a parser error in whatever reads it next;
+* the failure is attributed to the artifact and its producing key, rather than
+  to the consumer that happened to open it.
+
 This module holds no store state: it is the single definition of the sidecar
 key convention, the digest helpers, and the comparison predicates that
 ``ops``/``chunked`` call. ``storage.batch``, ``storage.transfer`` and
@@ -83,6 +103,11 @@ def sidecar_key(key: str) -> str:
 def is_sidecar_key(key: str) -> bool:
     """Return ``True`` when *key* is a SHA-256 sidecar rather than a data object."""
     return key.endswith(SIDECAR_SUFFIX)
+
+
+def _is_sha256_hex(value: str) -> bool:
+    """Return ``True`` when *value* is a well-formed SHA-256 hex digest."""
+    return len(value) == 64 and all(c in "0123456789abcdefABCDEF" for c in value)
 
 
 def _is_internal_key(key: str) -> bool:
@@ -205,7 +230,26 @@ async def read_expected_digest(
         return None
     if raw is None:
         return None
-    return raw.decode(errors="replace").strip()
+
+    digest = raw.decode(errors="replace").strip()
+    if not _is_sha256_hex(digest):
+        # Only our own format is trustworthy as an expectation. Anything else
+        # is an object that happens to sit at this key — a stray file, a
+        # half-written sidecar, another tool's metadata. Comparing against it
+        # would fail a *healthy* artifact with a non-retryable corruption
+        # error, which is a worse outcome than not verifying this one file.
+        logger.warning(
+            "Integrity sidecar '%s' does not contain a SHA-256 hex digest "
+            "(%d chars) — continuing without verifying the transfer of '%s'",
+            skey,
+            len(digest),
+            key,
+        )
+        return None
+    # Lowercased to match ``hashlib.hexdigest()``. Hex is case-insensitive, so
+    # an uppercase sidecar describes the same bytes — comparing it raw would
+    # report a healthy artifact as corrupt.
+    return digest.lower()
 
 
 async def write_digest_sidecar(
@@ -291,11 +335,11 @@ def check_transfer_digest(
 
     raise StorageIntegrityError(
         f"Corrupt artifact detected on {op} of '{key}': content hashes to "
-        f"{actual} but its producer recorded {expected}. The object in the "
-        f"store does not match the digest written alongside it — the producing "
-        f"app most likely failed part-way through writing it (a full disk or a "
-        f"killed pod mid-write both do this) and did not clean up. Retrying "
-        f"this step cannot help; re-run the step that produced '{key}'.",
+        f"{actual} but the digest recorded alongside it is {expected}. The "
+        f"object in the store is not the object that was uploaded — it has "
+        f"been rewritten, partially restored, or its upload completed only in "
+        f"part. Retrying this step cannot help: the same bytes come back every "
+        f"time. Re-run the step that produced '{key}'.",
         key=key,
         local_path=str(local_path) if local_path is not None else None,
         check="digest",
