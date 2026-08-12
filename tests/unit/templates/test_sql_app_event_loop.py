@@ -27,6 +27,7 @@ import orjson
 import pytest
 
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.templates import sql_app as sql_app_module
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionTaskInput,
     TransformInput,
@@ -202,3 +203,44 @@ async def test_extract_entity_does_not_block_the_loop(
         f"_extract_entity stalled the event loop ({ticks} ticks) — a starved "
         "loop cannot run the auto-heartbeat"
     )
+
+
+async def test_extract_entity_never_hands_the_file_handle_to_a_thread(
+    app: _SlowMapperApp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only serialisation may be offloaded — never the open output handle.
+
+    If the handle crossed into the blocking pool, a cancellation at that await
+    would unwind the enclosing ``with`` and close the file while a worker thread
+    was still writing to it. Per ADR-0010 that thread cannot be killed, so it
+    would write on into a closed — or retry-reopened — file.
+
+    Asserts the invariant directly: nothing passed to ``run_in_thread`` is a
+    file object, and the bytes still land on disk.
+    """
+    offloaded_args: list[Any] = []
+    real_run_in_thread = sql_app_module.run_in_thread
+
+    async def _recording_run_in_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        offloaded_args.extend(args)
+        offloaded_args.extend(kwargs.values())
+        return await real_run_in_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(sql_app_module, "run_in_thread", _recording_run_in_thread)
+
+    result = await app._extract_entity(
+        entity_type="database",
+        sql_template=_SlowMapperApp.fetch_database_sql,
+        input=_extract_input(tmp_path),
+    )
+
+    assert offloaded_args, "nothing was offloaded"
+    for arg in offloaded_args:
+        assert not hasattr(arg, "write"), (
+            f"a file-like object ({arg!r}) was handed to run_in_thread — a "
+            "cancellation there would close the handle under a live writer"
+        )
+
+    assert result.total_record_count == 2
+    written = (tmp_path / "raw" / "database" / "records.json").read_bytes()
+    assert written.count(b"\n") == 2

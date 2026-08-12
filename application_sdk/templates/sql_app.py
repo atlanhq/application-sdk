@@ -1530,21 +1530,36 @@ class SqlApp(App):
         try:
             sql = self._prepare_sql(sql_template.strip(), input)
 
-            def _write_batch(f: Any, batch: list[dict[str, Any]]) -> int:
-                for record in batch:
-                    f.write(orjson.dumps(record, default=_orjson_default))
-                    f.write(b"\n")
-                return len(batch)
+            def _serialize_batch(batch: list[dict[str, Any]]) -> bytes:
+                return b"".join(
+                    orjson.dumps(
+                        record,
+                        default=_orjson_default,
+                        option=orjson.OPT_APPEND_NEWLINE,
+                    )
+                    for record in batch
+                )
 
             with open(output_file, "wb") as f:
                 async for batch in client.run_query(
                     sql, batch_size=_EXTRACT_BATCH_SIZE
                 ):
-                    # Offloaded: serialising and writing a batch is 10k
-                    # orjson.dumps calls plus 20k blocking writes with no
-                    # await between them, so on wide rows a single batch can
-                    # outlast the heartbeat interval (ADR-0010).
-                    count += await run_in_thread(_write_batch, f, batch)
+                    # Only the serialisation is offloaded — 10k orjson.dumps
+                    # calls per batch is the part that outlasts the heartbeat
+                    # interval on wide rows (ADR-0010). The write stays on the
+                    # loop as one buffered call, which costs microseconds.
+                    #
+                    # Deliberately NOT passing `f` into the thread: if the
+                    # activity is cancelled at this await, the `with` block
+                    # unwinds and closes the handle while a worker thread is
+                    # still writing to it — and per ADR-0010 that thread cannot
+                    # be killed, so it would write on into a closed (or
+                    # retry-reopened) file. Serialise off-loop, write on-loop:
+                    # the handle never crosses the thread boundary, so the
+                    # single-handle streaming loop stays cancellation-safe.
+                    payload = await run_in_thread(_serialize_batch, batch)
+                    f.write(payload)
+                    count += len(batch)
         finally:
             await client.close()
 

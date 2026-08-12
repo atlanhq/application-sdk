@@ -128,8 +128,13 @@ async def _call_maybe_blocking(fn: Callable[..., Any], *args: Any) -> Any:
     """
     if inspect.iscoroutinefunction(fn):
         return await fn(*args)
-    # Imported lazily: `application_sdk.execution` imports back into
-    # `storage`, so a module-scope import closes a circular import.
+    # Imported lazily, and it has to be: this module is in
+    # `storage/__init__`'s eager chain, so importing
+    # `application_sdk.execution.heartbeat` at module scope runs
+    # `execution/__init__` -> Temporal activity utils -> `application_sdk.app`
+    # -> back to a still-initialising `contracts.base`, raising ImportError.
+    # The cycle is via `execution/__init__`, not a direct storage -> execution
+    # edge. See `storage/batch.py` for the full chain.
     from application_sdk.execution.heartbeat import run_in_thread  # noqa: PLC0415
 
     return await run_in_thread(fn, *args)

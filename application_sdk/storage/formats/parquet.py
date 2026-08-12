@@ -384,7 +384,12 @@ class ParquetFileReader(Reader):
                             break
                         yield frame
                 finally:
-                    await run_in_thread(pf.close)
+                    # Closed inline, not via run_in_thread: an ``await`` in a
+                    # finally can itself be cancelled, which would leak the
+                    # handle on activity cancellation or generator close.
+                    # Closing a parquet reader is one cheap syscall, so there
+                    # is nothing here worth offloading.
+                    pf.close()
         # See _get_dataframe: preserve an already-typed AppError.
         except AppError:
             raise

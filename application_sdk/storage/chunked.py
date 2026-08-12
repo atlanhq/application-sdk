@@ -597,8 +597,14 @@ async def download_file_chunked(
             # event loop — and the enclosing activity's auto-heartbeat — for
             # the full read+hash. Same treatment as
             # ``storage.reference._sha256_hex_file_async`` (ADR-0010, P031).
-            # Imported lazily: `application_sdk.execution` imports back into
-            # `storage`, so a module-scope import closes a circular import.
+            # Imported lazily, and it has to be: this module is in
+            # `storage/__init__`'s eager chain, so importing
+            # `application_sdk.execution.heartbeat` at module scope runs
+            # `execution/__init__` -> Temporal activity utils ->
+            # `application_sdk.app` -> back to a still-initialising
+            # `contracts.base`, raising ImportError. The cycle is via
+            # `execution/__init__`, not a direct storage -> execution edge.
+            # See `storage/batch.py` for the full chain.
             from application_sdk.execution.heartbeat import (  # noqa: PLC0415
                 run_in_thread,
             )
