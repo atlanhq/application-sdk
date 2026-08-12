@@ -424,6 +424,122 @@ def test_unparseable_verdict_is_a_no_op(monkeypatch):
     assert gh.calls == []
 
 
+# --- slow path (sdk-review.yml) -----------------------------------------
+
+
+def slow_env(**overrides) -> dict:
+    """The slow path's configuration: fetch the summary, don't own the status."""
+    env = {
+        "COMMENT_BODY": "",
+        "EXPECTED_HEAD": HEAD,
+        "WRITE_STATUS": "false",
+        "REQUIRE_APPROVED_LABEL": "true",
+    }
+    env.update(overrides)
+    return env
+
+
+def slow_gh(labels: list[str] | None = None, **kwargs) -> FakeGH:
+    """Like base_gh, but the comment list carries a full verdict body."""
+    gh = base_gh(labels=labels, **kwargs)
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(json.dumps([[{"id": 5, "body": verdict_comment()}]])),
+    )
+    return gh
+
+
+def test_slow_path_reads_the_verdict_off_the_newest_comment(monkeypatch):
+    gh = slow_gh(labels=["sdk-review-approved"])
+    assert run_main(gh, monkeypatch, **slow_env()) == 0
+    assert len(gh.called(is_approve)) == 1
+
+
+def test_slow_path_does_not_write_the_commit_status(monkeypatch):
+    gh = slow_gh(labels=["sdk-review-approved"])
+    assert run_main(gh, monkeypatch, **slow_env()) == 0
+    assert gh.called(is_status) == [], "sdk-review.yml owns its own status writes"
+
+
+def test_slow_path_picks_the_newest_summary_not_the_last_in_page_order():
+    gh = FakeGH()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(
+            json.dumps(
+                [
+                    [
+                        {"id": 9, "body": verdict_comment("READY_TO_MERGE")},
+                        {"id": 4, "body": verdict_comment("NEEDS_FIXES")},
+                    ]
+                ]
+            )
+        ),
+    )
+    body = approve.Client(REPO, PR, gh).latest_summary_body()
+    assert approve.extract_verdict(body) == "READY_TO_MERGE"
+
+
+def test_slow_path_skips_when_no_summary_comment_exists(monkeypatch):
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(json.dumps([[]])),
+    )
+    assert run_main(gh, monkeypatch, **slow_env()) == 0
+    assert gh.called(is_approve) == []
+
+
+def test_slow_path_refuses_when_the_approved_label_was_already_stripped(monkeypatch):
+    """dismiss-on-human / downgrade / reset-on-push all clear the label."""
+    gh = slow_gh(labels=[])
+    assert run_main(gh, monkeypatch, **slow_env()) == 0
+    assert gh.called(is_approve) == []
+
+
+def test_label_guard_reads_the_snapshot_not_the_label_it_just_wrote(monkeypatch):
+    """The shell version added the label, then read it back and always passed.
+
+    The guard must consult the state from BEFORE this run reconciled labels, or
+    it can never fire and the slow path re-approves after a downgrade.
+    """
+    gh = slow_gh(labels=[])
+    assert run_main(gh, monkeypatch, **slow_env()) == 0
+    # It still reconciles labels (that part is unconditional)...
+    assert gh.called(is_label_add)
+    # ...but the freshly-added label must not satisfy its own guard.
+    assert gh.called(is_approve) == []
+
+
+def test_fast_path_does_not_require_the_label(monkeypatch):
+    """The fast path is the one that STAMPS the label, so it cannot demand it."""
+    gh = base_gh(labels=[])
+    assert run_main(gh, monkeypatch) == 0
+    assert len(gh.called(is_approve)) == 1
+
+
+def test_slow_path_rescues_a_fast_path_that_labelled_but_failed_to_approve(monkeypatch):
+    """Fast path wrote the label then took a 403 — the label still stands, so
+    the slow path is entitled to post the approval it could not."""
+    gh = slow_gh(labels=["sdk-review-approved"], reviews=[])
+    assert run_main(gh, monkeypatch, **slow_env()) == 0
+    assert len(gh.called(is_approve)) == 1
+
+
+def test_slow_path_head_moved_since_dispatch_skips(monkeypatch):
+    gh = slow_gh(labels=["sdk-review-approved"])
+    assert run_main(gh, monkeypatch, **slow_env(EXPECTED_HEAD=OTHER)) == 0
+    assert gh.called(is_approve) == []
+    assert gh.called(is_label_add) == []
+
+
+def test_slow_path_skips_freshness_check_since_it_fetched_the_newest(monkeypatch):
+    """TRIGGERING_COMMENT_ID is meaningless when we just read the newest."""
+    gh = slow_gh(labels=["sdk-review-approved"])
+    assert run_main(gh, monkeypatch, **slow_env(), TRIGGERING_COMMENT_ID="0") == 0
+    assert len(gh.called(is_approve)) == 1
+
+
 def test_label_delete_404_is_tolerated(capsys):
     gh = FakeGH()
     gh.on(lambda a: "DELETE" in a, fail("gh: Not Found (HTTP 404)"))

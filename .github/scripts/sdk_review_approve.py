@@ -40,11 +40,42 @@ The old code sent label errors to /dev/null under `|| true`, so that failure was
 invisible. Here a delete that 404s is tolerated (the label was already absent)
 and anything else is surfaced as a ::warning::.
 
+Two callers
+-----------
+The fast path (`sdk-review-approve-on-verdict.yml`) passes the verdict comment
+in via COMMENT_BODY, straight off the `issue_comment` event, and owns the
+`sdk-review` commit status.
+
+The slow path (`sdk-review.yml`, after the mothership sandbox finishes its
+cleanup) leaves COMMENT_BODY empty; the newest summary comment is fetched
+instead. It sets EXPECTED_HEAD to the sha the review was dispatched for, does
+not write the commit status (its workflow has its own failure-path step), and
+sets REQUIRE_APPROVED_LABEL so it will not approve a verdict something has since
+invalidated.
+
+That label guard is the solo-approval safety property. `sdk-review-approved` is
+the one signal every invalidator clears: `dismiss-on-human` strips it (and
+notably does NOT touch the commit status, so the status cannot substitute),
+`downgrade-on-ci-failure` strips it, `reset-on-push` strips it. It is therefore
+read from a snapshot taken BEFORE this run reconciles labels — the shell version
+read it back after adding it, so the guard could only ever see the label it had
+just written and never fired.
+
 Environment:
     REPO                        owner/repo (e.g. atlanhq/application-sdk)
     PR_NUMBER                   pull request number
-    COMMENT_BODY                body of the triggering verdict comment
-    TRIGGERING_COMMENT_ID       id of the triggering comment
+    COMMENT_BODY                verdict comment body; when empty the newest
+                                summary comment on the PR is fetched instead
+    TRIGGERING_COMMENT_ID       id of the triggering comment; the freshness
+                                check only applies when COMMENT_BODY is set
+                                (fetching the newest makes it moot)
+    EXPECTED_HEAD               optional; when set, the PR's live head must
+                                match it as well as matching REVIEWED_HEAD
+    WRITE_STATUS                true (default) | false — own the sdk-review
+                                commit status
+    REQUIRE_APPROVED_LABEL      false (default) | true — refuse to approve
+                                unless `sdk-review-approved` was already on the
+                                PR when this run started
     GH_TOKEN                    App installation token — every call but APPROVE
     APPROVER_TOKEN              `atlan-ci` PAT — the APPROVE call only
     APPROVE_MAX_ATTEMPTS        default 3
@@ -205,14 +236,29 @@ class Client:
                 items.append(page)
         return items
 
-    def newest_summary_comment_id(self) -> int:
-        """Id of the most recent SDK review summary comment, or 0 if none."""
-        ids = [
-            comment.get("id", 0)
+    def _summary_comments(self) -> list[dict]:
+        return [
+            comment
             for comment in self._paginated(f"issues/{self.pr_number}/comments")
             if any(marker in (comment.get("body") or "") for marker in SUMMARY_MARKERS)
         ]
+
+    def newest_summary_comment_id(self) -> int:
+        """Id of the most recent SDK review summary comment, or 0 if none."""
+        ids = [comment.get("id", 0) for comment in self._summary_comments()]
         return max(ids) if ids else 0
+
+    def latest_summary_body(self) -> str:
+        """Body of the newest SDK review summary comment, or "" if none.
+
+        Ids are monotonic, so max-by-id is the newest — not merely the last in
+        page order.
+        """
+        comments = self._summary_comments()
+        if not comments:
+            return ""
+        newest = max(comments, key=lambda comment: comment.get("id", 0))
+        return newest.get("body") or ""
 
     def current_labels(self) -> set[str]:
         result = self.run(
@@ -415,9 +461,27 @@ def main(
     pr_number = os.environ.get("PR_NUMBER", "")
     body = os.environ.get("COMMENT_BODY", "")
     triggering_id = int(os.environ.get("TRIGGERING_COMMENT_ID") or 0)
+    expected_head = os.environ.get("EXPECTED_HEAD", "").strip()
+    write_status = os.environ.get("WRITE_STATUS", "true") != "false"
+    require_approved_label = os.environ.get("REQUIRE_APPROVED_LABEL", "false") == "true"
     approver_token = os.environ.get("APPROVER_TOKEN", "")
     max_attempts = int(os.environ.get("APPROVE_MAX_ATTEMPTS") or 3)
     max_wait = float(os.environ.get("APPROVE_MAX_WAIT_SECONDS") or 120)
+
+    client = Client(repo, pr_number, runner)
+
+    # Fast path hands us the event payload; slow path asks for the newest
+    # summary, which makes the freshness check below moot by construction.
+    from_event = bool(body)
+    if not from_event:
+        body = client.latest_summary_body()
+        if not body:
+            print(
+                f"::warning::No SDK review summary comment found on PR "
+                f"#{pr_number} — skipping (the sandbox may have errored before "
+                f"posting)."
+            )
+            return 0
 
     verdict = extract_verdict(body)
     if not verdict:
@@ -438,8 +502,6 @@ def main(
         )
         return 0
 
-    client = Client(repo, pr_number, runner)
-
     head_sha = client.head_sha()
     if not head_sha:
         print(f"::warning::PR #{pr_number}: HEAD unresolvable — skipping all stamps.")
@@ -454,19 +516,35 @@ def main(
         )
         return 0
 
+    # Belt-and-suspenders for the slow path: the review can take 10–30 minutes,
+    # and the sandbox could in principle have reviewed a sha other than the one
+    # its run was dispatched for.
+    if expected_head and head_sha != expected_head:
+        print(
+            f"::warning::PR #{pr_number}: head is {head_sha} but this run was "
+            f"dispatched for {expected_head} — skipping all stamps."
+        )
+        return 0
+
     # The job's concurrency group serialises runs per PR, but GitHub's queue is
     # not event-time ordered: after waiting, this run may execute after a newer
     # verdict has already been stamped. Ids are monotonic, so a larger one means
     # a newer summary exists and owns the final say.
-    newest_id = client.newest_summary_comment_id()
-    if newest_id > triggering_id:
-        print(
-            f"::notice::PR #{pr_number}: a newer SDK_REVIEW comment "
-            f"(id={newest_id}) supersedes this one (id={triggering_id}) — skipping."
-        )
-        return 0
+    if from_event:
+        newest_id = client.newest_summary_comment_id()
+        if newest_id > triggering_id:
+            print(
+                f"::notice::PR #{pr_number}: a newer SDK_REVIEW comment "
+                f"(id={newest_id}) supersedes this one (id={triggering_id}) — "
+                f"skipping."
+            )
+            return 0
 
-    to_add, to_remove = label_plan(verdict, client.current_labels())
+    # Snapshot BEFORE reconciling: `require_approved_label` asks whether the
+    # label was standing when this run started, which the post-reconcile state
+    # can no longer answer.
+    labels_before = client.current_labels()
+    to_add, to_remove = label_plan(verdict, labels_before)
     client.add_labels(to_add)
     for label in sorted(to_remove):
         client.remove_label(label)
@@ -486,8 +564,21 @@ def main(
             )
             for review_id in stale:
                 client.dismiss(review_id, message)
-        client.post_status(head_sha, state, description)
+        if write_status:
+            client.post_status(head_sha, state, description)
         print(f"Verdict '{verdict}' is not READY TO MERGE — no approval posted.")
+        return 0
+
+    # Solo-approval guard (slow path). Every invalidator — dismiss-on-human,
+    # downgrade-on-ci-failure, reset-on-push — clears this label, so its absence
+    # means something has spoken since the verdict and the approval must not be
+    # (re-)posted.
+    if require_approved_label and APPROVED_LABEL not in labels_before:
+        print(
+            f"::notice::PR #{pr_number}: `{APPROVED_LABEL}` was not present when "
+            f"this run started (a downgrade, dismissal or push likely intervened) "
+            f"— skipping approval."
+        )
         return 0
 
     # Don't double-approve: sdk-review.yml's slow path runs the same stamp after
@@ -497,7 +588,8 @@ def main(
             f"atlan-ci has already approved PR #{pr_number} with the bot "
             f"signature — skipping."
         )
-        client.post_status(head_sha, state, description)
+        if write_status:
+            client.post_status(head_sha, state, description)
         return 0
 
     if not approver_token:
@@ -514,18 +606,19 @@ def main(
         now=now,
     )
     if not approved:
-        # Leave the commit status as the dispatcher set it (pending). Going green
-        # here is what made this failure look like success on the PR.
+        # Deliberately do NOT advance the commit status. Going green here without
+        # an approving review is what made this failure look like success.
         print(
             f"::error::PR #{pr_number}: verdict is READY_TO_MERGE but the atlan-ci "
-            f"approval could not be posted. The sdk-review status is left pending so "
+            f"approval could not be posted. The sdk-review status is left as-is so "
             f"the merge gate stays blocked. Re-run this workflow, or comment "
             f"`@sdk-review`, once quota has recovered."
         )
         return 1
 
     print(f"Approved PR #{pr_number} as atlan-ci (commit_id={head_sha}).")
-    client.post_status(head_sha, state, description)
+    if write_status:
+        client.post_status(head_sha, state, description)
     return 0
 
 
