@@ -247,6 +247,47 @@ class TestConcurrentHolds:
         assert len(tokens) == 8 * 200
         assert len(set(tokens)) == len(tokens)
 
+    def test_tokens_are_unique_across_live_trackers(self) -> None:
+        """Tokens come from a process-wide counter, not a per-tracker one.
+
+        Two concurrently bound trackers (a nested attempt, or a test binding its
+        own tracker inside an activity) must never both own the same token —
+        otherwise a consumer pairing one tracker's ``enter_hold`` with the
+        other's ``exit_hold`` would silently release the wrong hold.
+        """
+        clock = FakeClock()
+        first = _tracker(clock)
+        second = _tracker(clock)
+
+        first_token = first.enter_hold("query on first", None)
+        second_token = second.enter_hold("query on second", None)
+
+        assert first_token != second_token
+
+    def test_cross_tracker_exit_does_not_release_the_hold(self) -> None:
+        """A token from one tracker is unknown to another live tracker.
+
+        The cross-tracker ``exit_hold`` must hit the unknown-token path (no hold
+        closed, no progress made) and leave the real hold vouching, rather than
+        silently releasing it.
+        """
+        clock = FakeClock()
+        recorder = HoldRecorder()
+        first = _tracker(clock, recorder)
+        second = _tracker(clock, recorder)
+        token = first.enter_hold("full table scan", None)
+        second.enter_hold("slow export", None)
+
+        clock.advance(10.0)
+        second.exit_hold(token)  # token belongs to `first`, not `second`
+
+        # The cross-tracker exit was a no-op: no hold closed on either tracker…
+        assert recorder.closed == []
+        # …the real hold on `first` is still vouching (not silently released)…
+        assert first.held() is True
+        # …and `second`'s own hold is untouched.
+        assert second.held() is True
+
     def test_last_at_never_regresses_under_concurrent_writes(self) -> None:
         """The stall clock must never move backwards, even if a caller's clock
         sample is stale relative to a write another thread already committed.

@@ -135,11 +135,19 @@ async def sha256_file(path: Path) -> str:
     ``await``; calling it on the event loop blocks the loop for the full
     read+hash. A blocked loop cannot run the SDK's auto-heartbeat coroutine, so
     a large-file verification would heartbeat-time-out the activity even while
-    making progress.
+    making progress (ADR-0010, P031).
+
+    ``run_in_thread`` also dispatches to the SDK's dedicated blocking pool
+    rather than asyncio's default executor, which Temporal's own SDK uses for
+    internal scheduling — sharing that pool risks exhausting it.
     """
-    from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — circular: application_sdk.execution imports app/contracts, which import storage.ops
-        run_in_thread,
-    )
+    # Imported lazily, and it has to be: this module is in ``storage/__init__``'s
+    # eager chain, so importing ``application_sdk.execution.heartbeat`` at module
+    # scope runs ``execution/__init__`` -> Temporal activity utils ->
+    # ``application_sdk.app`` -> back to a still-initialising ``contracts.base``,
+    # raising ImportError. The cycle is via ``execution/__init__``, not a direct
+    # storage -> execution edge. See ``storage/batch.py`` for the full chain.
+    from application_sdk.execution.heartbeat import run_in_thread  # noqa: PLC0415
 
     return await run_in_thread(_sha256_file_sync, path)
 

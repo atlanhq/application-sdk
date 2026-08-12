@@ -137,8 +137,16 @@ runs:
     # Ordered BEFORE the failure is re-raised, so the evidence survives a red
     # suite. `if: always()` is kept as a belt-and-braces guard for a step above
     # that fails without going through the verdict-recording path.
+    # `upload-artifact` classifies the artifact service's finalize 403 as
+    # non-retryable and fails on the first occurrence, even though the bytes
+    # already landed and the next attempt normally succeeds. That failed this
+    # composite, which failed the caller's Tests check, which ejected its
+    # merge-queue entry. Retry once, and never fail on it: the scorecard job
+    # downloads this with continue-on-error already.
     - name: Upload coverage artifacts
+      id: upload-unit-coverage
       if: always()
+      continue-on-error: true
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         name: unit-test-coverage
@@ -148,6 +156,20 @@ runs:
           htmlcov/
           results/
         retention-days: 14
+
+    - name: Upload coverage artifacts (retry)
+      if: steps.upload-unit-coverage.outcome == 'failure'
+      continue-on-error: true
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: unit-test-coverage
+        path: |
+          coverage.xml
+          coverage.json
+          htmlcov/
+          results/
+        retention-days: 14
+        overwrite: true
 
     # Gate on the recorded verdict: after this change the tests step always
     # succeeds (it records instead of exiting), so a bare pull_request gate

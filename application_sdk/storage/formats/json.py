@@ -1,6 +1,6 @@
 import os
 import warnings
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Generator
 from typing import TYPE_CHECKING, Any
 
 import orjson
@@ -9,6 +9,7 @@ from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.errors import AppError
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.storage.formats.utils import (
@@ -200,21 +201,40 @@ class JsonFileReader(Reader):
             logger.info("Reading %d JSON files in batches", len(json_files))
 
             chunk_size = self.chunk_size or 100000
-            batch: list[dict] = []
+
             # Files must be JSONL (one JSON object per line). Multi-line JSON
             # arrays are not supported and will raise orjson.JSONDecodeError.
-            for json_file in json_files:
-                with open(json_file, "rb") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        batch.append(orjson.loads(line))
-                        if len(batch) >= chunk_size:
-                            yield pd.DataFrame(batch)
-                            batch = []
-            if batch:
-                yield pd.DataFrame(batch)
+            def _iter_batches() -> Generator[list[dict], None, None]:
+                batch: list[dict] = []
+                for json_file in json_files:
+                    with open(json_file, "rb") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            batch.append(orjson.loads(line))
+                            if len(batch) >= chunk_size:
+                                yield batch
+                                batch = []
+                if batch:
+                    yield batch
+
+            batches = _iter_batches()
+
+            def _next_frame() -> "pd.DataFrame | None":
+                records = next(batches, None)
+                return None if records is None else pd.DataFrame(records)
+
+            # Offloaded per batch: filling one batch is a tight loop of blocking
+            # reads and orjson parses that does not yield until chunk_size
+            # records are in hand — at the 100k default that is well past the
+            # heartbeat interval, so inline it starves the auto-heartbeat and
+            # gets a healthy activity killed (ADR-0010).
+            while True:
+                frame = await run_in_thread(_next_frame)
+                if frame is None:
+                    break
+                yield frame
         # An already-typed AppError carries its own category/audience/evidence
         # (e.g. ObjectStoreReadError -> DEPENDENCY_UNAVAILABLE + the searched
         # prefix). Re-wrapping it as FormatReadError would downgrade that to
@@ -247,14 +267,21 @@ class JsonFileReader(Reader):
             # All records are accumulated in memory before building the
             # DataFrame. Suitable only for small datasets (≲ a few hundred MB).
             # For large inputs, use read_batches() to stay bounded.
-            all_records: list[dict] = []
-            for json_file in json_files:
-                with open(json_file, "rb") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            all_records.append(orjson.loads(line))
-            return pd.DataFrame(all_records)
+            def _read_all() -> "pd.DataFrame":
+                all_records: list[dict] = []
+                for json_file in json_files:
+                    with open(json_file, "rb") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line:
+                                all_records.append(orjson.loads(line))
+                return pd.DataFrame(all_records)
+
+            # Offloaded as one hop: this reads and parses every record in the
+            # prefix before it returns, with no await in between. Inline it
+            # holds the event loop — and the auto-heartbeat — for that whole
+            # span (ADR-0010).
+            return await run_in_thread(_read_all)
         # See _get_batched_dataframe: preserve an already-typed AppError.
         except AppError:
             raise
@@ -402,15 +429,23 @@ class JsonFileWriter(Writer):
             return str(obj)
 
         mode = "ab+" if SafeFileOps.exists(file_name) else "wb"
-        with SafeFileOps.open(file_name, mode=mode) as f:
-            for record in chunk.to_dict(orient="records"):
-                f.write(
-                    orjson.dumps(
-                        record,
-                        default=_default_serializer,
-                        option=orjson.OPT_APPEND_NEWLINE,
+
+        def _serialize_and_write() -> None:
+            with SafeFileOps.open(file_name, mode=mode) as f:
+                for record in chunk.to_dict(orient="records"):
+                    f.write(
+                        orjson.dumps(
+                            record,
+                            default=_default_serializer,
+                            option=orjson.OPT_APPEND_NEWLINE,
+                        )
                     )
-                )
+
+        # Offloaded as one hop: `to_dict` materialises the whole chunk and the
+        # write loop is one blocking syscall per record. Neither yields, so
+        # inline this stalls the event loop — including the auto-heartbeat —
+        # for the chunk's full write duration (ADR-0010).
+        await run_in_thread(_serialize_and_write)
 
     async def _finalize(self) -> None:
         """Finalize the JSON writer before closing.

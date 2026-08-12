@@ -647,10 +647,13 @@ async def download_file_chunked(
                 return None
 
             # Chunks land out of order, so no single hasher can be fed during
-            # the transfer: verifying costs one re-read of the finished file.
-            # run_in_thread keeps it off the event loop — a multi-GiB re-read
-            # inline would stall the auto-heartbeat coroutine and get the
-            # activity retried for a transfer that actually succeeded.
+            # the transfer: both the caller's digest and the integrity check
+            # cost one re-read of the finished file. ``integrity.sha256_file``
+            # runs it through ``run_in_thread`` — inline, a multi-GB re-read
+            # holds the event loop, and with it the enclosing activity's
+            # auto-heartbeat, for the full read+hash, so a transfer that
+            # actually succeeded gets retried (ADR-0010, P031; FND-282 made
+            # this offload here, FND-306 moved the body to the shared helper).
             digest = await integrity.sha256_file(path)
             if verifying and expected_sha256 is not None:
                 integrity.check_transfer_digest(
