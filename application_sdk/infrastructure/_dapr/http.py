@@ -528,6 +528,33 @@ class AsyncDaprClient:
     # Bindings
     # ------------------------------------------------------------------
 
+    # BLDX-1619: Dapr's HTTP binding API carries the payload inside a JSON body,
+    # so the only two shapes it can express are a parsed JSON value and a UTF-8
+    # string. A lossy decode used to turn every invalid byte of a parquet file
+    # into U+FFFD and write the damage without a word.
+    @staticmethod
+    def _encode_payload(data: bytes, binding_name: str) -> Any:
+        """Return the JSON-embeddable form of a binding payload.
+
+        Raises:
+            DaprBinaryPayloadError: If *data* is not valid UTF-8.
+        """
+        try:
+            parsed = orjson.loads(data)
+        # conformance: ignore[E009] not-JSON is the normal text path, handled below
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            parsed = None
+        if isinstance(parsed, (dict, list)):
+            return parsed
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            from application_sdk.infrastructure._dapr._dapr_errors import (  # noqa: PLC0415 — circular: _dapr_errors imports the error base which imports this module's package
+                DaprBinaryPayloadError,
+            )
+
+            raise DaprBinaryPayloadError(binding_name=binding_name) from exc
+
     async def invoke_binding(
         self,
         binding_name: str,
@@ -541,26 +568,16 @@ class AsyncDaprClient:
             If ``data`` contains valid JSON it is embedded as a parsed
             object so that Dapr forwards a proper JSON body to HTTP
             bindings (avoids double-encoding).  Otherwise the raw bytes
-            are decoded as UTF-8 text.  Binary data (protobuf, compressed)
-            should be base64-encoded by the caller.
+            are decoded as UTF-8 text.  Binary data (parquet, protobuf,
+            compressed) must be base64-encoded by the caller; sending it
+            raw raises ``DaprBinaryPayloadError``.
         """
         body: dict[str, Any] = {
             "operation": operation,
             "metadata": metadata or {},
         }
         if data:
-            try:
-                parsed = orjson.loads(data)
-                if isinstance(parsed, (dict, list)):
-                    body["data"] = parsed
-                else:
-                    body["data"] = data.decode("utf-8", errors="replace")
-            # conformance: ignore[E009] JSON/Unicode decode fallback; raw string is the safe default
-            except (
-                json.JSONDecodeError,
-                UnicodeDecodeError,
-            ):
-                body["data"] = data.decode("utf-8", errors="replace")
+            body["data"] = self._encode_payload(data, binding_name)
         resp = await self._client.post(
             BINDING_PATH.format(binding_name=binding_name),
             json=body,
