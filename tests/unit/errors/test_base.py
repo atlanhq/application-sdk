@@ -255,6 +255,42 @@ def test_redact_secrets_keeps_odbc_uid() -> None:
     assert "UID=sa" in redact_secrets(_ODBC_DSN)
 
 
+def test_redact_secrets_redacts_braced_odbc_pwd() -> None:
+    """ODBC quotes values containing `;` as `PWD={secret;with;semicolons}`.
+    The bare value class stops at the first `;` inside the braces and leaks
+    the password tail, so braced values are consumed as a unit."""
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets("PWD={secret;with;semicolons};Database=db")
+    assert out == "PWD=***;Database=db"
+    assert "secret" not in out and "semicolons" not in out
+
+
+def test_redact_secrets_braced_pwd_inside_full_dsn() -> None:
+    """End to end: a braced password inside a full DSN is masked while the
+    surrounding driver/host/encryption pairs survive."""
+    from application_sdk.errors import redact_secrets
+
+    dsn = (
+        "DRIVER={ODBC Driver 18 for SQL Server};SERVER=host.example.com,1433;"
+        "DATABASE=metadata;UID=sa;PWD={p@ss;w0rd};Encrypt=yes"
+    )
+    out = redact_secrets(dsn)
+    assert "p@ss" not in out and "w0rd" not in out
+    assert "UID=sa" in out and "Encrypt=yes" in out
+    assert "DRIVER={ODBC Driver 18 for SQL Server}" in out
+
+
+def test_redact_secrets_escaped_closing_brace_leaves_no_usable_secret() -> None:
+    """An escaped closing brace (`}}` per the ODBC spec) ends the match at the
+    first `}`. The residue is a brace fragment, not usable secret material."""
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets("PWD={pa}}ss};Database=db")
+    assert "PWD=***" in out
+    assert "pa" not in out.split("PWD=***")[1]
+
+
 def test_redact_secrets_keeps_correlation_ids() -> None:
     """A bare `uid` keyword has no word boundary in the alternation, so it
     would also match the tail of `run_guid=` and `correlation_uuid=` —

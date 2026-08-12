@@ -471,7 +471,12 @@ def _error_from_failure_details(details: FailureDetails) -> AppError:
             app_name=details.app_name,
             run_id=details.run_id,
         )
-    declared = {f.name for f in dataclasses.fields(leaf)}
+    # ``declared`` must exclude the base ``AppError`` fields: they are passed
+    # as explicit constructor arguments below, so an evidence key that shadows
+    # one (``message``, ``retryable``, …) would splat alongside the explicit
+    # arg and crash reconstruction with ``TypeError: got multiple values``.
+    # Mirrors the serializer, which never serialises base fields as evidence.
+    declared = {f.name for f in dataclasses.fields(leaf)} - _BASE_ERROR_FIELD_NAMES
     evidence = _redact_evidence(
         {k: v for k, v in details.evidence.items() if k in declared}
     )

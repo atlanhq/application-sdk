@@ -2903,6 +2903,41 @@ class TestPrimeFailureClassification:
         assert err.audience is Audience.USER
         assert err.to_failure_details().code == "SOME_FUTURE_CODE"
 
+    def test_reconstruction_drops_evidence_keys_shadowing_base_fields(self):
+        """Regression: ``declared`` on a known leaf includes inherited
+        ``AppError`` fields (``message``, ``retryable``, …). An evidence key
+        that shadows one was splatted alongside the explicit constructor arg
+        and crashed reconstruction with ``TypeError: got multiple values`` —
+        failing ``run()`` with a bare TypeError instead of the classified
+        error. Base-field-shadowing keys are now dropped, mirroring the
+        serializer, which never serialises base fields as evidence."""
+        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.errors.leaves import SourceUnavailableError
+        from application_sdk.errors.wire import FailureDetails
+
+        shadowed = PrimeAuthOutput(
+            success=False,
+            failure=FailureDetails(
+                category=FailureCategory.SOURCE_UNAVAILABLE,
+                code=SourceUnavailableError.code,
+                retryable=True,
+                audience=Audience.USER,
+                message="the envelope message",
+                evidence={"message": "a shadowing evidence value"},
+            ),
+        )
+
+        err = SqlApp._classify_prime_failure(shadowed)
+
+        # Reconstructs instead of raising; the envelope message wins and the
+        # shadowing evidence key is gone from the re-serialised wire form.
+        assert isinstance(err, SourceUnavailableError)
+        assert err.message == "the envelope message"
+        assert (
+            "a shadowing evidence value"
+            not in err.to_failure_details().model_dump_json()
+        )
+
     async def test_timeout_verdict_keeps_its_audience_across_the_wire(self):
         """The probe-specific timeout leaf must rebuild as itself, not as the
         base ``AppTimeoutError`` — the whole point of the leaf is its USER
