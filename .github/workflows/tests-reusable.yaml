@@ -817,6 +817,43 @@ jobs:
         shell: bash
         run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
 
+      # ── The install path's precondition, checked before it costs anything ───
+      # A caller on `install-app-to-tenant: true` without the tenant matrix shared
+      # with its repo can NEVER install. The fallback works exactly as designed —
+      # it is just not a fallback for installing: no matrix secret resolves
+      # `clouds` to `none`, prepare-tenant takes its single-tenant leg, and that
+      # leg supplies SDR_TEST_TENANT plus creds and an API key and no `tenant_id`.
+      # Installing needs one, because GM scopes a release via `allowed_tenants`
+      # matched exactly against the tenant's vcluster instance name. So the
+      # fallback is sufficient to RUN legs against a tenant and structurally
+      # insufficient to INSTALL onto one.
+      #
+      # Without this step the run learns that in prepare-tenant — after two
+      # per-arch image builds and a manifest merge have already run, ~4 minutes of
+      # GitHub-hosted ARM and x64 runner time, every time. The precondition is
+      # knowable here, in the first job on the e2e path, in seconds. FND-203.
+      #
+      # An ADDITION, not a move: `HAS_TENANT_MATRIX` proves the secret EXISTS, not
+      # that the relevant cloud's entry carries a `tenant_id`. This catches "no
+      # secret at all"; prepare-tenant's "Require a tenant ID before publishing
+      # anything" remains the backstop for "secret present, `tenant_id` missing for
+      # this cloud", which nothing here can see. Deleting either would look
+      # redundant to a future reader, so both are pinned by
+      # test_prepare_tenant_wiring.py.
+      #
+      # Failing rather than degrading, for the reason the late check already
+      # argues: Heracles re-fetches the manifest from the tenant-deployed pod at AE
+      # submit, so skipping the install and running the legs anyway would test the
+      # version already on the tenant while reporting on the PR's — the exact bug
+      # `install-app-to-tenant` exists to remove.
+      - name: Require the tenant matrix on the install path
+        if: inputs.install-app-to-tenant && env.HAS_TENANT_MATRIX == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::error::install-app-to-tenant is on but E2E_TENANT_MATRIX_JSON is not available to this repository, so no tenant ID can be resolved and a release cannot be scoped to any tenant. GM matches allowed_tenants EXACTLY against the tenant's vcluster instance name (e.g. 'markeznp37') — not its hostname — and the legacy single-tenant fallback (SDR_TEST_TENANT) has no matrix entry to carry that value, so there is nothing to fall back to. Either share E2E_TENANT_MATRIX_JSON with this repository, with a 'tenant_id' field on each cloud's entry (see docs/standards/connector-ci-e2e.md), or leave install-app-to-tenant off and use the E2E Tenant Install workflow, whose tenant_id input covers the one-off case. Failing at discovery rather than at prepare-tenant so this costs seconds instead of two image builds."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

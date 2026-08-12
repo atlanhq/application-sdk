@@ -225,14 +225,6 @@ A timeout is never downgraded this way — an accepted-but-unreconciled deploy i
 nobody else's fault, and it is the silent wrong-version failure this whole
 mechanism exists to remove.
 
-`prepare-tenant` therefore **fails** on an unresolved `tenant_id`, immediately
-after tenant resolution and before it publishes anything — it does not skip the
-install. Skipping would leave the job green having done nothing, the tenant on
-whatever version it was already running, and every leg reding on its own version
-check instead: one confusing failure per leg in place of one clear failure. Since
-`install-app-to-tenant` is opt-in, a caller that has opted in without a
-`tenant_id` is misconfigured rather than on a supported path.
-
 Each entry may also carry `"deployment_name"` when that tenant's system apps
 (publish / quality / lineage) are not registered under `production`. It reaches
 the harness as `E2E_TENANT_DEPLOYMENT_NAME`, which
@@ -270,6 +262,44 @@ key is the org-wide one.
 When the secret is not available to a repo, `clouds` is forced to `none` and the
 `Discover e2e suites` job emits a `::warning::` saying so — a run that asked for
 three clouds and got one must not look identical to one that got three.
+
+### Requiring a tenant ID on the install path
+
+That degradation is honest for a repo that only *runs legs against* a tenant, and
+insufficient for one that *installs onto* one. The single-tenant fallback supplies
+`SDR_TEST_TENANT` plus credentials and an API key, and no `tenant_id` — there is no
+matrix entry to carry one. So on `install-app-to-tenant: true` the missing secret
+is fatal, not a warning.
+
+Failing rather than skipping the install, deliberately. Skipping would leave
+`prepare-tenant` green having done nothing, the tenant on whatever version it was
+already running, and every leg reding on its own version check instead: one
+confusing failure per leg in place of one clear failure. Heracles re-fetches the
+manifest from the tenant-deployed pod at AE submit, so running the legs against an
+install that did not happen tests the version already on the tenant while
+reporting on the PR's — the exact bug `install-app-to-tenant` exists to remove.
+And since `install-app-to-tenant` is opt-in, a caller that has opted in without a
+`tenant_id` is misconfigured rather than on a supported path.
+
+**The same precondition, checked twice.** "A `tenant_id` can be resolved" is
+knowable in two halves at two different times, so it is checked at both (FND-203):
+
+| Where | Sees | Catches | Costs |
+| --- | --- | --- | --- |
+| `discover-e2e` → *Require the tenant matrix on the install path* | whether `E2E_TENANT_MATRIX_JSON` exists at all | `install-app-to-tenant: true` on a repo the secret was never shared with | seconds |
+| `prepare-tenant` → *Require a tenant ID before publishing anything* | the resolved `E2E_TENANT_ID` for **this** cloud | matrix present, this cloud's entry missing `tenant_id` | after two per-arch image builds and the manifest merge |
+
+The early check exists because the late one is expensive to reach: the install
+path builds `linux/amd64` and `linux/arm64` on separate native runners and merges
+the manifest before `prepare-tenant` runs, so a repo that could never install
+burned ~4 minutes of GitHub-hosted runner time per attempt to discover that.
+
+Neither check subsumes the other. The secret's *presence* says nothing about
+whether the entry inside it carries a `tenant_id`, so the early check cannot cover
+the late one's case; and the late check is the one that runs too late to be cheap.
+Both are pinned by `test_prepare_tenant_wiring.py`
+(`test_both_install_preconditions_are_checked`), because side by side each looks
+redundant — which is how one of them gets deleted.
 
 ## Cross-repo dispatch
 
