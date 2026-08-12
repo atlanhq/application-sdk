@@ -34,7 +34,9 @@ entrypoint script, the appuser setup, and the standard env vars the platform exp
 Any other base — raw upstream Python, cgr.dev images, or a stale/dev-branch tag of
 app-runtime-base — silently omits one or more of these, producing a container that
 passes local CI but fails in prod (missing graceful drain, missing Dapr sidecar, wrong
-user, or broken env).
+user, or broken env).  Customer impact: without the daprd sidecar the app cannot reach
+its state, secret, or queue components, so the connector bricks on first run in the
+customer's tenant — a day-one install failure discovered by the customer, not by CI.
 
 The final-stage `FROM` instruction must be exactly
 `registry.atlan.com/public/app-runtime-base:3`.  The v3 major tag is the only accepted
@@ -61,7 +63,9 @@ application and handles graceful drain on SIGTERM — forwarding the signal to b
 processes and waiting for clean shutdown.  Overriding CMD or ENTRYPOINT silently
 bypasses both: the app boots fine locally (no daprd needed there) but loses graceful
 drain in prod, causing in-flight requests to be dropped during rolling restarts or
-scale-down events.
+scale-down events.  Customer impact: every routine tenant operation — a rolling restart,
+a node upgrade, a scale-down — becomes a window where the customer's in-flight crawls
+and requests are dropped mid-run with no handoff.
 
 Neither `CMD` nor `ENTRYPOINT` may appear in the app Dockerfile.  The base image
 (`app-runtime-base`) ships an entrypoint script that co-launches `daprd` alongside the
@@ -82,7 +86,9 @@ environment where daprd is required.  Inline suppression: `# conformance: ignore
 **Rationale:** The platform runtime discovers the application class via ATLAN_APP_MODULE at container
 start.  An image that omits this variable will fail to start with a cryptic import error
 — not a build error — making the failure invisible until the container is actually
-deployed.  Enforcing the variable at lint time closes that gap.
+deployed.  Enforcing the variable at lint time closes that gap.  Customer impact: the
+image ships, deploys into the tenant, and crash-loops with an import error — an outage
+the customer sees first, on a release every pre-deploy gate passed.
 
 The Dockerfile must contain `ENV ATLAN_APP_MODULE=<module>:<AppClass>` with a non-empty
 value.  The platform runtime imports this module path and instantiates the named class
@@ -104,7 +110,9 @@ the Dockerfile.
 target.  Hardcoding ATLAN_APP_MODE in the Dockerfile bakes the mode decision into the
 image, preventing multi-mode deployments and making it easy to accidentally ship the
 wrong mode to prod.  The value must be injected at deploy time via the deployment
-manifest.
+manifest.  Customer impact: a worker image baked to server mode never polls the task
+queue — the customer's workflows sit queued forever while every health check reports the
+pod as running and healthy.
 
 `ENV ATLAN_APP_MODE` must not appear in the Dockerfile.  Runtime mode (`worker` /
 `server`) is deployment-specific: the same image may be deployed in different modes in
@@ -123,7 +131,10 @@ different environments.  Set `ATLAN_APP_MODE` in the deployment manifest (Kubern
 **Rationale:** The base image already establishes appuser as the container user.  A USER root (or USER
 0) instruction in the final stage reverses this, running the application process as root
 and exposing the container to privilege-escalation risks.  This is the exact pattern
-that turns a container escape into a host root compromise.
+that turns a container escape into a host root compromise.  Customer impact: the
+container processes the customer's credentials and source data inside their tenant —
+running it as root converts any exploitable app bug into potential host-level access to
+that customer's environment, a direct security exposure for them.
 
 No `USER root` or `USER 0` instruction may appear in the final stage of the Dockerfile
 (after the last `FROM`).  The base image (`app-runtime-base`) already runs as `appuser`;

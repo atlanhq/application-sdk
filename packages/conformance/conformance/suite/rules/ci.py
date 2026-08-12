@@ -25,7 +25,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "A mutable tag (@v4) can be silently re-pointed to any commit after review — "
             "including malicious code — with no notification to the consumer. Pinning to a "
             "full commit SHA makes the action content immutable: the code reviewed is the "
-            "code that runs."
+            "code that runs. "
+            "Customer impact: the CI these actions run builds and publishes the images "
+            "deployed into customer tenants — a re-pointed tag is a supply-chain path for "
+            "unreviewed code to reach every customer environment, or to exfiltrate the "
+            "publishing credentials that sign what customers run."
         ),
         short_description="External GitHub Action not pinned to a full commit digest",
         full_description=(

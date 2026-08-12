@@ -94,7 +94,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "if it omits them entirely the agent receives no credentials and "
             "produces zero assets — the MSSQL silent-failure regression "
             "(atlan-mssql-app#177, DISTR-752). Either way the workflow reports "
-            "'success', invisible to status-only test pipelines."
+            "'success', invisible to status-only test pipelines. "
+            "Customer impact: both failure modes land on the customer — an agent crawl "
+            "that hangs against their firewalled source or completes green with zero "
+            "assets in their catalog — and both look like a working product until the "
+            "customer asks where their metadata went."
         ),
         short_description=(
             "SDR agent manifest must surface agent_json + extraction_method at the "
@@ -173,7 +177,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "in a customer deployment. Fleet remediation confirmed the finding is "
             "REAL more often than assumed: 4 of 15 swept connectors had a genuine "
             "silent-zero-asset publish behind a P030 finding that had been "
-            "presumed a false positive."
+            "presumed a false positive. "
+            "Customer impact: this is the worst customer-facing failure class — data loss "
+            "disguised as success. The tenant reports a green run while zero assets reach "
+            "the customer's catalog, so it is the customer who discovers the gap, after "
+            "trusting the green status for however long it took them to look."
         ),
         short_description=(
             "SDR app has no self.upload() call in source — ENABLE_ATLAN_UPLOAD path unreachable"

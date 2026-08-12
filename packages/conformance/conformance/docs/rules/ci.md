@@ -29,7 +29,11 @@ Suppress a finding on the violating line or the line directly above it:
 
 **Rationale:** A mutable tag (@v4) can be silently re-pointed to any commit after review — including
 malicious code — with no notification to the consumer. Pinning to a full commit SHA
-makes the action content immutable: the code reviewed is the code that runs.
+makes the action content immutable: the code reviewed is the code that runs. Customer
+impact: the CI these actions run builds and publishes the images deployed into customer
+tenants — a re-pointed tag is a supply-chain path for unreviewed code to reach every
+customer environment, or to exfiltrate the publishing credentials that sign what
+customers run.
 
 External actions reused via `uses:` must be pinned to a full-length commit SHA (digest),
 never a mutable tag (@v4) or branch (@main). A tag can be re-pointed to malicious code

@@ -54,7 +54,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "An unbounded specifier lets an automated tool (Renovate) or a manual bump "
             "pull in a future SDK major without review. The SDK's versioning discipline only "
             "holds if every app has a bound that stops automatic upgrades past the reviewed "
-            "point."
+            "point. "
+            "Customer impact: an unreviewed SDK major rides an automated lockfile bump into "
+            "the next release, and its breaking changes surface as connector failures in "
+            "customer tenants with no app-code diff that explains them — the hardest kind "
+            "of regression to attribute during an incident."
         ),
         short_description=(
             "Application SDK dependency is missing or its version specifier is "
@@ -341,7 +345,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "also drifts from whatever application-sdk version is actually "
             "locked in the app's own uv.lock. The installed SDK wheel already "
             "bundles these files at application_sdk/components/, so the "
-            "network round-trip is both fragile and redundant."
+            "network round-trip is both fragile and redundant. "
+            "Customer impact: the flaky 429 blocks the build pipeline exactly when a "
+            "customer is waiting on a hotfix release, and component YAMLs fetched at a "
+            "drifted ref can ship state/queue configuration the locked SDK was never "
+            "validated against — misbehaving only once deployed in the tenant."
         ),
         short_description=(
             "A poe task fetches Dapr component YAMLs from GitHub instead of "

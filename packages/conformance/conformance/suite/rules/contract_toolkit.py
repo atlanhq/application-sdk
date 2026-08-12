@@ -633,7 +633,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "and the one legitimate single-brace token {deployment_name} is not in "
             "the flagged set), this is a BLOCK-tier rule rather than the usual "
             "land-as-WARN default: the only correct resolution is to upgrade to the "
-            "latest app-contract-toolkit and regenerate."
+            "latest app-contract-toolkit and regenerate. "
+            "Customer impact: the literal template token ships to the tenant on the "
+            "wire — artifacts get rooted under a path segment named '{app_name}' or the "
+            "marketplace record carries template text, so the customer's install or crawl "
+            "fails on identity plumbing they can neither see nor fix."
         ),
         short_description=(
             "Generated artifact contains an unresolved single-brace scaffold "
@@ -741,7 +745,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "connector when atlan.yaml became fully pkl-generated and the app_id, "
             "previously hand-carried in the file, was dropped because the pkl "
             "metadata block never declared it. BLOCK-tier because the only "
-            "outcome of shipping without it is a broken release."
+            "outcome of shipping without it is a broken release. "
+            "Customer impact: the fix a customer is waiting on looks shipped from the "
+            "inside (tag cut, image pushed) but never appears in the marketplace they "
+            "install from — the customer stays on the broken version while everyone "
+            "believes the release went out."
         ),
         short_description=(
             "atlan.yaml is present but declares no top-level app_id — the "
@@ -803,7 +811,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "of that name, so the check passed locally yet the release died in "
             "CI. A one-line poe alias mirroring the Makefile target closes the "
             "gap. BLOCK-tier because, like K011, the only outcome of the missing "
-            "piece is a broken release rather than degraded quality."
+            "piece is a broken release rather than degraded quality. "
+            "Customer impact: every marketplace release of the app is dead on arrival "
+            "until someone reads the failed Certify log — including the urgent one that "
+            "carries a fix a customer is actively blocked on."
         ),
         short_description=(
             "pyproject.toml defines no [tool.poe.tasks.generate] task — the SDK "

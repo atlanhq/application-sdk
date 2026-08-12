@@ -77,7 +77,10 @@ reassigned.
 **Rationale:** Temporal enforces a hard 2MB payload limit on workflow/activity I/O (ADR-0008).
 Unbounded fields can silently grow past it in production, failing the workflow with a
 cryptic size error instead of a type error at import time. A justified inline
-suppression keeps every opt-out visible in review and auditable in SARIF.
+suppression keeps every opt-out visible in review and auditable in SARIF. Customer
+impact: payload size scales with the customer's data, so the app that passed every test
+fails only in the tenant with the largest source system — the customer's crawl dies
+mid-run with a serialization error nothing in their configuration explains.
 
 An `Input`/`Output` contract subclass declared with the `allow_unbounded_fields=True`
 class keyword opts out of the SDK's payload-safety enforcement: arbitrary, untyped
@@ -103,6 +106,9 @@ sanctioned use is the justified inline suppression above — see BLDX-1428.
 SLA dashboards, and on-call routing (ADR-0013). A redeclaration either duplicates the
 parent (drifts on rename) or substitutes a different value (splits one failure mode
 across two buckets), corrupting the reporting layer for every downstream consumer.
+Customer impact: a drifted category miscounts or misroutes the customer's failures — an
+incident that should page as an availability breach files under the wrong bucket, so SLA
+reporting understates their outage and on-call responds late or not at all.
 
 `FailureCategory` is the closed, single-axis taxonomy the SDK owns — every value is the
 canonical answer to *what happened* and is consumed as an immutable reporting metric
@@ -133,7 +139,10 @@ sanctioned use is the justified inline suppression `# conformance: ignore[P002]
 **Rationale:** Each categorical leaf owns a prefix that embeds its category into every error code
 (`AUTH_`, `INTERNAL_`, etc.). Without it, the code column is opaque — dashboards must
 join the category column for every query, and subclasses that inherit the bare leaf code
-collapse all their distinct failure modes into one undifferentiated bucket.
+collapse all their distinct failure modes into one undifferentiated bucket. Customer
+impact: when distinct failure modes share one code, support cannot tell a customer's
+credential expiry from a source-system outage without reading raw logs — the customer
+gets a slower, less accurate answer to 'why did my crawl fail'.
 
 Every concrete subclass of an `application_sdk.errors` leaf (`AuthError`,
 `InternalError`, `InvalidInputError`, etc.) must declare its own `code: ClassVar[str]`
@@ -408,7 +417,10 @@ Using a primitive, a container, or a class that does not subclass Input/Output b
 the SDK's payload-safety validation, config-hash computation, and
 backwards-compatibility tracking.  The runtime @entrypoint decorator already rejects
 these at import time, so no conforming running app is untyped today — this rule surfaces
-the violation earlier (PR/CI) and covers pre-decorator code paths.
+the violation earlier (PR/CI) and covers pre-decorator code paths. Customer impact:
+because the runtime rejection fires at import, an untyped entrypoint that reaches a
+release does not degrade gracefully — the app crash-loops at container start in the
+tenant, taking every workflow the customer runs on it down with the one bad method.
 
 A method decorated with `@entrypoint` (or a concrete `run()` override on an `App`
 subclass, which is the implicit single-entrypoint form) must declare:
@@ -439,7 +451,9 @@ deployments.  Using an untyped structure bypasses the SDK's payload-safety enfor
 and makes the task's I/O invisible to dashboards, schema tooling, and the contract
 registry.  The runtime @task decorator already rejects these at import time, so no
 conforming running app is untyped today — this rule surfaces the violation earlier
-(PR/CI).
+(PR/CI). Customer impact: same failure mode as P013 — the import-time rejection means
+one untyped task in a shipped release crash-loops the worker in the tenant, an outage
+the customer discovers before anyone else does.
 
 A method decorated with `@task` must declare:
 
@@ -501,7 +515,10 @@ conformance: ignore[P015] <reason>` when a typed replacement is not feasible.
 (@entrypoint-decorated App methods). poe generate only runs pkl eval and never imports
 app code, so the two can drift silently. When they drift, the HTTP create path fails —
 /manifest?entrypoint=<name> may return 200 while /input-contract?entrypoint=<name>
-returns 404 — with no caller-side workaround (BLDX-1425).
+returns 404 — with no caller-side workaround (BLDX-1425). Customer impact: the customer
+clicks 'create workflow' in their tenant and the setup flow 404s — the app is
+effectively uninstallable from the marketplace, and nothing on the customer's side can
+route around it.
 
 An app's entry-point names are declared in two independent places:
 
@@ -828,7 +845,9 @@ suppress with `# conformance: ignore[P024] <reason>`.
 atlan.yaml top-level name: (contract), and ATLAN_APPLICATION_NAME in .env.example (env).
 When they diverge, extract and publish write/read at different artifact paths, leaving 0
 files for publish to find and stalling the workflow (BLDX-1491, observed in the MSSQL
-connector).
+connector). Customer impact: the customer's crawl extracts successfully and then
+publishes nothing — zero assets appear in their catalog while the workflow stalls or
+reports progress, the same silent-zero-asset class P030 polices at the upload seam.
 
 Three independent sources declare an app's name:
 
@@ -980,7 +999,10 @@ the platform can't see them and strands the agent extraction on the cloud queue
 (atlan-tableau-app / atlan-snowflake-app); if it omits them entirely the agent receives
 no credentials and produces zero assets — the MSSQL silent-failure regression
 (atlan-mssql-app#177, DISTR-752). Either way the workflow reports 'success', invisible
-to status-only test pipelines.
+to status-only test pipelines. Customer impact: both failure modes land on the customer
+— an agent crawl that hangs against their firewalled source or completes green with zero
+assets in their catalog — and both look like a working product until the customer asks
+where their metadata went.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, every *agent
 extraction* `manifest.json` under `app/generated/` must surface both `agent_json` and
@@ -1037,7 +1059,11 @@ no assets land in the bucket — a regression that slipped through status-only S
 so the regression class is caught at static-analysis time rather than in a customer
 deployment. Fleet remediation confirmed the finding is REAL more often than assumed: 4
 of 15 swept connectors had a genuine silent-zero-asset publish behind a P030 finding
-that had been presumed a false positive.
+that had been presumed a false positive. Customer impact: this is the worst
+customer-facing failure class — data loss disguised as success. The tenant reports a
+green run while zero assets reach the customer's catalog, so it is the customer who
+discovers the gap, after trusting the green status for however long it took them to
+look.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one Python
 source file (outside `tests/`) must contain a `self.upload(` call.

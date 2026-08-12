@@ -222,7 +222,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "contract_schema.lock.json ledger (append-only, regenerated in-PR) "
             "provides the baseline so the check is single-checkout and offline. "
             "BLOCK from day 0: backwards-compat is a property that must already hold; "
-            "there is no warn-first window."
+            "there is no warn-first window. "
+            "Customer impact: deployed tenants keep emitting the old payload shape after "
+            "the app upgrades under them, so the customer's first run on the new version "
+            "fails or silently mis-parses — a break they hit with zero changes on their side."
         ),
         short_description=(
             "An entrypoint contract field was removed or had its type changed"
@@ -276,7 +279,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "means the ledger was not regenerated after the field was added. Because "
             "the generator is append-only (it can never delete entries or change a "
             "recorded type), regeneration is always safe: it can only add. BLOCK "
-            "because a stale ledger defeats the backwards-compat guarantee."
+            "because a stale ledger defeats the backwards-compat guarantee. "
+            "Customer impact: an unledgered field is one PR away from B005's customer-facing "
+            "break shipping unnoticed — the removal that corrupts deployed tenants' payloads "
+            "passes CI clean because the guard had nothing to compare against."
         ),
         short_description=(
             "An entrypoint contract field is missing from contract_schema.lock.json"

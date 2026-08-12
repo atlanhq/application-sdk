@@ -64,6 +64,27 @@ def test_catalog_all_have_rationale() -> None:
     ), f"Rules missing rationale (add a rationale= to each RuleDefinition): {missing}"
 
 
+def test_catalog_block_rules_state_customer_impact() -> None:
+    """Every BLOCK-tier rationale must state its customer failure mode.
+
+    Tier is the criticality model (FND-221): block = customer risk, warn =
+    good-to-have. That semantic only stays auditable if each BLOCK rule's
+    rationale says concretely how the violation becomes a customer issue — a
+    rule that cannot state one does not belong at BLOCK (FND-311).
+    """
+    rules = load_catalog()
+    missing = [
+        rule.id
+        for rule in rules
+        if rule.tier is EnforcementTier.BLOCK
+        and "Customer impact:" not in rule.rationale
+    ]
+    assert not missing, (
+        f"BLOCK rules whose rationale has no 'Customer impact:' line: {missing} — "
+        "state how the violation turns into a customer issue, or keep the rule at WARN"
+    )
+
+
 def test_catalog_all_have_scope() -> None:
     """Every rule must declare a valid RuleScope (sdk / app / both)."""
     rules = load_catalog()

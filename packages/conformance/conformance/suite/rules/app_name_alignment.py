@@ -61,7 +61,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "ATLAN_APPLICATION_NAME in .env.example (env).  When they diverge, "
             "extract and publish write/read at different artifact paths, leaving "
             "0 files for publish to find and stalling the workflow (BLDX-1491, "
-            "observed in the MSSQL connector)."
+            "observed in the MSSQL connector). "
+            "Customer impact: the customer's crawl extracts successfully and then "
+            "publishes nothing — zero assets appear in their catalog while the workflow "
+            "stalls or reports progress, the same silent-zero-asset class P030 polices "
+            "at the upload seam."
         ),
         short_description=(
             "App name in code, atlan.yaml, or .env.example do not agree"

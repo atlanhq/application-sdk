@@ -387,7 +387,10 @@ wrong on the wire, not merely stylistically stale. Because it is never a false p
 (the {{...}} double-brace runtime tokens are excluded, and the one legitimate
 single-brace token {deployment_name} is not in the flagged set), this is a BLOCK-tier
 rule rather than the usual land-as-WARN default: the only correct resolution is to
-upgrade to the latest app-contract-toolkit and regenerate.
+upgrade to the latest app-contract-toolkit and regenerate. Customer impact: the literal
+template token ships to the tenant on the wire — artifacts get rooted under a path
+segment named '{app_name}' or the marketplace record carries template text, so the
+customer's install or crawl fails on identity plumbing they can neither see nor fix.
 
 A committed generated artifact (`atlan.yaml`, `app.yaml`, or a file under
 `app/generated/`) contains a single-brace scaffold placeholder token — `{app_name}`,
@@ -457,7 +460,9 @@ stays broken across every subsequent release until someone reads the failed publ
 It regressed on a live connector when atlan.yaml became fully pkl-generated and the
 app_id, previously hand-carried in the file, was dropped because the pkl metadata block
 never declared it. BLOCK-tier because the only outcome of shipping without it is a
-broken release.
+broken release. Customer impact: the fix a customer is waiting on looks shipped from the
+inside (tag cut, image pushed) but never appears in the marketplace they install from —
+the customer stays on the broken version while everyone believes the release went out.
 
 The committed `atlan.yaml` has no top-level `app_id:` key. `app_id` is the app's Global
 Marketplace identity; the release publish step POSTs it to the GM, and an empty value
@@ -498,7 +503,9 @@ every marketplace release. Apps whose contract generation lived only in a Makefi
 target (`make generate`) had no poe task of that name, so the check passed locally yet
 the release died in CI. A one-line poe alias mirroring the Makefile target closes the
 gap. BLOCK-tier because, like K011, the only outcome of the missing piece is a broken
-release rather than degraded quality.
+release rather than degraded quality. Customer impact: every marketplace release of the
+app is dead on arrival until someone reads the failed Certify log — including the urgent
+one that carries a fix a customer is actively blocked on.
 
 `pyproject.toml` has a contract (a `contract/` directory exists) but `[tool.poe.tasks]`
 defines no `generate` task. The SDK Certify step (`build-and-publish-app.yaml`) runs `uv
