@@ -205,6 +205,20 @@ def is_rate_limited(stderr: str) -> bool:
     return "rate limit" in lowered or "secondary rate" in lowered
 
 
+def is_secondary_rate_limit(stderr: str) -> bool:
+    """Whether the failure was a *secondary* (abuse/concurrency) throttle.
+
+    Secondary limits clear in seconds-to-a-minute and are worth waiting out on a
+    bounded delay. Primary quota exhaustion is different: it holds until the
+    hourly core window resets, which is what `rate_limit_reset()` reads — so the
+    two must not share the same wait calculation (a secondary throttle against a
+    distant core reset would otherwise fail fast instead of waiting its short
+    window).
+    """
+    lowered = stderr.lower()
+    return "secondary rate" in lowered or "abuse detection" in lowered
+
+
 class Client:
     """Thin `gh api` wrapper. All calls use GH_TOKEN unless told otherwise."""
 
@@ -297,9 +311,17 @@ class Client:
             return set()
         return {line.strip() for line in result.stdout.splitlines() if line.strip()}
 
-    def add_labels(self, labels: set[str]) -> None:
+    def add_labels(self, labels: set[str]) -> bool:
+        """Add `labels`; True on success (or nothing to do), False on failure.
+
+        The READY path keys off this: `sdk-review-downgrade-on-ci-failure.yml`
+        gates on the `sdk-review-approved` label being present, so an approval
+        posted while that label is absent would never be auto-dismissed on a
+        later CI failure. Reporting the failure lets the caller keep the
+        label/status/approval triple from durably disagreeing.
+        """
         if not labels:
-            return
+            return True
         args = [
             "api",
             f"repos/{self.repo}/issues/{self.pr_number}/labels",
@@ -316,8 +338,9 @@ class Client:
                 f"::warning::could not add labels {sorted(labels)}: "
                 f"{result.stderr.strip()}"
             )
-        else:
-            print(f"Added labels: {sorted(labels)}")
+            return False
+        print(f"Added labels: {sorted(labels)}")
+        return True
 
     def remove_label(self, label: str) -> None:
         result = self.run(
@@ -448,7 +471,12 @@ def post_approval_with_retry(
             break
 
         delay = float(attempt * 5)
-        if is_rate_limited(stderr):
+        if is_secondary_rate_limit(stderr):
+            # A secondary throttle clears in seconds-to-a-minute and has no
+            # relationship to the hourly core-quota reset `rate_limit_reset()`
+            # reads, so wait a bounded backoff rather than that unrelated reset.
+            delay = max(delay, 15.0)
+        elif is_rate_limited(stderr):
             reset = client.rate_limit_reset(token)
             if reset:
                 wait_for = reset - now()
@@ -568,11 +596,24 @@ def main(
     # can no longer answer.
     labels_before = client.current_labels()
     to_add, to_remove = label_plan(verdict, labels_before)
-    client.add_labels(to_add)
+    added_ok = client.add_labels(to_add)
     for label in sorted(to_remove):
         client.remove_label(label)
 
     state, description = status_for(verdict)
+
+    # The downgrade workflow gates on the `sdk-review-approved` label standing.
+    # Approving + greening the status while that label never landed would leave
+    # an approval no invalidator can clear on a later CI failure — so refuse to
+    # stamp and fail loudly instead, leaving the status as the dispatcher set it.
+    if verdict == READY and APPROVED_LABEL in to_add and not added_ok:
+        print(
+            f"::error::PR #{pr_number}: could not add the `{APPROVED_LABEL}` label, "
+            f"so the approval is NOT being posted and the sdk-review status is left "
+            f"pending. Without the label a later CI failure could not auto-dismiss "
+            f"the approval. Restore `issues: write` for the App token and re-run."
+        )
+        return 1
 
     if verdict != READY:
         # sdk-review-dismiss-on-human.yml only fires on HUMAN activity, so when a

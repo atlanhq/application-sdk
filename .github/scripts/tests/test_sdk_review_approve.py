@@ -314,6 +314,37 @@ def test_secondary_rate_limit_inside_budget_waits_for_reset():
     assert slept == [32.0]  # reset + 2s so the window has rolled over
 
 
+def test_secondary_rate_limit_ignores_the_distant_primary_reset():
+    """A secondary throttle must wait its short window, not the hourly core reset.
+
+    Regression: `rate_limit_reset()` reads `.resources.core.reset` — the primary
+    window. A secondary limit firing while that reset is far away must NOT be
+    failed fast against it; it should retry on a bounded delay and succeed.
+    """
+    gh = base_gh()
+    attempts = {"n": 0}
+
+    def limited():
+        attempts["n"] += 1
+        # True secondary-limit stderr, and the primary core reset is 3600s away.
+        return (
+            fail("You have exceeded a secondary rate limit. (HTTP 403)")
+            if attempts["n"] == 1
+            else ok()
+        )
+
+    gh.on(is_approve, limited)
+    gh.on(is_rate_limit_probe, ok("3600"))  # distant primary reset — irrelevant
+    client = approve.Client(REPO, PR, gh)
+    slept: list[float] = []
+    assert approve.post_approval_with_retry(
+        client, HEAD, "pat", 3, 120, sleeper=slept.append, now=lambda: 0.0
+    )
+    # Waited the bounded secondary delay (15s), NOT the 3600s primary reset.
+    assert slept == [15.0]
+    assert len(gh.called(is_approve)) == 2
+
+
 def test_exhausting_attempts_returns_false():
     gh = base_gh()
     gh.on(is_approve, fail("gh: Internal Server Error (HTTP 500)"))
@@ -333,6 +364,18 @@ def test_failed_approval_leaves_status_unset(monkeypatch):
     gh.on(is_rate_limit_probe, ok("999999"))
     assert run_main(gh, monkeypatch) == 1
     assert gh.called(is_status) == [], "a failed approval must not go green"
+
+
+def test_ready_verdict_with_failed_label_add_does_not_approve_or_go_green(monkeypatch):
+    """An approval without its `sdk-review-approved` label can never be
+    auto-dismissed on a later CI failure (the downgrade workflow gates on the
+    label) — so a failed label add must block the approval and the green status.
+    """
+    gh = base_gh()  # fast path: base_gh labels=[] → sdk-review-approved is in to_add
+    gh.on(is_label_add, fail("gh: Resource not accessible by integration (HTTP 403)"))
+    assert run_main(gh, monkeypatch) == 1
+    assert gh.called(is_approve) == [], "no approval without its label"
+    assert gh.called(is_status) == [], "status stays pending, not green"
 
 
 def test_successful_approval_sets_status_after_approving(monkeypatch):
