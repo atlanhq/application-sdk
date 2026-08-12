@@ -181,6 +181,13 @@ async def _fetch_chunk(
             otherwise leave a hole of NUL bytes that reads back as a
             plausible-looking file of exactly the right length.
     """
+    # Lazy, and it cannot be hoisted to module scope: application_sdk.execution's
+    # package __init__ reaches back into storage.ops, which imports this module.
+    # A sys.modules lookup per chunk is nothing against a multi-MiB range GET.
+    from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: see comment above
+        current_progress_tracker,
+    )
+
     length = min(chunk_size_bytes, size - offset)
     async with sem:
         if etag is not None:
@@ -225,6 +232,9 @@ async def _fetch_chunk(
             )
         progress.completed_bytes += len(raw)
         progress.fetched_bytes += len(raw)
+        # One range GET landed at its offset — the unit of work for this path
+        # (ADR-0018).
+        current_progress_tracker().mark_progress("storage.download_range")
         if progress_interval > 0:
             now = time.monotonic()
             if now - progress.last_progress >= progress_interval:

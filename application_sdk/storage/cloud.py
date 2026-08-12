@@ -422,6 +422,11 @@ class CloudStore:
         # BoundStore carries the credential-level put attributes (e.g. an S3
         # storageClass) into the primitive; compute_hash=False skips hashing
         # and implies write_sidecar=False.
+        #
+        # The per-part ``mark_progress`` hook FND-288 added to this method's own
+        # write loop is not lost with the loop: ``upload_file`` marks
+        # ``storage.upload_part`` per part, so the stall watchdog still sees a
+        # long external upload making progress. Only the label changed.
         await upload_file(
             key,
             path,
