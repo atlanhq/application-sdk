@@ -47,7 +47,7 @@ on:
         type: string
         default: "1.0.0"
       private_git_auth:
-        description: "Set true if the app has a private-org (atlanhq) git dependency that `uv lock` must resolve during the version bump. When true, atlanhq GitHub remotes are rewritten to token auth (via ORG_PAT_GITHUB) before `uv lock` runs, so resolution of the private git source succeeds. Default false — apps with only PyPI deps are unaffected. Mirrors the `private_git_auth` input in build-and-publish-app.yaml."
+        description: "DEPRECATED — no longer required, and no longer switches anything on. Safe to delete from your caller; safe to leave (still accepted). Rewriting atlanhq remotes to token auth before `uv lock` re-resolves the graph now happens automatically whenever ORG_PAT_GITHUB is available; apps with only PyPI deps are unaffected because with no token the rewrite is skipped entirely. What the flag still does is assert that this app CANNOT resolve its dependencies without the token, so a missing ORG_PAT_GITHUB fails immediately and by name rather than later inside `uv lock`."
         required: false
         type: boolean
         default: false
@@ -120,11 +120,13 @@ jobs:
           CURRENT=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
           echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
 
-      # The flag promises a token, but `secrets: inherit` resolves an unset org
-      # secret to an empty string rather than failing — so without this guard
-      # the rewrite below installs a redirect of every atlanhq URL to an
-      # *unauthenticated* token URL, and the job dies far from the cause.
-      # Condition stays in `if:`, never in the shell (docs/standards/ci.md).
+      # `private_git_auth` no longer gates the rewrite — that now applies
+      # automatically whenever ORG_PAT_GITHUB is available. The input survives
+      # as an *assertion*: `secrets: inherit` resolves an unset org secret to an
+      # empty string rather than failing, so an app that declares it needs the
+      # token gets a loud, named error here instead of a `uv lock` that dies far
+      # from the cause. Condition stays in `if:`, never in the shell
+      # (docs/standards/ci.md).
       - name: Require ORG_PAT_GITHUB when private_git_auth is set
         if: inputs.private_git_auth && env.GIT_TOKEN == ''
         run: |
@@ -142,11 +144,13 @@ jobs:
       # Torn down again after the changelog step, before the push: the checkout
       # above authenticates via git's `extraheader`, and leaving a userinfo
       # rewrite in place would hand the push a second, different credential.
+      # That teardown MUST stay gated on exactly the same condition this step
+      # applies under (a non-empty ORG_PAT_GITHUB) — the pair is symmetric, and
+      # an unset-all with nothing to unset exits 5.
       - name: Configure git auth for private dependencies
-        if: inputs.private_git_auth && env.GIT_TOKEN != ''
-        run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+        uses: atlanhq/application-sdk/.github/actions/private-git-auth@main
+        with:
+          token: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Bump version
         id: bump
@@ -170,10 +174,12 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: python3 .sdk-scripts/.github/scripts/update_changelog.py "${{ steps.versions.outputs.current }}" "${{ steps.bump.outputs.new }}"
 
-      # Restore the pristine push path — see the rewrite step above. Runs on the
-      # same guard so it is a no-op for every caller that did not opt in.
+      # Restore the pristine push path — see the rewrite step above. Gated on
+      # the token alone, matching the condition the action applies the rewrite
+      # under, so the pair stays symmetric: no rewrite, no unset (which would
+      # exit 5 with nothing to remove).
       - name: Drop private-dependency git rewrite before push
-        if: inputs.private_git_auth && env.GIT_TOKEN != ''
+        if: env.GIT_TOKEN != ''
         run: git config --global --unset-all url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf
 
       - name: Commit and open PR

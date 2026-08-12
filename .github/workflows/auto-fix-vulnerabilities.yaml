@@ -43,6 +43,10 @@ jobs:
     name: Auto-fix Vulnerabilities
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Job-level so the teardown step's `if:` can read it — a step's own `env:`
+    # is not visible to that step's condition. Matches tests-reusable.yaml.
+    env:
+      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: Get PR branch
         id: pr
@@ -181,6 +185,19 @@ jobs:
         with:
           version: "0.12.3"
 
+      # "Fix vulnerable packages" below runs `uv lock --upgrade-package`, which
+      # re-resolves the FULL dependency graph — so for an app with a private-org
+      # git source it must clone that other atlanhq repo, which the checkout
+      # above has no auth for. Same failure class as release-version-bump.yaml
+      # (`Permission denied (publickey)`), which this workflow was missing
+      # entirely. The action no-ops on an empty token, so apps with only PyPI
+      # deps are unaffected.
+      - name: Configure git auth for private dependencies
+        if: steps.identify.outputs.count > 0
+        uses: atlanhq/application-sdk/.github/actions/private-git-auth@main
+        with:
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
       - name: Fix vulnerable packages
         if: steps.identify.outputs.count > 0
         id: fix
@@ -301,6 +318,16 @@ jobs:
 
           print(f"\nDone: {len(fixed)} fixed, {len(failed)} failed")
           PYEOF
+
+      # Restore the pristine push path before `git push` below: the checkout
+      # authenticates via git's `extraheader`, and leaving a userinfo rewrite in
+      # place would hand the push a second, different credential. Gated on
+      # exactly the condition the rewrite applied under — the pair is symmetric,
+      # and an unset-all with nothing to remove exits 5. Mirrors
+      # release-version-bump.yaml.
+      - name: Drop private-dependency git rewrite before push
+        if: steps.identify.outputs.count > 0 && env.GIT_TOKEN != ''
+        run: git config --global --unset-all url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf
 
       - name: Commit fixes
         if: steps.fix.outputs.fixed_count > 0

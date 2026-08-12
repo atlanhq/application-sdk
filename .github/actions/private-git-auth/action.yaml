@@ -1,0 +1,73 @@
+name: Authenticate private atlanhq git dependencies
+description: |
+  Rewrites atlanhq GitHub remotes to token auth so that a later `uv sync` /
+  `uv lock` can resolve a private-org git dependency (a dep declared in
+  `[tool.uv.sources]` as `git+ssh://git@github.com/atlanhq/...`). Without this
+  the resolver clones over ssh with no key and dies on
+  `Permission denied (publickey)`.
+
+  Applies automatically wherever it is wired in: pass the token and the rewrite
+  happens; pass nothing and the action is an exact no-op. There is no opt-in
+  flag, because the apps that need it and the apps that don't are distinguished
+  by whether a token is available, not by a boolean a caller has to remember to
+  set.
+
+  DO NOT make this unconditional. With an empty token the rewrite still installs
+  a global redirect of every atlanhq URL to an unauthenticated token URL — which
+  then also applies to the repo's own checkout, so the job fails far from the
+  cause. That is why the rewrite is gated on the token being non-empty, and why
+  callers must not "default it to true".
+
+  Scope: this configures the *runner's* git. It does not reach inside
+  `docker build` — the image-build path (.github/actions/build-app-image,
+  .github/actions/sdr-e2e) authenticates separately via a BuildKit secret mount
+  (`/run/secrets/git_token`). Wiring this action into a job that only builds an
+  image buys nothing; the two mechanisms are deliberately separate.
+
+inputs:
+  token:
+    description: |
+      GitHub token with read access to the *other* atlanhq repo the dependency
+      lives in — normally `secrets.ORG_PAT_GITHUB`.
+
+      Do not pass a minted atlan-app-fleet App token: it is scoped to
+      `repositories: <the app's own repo>`, so it authenticates the rewrite and
+      then still 404s on the dependency's repo. When a job has both, prefer
+      ORG_PAT_GITHUB (`secrets.ORG_PAT_GITHUB || steps.app-token.outputs.token`,
+      not the reverse).
+
+      Empty (the default) makes this action a no-op.
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    # --global writes ~/.gitconfig, so this applies to the clone `uv` performs
+    # later in the same job and needs no checkout of its own.
+    #
+    # --replace-all on the first line, not a plain `git config`: both lines write
+    # the same key (url.<rewritten>.insteadOf) with different values, so once the
+    # key is multi-valued a plain set fails with "has multiple values" (exit 5).
+    # That makes a plain set unsafe to run twice in one job — which can happen
+    # now that this is an action a workflow and a nested composite can both use.
+    # --replace-all collapses to one value, the --add re-appends the second, and
+    # repeat invocations land on the same two entries.
+    - name: Authenticate private atlanhq git dependencies
+      if: inputs.token != ''
+      shell: bash
+      env:
+        GIT_TOKEN: ${{ inputs.token }}
+      run: |
+        git config --global --replace-all url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+        git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+
+    # A breadcrumb, not a failure: most apps have only PyPI deps and correctly
+    # reach here with no token. It exists so that when an app *does* have a
+    # private dep and the secret is missing, the later `Permission denied
+    # (publickey)` has a matching note earlier in the same log.
+    - name: No token for private atlanhq git dependencies
+      if: inputs.token == ''
+      shell: bash
+      run: |
+        echo "::notice title=private-git-auth::No token supplied — atlanhq remotes left unauthenticated. Expected for apps with only PyPI dependencies. If dependency resolution below fails with 'Permission denied (publickey)' on an atlanhq repo, this job needs ORG_PAT_GITHUB."

@@ -83,7 +83,7 @@ on:
         type: string
         default: "app"
       private_git_auth:
-        description: "Set true if the app has a private-org (atlanhq) git dependency that `uv sync` must clone in the certify gate. When true, certify authenticates atlanhq GitHub remotes with a minted fleet App token before installing deps, so the install succeeds and unit tests actually run. Default false — apps with only PyPI deps are unaffected."
+        description: "DEPRECATED — no longer required, and no longer switches anything on. Safe to delete from your caller; safe to leave (still accepted). Certify now authenticates atlanhq GitHub remotes before `uv sync` automatically, whenever ORG_PAT_GITHUB is available to the job; apps with only PyPI deps are unaffected because with no token the rewrite is skipped entirely. Setting this true has no effect in this workflow — unlike tests-reusable.yaml and release-version-bump.yaml, certify has no 'missing secret' assertion step for the flag to drive."
         required: false
         type: boolean
         default: false
@@ -472,13 +472,21 @@ jobs:
           fi
 
       # ── 2. App dependencies ───────────────────────────────────────────────────
+      # Unconditional: the action no-ops on an empty token, so apps with only
+      # PyPI deps are unaffected and apps with a private atlanhq dep need not
+      # set any flag.
+      #
+      # ORG_PAT_GITHUB FIRST, not the minted App token. This used to read
+      # `steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB`, but the fleet
+      # App token is scoped to `repositories: <this app's own repo>` — it wins
+      # the `||`, authenticates the rewrite, and then still cannot read the
+      # *other* atlanhq repo the dependency lives in. The App token stays as the
+      # fallback only so a job that somehow has it and not the PAT is no worse
+      # off than before.
       - name: Configure git auth for private dependencies
-        if: ${{ inputs.private_git_auth }}
-        env:
-          GIT_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
-        run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+        uses: atlanhq/application-sdk/.github/actions/private-git-auth@main
+        with:
+          token: ${{ secrets.ORG_PAT_GITHUB || steps.app-token.outputs.token }}
 
       - name: Install app dependencies
         id: app_install

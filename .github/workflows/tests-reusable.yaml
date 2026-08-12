@@ -239,15 +239,24 @@ on:
         type: boolean
         default: false
         description: |
-          Set true when the connector's lockfile pins a PRIVATE atlanhq git
-          dependency (e.g. query-redaction, pinned via `ssh://` or `https://`
-          in [tool.uv.sources]).  Every tier of this reusable runs `uv sync` on
-          the runner, and an unauthenticated clone of a private atlanhq repo
-          fails there — so with this flag each job rewrites atlanhq remotes to
-          a token URL (ORG_PAT_GITHUB, available via the caller's
-          `secrets: inherit`) BEFORE the deps action syncs.  The Docker build
-          is covered separately: `git-token` is always forwarded to sdr-e2e.
-          Leave false for connectors with only public dependencies.
+          DEPRECATED — no longer required, and no longer switches anything on.
+          Safe to delete from your caller; safe to leave (it is still accepted,
+          so removing it is not urgent).
+
+          Rewriting atlanhq remotes to a token URL before `uv sync` now happens
+          automatically in every tier, whenever ORG_PAT_GITHUB is available to
+          the job. Apps with only public dependencies are unaffected: with no
+          token the rewrite is skipped entirely, exactly as before.
+
+          What the flag still does: assert that this connector CANNOT resolve
+          its dependencies without the token, so the job fails immediately and
+          by name if ORG_PAT_GITHUB is missing, rather than dying later inside
+          `uv sync` with `Permission denied (publickey)`. That is the only
+          remaining reason to set it.
+
+          The Docker build is covered separately and always was: `git-token` is
+          forwarded to sdr-e2e, because a runner-global gitconfig does not reach
+          inside `docker build`.
       git-lfs-skip-smudge:
         required: false
         type: boolean
@@ -458,11 +467,12 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
-      # The flag promises a token. With ORG_PAT_GITHUB absent, GIT_TOKEN expands
-      # empty and the rewrite below would still install a global redirect of
-      # every atlanhq URL to an unauthenticated token URL — which then also
-      # applies to the connector's own repo checkout, so the job fails far from
-      # the cause. Fail here instead, naming the missing secret. The condition
+      # `private-git-deps` no longer gates the auth step — that now applies
+      # automatically whenever ORG_PAT_GITHUB is available. The input survives
+      # as an *assertion*: an app that sets it is declaring "I have a private
+      # atlanhq dep and cannot resolve deps without the token", so a missing
+      # secret should fail loudly here, naming it, rather than surfacing much
+      # later as `Permission denied (publickey)` inside `uv sync`. The condition
       # stays in `if:`, never in the shell (docs/standards/ci.md).
       - name: Require ORG_PAT_GITHUB when private-git-deps is set
         if: inputs.private-git-deps && env.GIT_TOKEN == ''
@@ -470,14 +480,13 @@ jobs:
           echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
           exit 1
 
-      # Private atlanhq git deps must be reachable before the deps action's
-      # `uv sync`. --global writes ~/.gitconfig, so it applies to the clone uv
-      # performs later in this job and needs no checkout of its own.
+      # Unconditional: the action no-ops on an empty token, so apps with only
+      # PyPI deps are unaffected and apps with a private atlanhq dep need not
+      # set any flag. Must precede the deps action's `uv sync`.
       - name: Authenticate private atlanhq git dependencies
-        if: inputs.private-git-deps && env.GIT_TOKEN != ''
-        run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+        uses: atlanhq/application-sdk/.github/actions/private-git-auth@main
+        with:
+          token: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Run unit tests
         id: unit
@@ -669,7 +678,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
-      # See the unit job for why this gates on the token, not just the flag.
+      # See the unit job for why the flag is now only an assertion.
       - name: Require ORG_PAT_GITHUB when private-git-deps is set
         if: inputs.private-git-deps && env.GIT_TOKEN == ''
         run: |
@@ -677,10 +686,9 @@ jobs:
           exit 1
 
       - name: Authenticate private atlanhq git dependencies
-        if: inputs.private-git-deps && env.GIT_TOKEN != ''
-        run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+        uses: atlanhq/application-sdk/.github/actions/private-git-auth@main
+        with:
+          token: ${{ secrets.ORG_PAT_GITHUB }}
 
       # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON). Exported here rather
       # than passed to the composite action below, because every action this
@@ -1623,7 +1631,7 @@ jobs:
           python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
             --json "$E2E_SOURCE_ENV_JSON" >> "$GITHUB_ENV"
 
-      # See the unit job for why this gates on the token, not just the flag.
+      # See the unit job for why the flag is now only an assertion.
       - name: Require ORG_PAT_GITHUB when private-git-deps is set
         if: inputs.private-git-deps && env.GIT_TOKEN == ''
         run: |
@@ -1634,10 +1642,9 @@ jobs:
       # build, so the token rewrite is needed here too — `git-token` below only
       # reaches the Docker build.
       - name: Authenticate private atlanhq git dependencies
-        if: inputs.private-git-deps && env.GIT_TOKEN != ''
-        run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+        uses: atlanhq/application-sdk/.github/actions/private-git-auth@main
+        with:
+          token: ${{ secrets.ORG_PAT_GITHUB }}
 
       # uv on the host for the sdr-e2e action's `uv run pytest` + summary steps.
       # The action self-installs uv only when application-sdk-ref is set

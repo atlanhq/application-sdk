@@ -216,13 +216,15 @@ on:
           from the caller.
       private-git-deps:
         description: >
-          Set true when the app's lockfile pins a PRIVATE atlanhq git dependency
-          (e.g. query-redaction).  The D-series leg is the only one that
-          materialises the environment (`uv sync`, via the detect action's
-          needs-env step), and an unauthenticated clone of a private atlanhq repo
-          fails there — so with this flag the suite job rewrites atlanhq remotes
-          to a token URL (ORG_PAT_GITHUB) first.  Requires the caller to pass
-          `secrets: inherit`.  Leave false for apps with only public deps.
+          DEPRECATED — no longer required, and no longer switches anything on.
+          Safe to delete from your caller; safe to leave (still accepted).
+          Rewriting atlanhq remotes to a token URL before the D-series leg's
+          `uv sync` now happens automatically whenever ORG_PAT_GITHUB is
+          available to the job. Apps with only public deps are unaffected: with
+          no token the rewrite is skipped, exactly as before. What the flag
+          still does is assert that this app CANNOT resolve its dependencies
+          without the token, so a missing ORG_PAT_GITHUB fails immediately and
+          by name rather than later inside `uv sync`.
         required: false
         default: false
         type: boolean
@@ -434,10 +436,12 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
-      # The flag promises a token; with ORG_PAT_GITHUB absent the rewrite below
-      # would redirect every atlanhq URL — including the caller checkout above —
-      # to an unauthenticated token URL, failing far from the cause. Condition
-      # stays in `if:`, never in the shell (docs/standards/ci.md).
+      # `private-git-deps` no longer gates the auth step — that now applies
+      # automatically whenever ORG_PAT_GITHUB is available. The input survives
+      # as an *assertion*: an app that sets it cannot resolve deps without the
+      # token, so a missing secret fails loudly here, naming it, instead of
+      # surfacing later as `Permission denied (publickey)`. Condition stays in
+      # `if:`, never in the shell (docs/standards/ci.md).
       - name: "Require ORG_PAT_GITHUB when private-git-deps is set"
         if: inputs.private-git-deps && env.GIT_TOKEN == ''
         shell: bash
@@ -446,16 +450,14 @@ jobs:
           exit 1
 
       # Only the D-series leg materialises the environment (the detect action's
-      # needs-env `uv sync`), but gating on the input and the token — rather
-      # than also duplicating the series condition — keeps this a one-second
-      # no-op on the other legs. --global writes ~/.gitconfig, so it applies to
-      # the clone uv performs inside the action.
+      # needs-env `uv sync`), but running this on every leg — rather than also
+      # duplicating the series condition — keeps it a one-second no-op
+      # elsewhere. The action itself no-ops when no token is available, so apps
+      # with only PyPI deps are unaffected and need not set any flag.
       - name: "Authenticate private atlanhq git dependencies"
-        if: inputs.private-git-deps && env.GIT_TOKEN != ''
-        shell: bash
-        run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+        uses: ./.github/actions/private-git-auth
+        with:
+          token: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: "Run ${{ matrix.series }}-series checks"
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
