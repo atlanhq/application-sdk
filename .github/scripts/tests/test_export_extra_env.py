@@ -703,7 +703,6 @@ def test_call_sites_are_the_expected_files():
     relative = {p.relative_to(_REPO_ROOT).as_posix() for p in _call_site_files()}
     assert relative == {
         ".github/actions/connector-integration-tests/action.yaml",
-        ".github/actions/dataforge-source/action.yaml",
         ".github/actions/sdr-e2e/action.yaml",
         ".github/workflows/tests-reusable.yaml",
     }

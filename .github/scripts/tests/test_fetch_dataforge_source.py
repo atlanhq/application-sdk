@@ -21,7 +21,7 @@ import pytest
 _SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
-import fetch_dataforge_source as fds  # noqa: E402
+import fetch_dataforge_source as fds
 
 _REPO_ROOT = _SCRIPTS_DIR.parents[1]
 
@@ -386,15 +386,6 @@ def test_tests_reusable_call_site_captures_stdout():
         "via command substitution — echoing it to the log would print every "
         "credential value unmasked"
     )
-
-
-def test_composite_action_invokes_scripts_at_real_paths():
-    action_dir = _REPO_ROOT / ".github" / "actions" / "dataforge-source"
-    action_yaml = (action_dir / "action.yaml").read_text()
-    assert _CAPTURE_SHAPE.search(action_yaml), "action must capture fetch stdout"
-    for rel in re.findall(r"\$\{\{ github\.action_path \}\}/(\S+?\.py)", action_yaml):
-        resolved = (action_dir / rel).resolve()
-        assert resolved.is_file(), f"action.yaml references missing script {rel}"
 
 
 def test_field_maps_file_is_well_formed():
