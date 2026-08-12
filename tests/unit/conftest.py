@@ -1,12 +1,17 @@
 """Unit test configuration and autouse fixtures."""
 
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from loguru import logger as _loguru_logger
 
-from application_sdk.execution.progress import ProgressTracker, bind_progress_tracker
+from application_sdk.execution.progress import (
+    ClosedHold,
+    ProgressTracker,
+    bind_progress_tracker,
+)
 
 # Re-export shared registry fixtures so all unit tests can use them without
 # explicit per-file imports (pytest discovers fixtures via conftest chain).
@@ -17,17 +22,23 @@ from application_sdk.testing.fixtures import (  # noqa: F401
 
 
 class RecordingProgressTracker(ProgressTracker):
-    """A real :class:`ProgressTracker` that also keeps every label it was given.
+    """A real :class:`ProgressTracker` that also keeps a history of its signals.
 
     ``ProgressTracker`` only retains the *most recent* label, which is all the
     stall watchdog needs but not enough to assert that a framework hook fires
     once per unit of work rather than once per record (ADR-0018's hard
     constraint). Subclassing keeps the real stall/hold behaviour intact — no
-    stub — while adding the ordered label history a hook test needs.
+    stub — while adding the ordered histories a hook or auto-hold test needs.
+
+    :attr:`labels` records ``mark_progress`` calls; :attr:`holds` records every
+    hold as it closes, which is a separate list because a closed hold is *not* a
+    ``mark_progress`` call — ``exit_hold`` re-arms the stall clock directly, so a
+    hold would otherwise leave no trace in either history.
     """
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self.holds: list[ClosedHold] = []
+        super().__init__(clock=clock, on_hold_closed=self.holds.append)
         self.labels: list[str] = []
 
     def mark_progress(self, label: str = "") -> None:
@@ -37,6 +48,10 @@ class RecordingProgressTracker(ProgressTracker):
     def count(self, label: str) -> int:
         """How many times *label* was recorded."""
         return self.labels.count(label)
+
+    def holds_for(self, label: str) -> list[ClosedHold]:
+        """Every closed hold recorded under *label*, in the order they closed."""
+        return [hold for hold in self.holds if hold.label == label]
 
 
 @pytest.fixture

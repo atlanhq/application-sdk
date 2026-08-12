@@ -46,6 +46,7 @@ from application_sdk.execution.progress import (
     bind_progress_tracker,
     current_progress_tracker,
 )
+from tests.unit.conftest import RecordingProgressTracker
 
 
 class _ProgIn(Input, allow_unbounded_fields=True):
@@ -209,7 +210,11 @@ class TestReachableFromRunInThread:
 
     @pytest.mark.asyncio
     async def test_module_level_run_in_thread(self) -> None:
-        tracker = ProgressTracker()
+        # A recording tracker, because the label history is what proves the mark
+        # landed: the offload's own auto-hold (FND-290) releases *after* the
+        # thread returns and re-arms the stall clock under its own label, so
+        # `last_label` is the hold's by the time the await completes.
+        tracker = RecordingProgressTracker()
 
         with bind_progress_tracker(tracker):
             seen = await run_in_thread(_read_tracker_deep)
@@ -218,17 +223,17 @@ class TestReachableFromRunInThread:
         # The context is copied into the thread, but the tracker object is
         # shared — so progress marked in the thread lands on the attempt's
         # tracker rather than on a private copy that dies with the thread.
-        assert tracker.last_label == "from_thread"
+        assert "from_thread" in tracker.labels
 
     @pytest.mark.asyncio
     async def test_task_execution_context_run_in_thread(self) -> None:
-        tracker = ProgressTracker()
+        tracker = RecordingProgressTracker()
 
         with bind_progress_tracker(tracker):
             seen = await _task_execution_context().run_in_thread(_read_tracker_deep)
 
         assert seen is tracker
-        assert tracker.last_label == "from_thread"
+        assert "from_thread" in tracker.labels
 
     @pytest.mark.asyncio
     async def test_reachable_from_a_nested_async_frame(self) -> None:
@@ -358,7 +363,12 @@ class TestActivityBinding:
         from_body, from_wrapper, from_module_level = seen
         assert from_wrapper is from_body
         assert from_module_level is from_body
-        assert from_body.last_label == "from_thread"
+        # The activity owns this tracker, so there is no label history to read —
+        # only the most recent signal, which is the second offload's auto-hold
+        # (FND-290) releasing under the offloaded callable's name. That is the
+        # composed shape end to end: bound by `activities.py`, reached through
+        # both entry points, and vouched for on the way back out.
+        assert from_body.last_label == "run_in_thread._read_tracker_deep"
 
     @pytest.mark.asyncio
     async def test_tracker_is_unbound_after_the_activity_returns(self) -> None:

@@ -575,6 +575,20 @@ class TaskExecutionContext:
         ContextVars (ObjectStore, logger context, correlation ID, infrastructure
         handles) are propagated to the worker thread automatically.
 
+        The offload is automatically wrapped in an unbounded progress hold
+        (ADR-0018), so however long the blocking call takes, the stall watchdog
+        never accuses it of stalling. Nothing to do at the call site, and a
+        legitimately long blocking call behaves exactly as it did before the
+        watchdog existed. To bound it instead, wrap the offload in
+        :meth:`holding_progress` with the allowance you would actually let this
+        one call have — a wedged call is then caught at ``timeout`` plus the
+        no-progress budget rather than at the duration backstop::
+
+            async with self.task_context.holding_progress(
+                "full table scan", timeout=7200
+            ):
+                rows = await self.task_context.run_in_thread(cursor.execute, sql)
+
         **CRITICAL: your blocking code MUST have its own timeout.** Python
         threads cannot be forcibly killed; a hang here hangs the thread
         forever.
