@@ -1786,17 +1786,7 @@ jobs:
         if: inputs.dataforge-datasource != ''
         env:
           DF_HERMETIC_FALLBACK: ${{ inputs.dataforge-hermetic-fallback }}
-        run: |
-          if [ -n "$E2E_SOURCE_DATASOURCE" ]; then
-            echo "::notice::e2e source: dataforge ($E2E_SOURCE_DATASOURCE)"
-          elif [ -n "$E2E_SOURCE_ENV_JSON" ]; then
-            echo "::notice::e2e source: repo credentials (dataforge fetch unavailable — see steps above)"
-          elif [ "$DF_HERMETIC_FALLBACK" = "true" ]; then
-            echo "::notice::e2e source: hermetic fallback (dataforge fetch unavailable — see steps above; no repo creds configured)"
-          else
-            echo "::error::no e2e source available — the dataforge fetch failed (see the steps above), no E2E_SOURCE_ENV_JSON repo credentials are configured, and this connector declares no hermetic source (dataforge-hermetic-fallback: false). Fix the dataforge chain (VPN, workload binding, resource) or configure E2E_SOURCE_ENV_JSON."
-            exit 1
-          fi
+        run: python3 application-sdk-scripts/.github/scripts/resolve_e2e_source.py
 
       # See the unit job for why this gates on the token, not just the flag.
       - name: Require ORG_PAT_GITHUB when private-git-deps is set
