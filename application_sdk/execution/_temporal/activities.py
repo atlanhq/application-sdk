@@ -206,25 +206,25 @@ def create_activity_from_task(
         # The binding is what makes it reachable from the framework hooks,
         # `run_in_thread` and `holding_progress()`, none of which is handed a
         # reference (ADR-0018 → *Feeding the tracker*).
-        tracker_token = set_progress_tracker(ProgressTracker())
-
         stop_event = asyncio.Event()
         heartbeat_task = None
 
-        if (
-            context.heartbeat_timeout_seconds is not None
-            and context.auto_heartbeat_seconds is not None
-        ):
-            heartbeat_task = asyncio.create_task(
-                auto_heartbeat_loop(
-                    interval_seconds=context.auto_heartbeat_seconds,
-                    heartbeat_fn=heartbeat_controller.heartbeat_keepalive,
-                    stop_event=stop_event,
-                    task_name=context.task_name,
-                )
-            )
+        tracker_token = set_progress_tracker(ProgressTracker())
 
         try:
+            if (
+                context.heartbeat_timeout_seconds is not None
+                and context.auto_heartbeat_seconds is not None
+            ):
+                heartbeat_task = asyncio.create_task(
+                    auto_heartbeat_loop(
+                        interval_seconds=context.auto_heartbeat_seconds,
+                        heartbeat_fn=heartbeat_controller.heartbeat_keepalive,
+                        stop_event=stop_event,
+                        task_name=context.task_name,
+                    )
+                )
+
             from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
                 has_refs_to_materialize,
                 has_refs_to_persist,
@@ -346,28 +346,33 @@ def create_activity_from_task(
             raise
 
         finally:
-            if heartbeat_task is not None:
-                stop_event.set()
-                try:
-                    await asyncio.wait_for(heartbeat_task, timeout=1.0)
-                # conformance: ignore[E004] cleanup path cancelling heartbeat task in finally; all exceptions handled by inner cancel+log
-                except (TimeoutError, Exception):
-                    heartbeat_task.cancel()
+            try:
+                if heartbeat_task is not None:
+                    stop_event.set()
                     try:
-                        await heartbeat_task
-                    # conformance: ignore[E004] heartbeat cancel cleanup in finally; debug-logged with exc_info; swallow is intentional
-                    except Exception:
-                        logger.debug(
-                            "Heartbeat task did not cancel cleanly", exc_info=True
-                        )
+                        await asyncio.wait_for(heartbeat_task, timeout=1.0)
+                    # conformance: ignore[E004] cleanup path cancelling heartbeat task in finally; all exceptions handled by inner cancel+log
+                    except (TimeoutError, Exception):
+                        heartbeat_task.cancel()
+                        try:
+                            await heartbeat_task
+                        # conformance: ignore[E004] heartbeat cancel cleanup in finally; debug-logged with exc_info; swallow is intentional
+                        except Exception:
+                            logger.debug(
+                                "Heartbeat task did not cancel cleanly", exc_info=True
+                            )
+            finally:
+                # Unbind in the same context that bound it, so a caller that
+                # invokes the activity body directly (a local run, a unit test)
+                # is left with whatever tracker it had, rather than this
+                # attempt's. The nested finally guarantees the reset runs even
+                # when the activity's cancellation lands during the heartbeat
+                # cleanup above (``CancelledError`` is a ``BaseException`` and
+                # would otherwise skip straight past the unbind).
+                reset_progress_tracker(tracker_token)
 
-            # Unbind in the same context that bound it, so a caller that invokes
-            # the activity body directly (a local run, a unit test) is left with
-            # whatever tracker it had, rather than this attempt's.
-            reset_progress_tracker(tracker_token)
-
-            app_instance._task_context = None
-            app_instance._context = None
+                app_instance._task_context = None
+                app_instance._context = None
 
     # Set type annotations with the actual input/output types from task metadata.
     # This is critical for Temporal to properly deserialize the input dataclass.
