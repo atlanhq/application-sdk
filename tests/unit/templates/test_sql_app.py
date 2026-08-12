@@ -2754,8 +2754,154 @@ class TestPrimeFailureClassification:
 
         assert result.success is False
         assert result.status is OutputStatus.FAILURE
-        assert result.failure is None
         assert result.error_type == "_AppAuthError"
+
+    async def test_denylisted_evidence_degrades_without_losing_the_verdict(self):
+        """The degrade must drop *evidence*, never routing. Falling back to
+        ``error_type`` / ``error_message`` re-derives the verdict from a class
+        name (``_AppAuthError``) that matches no string hint, so an explicit
+        AUTH / USER verdict would silently inverted into INTERNAL / APP_OWNER —
+        the exact CNCT-197 misrouting the typed path exists to prevent."""
+        from dataclasses import dataclass
+
+        from application_sdk.errors.categories import Audience, FailureCategory
+        from application_sdk.errors.leaves import AuthError
+
+        @dataclass(kw_only=True)
+        class _AppAuthError(AuthError):
+            api_key: str | None = None  # denylisted evidence key
+            auth_method: str | None = "odbc"  # keepable evidence
+
+        result = await self._probe(
+            _AppAuthError(message="rejected", api_key="synthetic")
+        )
+
+        assert result.failure is not None
+        assert result.failure.category is FailureCategory.AUTH
+        assert result.failure.audience is Audience.USER
+        assert result.failure.code == AuthError.code
+        # The offending key is gone; the innocent evidence beside it survives.
+        assert "api_key" not in result.failure.evidence
+        assert result.failure.evidence.get("auth_method") == "odbc"
+        assert "synthetic" not in result.failure.model_dump_json()
+
+        # And the degraded envelope still rebuilds as the connector's verdict.
+        err = SqlApp._classify_prime_failure(
+            PrimeAuthOutput.model_validate_json(result.model_dump_json())
+        )
+        assert isinstance(err, AuthError)
+        assert err.audience is Audience.USER
+
+    async def test_degrade_drops_all_evidence_before_giving_up_the_verdict(self):
+        """Second tier of the degrade: when stripping the denylisted keys is
+        not enough, drop evidence entirely rather than surrender the typed
+        routing. Today's envelope only rejects secret-named keys, so tier 1
+        always clears it — the rejection is injected here so the ladder is
+        exercised rather than assumed, and so a future validator that refuses
+        an evidence *value* costs the verdict its context, not its routing."""
+        from dataclasses import dataclass
+
+        from pydantic import ValidationError
+
+        from application_sdk.errors.categories import Audience, FailureCategory
+        from application_sdk.errors.leaves import AuthError
+        from application_sdk.errors.wire import FailureDetails
+
+        @dataclass(kw_only=True)
+        class _AppAuthError(AuthError):
+            api_key: str | None = None
+            auth_method: str | None = "odbc"
+
+        def _rejects_any_evidence(**kwargs: Any) -> FailureDetails:
+            if kwargs.get("evidence"):
+                raise ValidationError.from_exception_data(
+                    "FailureDetails",
+                    [
+                        {
+                            "type": "value_error",
+                            "loc": ("evidence",),
+                            "input": kwargs["evidence"],
+                            "ctx": {"error": ValueError("evidence not accepted")},
+                        }
+                    ],
+                )
+            return FailureDetails(**kwargs)
+
+        with patch(
+            "application_sdk.templates.sql_app.FailureDetails",
+            side_effect=_rejects_any_evidence,
+        ):
+            result = await self._probe(
+                _AppAuthError(message="rejected", api_key="synthetic")
+            )
+
+        assert result.failure is not None
+        assert result.failure.category is FailureCategory.AUTH
+        assert result.failure.audience is Audience.USER
+        assert result.failure.message == "rejected"
+        assert result.failure.evidence == {}
+
+    def test_reconstruction_redacts_a_secret_in_a_replayed_envelope(self):
+        """Reconstruction is an unredacted trust boundary. A pre-redaction-era
+        envelope replayed from Temporal history — or a hand-built output —
+        carries whatever its producer wrote. The denylist only rejects
+        secret-named *keys*, so a DSN in a nested evidence value, in
+        ``message`` or in ``suggested_action`` reaches the reconstruction leaf
+        and re-serialises onto the wire verbatim unless re-redacted here."""
+        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.errors.leaves import SourceUnavailableError
+        from application_sdk.errors.wire import FailureDetails
+
+        dsn = "UID=sa;PWD=SyntheticValue123"
+        legacy = PrimeAuthOutput(
+            success=False,
+            failure=FailureDetails(
+                category=FailureCategory.SOURCE_UNAVAILABLE,
+                code=SourceUnavailableError.code,
+                retryable=True,
+                audience=Audience.USER,
+                message=f"connect failed: {dsn}",
+                suggested_action=f"retry with {dsn}",
+                evidence={"network_error": f"refused for {dsn}"},
+            ),
+        )
+
+        err = SqlApp._classify_prime_failure(legacy)
+        wire = err.to_failure_details().model_dump_json()
+
+        assert "SyntheticValue123" not in wire
+        assert "PWD=***" in wire
+
+    def test_reconstruction_redacts_nested_and_unknown_code_envelopes(self):
+        """Same boundary, unknown-code branch: the generic reconstruction leaf
+        copies the producer's ``evidence`` and ``cause_repr`` wholesale, so a
+        secret nested inside a container value survives re-serialisation unless
+        the walker recurses over the reconstructed evidence too."""
+        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.errors.wire import FailureDetails
+
+        dsn = "UID=sa;PWD=SyntheticValue123"
+        unknown = PrimeAuthOutput(
+            success=False,
+            failure=FailureDetails(
+                category=FailureCategory.SOURCE_UNAVAILABLE,
+                code="SOME_FUTURE_CODE",
+                retryable=True,
+                audience=Audience.USER,
+                message="from a newer SDK",
+                evidence={"attempts": [{"dsn": dsn}]},
+                cause_repr=f"FutureError: {dsn}",
+            ),
+        )
+
+        err = SqlApp._classify_prime_failure(unknown)
+        wire = err.to_failure_details().model_dump_json()
+
+        assert "SyntheticValue123" not in wire
+        assert "PWD=***" in wire
+        # Redaction must not cost the envelope its routing or its shape.
+        assert err.audience is Audience.USER
+        assert err.to_failure_details().code == "SOME_FUTURE_CODE"
 
     async def test_timeout_verdict_keeps_its_audience_across_the_wire(self):
         """The probe-specific timeout leaf must rebuild as itself, not as the

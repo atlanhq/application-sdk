@@ -102,6 +102,7 @@ from application_sdk.errors import (
     FailureDetails,
     redact_secrets,
     safe_traceback,
+    sanitize_cause_repr,
 )
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
@@ -110,6 +111,7 @@ from application_sdk.errors.leaves import (
     InternalError,
     SourceUnavailableError,
 )
+from application_sdk.errors.wire import secret_named_evidence_keys
 from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
@@ -164,6 +166,10 @@ _PROBE_FAILURE_LEAVES: dict[str, type[AppError]] = {
 _BASE_ERROR_FIELD_NAMES: frozenset[str] = frozenset(
     f.name for f in dataclasses.fields(AppError)
 )
+
+#: Recursion bound for the evidence redaction walker. A pathologically deep
+#: hand-built structure must truncate rather than overflow the stack.
+_REDACT_MAX_DEPTH: int = 32
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -252,6 +258,161 @@ def _root_cause(exc: BaseException) -> BaseException:
     return exc
 
 
+def _redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0) -> Any:
+    """Redact every string reachable inside a value bound for the wire.
+
+    Strings are redacted wherever they appear inside dict / list / tuple / set
+    structures; other non-string values are left untouched. Used for evidence
+    on both wire crossings — serialising a typed error
+    (:func:`SqlApp._redact_typed_error`) and rebuilding one from an envelope
+    (:func:`_error_from_failure_details`).
+    """
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, dict):
+        if seen is None:
+            seen = set()
+        # Guard the two ways a hand-built container can crash the probe — both
+        # escape the ``except ValidationError`` degrade, and a crashed activity
+        # is retried, stacking failed_login_attempts on the source (the cycle
+        # this classifier exists to break):
+        #   * a self-referential container recurses forever — prune a revisit
+        #     rather than render it (the same id-tracking pattern
+        #     ``_root_cause`` uses for the ``__cause__`` walk);
+        #   * a pathologically deep acyclic structure overflows the stack —
+        #     bound depth and truncate past it.
+        # ``seen`` is a mutable add/remove recursion stack shared along the
+        # path, so diamond-shared (acyclic) subcontainers are redacted, not
+        # falsely pruned, and no frozenset is allocated per level.
+        if id(value) in seen:
+            return None
+        if depth >= _REDACT_MAX_DEPTH:
+            return "…"
+        seen.add(id(value))
+        try:
+            return {k: _redact_wire_value(v, seen, depth + 1) for k, v in value.items()}
+        finally:
+            seen.discard(id(value))
+    if isinstance(value, (list, tuple, set, frozenset)):
+        if seen is None:
+            seen = set()
+        if id(value) in seen:
+            return None
+        if depth >= _REDACT_MAX_DEPTH:
+            return "…"
+        seen.add(id(value))
+        try:
+            redacted = [_redact_wire_value(v, seen, depth + 1) for v in value]
+        finally:
+            seen.discard(id(value))
+        if isinstance(value, tuple) and hasattr(type(value), "_fields"):
+            # A NamedTuple takes positional fields, not an iterable —
+            # ``type(value)(redacted)`` crashes a 2+-field one and silently
+            # retypes a 1-field one (its sole field becomes the redacted
+            # *list*). Rebuild with positional expansion so the shape survives.
+            try:
+                return type(value)(*redacted)
+            except Exception:  # noqa: BLE001 — see fallback below
+                return tuple(redacted)
+        try:
+            return type(value)(redacted)
+        except Exception:  # noqa: BLE001 — a connector-authored container
+            # subclass whose constructor raises (any type, not just
+            # TypeError/ValueError) must not crash through the degrade either;
+            # fall back to a plain container of the same shape. Values are
+            # redacted either way, and evidence serialises as JSON arrays
+            # regardless.
+            return tuple(redacted) if isinstance(value, tuple) else redacted
+    return value
+
+
+def _redact_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    """Redact every string reachable inside an evidence mapping's values.
+
+    Keys are left alone — a secret-*named* key is the wire denylist's job
+    (:func:`secret_named_evidence_keys`); this handles secret-*carrying*
+    values under any key.
+    """
+    return {k: _redact_wire_value(v) for k, v in evidence.items()}
+
+
+def _failure_details_degraded(err: AppError) -> FailureDetails | None:
+    """Re-serialise a verdict the wire envelope rejected, keeping its routing.
+
+    Reached when ``to_failure_details()`` raises — in practice a connector leaf
+    carrying a secret-named evidence field (``api_key``, ``db_password``, …),
+    which the ``FailureDetails`` denylist refuses. Falling straight back to
+    ``error_type`` / ``error_message`` would throw away the connector's
+    explicit verdict and re-derive it from a class name no string hint matches,
+    silently inverting e.g. ``AuthError`` / ``USER`` into ``InternalError`` /
+    ``APP_OWNER`` — the exact CNCT-197 misrouting the typed path exists to fix.
+
+    So degrade the *evidence*, never the routing: drop the offending keys, and
+    if the envelope still refuses, drop evidence entirely. Only a verdict that
+    fails both attempts returns ``None`` (the caller then falls back to
+    strings). ``category`` / ``audience`` / ``code`` / ``retryable`` are read
+    instance-level so a reconstruction leaf's property overrides are honoured
+    alongside a normal leaf's class constants.
+
+    Args:
+        err: The classified verdict whose serialisation was rejected.
+
+    Returns:
+        The degraded envelope, or ``None`` if it could not be built at all.
+    """
+    evidence: dict[str, Any] = {
+        f.name: getattr(err, f.name)
+        for f in dataclasses.fields(err)
+        if f.name not in _BASE_ERROR_FIELD_NAMES
+    }
+    cause_repr = sanitize_cause_repr(err.cause) if err.cause else None
+    if isinstance(err, _EnvelopeError):
+        # Mirror its ``to_failure_details()``: routing overrides are not
+        # evidence, ``cause_repr`` is its own wire field, and the producer's
+        # evidence rides in a field rather than as per-leaf dataclass fields.
+        for name in (
+            "category_override",
+            "audience_override",
+            "code_override",
+            "cause_repr",
+            "evidence",
+        ):
+            evidence.pop(name, None)
+        evidence.update(err.evidence)
+        cause_repr = err.cause_repr or cause_repr
+
+    dropped = secret_named_evidence_keys(evidence)
+    attempts: list[dict[str, Any]] = [
+        {k: v for k, v in evidence.items() if k not in dropped}
+    ]
+    if attempts[0]:
+        # Second attempt only differs if the first still carried something.
+        attempts.append({})
+    for attempt in attempts:
+        try:
+            return FailureDetails(
+                category=err.category,
+                code=err.code,
+                retryable=err.effective_retryable,
+                audience=err.audience,
+                message=err.message,
+                suggested_action=err.suggested_action,
+                evidence=_redact_evidence(attempt),
+                app_name=err.app_name,
+                run_id=err.run_id,
+                cause_repr=cause_repr,
+            )
+        except ValidationError as degrade_error:
+            logger.warning(
+                "Degraded prime failure verdict (%s) still would not serialise "
+                "with %d evidence key(s); retrying with less. %s",
+                type(err).__name__,
+                len(attempt),
+                _redacted_validation_reason(degrade_error),
+            )
+    return None
+
+
 def _redacted_validation_reason(exc: ValidationError) -> str:
     """Return the validator messages only, dropping the rejected input.
 
@@ -277,27 +438,47 @@ def _error_from_failure_details(details: FailureDetails) -> AppError:
     Atlan, so the unknown-code path instead preserves the envelope's own
     ``category`` / ``audience`` / ``retryable`` on a generic reconstruction
     leaf.
+
+    Reconstruction is an unredacted trust boundary, so every field copied off
+    the envelope is re-redacted here. The ``FailureDetails`` denylist rejects
+    secret-named evidence *keys* only — never a nested value, and never the
+    ``message`` / ``suggested_action`` / ``cause_repr`` strings — so a
+    pre-redaction-era envelope replayed from Temporal history, a hand-built
+    ``PrimeAuthOutput``, or a future producer that forgets to redact would
+    otherwise put a live DSN back onto the wire when this error re-serialises.
     """
+    message = redact_secrets(details.message)
+    suggested_action = (
+        redact_secrets(details.suggested_action)
+        if details.suggested_action is not None
+        else None
+    )
     leaf = _PROBE_FAILURE_LEAVES.get(details.code)
     if leaf is None:
         return _EnvelopeError(
             category_override=details.category,
             audience_override=details.audience,
             code_override=details.code,
-            cause_repr=details.cause_repr,
-            evidence=dict(details.evidence),
-            message=details.message,
+            cause_repr=(
+                redact_secrets(details.cause_repr)
+                if details.cause_repr is not None
+                else None
+            ),
+            evidence=_redact_evidence(dict(details.evidence)),
+            message=message,
             retryable=details.retryable,
-            suggested_action=details.suggested_action,
+            suggested_action=suggested_action,
             app_name=details.app_name,
             run_id=details.run_id,
         )
     declared = {f.name for f in dataclasses.fields(leaf)}
-    evidence = {k: v for k, v in details.evidence.items() if k in declared}
+    evidence = _redact_evidence(
+        {k: v for k, v in details.evidence.items() if k in declared}
+    )
     return leaf(
-        message=details.message,
+        message=message,
         retryable=details.retryable,
-        suggested_action=details.suggested_action,
+        suggested_action=suggested_action,
         app_name=details.app_name,
         run_id=details.run_id,
         **evidence,
@@ -534,16 +715,24 @@ class SqlApp(App):
             # crashed activity — a crash is retried, and retrying this task is
             # what stacks failed_login_attempts on the source. A
             # connector-defined AppError can carry an evidence key the
-            # FailureDetails denylist rejects, so this degrades to the
-            # error_type / error_message path instead of raising.
+            # FailureDetails denylist rejects, so degrade the evidence while
+            # keeping the typed verdict: dropping to the
+            # error_type / error_message path instead would re-derive routing
+            # from a class name no string hint matches, inverting the
+            # connector's explicit verdict (CNCT-197 all over again).
             try:
                 failure = classified.to_failure_details()
             except ValidationError as verdict_error:
-                failure = None
+                failure = _failure_details_degraded(classified)
                 logger.warning(
-                    "Could not serialise the prime failure verdict (%s); "
-                    "falling back to error_type/error_message classification. %s",
+                    "Could not serialise the prime failure verdict (%s) as-is; "
+                    "%s. %s",
                     type(classified).__name__,
+                    (
+                        "kept the typed verdict with degraded evidence"
+                        if failure is not None
+                        else "falling back to error_type/error_message classification"
+                    ),
                     _redacted_validation_reason(verdict_error),
                 )
             # We want the traceback frames in worker logs — the long-tail
@@ -635,84 +824,15 @@ class SqlApp(App):
         ``message``, ``suggested_action`` and per-leaf evidence fields are
         not. Redact them in place so the wire envelope (and the Temporal
         payload) never carries a secret the producer embedded in any field —
-        a base wire field or a nested evidence structure alike. Strings are
-        redacted wherever they appear inside dict / list / tuple / set
-        evidence values; other non-string values are left untouched.
+        a base wire field or a nested evidence structure alike.
         """
-
-        def _redact_value(
-            value: Any, seen: set[int] | None = None, depth: int = 0
-        ) -> Any:
-            if isinstance(value, str):
-                return redact_secrets(value)
-            if isinstance(value, dict):
-                if seen is None:
-                    seen = set()
-                # Guard the two ways a hand-built container can crash the
-                # probe — both escape the ``except ValidationError`` degrade,
-                # and a crashed activity is retried, stacking
-                # failed_login_attempts on the source (the cycle this
-                # classifier exists to break):
-                #   * a self-referential container recurses forever — prune a
-                #     revisit rather than render it (the same id-tracking
-                #     pattern ``_root_cause`` uses for the ``__cause__`` walk);
-                #   * a pathologically deep acyclic structure overflows the
-                #     stack — bound depth and truncate past it.
-                # ``seen`` is a mutable add/remove recursion stack shared
-                # along the path, so diamond-shared (acyclic) subcontainers
-                # are redacted, not falsely pruned, and no frozenset is
-                # allocated per level.
-                if id(value) in seen:
-                    return None
-                if depth >= 32:
-                    return "…"
-                seen.add(id(value))
-                try:
-                    return {
-                        k: _redact_value(v, seen, depth + 1) for k, v in value.items()
-                    }
-                finally:
-                    seen.discard(id(value))
-            if isinstance(value, (list, tuple, set, frozenset)):
-                if seen is None:
-                    seen = set()
-                if id(value) in seen:
-                    return None
-                if depth >= 32:
-                    return "…"
-                seen.add(id(value))
-                try:
-                    redacted = [_redact_value(v, seen, depth + 1) for v in value]
-                finally:
-                    seen.discard(id(value))
-                if isinstance(value, tuple) and hasattr(type(value), "_fields"):
-                    # A NamedTuple takes positional fields, not an iterable —
-                    # ``type(value)(redacted)`` crashes a 2+-field one and
-                    # silently retypes a 1-field one (its sole field becomes
-                    # the redacted *list*). Rebuild with positional expansion
-                    # so the shape survives.
-                    try:
-                        return type(value)(*redacted)
-                    except Exception:  # noqa: BLE001 — see fallback below
-                        return tuple(redacted)
-                try:
-                    return type(value)(redacted)
-                except Exception:  # noqa: BLE001 — a connector-authored
-                    # container subclass whose constructor raises (any type,
-                    # not just TypeError/ValueError) must not crash through
-                    # the degrade either; fall back to a plain container of
-                    # the same shape. Values are redacted either way, and
-                    # evidence serialises as JSON arrays regardless.
-                    return tuple(redacted) if isinstance(value, tuple) else redacted
-            return value
-
         err.message = redact_secrets(err.message)
         if err.suggested_action is not None:
             err.suggested_action = redact_secrets(err.suggested_action)
         for f in dataclasses.fields(err):
             if f.name in _BASE_ERROR_FIELD_NAMES:
                 continue
-            setattr(err, f.name, _redact_value(getattr(err, f.name)))
+            setattr(err, f.name, _redact_wire_value(getattr(err, f.name)))
         return err
 
     @staticmethod
@@ -1140,11 +1260,11 @@ class SqlApp(App):
         # and never trip ``FAILED_LOGIN_ATTEMPTS`` lockouts.
         #
         # Failure handling: prime_sql_auth catches probe exceptions and
-        # returns them as ``success=False`` on its output. We classify
-        # ``error_type`` / ``error_message`` and raise the matching typed
-        # error so operators get actionable guidance for the *actual*
-        # failure mode (not a one-size-fits-all auth-lockout message —
-        # which would mislead an on-call investigating a DNS or TLS
+        # returns them as ``success=False`` on its output, carrying the
+        # verdict it classified against the live exception. We rebuild that
+        # typed error and raise it, so operators get actionable guidance for
+        # the *actual* failure mode (not a one-size-fits-all auth-lockout
+        # message — which would mislead an on-call investigating a DNS or TLS
         # misconfiguration). The parallel extract burst still never
         # runs on prime failure regardless of which error type we raise.
         prime_result = await self.prime_sql_auth(task_input)
