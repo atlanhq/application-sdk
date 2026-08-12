@@ -156,7 +156,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="P030",
         scope=RuleScope.APP,
         name="SdrUploadNotCalled",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
         autofixable=False,
@@ -231,11 +231,38 @@ RULES: tuple[RuleDefinition, ...] = (
             "workflow status is not evidence — every failure mode above reports\n"
             "'success'.  The live e2e's asset-count floor is the arbiter.\n"
             "\n"
-            "This is a WARN (not BLOCK): some apps are legitimately preflight-only\n"
-            "or delegate upload to a base-class method defined in the SDK template.\n"
-            "Review the finding before suppressing — if the app genuinely performs\n"
-            "an extract-and-upload cycle, add ``await self.upload(...)`` to the\n"
-            "``run()`` method or the relevant ``@entrypoint`` method.\n"
+            "This is a BLOCK: the failure it names is a silent zero-asset publish\n"
+            "in a customer tenant, reported to the customer as a successful run.\n"
+            "The two shapes that originally held it at WARN no longer do.\n"
+            "Preflight-only apps are now exempted structurally by the\n"
+            "``pipeline.publish = null`` carve-out below, not by the tier.  And\n"
+            "delegating to a base-class ``upload`` defined in the SDK template does\n"
+            "not clear the finding on purpose — an inherited ``upload`` that nothing\n"
+            "ever calls is exactly the unreachable-gate shape, and the specific case\n"
+            "of deferring to it explicitly (``super().upload(...)``) IS accepted as a\n"
+            "real call.  Fix by adding ``await self.upload(...)`` to the ``run()``\n"
+            "method or the relevant ``@entrypoint`` method.\n"
+            "\n"
+            "One residual false-positive shape remains, and it is a *stub* finding,\n"
+            "not an absence finding: a custom ``upload_to_atlan`` bridge whose\n"
+            "transfer happens inside a helper **inherited from a base class in\n"
+            "another file** cannot be resolved by the checker and reads as a no-op\n"
+            "stub (documented on ``_find_upload_bridges``).  Widening delegation to\n"
+            "any ``self.x(...)`` would reopen the false negative the rule exists to\n"
+            "close.\n"
+            "\n"
+            "**This rule honours no inline suppression.** The SDR checks build their\n"
+            "``Finding`` objects directly and never parse ``# conformance: ignore``\n"
+            "directives, and the absence finding is anchored at line 1 of\n"
+            "``atlan.yaml`` where YAML has no comment the parser reads anyway.  At\n"
+            "BLOCK that means the only exits are real ones: make the transfer\n"
+            "visible where the checker can see it (call ``self.upload(...)``, or\n"
+            "``super().upload(...)``, or keep the delegated helper in the same\n"
+            "class), or declare the app publish-less via ``pipeline.publish = null``\n"
+            "so the structural carve-out below applies.  Deliberately so — every\n"
+            "shape on the not-satisfied list above was a real silent-zero-asset\n"
+            "publish in fleet testing, and an easy opt-out is how this class stayed\n"
+            "invisible.\n"
             "\n"
             "Note: P008 flags ``self.upload()`` *inside* ``@task`` methods (the\n"
             "wrong location); P030 flags the *absence* of any upload call; P042\n"

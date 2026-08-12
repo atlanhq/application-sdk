@@ -393,7 +393,10 @@ drafting.
 
 **SDR-readiness rules (P029/P030, P037/P038/P039, P041, P042)** — all suggest-only,
 scope=app; `classification` is always `"judgment"`.  All gate on
-`self_deployed_runtime: true` in `atlan.yaml`.
+`self_deployed_runtime: true` in `atlan.yaml`.  Suggest-only is about *how the
+loop treats them* — never auto-edit an SDR finding, always draft and route to
+residue — and is independent of tier: P029 and P030 are BLOCK, so their residue
+entries are release-blocking for the app and should be written to say so.
 
 - **P029 SdrManifestMissingAgentJson** (BLOCK) — a `manifest.json` under
   `app/generated/` is missing the `agent_json` key in `dag.extract.inputs.args`.
@@ -414,7 +417,7 @@ scope=app; `classification` is always `"judgment"`.  All gate on
   manifest.  Draft the required `app.pkl` addition and route to residue for the
   developer to apply.
 
-- **P030 SdrUploadNotCalled** (WARN) — no real `self.upload(...)` **call**
+- **P030 SdrUploadNotCalled** (BLOCK) — no real `self.upload(...)` **call**
   exists in any app source file outside `tests/` (matched on the AST, so a
   comment or docstring merely *mentioning* it does not clear the finding),
   making the `ENABLE_ATLAN_UPLOAD` gate structurally unreachable — OR a custom

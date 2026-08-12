@@ -52,7 +52,7 @@ reassigned.
 | [P027](#p027) | `AppStateAsCrossTaskChannel` | `warn` | `app` | `state-seam` | — | 0.9.0 |
 | [P028](#p028) | `ManualQualifiedNameFString` | `warn` | `app` | `asset-modeling` | — | 0.9.0 |
 | [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
-| [P030](#p030) | `SdrUploadNotCalled` | `warn` | `app` | `sdr-readiness` | — | 0.9.0 |
+| [P030](#p030) | `SdrUploadNotCalled` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
 | [P031](#p031) | `SharedDefaultExecutorOffload` | `warn` | `both` | `async-correctness` | — | 0.13.0 |
 | [P032](#p032) | `ReservedPreflightActivityName` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P033](#p033) | `DuplicateInWorkflowPreflight` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
@@ -1025,7 +1025,7 @@ alone does not clear the   runtime failure.
 
 ## P030 — `SdrUploadNotCalled` {#p030}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
 
 > SDR app has no self.upload() call in source — ENABLE_ATLAN_UPLOAD path unreachable
 
@@ -1081,10 +1081,31 @@ publish) proving assets actually land in Atlas.  The workflow status is not evid
 every failure mode above reports 'success'.  The live e2e's asset-count floor is the
 arbiter.
 
-This is a WARN (not BLOCK): some apps are legitimately preflight-only or delegate upload
-to a base-class method defined in the SDK template. Review the finding before
-suppressing — if the app genuinely performs an extract-and-upload cycle, add `await
-self.upload(...)` to the `run()` method or the relevant `@entrypoint` method.
+This is a BLOCK: the failure it names is a silent zero-asset publish in a customer
+tenant, reported to the customer as a successful run. The two shapes that originally
+held it at WARN no longer do. Preflight-only apps are now exempted structurally by the
+`pipeline.publish = null` carve-out below, not by the tier.  And delegating to a
+base-class `upload` defined in the SDK template does not clear the finding on purpose —
+an inherited `upload` that nothing ever calls is exactly the unreachable-gate shape, and
+the specific case of deferring to it explicitly (`super().upload(...)`) IS accepted as a
+real call.  Fix by adding `await self.upload(...)` to the `run()` method or the relevant
+`@entrypoint` method.
+
+One residual false-positive shape remains, and it is a *stub* finding, not an absence
+finding: a custom `upload_to_atlan` bridge whose transfer happens inside a helper
+**inherited from a base class in another file** cannot be resolved by the checker and
+reads as a no-op stub (documented on `_find_upload_bridges`).  Widening delegation to
+any `self.x(...)` would reopen the false negative the rule exists to close.
+
+**This rule honours no inline suppression.** The SDR checks build their `Finding`
+objects directly and never parse `# conformance: ignore` directives, and the absence
+finding is anchored at line 1 of `atlan.yaml` where YAML has no comment the parser reads
+anyway.  At BLOCK that means the only exits are real ones: make the transfer visible
+where the checker can see it (call `self.upload(...)`, or `super().upload(...)`, or keep
+the delegated helper in the same class), or declare the app publish-less via
+`pipeline.publish = null` so the structural carve-out below applies.  Deliberately so —
+every shape on the not-satisfied list above was a real silent-zero-asset publish in
+fleet testing, and an easy opt-out is how this class stayed invisible.
 
 Note: P008 flags `self.upload()` *inside* `@task` methods (the wrong location); P030
 flags the *absence* of any upload call; P042 flags a hand-rolled bridge standing in for
