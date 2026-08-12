@@ -76,6 +76,10 @@ class FakeHTTP:
         self.routes: dict[tuple[str, str], list[tuple[int, object]]] = {}
         self.calls: list[tuple[str, str]] = []
         self.payloads: list[dict] = []
+        # Full argv per call, so the credential-exposure canary can assert the
+        # token never reaches curl's command line.
+        self.cmds: list[list[str]] = []
+        self.inputs: list[str | None] = []
 
     def route(self, method: str, contains: str, *responses: tuple[int, object]) -> None:
         self.routes[(method, contains)] = list(responses)
@@ -84,6 +88,8 @@ class FakeHTTP:
         method = cmd[cmd.index("-X") + 1]
         url = cmd[-1]
         self.calls.append((method, url))
+        self.cmds.append(list(cmd))
+        self.inputs.append(kwargs.get("input"))
         if "-d" in cmd:
             self.payloads.append(json.loads(cmd[cmd.index("-d") + 1]))
         for (route_method, contains), responses in self.routes.items():
@@ -1200,6 +1206,47 @@ def test_missing_token_is_a_clear_error(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     with pytest.raises(SystemExit, match="GH_TOKEN"):
         try_acquire(REPO, REF, BLOB)
+
+
+def test_token_is_not_in_the_curl_command_line(http: FakeHTTP) -> None:
+    """The credential must not be observable via /proc/<pid>/cmdline.
+
+    The token is fed to curl through a stdin config (-K -) instead of a -H
+    argument, so while the request runs the process list carries no copy of it.
+    """
+    secret = "ghp_super_secret_token"
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GH_TOKEN", secret)
+        http.route("POST", "/git/refs", (422, {"message": "Reference already exists"}))
+        try_acquire(REPO, REF, BLOB)
+
+    cmd = http.cmds[0]
+    assert not any(secret in arg for arg in cmd), "token leaked into curl argv"
+
+
+def test_every_transport_retry_still_carries_the_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """stdin is consumed per process, so the config has to be re-supplied on each
+    retry. A retry that reused the argv alone would send an unauthenticated
+    request and read the resulting 401 as a permission denial — which fails the
+    lease OPEN, the worst possible outcome for a transient blip."""
+    secret = "ghp_another_secret"
+    monkeypatch.setenv("GH_TOKEN", secret)
+    seen: list[str | None] = []
+
+    def flaky(cmd, **kwargs):
+        seen.append(kwargs.get("input"))
+        if len(seen) == 1:
+            return _curl_failed()
+        return _completed('HTTP/2 201\r\n\r\n{"sha": "abc"}')
+
+    monkeypatch.setattr("e2e_tenant_lease.run", flaky)
+    gh_request("POST", "probe", {"x": 1}, sleep=lambda _s: None)
+
+    assert len(seen) == 2
+    for supplied in seen:
+        assert supplied is not None and secret in supplied
 
 
 # --- input bounds ----------------------------------------------------------

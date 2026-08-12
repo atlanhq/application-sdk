@@ -275,20 +275,30 @@ def gh_request(
         "30",
         "-X",
         method,
+        # Read the Authorization header from stdin (-K -) rather than -H so the
+        # token never appears in curl's argv, where anything on the same runner
+        # could read it from /proc/<pid>/cmdline while the request runs. Only
+        # the credential goes through the pipe; the non-secret headers stay in
+        # argv, so the tests stubbing this seam still see the method and URL.
+        #
+        # Re-supplied on every retry below, because stdin is consumed per
+        # process: a retry that reused the argv without the config would send an
+        # unauthenticated request and read the 401 as a permission denial.
+        "-K",
+        "-",
         "-H",
         "Accept: application/vnd.github+json",
         "-H",
         "X-GitHub-Api-Version: 2022-11-28",
-        "-H",
-        f"Authorization: Bearer {token}",
     ]
+    config = f'header = "Authorization: Bearer {token}"\n'
     if payload is not None:
         cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(payload)]
     cmd.append(f"https://api.github.com/{path}")
 
     label = f"{method} {path}"
     for transport_attempt in range(1, _TRANSPORT_ATTEMPTS + 1):
-        result = run(cmd, capture_output=True, text=True, check=False)
+        result = run(cmd, input=config, capture_output=True, text=True, check=False)
         last = transport_attempt == _TRANSPORT_ATTEMPTS
 
         if result.returncode != 0:
