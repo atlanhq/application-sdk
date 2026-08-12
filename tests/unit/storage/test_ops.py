@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import obstore
 import orjson
 import pytest
 
@@ -867,6 +868,84 @@ class TestResumableChunkedDownload:
         # Mixed-generation partials are never left behind.
         assert not out.exists()
         assert not self._state_path(out).exists()
+
+    async def test_restart_after_412_is_still_pinned(self, store, tmp_path) -> None:
+        """The restart after a 412 must re-pin, not fall back to unpinned GETs.
+
+        The restart clears ``etag`` along with ``file_size``, and reading only
+        that half suggests attempt 2 runs unpinned — which would make a rewrite
+        *during the restart* undetectable. It does not: clearing the etag is
+        what lets the loop's ``if etag is None`` branch repopulate it from the
+        fresh HEAD, re-pinning against the new generation.
+
+        Pinned here means every range GET on attempt 2 carries ``If-Match``, so
+        a third generation appearing mid-restart raises rather than silently
+        splicing two generations into a right-length file. A review of this
+        code read the clear without the repopulation and concluded the
+        opposite, so the property is pinned rather than left to inspection.
+        """
+        await _put("res/pin.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "pin.bin"
+
+        real_get = obstore.get_async
+        real_get_range = obstore.get_range_async
+        real_head = obstore.head_async
+        pinned: list[str] = []
+        # Both range-GET entry points are instrumented on purpose. The unpinned
+        # branch calls get_range_async, NOT get_async, so a probe that watches
+        # only get_async cannot see the failure mode at all — it would pass on
+        # broken code by observing nothing.
+        unpinned: list[int] = []
+        heads = {"count": 0}
+        fired_412 = {"done": False}
+
+        async def counting_get(st, key, **kw):
+            options = kw.get("options") or {}
+            if "range" in options:
+                pinned.append(options["if_match"])
+                if not fired_412["done"]:
+                    fired_412["done"] = True
+                    from obstore.exceptions import PreconditionError
+
+                    raise PreconditionError("simulated: object rewritten once")
+            return await real_get(st, key, **kw)
+
+        async def counting_get_range(st, key, *, start, length):
+            unpinned.append(start)
+            return await real_get_range(st, key, start=start, length=length)
+
+        async def counting_head(st, key):
+            heads["count"] += 1
+            return await real_head(st, key)
+
+        with (
+            patch(
+                "application_sdk.storage.chunked.obstore.get_async", new=counting_get
+            ),
+            patch(
+                "application_sdk.storage.chunked.obstore.get_range_async",
+                new=counting_get_range,
+            ),
+            patch(
+                "application_sdk.storage.chunked.obstore.head_async", new=counting_head
+            ),
+        ):
+            await download_file_chunked(
+                "res/pin.bin", out, store, chunk_size_bytes=8, normalize=False
+            )
+
+        assert out.read_bytes() == self.CONTENT
+        # The restart happened: one HEAD for the original attempt, one more to
+        # re-resolve size + etag against the new generation.
+        assert fired_412["done"], "the 412 never fired — test proves nothing"
+        assert heads["count"] >= 2, f"no restart HEAD issued (heads={heads['count']})"
+        # Every range GET across both attempts carried If-Match. A single
+        # unpinned fetch means the restart lost the pin.
+        assert not unpinned, (
+            f"restart ran unpinned — {len(unpinned)} range GET(s) at offsets "
+            f"{unpinned} bypassed If-Match"
+        )
+        assert all(tag is not None for tag in pinned)
 
     async def test_checkpoint_from_other_generation_is_discarded(
         self, store, tmp_path
