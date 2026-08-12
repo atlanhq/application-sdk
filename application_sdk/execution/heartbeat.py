@@ -19,6 +19,7 @@ import asyncio
 import concurrent.futures
 import contextvars
 import functools
+import math
 import multiprocessing
 import os
 import threading
@@ -332,14 +333,20 @@ async def auto_heartbeat_loop(
         if progress is not None and watchdog_mode is not ProgressWatchdogMode.OFF
         else None
     )
-    if watchdog_budget is not None and watchdog_budget <= 0:
+    if watchdog_budget is not None and (
+        not math.isfinite(watchdog_budget) or watchdog_budget <= 0
+    ):
         # Refuse rather than obey. A budget of zero makes every attempt stall on
         # its first tick, so honouring it in enforce mode would turn one bad
-        # config value into a fleet-wide kill switch.
+        # config value into a fleet-wide kill switch. NaN slips past the
+        # `<= 0` check (comparisons against NaN are always False) and would
+        # enforce on the first tick, while +inf would silently never enforce —
+        # so only a finite positive allowance counts as a real budget.
         logger.warning(
-            "Stall watchdog for task '%s' was given a non-positive no-progress "
-            "budget (%.0fs); disabling the watchdog — set max_no_progress_seconds "
-            "to a real allowance, or the mode to 'off' to disable it deliberately",
+            "Stall watchdog for task '%s' was given a non-positive or "
+            "non-finite no-progress budget (%ss); disabling the watchdog — set "
+            "max_no_progress_seconds to a finite positive allowance, or the "
+            "mode to 'off' to disable it deliberately",
             task_name,
             watchdog_budget,
         )

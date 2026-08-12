@@ -964,3 +964,53 @@ class TestStallWatchdogWiring:
         assert not stalls.calls
         assert not run.stall_infos and not run.recorded
         assert run.beats == 3
+
+    @pytest.mark.asyncio
+    async def test_negative_budget_disables_the_watchdog(self) -> None:
+        """A negative allowance vouches for nothing: the guard must refuse it
+        the same way it refuses zero."""
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+        stalls = StallRecorder()
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.ENFORCE,
+            budget=-5.0,
+            on_stall=stalls,
+            step=10.0,
+            ticks=3,
+        )
+
+        assert any("non-positive" in str(c) for c in run.stall_warnings)
+        assert not stalls.calls
+        assert not run.stall_infos and not run.recorded
+        assert run.beats == 3
+
+    @pytest.mark.asyncio
+    async def test_non_finite_budget_disables_the_watchdog(self) -> None:
+        """NaN slips past a `<= 0` check (every comparison against NaN is
+        False) and +inf would silently never enforce — both must disable the
+        watchdog like any other invalid budget."""
+        for bad_budget in (float("nan"), float("inf")):
+            clock = WatchdogClock()
+            tracker = ProgressTracker(clock=clock)
+            stalls = StallRecorder()
+
+            run = await _drive(
+                tracker=tracker,
+                clock=clock,
+                mode=ProgressWatchdogMode.ENFORCE,
+                budget=bad_budget,
+                on_stall=stalls,
+                step=10.0,
+                ticks=3,
+            )
+
+            assert any(
+                "non-positive" in str(c) for c in run.stall_warnings
+            ), f"budget={bad_budget} did not trip the guard"
+            assert not stalls.calls, f"budget={bad_budget} enforced a stall"
+            assert not run.stall_infos and not run.recorded
+            assert run.beats == 3
