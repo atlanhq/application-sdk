@@ -196,12 +196,8 @@ def test_main_without_oidc_env_fails_before_any_request(monkeypatch, capsys):
     assert "id-token" in capsys.readouterr().err
 
 
-def test_main_stdout_is_pure_json_and_output_file_gets_resolved_id(
-    monkeypatch, tmp_path, capsys
-):
+def test_main_stdout_is_pure_json(monkeypatch, capsys):
     """stdout must be command-substitution-safe: one JSON object, nothing else."""
-    out_file = tmp_path / "gh_output"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(out_file))
     monkeypatch.setattr(
         fds, "_github_oidc_token", lambda audience="dataforge": "oidc-jwt"
     )
@@ -227,7 +223,6 @@ def test_main_stdout_is_pure_json_and_output_file_gets_resolved_id(
     # Breadcrumbs go to stderr and never include values.
     assert "Resolved dataforge source" in captured.err
     assert "s3cret" not in captured.err
-    assert "resolved-id=res-1" in out_file.read_text()
 
 
 # ── Call-site shape guards ────────────────────────────────────────────────────

@@ -1271,7 +1271,7 @@ class AEWorkflowClient:
         inflates counts after any re-crawl that archives — the
         evolution scenario's "dropped table must leave the active
         count at baseline" assertion is meaningless without this
-        filter (atlan-postgres-app run 31584334336).
+        filter (seen on a prior connector e2e run).
 
         Returns ``{typeName: count}`` with zeros for types that
         produced no matches. Used by the harness to assert extract +

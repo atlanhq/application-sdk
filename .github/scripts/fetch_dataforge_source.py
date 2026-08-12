@@ -154,8 +154,20 @@ def _github_oidc_token(audience: str = "dataforge") -> str:
         f"{req_url}{sep}audience={urllib.parse.quote(audience)}",
         headers={"Authorization": f"Bearer {req_token}"},
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.load(resp)["value"]
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.load(resp)["value"]
+    except urllib.error.HTTPError as exc:
+        raise DataforgeSourceError(
+            f"GitHub OIDC token request failed: HTTP {exc.code}"
+        ) from exc
+    except (OSError, json.JSONDecodeError, KeyError) as exc:
+        # URLError/timeout/OSError = the runner's token service is unreachable;
+        # JSONDecodeError/KeyError = an unexpected response shape. Fixed,
+        # body-free message: the response (or socket state) is never echoed.
+        raise DataforgeSourceError(
+            f"GitHub OIDC token request failed: {type(exc).__name__}"
+        ) from exc
 
 
 def _oauth_base_urls(base_url: str) -> list[str]:
@@ -208,6 +220,17 @@ def _exchange_for_service_token(base_url: str, oidc_token: str) -> str:
             if exc.code == 404:
                 continue
             break
+        except (OSError, json.JSONDecodeError, KeyError) as exc:
+            # URLError/timeout/OSError = the host is unreachable (VPN down,
+            # DNS, refused); JSONDecodeError/KeyError = an unexpected
+            # response shape. Fixed, body-free message — never echo the
+            # response or socket state.
+            raise DataforgeSourceError(
+                f"dataforge token exchange failed: {type(exc).__name__} — is "
+                "the VPN up and a workload binding registered for this repo "
+                "(issuer token.actions.githubusercontent.com, subject "
+                "repo:<org>/<repo>…)?"
+            ) from exc
     assert last_exc is not None
     raise DataforgeSourceError(
         f"dataforge token exchange failed: HTTP {last_exc.code} — is a workload "
@@ -326,31 +349,34 @@ def main(argv: list[str] | None = None) -> int:
         bearer = _exchange_for_service_token(base_url, _github_oidc_token())
         pin_resource = args.resource_id if args.mode == "resource" else ""
         pin_credential = args.resource_id if args.mode == "managed" else ""
-        raw, resolved_id = resolve_via_endpoint(
-            base_url,
-            bearer,
-            args.datasource,
-            env_tier=args.env_tier,
-            resource_id=pin_resource,
-            credential_id=pin_credential,
-        )
+        try:
+            raw, resolved_id = resolve_via_endpoint(
+                base_url,
+                bearer,
+                args.datasource,
+                env_tier=args.env_tier,
+                resource_id=pin_resource,
+                credential_id=pin_credential,
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            # URLError/timeout/OSError = unreachable mid-resolution;
+            # JSONDecodeError = an unexpected response shape. Fixed,
+            # body-free message — never echo the response or socket state.
+            raise DataforgeSourceError(
+                f"dataforge credential resolution failed: {type(exc).__name__}"
+            ) from exc
         exports = build_exports(raw, args.datasource, args.output_prefix)
     except DataforgeSourceError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1
 
     # Non-secret breadcrumbs -> stderr (the log); the env map -> stdout ONLY,
-    # for the caller's command substitution. resolved-id is a UUID, not a
-    # secret, so a single-line $GITHUB_OUTPUT write is safe.
+    # for the caller's command substitution.
     print(
         f"Resolved dataforge source: datasource={args.datasource} "
         f"mode={args.mode} id={resolved_id} fields={len(raw)}",
         file=sys.stderr,
     )
-    github_output = os.environ.get("GITHUB_OUTPUT")
-    if github_output:
-        with open(github_output, "a") as fh:
-            fh.write(f"resolved-id={resolved_id}\n")
 
     sys.stdout.write(json.dumps(exports, sort_keys=True))
     return 0
