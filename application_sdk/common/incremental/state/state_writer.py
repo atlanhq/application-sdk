@@ -408,7 +408,19 @@ async def create_current_state_snapshot(
 
         try:
             # Step 1: Get table scope (qualified names and incremental states)
-            table_scope = get_current_table_scope(transformed_dir, conn=conn)
+            #
+            # Every sync step in this block is offloaded for the same reason:
+            # each one is a DuckDB scan over the run's transformed output or a
+            # blocking parallel directory copy, none of them yield, and their
+            # cost scales with the source. Inline they hold the event loop —
+            # and this activity's auto-heartbeat — for the whole snapshot, so a
+            # healthy large-connection run gets killed on heartbeat_timeout
+            # (ADR-0010). The DuckDB connection is `threads=1` and file-backed
+            # and each hop is awaited before the next starts, so it is only
+            # ever touched by one thread at a time.
+            table_scope = await run_in_thread(
+                get_current_table_scope, transformed_dir, conn=conn
+            )
             if not table_scope or get_scope_length(table_scope) == 0:
                 raise FileNotFoundError(
                     f"No tables found in transformed output: {transformed_dir}. "
@@ -426,14 +438,16 @@ async def create_current_state_snapshot(
             await run_in_thread(prepare_current_state_directory, current_state_dir)
 
             # Step 3: Copy non-column entities (tables, schemas, databases)
-            copy_non_column_entities(
+            await run_in_thread(
+                copy_non_column_entities,
                 transformed_dir=transformed_dir,
                 current_state_dir=current_state_dir,
                 copy_workers=copy_workers,
             )
 
             # Step 4: Copy columns from transformed (lightweight — no ancestral merge)
-            column_count = _copy_columns_from_transformed(
+            column_count = await run_in_thread(
+                _copy_columns_from_transformed,
                 transformed_dir=transformed_dir,
                 current_state_dir=current_state_dir,
                 copy_workers=copy_workers,
@@ -441,14 +455,18 @@ async def create_current_state_snapshot(
 
             # Track which tables have extracted columns
             tables_with_columns = (
-                get_table_qns_from_columns(
-                    current_state_dir.joinpath(EntityType.COLUMN.value), conn=conn
+                await run_in_thread(
+                    get_table_qns_from_columns,
+                    current_state_dir.joinpath(EntityType.COLUMN.value),
+                    conn=conn,
                 )
                 or set()
             )
             table_scope.tables_with_extracted_columns = tables_with_columns
 
-            total_files = count_json_files_recursive(current_state_dir)
+            total_files = await run_in_thread(
+                count_json_files_recursive, current_state_dir
+            )
 
             logger.info(
                 "Current-state snapshot complete (lightweight): tables=%d columns_copied=%d "
@@ -475,7 +493,8 @@ async def create_current_state_snapshot(
                 if incremental_diff_dir.exists():
                     await run_in_thread(shutil.rmtree, incremental_diff_dir)
 
-                diff_result = create_incremental_diff(
+                diff_result = await run_in_thread(
+                    create_incremental_diff,
                     transformed_dir=transformed_dir,
                     incremental_diff_dir=incremental_diff_dir,
                     table_scope=table_scope,

@@ -418,17 +418,30 @@ async def upload_prefix(
     if normalize and prefix:
         prefix = normalize_key(prefix)
 
-    files: list[tuple[str, Path]] = []
-    for root, _dirs, filenames in os.walk(local, followlinks=False):
-        for fname in filenames:
-            file_path = Path(root) / fname
-            if file_path.is_symlink():
-                continue
-            rel = file_path.relative_to(local)
-            # Use PurePosixPath to ensure forward slashes in S3 keys (Windows uses backslash)
-            rel_posix = PurePosixPath(*rel.parts)
-            key = f"{prefix}/{rel_posix}" if prefix else str(rel_posix)
-            files.append((key, file_path))
+    def _collect_files() -> list[tuple[str, Path]]:
+        collected: list[tuple[str, Path]] = []
+        for root, _dirs, filenames in os.walk(local, followlinks=False):
+            for fname in filenames:
+                file_path = Path(root) / fname
+                if file_path.is_symlink():
+                    continue
+                rel = file_path.relative_to(local)
+                # Use PurePosixPath to ensure forward slashes in S3 keys (Windows uses backslash)
+                rel_posix = PurePosixPath(*rel.parts)
+                key = f"{prefix}/{rel_posix}" if prefix else str(rel_posix)
+                collected.append((key, file_path))
+        return collected
+
+    # Offloaded: the walk is one stat per entry over a whole run's output
+    # directory, which on a large extraction is thousands of syscalls with no
+    # await between them. Inline it holds the event loop — and the enclosing
+    # activity's auto-heartbeat — for the entire traversal (ADR-0010).
+    # Imported lazily: `application_sdk.execution` pulls in the Temporal
+    # activity utils, which import back into `contracts`/`storage`; at module
+    # scope here that closes a circular import.
+    from application_sdk.execution.heartbeat import run_in_thread  # noqa: PLC0415
+
+    files: list[tuple[str, Path]] = await run_in_thread(_collect_files)
 
     sem = asyncio.Semaphore(max_concurrency)
     uploaded: list[str] = []

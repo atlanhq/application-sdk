@@ -1,0 +1,204 @@
+"""FND-282: the SqlApp extract/transform bodies must not starve the event loop.
+
+``SqlApp`` is the base class every SQL connector inherits, so a blocking loop
+in ``_extract_entity`` / ``_transform_entity`` is a fleet-wide starvation site:
+the auto-heartbeat coroutine cannot run, and Temporal kills an activity that
+was making progress throughout (ADR-0010, ADR-0018 *Problem 2*).
+
+``_transform_entity`` is the sharper case — it maps every raw record for the
+entity (JSON parse, the connector's ``map_*`` function, serialise, write) with
+no await anywhere in the loop, so its hold scales with the source table.
+
+Both tests drive the real method while a ticker coroutine counts how often the
+loop got to run something else, so they assert the property that matters rather
+than which callable was handed to ``run_in_thread``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import time
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+from typing import Any, ClassVar, TypeVar
+
+import orjson
+import pytest
+
+from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.templates.contracts.sql_metadata import (
+    ExtractionTaskInput,
+    TransformInput,
+)
+from application_sdk.templates.sql_app import SqlApp
+
+pytestmark = pytest.mark.asyncio
+
+T = TypeVar("T")
+
+BLOCK_SECONDS = 0.3
+TICK_SECONDS = 0.01
+MIN_TICKS = 5
+
+
+class _FakeSqlClient(BaseSQLClient):
+    """In-process SQL client yielding one fixed batch — no network, no driver."""
+
+    _ROWS: ClassVar[list[dict[str, Any]]] = [
+        {"database_name": "prod"},
+        {"database_name": "stage"},
+    ]
+
+    def __init__(self) -> None:
+        pass  # skip BaseSQLClient.__init__ — no DB_CONFIG needed for the fake
+
+    async def load(self, credentials: dict[str, Any] | None = None) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    async def run_query(self, query: str, batch_size: int = 100_000):
+        yield self._ROWS
+
+
+class _SlowMapperApp(SqlApp):
+    """SqlApp whose mapper is expensive, standing in for a real pyatlan mapper."""
+
+    sql_client_class: ClassVar[type[BaseSQLClient] | None] = _FakeSqlClient
+    _app_registered: ClassVar[bool] = True
+
+    fetch_database_sql: ClassVar[str] = "SELECT 1"
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.mapped = 0
+
+    def map_database(
+        self, record: dict[str, Any], connection_qn: str
+    ) -> dict[str, Any]:
+        # Charge the cost once — a real mapper's per-record cost times a large
+        # table is what produces the multi-second holds seen in production.
+        if self.mapped == 0:
+            time.sleep(BLOCK_SECONDS)
+        self.mapped += 1
+        return {
+            "typeName": "Database",
+            "attributes": {
+                "name": record["database_name"],
+                "qualifiedName": f"{connection_qn}/{record['database_name']}",
+            },
+        }
+
+
+async def count_ticks_during(work: Callable[[], Awaitable[T]]) -> tuple[T, int]:
+    """Run *work*, returning its result and how many times the loop ticked."""
+    ticks = 0
+
+    async def _ticker() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(TICK_SECONDS)
+            ticks += 1
+
+    ticker = asyncio.create_task(_ticker())
+    try:
+        result = await work()
+    finally:
+        ticker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await ticker
+    return result, ticks
+
+
+def _extract_input(tmp_path: Path) -> ExtractionTaskInput:
+    return ExtractionTaskInput(
+        workflow_id="wf-test",
+        output_path=str(tmp_path),
+        output_prefix=str(tmp_path),
+        exclude_filter="",
+        include_filter="",
+        temp_table_regex="",
+    )
+
+
+def _transform_input(tmp_path: Path) -> TransformInput:
+    return TransformInput(
+        workflow_id="wf-test",
+        output_path=str(tmp_path),
+        output_prefix=str(tmp_path),
+        exclude_filter="",
+        include_filter="",
+        temp_table_regex="",
+        raw_file=None,
+    )
+
+
+@pytest.fixture
+def app(monkeypatch: pytest.MonkeyPatch) -> _SlowMapperApp:
+    instance = _SlowMapperApp()
+
+    async def _fake_init(self: Any, _input: Any) -> BaseSQLClient:
+        return _FakeSqlClient()
+
+    monkeypatch.setattr(SqlApp, "_init_sql_client", _fake_init)
+    return instance
+
+
+async def test_transform_entity_does_not_block_the_loop(
+    app: _SlowMapperApp, tmp_path: Path
+) -> None:
+    raw_dir = tmp_path / "raw" / "database"
+    raw_dir.mkdir(parents=True)
+    with (raw_dir / "records.json").open("wb") as f:
+        for name in ("prod", "stage"):
+            f.write(orjson.dumps({"database_name": name}))
+            f.write(b"\n")
+
+    result, ticks = await count_ticks_during(
+        lambda: app._transform_entity(
+            entity_type="database",
+            mapper_fn=app.map_database,
+            input=_transform_input(tmp_path),
+        )
+    )
+
+    assert result.total_record_count == 2
+    assert app.mapped == 2, "the mapper never ran"
+    assert ticks >= MIN_TICKS, (
+        f"_transform_entity stalled the event loop ({ticks} ticks) — a starved "
+        "loop cannot run the auto-heartbeat, which is what gets healthy "
+        "activities killed on heartbeat_timeout"
+    )
+
+
+async def test_extract_entity_does_not_block_the_loop(
+    app: _SlowMapperApp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_dumps = orjson.dumps
+    slowed = {"done": False}
+
+    def _slow_dumps(*args: Any, **kwargs: Any) -> bytes:
+        # Charge the cost once, standing in for a full 10k-row batch.
+        if not slowed["done"]:
+            slowed["done"] = True
+            time.sleep(BLOCK_SECONDS)
+        return real_dumps(*args, **kwargs)
+
+    monkeypatch.setattr("application_sdk.templates.sql_app.orjson.dumps", _slow_dumps)
+
+    result, ticks = await count_ticks_during(
+        lambda: app._extract_entity(
+            entity_type="database",
+            sql_template=_SlowMapperApp.fetch_database_sql,
+            input=_extract_input(tmp_path),
+        )
+    )
+
+    assert result.total_record_count == 2
+    assert slowed["done"], "the serialise path never ran"
+    assert ticks >= MIN_TICKS, (
+        f"_extract_entity stalled the event loop ({ticks} ticks) — a starved "
+        "loop cannot run the auto-heartbeat"
+    )

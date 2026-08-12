@@ -274,17 +274,25 @@ class ParquetFileReader(Reader):
             self._downloaded_files.extend(parquet_files)
             logger.info("Reading %d parquet files", len(parquet_files))
 
-            tables = [pq.read_table(f) for f in parquet_files]
-            if not tables:
+            def _read_and_combine() -> "pd.DataFrame":
                 import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
-                return pd.DataFrame()
-            # Normalize legacy all-null large_string shards (pre-CNCT-80
-            # writes) so permissive promotion can merge them against a
-            # sibling shard's concrete numeric type.
-            tables = [_normalize_all_null_string_columns(t) for t in tables]
-            combined = pa.concat_tables(tables, promote_options="permissive")
-            return combined.to_pandas()
+                tables = [pq.read_table(f) for f in parquet_files]
+                if not tables:
+                    return pd.DataFrame()
+                # Normalize legacy all-null large_string shards (pre-CNCT-80
+                # writes) so permissive promotion can merge them against a
+                # sibling shard's concrete numeric type.
+                tables = [_normalize_all_null_string_columns(t) for t in tables]
+                combined = pa.concat_tables(tables, promote_options="permissive")
+                return combined.to_pandas()
+
+            # Offloaded as one hop: reading every shard, promoting schemas and
+            # materialising a single pandas frame is blocking disk I/O plus
+            # CPU-bound Arrow work whose cost scales with the prefix. Inline it
+            # holds the event loop for that whole span, which starves the
+            # auto-heartbeat and gets a healthy activity killed (ADR-0010).
+            return await run_in_thread(_read_and_combine)
         # An already-typed AppError carries its own category/audience/evidence
         # (e.g. ObjectStoreReadError -> DEPENDENCY_UNAVAILABLE + the searched
         # prefix). Re-wrapping it as FormatReadError would downgrade that to
@@ -357,12 +365,26 @@ class ParquetFileReader(Reader):
             chunk_size = self.chunk_size or 100000
 
             for parquet_file in parquet_files:
-                pf = pq.ParquetFile(parquet_file)
+                # Opening reads the file footer; advancing the iterator reads
+                # and decodes a whole row group and converts it to pandas.
+                # Both are blocking, and at batch_size=100k the per-batch cost
+                # is far past the heartbeat interval — offload each step so the
+                # loop stays free to beat between batches (ADR-0010).
+                pf = await run_in_thread(pq.ParquetFile, parquet_file)
                 try:
-                    for batch in pf.iter_batches(batch_size=chunk_size):
-                        yield batch.to_pandas()
+                    batches = pf.iter_batches(batch_size=chunk_size)
+
+                    def _next_frame() -> "pd.DataFrame | None":
+                        batch = next(batches, None)  # noqa: B023 — consumed within this iteration
+                        return None if batch is None else batch.to_pandas()
+
+                    while True:
+                        frame = await run_in_thread(_next_frame)
+                        if frame is None:
+                            break
+                        yield frame
                 finally:
-                    pf.close()
+                    await run_in_thread(pf.close)
         # See _get_dataframe: preserve an already-typed AppError.
         except AppError:
             raise
@@ -722,9 +744,16 @@ class ParquetFileWriter(Writer):
             if not temp_files:
                 return
 
-            combined_df = pd.concat(
-                [pd.read_parquet(f) for f in temp_files], ignore_index=True
-            )
+            # Offloaded: a consolidation folder holds a full buffer's worth of
+            # chunks, so reading them all back and concatenating is seconds of
+            # blocking disk I/O plus CPU. Inline it starves the auto-heartbeat
+            # for that span (ADR-0010).
+            def _read_and_concat() -> "pd.DataFrame":
+                return pd.concat(
+                    [pd.read_parquet(f) for f in temp_files], ignore_index=True
+                )
+
+            combined_df = await run_in_thread(_read_and_concat)
 
             # Write consolidated chunks respecting max_file_size_bytes
             partitions = 0
@@ -886,17 +915,23 @@ class ParquetFileWriter(Writer):
         import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
         import pyarrow.parquet as pq  # noqa: PLC0415 — optional dep: pyarrow.parquet
 
-        table = pa.Table.from_pandas(chunk, preserve_index=False)
-        row_group_size = max(
-            1, min(len(table), 16_000_000 // max(1, table.nbytes // max(1, len(table))))
-        )
-        # Offloaded: pq.write_table() is blocking disk I/O; running it
-        # inline stalls the event loop — including the auto-heartbeat —
-        # for the write's full duration on large chunks.
-        await run_in_thread(
-            pq.write_table,
-            table,
-            file_name,
-            compression="snappy",
-            row_group_size=row_group_size,
-        )
+        # Offloaded as one hop: `Table.from_pandas` is CPU-bound conversion over
+        # the whole chunk and `pq.write_table` is blocking disk I/O. Either one
+        # inline stalls the event loop — including the auto-heartbeat — for its
+        # full duration on large chunks (ADR-0010).
+        def _convert_and_write() -> None:
+            table = pa.Table.from_pandas(chunk, preserve_index=False)
+            row_group_size = max(
+                1,
+                min(
+                    len(table), 16_000_000 // max(1, table.nbytes // max(1, len(table)))
+                ),
+            )
+            pq.write_table(
+                table,
+                file_name,
+                compression="snappy",
+                row_group_size=row_group_size,
+            )
+
+        await run_in_thread(_convert_and_write)

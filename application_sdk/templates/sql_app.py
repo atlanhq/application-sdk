@@ -113,6 +113,7 @@ from application_sdk.errors.leaves import (
 )
 from application_sdk.errors.wire import secret_named_evidence_keys
 from application_sdk.execution import build_output_path, get_object_store_prefix
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.contracts.sql_metadata import (
@@ -1528,14 +1529,22 @@ class SqlApp(App):
         count = 0
         try:
             sql = self._prepare_sql(sql_template.strip(), input)
+
+            def _write_batch(f: Any, batch: list[dict[str, Any]]) -> int:
+                for record in batch:
+                    f.write(orjson.dumps(record, default=_orjson_default))
+                    f.write(b"\n")
+                return len(batch)
+
             with open(output_file, "wb") as f:
                 async for batch in client.run_query(
                     sql, batch_size=_EXTRACT_BATCH_SIZE
                 ):
-                    for record in batch:
-                        f.write(orjson.dumps(record, default=_orjson_default))
-                        f.write(b"\n")
-                        count += 1
+                    # Offloaded: serialising and writing a batch is 10k
+                    # orjson.dumps calls plus 20k blocking writes with no
+                    # await between them, so on wide rows a single batch can
+                    # outlast the heartbeat interval (ADR-0010).
+                    count += await run_in_thread(_write_batch, f, batch)
         finally:
             await client.close()
 
@@ -1640,30 +1649,41 @@ class SqlApp(App):
         output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / "entities.json"
 
-        count = 0
-        with open(raw_file, "rb") as r, open(output_file, "wb") as w:
-            for line in r:
-                line = line.strip()
-                if not line:
-                    continue
-                record = orjson.loads(line)
-                asset = mapper_fn(record, connection_qn)
-                # Inject connectionName if the mapper returned a dict
-                if isinstance(asset, dict) and connection_name:
-                    asset.setdefault("attributes", {}).setdefault(
-                        "connectionName", connection_name
-                    )
-                if hasattr(asset, "to_nested_dict"):
-                    payload = asset.to_nested_dict()
-                elif hasattr(asset, "model_dump"):
-                    payload = asset.model_dump()
-                elif isinstance(asset, dict):
-                    payload = asset
-                else:
-                    payload = record
-                w.write(orjson.dumps(payload, default=_orjson_default))
-                w.write(b"\n")
-                count += 1
+        def _map_records() -> int:
+            written = 0
+            with open(raw_file, "rb") as r, open(output_file, "wb") as w:
+                for line in r:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    record = orjson.loads(line)
+                    asset = mapper_fn(record, connection_qn)
+                    # Inject connectionName if the mapper returned a dict
+                    if isinstance(asset, dict) and connection_name:
+                        asset.setdefault("attributes", {}).setdefault(
+                            "connectionName", connection_name
+                        )
+                    if hasattr(asset, "to_nested_dict"):
+                        payload = asset.to_nested_dict()
+                    elif hasattr(asset, "model_dump"):
+                        payload = asset.model_dump()
+                    elif isinstance(asset, dict):
+                        payload = asset
+                    else:
+                        payload = record
+                    w.write(orjson.dumps(payload, default=_orjson_default))
+                    w.write(b"\n")
+                    written += 1
+            return written
+
+        # Offloaded as one hop: this maps every raw record for the entity —
+        # JSON parse, the connector's mapper_fn (which builds pyatlan asset
+        # objects), serialise, write — with no await anywhere in the loop.
+        # A large table's records.json therefore holds the event loop for the
+        # whole transform, which stops the auto-heartbeat and gets a healthy
+        # activity killed on heartbeat_timeout. Every SQL connector inherits
+        # this method, so the fix applies fleet-wide (ADR-0010).
+        count = await run_in_thread(_map_records)
 
         logger.info("Transformed %s: %d records", entity_type, count)
         # Emit a FileReference to entities.json so the activity

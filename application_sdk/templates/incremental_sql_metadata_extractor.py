@@ -524,14 +524,28 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 )
 
         # Step 3: Find backfill tables using DuckDB
+        #
+        # Offloaded: both DuckDB steps scan every transformed table JSON for
+        # the connection and run SQL over it — seconds to minutes on a large
+        # source, with no await inside. Inline they hold the event loop for
+        # that whole span, which stops this activity's auto-heartbeat and gets
+        # it killed on heartbeat_timeout while it is making progress
+        # (ADR-0010).
         logger.info("Analyzing table state to identify backfill candidates...")
-        backfill_qns = get_backfill_tables(transformed_dir, previous_current_state_dir)
+        backfill_qns = await run_in_thread(
+            get_backfill_tables, transformed_dir, previous_current_state_dir
+        )
         backfill_count_for_log = len(backfill_qns) if backfill_qns else 0
         logger.info("Found %d tables needing backfill", backfill_count_for_log)
 
         # Step 4: Get tables needing column extraction using DuckDB
-        filtered_rows, changed_count, backfill_count, _no_change_count = (
-            get_tables_needing_column_extraction(transformed_dir, backfill_qns)
+        (
+            filtered_rows,
+            changed_count,
+            backfill_count,
+            _no_change_count,
+        ) = await run_in_thread(
+            get_tables_needing_column_extraction, transformed_dir, backfill_qns
         )
 
         total_tables = changed_count + backfill_count
@@ -552,25 +566,31 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         )
         batches_dir.mkdir(parents=True, exist_ok=True)
 
-        batch_idx = 0
-        total_tables_batched = 0
-        current_batch: list[str] = []
+        def _write_batches() -> tuple[int, int]:
+            written_batches = 0
+            batched = 0
+            current_batch: list[str] = []
 
-        for row in filtered_rows:
-            current_batch.append(row["table_id"])
+            for row in filtered_rows:
+                current_batch.append(row["table_id"])
 
-            if len(current_batch) >= batch_size:
-                batch_file = batches_dir / f"batch-{batch_idx}.json"
+                if len(current_batch) >= batch_size:
+                    batch_file = batches_dir / f"batch-{written_batches}.json"
+                    batch_file.write_bytes(orjson.dumps(current_batch))
+                    written_batches += 1
+                    batched += len(current_batch)
+                    current_batch = []
+
+            if current_batch:
+                batch_file = batches_dir / f"batch-{written_batches}.json"
                 batch_file.write_bytes(orjson.dumps(current_batch))
-                batch_idx += 1
-                total_tables_batched += len(current_batch)
-                current_batch = []
+                written_batches += 1
+                batched += len(current_batch)
+            return written_batches, batched
 
-        if current_batch:
-            batch_file = batches_dir / f"batch-{batch_idx}.json"
-            batch_file.write_bytes(orjson.dumps(current_batch))
-            batch_idx += 1
-            total_tables_batched += len(current_batch)
+        # Offloaded: one pass over every table needing extraction, writing a
+        # file per batch, with no await in the loop (ADR-0010).
+        batch_idx, total_tables_batched = await run_in_thread(_write_batches)
 
         logger.info(
             "Created %d batch files for %d tables at %s",
