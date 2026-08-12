@@ -2020,13 +2020,31 @@ jobs:
             --out results/test-readiness.json \
             || echo "::warning::test-readiness scorecard generation failed (skipped)"
 
+      # `upload-artifact` classifies the artifact service's finalize 403 as
+      # non-retryable and fails on the first occurrence, even though the bytes
+      # already landed and the next attempt normally succeeds. That failed the
+      # job, which failed the aggregate gate, which ejected the merge-queue
+      # entry. So: retry once, and never fail the gate on it:
+      # the scorecard is reporting, not a gate.
       - name: Upload scorecard
+        id: upload-scorecard
         if: hashFiles('results/test-readiness.json') != ''
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: test-readiness-scorecard
           path: results/test-readiness.json
           retention-days: 14
+
+      - name: Upload scorecard (retry)
+        if: steps.upload-scorecard.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-readiness-scorecard
+          path: results/test-readiness.json
+          retention-days: 14
+          overwrite: true
 
   # ── Aggregator gate (single required check for branch protection) ────────
   tests-passed:

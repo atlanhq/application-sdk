@@ -468,12 +468,31 @@ jobs:
           conformance-ref: ${{ inputs.conformance-ref }}
           needs-env: ${{ matrix.needs_env }}
 
+      # `upload-artifact` classifies the artifact service's finalize 403 as
+      # non-retryable and fails on the first occurrence, even though the bytes
+      # already landed and the next attempt normally succeeds. That failed the
+      # job, which failed the aggregate gate, which ejected the merge-queue
+      # entry. So: retry once, and never fail the gate on it:
+      # the series verdict is the gate; this artifact only feeds the
+      # Security tab, and conformance-upload-sarif.yaml already treats a
+      # missing artifact as an expected state.
       - name: "Upload SARIF artifact"
+        id: upload-sarif
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && !cancelled()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: conformance-${{ matrix.slug }}-sarif
           path: ${{ matrix.slug }}.sarif
+
+      - name: "Upload SARIF artifact (retry)"
+        if: steps.upload-sarif.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-${{ matrix.slug }}-sarif
+          path: ${{ matrix.slug }}.sarif
+          overwrite: true
 
   # ── Contract ledger append-only guard ─────────────────────────────────────
   # Verifies that no entry was deleted from the committed contract ledger and
