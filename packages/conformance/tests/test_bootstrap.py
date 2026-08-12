@@ -1189,12 +1189,9 @@ def test_checks_yml_without_deps_is_byte_identical_to_no_step_render() -> None:
     drift in every already-bootstrapped repo (none of which passes this flag)."""
     rendered = render("checks.yml")
     assert "apt-get" not in rendered
-    # The checkout step is followed immediately by the next step's leading
-    # comment, with nothing (not even an empty line) where the conditional
-    # block sat. Asserted on the first line that follows checkout whatever that
-    # step happens to be, so this keeps testing the whitespace contract rather
-    # than pinning which step comes next.
-    assert "# v7.0.1\n      # setup-deps below runs" in rendered
+    # The checkout step is followed immediately by setup-deps, with nothing
+    # (not even an empty line) where the conditional block sat.
+    assert "# v7.0.1\n      - uses: atlanhq" in rendered
 
 
 def test_checks_yml_renders_system_deps_step() -> None:

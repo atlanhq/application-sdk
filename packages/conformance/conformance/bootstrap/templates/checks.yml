@@ -27,14 +27,5 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y << system_deps >>
-<% endif %>      # setup-deps below runs `uv sync`, which for an app with a private-org
-      # (atlanhq) git dependency has to clone that OTHER repo — and the checkout
-      # above carries no auth for it, so the sync dies on
-      # `Permission denied (publickey)` and pre-commit never runs at all.
-      # The action no-ops when ORG_PAT_GITHUB is absent, so apps with only PyPI
-      # dependencies are unaffected and nothing has to be configured per-app.
-      - uses: atlanhq/application-sdk/.github/actions/private-git-auth@main
-        with:
-          token: ${{ secrets.ORG_PAT_GITHUB }}
-      - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
+<% endif %>      - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
