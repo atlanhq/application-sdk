@@ -275,6 +275,20 @@ on:
         description: |
           Prefix for the aliased env set (E2E_<PREFIX>_HOST, …). Empty = the
           uppercased datasource name.
+      dataforge-hermetic-fallback:
+        required: false
+        type: string
+        default: "true"
+        description: |
+          Whether this connector can run its e2e suite against a local
+          hermetic source (a seeded sibling container) when neither the
+          dataforge fetch nor E2E_SOURCE_ENV_JSON produced credentials.
+          Set "false" for SaaS-style connectors with no hermetic option:
+          the source-resolution step then FAILS FAST with an explicit
+          "no e2e source available" error instead of letting the leg limp
+          to the extract node and die minutes later on a cryptic
+          empty-credential auth failure. Only consulted when
+          dataforge-datasource is set.
       private-git-deps:
         required: false
         type: boolean
@@ -1566,14 +1580,25 @@ jobs:
             --json "$DF_ENV_JSON" >> "$GITHUB_ENV"
 
       # E2E_SOURCE_DATASOURCE is a non-secret breadcrumb the fetch exports on
-      # success — its presence is the source-selection signal.
-      - name: Report e2e source selection
+      # success — its presence is the source-selection signal. When nothing
+      # resolved AND the connector declared no hermetic option, fail HERE —
+      # one minute in, with the actual fix in the message — rather than
+      # letting the leg limp to the extract node and die on a cryptic
+      # empty-credential auth failure.
+      - name: Resolve e2e source (fail fast when none)
         if: inputs.dataforge-datasource != ''
+        env:
+          DF_HERMETIC_FALLBACK: ${{ inputs.dataforge-hermetic-fallback }}
         run: |
           if [ -n "$E2E_SOURCE_DATASOURCE" ]; then
             echo "::notice::e2e source: dataforge ($E2E_SOURCE_DATASOURCE)"
+          elif [ -n "$E2E_SOURCE_ENV_JSON" ]; then
+            echo "::notice::e2e source: repo credentials (dataforge fetch unavailable — see steps above)"
+          elif [ "$DF_HERMETIC_FALLBACK" = "true" ]; then
+            echo "::notice::e2e source: hermetic fallback (dataforge fetch unavailable — see steps above; no repo creds configured)"
           else
-            echo "::notice::e2e source: repo credentials / hermetic fallback (dataforge fetch unavailable — see steps above)"
+            echo "::error::no e2e source available — the dataforge fetch failed (see the steps above), no E2E_SOURCE_ENV_JSON repo credentials are configured, and this connector declares no hermetic source (dataforge-hermetic-fallback: false). Fix the dataforge chain (VPN, workload binding, resource) or configure E2E_SOURCE_ENV_JSON."
+            exit 1
           fi
 
       # See the unit job for why this gates on the token, not just the flag.
