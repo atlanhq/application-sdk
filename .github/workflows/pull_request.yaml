@@ -165,7 +165,12 @@ jobs:
       - uses: "./.github/actions/trivy"
         if: needs.changes.outputs.scan == 'true'
         with:
+          # Reporting and enforcement are separate switches on purpose — see the
+          # action's input docs. Both are passed explicitly so that a future edit
+          # to one is visibly not an edit to the other. The action itself skips
+          # the comments on merge_group; enforcement runs on every event.
           add-report-comment-to-pr: "true"
+          fail-on-findings: "true"
 
   trivy-container:
     name: Trivy Container Scan
