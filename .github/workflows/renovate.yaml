@@ -131,13 +131,10 @@ jobs:
         with:
           version: "0.12.3"
 
-      - name: Install pkl
-        run: |
-          set -euo pipefail
-          curl -fsSL -o /tmp/pkl \
-            "https://github.com/apple/pkl/releases/download/0.27.2/pkl-linux-amd64"
-          chmod +x /tmp/pkl
-          sudo mv /tmp/pkl /usr/local/bin/pkl
+      # Version omitted deliberately: this job has no pkl pin of its own, so it
+      # tracks the action's fleet-wide default rather than reintroducing a
+      # fourth literal "0.27.2" that drifts silently.
+      - uses: ./.github/actions/install-pkl
 
       # Renovate 43 requires Node >=24.11 — newer than the ubuntu-latest default,
       # so pin the runtime explicitly rather than relying on the preinstalled one.

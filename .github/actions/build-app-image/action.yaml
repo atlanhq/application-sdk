@@ -175,7 +175,8 @@ runs:
         "${{ github.action_path }}/../sdr-e2e/repin-application-sdk.sh"
         if ! command -v uv >/dev/null 2>&1; then
           echo "Installing uv for the pre-build re-lock..."
-          curl -LsSf https://astral.sh/uv/0.7.3/install.sh | sh
+          "${{ github.action_path }}/../../scripts/with-retry.sh" \
+            bash -c "curl -LsSf https://astral.sh/uv/0.7.3/install.sh | sh"
           export PATH="$HOME/.local/bin:$PATH"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         fi

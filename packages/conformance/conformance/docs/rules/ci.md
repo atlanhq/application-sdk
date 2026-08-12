@@ -5,7 +5,7 @@
 
 # CI/Workflow Supply-Chain Rules (C-series)
 
-**3 rules** · Checker: `suite.checks.actions_pinning` and related workflow checks (static)
+**4 rules** · Checker: `suite.checks.actions_pinning` and related workflow checks (static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -18,6 +18,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [C001](#c001) | `UnpinnedActionReference` | `block` | `both` | `supply-chain` | yes | 0.2.0 |
 | [C002](#c002) | `BootstrapWorkflowDrift` | `warn` | `app` | `ci-consistency` | yes | 0.3.0 |
 | [C003](#c003) | `GitignoreMissingEntry` | `warn` | `both` | `ci-consistency` | — | 0.4.0 |
+| [C004](#c004) | `UnretriedToolDownload` | `warn` | `both` | `ci-reliability` | — | 0.18.0 |
 
 ---
 
@@ -78,5 +79,35 @@ only the absent-`.gitignore` case is mechanically fixed (via the same `bootstrap
 re-sync as C002); a missing-entry finding on an existing `.gitignore` always requires
 human judgment and is not autofixed, which is why this rule's `autofixable` is false
 overall.
+
+---
+
+## C004 — `UnretriedToolDownload` {#c004}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `ci-reliability` · **Autofixable:** — · **Since:** 0.18.0
+
+> CI downloads a tool over the network with no retry
+
+**Rationale:** CI that installs its toolchain at job time takes a live dependency on a third-party CDN
+every run, and those CDNs serve 5xx bursts lasting minutes. A one-shot fetch turns a
+transient upstream blip into a failed build — and on a merge-queue-gating job, into an
+ejected PR that costs a full re-queue. The remediation is almost always a single flag.
+
+Flags a `curl`/`wget` that installs something — it writes the response to a file or
+pipes it into a shell or `tar` — and carries no retry, plus `uv python install`, which
+fetches a python-build-standalone tarball from GitHub releases with no retry of its own.
+
+Recognised as retried: the `with-retry.sh` wrapper (including via a shell variable
+holding its path), `curl --retry`, and `wget --tries` / `--retry-on-http-error`. A `curl
+--retry` WITHOUT `--retry-all-errors` is still flagged: plain `--retry` covers transport
+errors but not an HTTP 503, which is the failure this rule exists for.
+
+Not flagged: fetches whose body is read rather than installed (a version lookup, a `-o
+/dev/null` health probe — those sit in their own poll loops), and localhost URLs.
+
+WARN, not BLOCK: existing repos carry these throughout, and a one-shot fetch is a
+reliability defect rather than a security or correctness one. The best fix is often not
+a retry at all but removing the download — taking the tool from the runner tool cache,
+or from `atlanhq/application-sdk/.github/actions/setup-deps@main`.
 
 ---
