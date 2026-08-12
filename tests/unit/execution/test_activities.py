@@ -638,7 +638,9 @@ class TestActivityFnExecution:
         )
 
         # Patch auto_heartbeat_loop so it returns immediately when stop_event set.
-        async def fake_loop(*, interval_seconds, heartbeat_fn, stop_event, task_name):
+        async def fake_loop(
+            *, interval_seconds, heartbeat_fn, stop_event, task_name, **_watchdog
+        ):
             await stop_event.wait()
 
         with (

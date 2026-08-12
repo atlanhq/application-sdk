@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.27.2
-source-sha:    9ecd435db35594f3554a9df3be34c153ff594636
-source-date:   2026-08-12T17:02:59+01:00
+source-sha:    aaaed3a54415a5dba8626bd74796c586cfa1c168
+source-date:   2026-08-13T03:04:30+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,7 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 11 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 58 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 59 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 37 |
@@ -1043,6 +1043,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import SourceUnavailableError`
 - **Signature:** `class SourceUnavailableError(*, ...)`
 - **Summary:** Customer-controlled source system is temporarily unreachable.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `TaskStalledError`
+
+- **Import:** `from application_sdk.errors import TaskStalledError`
+- **Signature:** `class TaskStalledError(*, ...)`
+- **Summary:** An activity attempt was failed for making no observable progress (ADR-0018).
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `UnimplementedError`

@@ -415,6 +415,94 @@ class TestClosedHoldObservations:
 
 
 # ---------------------------------------------------------------------------
+# The stall verdict (what tells the cancellation handler whose cancel it is)
+# ---------------------------------------------------------------------------
+
+
+class TestStallVerdict:
+    def test_no_verdict_until_the_watchdog_records_one(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+
+        clock.advance(9000.0)
+
+        # Quiet for hours is not a verdict: only the watchdog decides, and only
+        # in enforce mode. A tracker that answered "stalled" on elapsed time
+        # alone would make warn mode fail activities.
+        assert tracker.stalled_for() == 9000.0
+        assert tracker.stall is None
+
+    def test_verdict_carries_the_observed_gap_and_label(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+
+        tracker.flag_stalled(
+            stalled_for_seconds=915.0, last_progress_label="writer.flush_buffer"
+        )
+
+        stall = tracker.stall
+        assert stall is not None
+        assert stall.stalled_for_seconds == 915.0
+        assert stall.last_progress_label == "writer.flush_buffer"
+
+    def test_verdict_is_frozen_against_later_progress(self) -> None:
+        """The numbers must not move between the verdict and the raise site.
+
+        The cancellation travels to the attempt's next ``await``, and anything
+        still in flight can mark progress on the way — which would re-arm
+        ``stalled_for()`` and relabel ``last_label``, leaving the failure to
+        report a gap of nothing after a signal that arrived post-mortem.
+        """
+        clock = FakeClock()
+        tracker = _tracker(clock)
+        clock.advance(900.0)
+        tracker.flag_stalled(stalled_for_seconds=900.0, last_progress_label="extract")
+
+        clock.advance(5.0)
+        tracker.mark_progress("storage.upload_part")
+
+        stall = tracker.stall
+        assert stall is not None
+        assert stall.stalled_for_seconds == 900.0
+        assert stall.last_progress_label == "extract"
+        assert tracker.last_label == "storage.upload_part"
+
+    def test_flagging_is_not_progress(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+        clock.advance(600.0)
+
+        tracker.flag_stalled(stalled_for_seconds=600.0, last_progress_label="")
+
+        # Recording the verdict must not touch the clock it is a verdict about.
+        assert tracker.stalled_for() == 600.0
+
+    def test_first_verdict_wins(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+
+        tracker.flag_stalled(stalled_for_seconds=900.0, last_progress_label="extract")
+        tracker.flag_stalled(stalled_for_seconds=1800.0, last_progress_label="later")
+
+        stall = tracker.stall
+        assert stall is not None
+        assert (stall.stalled_for_seconds, stall.last_progress_label) == (
+            900.0,
+            "extract",
+        )
+
+    def test_an_unlabelled_attempt_records_an_empty_label(self) -> None:
+        clock = FakeClock()
+        tracker = _tracker(clock)
+
+        tracker.flag_stalled(stalled_for_seconds=60.0, last_progress_label="")
+
+        stall = tracker.stall
+        assert stall is not None
+        assert stall.last_progress_label == ""
+
+
+# ---------------------------------------------------------------------------
 # Clock injection
 # ---------------------------------------------------------------------------
 
