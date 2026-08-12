@@ -23,6 +23,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from conformance.suite.checks._ast_common import safe_read_text
+
 # Committed JSON, relative to the ``conformance`` package root (ships in the wheel
 # under ``conformance/data/`` — same mechanism as the deprecation manifest).
 _BASELINE_RELPATH: tuple[str, ...] = ("data", "toolkit_baseline.json")
@@ -63,7 +65,12 @@ def build_baseline(sdk_root: Path) -> ToolkitBaseline:
     scheme so the stored base matches the scan-time comparison form.
     """
     pkl_project = sdk_root.joinpath(*TOOLKIT_PKLPROJECT_RELPATH)
-    text = pkl_project.read_text(encoding="utf-8")
+    text = safe_read_text(pkl_project)
+    if text is None:
+        raise ValueError(
+            f"{pkl_project} is unreadable or not valid UTF-8 — cannot build the "
+            f"toolkit baseline."
+        )
 
     name_m = _NAME_RE.search(text)
     version_m = _VERSION_RE.search(text)

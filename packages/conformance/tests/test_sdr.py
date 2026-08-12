@@ -200,6 +200,27 @@ def test_p030_rule_metadata() -> None:
     assert rule.category == "sdr-readiness"
 
 
+def test_p030_prose_no_longer_calls_a_working_bridge_a_false_positive() -> None:
+    """P030 must not document the shape P042 now reports as a false positive."""
+    rule = get_rule("P030")
+    assert "documented false positive" not in rule.full_description.lower()
+    assert "P042" in rule.full_description
+
+
+def test_p042_rule_metadata() -> None:
+    rule = get_rule("P042")
+    assert rule.name == "SdrHandRolledUploadBridge"
+    assert rule.tier == EnforcementTier.WARN
+    assert rule.scope == RuleScope.APP
+    assert rule.autofixable is False
+    assert rule.rationale.strip()
+    assert rule.since == "0.18.0"
+    assert rule.category == "sdr-readiness"
+    # The rule exists as an interim net for a shim the SDK removes in v4.0, so
+    # it carries a retirement path rather than becoming permanent by default.
+    assert rule.superseded_by == "sdk>=4.0.0"
+
+
 # ── P029: manifest missing agent_json ───────────────────────────────────────
 
 
@@ -425,6 +446,30 @@ def test_p030_silent_when_upload_call_present(tmp_path: Path) -> None:
         {
             "atlan.yaml": _SDR_ATLAN_YAML,
             "app/connector.py": "class Connector:\n    async def run(self):\n        await self.upload('output')\n",
+        },
+    )
+    findings = _run(tmp_path)
+    assert not any(f.rule_id == "P030" for f in findings)
+
+
+def test_p030_silent_when_super_upload_call_present(tmp_path: Path) -> None:
+    """`await super().upload(...)` is a real transfer path, not an absence.
+
+    An app that overrides ``upload`` to add connector-specific logic and then
+    defers to the SDK's ``App.upload()`` has a structurally reachable upload.
+    Matching only ``self.upload`` false-positived P030 on exactly that shape —
+    the same ``super()`` call T017 (``e2e_agent_spec``) already honours.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "from application_sdk.app import App\n\n"
+                "class Connector(App):\n"
+                "    async def run(self, workflow_args):\n"
+                "        await super().upload(workflow_args)\n"
+            ),
         },
     )
     findings = _run(tmp_path)
@@ -992,3 +1037,806 @@ def test_scan_path_is_noop(tmp_path: Path) -> None:
     f = tmp_path / "app.py"
     f.write_text("pass\n")
     assert scan_path(f, tmp_path) == []
+
+
+# ── P030: upload-bridge shapes (fleet-sweep hardening) ───────────────────────
+
+_NOOP_BRIDGE = (
+    "class Connector:\n"
+    "    async def upload_to_atlan(self, prefix):\n"
+    "        # publish owns the transfer\n"
+    "        return None\n"
+)
+
+_REAL_BRIDGE = (
+    "class Connector:\n"
+    "    async def upload_to_atlan(self, prefix):\n"
+    "        store = self._object_store\n"
+    "        await store.upload_prefix(prefix, tier='retained')\n"
+)
+
+
+def test_p030_flags_noop_upload_bridge_stub(tmp_path: Path) -> None:
+    """An upload_to_atlan whose body performs no storage-transfer call is a
+    no-op stub — the mongodbatlas-class silent-zero-asset shape — and is
+    flagged at the definition, not as a generic absence."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _NOOP_BRIDGE,
+        },
+    )
+    p030 = [f for f in _run(tmp_path) if f.rule_id == "P030"]
+    assert len(p030) == 1
+    assert p030[0].file == "app/connector.py"
+    assert p030[0].line == 2
+    assert "no-op stub" in p030[0].message
+    assert "full-DAG e2e" in p030[0].message
+
+
+def test_p030_real_bridge_is_p042_not_a_p030_absence(tmp_path: Path) -> None:
+    """A transferring bridge is P042's shape, not P030's — and never silence.
+
+    Bytes do move, so P030's silent-zero-asset message would be wrong. But the
+    app has reimplemented an SDK contract on a symbol deprecated for removal in
+    v4.0, so it stays visible under its own rule.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _REAL_BRIDGE,
+        },
+    )
+    findings = _run(tmp_path)
+    assert not any(f.rule_id == "P030" for f in findings)
+    p042 = [f for f in findings if f.rule_id == "P042"]
+    assert len(p042) == 1
+    assert p042[0].file == "app/connector.py"
+    assert p042[0].line == 2
+    assert "self.upload" in p042[0].message
+    assert "v4.0.0" in p042[0].message
+
+
+def test_p042_silent_when_self_upload_is_present(tmp_path: Path) -> None:
+    """A bridge alongside a real self.upload() is redundant, not a substitution.
+
+    P042 is about a bridge standing *in place of* the SDK path; with the SDK
+    path present there is nothing being stood in for.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _REAL_BRIDGE,
+            "app/main.py": (
+                "class App:\n"
+                "    async def run(self):\n"
+                "        await self.upload('output')\n"
+            ),
+        },
+    )
+    findings = _run(tmp_path)
+    assert not any(f.rule_id in ("P030", "P042") for f in findings)
+
+
+def test_p042_does_not_double_report_a_noop_stub(tmp_path: Path) -> None:
+    """A no-op stub carries exactly one finding — the sharper P030 one.
+
+    It is not a working bridge, so P042 must not add a second finding on the
+    same method, and the app-level absence finding must not fire either.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _NOOP_BRIDGE,
+        },
+    )
+    findings = [f for f in _run(tmp_path) if f.rule_id in ("P030", "P042")]
+    assert [f.rule_id for f in findings] == ["P030"]
+    assert "no-op stub" in findings[0].message
+
+
+def test_p042_reports_a_working_bridge_beside_a_noop_stub(tmp_path: Path) -> None:
+    """Mixed shapes are graded per method, each under the rule that fits it."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/stub.py": _NOOP_BRIDGE,
+            "app/connector.py": _REAL_BRIDGE,
+        },
+    )
+    findings = [f for f in _run(tmp_path) if f.rule_id in ("P030", "P042")]
+    assert {(f.rule_id, f.file) for f in findings} == {
+        ("P030", "app/stub.py"),
+        ("P042", "app/connector.py"),
+    }
+
+
+def test_p042_silent_on_non_sdr_app(tmp_path: Path) -> None:
+    """Gated on self_deployed_runtime, like the rest of the P-series SDR rules."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": "self_deployed_runtime: false\n",
+            "app/connector.py": _REAL_BRIDGE,
+        },
+    )
+    assert not any(f.rule_id == "P042" for f in _run(tmp_path))
+
+
+def test_p042_silent_when_app_has_no_publish_stage(tmp_path: Path) -> None:
+    """Shares P030's exemption: an extract-only app hands assets off to nothing."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/manifest.json": _MANIFEST_NO_PUBLISH,
+            "app/connector.py": _REAL_BRIDGE,
+        },
+    )
+    assert not any(f.rule_id == "P042" for f in _run(tmp_path))
+
+
+def test_p030_absence_message_no_longer_offers_a_bridge_as_a_fix(
+    tmp_path: Path,
+) -> None:
+    """The absence remediation points at self.upload() only.
+
+    Naming a hand-rolled bridge as an alternative fix would prescribe the very
+    shape P042 now reports.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": "class App:\n    pass\n",
+        },
+    )
+    p030 = [f for f in _run(tmp_path) if f.rule_id == "P030"]
+    assert len(p030) == 1
+    assert "upload_to_atlan bridge into" not in p030[0].message
+    assert "await self.upload(...)" in p030[0].message
+
+
+def test_p030_noop_stub_flagged_even_with_self_upload_elsewhere(
+    tmp_path: Path,
+) -> None:
+    """A dead no-op stub alongside a real self.upload() still fires — it masks
+    the real transfer path."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _NOOP_BRIDGE,
+            "app/main.py": (
+                "class App:\n"
+                "    async def run(self):\n"
+                "        await self.upload('output')\n"
+            ),
+        },
+    )
+    p030 = [f for f in _run(tmp_path) if f.rule_id == "P030"]
+    assert len(p030) == 1
+    assert "no-op stub" in p030[0].message
+
+
+def test_p030_absence_message_covers_sqlapp_run_delegation(tmp_path: Path) -> None:
+    """The absence finding explains that delegating to SqlApp.run() does not
+    satisfy the rule (deployment store only) and demands e2e evidence before a
+    false-positive call — the clickhouse-class shape."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/main.py": (
+                "from application_sdk.templates import SqlApp\n"
+                "app = SqlApp(name='c')\n"
+                "app.run()\n"
+            ),
+        },
+    )
+    p030 = [f for f in _run(tmp_path) if f.rule_id == "P030"]
+    assert len(p030) == 1
+    assert "SqlApp.run()" in p030[0].message
+    assert "full-DAG e2e" in p030[0].message
+
+
+# ── P041: hard preflight gate in an SDR app ──────────────────────────────────
+
+
+def test_p041_rule_metadata() -> None:
+    rule = get_rule("P041")
+    assert rule.name == "SdrHardPreflightGate"
+    assert rule.tier == EnforcementTier.WARN
+    assert rule.scope == RuleScope.APP
+    assert rule.autofixable is False
+    assert rule.rationale.strip()
+    assert rule.since == "0.18.0"
+    assert rule.category == "sdr-readiness"
+
+
+_APP_WITH_UPLOAD = (
+    "class Connector:\n    async def run(self):\n        await self.upload('o')\n"
+)
+
+
+def test_p041_fires_on_unconditional_hard_gate(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _APP_WITH_UPLOAD,
+            "app/main.py": ("class MyApp(App):\n" '    preflight_gate_mode = "hard"\n'),
+        },
+    )
+    p041 = [f for f in _run(tmp_path) if f.rule_id == "P041"]
+    assert len(p041) == 1
+    assert p041[0].file == "app/main.py"
+    assert p041[0].line == 2
+    assert "ATLAN_PREFLIGHT_GATE_MODE" in p041[0].message
+
+
+def test_p041_fires_on_annotated_assignment(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _APP_WITH_UPLOAD,
+            "app/main.py": (
+                "class MyApp(App):\n" '    preflight_gate_mode: str = "hard"\n'
+            ),
+        },
+    )
+    assert any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+def test_p041_silent_on_soft_gate(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _APP_WITH_UPLOAD,
+            "app/main.py": ("class MyApp(App):\n" '    preflight_gate_mode = "soft"\n'),
+        },
+    )
+    assert not any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+def test_p041_silent_on_run_mode_conditional(tmp_path: Path) -> None:
+    """The recommended interim posture — a run-mode conditional — never fires."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _APP_WITH_UPLOAD,
+            "app/main.py": (
+                "class MyApp(App):\n"
+                "    preflight_gate_mode = (\n"
+                '        "soft" if ENABLE_ATLAN_UPLOAD else "hard"\n'
+                "    )\n"
+            ),
+        },
+    )
+    assert not any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+def test_p041_silent_on_non_sdr_app(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _NON_SDR_ATLAN_YAML,
+            "app/main.py": ("class MyApp(App):\n" '    preflight_gate_mode = "hard"\n'),
+        },
+    )
+    assert not any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+# ── Regression: evidence must come from the scope being graded ───────────────
+
+
+def test_p030_absence_not_cleared_by_a_comment_mentioning_self_upload(
+    tmp_path: Path,
+) -> None:
+    """A textual mention is indistinguishable from a call under a substring test.
+
+    The population this rule targets is precisely where such a comment is
+    likely — fleet remediation found a stub whose comment claimed the publish
+    stage owned the transfer.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    async def run(self):\n"
+                "        # publish owns the transfer, we do not call self.upload(...)\n"
+                "        pass\n"
+            ),
+        },
+    )
+    assert any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p030_absence_not_cleared_by_a_docstring_mentioning_self_upload(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    async def run(self):\n"
+                '        """TODO: wire this to self.upload(prefix)."""\n'
+                "        pass\n"
+            ),
+        },
+    )
+    assert any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p030_abstract_bridge_declaration_is_not_a_noop_stub(tmp_path: Path) -> None:
+    """`raise NotImplementedError` declares a contract for a subclass.
+
+    Grading it as a stub put a permanent spurious finding on every connector
+    using the declare-abstract/implement-in-subclass idiom.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class BaseConnector:\n"
+                "    async def upload_to_atlan(self, prefix):\n"
+                '        """Subclasses implement the transfer."""\n'
+                "        raise NotImplementedError\n"
+                "\n\n"
+                "class RealConnector(BaseConnector):\n"
+                "    async def upload_to_atlan(self, prefix):\n"
+                "        await self._store.upload_prefix(prefix)\n"
+            ),
+        },
+    )
+    assert not any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p030_bridge_delegating_to_a_helper_is_not_a_noop_stub(
+    tmp_path: Path,
+) -> None:
+    """Correctness must not rest on whether the helper's *name* contains a verb."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    async def upload_to_atlan(self, prefix):\n"
+                "        await self._relay_to_tenant_bucket(prefix)\n"
+                "\n"
+                "    async def _relay_to_tenant_bucket(self, prefix):\n"
+                "        await self._object_store.upload_prefix(prefix)\n"
+            ),
+        },
+    )
+    assert not any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p030_ordinary_method_names_do_not_count_as_transfers(
+    tmp_path: Path,
+) -> None:
+    """`put` is a substring of compute/output/inputs — a stub containing any of
+    them evaded detection entirely under bare-substring matching."""
+    for body in (
+        "self._metrics.put('upload_attempted', 1)",
+        "buffer.copy()",
+        "requests.put(url)",
+        "self.compute_summary()",
+        "self.output_stats()",
+        "self.get_inputs()",
+    ):
+        root = tmp_path / body[:12].replace(".", "_").replace("(", "_")
+        _write(
+            root,
+            {
+                "atlan.yaml": _SDR_ATLAN_YAML,
+                "app/connector.py": (
+                    "class Connector:\n"
+                    "    async def upload_to_atlan(self, prefix):\n"
+                    f"        {body}\n"
+                ),
+            },
+        )
+        p030 = [f for f in _run(root) if f.rule_id == "P030"]
+        assert p030, f"{body} should NOT clear the no-op-stub finding"
+        assert "no-op stub" in p030[0].message
+
+
+def test_p030_store_receiver_verbs_count_as_transfers(tmp_path: Path) -> None:
+    """`self._object_store.sync(...)` / `self._store.push(...)` are real bridges —
+    misreporting them tells an author their working upload moves no bytes."""
+    for body in ("self._object_store.sync(prefix)", "self._store.push(prefix)"):
+        root = tmp_path / body[5:16].replace(".", "_").replace("(", "_")
+        _write(
+            root,
+            {
+                "atlan.yaml": _SDR_ATLAN_YAML,
+                "app/connector.py": (
+                    "class Connector:\n"
+                    "    async def upload_to_atlan(self, prefix):\n"
+                    f"        await {body}\n"
+                ),
+            },
+        )
+        assert not any(f.rule_id == "P030" for f in _run(root)), body
+
+
+def test_p030_real_fleet_bridge_shapes_are_not_flagged(tmp_path: Path) -> None:
+    """The call names green connectors actually use (postgres/snowflake/glue)."""
+    for body in (
+        "await storage_upload_file(key, tmp, store=upstream_store)",
+        "await upload_file(dest_key, tmp_path, store=upstream_store)",
+        "await AtlanStorage.migrate_from_objectstore_to_atlan(prefix=p)",
+    ):
+        root = tmp_path / str(abs(hash(body)))
+        _write(
+            root,
+            {
+                "atlan.yaml": _SDR_ATLAN_YAML,
+                "app/connector.py": (
+                    "class Connector:\n"
+                    "    async def upload_to_atlan(self, prefix):\n"
+                    f"        {body}\n"
+                ),
+            },
+        )
+        assert not any(f.rule_id == "P030" for f in _run(root)), body
+
+
+def test_p041_silent_on_if_else_run_mode_split(tmp_path: Path) -> None:
+    """The if/else spelling of the posture the rule's own remediation recommends.
+
+    Semantically identical to the documented ternary — an ordinary style choice
+    once the branches grow past one line.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    def configure(self):\n"
+                "        if ENABLE_ATLAN_UPLOAD:\n"
+                "            self.preflight_gate_mode = 'soft'\n"
+                "        else:\n"
+                "            self.preflight_gate_mode = 'hard'\n"
+            ),
+        },
+    )
+    assert not any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+def test_p041_fires_on_inverted_and_both_hard_and_env_default(
+    tmp_path: Path,
+) -> None:
+    """Structural exemption of every non-Constant let these three escape."""
+    cases = {
+        "inverted": "'hard' if ENABLE_ATLAN_UPLOAD else 'soft'",
+        "both_hard": "'hard' if FLAG else 'hard'",
+        "env_default": "os.environ.get('ATLAN_PREFLIGHT_GATE_MODE', 'hard')",
+    }
+    for label, expr in cases.items():
+        root = tmp_path / label
+        _write(
+            root,
+            {
+                "atlan.yaml": _SDR_ATLAN_YAML,
+                "app/connector.py": (
+                    "class Connector:\n    preflight_gate_mode = " + expr + "\n"
+                ),
+            },
+        )
+        assert any(f.rule_id == "P041" for f in _run(root)), label
+
+
+def test_p041_silent_on_env_override_of_the_run_mode_split(tmp_path: Path) -> None:
+    """The full documented posture: env-overridable, defaulting to the split."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    preflight_gate_mode = os.environ.get(\n"
+                "        'ATLAN_PREFLIGHT_GATE_MODE',\n"
+                "        'soft' if ENABLE_ATLAN_UPLOAD else 'hard',\n"
+                "    )\n"
+            ),
+        },
+    )
+    assert not any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+# ── Round-2 regressions ──────────────────────────────────────────────────────
+
+
+def test_sdr_scan_survives_non_utf8_files(tmp_path: Path) -> None:
+    """_is_sdr_app gates P030 and P041 — one bad byte must not take them out."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": "class Connector:\n    async def run(self):\n        pass\n",
+        },
+    )
+    (tmp_path / "app" / "bad.py").write_bytes(b"\xff\xfe class X: pass\n")
+    (tmp_path / "app" / "generated").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "app" / "generated" / "manifest.json").write_bytes(b"\xff\xfe{}")
+    assert any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p030_compound_non_storage_names_do_not_clear_the_stub(
+    tmp_path: Path,
+) -> None:
+    """A compound name carrying a verb token is not evidence of a transfer.
+
+    The receiver check that makes the bare-verb path sound must apply at every
+    token count, or these six clear the finding while moving no bytes.
+    """
+    for i, body in enumerate(
+        (
+            "self._metrics.put_metric_data(x)",
+            "self.migrate_schema()",
+            "self._cache.copy_on_write()",
+            "self._clipboard.copy_paste()",
+            "self._client.transfer_encoding()",
+            "self._queue.push_job(x)",
+        )
+    ):
+        root = tmp_path / f"case{i}"
+        _write(
+            root,
+            {
+                "atlan.yaml": _SDR_ATLAN_YAML,
+                "app/connector.py": (
+                    "class Connector:\n"
+                    "    async def upload_to_atlan(self, prefix):\n"
+                    f"        {body}\n"
+                ),
+            },
+        )
+        p030 = [f for f in _run(root) if f.rule_id == "P030"]
+        assert p030, f"{body} should NOT clear the no-op-stub finding"
+        assert "no-op stub" in p030[0].message
+
+
+def test_p030_write_on_a_store_receiver_is_a_transfer(tmp_path: Path) -> None:
+    """A write()-only real bridge must not be reported as a no-op stub."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    async def upload_to_atlan(self, prefix):\n"
+                "        await self._object_store.write(prefix, data)\n"
+            ),
+        },
+    )
+    assert not any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p030_two_hop_same_class_delegation_is_not_a_stub(tmp_path: Path) -> None:
+    """Delegation resolves transitively within the class, not just one hop."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    async def upload_to_atlan(self, prefix):\n"
+                "        await self._helper1(prefix)\n"
+                "\n"
+                "    async def _helper1(self, prefix):\n"
+                "        await self._helper2(prefix)\n"
+                "\n"
+                "    async def _helper2(self, prefix):\n"
+                "        await self._object_store.upload_prefix(prefix)\n"
+            ),
+        },
+    )
+    assert not any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p041_fires_on_or_default_and_name_indirection(tmp_path: Path) -> None:
+    """The or-default env idiom and one hop of module-level indirection."""
+    cases = {
+        "or_default": (
+            "import os\n"
+            "class Connector:\n"
+            "    preflight_gate_mode = os.environ.get('ATLAN_PREFLIGHT_GATE_MODE')"
+            " or 'hard'\n"
+        ),
+        "name_indirection": (
+            "MODE = 'hard'\nclass Connector:\n    preflight_gate_mode = MODE\n"
+        ),
+    }
+    for label, src in cases.items():
+        root = tmp_path / label
+        _write(root, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+        assert any(f.rule_id == "P041" for f in _run(root)), label
+
+
+def test_p041_silent_on_or_default_soft(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "import os\n"
+                "class Connector:\n"
+                "    preflight_gate_mode = os.environ.get('ATLAN_PREFLIGHT_GATE_MODE')"
+                " or 'soft'\n"
+            ),
+        },
+    )
+    assert not any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+def test_p041_silent_on_helper_call_with_hard_default(tmp_path: Path) -> None:
+    """An arbitrary helper call is opaque — its `default="hard"` proves nothing.
+
+    Only the documented env-lookup callees (`os.environ.get` / `os.getenv`)
+    have their default read as the deployment mode; for any other callable the
+    returned value is invisible to a static check, so a constant keyword must
+    not fire the rule.
+    """
+    cases = {
+        "helper_kw_default": (
+            "class Connector:\n"
+            "    preflight_gate_mode = resolve_gate(env_mode, default='hard')\n"
+        ),
+        "helper_positional_default": (
+            "class Connector:\n"
+            "    preflight_gate_mode = resolve_gate(env_mode, 'hard')\n"
+        ),
+        "config_getter": (
+            "class Connector:\n"
+            "    preflight_gate_mode = self.config.get('gate_mode', 'hard')\n"
+        ),
+    }
+    for label, src in cases.items():
+        root = tmp_path / label
+        _write(root, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+        assert not any(f.rule_id == "P041" for f in _run(root)), label
+
+
+def test_p030_compound_upload_names_still_need_a_store(tmp_path: Path) -> None:
+    """`upload` as one token of a compound name proves nothing on its own.
+
+    Only the bare `upload(...)` / `self.upload(...)` clears without a store.
+    """
+    for i, body in enumerate(
+        ("self._log.upload_metrics(x=1)", "self._telemetry.upload_stats()")
+    ):
+        root = tmp_path / f"c{i}"
+        _write(
+            root,
+            {
+                "atlan.yaml": _SDR_ATLAN_YAML,
+                "app/connector.py": (
+                    "class Connector:\n"
+                    "    async def upload_to_atlan(self, prefix):\n"
+                    f"        {body}\n"
+                ),
+            },
+        )
+        assert [f.rule_id for f in _run(root) if f.rule_id == "P030"] == ["P030"], body
+
+
+def test_p030_registry_named_store_is_not_a_store_receiver(tmp_path: Path) -> None:
+    """`_store_of_names` merely contains the word — substring matching accepted it."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    async def upload_to_atlan(self, prefix):\n"
+                "        self._store_of_names.put('x')\n"
+            ),
+        },
+    )
+    assert any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p030_bare_sdk_storage_helpers_are_transfers(tmp_path: Path) -> None:
+    """The green fleet bridges call SDK helpers as bare functions, no receiver."""
+    for i, body in enumerate(
+        (
+            "await storage_upload_file(key, tmp, store=upstream_store)",
+            "await upload_file(dest_key, tmp_path, store=upstream_store)",
+        )
+    ):
+        root = tmp_path / f"b{i}"
+        _write(
+            root,
+            {
+                "atlan.yaml": _SDR_ATLAN_YAML,
+                "app/connector.py": (
+                    "class Connector:\n"
+                    "    async def upload_to_atlan(self, prefix):\n"
+                    f"        {body}\n"
+                ),
+            },
+        )
+        assert not any(f.rule_id == "P030" for f in _run(root)), body
+
+
+def test_p041_fires_on_class_body_constant_indirection(tmp_path: Path) -> None:
+    """`preflight_gate_mode` is conventionally a class attribute."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    MODE = 'hard'\n"
+                "    preflight_gate_mode = MODE\n"
+            ),
+        },
+    )
+    assert any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+def test_p041_fires_on_deterministic_reassigned_constant(tmp_path: Path) -> None:
+    """Two straight-line module assignments have a deterministic final value."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "MODE = 'soft'\n"
+                "MODE = 'hard'\n"
+                "class Connector:\n"
+                "    preflight_gate_mode = MODE\n"
+            ),
+        },
+    )
+    assert any(f.rule_id == "P041" for f in _run(tmp_path))
+
+
+def test_p030_positional_store_argument_is_a_transfer(tmp_path: Path) -> None:
+    """The SDK's own callers pass the store positionally."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "class Connector:\n"
+                "    async def upload_to_atlan(self, prefix):\n"
+                "        await transfer_directory(src, dst, upstream_store)\n"
+            ),
+        },
+    )
+    assert not any(f.rule_id == "P030" for f in _run(tmp_path))
+
+
+def test_p041_fires_on_annotated_constant_indirection(tmp_path: Path) -> None:
+    """`MODE: str = "hard"` is the annotated spelling of a resolved constant."""
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "MODE: str = 'hard'\n"
+                "class Connector:\n"
+                "    preflight_gate_mode = MODE\n"
+            ),
+        },
+    )
+    assert any(f.rule_id == "P041" for f in _run(tmp_path))

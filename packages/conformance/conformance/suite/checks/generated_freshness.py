@@ -244,7 +244,7 @@ def _resolved_toolkit_version(root: Path, base: str) -> str | None:
         return None
     try:
         lock = _parse_deps_lock(deps_path.read_text(encoding="utf-8"))
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     if not lock:
         return None
@@ -261,7 +261,7 @@ def _scan_toolkit_dependency(
     pkl_project = root / "contract" / "PklProject"
     try:
         text = pkl_project.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
 
     toolkit = _find_toolkit_dep(_parse_pkl_project_deps(text))
@@ -394,7 +394,7 @@ def _scan_lock_drift(root: Path, present: set[str]) -> list[Finding]:
     pkl_project = root / "contract" / "PklProject"
     try:
         text = pkl_project.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
     pins = [
         (base, version, lineno)
@@ -413,7 +413,7 @@ def _scan_lock_drift(root: Path, present: set[str]) -> list[Finding]:
     if deps_path.is_file():
         try:
             lock = _parse_deps_lock(deps_path.read_text(encoding="utf-8"))
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             lock = None
 
     for base, version, lineno in pins:
@@ -479,7 +479,7 @@ def _scan_missing_outputs(root: Path, present: set[str]) -> list[Finding]:
     app_pkl = root / "contract" / "app.pkl"
     try:
         text = app_pkl.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
 
     directives = _parse_pkl_directives(text)
@@ -647,7 +647,7 @@ def _scan_e2e_scaffolding(root: Path, present: set[str]) -> list[Finding]:
     app_pkl = root / "contract" / "app.pkl"
     try:
         text = app_pkl.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
     if _ENTRYPOINTS_RE.search(text):
         # Multi-entrypoint bundle: E2E scaffolding lands per-entrypoint, not at the

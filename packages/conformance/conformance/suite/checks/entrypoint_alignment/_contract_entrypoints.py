@@ -78,7 +78,7 @@ def _routes_from_manifest(manifest_path: Path) -> frozenset[str]:
     """
     try:
         data: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return frozenset()
 
     dag = data.get("dag") if isinstance(data, dict) else None

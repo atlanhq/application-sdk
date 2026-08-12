@@ -15,6 +15,7 @@ class Category(str, Enum):
     GITHUB_ACTIONS = "github-actions"
     CONTRACT_TOOLKIT = "contract-toolkit"
     CONFORMANCE_PACKAGE = "conformance-package"
+    SDK_PACKAGE = "sdk-package"
     PYTHON_DEP = "python-dep"
     UNKNOWN = "unknown"
 
@@ -70,6 +71,22 @@ class ChecksState(str, Enum):
 
 
 @dataclass(frozen=True)
+class PRDep:
+    """One dependency a Renovate PR delivers: package name + version change.
+
+    Parsed from the PR body's version table (primary) or the PR title
+    (fallback) — see ``classify.extract_deps``. Versions are kept verbatim as
+    Renovate rendered them (a constraint change may read ``>=3.20,<4``, a
+    lockfile bump ``3.26.1``); consumers that need semver should parse
+    defensively. ``from_version`` may be empty when only the target version is
+    known (title-only parse)."""
+
+    name: str
+    from_version: str
+    to_version: str
+
+
+@dataclass(frozen=True)
 class RenovatePR:
     """Normalised representation of a single Renovate PR."""
 
@@ -96,6 +113,11 @@ class RenovatePR:
     auto_merge_expected: bool = False
     blocking_reason: BlockingReason = BlockingReason.UNKNOWN
     age_days: int = 0
+    # populated by classify() from the PR body/title — which packages this PR
+    # delivers, so downstream dashboards can join "repo is behind on tool X" to
+    # the exact PR that fixes it. Empty for lock-file-maintenance PRs (they
+    # carry no version table) and unparseable bodies.
+    deps: tuple[PRDep, ...] = ()
 
 
 @dataclass

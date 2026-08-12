@@ -132,7 +132,7 @@ def _ci_declared_fail_under(root: Path) -> float | None:
     ):
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
         m = _CI_FAIL_UNDER_RE.search(text)
         if m is None:
@@ -341,7 +341,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
     """Scan a single ``pyproject.toml`` file for T014–T015 findings."""
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
     try:
         rel = path.relative_to(root)

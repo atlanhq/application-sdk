@@ -98,7 +98,7 @@ def read_manifest(path: Path, root: Path) -> ManifestDag | None:
     """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None
     dag = data.get("dag")
     if not isinstance(dag, dict):

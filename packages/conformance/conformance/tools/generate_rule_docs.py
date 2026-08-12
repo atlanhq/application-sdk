@@ -124,7 +124,8 @@ _SERIES_META: list[SeriesMeta] = [
             "conformance/suite/rules/entrypoint.py, "
             "conformance/suite/rules/client_seam.py, "
             "conformance/suite/rules/determinism.py, "
-            "conformance/suite/rules/app_name_alignment.py"
+            "conformance/suite/rules/app_name_alignment.py, "
+            "conformance/suite/rules/transform_templates.py"
         ),
         output_filename="prescriptions.md",
         checker=(
@@ -135,7 +136,8 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.client_seam` (P019), "
             "`suite.checks.determinism` (P020–P024, P031), "
             "`suite.checks.app_name_alignment` (P025), "
-            "`suite.checks.sdr` (P029/P030, P037/P038/P039) "
+            "`suite.checks.sdr` (P029/P030, P037/P038/P039, P041), "
+            "`suite.checks.transform_templates` (P040, scans template YAML) "
             "(all AST-based / cross-artifact)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
@@ -164,8 +166,10 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.coverage_config` (T014-T015), "
             "`suite.checks.e2e_deployment_name` (T016), "
             "`suite.checks.e2e_agent_spec` (T017), "
-            "`suite.checks.integration_deselect` (T018), and "
-            "`suite.checks.asyncio_loop_scope` (T019) (AST/TOML/YAML-based)"
+            "`suite.checks.integration_deselect` (T018), "
+            "`suite.checks.asyncio_loop_scope` (T019), "
+            "`suite.checks.e2e_workflow_shape` (T020-T022), and "
+            "`suite.checks.e2e_generated_harness` (T023-T024) (AST/TOML/YAML-based)"
         ),
         suppression_example=(
             "# conformance: ignore[T001] intentional: marked dynamically via add_marker"

@@ -109,7 +109,7 @@ def load_ledger(
             )
         else:
             text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
+    except (FileNotFoundError, UnicodeDecodeError):
         return ContractLedger(version=LEDGER_VERSION, fields=[])
     except OSError as exc:  # pragma: no cover
         print(f"warning: could not read contract ledger: {exc}", file=sys.stderr)

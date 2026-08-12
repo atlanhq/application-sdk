@@ -51,6 +51,94 @@ class ProcessOutput(Output):
     results: FileReference  # large data stored in object store
 ```
 
+## Reporting Failure as Data
+
+Most tasks report failure by raising -- Temporal marks the activity failed and retries it
+per the task's retry policy. A few must not: when *retrying is itself the damage*, the task
+catches the exception and returns a structured failure on its `Output`, and the caller
+(`run()`) decides what to do.
+
+`SqlApp.prime_sql_auth` is the SDK's worked example. It issues one `SELECT 1` to warm the
+source's auth cache before the parallel extract burst. If the source rejects the
+credential, an activity-level retry just stacks the source's `failed_login_attempts`
+counter -- accelerating the very lockout the probe exists to prevent. So the task is
+declared `retry_max_attempts=1` and returns `PrimeAuthOutput(success=False, failure=...)`
+instead of raising.
+
+### The typed failure contract
+
+`failure` is a `FailureDetails` -- the SDK's wire envelope for a classified error (see
+[common.md](common.md#wire-envelope)). It carries routing (`category`, `audience`,
+`retryable`, `code`), a `message`, an optional `suggested_action`, and per-error
+`evidence`.
+
+`SqlApp.run()` consumes it by rebuilding the typed error and raising it, so the workflow
+fails with the verdict the task reached -- routing, evidence and remediation hint intact:
+
+```python
+prime_result = await self.prime_sql_auth(task_input)
+if not prime_result.success:
+    raise self._classify_prime_failure(prime_result)
+```
+
+**Classify where the exception is, not where the strings are.** Only serialisable fields
+cross an activity boundary, and `BaseSQLClient.get_results` rewraps every driver exception
+in one wrapper class with one fixed message -- so a DNS failure, a TLS error and a
+credential rejection arrive at the caller looking identical. A caller classifying from
+those strings routes all three to `INTERNAL` / `APP_OWNER`, telling Atlan to investigate a
+customer credential problem. Classifying inside the task, where the live `__cause__` chain
+still exists, is what makes `AuthError` / `USER` reach the right first-responder.
+
+Apply the same shape to your own task: classify against the live exception, put the verdict
+on the output, and let the caller rebuild it.
+
+### Legacy string fields
+
+`PrimeAuthOutput` also carries `error_type` and `error_message`. They are a fallback, not
+the contract -- read `failure` first:
+
+| Field | Semantics |
+|---|---|
+| `failure` | Authoritative typed verdict. `None` on success, and on outputs from an older SDK. |
+| `error_type` | Class name of the **root cause** (innermost `__cause__`), not the SDK wrapper around it. |
+| `error_message` | Message of the **root cause**, secret-redacted and truncated to 500 chars. |
+
+`_classify_prime_failure` falls back to matching those two strings only when `failure` is
+absent -- an activity result written by an older SDK and replayed from Temporal history, or
+a `PrimeAuthOutput` a connector built by hand.
+
+### Redaction is the producer's job
+
+A SQL driver message routinely embeds the whole connection string, password included, and
+everything on an output is persisted in Temporal history and in logs. The SDK therefore
+redacts at every boundary that writes to the wire: at capture (`error_message`), when
+serialising a typed verdict (`message`, `suggested_action`, and recursively through nested
+`evidence` values), and again when rebuilding an error from a replayed envelope -- history
+may predate the redaction, and the envelope's denylist rejects secret-named evidence *keys*
+only, never a secret sitting in a value.
+
+If your task returns failure as data, redact before it leaves the task:
+
+```python
+from application_sdk.errors import redact_secrets, safe_traceback
+
+@task(retry_max_attempts=1)
+async def probe(self, input: ProbeInput) -> ProbeOutput:
+    try:
+        await self._connect(input)
+    except Exception as exc:
+        # Never exc_info=True here -- the traceback renders the driver
+        # message, connection string and all, verbatim into the log.
+        logger.error("probe failed\n%s", safe_traceback(exc))
+        return ProbeOutput(success=False, error_message=redact_secrets(str(exc)))
+    return ProbeOutput(success=True)
+```
+
+Evidence keys are constrained too: `FailureDetails` rejects secret-named keys
+(`api_key`, `db_password`, `*_token`, …) outright. `prime_sql_auth` degrades such a verdict
+by dropping the offending keys and keeping the typed routing -- never by falling back to a
+string-matched guess, which would silently invert the connector's own verdict.
+
 ## Timeouts and Auto-Heartbeating
 
 Configure timeouts and heartbeating as keyword arguments on `@task`:

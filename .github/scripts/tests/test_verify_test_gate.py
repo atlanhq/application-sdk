@@ -18,7 +18,7 @@ sys.path.insert(
     0, str(Path(__file__).parent.parent.parent / "actions" / "verify-test-gate")
 )
 
-from verify_test_gate import evaluate, main, render  # noqa: E402
+from verify_test_gate import cancelled_only, evaluate, main, render  # noqa: E402
 
 # --- passing states --------------------------------------------------------
 
@@ -704,8 +704,18 @@ def test_conclusion_tracks_passed_across_every_scenario_in_this_module() -> None
     ]
     for scenario in scenarios:
         out = render(*scenario)
-        expected = "success" if out["passed"] == "true" else "failure"
-        assert out["conclusion"] == expected, f"disagreed on {scenario}"
+        # A blocked gate spells itself "cancelled" rather than "failure" when
+        # nothing actually failed (see the cancellation tests below) — so the
+        # invariant is that `conclusion` agrees with `passed` about PASS/BLOCK,
+        # not that BLOCK has exactly one spelling.
+        if out["passed"] == "true":
+            assert out["conclusion"] == "success", f"disagreed on {scenario}"
+        else:
+            assert out["conclusion"] in (
+                "failure",
+                "cancelled",
+            ), f"disagreed on {scenario}"
+            assert out["conclusion"] != "success", f"disagreed on {scenario}"
 
 
 def test_the_real_failure_this_change_was_written_for() -> None:
@@ -733,3 +743,448 @@ def test_the_real_failure_this_change_was_written_for() -> None:
         "must report the connector run's failure"
     )
     assert out["e2e-status"] == "❌ e2e image build failed"
+
+
+# --- cancellation is not failure (FND-218) ---------------------------------
+#
+# GitHub keeps at most ONE pending run per concurrency group, so a third
+# arrival cancels the queued one before it is ever given a runner. The gate
+# must still BLOCK (an un-run test cannot green a merge) but must not spell
+# that block "failure" — a mirrored failure on the dispatching SDK PR reads as
+# "your change broke the connector" and sends a reviewer into the wrong diff.
+
+
+def test_cancelled_integration_blocks_but_reports_cancelled() -> None:
+    out = render("success", "cancelled", "success", "skipped", "skipped")
+    assert out["passed"] == "false", "an un-run test must never green the gate"
+    assert out["conclusion"] == "cancelled"
+    assert out["overall-status"] == "🚫 Cancelled — no verdict, re-run"
+    assert out["integration-status"] == "🚫 Cancelled — not run"
+
+
+def test_cancelled_unit_reports_cancelled() -> None:
+    out = render("cancelled", "skipped", "skipped", "skipped", "skipped")
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "cancelled"
+    assert out["unit-status"] == "🚫 Cancelled — not run"
+
+
+def test_cancelled_e2e_leg_reports_cancelled() -> None:
+    out = render("success", "success", "success", "success", "cancelled")
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "cancelled"
+    assert out["e2e-status"] == "🚫 Cancelled — not run"
+
+
+def test_a_real_failure_alongside_a_cancellation_is_still_failure() -> None:
+    # The discriminator is "did anything actually fail", not "was anything
+    # cancelled". A cancelled sibling must not launder a genuine failure into
+    # a benign "just re-run" verdict.
+    out = render("success", "failure", "success", "success", "cancelled")
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "failure"
+
+
+@pytest.mark.parametrize(
+    "kwargs,row",
+    [
+        ({"build_e2e_image": "cancelled"}, "🚫 e2e image build cancelled — not run"),
+        (
+            {"merge_e2e_image": "cancelled"},
+            "🚫 e2e image manifest merge cancelled — not run",
+        ),
+        ({"prepare_tenant": "cancelled"}, "🚫 Tenant install cancelled — not run"),
+    ],
+)
+def test_cancelled_install_path_jobs_report_cancelled(kwargs, row) -> None:
+    out = render(
+        unit="success",
+        integration="success",
+        detect_integration="success",
+        discover_e2e="success",
+        e2e="skipped",
+        **kwargs,
+    )
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "cancelled"
+    assert out["e2e-status"] == row
+
+
+@pytest.mark.parametrize(
+    "kwargs,row",
+    [
+        (
+            {"detect_merge_queue": "cancelled"},
+            "🚫 Merge-queue detection cancelled — not run",
+        ),
+        (
+            {"detect_integration": "cancelled"},
+            "🚫 Integration-suite detection cancelled — not run",
+        ),
+    ],
+)
+def test_cancelled_detection_jobs_report_cancelled(kwargs, row) -> None:
+    defaults = {
+        "unit": "success",
+        "integration": "skipped",
+        "detect_integration": "success",
+        "discover_e2e": "skipped",
+        "e2e": "skipped",
+    }
+    out = render(**{**defaults, **kwargs})
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "cancelled"
+    assert out["integration-status"] == row
+
+
+def test_cancelled_discovery_reports_cancelled() -> None:
+    out = render("success", "success", "success", "cancelled", "skipped")
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "cancelled"
+    assert out["e2e-status"] == "🚫 e2e discovery cancelled — not run"
+
+
+def test_the_matrix_skipped_anomaly_is_not_laundered_as_a_cancellation() -> None:
+    # This anomaly errors while every result sits in the OK set, so a naive
+    # "no failures ⇒ cancelled" rule would report it as "just re-run" and hide
+    # a genuine misconfiguration. cancelled_only requires an actual
+    # cancellation to be present.
+    assert not cancelled_only("success", "success", "success", "success", "skipped")
+    out = render("success", "success", "success", "success", "skipped")
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "failure"
+
+
+def test_cancelled_only_is_false_when_the_gate_passes() -> None:
+    # No cancellation present, nothing blocking — there is nothing to explain.
+    assert not cancelled_only("success", "success", "success", "success", "success")
+
+
+def test_a_cancellation_does_not_mask_the_matrix_skipped_anomaly() -> None:
+    # The anomaly error is raised by evaluate() independently of the raw job
+    # results, so a cancellation elsewhere does not make it go away. cancelled_only
+    # used to inspect raw results alone: a cancelled detection job coinciding with
+    # the anomaly (discovery green, matrix skipped, install path clean) returned
+    # True, and the gate spelled a genuine misconfiguration "just re-run".
+    assert not cancelled_only(
+        "success", "success", "success", "success", "skipped", "cancelled"
+    )
+    out = render("success", "success", "success", "success", "skipped", "cancelled")
+    assert out["passed"] == "false"
+    assert out["conclusion"] == "failure", (
+        "the anomaly is not cancellation-attributable, so its presence must "
+        "spell failure and surface the misconfiguration — never a benign re-run"
+    )
+    errors = evaluate(
+        "success", "success", "success", "success", "skipped", "cancelled"
+    )
+    assert any("matrix was skipped" in e for e in errors)
+
+
+def test_main_annotates_the_cancellation_guidance(capsys) -> None:
+    rc = main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "cancelled",
+            "--detect-integration",
+            "success",
+            "--discover-e2e",
+            "skipped",
+            "--e2e",
+            "skipped",
+        ]
+    )
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "conclusion=cancelled" in captured.out
+    assert "passed=false" in captured.out
+    # The per-job reason still fires; the guidance is additive, and follows it
+    # so the annotation list reads cause-then-verdict.
+    assert "integration tests did not succeed (result=cancelled)" in captured.err
+    assert "were cancelled, not failed" in captured.err
+    assert "Re-run rather than triage the diff." in captured.err
+
+
+def test_main_does_not_annotate_the_guidance_on_a_real_failure(capsys) -> None:
+    main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "failure",
+            "--detect-integration",
+            "success",
+            "--discover-e2e",
+            "skipped",
+            "--e2e",
+            "skipped",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert "conclusion=failure" in captured.out
+    assert "Re-run rather than triage" not in captured.err
+
+
+# --- tenant lease (FND-250) ------------------------------------------------
+
+
+def test_lease_tenant_skipped_is_a_pass() -> None:
+    # The default for every caller pinned at @main that has not wired the job,
+    # and the honest value when the install path is off.
+    assert evaluate("success", "skipped", "skipped", "skipped", "skipped") == []
+
+
+def test_lease_tenant_success_is_a_pass() -> None:
+    assert (
+        evaluate(
+            "success",
+            "success",
+            "success",
+            "success",
+            "success",
+            "success",
+            "success",
+            "success",
+            "success",
+            "success",
+        )
+        == []
+    )
+
+
+def test_lease_tenant_failure_fails_the_gate_by_name() -> None:
+    # Without this the failure surfaces only as the downstream "matrix skipped"
+    # anomaly, which reads as a workflow misconfiguration rather than "the tenant
+    # was busy".
+    errors = evaluate(
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "success",
+        "skipped",
+        "failure",
+    )
+    assert any("the tenant lease did not succeed (result=failure)" in e for e in errors)
+
+
+def test_lease_tenant_failure_suppresses_the_matrix_anomaly() -> None:
+    # One cause, one annotation: the lease failing IS why the matrix skipped.
+    errors = evaluate(
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "success",
+        "skipped",
+        "failure",
+    )
+    assert not any("matrix was skipped" in e for e in errors)
+
+
+def test_lease_tenant_row_says_the_tenant_was_busy() -> None:
+    # "Failed" here would send a reviewer into their own diff; the tenant was
+    # occupied, which is a re-run, not a fix.
+    row = render(
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "success",
+        "skipped",
+        "failure",
+    )["e2e-status"]
+    assert row == "⏳ Tenant busy — lease not acquired, re-run"
+
+
+def test_lease_tenant_cancelled_row_reads_as_cancelled() -> None:
+    row = render(
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "success",
+        "skipped",
+        "cancelled",
+    )["e2e-status"]
+    assert row == "🚫 Tenant lease cancelled — not run"
+
+
+def test_lease_tenant_cancelled_is_reported_as_cancelled_not_failure() -> None:
+    outputs = render(
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "success",
+        "skipped",
+        "cancelled",
+    )
+    assert outputs["passed"] == "false"
+    assert outputs["conclusion"] == "cancelled"
+
+
+def test_lease_tenant_failure_is_reported_as_failure() -> None:
+    # A lease TIMEOUT is a genuine job failure, not a cancellation: nothing was
+    # evicted, the run waited its full budget and gave up.
+    outputs = render(
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "success",
+        "skipped",
+        "failure",
+    )
+    assert outputs["passed"] == "false"
+    assert outputs["conclusion"] == "failure"
+
+
+def test_lease_tenant_row_yields_to_an_earlier_install_path_failure() -> None:
+    # Reported in pipeline order, so the row names the FIRST thing that broke —
+    # a failed image build explains the lease never running.
+    row = render(
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "skipped",
+        "skipped",
+        "failure",
+        "skipped",
+        "skipped",
+        "skipped",
+    )["e2e-status"]
+    assert row == "❌ e2e image build failed"
+
+
+def test_lease_tenant_precedes_the_install_in_the_reported_order() -> None:
+    # Both broken: the lease is reported, because it runs first and a tenant that
+    # was never leased is why the install did not happen.
+    row = render(
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "success",
+        "failure",
+        "failure",
+    )["e2e-status"]
+    assert row == "⏳ Tenant busy — lease not acquired, re-run"
+
+
+def test_main_accepts_the_lease_tenant_flag(capsys) -> None:
+    main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "skipped",
+            "--detect-integration",
+            "skipped",
+            "--discover-e2e",
+            "success",
+            "--build-e2e-image",
+            "success",
+            "--merge-e2e-image",
+            "success",
+            "--lease-tenant",
+            "failure",
+            "--prepare-tenant",
+            "skipped",
+            "--e2e",
+            "skipped",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert "passed=false" in captured.out
+    assert "the tenant lease did not succeed" in captured.err
+
+
+def test_lease_tenant_flag_defaults_to_skipped(capsys) -> None:
+    # Cross-repo compatibility: a caller pinned at @main that has not added the
+    # job yet must keep passing.
+    main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "skipped",
+            "--detect-integration",
+            "skipped",
+            "--discover-e2e",
+            "skipped",
+            "--e2e",
+            "skipped",
+        ]
+    )
+    assert "passed=true" in capsys.readouterr().out
+
+
+def test_a_cancelled_lease_that_skipped_the_matrix_is_still_a_cancellation() -> None:
+    """Regression: the matrix-skipped anomaly guard must see the lease result.
+
+    `cancelled_only` excludes the "discovery succeeded but the matrix was
+    skipped" anomaly, because that anomaly fires on results that all sit in the
+    OK set and must never be relabelled "just re-run". But a CANCELLED lease is
+    exactly why the matrix skipped, and it is cancellation-attributable — so if
+    the guard computes the install path without the lease result, it sees three
+    OK jobs, concludes "anomaly", and reports a cancelled lease as `failure`:
+    the wrong-diff misdirection this whole area exists to remove.
+    """
+    outputs = render(
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "success",
+        "skipped",
+        "cancelled",
+    )
+    assert outputs["conclusion"] == "cancelled"
+    assert outputs["passed"] == "false"
+
+
+def test_the_matrix_skipped_anomaly_still_reads_as_failure_with_a_clean_lease() -> None:
+    # The other side of the guard: nothing cancelled anywhere, so a skipped
+    # matrix is a genuine misconfiguration and must not say "re-run".
+    outputs = render(
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "success",
+        "success",
+        "success",
+    )
+    assert outputs["conclusion"] == "failure"
+    assert outputs["passed"] == "false"

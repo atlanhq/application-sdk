@@ -209,7 +209,7 @@ def discover(root: Path) -> list[Path]:
             continue
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
         if _ENV_VAR in text and _is_compose_file(text):
             paths.append(path)
@@ -220,7 +220,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
     """Scan a single compose-overlay file for T016 findings."""
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
     try:
         rel = path.relative_to(root)

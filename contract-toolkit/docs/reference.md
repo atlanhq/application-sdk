@@ -1172,6 +1172,7 @@ class AdvancedJDBCUrlGroup {
   urlAddonBefore: String                     // Prefix on the URL text input
   connectByDefault: "host"|"url" = "host"    // Initial radio value
   urlLabel: String = "SQLAlchemy Connection URL"
+  isDelimitedBySemicolons: Boolean = false   // For `;`-delimited JDBC URLs (e.g. Hive `jdbc:hive2://host:port/db;k=v`); emits `ui.isDelimitedBySemicolons` on the base block + every condition. Omitted (not `false`) when unset.
   urlHelp: String?
   urlPlaceholder: String?
   hostField: FieldSpec                       // Shared host row (FieldSpec re-used across auth-types)
@@ -1584,16 +1585,55 @@ time instead of at AE parse time.
 
 `dependsOn` emits two shapes based on list length:
 
-- 1 entry → `"depends_on": {"node_id": "..."}` (fires on the parent's SUCCESS *or* FAILURE)
+- 1 entry → `"depends_on": {"node_id": "...", "tag": "success"}`
+  (node is scheduled only when the parent reaches SUCCESS)
 - 2+ entries → `"depends_on": {"and_conditions": [{"node_id": "...", "tag": "success"}, ...]}`
   (strict AND-fan-in: node is scheduled only when every listed parent reaches SUCCESS)
 
-The `tag: "success"` in the multi-parent shape is honored by AE's condition evaluator
-(`automation_engine/workflows/graph.py`), which gates on
-`WorkflowRunNodeStatus.SUCCESS`. Because single-parent emission omits `tag`, adding a
-second entry to an existing `dependsOn` is not a pure additive change — it switches the
-node from "fire on any completion" to "fire only on all-success". Call this out in the
-app PR that introduces the second entry. See `examples/fanin/` for a minimal example.
+Both shapes carry `tag: "success"`. AE's condition evaluator
+(`automation_engine/workflows/graph.py`) honors it by gating on
+`WorkflowRunNodeStatus.SUCCESS`, so a failed or skipped parent leaves the dependent
+node Skipped rather than scheduling it. Adding an entry to an existing `dependsOn` is
+therefore purely additive: it widens the set of parents that must succeed without
+changing the gate itself. See `examples/fanin/` for a minimal example.
+
+**Opting out of the success gate (ordering-only dependencies).** `dependsOn` is
+deliberately fail-fast, because that is what almost every connector pipeline wants. When
+a node must run purely for *sequencing* — after the parent settles, whatever its outcome
+— omit the tag and spell the dependency out with `dependsOnCondition`:
+
+```pkl
+// Single parent, ordering only → "depends_on": {"node_id": "extract"}
+dependsOnCondition = new DependencyCondition { nodeId = "extract" }
+
+// Several parents, ordering only
+dependsOnCondition = new DependencyCondition {
+  andConditions {
+    new DependencyCondition { nodeId = "extract" }
+    new DependencyCondition { nodeId = "publish" }
+  }
+}
+
+// Mixed: extract must succeed, publish only has to settle
+dependsOnCondition = new DependencyCondition {
+  andConditions {
+    new DependencyCondition { nodeId = "extract"; tag = "success" }
+    new DependencyCondition { nodeId = "publish" }
+  }
+}
+```
+
+An untagged node condition is ready once that parent's status is SUCCESS *or* FAILURE —
+the pre-fix `dependsOn` behavior, now opt-in per dependency instead of implicit. Two
+caveats:
+
+- It is failure-tolerant but **not** skip-tolerant. A *skipped* parent has neither status,
+  so the dependent node is skipped too and skips cascade down the branch. For a node that
+  must run even when upstream never executed, use the run-level `workflow_complete` tag
+  (see `NotificationNode`) rather than an untagged node condition.
+- On pre-built nodes that ship a default `dependsOn` (`PublishNode`,
+  `QueryIntelligenceNode`, `LineageNode`), set `dependsOn = null` first — the two
+  properties are mutually exclusive and `pkl eval` rejects setting both.
 
 Pkl listing amendment matters for pre-built nodes. Nodes such as `PublishNode`,
 `QueryIntelligenceNode`, and `LineageNode` define defaults like
@@ -2790,7 +2830,7 @@ behavior.
           "connection_entity": "{{connection}}"
         }
       },
-      "depends_on": { "node_id": "extract" }
+      "depends_on": { "node_id": "extract", "tag": "success" }
     }
   }
 }

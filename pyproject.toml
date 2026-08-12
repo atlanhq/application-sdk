@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.27.1"
+version = "3.27.2"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -70,9 +70,24 @@ sql = [
     "duckdb>=1.1.3,<1.6.0",
     "duckdb-engine>=0.17.0,<0.18.0",
 ]
-# Daft transformer engine — deprecated no-op alias; will be removed next major.
-# Install [sql] or [incremental] instead; daft is no longer used.
-daft = []
+# Deprecated alias for [sql] — removed in v4.0.0. Install [sql] (or
+# [incremental]) instead; the daft transformer engine itself is gone.
+#
+# This aliases rather than resolving empty. Before v3.22 the extra pulled duckdb
+# transitively; emptying it turned every app pinned to
+# atlan-application-sdk[daft] into a latent "duckdb is required for
+# DuckDBConnectionManager" ImportError on the first real transform — imports
+# still succeed and mocked unit tests still pass, so the break only surfaces
+# end-to-end, which is how it reached main on a connector after an automated
+# upgrade crossed the 3.22 line. An emptied compat extra is not a shim; it is a
+# silent removal wearing a shim's name. Policy here is compat shim + named
+# removal version, and a true alias satisfies it: every affected app is fixed by
+# a version bump with no per-repo remediation.
+#
+# There is no runtime deprecation signal available at this layer — an extra is
+# resolved by the installer, not imported — so the removal version is carried
+# here, in docs/upgrade-guide-v3.md, and by the D010 conformance rule.
+daft = ["atlan-application-sdk[sql]"]
 # Disk-backed RocksDB storage utilities (SpillableDict, rocksdb_utils).
 # Standalone extra — non-incremental connectors that want disk-backed
 # scratch state pull this in directly without needing the full
@@ -152,6 +167,14 @@ test = [
     "hypothesis>=6.114.0,<7.0.0",
     "trustme>=1.2.1,<2.0.0",
     "pyjwt[crypto]>=2.12.0",
+    # Test-only. The SDK ships psycopg3; psycopg2 reaches production through
+    # connector apps. It is here so tests/unit/clients/test_sql_typecasters.py
+    # can pin the psycopg2 facts the tolerant-decoder fix depends on (that
+    # `extensions.encodings` is the dict the C layer reads, and that UNICODE
+    # resolves to a utf-8 codec) against the real driver rather than a mock —
+    # a driver upgrade that moves that seam must fail loudly in CI. See
+    # CONAT-767. Never add this to [project.dependencies].
+    "psycopg2-binary>=2.9.12,<3.0.0",
 ]
 examples = [
     "snowflake-sqlalchemy>=1.7.0,<2.0.0",

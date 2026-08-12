@@ -165,7 +165,12 @@ jobs:
       - uses: "./.github/actions/trivy"
         if: needs.changes.outputs.scan == 'true'
         with:
+          # Reporting and enforcement are separate switches on purpose — see the
+          # action's input docs. Both are passed explicitly so that a future edit
+          # to one is visibly not an edit to the other. The action itself skips
+          # the comments on merge_group; enforcement runs on every event.
           add-report-comment-to-pr: "true"
+          fail-on-findings: "true"
 
   trivy-container:
     name: Trivy Container Scan
@@ -415,13 +420,22 @@ jobs:
   # Connector tests: dispatches tests.yaml to each connector repo.
   # Triggers:
   #   merge_group — always runs on code-changing merge queue entries (the
-  #     primary gate). Each entry has a unique SHA so runs are parallel.
+  #     primary gate). Each entry has a unique SHA, but note the SDK's SHA is
+  #     NOT what scopes the connector-side concurrency groups: on the dispatch
+  #     path github.ref over there is the connector's own refs/heads/main. The
+  #     unit/integration groups in tests-reusable are therefore run-unique off
+  #     the PR path — see the long note on that job. Don't reintroduce a
+  #     ref-keyed group for anything a merge-queue batch can reach.
   #     build-sdk-base-image is skipped here, so base_image_ref is omitted
   #     and connectors build FROM the released base.
   #   pull_request + 'e2e' label — opt-in during PR development; also used
-  #     to release-gate the release PR before merging. The connector-side
-  #     e2e job serialises itself via its own concurrency group, so
-  #     simultaneous e2e-labelled PRs queue safely on the connector side.
+  #     to release-gate the release PR before merging. Tenant access on the
+  #     connector side is serialised by the (app, cloud) lease in
+  #     tests-reusable's lease-tenant job, which is a real queue: concurrent
+  #     e2e-labelled PRs wait their turn instead of the third one being
+  #     silently evicted as `cancelled` (FND-218 / FND-250). No cap on how
+  #     many can be in flight — a run that waits longer than the lease budget
+  #     fails saying the tenant was busy, naming the run that holds it.
   #     On this path base_image_ref is the freshly-built PR base image, so
   #     the connector is rebuilt on top of the SDK PR's runtime image.
   connector-tests:
@@ -512,8 +526,9 @@ jobs:
           # distinct_id is passed explicitly: return-dispatch v4 no longer
           # injects it (see the e2e-apps workflow-inputs description). Here it
           # is only a human breadcrumb correlating the connector run back to
-          # this SDK PR — tests-reusable keys its concurrency on github.ref and
-          # its e2e legs are cancel-in-progress:false, so nothing depends on it.
+          # this SDK PR — tests-reusable's unit/integration groups are run-unique
+          # off the PR path and its e2e legs are cancel-in-progress:false, so
+          # nothing depends on it.
           # Set to the same SHA as check-sha below so the two line up.
           workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}","distinct_id":"{1}"}}', github.sha, github.sha) || format('{{"application_sdk_ref":"{0}","run_e2e":"true","base_image_ref":"{1}","distinct_id":"{2}"}}', github.event.pull_request.head.sha, needs.merge-sdk-base-image.outputs.image, github.event.pull_request.head.sha) }}
           wait-mode: callback

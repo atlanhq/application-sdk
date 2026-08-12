@@ -71,6 +71,17 @@ class AtlanRuleProperties(BaseModel):
     since: str | None = None
     """Conformance suite version when this rule was introduced, e.g. ``"0.2.0"``."""
 
+    until: str | None = None
+    """Conformance suite version at which this rule retires — the first version
+    that must no longer ship it.  ``None`` means indefinite enforcement.  A
+    report consumer can use it to distinguish a permanent invariant from an
+    interim net with a scheduled end."""
+
+    superseded_by: str | None = None
+    """What makes this rule unnecessary: a rule ID (``"P042"``) or an
+    ``sdk>=X.Y.Z`` marker naming the SDK fix that removes the condition.
+    Present without ``until`` while the retirement version is still undecided."""
+
     rationale: str | None = None
     """Why this rule exists — what risk it avoids, what loop it closes, or what
     value it adds.  Surfaced as ``atlan/rationale`` in the ``properties`` bag."""
@@ -94,6 +105,10 @@ class AtlanRuleProperties(BaseModel):
             out["atlan/orthogonalGate"] = self.orthogonal_gate
         if self.since is not None:
             out["atlan/since"] = self.since
+        if self.until is not None:
+            out["atlan/until"] = self.until
+        if self.superseded_by is not None:
+            out["atlan/supersededBy"] = self.superseded_by
         if self.rationale is not None:
             out["atlan/rationale"] = self.rationale
         if self.forces_external_influence:
@@ -111,6 +126,8 @@ class AtlanRuleProperties(BaseModel):
             autofixable=bool(props.get("atlan/autofixable", False)),
             orthogonal_gate=props.get("atlan/orthogonalGate"),
             since=props.get("atlan/since"),
+            until=props.get("atlan/until"),
+            superseded_by=props.get("atlan/supersededBy"),
             rationale=props.get("atlan/rationale"),
             forces_external_influence=bool(
                 props.get("atlan/forcesExternalInfluence", False)

@@ -141,7 +141,15 @@ selected upload widget plus `ui.accept`, `ui.fileMetadata`, and opt-in
 the generated default is still emitted, so no form input is required.
 For `credentialUrlGroup` forms, the visible auth panes live inside
 `jdbcUrl.properties`; root-level auth panes are hidden merge targets for agent
-credential overrides.
+credential overrides. For sources whose JDBC URL separates its parameters with
+`;` rather than the `?a=&b=` query-string form (Hive, for example, connects
+with `jdbc:hive2://host:port/db;k=v;k2=v2`), set
+`isDelimitedBySemicolons = true` on the `credentialUrlGroup`. The generated
+config then emits `ui.isDelimitedBySemicolons` on the base `jdbcUrl.ui` block
+and every per-mode/per-auth condition, and the frontend's
+`AdvancedJDBCUrlGroup.vue` rewrites the separators before parsing the URL. The
+flag is opt-in, defaults to `false`, and is omitted (not emitted as `false`)
+when unset, so existing generated output is unchanged.
 
 ### Manifest (`app/generated/manifest.json`)
 

@@ -68,6 +68,28 @@ def _reset_dapr_sidecar_cold_start_gate(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _reset_fetched_binding_secrets_registry():
+    """Reset the startup-fetched binding-secrets registry after every unit test.
+
+    ``application_sdk.storage.binding._FETCHED_BINDING_SECRETS`` is a
+    process-wide dict populated by ``_create_infrastructure`` via
+    ``set_fetched_binding_secrets``.  A test that exercises the startup wiring
+    with the real setter (e.g.
+    ``test_main_binding_secrets.py::test_infrastructure_passes_the_fetched_secrets_to_the_resolver``)
+    leaves entries behind, and a later test that expects env-only resolution
+    then sees the leaked secret map and fails — order-dependent, green in
+    isolation.  Same hazard class as ``_reset_dapr_sidecar_cold_start_gate``
+    above; same fix shape.
+    """
+    yield
+    from application_sdk.storage.binding import (
+        _reset_fetched_binding_secrets,
+    )
+
+    _reset_fetched_binding_secrets()
+
+
 @pytest.fixture
 def fast_dapr_cold_start_retry(monkeypatch):
     """Zero out cold-start retry backoff so a retry-then-succeed test runs

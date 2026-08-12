@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.27.2 (August 12, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.27.1...v3.27.2
+
+### Bug Fixes
+
+- move psycopg2 tolerant decoding to the seam psycopg2 actually uses (#3008) (by @mothership-ai[bot] in [561ad5f](https://github.com/atlanhq/application-sdk/commit/561ad5f))
+- make current-state/diff upload concurrency configurable (#3123) (by @zaman-atlan in [ce6ac80](https://github.com/atlanhq/application-sdk/commit/ce6ac80))
+- parse JSON-string extra when flattening credentials (#3137) (by @praveenkmr in [3497c93](https://github.com/atlanhq/application-sdk/commit/3497c93))
+- resolve binding secretKeyRef via auth.secretStore (#3105) (by @fyzanshaik-atlan in [2fe811a](https://github.com/atlanhq/application-sdk/commit/2fe811a))
+- classify prime probe failures from the live exception (CNCT-197, CNCT-198) (#3118) (by @fyzanshaik-atlan in [e034498](https://github.com/atlanhq/application-sdk/commit/e034498))
+
+
 ## v3.27.1 (August 11, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.27.0...v3.27.1

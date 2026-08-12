@@ -30,8 +30,23 @@ _TRACEBACK_MAX_LEN = 8000
 # secret redactor.
 _URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNORECASE)
 # Matches secret query params: api_key=value → api_key=***
+# ``pwd`` covers ODBC/DSN keyword syntax (``UID=sa;PWD=…``), which no other
+# keyword here matches — ODBC connectors do not use ``password=``.
+# The value alternation tries a braced value first: ODBC quotes values that
+# contain the ``;`` separator as ``PWD={secret;with;semicolons}``, and the
+# bare-value class ``[^\s&,;#]+`` would stop at the first ``;`` inside the
+# braces and leak the password tail. ``\{[^}]*\}`` consumes the braces as a
+# unit so only the closing brace survives; an *escaped* closing brace
+# (``}}`` per the ODBC spec) still ends the match at the first ``}`` — the
+# residue is then a brace fragment, not usable secret material. The bare
+# class still stops at ``;``, so the following key=value pair survives.
+# ``uid`` is deliberately absent. It is a user name, not a credential, and
+# dropping it would remove "which account failed to log in" from every auth
+# failure. It also has no word boundary in this alternation, so it would match
+# the tail of ``run_guid=`` and ``correlation_uuid=`` — redacting the exact
+# correlation IDs an on-call needs.
 _SECRET_PARAM_RE = re.compile(
-    r"(?i)((?:api_key|access_token|auth_token|password|passwd|secret|credential|private_key)=)[^\s&,;#]+",
+    r"(?i)((?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential|private_key)=)(?:\{[^}]*\}|[^\s&,;#]+)",
 )
 
 

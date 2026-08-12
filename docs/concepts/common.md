@@ -180,6 +180,27 @@ Tenant identity is intentionally absent from `FailureDetails`. Per-tenant attrib
 the consumer's responsibility (e.g., the Automation Engine attaches tenant from its own
 session at ingest time).
 
+#### Evidence keys may not be secret-named
+
+`FailureDetails` refuses evidence keys that advertise a secret -- exact names
+(`password`, `token`, `secret`, `api_key`, `private_key`, `authorization`, `auth_header`,
+`cookie`) and compound suffixes (`*_password`, `*_token`, `*_secret`, so `client_secret`
+and `db_password` are rejected while `object_key` and `cache_key` pass). Construction
+raises `ValidationError`, so a leaf that declares such a dataclass field cannot serialise
+at all:
+
+```python
+from application_sdk.errors.wire import secret_named_evidence_keys
+
+# Ask before you build — the rejection names no keys you can act on.
+bad = secret_named_evidence_keys({"host": "db.internal", "api_key": "…"})
+# frozenset({'api_key'})
+```
+
+The denylist is a name check, not a value check: it cannot see a credential sitting in an
+innocently-named key, or nested inside a dict or list value. Redact values yourself with
+`redact_secrets` before attaching them as evidence.
+
 ### Legacy error-code namespaces (backward-compat only)
 
 - **`application_sdk.common.error_codes`** — `ATLAN-{COMPONENT}-{HTTP_CODE}-{SEQ}` HTTP-style codes. Do not use in new code.

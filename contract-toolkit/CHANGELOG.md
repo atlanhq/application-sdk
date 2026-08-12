@@ -6,6 +6,18 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.21.1] - 2026-08-12
+
+### Bug fixes
+
+- gate single-parent dependsOn on parent success (FND-261) (#3140) ([7485c3b](https://github.com/atlanhq/application-sdk/commit/7485c3b))
+
+## [0.21.0] - 2026-08-11
+
+### Features
+
+- emit ui.isDelimitedBySemicolons from AdvancedJDBCUrlGroup (#3125) ([ef94732](https://github.com/atlanhq/application-sdk/commit/ef94732))
+
 ## [0.20.0] - 2026-08-07
 
 ### Features

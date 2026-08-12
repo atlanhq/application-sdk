@@ -3,7 +3,8 @@ kind: responsibility
 name: deprecation-area
 description: >
   Maintains the current B-series violation-set and drives remediation of
-  deprecation findings.  B001 (app: stop consuming a deprecated SDK symbol) and
+  deprecation findings.  B001 (app: stop consuming a deprecated SDK symbol),
+  B007 (app: daft-only DataFrame APIs dead on the daft-less runtime), and
   B002 (sdk: fix a malformed deprecation notice) are guided fixes; B003 (overdue
   removal) and B004 (unmarked claim) are detect-only and route to residue.
 ---
@@ -24,8 +25,9 @@ empty (warnings do not fail the gate).  In **strict** mode the fingerprint-set
 includes unsuppressed WARNING results, which is where B-series remediation
 actually runs.
 
-The active scope decides which rules can appear: on a consumer app only B001
-(scope `app`) surfaces; on the SDK only B002/B003/B004 (scope `sdk`).  The runner
+The active scope decides which rules can appear: on a consumer app only
+B001/B007 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
+The runner
 auto-detects scope, so each repo only ever sees its own half.
 
 This facet's fingerprint moves when any B-series finding is resolved (fixed or
@@ -73,9 +75,13 @@ with `recheck-narrowest` + the test orthogonal gate, then routes to residue for
 human audit):
 
 - **B001 DeprecatedSdkSymbolUsage** (app source) — the app imports, subclasses,
-  or calls a symbol the SDK has deprecated.  Apply the migration named in the
-  finding message — **never a blind name swap**: the replacement usually changes
-  the call shape (signature, return type, import path).  Examples:
+  calls, or reads a symbol the SDK has deprecated.  Apply the migration named in
+  the finding message — **never a blind name swap**: the replacement usually
+  changes the call shape (signature, return type, import path).  Examples:
+  - `DataframeType.daft` → `DataframeType.pandas` — a deprecated **enum member**
+    (removal in v4.0.0), marked via the SDK's `__deprecated_members__`
+    convention and carried in the generated manifest like any other symbol.
+    This one *is* a safe swap: daft already routes to the pandas/pyarrow path.
   - `upload_to_atlan(input)` → `App.upload(UploadInput(local_path=...,
     tier=StorageTier.RETAINED))` — different argument and return types; read the
     call site and adapt both.
@@ -153,6 +159,27 @@ human audit):
   Because the migration is non-trivial, `classification` is always `"judgment"`.
   The orthogonal test gate is what makes applying it safe: if the migration
   breaks behaviour, the gate reverts and routes to residue.
+
+- **B007 DaftOnlyDataframeApiUsage** (app source) — a daft-only DataFrame API is
+  used on frames the SDK hands the app; the daft-less SDK runtime returns
+  **pandas**, so the call raises `AttributeError` at runtime while imports and
+  mocked tests stay green (latent-on-main breakage found in the fleet SDR
+  sweep).  Apply the pandas migration named in the finding message:
+  - `frame.count_rows()` → `len(frame)`;
+  - `frame.to_pylist()` → `frame.to_dict("records")` (pyarrow-Table receivers
+    are already exempted by the checker — `pa.Table.to_pylist()` is real);
+  - `frame.names` → `frame.columns`.
+
+  `DataframeType.daft` is **not** a B007 finding — it is an SDK symbol and
+  arrives as **B001** from the generated deprecation manifest.  The migration
+  is the same (`DataframeType.pandas`), but read it off the B001 finding, whose
+  message carries the SDK's own notice text.
+
+  Do NOT fix these one CI cycle at a time: run the app's transforms locally
+  against synthetic raw data and migrate every call in one pass.  Matching is
+  attribute-name-anchored, so when the receiver is genuinely not an SDK reader
+  frame propose a `# conformance: ignore[B007] <reason>` suppression instead.
+  `classification` is always `"judgment"`.
 
 - **B002 MalformedDeprecationNotice** (SDK source) — the notice is missing a
   migration target and/or a removal version.  Edit the notice string in place to

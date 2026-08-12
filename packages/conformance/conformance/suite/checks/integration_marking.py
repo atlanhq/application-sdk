@@ -142,7 +142,7 @@ def accepted_markers_for_repo(root: Path) -> frozenset[str]:
     pyproject = root / "pyproject.toml"
     try:
         data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
         return _DEFAULT_ACCEPTED_MARKERS
     addopts = (
         data.get("tool", {}).get("pytest", {}).get("ini_options", {}).get("addopts")
@@ -325,7 +325,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
     """
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
     try:
         rel = path.relative_to(root)
