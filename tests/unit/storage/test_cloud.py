@@ -251,6 +251,73 @@ class TestCloudStoreOps:
         data = await store.get_bytes("test.txt")
         assert data == b"hello"
 
+    async def test_upload_writes_no_sidecar(self, tmp_path):
+        """Routing through ``upload_file`` must not drag the sidecar protocol
+        onto an external bucket: the customer's store gains only the object
+        they asked for."""
+        store = self._make_store(tmp_path)
+        local = tmp_path / "payload.bin"
+        local.write_bytes(b"0123456789")
+        await store.upload(local, "artifacts/payload.bin")
+        assert await store.list(prefix="artifacts") == ["artifacts/payload.bin"]
+
+    async def test_upload_detects_local_truncation_mid_read(self, tmp_path):
+        """A file truncated under the reader leaves a prefix of the intended
+        artifact in the customer's bucket — that must not report success
+        (FND-306). This is the guarantee routing through the shared primitive
+        buys; it fails if ``upload`` ever streams directly again."""
+        from application_sdk.storage.errors import StorageIntegrityError
+
+        store = self._make_store(tmp_path)
+        local = tmp_path / "big.bin"
+        local.write_bytes(b"x" * 4096)
+
+        real_open = Path.open
+
+        def truncating_open(self, *args, **kwargs):
+            handle = real_open(self, *args, **kwargs)
+            with open(self, "r+b") as trunc:
+                trunc.truncate(16)
+            return handle
+
+        with (
+            patch.object(Path, "open", truncating_open),
+            pytest.raises(StorageIntegrityError) as exc,
+        ):
+            await store.upload(local, "artifacts/big.bin")
+        assert exc.value.check == "local_size"
+        assert exc.value.effective_retryable is False
+
+    async def test_upload_detects_object_dropped_by_the_store(self, tmp_path):
+        """A backend that reports success but persists nothing must not pass
+        silently on an external bucket either."""
+        store = self._make_store(tmp_path)
+        local = tmp_path / "payload.bin"
+        local.write_bytes(b"0123456789")
+
+        with (
+            patch(
+                "application_sdk.storage.ops.get_file_meta",
+                new=_async_return(None),
+            ),
+            pytest.raises(StorageError, match="absent from the store"),
+        ):
+            await store.upload(local, "artifacts/payload.bin")
+
+    async def test_upload_detects_short_readback(self, tmp_path):
+        store = self._make_store(tmp_path)
+        local = tmp_path / "payload.bin"
+        local.write_bytes(b"0123456789")
+
+        with (
+            patch(
+                "application_sdk.storage.ops.get_file_meta",
+                new=_async_return((4, "etag")),
+            ),
+            pytest.raises(StorageError, match="Incomplete upload"),
+        ):
+            await store.upload(local, "artifacts/payload.bin")
+
     async def test_list_empty_prefix(self, tmp_path):
         store = self._make_store(tmp_path)
         keys = await store.list(prefix="nothing")

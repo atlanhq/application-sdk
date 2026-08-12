@@ -360,6 +360,19 @@ class TestUploadValidation:
             is None
         )
 
+    async def test_sidecar_write_failure_does_not_fail_the_upload(self, store) -> None:
+        """The object itself uploaded fine; it just cannot be verified later.
+
+        Losing verification must not also lose the artifact — a store that
+        accepts objects but rejects the sidecar (a narrower write policy, a
+        transient failure) would otherwise turn every upload into a hard error.
+        """
+        with patch(
+            "application_sdk.storage.ops.obstore.put_async",
+            side_effect=RuntimeError("sidecar denied"),
+        ):
+            await integrity.write_digest_sidecar(store, "w/ok.json", "abc123")
+
 
 def _async_return(value):
     async def _inner(*_args, **_kwargs):

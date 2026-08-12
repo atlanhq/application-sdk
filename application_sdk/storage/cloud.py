@@ -394,12 +394,24 @@ class CloudStore:
         participate in the SDK sidecar protocol (mirrors the download path's
         ``sidecar_present=False``).
 
+        Transport policy is the primitive's, not this class's: that includes the
+        deployment part-size override (``ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES``,
+        DISTR-899), which now reaches external buckets too. The default is
+        unchanged at 8 MiB, so only a deployment that has explicitly tuned the
+        part size sees a difference — and a deployment that had to tune it for
+        its egress path almost certainly wants it applied uniformly.
+
         Args:
             local_path: Path to the local file.
             key: Destination object key.
 
         Returns:
-            Number of bytes uploaded.
+            Size of the local file when the upload began. The truncation guard
+            makes that the exact byte count in every case but one: a file being
+            appended to concurrently streams to EOF, so *more* bytes may reach
+            the store than are reported here. ``upload_file`` owns the true
+            count and does not surface it; no caller needs the exact figure, so
+            this does not spend a second HEAD to recover it.
         """
         path = Path(local_path)
         try:
