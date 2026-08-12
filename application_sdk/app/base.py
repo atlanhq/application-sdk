@@ -11,6 +11,7 @@ import threading
 import warnings
 from abc import ABC
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -948,6 +949,39 @@ class App(ABC):
                 "run_in_thread() can only be called inside @task methods."
             )
         return await self._task_context.run_in_thread(func, *args, **kwargs)
+
+    def holding_progress(
+        self, label: str, *, timeout: float | None
+    ) -> AbstractAsyncContextManager[None]:
+        """Vouch for one opaque operation for as long as you would let it run.
+
+        Pauses the stall watchdog (ADR-0018) for a call the SDK cannot see into,
+        and records the completed call as progress on exit::
+
+            async with self.holding_progress("snapshot metadata query", timeout=1800):
+                rows = await long_single_query(...)
+
+        Only available in @task methods — outside one there is no attempt to
+        vouch for, so a hold there would claim coverage it cannot provide.
+
+        Args:
+            label: The call site being vouched for. Must identify a *site*,
+                never a query, key, credential or customer value.
+            timeout: How long you would let this one operation run before you
+                would rather it failed — not a prediction of its duration.
+                Keyword-only and required; ``None`` declares an unbounded hold.
+
+        Returns:
+            An async context manager. Use it with ``async with``.
+
+        Raises:
+            AppContextError: If called outside a @task method.
+        """
+        if self._task_context is None:
+            raise AppContextError(
+                "holding_progress() can only be called inside @task methods."
+            )
+        return self._task_context.holding_progress(label, timeout=timeout)
 
     # =========================================================================
     # State accessors

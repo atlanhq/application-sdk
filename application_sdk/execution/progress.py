@@ -22,7 +22,9 @@ Two signals feed it (see ADR-0018 → *Feeding the tracker*):
   query, one slow API call, a blocking call offloaded through
   ``run_in_thread``). The SDK never invents the allowance; a human declares it
   at the one call site that knows, or declares nothing and gets an unbounded
-  hold that the duration backstop owns.
+  hold that the duration backstop owns. App code does not pair these two calls
+  by hand — :func:`holding_progress` is the public front door, and it is the
+  one piece of ADR-0018 an app author is expected to type.
 
 Both signals are produced deep inside code that has no reference to the
 tracker — the SDK's transfer loops, a blocking call offloaded through
@@ -37,9 +39,9 @@ The watchdog that consumes the tracker lives in
 of the three :class:`ProgressWatchdogMode` states. It is handed the tracker by
 injection rather than reading the ContextVar, so it stays unit-testable without
 an activity. The framework hooks (FND-288), the ``run_in_thread`` auto-holds
-(FND-290), the public ``holding_progress()`` context manager (FND-291) and the
-warn-mode telemetry that consumes :class:`ClosedHold` (FND-292) are separate
-pieces built on this one.
+(FND-290) and the warn-mode telemetry that consumes :class:`ClosedHold`
+(FND-292) are separate pieces built on this one; :func:`holding_progress`
+(FND-291) lives here, next to the tracker whose holds it opens.
 """
 
 from __future__ import annotations
@@ -47,8 +49,8 @@ from __future__ import annotations
 import itertools
 import threading
 import time
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 
@@ -475,3 +477,92 @@ def bind_progress_tracker(tracker: ProgressTracker) -> Iterator[ProgressTracker]
         yield tracker
     finally:
         _progress_tracker.reset(token)
+
+
+@asynccontextmanager
+async def holding_progress(label: str, *, timeout: float | None) -> AsyncIterator[None]:
+    """Vouch for one opaque operation for as long as you would let it run.
+
+    The explicit half of ADR-0018, and the only part of it an app author types.
+    One context manager covers both shapes of opaque work — an ``await`` against
+    the connector's own async client, and a blocking call offloaded through
+    ``run_in_thread``:
+
+    .. code-block:: python
+
+        # async: the connector's own client, which the SDK cannot see into
+        async with holding_progress("snapshot metadata query", timeout=1800):
+            rows = await long_single_query(...)
+
+        # blocking: the same wrapper around the offload
+        async with holding_progress("full table scan", timeout=7200):
+            rows = await run_in_thread(cursor.execute, sql)
+
+    Inside an ``App`` subclass, reach it as ``self.holding_progress(...)`` or
+    ``self.task_context.holding_progress(...)`` — the same two receivers as
+    ``run_in_thread``. Import this function directly for app code that sits
+    outside the app class.
+
+    Inside the block the stall watchdog is paused for this attempt; on exit the
+    completed operation is recorded as progress under ``label``. Past the
+    declared allowance the hold **lapses**: the watchdog resumes from the
+    deadline and the stall fires ``max_no_progress_seconds`` later, so the
+    effective kill time for a wedged call is ``timeout + budget`` rather than the
+    duration backstop's 24h.
+
+    **Expect to need this in almost every connector.** Blocking calls are
+    auto-held because ``run_in_thread`` is a mandatory seam, but async source
+    calls have no equivalent SDK-owned seam — a connector talks to its source
+    with its *own* async client (async SQLAlchemy, ``httpx.AsyncClient``, a
+    vendor SDK), and the SDK's internal SQL/HTTP clients are not on that path.
+    Interleaved streaming reads (fetch a page, write a batch, repeat) are
+    already covered by the write side and need no hold; the residual this exists
+    for is the genuinely opaque *single* call — one large metadata query, one
+    slow list/export that returns everything at once. That is a standard part of
+    writing a long-running async task, not a rare escape hatch.
+
+    Args:
+        label: The call site being vouched for, e.g.
+            ``"snapshot metadata query"``. Named in the stall log and in the
+            warn-mode hold report, so it must identify a *site* — never
+            interpolate a query, a key, a credential or a customer value into
+            it.
+        timeout: How long you would let this one operation run before you would
+            rather it failed — **not** a prediction of how long it takes. That
+            question is answerable here because it is a property of one
+            operation against one resource, rather than of a tenant's data
+            volume. Keyword-only and required: the SDK never derives or defaults
+            this number, so declaring nothing is spelled ``timeout=None``, which
+            makes the hold unbounded and hands the whole bound to the duration
+            backstop — an accepted residual, and one warn mode reports rather
+            than hides.
+
+            Err generous. The error is asymmetric: too generous only delays
+            detection toward the backstop, while too tight kills a healthy run —
+            and because stall kills retry, a too-tight allowance burns the same
+            wasted work up to three times. Use warn mode's observed p99 for the
+            site plus headroom rather than a number invented at the desk.
+
+    Yields:
+        ``None`` — the block's value is the vouch, not an object.
+
+    Note:
+        Outside an activity (a local run, a unit test, a script) this is inert:
+        there is no attempt to vouch for, so the hold is recorded nowhere and
+        nothing observes it.
+
+        The hold is released in a ``finally``, so an exception or a cancellation
+        inside the block releases it rather than leaving the watchdog paused for
+        the rest of the attempt. Holds are keyed by token rather than stacked, so
+        nesting and concurrent blocks — ``asyncio.gather`` over several opaque
+        calls — cannot release each other's deadlines.
+    """
+    # Read the tracker once and release on the same object. Re-reading at exit
+    # would pick up whatever the context has bound by then, which for a hold
+    # spanning a context change releases the wrong deadline.
+    tracker = current_progress_tracker()
+    token = tracker.enter_hold(label, timeout)
+    try:
+        yield
+    finally:
+        tracker.exit_hold(token)
