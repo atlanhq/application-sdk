@@ -241,7 +241,18 @@ class ProgressTracker:
 
     def stalled_for(self) -> float:
         """Seconds since the last observable progress, 0 while vouched-for."""
-        return 0.0 if self.held() else self._clock() - self._last_at
+        now = self._clock()
+        since = self._last_at
+        for h in self._holds.values():
+            if h.deadline is None or h.deadline > now:
+                return 0.0
+            # A *lapsed* bounded hold resumes the clock from its deadline, not
+            # from the progress signal before it: the allowance vouched for
+            # everything up to the deadline, which is what makes the kill time
+            # for a wedged held call `timeout + budget` (see Holds) rather than
+            # firing the instant the allowance lapses.
+            since = max(since, h.deadline)
+        return now - since
 ```
 
 ### The watchdog in the loop
