@@ -279,9 +279,7 @@ def check_transfer_digest(
     """
     if actual == expected:
         return
-    from application_sdk.storage.errors import (  # noqa: PLC0415
-        StorageIntegrityError,
-    )
+    from application_sdk.storage.errors import StorageIntegrityError  # noqa: PLC0415
 
     raise StorageIntegrityError(
         f"Corrupt artifact detected on {op} of '{key}': content hashes to "
@@ -322,9 +320,7 @@ def check_local_file_stable(
     """
     if bytes_read >= declared_size:
         return
-    from application_sdk.storage.errors import (  # noqa: PLC0415
-        StorageIntegrityError,
-    )
+    from application_sdk.storage.errors import StorageIntegrityError  # noqa: PLC0415
 
     raise StorageIntegrityError(
         f"Local file '{local_path}' shrank while it was being uploaded to "

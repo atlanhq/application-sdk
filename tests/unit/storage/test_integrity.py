@@ -405,9 +405,7 @@ class TestDownloadValidation:
         await download_file("bare/data.json", dest, store, normalize=False)
         assert dest.read_bytes() == b"whatever"
 
-    async def test_short_write_raises_a_retryable_error(
-        self, store, tmp_path
-    ) -> None:
+    async def test_short_write_raises_a_retryable_error(self, store, tmp_path) -> None:
         """Fewer bytes on disk than the store declared is a truncated transfer,
         not a corrupt source — retrying it is worthwhile, so it must not be the
         non-retryable integrity error."""
@@ -423,7 +421,9 @@ class TestDownloadValidation:
             patch("application_sdk.storage.ops.obstore.get_async", new=short_get),
             pytest.raises(StorageError) as exc,
         ):
-            await download_file("t/data.bin", tmp_path / "o.bin", store, normalize=False)
+            await download_file(
+                "t/data.bin", tmp_path / "o.bin", store, normalize=False
+            )
         assert not isinstance(exc.value, StorageIntegrityError)
         assert "Incomplete download" in exc.value.message
 
@@ -454,9 +454,7 @@ class TestDownloadValidation:
     ) -> None:
         art = await _seed(store, tmp_path, "sw/data.json", b'{"a": 1}')
         await _corrupt_object(store, art.key, b"{")
-        monkeypatch.setattr(
-            "application_sdk.constants.STORAGE_VERIFY_TRANSFERS", False
-        )
+        monkeypatch.setattr("application_sdk.constants.STORAGE_VERIFY_TRANSFERS", False)
         await download_file(art.key, tmp_path / "o.json", store, normalize=False)
 
 
@@ -530,14 +528,14 @@ class TestChunkedDownloadValidation:
             options = kw.get("options") or {}
             if "range" in options:
                 rng = options["range"]
-                raw = await short_range(
-                    st, key, start=rng[0], length=rng[1] - rng[0]
-                )
+                raw = await short_range(st, key, start=rng[0], length=rng[1] - rng[0])
                 return _Bytes(raw)
             return await real_get(st, key, **kw)
 
         with (
-            patch("application_sdk.storage.chunked.obstore.get_async", new=unpinned_get),
+            patch(
+                "application_sdk.storage.chunked.obstore.get_async", new=unpinned_get
+            ),
             pytest.raises(StorageError) as exc,
         ):
             await download_file_chunked(
