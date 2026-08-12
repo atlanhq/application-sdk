@@ -71,4 +71,28 @@ facts {
       }
     }
   }
+
+  // ---- Ordering-only opt-out stays available -----------------------------
+  //
+  // Gating `dependsOn` on success is the right default, but sequencing a node
+  // after a parent *without* the gate must stay expressible. AE's evaluator
+  // (`graph.py`) treats an untagged node condition as ready once the parent's
+  // status is SUCCESS or FAILURE, so `renderDependencyCondition` must keep
+  // omitting `tag` when the author omits it — otherwise the success gate
+  // becomes mandatory and cleanup/audit nodes lose their escape hatch.
+
+  ["App.pkl: untagged dependsOnCondition renders no tag (ordering-only opt-out)"] {
+    faninDag["audit"]["depends_on"] == new Mapping {
+      ["node_id"] = "join"
+    }
+  }
+
+  ["App.pkl: and_conditions preserve per-parent tagging (one gated, one ordering-only)"] {
+    faninDag["mixed-gate"]["depends_on"] == new Mapping {
+      ["and_conditions"] = new Listing {
+        new Mapping { ["node_id"] = "left"; ["tag"] = "success" }
+        new Mapping { ["node_id"] = "right" }
+      }
+    }
+  }
 }

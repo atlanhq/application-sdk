@@ -1595,9 +1595,45 @@ Both shapes carry `tag: "success"`. AE's condition evaluator
 `WorkflowRunNodeStatus.SUCCESS`, so a failed or skipped parent leaves the dependent
 node Skipped rather than scheduling it. Adding an entry to an existing `dependsOn` is
 therefore purely additive: it widens the set of parents that must succeed without
-changing the gate itself. A node that genuinely must run regardless of its parent's
-outcome needs `dependsOnCondition` with an explicit tag (or the run-level
-`workflow_complete` tag) instead. See `examples/fanin/` for a minimal example.
+changing the gate itself. See `examples/fanin/` for a minimal example.
+
+**Opting out of the success gate (ordering-only dependencies).** `dependsOn` is
+deliberately fail-fast, because that is what almost every connector pipeline wants. When
+a node must run purely for *sequencing* — after the parent settles, whatever its outcome
+— omit the tag and spell the dependency out with `dependsOnCondition`:
+
+```pkl
+// Single parent, ordering only → "depends_on": {"node_id": "extract"}
+dependsOnCondition = new DependencyCondition { nodeId = "extract" }
+
+// Several parents, ordering only
+dependsOnCondition = new DependencyCondition {
+  andConditions {
+    new DependencyCondition { nodeId = "extract" }
+    new DependencyCondition { nodeId = "publish" }
+  }
+}
+
+// Mixed: extract must succeed, publish only has to settle
+dependsOnCondition = new DependencyCondition {
+  andConditions {
+    new DependencyCondition { nodeId = "extract"; tag = "success" }
+    new DependencyCondition { nodeId = "publish" }
+  }
+}
+```
+
+An untagged node condition is ready once that parent's status is SUCCESS *or* FAILURE —
+the pre-fix `dependsOn` behavior, now opt-in per dependency instead of implicit. Two
+caveats:
+
+- It is failure-tolerant but **not** skip-tolerant. A *skipped* parent has neither status,
+  so the dependent node is skipped too and skips cascade down the branch. For a node that
+  must run even when upstream never executed, use the run-level `workflow_complete` tag
+  (see `NotificationNode`) rather than an untagged node condition.
+- On pre-built nodes that ship a default `dependsOn` (`PublishNode`,
+  `QueryIntelligenceNode`, `LineageNode`), set `dependsOn = null` first — the two
+  properties are mutually exclusive and `pkl eval` rejects setting both.
 
 Pkl listing amendment matters for pre-built nodes. Nodes such as `PublishNode`,
 `QueryIntelligenceNode`, and `LineageNode` define defaults like

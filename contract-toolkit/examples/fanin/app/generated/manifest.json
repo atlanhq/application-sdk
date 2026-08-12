@@ -148,6 +148,52 @@
       "error_handling": {
         "start_to_close_timeout_seconds": 86400
       }
+    },
+    "audit": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Audit After Join Settles",
+      "app_name": "automation-engine",
+      "inputs": {
+        "workflow_type": "AuditWorkflow",
+        "app_name": "automation-engine",
+        "task_queue": "atlan-automation-engine-{deployment_name}",
+        "args": {
+          "app_name": "automation-engine"
+        }
+      },
+      "depends_on": {
+        "node_id": "join"
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
+      }
+    },
+    "mixed-gate": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Left Must Succeed, Right Must Settle",
+      "app_name": "automation-engine",
+      "inputs": {
+        "workflow_type": "MixedGateWorkflow",
+        "app_name": "automation-engine",
+        "task_queue": "atlan-automation-engine-{deployment_name}",
+        "args": {
+          "app_name": "automation-engine"
+        }
+      },
+      "depends_on": {
+        "and_conditions": [
+          {
+            "node_id": "left",
+            "tag": "success"
+          },
+          {
+            "node_id": "right"
+          }
+        ]
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
+      }
     }
   }
 }
