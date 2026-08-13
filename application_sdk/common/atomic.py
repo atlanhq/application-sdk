@@ -402,7 +402,7 @@ def atomic_write(
                 f"artifact rather than extend it. Use disk_full_guard around the "
                 f"append instead."
             ),
-            constraint="a creating mode: w, wb, x, xb",
+            constraint="a creating mode: w, wb",
             value_summary=mode,
         )
     if "x" in mode:
