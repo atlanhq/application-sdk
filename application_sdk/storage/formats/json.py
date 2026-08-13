@@ -427,12 +427,13 @@ class JsonFileWriter(Writer):
         Not an atomic write, unlike the SDK's other artifact writers (FND-318):
         successive calls *append* to the same chunk file, and an append cannot
         be staged-and-renamed without rewriting everything already in the file
-        on every call. What it does get is :func:`disk_full_guard`, so running
-        out of disk here is a typed ``DiskFullError`` naming this file and this
-        step rather than a bare ``OSError`` that some broad ``except`` upstream
-        swallows. A chunk left short by that failure is still short — the run
-        fails, and the residue is bounded by the writer's staging (FND-317)
-        rather than by this method.
+        on every call. What it does get is :func:`disk_full_guard` around a
+        flushed and fsync'd write, so running out of disk here is a typed
+        ``DiskFullError`` naming this file and this step rather than a bare
+        ``OSError`` that some broad ``except`` upstream swallows — or, on a
+        delayed-allocation filesystem, no error at all. A chunk left short by
+        that failure is still short — the run fails, and the residue is bounded
+        by the writer's staging (FND-317) rather than by this method.
         """
 
         def _default_serializer(obj: object) -> str:
@@ -453,6 +454,14 @@ class JsonFileWriter(Writer):
                                 option=orjson.OPT_APPEND_NEWLINE,
                             )
                         )
+                    # Flush and fsync inside the guard, as the atomic writers
+                    # do (FND-318): on a delayed-allocation filesystem the
+                    # write() calls only dirty page cache, so without this the
+                    # ENOSPC surfaces later — or never — and a short chunk
+                    # passes as complete. This does not make the append atomic;
+                    # it makes its failure typed and attributed here.
+                    f.flush()
+                    os.fsync(f.fileno())
 
         # Offloaded as one hop: `to_dict` materialises the whole chunk and the
         # write loop is one blocking syscall per record. Neither yields, so

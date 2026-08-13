@@ -158,6 +158,15 @@ class TestAtomicWrite:
             with atomic_write(tmp_path / "a.json", operation="t", mode="ab"):
                 pass
 
+    def test_exclusive_create_modes_are_rejected(self, tmp_path: Path) -> None:
+        """Publication is os.replace, which overwrites, so "x" would lie about
+        refusing to clobber — the honest contract is last-writer-wins."""
+        from application_sdk.common.errors import AtomicWriteModeError  # noqa: PLC0415
+
+        with pytest.raises(AtomicWriteModeError, match="does not support mode"):
+            with atomic_write(tmp_path / "a.json", operation="t", mode="xb"):
+                pass
+
     def test_a_non_writing_mode_is_rejected(self, tmp_path: Path) -> None:
         from application_sdk.common.errors import AtomicWriteModeError  # noqa: PLC0415
 
@@ -199,6 +208,21 @@ class TestAtomicWrite:
             with atomic_path(artifact, operation="test write"):
                 pass
 
+        assert not artifact.exists()
+
+    def test_a_staging_directory_that_cannot_be_created_fails_typed(
+        self, tmp_path: Path
+    ) -> None:
+        """Creating .sdk-partial is itself a write; on a full filesystem its
+        ENOSPC must arrive as DiskFullError, not escape as a bare OSError."""
+        artifact = tmp_path / "artifact.json"
+
+        with patch("application_sdk.common.atomic.os.makedirs", _enospc):
+            with pytest.raises(DiskFullError) as caught:
+                with atomic_write(artifact, operation="test write") as handle:
+                    handle.write(b"x")
+
+        assert caught.value.operation == "test write"
         assert not artifact.exists()
 
 

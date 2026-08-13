@@ -317,7 +317,11 @@ def atomic_path(
     # race a concurrent writer that has already created its own staging file
     # in there.
     staging_dir = final.parent / PARTIAL_DIRNAME
-    os.makedirs(convert_to_extended_path(staging_dir), exist_ok=True)
+    # Inside the guard: creating the staging directory is itself a write, and
+    # on a full filesystem it fails with the same ENOSPC the write would have
+    # — so it is classified identically rather than escaping as a raw OSError.
+    with disk_full_guard(final, operation=operation, required_bytes=required_bytes):
+        os.makedirs(convert_to_extended_path(staging_dir), exist_ok=True)
     # uuid4 rather than a counter or the pid: two writers racing on the same
     # artifact name — a cancelled attempt's orphaned thread and its retry —
     # must not resolve the same staging path, and neither may see the other.
@@ -361,16 +365,20 @@ def atomic_write(
     The canonical SDK artifact write. Everything :func:`atomic_path` guarantees,
     with the handle opened and flushed for you.
 
-    ``mode`` must be a creating mode (``"wb"``, ``"w"``, ``"xb"``, …). Append
-    modes are rejected: the staging file starts empty, so ``"ab"`` here would
-    silently drop everything already in the artifact rather than appending to
-    it. A genuine append cannot be made atomic without rewriting the whole file
-    — wrap it in :func:`disk_full_guard` instead and accept that it is not.
+    ``mode`` must be a ``"w"`` mode. Append modes are rejected: the staging
+    file starts empty, so ``"ab"`` here would silently drop everything already
+    in the artifact rather than appending to it. Exclusive-create (``"x"``)
+    modes are rejected too: publication is ``os.replace``, which overwrites, so
+    the exclusivity would not survive the rename and an existing artifact would
+    be clobbered by a mode claiming to refuse exactly that. The contract is
+    last-writer-wins. A genuine append cannot be made atomic without rewriting
+    the whole file — wrap it in :func:`disk_full_guard` instead and accept that
+    it is not.
 
     Args:
         path: Final artifact path. Its parent directory is created.
         operation: Short phrase naming the step, for the failure message.
-        mode: Any creating mode ``open`` accepts.
+        mode: Any writing mode ``open`` accepts (``"w"``, ``"wb"``).
         encoding: Text encoding, for text modes.
         required_bytes: Size the write needs, when known.
         **open_kwargs: Forwarded to ``open``.
@@ -381,8 +389,8 @@ def atomic_write(
     Raises:
         DiskFullError: If the filesystem is out of space, before or during
             the write.
-        AtomicWriteModeError: If *mode* is an append mode or is not a writing
-            mode.
+        AtomicWriteModeError: If *mode* is an append mode, an exclusive-create
+            mode, or not a writing mode.
     """
     from application_sdk.common.errors import AtomicWriteModeError  # noqa: PLC0415
 
@@ -397,10 +405,22 @@ def atomic_write(
             constraint="a creating mode: w, wb, x, xb",
             value_summary=mode,
         )
-    if not any(flag in mode for flag in ("w", "x")):
+    if "x" in mode:
+        raise AtomicWriteModeError(
+            message=(
+                f"atomic_write does not support mode {mode!r}: publication is "
+                f"os.replace, which overwrites, so exclusive-create semantics "
+                f"cannot survive the rename — an 'x' mode here would clobber an "
+                f"existing artifact while claiming not to. The contract is "
+                f"last-writer-wins; use a creating 'w' mode."
+            ),
+            constraint="a creating mode: w, wb",
+            value_summary=mode,
+        )
+    if "w" not in mode:
         raise AtomicWriteModeError(
             message=f"atomic_write needs a writing mode, got {mode!r}",
-            constraint="a creating mode: w, wb, x, xb",
+            constraint="a creating mode: w, wb",
             value_summary=mode,
         )
 

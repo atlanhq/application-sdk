@@ -194,3 +194,30 @@ async def test_write_chunk_handles_pandas_timestamp(tmp_path: Path) -> None:
         record = orjson.loads(f.read().strip())
     assert record["name"] == "a"
     assert "2024-01-01" in record["ts"]
+
+
+@pytest.mark.asyncio
+async def test_write_chunk_surfaces_a_delayed_allocation_enospc_typed(
+    tmp_path: Path,
+) -> None:
+    """The append cannot be staged, but it is flushed and fsync'd inside the
+    guard (FND-318): on a delayed-allocation filesystem the write() calls only
+    dirty page cache, so without the fsync the ENOSPC surfaces later — or
+    never — and a short chunk passes as complete."""
+    import errno
+
+    from application_sdk.errors import DiskFullError
+
+    writer = JsonFileWriter(path=str(tmp_path / "out"))
+    df = pd.DataFrame({"id": [1, 2]})
+    out_file = str(tmp_path / "out" / "chunk.json")
+
+    def _enospc(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    with patch("os.fsync", _enospc):
+        with pytest.raises(DiskFullError) as caught:
+            await writer._write_chunk(df, out_file)
+
+    assert caught.value.operation == "json chunk write"
+    assert caught.value.path == out_file

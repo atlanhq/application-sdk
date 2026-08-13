@@ -474,6 +474,16 @@ def test_no_sdk_writer_reintroduces_a_direct_to_final_write() -> None:
         ),
         "application_sdk/common/incremental/helpers.py": ("shutil.copy2(",),
         "application_sdk/storage/reference.py": ('+ ".sha256").write_text(',),
+        # _write_statistics in formats/__init__.py wrote the statistics sidecar
+        # with a bare open() at method-body indent; the pattern carries that
+        # indent so a top-level helper elsewhere does not trip it.
+        "application_sdk/storage/formats/__init__.py": ("\n            with open(",),
+        # _write_chunk in formats/parquet.py passed the final path straight to
+        # pq.write_table; the converted form writes to the atomic_path staging
+        # path instead, so the banned form is write_table on `file_name`.
+        "application_sdk/storage/formats/parquet.py": (
+            "pq.write_table(\n                table,\n                file_name,",
+        ),
     }
     root = Path(__file__).resolve().parents[3]
 
