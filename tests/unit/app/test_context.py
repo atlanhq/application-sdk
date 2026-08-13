@@ -587,7 +587,7 @@ class TestTaskExecutionContextHeartbeat:
     def test_heartbeat_marks_progress(
         self, progress_marks: RecordingProgressTracker
     ) -> None:
-        """A manual beat re-arms the stall clock (ADR-0018, mechanism 3).
+        """A manual beat marks progress for the stall watchdog (ADR-0018).
 
         The docs tell an author to beat inside a custom loop the SDK cannot see
         into *instead of* declaring a hold, so a beat that reached Temporal but

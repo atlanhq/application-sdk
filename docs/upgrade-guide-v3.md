@@ -1016,9 +1016,9 @@ async def fetch(self, input: MyInput) -> MyOutput:
 
 ---
 
-## Step 11b: The stall watchdog — "what if I do nothing?"
+## Step 11b: The stall watchdog
 
-The SDK now runs a **stall watchdog** inside every activity: it watches for observable
+What if you do nothing? The SDK now runs a **stall watchdog** inside every activity: it watches for observable
 forward progress, and reports when an attempt goes quiet for longer than
 `max_no_progress_seconds` (900s). At the same time `timeout_seconds`
 (`start_to_close`) becomes a **24h backstop** you never tune, instead of a duration you

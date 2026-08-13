@@ -107,9 +107,9 @@ to do:
 | SQL / REST template page loops | one fetched page written | `extract.page`, `fetch_databases.page`, `fetch_schemas.page`, `fetch_tables.page`, `fetch_columns.page` |
 | Your own `self.heartbeat(...)` | whatever you decide | `task.heartbeat` |
 
-Hooks sit on **batch, chunk and page boundaries — never per record.** One batch is
-already the unit of observable work, and a per-record mark would be a hot-path cost for
-no extra signal.
+Hooks sit on **batch, chunk and page boundaries — not per record, in the current hook
+set.** One batch is already the unit of observable work, and a per-record mark would be
+a hot-path cost for no extra signal.
 
 The label matters beyond bookkeeping: it is what a stall report names, so
 `last signal was 'fetch_tables.page'` tells an operator *which* loop went quiet rather
@@ -193,8 +193,11 @@ fail in testing, it false-kills at the tail, against the largest tenant, hours i
   several opaque calls — never release each other. The hold is released in a `finally`,
   so an exception or a cancellation inside the block does not leave the watchdog paused.
 
-`label` is written into logs and metric labels, so it must identify a **site**. Never
-interpolate a query, a key, a credential or a customer value into it.
+!!! warning "High-cardinality labels"
+
+    `label` is written into logs and metric labels, so it must identify a **site**.
+    Never interpolate a query, a key, a credential or a customer value into it — a
+    per-tenant label is a metrics-backend bill, not a code bug.
 
 ## Choosing an allowance
 
@@ -353,7 +356,7 @@ under-instrumented app burns the same wasted work up to three times before faili
 ## What if I do nothing?
 
 Nothing fails differently. See
-[Upgrading: the stall watchdog](../upgrade-guide-v3.md#step-11b-the-stall-watchdog-what-if-i-do-nothing)
+[Upgrading: the stall watchdog](../upgrade-guide-v3.md#step-11b-the-stall-watchdog)
 for the full answer, including which code shapes do eventually need action and which
 never will.
 
