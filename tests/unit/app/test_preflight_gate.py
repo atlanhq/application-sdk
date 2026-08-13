@@ -54,6 +54,31 @@ class _ActivityErrorStub(Exception):
         self.__cause__ = cause
 
 
+def _real_activity_error(cause: BaseException):
+    """A genuine Temporal ``ActivityError`` wrapping ``cause``.
+
+    Built from the real class rather than ``_ActivityErrorStub`` wherever the
+    behaviour under test *is* a temporalio detail — that ``ActivityError``
+    exposes ``.cause``, and that ``TimeoutError.type`` is a ``TimeoutType``
+    enum rather than a string. A hand-rolled double there would pin our belief
+    about the dependency instead of the dependency itself, and would keep
+    passing if either premise changed under us.
+    """
+    from temporalio.exceptions import ActivityError
+
+    err = ActivityError(
+        "Activity task failed",
+        scheduled_event_id=1,
+        started_event_id=2,
+        identity="worker",
+        activity_type="myapp:preflight",
+        activity_id="1",
+        retry_state=None,
+    )
+    err.__cause__ = cause
+    return err
+
+
 def _preflight_failed_error() -> ApplicationError:
     return ApplicationError(
         "Preflight failed: bad creds", type="PreflightFailed", non_retryable=True
@@ -304,26 +329,73 @@ class TestUnderlyingErrorType:
 
         assert underlying_error_type(ValueError("x")) == "ValueError"
 
-    def test_ignores_non_string_type_from_temporal_timeout(self) -> None:
-        # Temporal's TimeoutError (raised on activity start/schedule-to-close
-        # overrun and caught by the same fail-open path) carries a TimeoutType
-        # enum as `.type`, not a string. It must not leak an enum object into
-        # `reason`; fall through to the class name instead.
+    def test_activity_timeout_names_which_deadline_fired(self) -> None:
+        # A deadline overrun is the *dominant* gate_broken shape in production
+        # (CONNECT-841: a 120s Dapr cold-start wait inside a narrower
+        # start_to_close), and it carries no string `type` anywhere — Temporal's
+        # TimeoutError puts a TimeoutType *enum* on `.type`. Reporting the
+        # wrapper name ("ActivityError") for it, as this used to, is the exact
+        # uninformative label this helper exists to remove. Name the deadline
+        # instead, and keep it a str so `reason`'s consumers are unaffected.
+        from temporalio.exceptions import TimeoutError as TemporalTimeoutError
         from temporalio.exceptions import TimeoutType
 
         from application_sdk.execution._temporal.preflight_gate import (
             underlying_error_type,
         )
 
-        class _TimeoutLike(Exception):
-            def __init__(self) -> None:
-                super().__init__("deadline exceeded")
-                self.type = TimeoutType.START_TO_CLOSE
+        for timeout_type, expected in (
+            (TimeoutType.START_TO_CLOSE, "Timeout:START_TO_CLOSE"),
+            (TimeoutType.SCHEDULE_TO_CLOSE, "Timeout:SCHEDULE_TO_CLOSE"),
+            (TimeoutType.HEARTBEAT, "Timeout:HEARTBEAT"),
+        ):
+            timed_out = TemporalTimeoutError(
+                "deadline exceeded", type=timeout_type, last_heartbeat_details=[]
+            )
+            result = underlying_error_type(_real_activity_error(timed_out))
+            assert result == expected
+            assert isinstance(result, str)
 
-        # No string `type` in the chain -> fall through to the top-level class
-        # name (the wrapper, "ActivityError" in prod), a string — never the
-        # TimeoutType enum object.
-        result = underlying_error_type(_ActivityErrorStub(_TimeoutLike()))
+    def test_a_real_fault_outranks_the_deadline_that_ended_it(self) -> None:
+        # A schedule_to_close expiry hangs the last attempt's ApplicationError
+        # off the TimeoutError, so the chain carries BOTH a timeout enum and a
+        # real string type. The attempt's own fault is the better reason — the
+        # deadline is what noticed, not what broke — so the string must win even
+        # though the enum is encountered first.
+        from temporalio.exceptions import TimeoutError as TemporalTimeoutError
+        from temporalio.exceptions import TimeoutType
+
+        from application_sdk.execution._temporal.preflight_gate import (
+            underlying_error_type,
+        )
+
+        timed_out = TemporalTimeoutError(
+            "deadline exceeded",
+            type=TimeoutType.SCHEDULE_TO_CLOSE,
+            last_heartbeat_details=[],
+        )
+        timed_out.__cause__ = ApplicationError(
+            "Dapr sidecar unreachable", type="DaprSidecarUnreachableError"
+        )
+        assert (
+            underlying_error_type(_real_activity_error(timed_out))
+            == "DaprSidecarUnreachableError"
+        )
+
+    def test_an_unrecognised_non_string_type_still_falls_through(self) -> None:
+        # The enum branch is scoped to TimeoutType specifically. Any other
+        # non-string `type` must keep falling through to the class name rather
+        # than being stringified into `reason` on spec.
+        from application_sdk.execution._temporal.preflight_gate import (
+            underlying_error_type,
+        )
+
+        class _OddType(Exception):
+            def __init__(self) -> None:
+                super().__init__("odd")
+                self.type = object()
+
+        result = underlying_error_type(_ActivityErrorStub(_OddType()))
         assert result == "_ActivityErrorStub"
         assert isinstance(result, str)
 

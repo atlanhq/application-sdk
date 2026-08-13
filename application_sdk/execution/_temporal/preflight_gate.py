@@ -34,6 +34,7 @@ import orjson
 from pydantic import BaseModel, Field, ValidationError
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import TimeoutType
 
 with workflow.unsafe.imports_passed_through():
     from application_sdk.credentials.errors import CredentialNotFoundError
@@ -126,34 +127,47 @@ def underlying_error_type(exc: BaseException) -> str:
     Temporal's default failure converter records a raised error as an
     ``ApplicationError`` whose ``type`` is the original class name, then wraps
     it in an ``ActivityError``. On the workflow side ``type(exc).__name__`` is
-    therefore the wrapper ("ActivityError"), not the fault. The first ``type``
-    in the cause chain is the real reason — the same chain
-    :func:`is_preflight_block` walks. Falls back to the top-level class name
-    when nothing in the chain carries a string ``type`` (e.g. a bare
-    ``ApplicationError`` with no ``type`` set, or a plain ``RuntimeError``).
+    therefore the wrapper ("ActivityError"), not the fault. The first *string*
+    ``type`` in the cause chain is the real reason — the same chain
+    :func:`is_preflight_block` walks.
 
-    The ``str`` guard matters: Temporal's own ``TimeoutError`` — raised into
-    this same fail-open path when the gate activity overruns its
-    start/schedule-to-close deadline — carries a ``type`` that is a
-    ``TimeoutType`` *enum*, not a string. Returning that raw would put an enum
-    object into ``reason``, a field every consumer reads as a string. Only a
-    string ``type`` (an ``ApplicationError``'s original class name) is a real
-    reason; anything else falls through to the class name.
+    A deadline overrun needs its own answer, because Temporal reports it with a
+    ``TimeoutError`` whose ``type`` is a ``TimeoutType`` *enum*, not a string. A
+    string ``type`` still wins outright when one exists anywhere in the chain: a
+    ``schedule_to_close`` expiry hangs the last attempt's ``ApplicationError``
+    off the ``TimeoutError``, and that attempt's real fault (e.g.
+    ``DaprSidecarUnreachableError``) is a better reason than the deadline that
+    finally ended it. Only when the chain carries no string ``type`` at all does
+    the timeout answer: ``Timeout:<TIMEOUT_TYPE>`` (e.g.
+    ``Timeout:START_TO_CLOSE``). Naming *which* deadline fired is the point —
+    ``START_TO_CLOSE`` says one attempt outran its own budget, and per CONNECT-841
+    that is what a Dapr cold-start wait wider than the gate's ``start_to_close``
+    looks like from the workflow; ``SCHEDULE_TO_CLOSE`` says the retry window
+    closed. Reporting the wrapper name ("ActivityError") for either — as this did
+    before — is the same uninformative label this function exists to remove.
+
+    Falls back to the top-level class name only when the chain offers neither
+    (e.g. a bare ``ApplicationError`` with no ``type`` set, or a plain
+    ``RuntimeError``). Every return is a ``str``: ``reason`` is a field every
+    consumer reads as a string, so an enum object must never reach it.
 
     Used for the fail-open ``no_verdict`` outcome row's ``reason`` so a
     persistent platform fault reaches the dashboard as its real cause (e.g.
     ``DaprSidecarUnreachableError``) instead of an uninformative wrapper name.
     """
     seen: set[int] = set()
+    timeout_reason: str | None = None
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         found = getattr(current, "type", None)
         if isinstance(found, str) and found:
             return found
+        if timeout_reason is None and isinstance(found, TimeoutType):
+            timeout_reason = f"Timeout:{found.name}"
         nxt = getattr(current, "cause", None)
         current = nxt if nxt is not None else current.__cause__
-    return type(exc).__name__
+    return timeout_reason or type(exc).__name__
 
 
 def input_type_supports_gate(input_type: type) -> bool:

@@ -392,8 +392,12 @@ async def _probe_one(secret_store: SecretStore, value: str) -> tuple[str, str, A
     """Probe one candidate ref-key. Returns ``(outcome, value, secret)``.
 
     Raises:
-        SecretStoreUnavailableError: If the store never answered (cold-start
-            outage that exhausted the retry budget).
+        SecretStoreUnreachableError: If the store never answered across the
+            whole cold-start budget (the terminal case).
+        SecretStoreUnavailableError: If the store failed *without* the budget
+            being spent — only reachable once this component has already
+            answered once, so ``retry_past_dapr_cold_start`` short-circuits its
+            wait and a later blip surfaces raw (the transient case).
     """
     value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
     try:
@@ -415,9 +419,13 @@ async def _probe_one(secret_store: SecretStore, value: str) -> tuple[str, str, A
             elapsed_seconds=exc.elapsed_seconds,
         ) from None
     except ColdStartRaceError:
-        # The store never actually answered — a cold-start outage that
-        # exhausted the full retry budget, not "this field isn't a
-        # secret" (that case is already collapsed to None by
+        # A *steady-state* blip, not an exhausted budget: budget exhaustion
+        # always raises DaprSidecarUnreachableError and is caught above, so the
+        # only way a bare ColdStartRaceError reaches here is
+        # retry_past_dapr_cold_start short-circuiting its wait — this component
+        # has already answered once, so the error propagates from `call()`
+        # without any retry. Either way the store did not answer, which is not
+        # "this field isn't a secret" (that case is already collapsed to None by
         # get_optional without raising). Propagate so the caller sees
         # a typed outage instead of silently proceeding with a
         # corrupt credential, mirroring the vault sibling
