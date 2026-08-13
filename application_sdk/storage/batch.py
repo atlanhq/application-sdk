@@ -19,11 +19,20 @@ both follow this — the data source is always the first positional argument.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 import obstore
 
+# Sidecar naming is owned by ``storage.integrity`` — the module that also reads
+# and writes them. Re-exported here (``batch.SIDECAR_SUFFIX`` /
+# ``batch.is_sidecar_key``) because the listing filters are the historical
+# import site and ``application_sdk.storage`` re-exports both from batch.
+from application_sdk.storage.integrity import (
+    SIDECAR_SUFFIX as SIDECAR_SUFFIX,  # re-export
+)
+from application_sdk.storage.integrity import is_sidecar_key, sidecar_key
 from application_sdk.storage.ops import (
     _is_not_found,
     _list_items,
@@ -153,19 +162,50 @@ async def list_keys_with_meta(
         ) from exc
 
 
-# Suffix of the tiny SHA-256 integrity/dedup sidecar written alongside every
-# uploaded object by ``storage.transfer`` (``{key}.sha256``). Sidecars are
-# implementation detail — never a data object — so directory listings that
-# enumerate content exclude them. This is the single source of truth for what
-# counts as a sidecar vs. a data key; all listing filters go through
-# :func:`is_sidecar_key` / :func:`list_data_keys` rather than re-testing the
-# literal suffix inline.
-SIDECAR_SUFFIX = ".sha256"
+@dataclass(frozen=True, slots=True)
+class DataObject:
+    """One data object from a listing, with everything a transfer needs.
+
+    ``has_sidecar`` is free here and expensive later: the listing has already
+    enumerated every key under the prefix, including the ``{key}.sha256``
+    sidecars, so pairing them up costs one in-memory pass. A download that does
+    not carry the answer forward has to probe for the sidecar per file instead
+    — one extra round trip each, on a path that runs thousands of times.
+    """
+
+    key: str
+    size: int
+    etag: str | None
+    has_sidecar: bool
 
 
-def is_sidecar_key(key: str) -> bool:
-    """Return ``True`` if *key* is a SHA-256 sidecar rather than a data object."""
-    return key.endswith(SIDECAR_SUFFIX)
+async def list_data_objects(
+    prefix: str = "",
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    normalize: bool = True,
+) -> list[DataObject]:
+    """List data objects under *prefix*, pairing each with its sidecar flag.
+
+    The single listing pass every sidecar-aware helper is built on: it applies
+    the ``is_sidecar_key`` exclusion once and records, per surviving data
+    object, whether its integrity sidecar was in the same listing.
+
+    Returns:
+        Sorted list of :class:`DataObject` for data objects only.
+    """
+    items = await list_keys_with_meta(prefix, store, normalize=normalize)
+    all_keys = {k for k, _, _ in items}
+    return [
+        DataObject(
+            key=key,
+            size=size,
+            etag=etag,
+            has_sidecar=sidecar_key(key) in all_keys,
+        )
+        for key, size, etag in items
+        if not is_sidecar_key(key)
+    ]
 
 
 async def list_data_keys(
@@ -179,7 +219,8 @@ async def list_data_keys(
     Thin wrapper over :func:`list_keys` that drops ``{key}.sha256`` sidecar
     entries, so callers enumerating a directory's *content* (upload reconcile,
     deployment-store fallback, …) share one definition of "data key". See
-    :func:`list_data_keys_with_meta` when per-object size/etag is also needed.
+    :func:`list_data_objects` when per-object size / etag / sidecar presence is
+    also needed.
 
     Unlike :func:`list_keys`, this does not expose a ``suffix`` filter: the sole
     narrowing here is the sidecar exclusion. That omission is intentional — no
@@ -220,9 +261,8 @@ async def list_data_keys_with_meta(
         Sorted list of ``(key, size_bytes, e_tag)`` for data objects only.
     """
     return [
-        (k, s, e)
-        for k, s, e in await list_keys_with_meta(prefix, store, normalize=normalize)
-        if not is_sidecar_key(k)
+        (obj.key, obj.size, obj.etag)
+        for obj in await list_data_objects(prefix, store, normalize=normalize)
     ]
 
 
@@ -336,6 +376,12 @@ async def download_prefix(
     (e.g. key ``artifacts/run/file.json`` → ``local_dir/artifacts/run/file.json``).
     Downloads run concurrently (up to *max_concurrency* at a time).
 
+    ``{key}.sha256`` sidecars are not mirrored to disk: they are SDK
+    bookkeeping, and a caller that hands the downloaded directory to a reader
+    which globs it (a RocksDB / DuckDB state directory, a parquet dataset) must
+    not find extra files in it. They are instead consumed here — each object is
+    verified against its sidecar as it lands (FND-306).
+
     Args:
         prefix: Object key prefix to download.
         local_dir: Local directory to write files into.
@@ -349,35 +395,42 @@ async def download_prefix(
 
     Raises:
         StorageError: If listing or downloading fails.
+        StorageIntegrityError: If an object does not match its sidecar digest.
         ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     import asyncio  # noqa: PLC0415 — stdlib asyncio; lazy use only
 
-    items = await list_keys_with_meta(prefix, store, suffix=suffix, normalize=normalize)
+    objects = await list_data_objects(prefix, store, normalize=normalize)
+    if suffix:
+        lsuffix = suffix.lower()
+        objects = [o for o in objects if o.key.lower().endswith(lsuffix)]
     local = Path(local_dir)
     # Reject keys whose resolved path escapes local_dir (e.g. via ".." segments).
-    destinations = [str(_safe_join_under(local, key)) for key, _, _ in items]
+    destinations = [str(_safe_join_under(local, obj.key)) for obj in objects]
 
     sem = asyncio.Semaphore(max_concurrency)
 
-    async def _download_one(key: str, dest: str, size: int, etag: str | None) -> None:
+    async def _download_one(obj: DataObject, dest: str) -> None:
         async with sem:
             # Pass the listing's size + etag so a large object is fetched via
             # bounded parallel range GETs (each with its own timeout / retry
             # budget, version-pinned via If-Match) while small objects still
             # stream in a single GET — and no per-file HEAD is issued, since
             # the metadata is already known. (BLDX-1513 / BLDX-1523)
+            # has_sidecar comes from the same listing, so verification costs at
+            # most the one GET that actually reads the digest.
             await download_file_chunked(
-                key,
+                obj.key,
                 dest,
                 store,
                 normalize=False,
-                file_size=size,
-                etag=etag,
+                file_size=obj.size,
+                etag=obj.etag,
+                sidecar_present=obj.has_sidecar,
             )
 
     await asyncio.gather(
-        *[_download_one(k, d, s, e) for (k, s, e), d in zip(items, destinations)]
+        *[_download_one(obj, d) for obj, d in zip(objects, destinations)]
     )
     return destinations
 
@@ -418,17 +471,39 @@ async def upload_prefix(
     if normalize and prefix:
         prefix = normalize_key(prefix)
 
-    files: list[tuple[str, Path]] = []
-    for root, _dirs, filenames in os.walk(local, followlinks=False):
-        for fname in filenames:
-            file_path = Path(root) / fname
-            if file_path.is_symlink():
-                continue
-            rel = file_path.relative_to(local)
-            # Use PurePosixPath to ensure forward slashes in S3 keys (Windows uses backslash)
-            rel_posix = PurePosixPath(*rel.parts)
-            key = f"{prefix}/{rel_posix}" if prefix else str(rel_posix)
-            files.append((key, file_path))
+    def _collect_files() -> list[tuple[str, Path]]:
+        collected: list[tuple[str, Path]] = []
+        for root, _dirs, filenames in os.walk(local, followlinks=False):
+            for fname in filenames:
+                file_path = Path(root) / fname
+                if file_path.is_symlink():
+                    continue
+                rel = file_path.relative_to(local)
+                # Use PurePosixPath to ensure forward slashes in S3 keys (Windows uses backslash)
+                rel_posix = PurePosixPath(*rel.parts)
+                key = f"{prefix}/{rel_posix}" if prefix else str(rel_posix)
+                collected.append((key, file_path))
+        return collected
+
+    # Offloaded: the walk is one stat per entry over a whole run's output
+    # directory, which on a large extraction is thousands of syscalls with no
+    # await between them. Inline it holds the event loop — and the enclosing
+    # activity's auto-heartbeat — for the entire traversal (ADR-0010).
+    # Imported lazily, and it has to be. This module is in the chain
+    # `storage/__init__` loads eagerly, and that chain is itself entered from
+    # `contracts.base` (contracts.types -> credentials -> common.utils ->
+    # storage). At module scope, importing `application_sdk.execution.heartbeat`
+    # runs `execution/__init__`, which pulls in the Temporal activity utils ->
+    # `application_sdk.app` -> back to `contracts.base` while it is still
+    # initialising, and that raises ImportError. The cycle runs through
+    # `execution/__init__`; there is no direct storage -> execution edge.
+    #
+    # This is also why `transfer.py`, `reference.py` and `formats/*` import
+    # `run_in_thread` at module scope without trouble — they are not in
+    # `storage/__init__`'s eager chain. Only batch/chunked/cloud/rolling are.
+    from application_sdk.execution.heartbeat import run_in_thread  # noqa: PLC0415
+
+    files: list[tuple[str, Path]] = await run_in_thread(_collect_files)
 
     sem = asyncio.Semaphore(max_concurrency)
     uploaded: list[str] = []

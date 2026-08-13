@@ -421,8 +421,8 @@ async def test_app_upload_falls_back_to_deployment_store_when_local_absent(tmp_p
     The SDK auto-derives the deployment-store key from normalize_key(local_path),
     so existing call sites get the fallback for free on the next SDK bump.
     """
+    from application_sdk.storage.integrity import read_expected_digest
     from application_sdk.storage.ops import normalize_key, upload_file
-    from application_sdk.storage.transfer import _put_remote_sha256
 
     deployment_root = tmp_path / "deployment"
     upstream_root = tmp_path / "upstream"
@@ -438,8 +438,11 @@ async def test_app_upload_falls_back_to_deployment_store_when_local_absent(tmp_p
     deploy_key = normalize_key(str(local_src))
     await upload_file(deploy_key, local_src, deployment_store, normalize=False)
 
+    # upload_file writes the ``{key}.sha256`` sidecar itself (FND-306). Pin
+    # that premise rather than assuming it: this test's whole scenario is
+    # "the deployment store holds a verifiable copy".
     digest = hashlib.sha256(content).hexdigest()
-    await _put_remote_sha256(deployment_store, deploy_key, digest)
+    assert await read_expected_digest(deployment_store, deploy_key) == digest
 
     # Pod B: local_path no longer exists.
     local_src.unlink()
@@ -522,8 +525,8 @@ async def test_app_upload_cross_store_sha256_match_causes_skip(tmp_path):
     deployment-store sidecar already matches the upstream sidecar the SDK
     must return synced=False without transferring any bytes.
     """
+    from application_sdk.storage.integrity import read_expected_digest
     from application_sdk.storage.ops import upload_file
-    from application_sdk.storage.transfer import _put_remote_sha256
 
     deployment_root = tmp_path / "deployment"
     upstream_root = tmp_path / "upstream"
@@ -537,8 +540,11 @@ async def test_app_upload_cross_store_sha256_match_causes_skip(tmp_path):
     src_file.write_bytes(content)
     await upload_file(deploy_key, src_file, deployment_store, normalize=False)
 
+    # upload_file writes the ``{key}.sha256`` sidecar itself (FND-306). Pin
+    # that premise rather than assuming it: this test's whole scenario is
+    # "the deployment store holds a verifiable copy".
     digest = hashlib.sha256(content).hexdigest()
-    await _put_remote_sha256(deployment_store, deploy_key, digest)
+    assert await read_expected_digest(deployment_store, deploy_key) == digest
 
     ref = FileReference(local_path=str(src_file), storage_path=deploy_key)
     app = _make_app(deployment_store, upstream_store=upstream_store, run_id="run-dedup")

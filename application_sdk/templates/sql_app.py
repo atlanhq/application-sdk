@@ -113,6 +113,8 @@ from application_sdk.errors.leaves import (
 )
 from application_sdk.errors.wire import secret_named_evidence_keys
 from application_sdk.execution import build_output_path, get_object_store_prefix
+from application_sdk.execution.heartbeat import run_in_thread
+from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.contracts.sql_metadata import (
@@ -1528,14 +1530,49 @@ class SqlApp(App):
         count = 0
         try:
             sql = self._prepare_sql(sql_template.strip(), input)
+
+            def _serialize_batch(batch: list[dict[str, Any]]) -> bytes:
+                return b"".join(
+                    orjson.dumps(
+                        record,
+                        default=_orjson_default,
+                        option=orjson.OPT_APPEND_NEWLINE,
+                    )
+                    for record in batch
+                )
+
             with open(output_file, "wb") as f:
                 async for batch in client.run_query(
                     sql, batch_size=_EXTRACT_BATCH_SIZE
                 ):
-                    for record in batch:
-                        f.write(orjson.dumps(record, default=_orjson_default))
-                        f.write(b"\n")
-                        count += 1
+                    # Only the serialisation is offloaded — 10k orjson.dumps
+                    # calls per batch is the part that outlasts the heartbeat
+                    # interval on wide rows (ADR-0010). The write stays on the
+                    # loop as one buffered call, which costs microseconds.
+                    #
+                    # Deliberately NOT passing `f` into the thread: if the
+                    # activity is cancelled at this await, the `with` block
+                    # unwinds and closes the handle while a worker thread is
+                    # still writing to it — and per ADR-0010 that thread cannot
+                    # be killed, so it would write on into a closed (or
+                    # retry-reopened) file. Serialise off-loop, write on-loop:
+                    # the handle never crosses the thread boundary, so the
+                    # single-handle streaming loop stays cancellation-safe.
+                    payload = await run_in_thread(_serialize_batch, batch)
+                    f.write(payload)
+                    count += len(batch)
+                    # One fetched page serialised and written is one observable
+                    # unit (ADR-0018). Marked here rather than per record: one
+                    # page is already the unit, and a mark per record would be a
+                    # hot-path cost for no extra signal.
+                    #
+                    # This is the whole reason the read side needs no hold — the
+                    # fetch → serialise → write cycle marks on every page, so
+                    # only a *single* cycle slower than max_no_progress_seconds
+                    # needs an explicit hold from the app. (FND-290's auto-hold
+                    # around the `run_in_thread` above already covers the
+                    # serialise leg of that cycle.)
+                    current_progress_tracker().mark_progress("extract.page")
         finally:
             await client.close()
 
@@ -1640,30 +1677,51 @@ class SqlApp(App):
         output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / "entities.json"
 
-        count = 0
-        with open(raw_file, "rb") as r, open(output_file, "wb") as w:
-            for line in r:
-                line = line.strip()
-                if not line:
-                    continue
-                record = orjson.loads(line)
-                asset = mapper_fn(record, connection_qn)
-                # Inject connectionName if the mapper returned a dict
-                if isinstance(asset, dict) and connection_name:
-                    asset.setdefault("attributes", {}).setdefault(
-                        "connectionName", connection_name
-                    )
-                if hasattr(asset, "to_nested_dict"):
-                    payload = asset.to_nested_dict()
-                elif hasattr(asset, "model_dump"):
-                    payload = asset.model_dump()
-                elif isinstance(asset, dict):
-                    payload = asset
-                else:
-                    payload = record
-                w.write(orjson.dumps(payload, default=_orjson_default))
-                w.write(b"\n")
-                count += 1
+        def _map_records() -> int:
+            written = 0
+            with open(raw_file, "rb") as r, open(output_file, "wb") as w:
+                for line in r:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    record = orjson.loads(line)
+                    asset = mapper_fn(record, connection_qn)
+                    # Inject connectionName if the mapper returned a dict
+                    if isinstance(asset, dict) and connection_name:
+                        asset.setdefault("attributes", {}).setdefault(
+                            "connectionName", connection_name
+                        )
+                    if hasattr(asset, "to_nested_dict"):
+                        payload = asset.to_nested_dict()
+                    elif hasattr(asset, "model_dump"):
+                        payload = asset.model_dump()
+                    elif isinstance(asset, dict):
+                        payload = asset
+                    else:
+                        payload = record
+                    w.write(orjson.dumps(payload, default=_orjson_default))
+                    w.write(b"\n")
+                    written += 1
+            return written
+
+        # Offloaded as one hop: this maps every raw record for the entity —
+        # JSON parse, the connector's mapper_fn (which builds pyatlan asset
+        # objects), serialise, write — with no await anywhere in the loop.
+        # A large table's records.json therefore holds the event loop for the
+        # whole transform, which stops the auto-heartbeat and gets a healthy
+        # activity killed on heartbeat_timeout. Every SQL connector inherits
+        # this method, so the fix applies fleet-wide (ADR-0010).
+        #
+        # No framework progress hook inside `_map_records`, deliberately
+        # (ADR-0018). The loop is line-by-line with no batch boundary to mark
+        # at, and the never-per-record rule forbids the only boundary it has.
+        # It does not need one: the whole map is a single `run_in_thread` hop,
+        # which FND-290 wraps in an unbounded auto-hold — so the stall watchdog
+        # is vouched for across the entire transform by mechanism 2 rather than
+        # mechanism 1. That leaves the 24h backstop as its only bound, which is
+        # the ADR's accepted residual for opaque offloaded work and is exactly
+        # what warn mode is meant to surface with an observed duration.
+        count = await run_in_thread(_map_records)
 
         logger.info("Transformed %s: %d records", entity_type, count)
         # Emit a FileReference to entities.json so the activity

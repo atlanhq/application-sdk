@@ -14,7 +14,7 @@ import asyncio
 import dataclasses
 from collections.abc import Callable
 from datetime import timedelta
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from temporalio import activity
@@ -25,6 +25,10 @@ from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
+
+if TYPE_CHECKING:
+    from application_sdk.errors.base import AppError
+    from application_sdk.execution.errors import ApplicationError
 
 logger = get_logger(__name__)
 
@@ -70,6 +74,62 @@ def _sever_cause_chain(exc: BaseException) -> None:
             current.__context__ = None
             break
         current = nxt
+
+
+def _to_application_error(e: AppError) -> ApplicationError:
+    """Translate a typed :class:`AppError` into the ``ApplicationError`` we raise.
+
+    Shared by every site in this module that fails an activity with a typed
+    error — the stall branch of the cancellation handler and the general
+    ``AppError`` branch — because all three things it does are easy to get
+    subtly different in a second copy, and each one silently degrades a failure
+    that a human has to read later:
+
+    - the ``FailureDetails`` guard, so non-serialisable evidence costs the
+      structured details rather than replacing the real error with a secondary
+      one;
+    - ``_sever_cause_chain``, so Temporal's failure serializer can always
+      complete (BLDX-1512);
+    - ``non_retryable=not e.effective_retryable``, so the error's own retry
+      policy reaches Temporal instead of the default.
+
+    Args:
+        e: The typed error to translate. Mutated by the cause-chain severing,
+            which is safe because the caller raises the returned
+            ``ApplicationError`` immediately.
+
+    Returns:
+        The ``ApplicationError`` to raise, with the error's class name as its
+        wire ``type``. Callers must still ``raise ... from`` the original
+        exception so the traceback keeps its chain.
+    """
+    from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+        ApplicationError,
+    )
+
+    # Guard FailureDetails construction: evidence fields may contain
+    # non-serialisable values; fall back to details-free ApplicationError
+    # rather than letting a secondary error mask the original.
+    try:
+        details: tuple[Any, ...] = (e.to_failure_details(),)
+    except Exception:
+        logger.warning(
+            "Failed to build FailureDetails for %s; raising without structured details",
+            type(e).__name__,
+            exc_info=True,
+        )
+        details = ()
+
+    # Sever deep / cyclic __cause__ / __context__ chains before Temporal's
+    # failure serializer walks them (BLDX-1512).
+    _sever_cause_chain(e)
+
+    return ApplicationError(
+        str(e),
+        *details,
+        type=type(e).__name__,
+        non_retryable=not e.effective_retryable,
+    )
 
 
 @dataclasses.dataclass
@@ -143,6 +203,10 @@ def create_activity_from_task(
             TemporalHeartbeatController,
             auto_heartbeat_loop,
         )
+        from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            ProgressTracker,
+            bind_progress_tracker,
+        )
 
         app_registry = AppRegistry.get_instance()
         app_metadata = app_registry.get(context.app_name)
@@ -194,161 +258,239 @@ def create_activity_from_task(
         )
         app_instance._task_context = task_exec_context
 
+        # One tracker per attempt, bound for the extent of the body. Created
+        # unconditionally — deliberately not gated on heartbeat_timeout_seconds,
+        # since the stall watchdog is what bounds a wedged attempt on a task
+        # that has heartbeating disabled. The binding is what makes it reachable
+        # from the framework hooks, `run_in_thread` and `holding_progress()`,
+        # none of which is handed a reference (ADR-0018 → *Feeding the
+        # tracker*).
+        #
+        # A block rather than a set/reset pair: no path out of the body can
+        # leave a dead attempt's tracker bound to this context — not a raise
+        # from `create_task` while the loop is closing, and not a
+        # `CancelledError` (a `BaseException`) landing in the cleanup below.
         stop_event = asyncio.Event()
         heartbeat_task = None
 
-        if (
-            context.heartbeat_timeout_seconds is not None
-            and context.auto_heartbeat_seconds is not None
-        ):
-            heartbeat_task = asyncio.create_task(
-                auto_heartbeat_loop(
-                    interval_seconds=context.auto_heartbeat_seconds,
-                    heartbeat_fn=heartbeat_controller.heartbeat_keepalive,
-                    stop_event=stop_event,
-                    task_name=context.task_name,
-                )
-            )
+        with bind_progress_tracker(ProgressTracker()) as tracker:
+            try:
+                if (
+                    context.heartbeat_timeout_seconds is not None
+                    and context.auto_heartbeat_seconds is not None
+                ):
+                    # Captured here, in the attempt's own task. The handler below
+                    # runs inside the heartbeat task, where
+                    # `asyncio.current_task()` would be the watchdog itself — it
+                    # would cancel the thing doing the watching and leave the
+                    # wedged attempt running.
+                    activity_task = asyncio.current_task()
 
-        try:
-            from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-                has_refs_to_materialize,
-                has_refs_to_persist,
-                materialize_file_refs,
-                persist_file_refs,
-            )
+                    def on_stall(
+                        stalled_for_seconds: float, last_progress_label: str
+                    ) -> None:
+                        """Fail this attempt: record the verdict, then cancel it.
 
-            method_name = getattr(task_metadata.func, "__name__", task_metadata.name)
-            task_method = getattr(app_instance, method_name)
-
-            # Resolve the store once for both FileReference hooks.
-            store = infra.storage if infra is not None else None
-
-            # Materialise any durable FileReferences in the input before the task runs.
-            if store is not None and has_refs_to_materialize(input_data):
-                input_data = await materialize_file_refs(store, input_data)
-
-            result = await task_method(input_data)
-
-            # Persist any ephemeral FileReferences in the output after the task completes.
-            if store is not None and has_refs_to_persist(result):
-                from application_sdk.execution._temporal.activity_utils import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-                    build_output_path,
-                )
-
-                try:
-                    output_path: str | None = build_output_path()
-                except Exception:
-                    logger.warning(
-                        "build_output_path() failed, proceeding without output path",
-                        exc_info=True,
-                    )
-                    output_path = None
-                result = await persist_file_refs(store, result, output_path=output_path)
-
-            # Track all FileReference local paths for on_complete() cleanup.
-            from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-                _find_file_refs,
-            )
-
-            all_refs = _find_file_refs(input_data) + _find_file_refs(result)
-            if all_refs:
-                _track_file_refs(context.workflow_id, *all_refs)
-
-            return cast("Output", result)
-
-        except asyncio.CancelledError as e:
-            # In Python 3.8+, ``asyncio.CancelledError`` extends ``BaseException``,
-            # so it bypasses the ``except Exception`` block below. We must catch
-            # it explicitly to attribute pod-termination cancels to
-            # ``ApplicationError(type=WORKER_EVICTED_TYPE)`` and let other cancels propagate as today.
-            #
-            # NOTE: converting ``CancelledError`` to a regular exception
-            # technically violates asyncio's cancellation protocol — the
-            # task ends in done-with-exception state instead of cancelled,
-            # so callers keying on ``Task.cancelled()`` would observe False.
-            # In practice this only fires during graceful worker shutdown,
-            # where the only consumer is Temporal's activity wrapper (which
-            # records the failure on the wire as ``ApplicationError`` — the
-            # exact behaviour we want so the workflow-side eviction loop can
-            # re-dispatch). The activity's ``finally`` block still runs for
-            # heartbeat cleanup. If we ever surface this swap to a plain
-            # asyncio caller, we'd need to relocate it to a Temporal
-            # interceptor instead.
-            from application_sdk.execution.shutdown import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-                is_worker_shutting_down,
-            )
-
-            if is_worker_shutting_down():
-                from application_sdk.errors.leaves import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + errors imports observability transitively
-                    WORKER_EVICTED_TYPE,
-                )
-                from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-                    ApplicationError,
-                )
-
-                _sever_cause_chain(e)
-                raise ApplicationError(
-                    "Activity terminated because the worker pod is shutting down",
-                    type=WORKER_EVICTED_TYPE,
-                    non_retryable=True,
-                ) from e
-            raise
-
-        # conformance: ignore[E004] exception translator: both branches re-raise; nothing is swallowed
-        except Exception as e:
-            from application_sdk.errors.base import (  # noqa: PLC0415 — circular
-                AppError as _AppError,
-            )
-
-            if isinstance(e, _AppError):
-                from application_sdk.execution.errors import (  # noqa: PLC0415 — circular
-                    ApplicationError,
-                )
-
-                # Guard FailureDetails construction: evidence fields may contain
-                # non-serialisable values; fall back to details-free ApplicationError
-                # rather than letting a secondary error mask the original.
-                try:
-                    details: tuple[Any, ...] = (e.to_failure_details(),)
-                except Exception:
-                    logger.warning(
-                        "Failed to build FailureDetails for %s; raising without structured details",
-                        type(e).__name__,
-                        exc_info=True,
-                    )
-                    details = ()
-
-                # Sever deep / cyclic __cause__ / __context__ chains before
-                # Temporal's failure serializer walks them (BLDX-1512).
-                _sever_cause_chain(e)
-
-                raise ApplicationError(
-                    str(e),
-                    *details,
-                    type=type(e).__name__,
-                    non_retryable=not e.effective_retryable,
-                ) from e
-            raise
-
-        finally:
-            if heartbeat_task is not None:
-                stop_event.set()
-                try:
-                    await asyncio.wait_for(heartbeat_task, timeout=1.0)
-                # conformance: ignore[E004] cleanup path cancelling heartbeat task in finally; all exceptions handled by inner cancel+log
-                except (TimeoutError, Exception):
-                    heartbeat_task.cancel()
-                    try:
-                        await heartbeat_task
-                    # conformance: ignore[E004] heartbeat cancel cleanup in finally; debug-logged with exc_info; swallow is intentional
-                    except Exception:
-                        logger.debug(
-                            "Heartbeat task did not cancel cleanly", exc_info=True
+                        Recording before cancelling is what makes the two
+                        orderings equivalent: the cancellation lands at the
+                        attempt's next ``await``, which is never earlier than the
+                        return from this call, so the observation is always
+                        already there when the handler below reads it.
+                        """
+                        tracker.flag_stalled(
+                            stalled_for_seconds=stalled_for_seconds,
+                            last_progress_label=last_progress_label,
                         )
+                        if activity_task is not None:
+                            activity_task.cancel()
 
-            app_instance._task_context = None
-            app_instance._context = None
+                    heartbeat_task = asyncio.create_task(
+                        auto_heartbeat_loop(
+                            interval_seconds=context.auto_heartbeat_seconds,
+                            heartbeat_fn=heartbeat_controller.heartbeat_keepalive,
+                            stop_event=stop_event,
+                            task_name=context.task_name,
+                            # `watchdog_mode` and `max_no_progress_seconds` are
+                            # deliberately absent: their defaults leave the
+                            # watchdog inert, and the per-task flag and budget
+                            # that turn it on are FND-296's. Injecting the
+                            # handler now means enabling the watchdog is a config
+                            # change rather than a second seam.
+                            progress=tracker,
+                            on_stall=on_stall,
+                        )
+                    )
+
+                from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                    has_refs_to_materialize,
+                    has_refs_to_persist,
+                    materialize_file_refs,
+                    persist_file_refs,
+                )
+
+                method_name = getattr(
+                    task_metadata.func, "__name__", task_metadata.name
+                )
+                task_method = getattr(app_instance, method_name)
+
+                # Resolve the store once for both FileReference hooks.
+                store = infra.storage if infra is not None else None
+
+                # Materialise any durable FileReferences in the input before the task runs.
+                if store is not None and has_refs_to_materialize(input_data):
+                    input_data = await materialize_file_refs(store, input_data)
+
+                result = await task_method(input_data)
+
+                # Persist any ephemeral FileReferences in the output after the task completes.
+                if store is not None and has_refs_to_persist(result):
+                    from application_sdk.execution._temporal.activity_utils import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                        build_output_path,
+                    )
+
+                    try:
+                        output_path: str | None = build_output_path()
+                    except Exception:
+                        logger.warning(
+                            "build_output_path() failed, proceeding without output path",
+                            exc_info=True,
+                        )
+                        output_path = None
+                    result = await persist_file_refs(
+                        store, result, output_path=output_path
+                    )
+
+                # Track all FileReference local paths for on_complete() cleanup.
+                from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                    _find_file_refs,
+                )
+
+                all_refs = _find_file_refs(input_data) + _find_file_refs(result)
+                if all_refs:
+                    _track_file_refs(context.workflow_id, *all_refs)
+
+                return cast("Output", result)
+
+            except asyncio.CancelledError as e:
+                # In Python 3.8+, ``asyncio.CancelledError`` extends ``BaseException``,
+                # so it bypasses the ``except Exception`` block below. We must catch
+                # it explicitly to attribute the two cancels the SDK gives a
+                # meaning — a stall kill to
+                # ``ApplicationError(type="TaskStalledError")`` and a pod
+                # termination to ``ApplicationError(type=WORKER_EVICTED_TYPE)`` —
+                # and let every other cancel propagate as today.
+                #
+                # NOTE: converting ``CancelledError`` to a regular exception
+                # technically violates asyncio's cancellation protocol — the
+                # task ends in done-with-exception state instead of cancelled,
+                # so callers keying on ``Task.cancelled()`` would observe False.
+                # In practice it only fires on those two attributed cancels,
+                # where the only consumer is Temporal's activity wrapper (which
+                # records the failure on the wire as ``ApplicationError`` — the
+                # exact behaviour we want so the workflow-side eviction loop can
+                # re-dispatch). The activity's ``finally`` block still runs for
+                # heartbeat cleanup. If we ever surface this swap to a plain
+                # asyncio caller, we'd need to relocate it to a Temporal
+                # interceptor instead.
+
+                # The stall check comes FIRST, ahead of the shutdown check, and
+                # the order is load-bearing rather than stylistic: a stall and a
+                # SIGTERM can coincide, and if eviction won that race, a wedged
+                # attempt would be mislabelled `WorkerEvicted` and re-dispatched
+                # by the workflow-side eviction-retry loop *outside* the normal
+                # retry budget — the exact amplification ADR-0018 exists to
+                # remove. Attributed to the stall, it spends the task's own retry
+                # budget like any other failure.
+                stall = tracker.stall
+                if stall is not None:
+                    from application_sdk.errors.leaves import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + errors imports observability transitively
+                        TaskStalledError,
+                    )
+
+                    last_label = stall.last_progress_label or "<none>"
+                    _sever_cause_chain(e)
+                    raise _to_application_error(
+                        TaskStalledError(
+                            message=(
+                                f"Task '{context.task_name}' made no observable "
+                                f"progress for {stall.stalled_for_seconds:.0f}s; "
+                                f"last signal was '{last_label}'"
+                            ),
+                            operation=context.task_name,
+                            stalled_for_seconds=stall.stalled_for_seconds,
+                            # Left unset rather than "" when the attempt never
+                            # reported one: absent reads as absent on the wire,
+                            # and "the attempt never made a single observable
+                            # signal" is a materially different finding from "it
+                            # went quiet after this one".
+                            last_progress_label=stall.last_progress_label or None,
+                            app_name=context.app_name,
+                            run_id=run_id,
+                            suggested_action=(
+                                "Declare an allowance for the call that "
+                                "legitimately runs quiet for this long; otherwise "
+                                "look for a retry loop that never exits, or a "
+                                "source connection that hung without erroring"
+                            ),
+                        )
+                    ) from e
+
+                from application_sdk.execution.shutdown import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                    is_worker_shutting_down,
+                )
+
+                if is_worker_shutting_down():
+                    from application_sdk.errors.leaves import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + errors imports observability transitively
+                        WORKER_EVICTED_TYPE,
+                    )
+                    from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                        ApplicationError,
+                    )
+
+                    _sever_cause_chain(e)
+                    raise ApplicationError(
+                        "Activity terminated because the worker pod is shutting down",
+                        type=WORKER_EVICTED_TYPE,
+                        non_retryable=True,
+                    ) from e
+                raise
+
+            # conformance: ignore[E004] exception translator: both branches re-raise; nothing is swallowed
+            except Exception as e:
+                from application_sdk.errors.base import (  # noqa: PLC0415 — circular
+                    AppError as _AppError,
+                )
+
+                if isinstance(e, _AppError):
+                    raise _to_application_error(e) from e
+                raise
+
+            finally:
+                try:
+                    if heartbeat_task is not None:
+                        stop_event.set()
+                        try:
+                            await asyncio.wait_for(heartbeat_task, timeout=1.0)
+                        # conformance: ignore[E004] cleanup path cancelling heartbeat task in finally; all exceptions handled by inner cancel+log
+                        except (TimeoutError, Exception):
+                            heartbeat_task.cancel()
+                            try:
+                                await heartbeat_task
+                            # conformance: ignore[E004] heartbeat cancel cleanup in finally; debug-logged with exc_info; swallow is intentional
+                            except Exception:
+                                logger.debug(
+                                    "Heartbeat task did not cancel cleanly",
+                                    exc_info=True,
+                                )
+                finally:
+                    # Nested so the app-instance clears survive the heartbeat
+                    # cleanup above raising — in particular a ``CancelledError``,
+                    # which is a ``BaseException`` and would otherwise skip
+                    # straight past them. (The tracker needs no such guard: its
+                    # `with` block unbinds on every exit path, cancellation
+                    # included.)
+                    app_instance._task_context = None
+                    app_instance._context = None
 
     # Set type annotations with the actual input/output types from task metadata.
     # This is critical for Temporal to properly deserialize the input dataclass.

@@ -413,11 +413,57 @@ Detection latency is `max_no_progress_seconds` plus at most one loop tick (10s).
 ### Feeding the tracker (three mechanisms, most-automatic first)
 
 1. **Framework hooks (automatic, no app action).** Call `mark_progress()` wherever
-   the SDK already loops over units of work: the batched output writers, the
-   record/statistics emission path, and the `ObjectStore` transfer loops
-   (`storage/transfer.py`, `storage/chunked.py`, `storage/file_ref_sync.py`). This
-   covers the streaming majority — the bulk of connector runtime — with no code
-   change in the app.
+   the SDK already loops over units of work. This covers the streaming majority —
+   the bulk of connector runtime — with no code change in the app. Each hook
+   reaches the attempt's tracker through `current_progress_tracker()` (FND-287),
+   which outside an activity returns the inert tracker — so every hook below is a
+   no-op until `activities.py` binds one. As landed (FND-288), the hooked set is:
+
+   | Where | Unit | Label |
+   | --- | --- | --- |
+   | `storage/formats/__init__.py` — `Writer._flush_buffer` | one buffer chunk written | `writer.flush_buffer` |
+   | `storage/formats/__init__.py` — `Writer._write_statistics` | statistics sidecar emitted at `close()` | `writer.statistics` |
+   | `storage/formats/parquet.py` — `_write_chunk_to_temp_folder` | one accumulated chunk | `writer.accumulate_chunk` |
+   | `storage/formats/parquet.py` — `_consolidate_current_folder` | one consolidated file | `writer.consolidate_chunk` |
+   | `storage/rolling.py` — `RollingFileWriter._flush_locked` | one rolled chunk | `writer.rolling_flush` |
+   | `storage/ops.py` — `upload_file` / `download_file` | one multipart part / streamed chunk | `storage.upload_part`, `storage.download_chunk` |
+   | `storage/chunked.py` — `_fetch_chunk` | one range GET at its offset | `storage.download_range` |
+   | `storage/transfer.py` — `_upload_one` / `_upload_from_store` / `_download_one` | one file transferred *or* skipped on a hash match | `storage.upload_file`, `storage.copy_file`, `storage.download_file` |
+   | `storage/cloud.py` — `CloudStore.upload` | one part to an external store | `cloudstore.upload_part` |
+   | `storage/file_ref_sync.py` — `_replace_refs` | one `FileReference` persisted / materialised | `file_ref.persist`, `file_ref.materialize` |
+   | `templates/sql_app.py` — `_extract_entity` | one fetched page written to raw JSONL | `extract.page` |
+   | `templates/sql_metadata_extractor.py` — `fetch_databases` / `fetch_schemas` / `fetch_tables` / `fetch_columns` | one fetched page | `fetch_*.page` |
+
+   Two grains on purpose: **per part/chunk** inside the byte loops, so a single
+   multi-GB object is never one long quiet window, and **per file** at the
+   orchestration boundaries, so `last_label` tells an operator *which* loop went
+   quiet rather than only that bytes were moving. A hash-match skip counts as
+   progress — an idempotent retry over a large prefix pays a digest and a sidecar
+   GET per file, and reading that as silence would manufacture a stall.
+
+   `storage/ops.py`, `storage/rolling.py`, `storage/cloud.py` and the template page
+   loops are additions to this ADR's original three-file sketch, each because a
+   single step there can outlast the budget with nothing else to carry its signal:
+   `ops` owns the actual byte loops the other modules delegate to;
+   `RollingFileWriter` is the *recommended* replacement for the v4.0-deprecated
+   writers and is not a `Writer` subclass, so it inherits no hook; and the
+   `fetch_*` page loops accumulate in memory rather than streaming to a writer, so
+   there is no write side to cover for them.
+
+   **Where mechanism 1 stops and mechanism 2 starts.** A hook only helps a loop
+   that yields *and* has a boundary worth marking. `SqlApp._transform_entity` has
+   neither: rollout step 1 (FND-282) offloaded its whole record map into a single
+   `run_in_thread` hop, and the loop inside is line-by-line with no batch
+   boundary — the only boundary available is the per-record one this rule
+   forbids. It needs no hook, because the auto-hold below vouches for the entire
+   offloaded call. Coverage there is mechanism 2, and the residual is the 24h
+   backstop that warn mode is meant to surface.
+
+   The general rule: **a synchronous loop that holds the event loop cannot be
+   fixed with a mark** — the watchdog coroutine cannot tick to read one. That is
+   loop starvation, `heartbeat_timeout`'s job, and an ADR-0010 offload is the
+   fix. Offload first, then decide whether the offloaded call wants a hook
+   (a yielding batch loop) or a hold (one opaque hop).
 2. **`run_in_thread` auto-holds (automatic for blocking work).** Anything offloaded
    through `run_in_thread` is wrapped in an **unbounded** hold by the SDK, so a
    legitimate long blocking call is never false-killed and behaviour on upgrade is
@@ -425,6 +471,36 @@ Detection latency is `max_no_progress_seconds` plus at most one loop tick (10s).
    duration of the call and the 24h backstop is the only bound — a real, documented
    residual. Warn mode surfaces each one with its observed duration, and the
    conformance rule keeps them visible afterwards.
+
+   As landed (FND-290), the hold wraps the *single* implementation all three
+   public entry points funnel into — the module-level `run_in_thread`, the
+   `TaskExecutionContext` wrapper and `App.run_in_thread` — so a blocking call
+   gets exactly one hold no matter which one an app reaches for. It starts before
+   the executor dispatch, so it also covers time queued behind a saturated
+   `sdk-blocking-` pool, and it is released in a `finally`: an offload that
+   raises, and an activity cancelled mid-offload, must release their *own* token,
+   because a leaked unbounded hold vouches for the rest of the attempt and
+   silences the watchdog for good. Holds are keyed by token, so concurrent
+   offloads under one `asyncio.gather`, and an auto-hold nested inside an
+   author's declared `holding_progress`, never release each other.
+
+   The label is `run_in_thread.<callable qualname>` — the offloaded callable's
+   own name, never an argument, so warn mode ranks *sites*
+   (`run_in_thread.Cursor.execute`, p99 40min, unbounded) instead of collapsing
+   an app's blocking work into one bucket, and no query, path or credential can
+   reach a log or metric label through this route.
+
+   `run_fault_isolated` — the SDK's other offload seam, and `run_best_effort`'s
+   mechanism — is held on the same grounds: an isolated call emits nothing at all
+   until the child returns, and the SDK's own default allowance for the upload
+   validation scan is 600s, well past any plausible no-progress budget. Its hold
+   is **bounded by its own `timeout`** where `run_in_thread`'s is unbounded, and
+   that is not the derived bound rejected above: what is rejected is inferring an
+   allowance from the *callee's* per-operation kwargs, whereas
+   `run_fault_isolated(timeout=...)` is this function's own parameter, enforced
+   here as a wall-clock kill of the child — which is exactly what an allowance
+   means. `timeout=None` still yields an unbounded hold, matching its "wait
+   forever" semantics.
 3. **Manual `context.heartbeat(...)` or `holding_progress(...)` (explicit, app
    action).** The residual: a custom async loop, or an opaque single `await`
    against the connector's own source client (see the asymmetry below — this is
@@ -443,13 +519,22 @@ One mechanism covers both blocking and async opaque work:
 
 ```python
 # async: the connector's own client
-async with self.context.holding_progress("snapshot metadata query", timeout=1800):
+async with self.holding_progress("snapshot metadata query", timeout=1800):
     rows = await long_single_query(...)
 
 # blocking: the same wrapper around the offload
-async with self.context.holding_progress("full table scan", timeout=7200):
-    rows = await self.context.run_in_thread(cursor.execute, sql)
+async with self.holding_progress("full table scan", timeout=7200):
+    rows = await self.run_in_thread(cursor.execute, sql)
 ```
+
+It lives on `TaskExecutionContext` next to `run_in_thread`, with the same
+`App`-level shorthand (`self.holding_progress(...)` /
+`self.task_context.holding_progress(...)`), and as a module-level
+`application_sdk.execution.progress.holding_progress` for app code that sits
+outside the app class. `timeout` is keyword-only and **required**: declaring
+nothing is spelled `timeout=None`, so an unbounded hold is a statement in the
+source rather than an omission, and no default can quietly reintroduce a
+derived duration.
 
 An earlier draft of this ADR proposed *deriving* the hold's bound from the
 `timeout=` kwarg the call already carries, on the theory that ADR-0010 already

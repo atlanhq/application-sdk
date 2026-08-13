@@ -56,12 +56,9 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
-      - name: Install PKL
-        run: |
-          set -euo pipefail
-          curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
-          chmod +x /tmp/pkl
-          sudo mv /tmp/pkl /usr/local/bin/pkl
+      - uses: ./.github/actions/install-pkl
+        with:
+          version: ${{ env.PKL_VERSION }}
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:

@@ -55,14 +55,20 @@ def _load(path: Path) -> dict[str, Any]:
 def _load_or_skip(path: Path) -> dict[str, Any] | None:
     """Load a workflow for the repo-wide sweep, tolerating unparseable files.
 
-    `.github/workflows/scheduled-trivy-scan.yml` does not parse as YAML on main
-    (a heredoc body inside a `run: |` block sits at column 0, which terminates
-    the block scalar). GitHub cannot run an invalid workflow either, so it cannot
-    exhibit the bug this sweep looks for — and repairing it here would silently
-    start a daily security scan that files tickets, which is not this change's to
-    make. Tolerated rather than asserted against, for the same reason
-    test_e2e_tenant_install_workflow.py scopes its own guard: a check born
-    red on pre-existing debt gets disabled instead of fixed.
+    No workflow is currently unparseable. This tolerance was added for
+    `.github/workflows/scheduled-trivy-scan.yml`, which did not parse as YAML on
+    main (a heredoc body inside a `run: |` block sat at column 0, terminating the
+    block scalar) — and which has since been deleted, on the reasoning noted here
+    that repairing it would silently start a ticket-filing security scan. GitHub
+    cannot run an invalid workflow, so such a file cannot exhibit the bug this
+    sweep looks for.
+
+    Kept rather than tightened into an assertion: this sweep's job is the
+    label-trigger gate, and failing it on someone else's malformed YAML would
+    make it a check born red on unrelated debt — the failure mode that gets a
+    guard disabled instead of fixed (cf. test_e2e_tenant_install_workflow.py
+    scoping its own guard). `test_artifact_upload_retry.py` owns the assertion
+    that no new unparseable workflow lands.
     """
     try:
         return _load(path)

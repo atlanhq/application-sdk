@@ -1,9 +1,17 @@
 """Unit test configuration and autouse fixtures."""
 
+import time
+from collections.abc import Callable, Iterator
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from loguru import logger as _loguru_logger
+
+from application_sdk.execution.progress import (
+    ClosedHold,
+    ProgressTracker,
+    bind_progress_tracker,
+)
 
 # Re-export shared registry fixtures so all unit tests can use them without
 # explicit per-file imports (pytest discovers fixtures via conftest chain).
@@ -11,6 +19,55 @@ from application_sdk.testing.fixtures import (  # noqa: F401
     clean_app_registry,
     clean_task_registry,
 )
+
+
+class RecordingProgressTracker(ProgressTracker):
+    """A real :class:`ProgressTracker` that also keeps a history of its signals.
+
+    ``ProgressTracker`` only retains the *most recent* label, which is all the
+    stall watchdog needs but not enough to assert that a framework hook fires
+    once per unit of work rather than once per record (ADR-0018's hard
+    constraint). Subclassing keeps the real stall/hold behaviour intact — no
+    stub — while adding the ordered histories a hook or auto-hold test needs.
+
+    :attr:`labels` records ``mark_progress`` calls; :attr:`holds` records every
+    hold as it closes, which is a separate list because a closed hold is *not* a
+    ``mark_progress`` call — ``exit_hold`` re-arms the stall clock directly, so a
+    hold would otherwise leave no trace in either history.
+    """
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self.holds: list[ClosedHold] = []
+        super().__init__(clock=clock, on_hold_closed=self.holds.append)
+        self.labels: list[str] = []
+
+    def mark_progress(self, label: str = "") -> None:
+        self.labels.append(label)
+        super().mark_progress(label)
+
+    def count(self, label: str) -> int:
+        """How many times *label* was recorded."""
+        return self.labels.count(label)
+
+    def holds_for(self, label: str) -> list[ClosedHold]:
+        """Every closed hold recorded under *label*, in the order they closed."""
+        return [hold for hold in self.holds if hold.label == label]
+
+
+@pytest.fixture
+def progress_marks() -> Iterator[RecordingProgressTracker]:
+    """Bind a recording tracker for the test, and hand it back.
+
+    Framework hooks read the current attempt's tracker via
+    :func:`~application_sdk.execution.progress.current_progress_tracker`, which
+    outside an activity returns the inert tracker that discards every signal —
+    so binding a real one here is what turns the hooks on for a test. Stands in
+    for the per-attempt bind ``activities.py`` does in production, via the same
+    ``bind_progress_tracker`` block, so a test can never leave a binding behind.
+    """
+    tracker = RecordingProgressTracker()
+    with bind_progress_tracker(tracker):
+        yield tracker
 
 
 @pytest.fixture

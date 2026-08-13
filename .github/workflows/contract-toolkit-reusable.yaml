@@ -37,12 +37,9 @@ jobs:
         with:
           version: "0.12.3"
 
-      - name: Install PKL
-        run: |
-          set -euo pipefail
-          curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
-          chmod +x /tmp/pkl
-          sudo mv /tmp/pkl /usr/local/bin/pkl
+      - uses: ./.github/actions/install-pkl
+        with:
+          version: ${{ env.PKL_VERSION }}
 
       - name: Regenerate all examples
         run: contract-toolkit/scripts/regenerate-all.sh
@@ -79,12 +76,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install PKL
-        run: |
-          set -euo pipefail
-          curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
-          chmod +x /tmp/pkl
-          sudo mv /tmp/pkl /usr/local/bin/pkl
+      - uses: ./.github/actions/install-pkl
+        with:
+          version: ${{ env.PKL_VERSION }}
 
       - name: Check generated output invariants
         run: contract-toolkit/scripts/check-invariants.sh

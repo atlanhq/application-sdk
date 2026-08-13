@@ -118,12 +118,30 @@ jobs:
           secrets: |
             git_token=${{ secrets.ORG_PAT_GITHUB }}
 
+      # `upload-artifact` classifies the artifact service's finalize 403 as
+      # non-retryable and fails on the first occurrence, even though the bytes
+      # already landed and the next attempt normally succeeds. That failed the
+      # job, which failed the aggregate gate, which ejected the merge-queue
+      # entry. So: retry once, and keep it fatal if both attempts fail —
+      # the trivy-scan job downloads this with no continue-on-error, so
+      # losing it fails that job anyway; failing here says why.
       - name: Upload image artifact
+        id: upload-image
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: docker-image
           path: /tmp/image.tar
           retention-days: 7
+
+      - name: Upload image artifact (retry)
+        if: steps.upload-image.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: docker-image
+          path: /tmp/image.tar
+          retention-days: 7
+          overwrite: true
 
   # ── Trivy scan ──────────────────────────────────────────────────────────────
   trivy-scan:
@@ -154,8 +172,8 @@ jobs:
 
       - name: Install Trivy
         # Install via the official setup-trivy action with a PINNED version —
-        # the same recipe already used by scheduled-trivy-scan.yml and the
-        # sdk-trivy-scan composite (same action SHA, same v0.70.0 pin). This
+        # the same recipe already used by the sdk-trivy-scan composite (same
+        # action SHA, same v0.70.0 pin). This
         # replaces a hand-rolled install that resolved the version from
         # api.github.com/.../trivy/releases/latest at scan time: when that call
         # returned anything but the expected JSON (a transient GitHub API 5xx,
@@ -194,12 +212,30 @@ jobs:
             --output /tmp/trivy_results.json \
             "$IMAGE"
 
+      # `upload-artifact` classifies the artifact service's finalize 403 as
+      # non-retryable and fails on the first occurrence, even though the bytes
+      # already landed and the next attempt normally succeeds. That failed the
+      # job, which failed the aggregate gate, which ejected the merge-queue
+      # entry. So: retry once, and never fail the gate on it:
+      # the consumer already downloads this with continue-on-error.
       - name: Upload Trivy results
+        id: upload-trivy
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: trivy-results
           path: /tmp/trivy_results.json
           retention-days: 7
+
+      - name: Upload Trivy results (retry)
+        if: steps.upload-trivy.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: trivy-results
+          path: /tmp/trivy_results.json
+          retention-days: 7
+          overwrite: true
 
   # ── Security Gate — check Trivy results against allowlist ───────────────────
   security-gate:

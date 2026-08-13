@@ -16,6 +16,7 @@ from typing import ClassVar
 from application_sdk.errors import (
     STORAGE_CONFIG,
     STORAGE_EMPTY_UPLOAD,
+    STORAGE_INTEGRITY,
     STORAGE_NOT_FOUND,
     STORAGE_OPERATION,
     STORAGE_PERMISSION,
@@ -341,6 +342,98 @@ class StorageEmptyUploadError(DataIntegrityError, StorageError):
         parts = [f"[{self.error_code.code}] {self.message}"]
         if self.local_path:
             parts.append(f"local_path={self.local_path}")
+        if self.cause:
+            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
+        return " | ".join(parts)
+
+
+@dataclass(kw_only=True)
+class StorageIntegrityError(DataIntegrityError, StorageError):
+    """Transferred bytes do not match the digest recorded for them (FND-306).
+
+    Raised by the transfer primitives when a file fails content validation:
+
+    * **Download** — the downloaded bytes hash to something other than the
+      ``{key}.sha256`` sidecar the producer wrote. Either the object in the
+      store is corrupt at source (a producer that died mid-write, e.g. on
+      ``ENOSPC``) or it was rewritten with content that no longer matches its
+      sidecar.
+    * **Upload** — the local file shrank while it was being read, so the bytes
+      that landed in the store are a truncated prefix of the artifact the
+      caller asked to upload.
+
+    Non-retryable by design: a byte-stable corrupt input fails identically on
+    every attempt, so burning the retry budget on it only delays the real
+    signal and misattributes the failure to the consumer. Re-running the
+    *producing* step is the remediation.
+
+    Categorical parent is ``DataIntegrityError`` (category=DATA_INTEGRITY,
+    audience=APP_OWNER, retryable=False); domain parent is ``StorageError``
+    so ``except StorageError:`` catch blocks still fire.
+
+    Attributes:
+        key: Object-store key that failed validation.
+        local_path: Local file the bytes were read from / written to.
+        check: Which validation failed — ``"digest"`` (content does not match
+            the recorded SHA-256) or ``"local_size"`` (source file shrank
+            mid-upload).
+        expectation: Digest the producer recorded, or the expected byte count.
+        observed: Digest actually computed, or the observed byte count.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_INTEGRITY
+    code: ClassVar[str] = "DATA_INTEGRITY_STORAGE_TRANSFER"
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.APP_OWNER
+
+    local_path: str | None = None
+    check: str | None = None
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        local_path: str | None = None,
+        check: str | None = None,
+        expectation: str | None = None,
+        observed: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        DataIntegrityError.__init__(
+            self,
+            message=message,
+            cause=cause,
+            expectation=expectation,
+            observed=observed,
+            location=key,
+        )
+        self.key = key
+        self.local_path = local_path
+        self.check = check
+        self._error_code = error_code
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return (
+            self._error_code
+            if self._error_code is not None
+            else self.DEFAULT_ERROR_CODE
+        )
+
+    def __str__(self) -> str:
+        parts = [f"[{self.error_code.code}] {self.message}"]
+        if self.key:
+            parts.append(f"key={self.key}")
+        if self.local_path:
+            parts.append(f"local_path={self.local_path}")
+        if self.check:
+            parts.append(f"check={self.check}")
+        if self.expectation:
+            parts.append(f"expected={self.expectation}")
+        if self.observed:
+            parts.append(f"observed={self.observed}")
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)

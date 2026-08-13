@@ -18,6 +18,7 @@ from application_sdk.errors.leaves import (
     RateLimitedError,
     ResourceExhaustedError,
     SourceUnavailableError,
+    TaskStalledError,
     UnimplementedError,
 )
 
@@ -213,6 +214,92 @@ def test_leaf_audience_in_failure_details(
 ) -> None:
     fd = cls(message="test").to_failure_details()
     assert fd.audience is expected_audience
+
+
+class TestTaskStalledError:
+    """The stall subtype of the TIMEOUT leaf (ADR-0018).
+
+    Not in ``_LEAVES``: that table is one entry per ``FailureCategory``, and a
+    stall shares TIMEOUT with :class:`AppTimeoutError` by design rather than
+    claiming a sixteenth category.
+    """
+
+    def test_is_an_app_timeout_error(self) -> None:
+        # `except AppTimeoutError:` in an app must keep catching a stall kill —
+        # that is the whole reason this is a subtype and not a new leaf.
+        assert issubclass(TaskStalledError, AppTimeoutError)
+        assert isinstance(TaskStalledError(message="stalled"), AppTimeoutError)
+
+    def test_metadata(self) -> None:
+        assert TaskStalledError.category is FailureCategory.TIMEOUT
+        assert TaskStalledError.code == "TIMEOUT_TASK_STALLED"
+        assert TaskStalledError.audience is Audience.APP_OWNER
+        assert (
+            TaskStalledError(message="stalled").qualified_code
+            == "TIMEOUT.TIMEOUT_TASK_STALLED"
+        )
+
+    def test_is_retryable_by_default(self) -> None:
+        """The deliberate half of the ADR-0018 argument, pinned.
+
+        The dominant cause of a stall is a transient source-side hang that
+        self-heals; flipping this to non-retryable would convert that majority
+        into failed runs needing a manual re-run from zero.
+        """
+        assert TaskStalledError.default_retryable is True
+        assert TaskStalledError(message="stalled").effective_retryable is True
+
+    def test_distinguishable_from_a_plain_timeout_on_the_wire(self) -> None:
+        """Same category, different code — so a stall kill is countable on its own.
+
+        Rolling a stall into ``TIMEOUT.TIMEOUT`` would make the M2 warn data
+        unreadable: the fleet-wide numbers could not separate stall kills from
+        StartToClose and heartbeat timeouts.
+        """
+        stalled = TaskStalledError(message="stalled").to_failure_details()
+        plain = AppTimeoutError(message="timed out").to_failure_details()
+
+        assert stalled.category is plain.category
+        assert stalled.code != plain.code
+
+    def test_evidence_carries_the_gap_and_the_label(self) -> None:
+        fd = TaskStalledError(
+            message="stalled",
+            operation="fetch_tables",
+            stalled_for_seconds=915.0,
+            last_progress_label="writer.flush_buffer",
+        ).to_failure_details()
+
+        assert fd.evidence["stalled_for_seconds"] == 915.0
+        assert fd.evidence["last_progress_label"] == "writer.flush_buffer"
+        assert fd.evidence["operation"] == "fetch_tables"
+        assert fd.retryable is True
+        assert fd.audience is Audience.APP_OWNER
+
+    def test_the_inherited_bounded_wait_fields_stay_unset(self) -> None:
+        """A stall has no bounded wait that elapsed — that absence is the point.
+
+        Populating ``timeout_seconds`` / ``elapsed_seconds`` with the stall gap
+        would claim a limit was configured and hit, when what happened is that
+        nothing bounded the quiet at all.
+        """
+        fd = TaskStalledError(
+            message="stalled", stalled_for_seconds=915.0
+        ).to_failure_details()
+
+        assert fd.evidence["timeout_seconds"] is None
+        assert fd.evidence["elapsed_seconds"] is None
+
+    def test_context_fields_survive_to_the_envelope(self) -> None:
+        fd = TaskStalledError(
+            message="stalled",
+            app_name="_app",
+            run_id="run-1",
+            suggested_action="declare an allowance",
+        ).to_failure_details()
+
+        assert (fd.app_name, fd.run_id) == ("_app", "run-1")
+        assert fd.suggested_action == "declare an allowance"
 
 
 def test_internal_error_classification_pending_default() -> None:

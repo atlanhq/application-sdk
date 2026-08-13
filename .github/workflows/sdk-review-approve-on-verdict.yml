@@ -1,6 +1,6 @@
-# Post the atlan-ci approval the moment mothership-ai[bot] posts the
-# verdict comment, so the formal approval doesn't have to wait for the
-# sandbox to finish its post-verdict cleanup.
+# Stamp the SDK review verdict the moment mothership-ai[bot] posts it, so the
+# formal approval doesn't have to wait for the sandbox to finish its
+# post-verdict cleanup.
 #
 # Why this exists:
 #   `sdk-review.yml`'s "Approve PR as atlan-ci" step runs AFTER the
@@ -13,10 +13,17 @@
 #   atlan-ci approval appears.
 #
 #   `issue_comment: created` fires within seconds of the verdict comment
-#   landing. This workflow listens on that event, validates the
-#   commenter (mothership-ai[bot]) and the marker (`<!-- SDK_REVIEW -->`
-#   or the legacy `<!-- TEST_SDK_REVIEW -->`), extracts the verdict, and
-#   posts the approval directly. End-to-end: comment → approval in ~5s.
+#   landing. This workflow listens on that event and stamps directly.
+#   End-to-end: comment → approval in ~5s.
+#
+# Two tokens, deliberately:
+#   `atlan-ci` is a CODEOWNER, so the APPROVE review must carry that identity.
+#   Nothing else here does. Running the whole sequence on the `atlan-ci` PAT
+#   spent ~15 requests per fire against one 5,000/hr user quota shared with
+#   every other `atlan-ci` workflow; under a burst of concurrent review/resolve
+#   loops it ran out, and the APPROVE — last call in the sequence — took the
+#   403. So the fleet App token does everything, and ORG_PAT_GITHUB is spent
+#   on exactly one request.
 #
 # Idempotency:
 #   The approve step in `sdk-review.yml` still runs as a fallback after
@@ -24,13 +31,14 @@
 #   APPROVED review with the bot signature?" before posting, so we
 #   don't end up with two approvals on the same PR head.
 #
-# Side-effects:
+# Side-effects (all guarded, see .github/scripts/sdk_review_approve.py):
 #   labels        applied from the extracted verdict (single source of
 #                 truth, decoupled from PR-head orchestration)
 #   reviews       atlan-ci posts APPROVE only when verdict ==
 #                 READY_TO_MERGE
 #   commit-status sdk-review context flipped to success/failure based
-#                 on the verdict
+#                 on the verdict — and only AFTER the approval lands, so a
+#                 failed approval never leaves a green check behind
 
 name: SDK Review — approve on verdict comment
 
@@ -44,8 +52,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
-  statuses: write
 
 jobs:
   sdk-review-approve:
@@ -67,199 +73,40 @@ jobs:
     # may complete AFTER the later one and overwrite its label writes.
     # `cancel-in-progress: false` is required: we must not cancel the
     # newer run. GitHub queues the blocked run; by the time it starts, the
-    # freshness check below ensures it either acts on the newest comment or
-    # no-ops if a different verdict comment has since landed.
+    # freshness check in the script ensures it either acts on the newest
+    # comment or no-ops if a different verdict comment has since landed.
     concurrency:
       group: sdk-review-approve-${{ github.event.issue.number }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Headroom for APPROVE_MAX_WAIT_SECONDS of rate-limit backoff plus checkout.
+    timeout-minutes: 10
     steps:
+      - name: Checkout repo (for the stamp script)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Mint fleet App token
+        # Carries its own rate-limit quota, independent of the `atlan-ci` user
+        # quota that ORG_PAT_GITHUB draws on. Needs `issues: write` as well as
+        # `pull_requests: write` — labels are an Issues-scope resource, and a
+        # token without it can approve a review while every label write fails.
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - name: Extract verdict, apply labels, post approval
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          # Everything except the APPROVE call.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # The APPROVE call only — atlan-ci is the CODEOWNER whose approval
+          # satisfies branch protection.
+          APPROVER_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           TRIGGERING_COMMENT_ID: ${{ github.event.comment.id }}
-        run: |
-          set -euo pipefail
-
-          # Extract the verdict. Prefer the structured marker
-          # `<!-- VERDICT: READY_TO_MERGE -->` (deterministic, formatting-
-          # invariant). Fall back to the `### Verdict:` grep for legacy
-          # comments that pre-date the structured marker.
-          #
-          # `|| true` is load-bearing here: under `set -euo pipefail`,
-          # grep returning 1 on a no-match (the structured marker isn't
-          # present yet in the verdict comment we're parsing) would kill
-          # the script BEFORE the prose-grep fallback below got a chance
-          # to run. Tolerate the no-match so we fall through cleanly.
-          VERDICT=$(printf '%s' "$COMMENT_BODY" | grep -oP '<!--\s*VERDICT:\s*\K[A-Z_]+' | head -1 || true)
-          if [ -z "$VERDICT" ]; then
-            RAW=$(printf '%s' "$COMMENT_BODY" | grep -oiP '###\s*Verdict:\s*\K[A-Z][A-Z _]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
-            VERDICT=$(printf '%s' "$RAW" | tr -s ' ' '_' | sed 's/_*$//')
-          fi
-          if [ -z "$VERDICT" ]; then
-            echo "::warning::Could not extract verdict from mothership-ai comment on PR #${PR_NUMBER}. Skipping."
-            exit 0
-          fi
-          echo "Detected verdict: '${VERDICT}'"
-
-          # Extract the sha that was actually reviewed from the structured
-          # marker `<!-- REVIEWED_HEAD: sha -->`. Uses the same idiom as
-          # VERDICT extraction above (`grep -oP '<!--\s*KEY:\s*\K...'`).
-          # A missing or empty marker means this is a legacy comment whose
-          # reviewed sha cannot be established; treat it as unverifiable
-          # rather than approving blind.
-          REVIEWED_HEAD=$(printf '%s' "$COMMENT_BODY" | grep -oP '<!--\s*REVIEWED_HEAD:\s*\K[0-9a-f]+' | head -1 || true)
-          if [ -z "$REVIEWED_HEAD" ]; then
-            echo "::warning::PR #${PR_NUMBER}: verdict comment has no REVIEWED_HEAD marker — cannot confirm which sha was reviewed; skipping all stamps."
-            exit 0
-          fi
-
-          # Resolve the PR HEAD so we can apply the commit status.
-          HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha')
-
-          # Guard: the verdict was computed for REVIEWED_HEAD. If the PR
-          # received a new push after the verdict comment was posted,
-          # REVIEWED_HEAD != HEAD_SHA. Do not stamp labels, commit status,
-          # or approval — that would bless unreviewed code.
-          if [ "$REVIEWED_HEAD" != "$HEAD_SHA" ]; then
-            echo "::warning::PR #${PR_NUMBER}: verdict was computed for ${REVIEWED_HEAD} but current head is ${HEAD_SHA} — skipping all stamps."
-            exit 0
-          fi
-
-          # S3 freshness check: verify the triggering comment is the NEWEST
-          # SDK_REVIEW summary on this PR. The concurrency group above
-          # serializes runs, but GitHub's queue is not event-time ordered —
-          # after waiting in queue, this run may execute after a NEWER
-          # verdict comment has already been processed. If so, skip to avoid
-          # overwriting a more-recent verdict's labels/status/approval.
-          #
-          # Fetch the id of the most-recent SDK_REVIEW comment using the
-          # same --paginate --slurp idiom used in sdk-review.yml. The
-          # TRIGGERING_COMMENT_ID is the event payload's comment id
-          # (integer). If a newer comment exists, its id will be larger
-          # (GitHub ids are monotonically increasing).
-          NEWEST_SDK_COMMENT_ID=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            --paginate --slurp 2>/dev/null \
-            | jq -r '[.[][] | select((.body | contains("<!-- SDK_REVIEW -->")) or (.body | contains("<!-- TEST_SDK_REVIEW -->")))] | last | .id // 0')
-          if [ "${NEWEST_SDK_COMMENT_ID:-0}" -gt "${TRIGGERING_COMMENT_ID:-0}" ]; then
-            echo "::notice::PR #${PR_NUMBER}: a newer SDK_REVIEW comment (id=${NEWEST_SDK_COMMENT_ID}) exists after this one (id=${TRIGGERING_COMMENT_ID}) — that run will/did process the final verdict; skipping."
-            exit 0
-          fi
-
-          # Strip the legacy `test-sdk-review-*` labels so PRs that
-          # pre-date the promotion don't end up wearing both prefixes.
-          for stale in "test-sdk-review-approved" "test-sdk-review-needs-human" "test-sdk-review-needs-rebase"; do
-            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "$stale" 2>/dev/null || true
-          done
-
-          # Apply the canonical sdk-review-* labels based on verdict.
-          case "$VERDICT" in
-            "READY_TO_MERGE")
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-approved" 2>/dev/null || true
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-needs-human" 2>/dev/null || true
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-needs-rebase" 2>/dev/null || true
-              ;;
-            "NEEDS_HUMAN")
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-needs-human" 2>/dev/null || true
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-approved" 2>/dev/null || true
-              ;;
-            "NEEDS_REBASE")
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-needs-rebase" 2>/dev/null || true
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-approved" 2>/dev/null || true
-              ;;
-            *)
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-approved" 2>/dev/null || true
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-needs-human" 2>/dev/null || true
-              ;;
-          esac
-
-          # Update the sdk-review commit status on the PR HEAD to
-          # reflect the verdict. The dispatch workflow sets this to
-          # pending; we resolve it here based on the actual outcome.
-          case "$VERDICT" in
-            "READY_TO_MERGE")
-              STATUS_STATE="success"; STATUS_DESC="Approved";;
-            "NEEDS_FIXES"|"BLOCKED")
-              STATUS_STATE="failure"; STATUS_DESC="Verdict: ${VERDICT}";;
-            *)
-              # NEEDS_HUMAN / NEEDS_REBASE / unknown — leave as failure
-              # so the merge gate stays visibly blocked.
-              STATUS_STATE="failure"; STATUS_DESC="Verdict: ${VERDICT}";;
-          esac
-          gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
-            -X POST \
-            -f state="${STATUS_STATE}" \
-            -f context=sdk-review \
-            -f description="${STATUS_DESC}"
-
-          # Only READY_TO_MERGE gets a formal atlan-ci approval.
-          if [ "$VERDICT" != "READY_TO_MERGE" ]; then
-            echo "Verdict '${VERDICT}' is not READY TO MERGE — labels applied, no approval posted."
-            # S3: dismiss any existing bot approval. sdk-review-dismiss-on-human.yml
-            # only fires on HUMAN activity — it will not run here. When a newer
-            # verdict (e.g. NEEDS_FIXES after a second review of the same HEAD)
-            # supersedes a prior READY_TO_MERGE, the prior atlan-ci approval must be
-            # dismissed so the merge gate returns to requiring a fresh approval.
-            # Reuse the same selector used by sdk-review-dismiss-on-human.yml.
-            STALE_IDS=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
-              --paginate --slurp 2>/dev/null \
-              | jq -r '[.[][] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | .[].id' 2>/dev/null || true)
-            if [ -n "$STALE_IDS" ]; then
-              DISMISS_MSG="Newer SDK review verdict (${VERDICT}) supersedes the prior bot approval — auto-dismissing. Re-run \`@sdk-review\` when ready for re-approval."
-              for rid in $STALE_IDS; do
-                gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews/${rid}/dismissals" \
-                  -X PUT -f message="$DISMISS_MSG" 2>/dev/null || true
-                echo "Dismissed stale atlan-ci approval ${rid} (newer verdict: ${VERDICT})."
-              done
-            fi
-            exit 0
-          fi
-
-          # Idempotency guard: don't post a second atlan-ci approval if
-          # one already exists with our signature. Otherwise the slow-path
-          # approve step in sdk-review.yml would double-approve.
-          # --slurp collapses pages into one array so the count is a single
-          # number. --paginate --jq runs jq per page and concatenates numbers.
-          EXISTING=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
-            --paginate --slurp 2>/dev/null \
-            | jq '[.[][] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | length' 2>/dev/null || echo "0")
-          if [ "${EXISTING:-0}" != "0" ]; then
-            echo "atlan-ci has already approved PR #${PR_NUMBER} with the bot signature — skipping."
-            exit 0
-          fi
-
-          # NOTE: the leading line of the body is a STABLE SIGNATURE used
-          # by sdk-review-dismiss-on-human.yml to identify approvals
-          # posted by the bot. Keep this in sync with sdk-review.yml.
-          #
-          # S2: pin the review to commit_id=HEAD_SHA so GitHub associates
-          # the approval with the specific commit we verified. If a push
-          # lands between our REVIEWED_HEAD check and this POST, GitHub
-          # attaches the approval to the OLD (reviewed) commit rather than
-          # the new HEAD. Full protection against that window additionally
-          # requires `dismiss_stale_reviews_on_push` enabled on the main
-          # branch protection rule — that setting could not be verified from
-          # a non-admin token; confirm it is ON before relying on this guard.
-          # Residual TOCTOU: label writes above are PR-scoped (no sha
-          # param in the labels API). A push after label-write leaves a
-          # stale label until sdk-review-reset-on-push.yml clears it —
-          # this is the known irreducible window. Labels are display-only;
-          # branch protection gates on the review + commit status, both of
-          # which are sha-pinned.
-          # `gh pr review --approve` does not expose commit_id; use the
-          # raw API instead.
-          APPROVE_BODY=$(printf '%s\n' \
-            "**SDK reviewer's verdict:** READY TO MERGE." \
-            "" \
-            "Full review summary is in the comment posted on this PR." \
-            "")
-          gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
-            -X POST \
-            -f commit_id="$HEAD_SHA" \
-            -f event=APPROVE \
-            -f body="$APPROVE_BODY"
-          echo "Approved PR #${PR_NUMBER} as atlan-ci (fast path, commit_id=${HEAD_SHA})."
+        run: python3 .github/scripts/sdk_review_approve.py
