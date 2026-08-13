@@ -34,10 +34,7 @@ from application_sdk.credentials.errors import (
     CredentialRoutingError,
 )
 from application_sdk.credentials.spec import AgentCredentialSpec
-from application_sdk.errors.leaves import (
-    ColdStartRaceError,
-    DaprSidecarUnreachableError,
-)
+from application_sdk.errors.leaves import ColdStartRaceError
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreError,

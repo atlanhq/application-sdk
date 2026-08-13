@@ -153,6 +153,7 @@ class SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError):
         )
 
 
+@dataclass(kw_only=True)
 class SecretStoreUnreachableError(SecretStoreError, DaprSidecarUnreachableError):
     """Terminal counterpart of :class:`SecretStoreUnavailableError`: the secret
     store's Dapr sidecar stayed unreachable for the *entire* cold-start budget —
@@ -172,7 +173,14 @@ class SecretStoreUnreachableError(SecretStoreError, DaprSidecarUnreachableError)
     Secret-safe: the ref-key stays hashed in ``secret_name`` and no ``cause`` is
     attached (the underlying httpx error can re-embed the ref-key via a
     percent-encoded URL). Carries only the secret-free ``component`` /
-    ``attempts`` / ``elapsed_seconds`` diagnostics.
+    ``attempts`` / ``elapsed_seconds`` diagnostics. ``@dataclass`` so those three
+    reach the wire ``evidence`` via ``to_failure_details()`` (a plain-attribute
+    class would drop them); the custom ``__init__`` is preserved because
+    ``@dataclass`` skips init generation when the class defines its own.
+
+    Inherits the deliberate wire-retryable default from
+    ``DaprSidecarUnreachableError``: this type names the outage, it does not stop
+    the retry (an activity-level retry may still recover on a healthy worker).
     """
 
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SIDECAR_UNREACHABLE"

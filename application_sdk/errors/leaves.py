@@ -256,9 +256,17 @@ class DaprSidecarUnreachableError(ColdStartRaceError):
     :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start` only at
     budget exhaustion — the point at which no attempt ever got a usable
     answer. A transient race that eventually resolves returns normally and
-    never reaches this type, so this type is the signal that waiting longer
-    will not help: a caller may reason about it differently (e.g. stop rather
-    than fail open into a guaranteed repeat).
+    never reaches this type, so this type distinguishes a budget-exhausted
+    outage from a still-booting one for diagnosis.
+
+    It stays wire-retryable (inherits ``default_retryable = True``): naming the
+    terminal state does not by itself change retry or fail-open behaviour. An
+    activity-level retry can still recover when a later attempt lands on a
+    healthy worker (a single bad pod in a multi-replica pool), so the retry
+    hint is left on deliberately — the same topology reasoning that keeps a
+    platform fault failing open rather than blocking the run. Choosing to
+    *stop* on this state instead of retrying is a separate policy decision, not
+    made here.
 
     Distinct from a plain ``ColdStartRaceError`` purely so the two read
     differently to an operator or a triaging agent: a bare

@@ -882,6 +882,10 @@ class TestRetryPastDaprColdStart:
         assert err.elapsed_seconds >= 10.0
         assert err.code == "DEPENDENCY_UNAVAILABLE_SIDECAR_UNREACHABLE"
         assert err.category == FailureCategory.DEPENDENCY_UNAVAILABLE
+        # Deliberately stays wire-retryable: naming the terminal state does not
+        # stop the retry (an activity retry may recover on a healthy worker).
+        # Flipping this is the deferred "stop on exhaustion" policy decision.
+        assert err.to_failure_details().retryable is True
 
     async def test_exhaustion_error_still_caught_as_coldstart(
         self, deterministic_dapr_cold_start_deadline

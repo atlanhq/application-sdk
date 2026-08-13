@@ -59,6 +59,35 @@ class TestSecretStoreUnreachableError:
         assert err.secret_name == "sha256:abcd1234"
         assert err.cause is None
 
+    def test_diagnostics_reach_the_wire_evidence(self) -> None:
+        # The whole point of the fields is operator-visible diagnostics, so they
+        # must survive to_failure_details() (the class must be a @dataclass, or
+        # dataclasses.fields() would omit the plain-attribute fields).
+        err = SecretStoreUnreachableError(
+            "sha256:abcd1234",
+            component="secretstore",
+            attempts=2,
+            elapsed_seconds=120.0,
+        )
+        evidence = err.to_failure_details().evidence
+        assert evidence["component"] == "secretstore"
+        assert evidence["attempts"] == 2
+        assert evidence["elapsed_seconds"] == 120.0
+        # Redaction still holds on the wire: the hashed label, never a raw ref-key.
+        assert evidence["secret_name"] == "sha256:abcd1234"
+
+    def test_stays_wire_retryable_by_design(self) -> None:
+        # Deliberate: naming the terminal outage does not stop the retry. An
+        # activity-level retry can still recover on a healthy worker, so the type
+        # stays retryable (the transient sibling's behaviour is unchanged).
+        # Flipping this is the deferred "stop on exhaustion" policy decision.
+        assert (
+            SecretStoreUnreachableError("sha256:abcd1234")
+            .to_failure_details()
+            .retryable
+            is True
+        )
+
 
 class TestMockSecretStore:
     """Tests for MockSecretStore."""
