@@ -7,12 +7,13 @@ Two modes of heartbeating are supported:
 2. Manual (developer-controlled): developer calls heartbeat() with progress info
    for resume-on-retry support.
 
-This module is also the SDK's offload seam, with three sanctioned primitives:
+This module is also the SDK's offload seam, with four sanctioned primitives:
 ``run_in_thread`` offloads blocking calls so they don't starve the heartbeat
-loop (ADR-0010); ``run_fault_isolated`` runs work in a child process so a native
-fault can't kill the worker; and ``run_best_effort`` is the policy layer over it
-for non-essential work — it isolates *and* swallows failures so best-effort work
-can never break the caller.
+loop (ADR-0010); ``submit_in_thread`` is its detached variant for cleanup that
+cancellation must not be able to skip; ``run_fault_isolated`` runs work in a
+child process so a native fault can't kill the worker; and ``run_best_effort``
+is the policy layer over it for non-essential work — it isolates *and* swallows
+failures so best-effort work can never break the caller.
 """
 
 import asyncio
@@ -534,6 +535,74 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
         _BLOCKING_EXECUTOR,
         functools.partial(ctx.run, functools.partial(func, *args, **kwargs)),
     )
+
+
+def submit_in_thread(
+    func: Callable[..., Any], *args: Any, **kwargs: Any
+) -> "concurrent.futures.Future[Any]":
+    """Run a blocking *cleanup* call on the offload pool without awaiting it.
+
+    ``run_in_thread`` is the primitive to reach for. This is its narrow
+    companion for one specific problem: **cleanup that cancellation must not be
+    able to skip.** An ``await`` inside a ``finally`` is itself a cancellation
+    point, so a cancelled coroutine can be cut off before its own cleanup runs
+    and leak whatever it was holding. Submitting instead of awaiting takes the
+    event loop out of the path entirely: the call is handed to the pool and runs
+    to completion whether or not the caller survives — and, because it is not on
+    the loop, it may block on a lock held by an orphaned worker thread.
+
+    Nothing awaits the result, so a failure has nowhere to surface. It is logged
+    here rather than being swallowed by an unretrieved future.
+
+    Use only for short, self-contained cleanup — closing a handle, releasing a
+    lock — whose result no caller needs. Anything a caller must observe, or must
+    know has finished before the next step, belongs in ``run_in_thread``.
+
+    Args:
+        func: Blocking cleanup callable.
+        *args: Positional arguments for ``func``.
+        **kwargs: Keyword arguments for ``func``.
+
+    Returns:
+        The pool future, for callers (in practice, tests) that want to wait on
+        it. A cancelled future means the pool was already shut down and the call
+        never ran. Ignoring the return value is the normal case.
+    """
+    ctx = contextvars.copy_context()
+    try:
+        future = _BLOCKING_EXECUTOR.submit(
+            ctx.run, functools.partial(func, *args, **kwargs)
+        )
+    except RuntimeError:
+        # The pool refuses work only once it has been shut down, which happens
+        # at interpreter exit. Nothing is left running to clean up after, and the
+        # OS reclaims whatever the process was holding — so this is ordinary
+        # shutdown ordering rather than a failure, and a caller unwinding in a
+        # ``finally`` must not have an exception raised at it here.
+        logger.debug(
+            "Offload pool is shut down; skipped detached cleanup call to %r",
+            getattr(func, "__qualname__", func),
+            exc_info=True,
+        )
+        skipped: concurrent.futures.Future[Any] = concurrent.futures.Future()
+        skipped.cancel()
+        return skipped
+    future.add_done_callback(_report_detached_failure)
+    return future
+
+
+def _report_detached_failure(future: "concurrent.futures.Future[Any]") -> None:
+    """Log a detached cleanup failure, since no caller will ever await it."""
+    if future.cancelled():
+        return
+    error = future.exception()
+    if error is not None:
+        logger.warning(
+            "Detached cleanup call failed: %s: %s",
+            type(error).__name__,
+            error,
+            exc_info=error,
+        )
 
 
 # Executor for work that must not be able to take the worker down with it.
