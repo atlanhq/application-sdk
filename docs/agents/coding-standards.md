@@ -150,6 +150,23 @@ result = requests.get(url)
 result = await self.run_in_thread(requests.get, url)
 ```
 
+## Long-Running Tasks: Progress and Stalls
+
+A task that goes quiet for longer than `max_no_progress_seconds` (900s) is reported as a
+stall — and failed, in an app that enforces. The SDK covers its own write, transfer and
+page loops, and auto-holds every `run_in_thread` offload; what it cannot see is a custom
+async loop or an opaque single `await` against the connector's own source client. Those
+need one line: `self.heartbeat(...)` in the loop, or
+`async with self.holding_progress(label, timeout=...)` around the opaque call.
+
+`timeout` is *how long you would let this one call run before you would rather it
+failed* — not a prediction of its duration. Err generous; too tight false-kills a
+healthy run, and stall kills retry.
+
+Read [Progress and Stalls](../concepts/progress-and-stalls.md) before writing a
+long-running task, and [ADR-0018](../adr/0018-progress-aware-heartbeat.md) if you need
+the design rationale.
+
 ## Large Payloads and FileReference
 
 Use `FileReference` for any data that cannot fit in Temporal's 2 MB payload limit.

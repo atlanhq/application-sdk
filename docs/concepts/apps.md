@@ -224,7 +224,10 @@ async with self.holding_progress("full table scan", timeout=7200):
 
 For opaque *async* calls (the connector's own async client) there is no SDK-owned seam to auto-hold, so wrap those in `holding_progress` directly. Expect to need it: interleaved streaming reads (fetch a page, write a batch, repeat) are already covered by the SDK's own writer and transfer loops, but almost every connector makes at least one genuinely opaque single call — one large metadata query, one slow list/export that returns everything at once.
 
-See [ADR-0018](../adr/0018-progress-aware-heartbeat.md) for the design.
+See [Progress and Stalls](progress-and-stalls.md) for the whole picture — what counts as
+progress, how to size the allowance from your own data, and how to read the report the
+watchdog produces for your app — and [ADR-0018](../adr/0018-progress-aware-heartbeat.md)
+for the design.
 
 ## Lifecycle Hooks
 

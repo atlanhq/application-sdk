@@ -102,6 +102,7 @@ nav:
       - State, Secrets, Pub/Sub & Bindings: concepts/state-secrets-pubsub.md
       - Entry Points: concepts/entry-points.md
       - Tasks: concepts/tasks.md
+      - Progress & Stalls: concepts/progress-and-stalls.md
       - Server: concepts/server.md
       - Clients: concepts/clients.md
       - Common: concepts/common.md

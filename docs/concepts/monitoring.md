@@ -141,6 +141,22 @@ scrape_configs:
     metrics_path: /metrics
 ```
 
+### Stall-watchdog metrics
+
+The in-process stall watchdog (ADR-0018) emits two histograms. Both are the *report* an
+app author works from, not an alert surface — the accompanying logs are INFO by design.
+See [Progress and Stalls](progress-and-stalls.md#reading-your-warn-report) for the
+queries that turn them into a per-app work-list.
+
+| Metric | Records | Labels |
+|---|---|---|
+| `task_no_progress_gap_seconds` | one entry per gap that exceeded `max_no_progress_seconds` | `task_name`, `progress_last_label`, `watchdog_mode` |
+| `task_hold_duration_seconds` | one entry per hold released — every hold, not only long ones | `task_name`, `hold_label`, `hold_bounded`, `hold_lapsed` |
+
+`watchdog_mode` is what keeps warn-mode observations and enforced kills aggregating
+separately; `hold_bounded="false"` isolates the sites still relying on the duration
+backstop.
+
 ### Recommended Alerts
 
 | Alert | Condition | Severity |
@@ -149,6 +165,13 @@ scrape_configs:
 | Worker slots exhausted | `temporal_worker_task_slots_available == 0` | Critical |
 | Elevated workflow latency | `histogram_quantile(0.99, temporal_workflow_endtoend_latency_bucket) > 300` | Warning |
 | Temporal server errors | `rate(temporal_long_request_failure_total[5m]) > 0` | Warning |
+| Stalled task attempts | `rate(task_no_progress_gap_seconds_count{watchdog_mode="warn"}[15m]) > 0` | Warning |
+
+The stall alert is **not optional while an app is in `warn`.** Warn mode cannot fail an
+activity, so an alert on this metric is what stands in for the kill: a wedged attempt is
+visible within `max_no_progress_seconds`, but it will hold its worker slot until the 24h
+backstop unless a human intervenes. Once an app runs in `enforce`, the same series
+measures its kill rate instead.
 
 ---
 

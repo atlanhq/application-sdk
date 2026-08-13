@@ -1016,6 +1016,70 @@ async def fetch(self, input: MyInput) -> MyOutput:
 
 ---
 
+## Step 11b: The stall watchdog — "what if I do nothing?"
+
+The SDK now runs a **stall watchdog** inside every activity: it watches for observable
+forward progress, and reports when an attempt goes quiet for longer than
+`max_no_progress_seconds` (900s). At the same time `timeout_seconds`
+(`start_to_close`) becomes a **24h backstop** you never tune, instead of a duration you
+guess.
+
+**There is no migration task here.** This step exists to tell you that, precisely.
+
+> The progress signals the watchdog reads are already live. The settings that act on
+> them — `progress_watchdog` and `max_no_progress_seconds` — arrive together with the
+> 24h backstop, in the release that turns the watchdog on fleet-wide in `warn`.
+
+### On upgrade, nothing fails differently
+
+- You land in **`warn` mode**, which cannot fail an activity. It observes and reports.
+- `heartbeat_timeout_seconds` keeps its meaning and its 60s default. Crash, OOM and
+  node-loss detection is unchanged.
+- No existing knob changes meaning, so there is no coupled default to bump.
+- The one thing that *does* change immediately is in your favour: with the backstop at
+  24h, a legitimately long run stops dying at a guessed ceiling.
+
+What you gain is a report about your own code — the sites that go quiet, and the long
+opaque calls the SDK is currently vouching for unbounded. Reading it is optional and
+can wait; the app stays correct indefinitely without it.
+
+### The added cost is telemetry
+
+Two histograms and the occasional INFO log line. Warn-mode findings are deliberately
+**never** WARNING-level — a stall observation under a fleet-wide default is an expected
+observation, not an alert.
+
+If you need even that gone, `progress_watchdog="off"` is the kill-switch. It makes the
+whole mechanism inert. It is not the normal state, and it also switches off the report
+you would otherwise use later.
+
+### Declaring holds is an eventual optimisation, not an upgrade task
+
+Wrapping opaque calls in `holding_progress()` is work you take on when you want the
+stronger guarantee — a wedge caught in minutes rather than at the backstop — at a time
+of your choosing, guided by your own warn report. It is not a precondition for taking
+the version.
+
+### Which code shapes eventually need action
+
+Relevant only if and when you flip an app to `enforce`:
+
+| Your existing code | In `warn` (today) | In `enforce` | Action |
+|---|---|---|---|
+| Streaming through SDK writers / `ObjectStore` transfers / template page loops | silent | covered — hooks mark progress | none |
+| Already calls `self.heartbeat(...)` | silent | covered — a beat marks progress | none |
+| Opaque blocking call via `run_in_thread` | reported as a long unbounded hold | covered — unbounded auto-hold; the backstop is the only bound | optional: declare an allowance to get a real bound |
+| **A custom async loop doing its own I/O** | reported as a no-progress gap | **false-killed** if any gap exceeds the budget | add a beat or a hold |
+| **An opaque single `await` against your source** (your own async client) | reported as a no-progress gap | **false-killed at the tail** | wrap in `holding_progress()` — expected in nearly every connector |
+
+The last two rows are why `enforce` is a per-app decision verified against a
+large-tenant profile, not a smoke test.
+
+See [Progress and Stalls](concepts/progress-and-stalls.md) for the three knobs, how to
+read your warn report, and how to size an allowance.
+
+---
+
 ## Step 12: App Lifecycle Hooks
 
 v3 adds structured lifecycle hooks that replace ad-hoc cleanup logic that was

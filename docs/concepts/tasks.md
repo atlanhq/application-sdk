@@ -181,6 +181,28 @@ env:
 
 Explicit `@task(timeout_seconds=...)` values always take precedence over the env vars.
 
+### The three knobs
+
+Timeout-shaped settings are easy to confuse, so it is worth being explicit about which
+question each one answers:
+
+| Knob | Default | Answers | Tune it? |
+|---|---|---|---|
+| `heartbeat_timeout_seconds` | 60s | *"Is anything beating at all?"* — crash, OOM kill, node loss, a fully blocked event loop | No |
+| `max_no_progress_seconds` | 900s | *"How long may this attempt be silent before it counts as stalled?"* — wedged-but-alive | Rarely |
+| `timeout_seconds` (`start_to_close`) | 600s today; a 24h backstop once the stall watchdog ships | *"What is the absolute ceiling on one attempt?"* | No — it becomes a backstop, not a budget |
+
+`max_no_progress_seconds` and the `progress_watchdog` mode arrive with the release that
+raises `timeout_seconds` to its backstop value; the progress signals they act on are
+already live.
+
+`max_no_progress_seconds` is **not** the beat interval (that is `auto_heartbeat_seconds`,
+and it is unconditional) and **not** a duration budget — it measures the *gap* between
+progress signals, so a nine-hour task that writes a batch every thirty seconds never
+approaches it. See [Progress and Stalls](progress-and-stalls.md) for the full picture:
+what counts as progress, when you need `holding_progress()`, and how to read the report
+the watchdog produces for your app.
+
 ## Manual Heartbeats with Progress
 
 For tasks that should resume from where they left off after a retry, send typed heartbeat details:
@@ -205,6 +227,11 @@ class MyConnector(App):
             )
 ```
 
+A manual beat also **marks progress** for the stall watchdog, under the label
+`task.heartbeat` — so a custom loop that beats once per iteration is observable and
+needs no hold. It is the third of the three progress mechanisms in
+[Progress and Stalls](progress-and-stalls.md#the-one-rule).
+
 ## Infrastructure Access via self.context
 
 Inside a `@task` method, access infrastructure through `self.context`:
@@ -226,6 +253,8 @@ You do not create `DaprClient` instances or call `SecretStore` statics. Infrastr
 ## Blocking Sync Code
 
 Prefer native async libraries wherever possible. For legacy sync code that cannot be rewritten, `self.task_context.run_in_thread(fn, *args)` offloads the call to a thread pool, preventing it from stalling the event loop and blocking heartbeats. See [ADR-0010](../adr/0010-async-first-blocking-code.md) for when this is appropriate and the required internal-timeout precautions.
+
+Every offload is automatically wrapped in an unbounded progress hold, so a long blocking call is never read as a stall — see [Progress and Stalls](progress-and-stalls.md#automatic-holds-on-offloaded-work) for how to give it a real bound instead.
 
 ## FileReference: Passing Large Data Between Tasks
 
