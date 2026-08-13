@@ -14,12 +14,12 @@ import shutil
 from pathlib import Path
 from typing import Tuple
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common.incremental.helpers import (
     count_json_files_recursive,
     get_persistent_artifacts_path,
     get_persistent_s3_prefix,
 )
-from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix
 from application_sdk.storage.errors import StorageError

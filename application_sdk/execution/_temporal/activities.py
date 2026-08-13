@@ -19,11 +19,17 @@ from uuid import uuid4
 
 from temporalio import activity
 
+from application_sdk._runtime.progress import ProgressTracker, bind_progress_tracker
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata
 from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference
+from application_sdk.execution.heartbeat import (
+    NoopHeartbeatController,
+    TemporalHeartbeatController,
+    auto_heartbeat_loop,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -197,15 +203,6 @@ def create_activity_from_task(
         from application_sdk.app.context import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             AppContext,
             TaskExecutionContext,
-        )
-        from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-            NoopHeartbeatController,
-            TemporalHeartbeatController,
-            auto_heartbeat_loop,
-        )
-        from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-            ProgressTracker,
-            bind_progress_tracker,
         )
         from application_sdk.execution.progress_telemetry import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             closed_hold_observer,

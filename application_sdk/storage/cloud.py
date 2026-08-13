@@ -50,6 +50,7 @@ import obstore as obs
 import orjson
 from obstore.store import ObjectStore
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.storage.errors import (
     StorageConfigError,
     StorageError,
@@ -495,16 +496,6 @@ class CloudStore:
         # thousands of syscalls with no await between them on a large upload.
         # Inline it holds the event loop — and the enclosing activity's
         # auto-heartbeat — for the entire traversal (ADR-0010).
-        # Imported lazily, and it has to be: this module is in
-        # `storage/__init__`'s eager chain, so importing
-        # `application_sdk.execution.heartbeat` at module scope runs
-        # `execution/__init__` -> Temporal activity utils ->
-        # `application_sdk.app` -> back to a still-initialising
-        # `contracts.base`, raising ImportError. The cycle is via
-        # `execution/__init__`, not a direct storage -> execution edge.
-        # See `storage/batch.py` for the full chain.
-        from application_sdk.execution.heartbeat import run_in_thread  # noqa: PLC0415
-
         files: list[tuple[str, Path]] = await run_in_thread(_collect_files)
 
         sem = asyncio.Semaphore(max_concurrency)

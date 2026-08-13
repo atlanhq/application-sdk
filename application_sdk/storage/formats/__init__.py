@@ -18,11 +18,11 @@ from typing import TYPE_CHECKING, Any, Union, cast
 
 import orjson
 
+from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
 from application_sdk.contracts.types import FileReference
-from application_sdk.execution.heartbeat import run_in_thread
-from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.storage.formats.utils import (

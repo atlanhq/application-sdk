@@ -56,8 +56,8 @@ import warnings
 from abc import abstractmethod
 from typing import Any, ClassVar
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.app.task import task
-from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates._template_errors import (
     IncrementalSqlMetadataExtractorNotImplementedError,

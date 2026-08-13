@@ -75,6 +75,7 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -166,14 +167,6 @@ async def sha256_file(path: Path) -> str:
     rather than asyncio's default executor, which Temporal's own SDK uses for
     internal scheduling — sharing that pool risks exhausting it.
     """
-    # Imported lazily, and it has to be: this module is in ``storage/__init__``'s
-    # eager chain, so importing ``application_sdk.execution.heartbeat`` at module
-    # scope runs ``execution/__init__`` -> Temporal activity utils ->
-    # ``application_sdk.app`` -> back to a still-initialising ``contracts.base``,
-    # raising ImportError. The cycle is via ``execution/__init__``, not a direct
-    # storage -> execution edge. See ``storage/batch.py`` for the full chain.
-    from application_sdk.execution.heartbeat import run_in_thread  # noqa: PLC0415
-
     return await run_in_thread(_sha256_file_sync, path)
 
 

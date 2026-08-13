@@ -32,6 +32,7 @@ import orjson
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
+from application_sdk._runtime.offload import run_best_effort, run_in_thread
 from application_sdk.app._ep_registration import (
     _apply_app_registration,
     _build_entry_points,
@@ -202,7 +203,7 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     sampling) so the summary is accurate.
 
     The scan runs via
-    :func:`application_sdk.execution.heartbeat.run_best_effort`, for two reasons.
+    :func:`application_sdk._runtime.offload.run_best_effort`, for two reasons.
     It keeps the event loop and the activity's auto-heartbeat free while a large
     batch is validated (ADR-0010). More importantly, it makes the never-raises
     contract hold even against *native* faults: the decode exercises third-party
@@ -231,9 +232,6 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     if target is None:
         return
 
-    from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — deferred: app.base is imported by execution (circular)
-        run_best_effort,
-    )
     from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
         validate_transformed_dir,
     )
@@ -1407,9 +1405,6 @@ class App(ABC):
         )
         from application_sdk.execution import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
             build_output_path,
-        )
-        from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-            run_in_thread,
         )
 
         path_results: dict[str, bool] = {}

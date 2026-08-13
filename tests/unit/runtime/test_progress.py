@@ -1,4 +1,4 @@
-"""Unit tests for application_sdk.execution.progress.
+"""Unit tests for application_sdk._runtime.progress.
 
 No worker, no event loop, no patched global clock: the tracker takes its clock
 by injection precisely so tests can drive time without touching
@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from application_sdk.execution.progress import ClosedHold, ProgressTracker
+from application_sdk._runtime.progress import ClosedHold, ProgressTracker
 
 # ---------------------------------------------------------------------------
 # Test doubles

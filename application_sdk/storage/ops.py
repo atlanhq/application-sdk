@@ -68,6 +68,7 @@ if TYPE_CHECKING:
 
     JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
+from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.observability.logger_adaptor import get_logger
 
 # Transfer integrity validation (FND-306). ``integrity`` holds no top-level
@@ -672,12 +673,6 @@ async def upload_file(
         STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
     )
 
-    # Hoisted out of the part loop so the lazy import is paid once per upload
-    # rather than once per part.
-    from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: application_sdk.execution's package __init__ reaches back into storage.ops
-        current_progress_tracker,
-    )
-
     last_progress = started
     bytes_sent = 0
     try:
@@ -910,12 +905,6 @@ async def download_file(
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         from application_sdk.constants import (  # noqa: PLC0415
             STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
-        )
-
-        # Hoisted out of the stream loop so the lazy import is paid once per
-        # download rather than once per chunk.
-        from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: application_sdk.execution's package __init__ reaches back into storage.ops
-            current_progress_tracker,
         )
 
         last_progress = started

@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Union, cast
 from urllib.parse import quote, quote_plus
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql_errors import (
@@ -34,7 +35,6 @@ from application_sdk.common.aws_utils import (
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 from application_sdk.credentials.utils import parse_credentials_extra
 from application_sdk.errors import AppError, sanitize_cause_repr
-from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)

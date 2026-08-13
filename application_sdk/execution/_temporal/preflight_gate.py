@@ -1017,7 +1017,7 @@ def build_preflight_gate_activity(
                     check.cancel()
                     # Abandoning a task without awaiting leaves any exception it
                     # later raises unretrieved, which asyncio logs on GC. Consume
-                    # it (same fire-and-forget idiom as execution/heartbeat.py).
+                    # it (same fire-and-forget idiom as _runtime/offload.py).
                     check.add_done_callback(
                         lambda f: None if f.cancelled() else f.exception()
                     )

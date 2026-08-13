@@ -5,11 +5,11 @@ from typing import TYPE_CHECKING, Any
 
 import orjson
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.errors import AppError
-from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.storage.formats.utils import (

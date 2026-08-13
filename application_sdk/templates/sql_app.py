@@ -85,6 +85,8 @@ import orjson
 from pydantic import ValidationError
 from temporalio import workflow as _temporal_workflow
 
+from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
@@ -113,8 +115,6 @@ from application_sdk.errors.leaves import (
 )
 from application_sdk.errors.wire import secret_named_evidence_keys
 from application_sdk.execution import build_output_path, get_object_store_prefix
-from application_sdk.execution.heartbeat import run_in_thread
-from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.contracts.sql_metadata import (

@@ -46,9 +46,9 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.contracts.types import FileReference
-from application_sdk.execution.heartbeat import run_in_thread
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore

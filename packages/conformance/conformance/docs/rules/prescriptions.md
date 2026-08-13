@@ -1122,7 +1122,7 @@ SDK's own dedicated `sdk-blocking-*` thread pool.
 
 `run_in_executor(<some-executor>, ...)` with any executor other than `None` is not
 flagged — a call-site-owned `ThreadPoolExecutor` is not the shared-pool contention this
-rule targets. `application_sdk/execution/heartbeat.py` is exempt: that is where
+rule targets. `application_sdk/_runtime/offload.py` is exempt: that is where
 `run_in_thread()`'s own dedicated-executor dispatch lives.
 
 Remediation is a restructure (swap in `run_in_thread()`), so findings route to residue.
@@ -1257,7 +1257,7 @@ concurrent.futures import ProcessPoolExecutor as PPE; PPE(...)` is caught).
 `multiprocessing.get_context(...).Process()` on a runtime receiver is not statically
 resolvable and is not flagged; `ThreadPoolExecutor` is a thread pool, out of scope here
 (thread offload onto the shared default executor is governed by P031).
-`application_sdk/execution/heartbeat.py` is exempt — that is where the seam's own pool
+`application_sdk/_runtime/offload.py` is exempt — that is where the seam's own pool
 lives.
 
 Remediation is a restructure (route through the seam), so findings route to residue.

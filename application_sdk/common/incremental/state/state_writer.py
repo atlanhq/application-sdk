@@ -31,6 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common.incremental.helpers import (
     copy_directory_parallel,
     count_json_files_recursive,
@@ -53,7 +54,6 @@ from application_sdk.common.incremental.storage.duckdb_utils import (
 )
 from application_sdk.constants import INCREMENTAL_DIFF_SUBPATH_TEMPLATE
 from application_sdk.execution import get_object_store_prefix
-from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix, upload_prefix
 

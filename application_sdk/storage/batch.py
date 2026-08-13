@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING
 
 import obstore
 
+from application_sdk._runtime.offload import run_in_thread
+
 # Sidecar naming is owned by ``storage.integrity`` — the module that also reads
 # and writes them. Re-exported here (``batch.SIDECAR_SUFFIX`` /
 # ``batch.is_sidecar_key``) because the listing filters are the historical
@@ -489,20 +491,6 @@ async def upload_prefix(
     # directory, which on a large extraction is thousands of syscalls with no
     # await between them. Inline it holds the event loop — and the enclosing
     # activity's auto-heartbeat — for the entire traversal (ADR-0010).
-    # Imported lazily, and it has to be. This module is in the chain
-    # `storage/__init__` loads eagerly, and that chain is itself entered from
-    # `contracts.base` (contracts.types -> credentials -> common.utils ->
-    # storage). At module scope, importing `application_sdk.execution.heartbeat`
-    # runs `execution/__init__`, which pulls in the Temporal activity utils ->
-    # `application_sdk.app` -> back to `contracts.base` while it is still
-    # initialising, and that raises ImportError. The cycle runs through
-    # `execution/__init__`; there is no direct storage -> execution edge.
-    #
-    # This is also why `transfer.py`, `reference.py` and `formats/*` import
-    # `run_in_thread` at module scope without trouble — they are not in
-    # `storage/__init__`'s eager chain. Only batch/chunked/cloud/rolling are.
-    from application_sdk.execution.heartbeat import run_in_thread  # noqa: PLC0415
-
     files: list[tuple[str, Path]] = await run_in_thread(_collect_files)
 
     sem = asyncio.Semaphore(max_concurrency)

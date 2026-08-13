@@ -643,10 +643,14 @@ class TestTaskExecutionContextHeartbeat:
 class TestTaskExecutionContextRunInThread:
     """Guards the BLDX-1129 bug class.
 
-    ``run_in_thread`` does an inline ``from application_sdk.execution.heartbeat
-    import run_in_thread`` at call-time (line 571–575). If that symbol is ever
-    renamed or removed, this test will fail at runtime — the exact failure mode
-    BLDX-1129 wants to catch.
+    ``run_in_thread`` used to be imported inline at call time, so a rename of the
+    offloaded symbol surfaced only when a task actually offloaded something —
+    exactly the failure mode BLDX-1129 wants caught. Since FND-316 / ADR-0019 the
+    primitive lives in ``application_sdk._runtime.offload`` and ``context.py``
+    imports it at module scope, so a rename now fails at import. These tests keep
+    the behavioural half of the guard, and
+    :meth:`test_run_in_thread_delegates_to_the_substrate_primitive` pins the
+    delegation itself.
     """
 
     @pytest.mark.asyncio
@@ -690,16 +694,19 @@ class TestTaskExecutionContextRunInThread:
         result = await tec.run_in_thread(add, 2, 3, mult=10)
         assert result == 50
 
-    def test_run_in_thread_inline_import_resolves(self) -> None:
-        """Direct check that the inline-imported symbol exists.
+    def test_run_in_thread_delegates_to_the_substrate_primitive(self) -> None:
+        """``context.py`` offloads through the substrate, not a private copy.
 
-        This is the BLDX-1129 guard — if ``run_in_thread`` is renamed in
-        ``application_sdk.execution.heartbeat`` without updating ``context.py``,
-        this assertion fails fast with a clear error.
+        The BLDX-1129 guard, restated for the module-scope import: the name
+        ``context.py`` calls must be the one sanctioned primitive, so a task's
+        offload lands on the SDK's blocking pool and inside its auto-hold. A
+        local re-implementation would satisfy every behavioural test above while
+        losing both.
         """
-        from application_sdk.execution.heartbeat import run_in_thread
+        from application_sdk._runtime.offload import run_in_thread
+        from application_sdk.app import context as context_module
 
-        assert callable(run_in_thread)
+        assert context_module.run_in_thread is run_in_thread
 
 
 # ---------------------------------------------------------------------------

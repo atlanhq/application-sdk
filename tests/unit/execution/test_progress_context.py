@@ -29,12 +29,12 @@ from unittest import mock
 
 import pytest
 
+from application_sdk._runtime import progress as progress_module
 from application_sdk.app.base import App
 from application_sdk.app.context import AppContext, TaskExecutionContext
 from application_sdk.app.registry import TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
-from application_sdk.execution import progress as progress_module
 from application_sdk.execution._temporal import activities as activities_module
 from application_sdk.execution._temporal.activities import (
     TaskContext,
@@ -340,7 +340,8 @@ class TestActivityBinding:
             await stop_event.wait()
 
         with mock.patch(
-            "application_sdk.execution.heartbeat.auto_heartbeat_loop", new=fake_loop
+            "application_sdk.execution._temporal.activities.auto_heartbeat_loop",
+            new=fake_loop,
         ):
             result = await activity_fn(
                 _task_context("_see-app", "greet", heartbeating=heartbeating),
@@ -466,7 +467,7 @@ class TestActivityBinding:
 
         with (
             mock.patch(
-                "application_sdk.execution.heartbeat.auto_heartbeat_loop",
+                "application_sdk.execution._temporal.activities.auto_heartbeat_loop",
                 new=cancelling_loop,
             ),
             pytest.raises(asyncio.CancelledError),
