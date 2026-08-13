@@ -143,6 +143,8 @@ class DataForgeSource:
             if isinstance(parsed, dict):
                 for key, value in parsed.items():
                     normalised = _normalise(str(key))
+                    if not normalised:
+                        continue
                     blob_keys.add(normalised)
                     if value is not None and str(value).strip() != "":
                         fields[normalised] = str(value)
@@ -161,13 +163,19 @@ class DataForgeSource:
         prefix = ""
         if resolved_ds:
             derived = re.sub(r"[^A-Za-z0-9]", "_", resolved_ds.upper())
+            # Require at least one alphanumeric: a separator-only datasource
+            # ("-", " — ") folds to bare underscores, which is no real scope.
+            if not re.search(r"[A-Z0-9]", derived):
+                derived = ""
             if derived:
                 prefix = "E2E_" + derived + "_"
         if prefix:
             for key, value in env.items():
                 if key.startswith(prefix):
                     normalised = _normalise(key[len(prefix) :])
-                    if normalised in blob_keys:
+                    # A var exactly equal to the prefix has no field name; a
+                    # normalised-empty key would be stored but never readable.
+                    if not normalised or normalised in blob_keys:
                         continue
                     stripped = value.strip() if value else ""
                     if stripped:

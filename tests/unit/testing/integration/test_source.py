@@ -117,12 +117,27 @@ def test_blob_loads_with_no_datasource_anywhere():
 
 def test_datasource_that_normalises_to_empty_skips_the_flat_pass():
     # A datasource of only separator characters derives no usable prefix; the
-    # flat pass must not match every E2E_* var in the environment.
-    env = {"E2E_POSTGRES_HOST": "db.internal"}
+    # flat pass must not match every E2E_* var in the environment — including
+    # one that starts with the bare-underscore folding of that name.
+    env = {"E2E_POSTGRES_HOST": "db.internal", "E2E___HOST": "leaked"}
     src = DataForgeSource.from_env("-", environ=env)
 
     assert not src.available
     assert src.as_dict() == {}
+
+
+def test_var_exactly_equal_to_the_prefix_is_not_a_field():
+    # E2E_POSTGRES_ has no field name after the prefix; storing it under the
+    # empty-string key would make an unreadable field count as present.
+    env = {
+        "E2E_POSTGRES_": "weird",
+        "E2E_POSTGRES_HOST": "db.internal",
+        "E2E_SOURCE_RAW_JSON": json.dumps({"": "also-weird", "port": "5432"}),
+    }
+    src = DataForgeSource.from_env("postgres", environ=env)
+
+    assert "" not in src.as_dict()
+    assert src.as_dict() == {"port": "5432", "host": "db.internal"}
 
 
 def test_blob_field_left_empty_is_not_backfilled_by_a_flat_var():
