@@ -218,7 +218,13 @@ async with self.holding_progress("full table scan", timeout=7200):
     rows = await self.run_in_thread(cursor.execute, sql)
 ```
 
-For opaque *async* calls (the connector's own async client) there is no SDK-owned seam to auto-hold, so wrap those in `holding_progress` directly. See [ADR-0018](../adr/0018-progress-aware-heartbeat.md) for the design.
+`timeout` is **not** a prediction of how long the call takes. Err generous: too generous only delays detection toward the backstop, while too tight kills a healthy run — and because stall kills retry, a too-tight allowance burns the same wasted work up to three times.
+
+**Inside a `holding_progress` block the automatic holds stand down**, so the allowance you declared is what governs. The example above lapses at 7200s rather than inheriting an unbounded auto-hold that would outlive it — the SDK never adds a vouch that outlives the one you asked for. (An offload running concurrently in a task that never entered the block is still auto-held.)
+
+For opaque *async* calls (the connector's own async client) there is no SDK-owned seam to auto-hold, so wrap those in `holding_progress` directly. Expect to need it: interleaved streaming reads (fetch a page, write a batch, repeat) are already covered by the SDK's own writer and transfer loops, but almost every connector makes at least one genuinely opaque single call — one large metadata query, one slow list/export that returns everything at once.
+
+See [ADR-0018](../adr/0018-progress-aware-heartbeat.md) for the design.
 
 ## Lifecycle Hooks
 

@@ -378,34 +378,170 @@ class TestTheHoldIsAlwaysReleased:
         assert tracker.held() is False
         assert len(tracker.holds) == 2
 
+
+# ---------------------------------------------------------------------------
+# A declared allowance wins: the auto-hold stands down inside holding_progress
+# ---------------------------------------------------------------------------
+
+
+class TestADeclaredAllowanceGoverns:
+    """``holding_progress`` around an offload — ADR-0018's blocking example.
+
+    The tracker's hold set is a *union*: ``held()`` and ``stalled_for()`` report
+    vouched while any hold is unlapsed, and an unbounded hold never lapses. So an
+    auto-hold nested inside a declared one would keep vouching past the declared
+    allowance and hand the site back to the 24h backstop — the exact outcome
+    ``holding_progress`` exists to prevent. The auto-hold therefore stands down
+    inside a declared block.
+    """
+
     @pytest.mark.asyncio
-    async def test_an_offload_inside_a_declared_hold_leaves_it_intact(
+    async def test_a_wedged_offload_is_still_caught_at_timeout_plus_budget(
+        self,
+    ) -> None:
+        """The promise `holding_progress`'s own docstring makes, end to end.
+
+        A blocking call wedges inside a declared 7200s allowance. Once the
+        allowance lapses the watchdog must resume *from the deadline* and fire
+        one budget later — not stay paused for the 24h backstop because the
+        offload added a vouch nobody asked for.
+        """
+        clock = _FakeClock()
+        recording = RecordingProgressTracker(clock=clock)
+        on_stall = MagicMock()
+        wedged = threading.Event()
+        entered = threading.Event()
+
+        def _wedged_blocking_call() -> None:
+            entered.set()
+            wedged.wait(timeout=10)
+
+        try:
+            with bind_progress_tracker(recording):
+                async with holding_progress("full table scan", timeout=7200):
+                    offload = asyncio.create_task(run_in_thread(_wedged_blocking_call))
+                    assert await asyncio.to_thread(entered.wait, 5), "never started"
+
+                    # The declared allowance lapses, then the budget elapses.
+                    clock.advance(7200 + 60 + 1)
+
+                    assert recording.held() is False
+                    assert recording.stalled_for() == pytest.approx(61.0)
+                    fired = _check_for_stall(
+                        progress=recording,
+                        budget_seconds=60.0,
+                        mode=ProgressWatchdogMode.ENFORCE,
+                        task_name="extract",
+                        on_stall=on_stall,
+                    )
+
+                    assert fired is True
+                    on_stall.assert_called_once()
+        finally:
+            wedged.set()
+            await offload
+
+    @pytest.mark.asyncio
+    async def test_only_the_declared_hold_is_recorded(
         self, tracker: RecordingProgressTracker
     ) -> None:
-        """Nesting, in the shape ADR-0018's own blocking example produces.
+        """One hold around the offload, not two.
 
-        ``holding_progress`` around ``run_in_thread`` (FND-291) means an author's
-        *declared* bounded hold with this PR's auto-hold nested inside it. The
-        inner release must not touch the outer token — that would drop a declared
-        allowance on the floor mid-call and hand the site back to the backstop,
-        turning a `timeout + budget` kill time silently back into 24h.
-
-        FND-291 already asserts the offload can *see* the enclosing hold; what is
-        asserted here is the release, which is this PR's half.
+        The warn-mode work-list should rank the site an author can act on — the
+        declared one — rather than double-counting the same wall-clock under a
+        second auto-generated label.
         """
         async with holding_progress("full table scan", timeout=7200):
             await run_in_thread(_echo, "page")
 
-            assert (
-                tracker.held() is True
-            ), "the declared hold must survive the inner release"
-            assert [hold.label for hold in tracker.holds] == [f"{THREAD_PREFIX}_echo"]
+            assert tracker.held() is True
 
+        assert [hold.label for hold in tracker.holds] == ["full table scan"]
+        assert [hold.allowance_seconds for hold in tracker.holds] == [7200]
         assert tracker.held() is False
-        # Inner first, outer second — and the outer keeps the allowance its
-        # author declared rather than inheriting the auto-hold's `None`.
-        assert [hold.allowance_seconds for hold in tracker.holds] == [None, 7200]
-        assert tracker.holds[1].label == "full table scan"
+
+    @pytest.mark.asyncio
+    async def test_an_isolated_call_stands_down_too(
+        self, tracker: RecordingProgressTracker
+    ) -> None:
+        """Both offload seams obey the same precedence rule.
+
+        A rule that held at one seam and not the other would be worse than no
+        rule: the same `holding_progress` block would mean different things
+        depending on which primitive the body happened to reach for.
+        """
+        async with holding_progress("validation scan", timeout=600):
+            await run_fault_isolated(_echo, "hi", timeout=30)
+
+        assert [hold.label for hold in tracker.holds] == ["validation scan"]
+
+    @pytest.mark.asyncio
+    async def test_a_concurrent_offload_outside_the_block_is_still_held(
+        self, tracker: RecordingProgressTracker
+    ) -> None:
+        """The reason this is context-scoped and not tracker-scoped.
+
+        Suppressing on "some hold is open on this tracker" would leave a
+        concurrent offload in an unrelated task unvouched for its whole duration
+        — re-introducing the false-kill the auto-hold exists to remove. Only the
+        task that entered the block sees the mark.
+        """
+        inside_running = threading.Event()
+        release_inside = threading.Event()
+
+        async def _inside_a_declared_block() -> None:
+            async with holding_progress("declared", timeout=600):
+                await run_in_thread(inside_running.set)
+                await asyncio.to_thread(release_inside.wait, 5)
+
+        declared = asyncio.create_task(_inside_a_declared_block())
+        assert await asyncio.to_thread(inside_running.wait, 5), "never started"
+
+        # This offload's task never entered the block, so it must be auto-held.
+        await run_in_thread(_echo, "elsewhere")
+
+        release_inside.set()
+        await declared
+
+        labels = [hold.label for hold in tracker.holds]
+        assert (
+            f"{THREAD_PREFIX}_echo" in labels
+        ), "an offload outside the declared block must still be vouched for"
+        assert "declared" in labels
+
+    @pytest.mark.asyncio
+    async def test_the_auto_hold_returns_once_the_block_exits(
+        self, tracker: RecordingProgressTracker
+    ) -> None:
+        """Standing down lasts exactly as long as the declared allowance does."""
+        async with holding_progress("full table scan", timeout=7200):
+            await run_in_thread(_echo, "inside")
+
+        await run_in_thread(_echo, "after")
+
+        assert [hold.label for hold in tracker.holds] == [
+            "full table scan",
+            f"{THREAD_PREFIX}_echo",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_nested_declared_blocks_restore_one_level_at_a_time(
+        self, tracker: RecordingProgressTracker
+    ) -> None:
+        """An inner block exiting must not re-arm the auto-hold under an outer one.
+
+        The mark is a ContextVar token, so leaving the inner block restores the
+        outer block's value rather than clearing it — otherwise an offload
+        between the inner and outer exits would add exactly the hold this
+        precedence rule exists to suppress.
+        """
+        async with holding_progress("outer", timeout=7200):
+            async with holding_progress("inner", timeout=600):
+                await run_in_thread(_echo, "innermost")
+
+            await run_in_thread(_echo, "between")
+
+        assert [hold.label for hold in tracker.holds] == ["inner", "outer"]
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ can never break the caller.
 
 import asyncio
 import concurrent.futures
+import contextlib
 import contextvars
 import functools
 import math
@@ -25,7 +26,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Protocol, TypeVar
 
@@ -33,6 +34,7 @@ from application_sdk.execution.progress import (
     ProgressTracker,
     ProgressWatchdogMode,
     current_progress_tracker,
+    declared_hold_active,
 )
 from application_sdk.observability import (
     resource_sampler as _resource_sampler,  # module alias kept so tests can patch _resource_sampler.sample()
@@ -536,6 +538,60 @@ def _is_usable_callable_name(name: str) -> bool:
     )
 
 
+@contextlib.contextmanager
+def _auto_hold(label: str, timeout: float | None) -> Iterator[None]:
+    """Vouch for an offload — unless a human already vouched for it.
+
+    The automatic half of ADR-0018's mechanism 2, shared by both offload seams so
+    the precedence rule below cannot be right at one and wrong at the other.
+
+    **An explicit allowance wins.** Inside a ``holding_progress`` block the auto-
+    hold stands down entirely and the declared hold governs. It has to: the
+    tracker's hold set is a union — ``held()`` and ``stalled_for()`` say
+    "vouched" while *any* hold is unlapsed — so an unbounded auto-hold nested
+    inside a bounded declared one keeps vouching after the declared allowance
+    lapses. The author asked for a wedged call to be caught at
+    ``timeout + budget``; adding a hold they did not ask for would silently hand
+    the site back to the duration backstop, which is the exact outcome
+    ``holding_progress`` exists to prevent. Standing down is also the honest
+    reading: the operation *is* already vouched for, by someone who knows the
+    number.
+
+    That leaves exactly one hold around the offload rather than two, so the
+    warn-mode work-list ranks the site an author can act on — the declared one —
+    instead of double-counting the same wall-clock under a second label.
+
+    The suppression is context-scoped (:func:`declared_hold_active`), never
+    tracker-scoped: a concurrent offload in a task that never entered the block
+    still gets its own hold. Suppressing on "some hold is open somewhere on this
+    tracker" would leave real blocking work unvouched and re-introduce the
+    false-kill this mechanism exists to remove.
+
+    Args:
+        label: Hold label — a site, never a value.
+        timeout: Allowance for the hold, or ``None`` for an unbounded one.
+
+    Yields:
+        Nothing; the caller runs its offload inside the block.
+    """
+    if declared_hold_active():
+        yield
+        return
+    # The tracker is read once and both calls go to that same object. Re-reading
+    # for the release would pick up whatever tracker the context has by then,
+    # which for a hold spanning a context change releases the wrong deadline.
+    tracker = current_progress_tracker()
+    hold = tracker.enter_hold(label, timeout)
+    try:
+        yield
+    finally:
+        # `finally`, not the success path: an offload that raises, and an
+        # activity cancelled mid-offload, must still release *their own* token.
+        # A leaked unbounded hold vouches for the rest of the attempt, which
+        # turns one exception into a watchdog that never fires again.
+        tracker.exit_hold(hold)
+
+
 async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     """Last-resort escape hatch: run a blocking function in a thread pool.
 
@@ -600,7 +656,9 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
       ``holding_progress(label, timeout=...)``
       (:func:`application_sdk.execution.progress.holding_progress`) and a wedged
       call is caught at ``timeout`` + the no-progress budget instead of at the
-      backstop.
+      backstop. Inside such a block the automatic hold **stands down** and your
+      declared allowance governs; the SDK never adds a vouch that would outlive
+      the one you asked for.
 
     **CRITICAL: your blocking code MUST have its own timeout.**
     Python threads cannot be forcibly killed. If the wrapped call hangs
@@ -635,30 +693,11 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     # inactive for the call's duration, the duration backstop owns it, and warn
     # mode reports every closed hold with its observed duration. That residual
     # is accepted and surfaced, not closed.
-    #
-    # The hold starts before the executor dispatch on purpose, so it also covers
-    # time spent queued behind a saturated `sdk-blocking-` pool: that is quiet
-    # time the attempt can do nothing about, and killing it is exactly the
-    # false-kill this hold exists to prevent.
-    #
-    # The tracker is read once and both calls go to that same object. Re-reading
-    # for the release would pick up whatever tracker the context has by then,
-    # which for a hold spanning a context change releases the wrong deadline.
-    tracker = current_progress_tracker()
-    hold = tracker.enter_hold(
-        _THREAD_HOLD_PREFIX + _offloaded_callable_name(func), None
-    )
-    try:
+    with _auto_hold(_THREAD_HOLD_PREFIX + _offloaded_callable_name(func), None):
         return await loop.run_in_executor(
             _BLOCKING_EXECUTOR,
             functools.partial(ctx.run, functools.partial(func, *args, **kwargs)),
         )
-    finally:
-        # `finally`, not the success path: an offload that raises, and an
-        # activity cancelled mid-offload, must still release *their own* token.
-        # A leaked unbounded hold vouches for the rest of the attempt, which
-        # turns one exception into a watchdog that never fires again.
-        tracker.exit_hold(hold)
 
 
 # Executor for work that must not be able to take the worker down with it.
@@ -809,11 +848,13 @@ async def run_fault_isolated(
     # it failed. What ADR-0018 rejects is deriving a bound from the *callee's*
     # per-operation kwargs, which is a different number. `timeout=None` still
     # means an unbounded hold, matching `None`'s "wait forever" here.
-    tracker = current_progress_tracker()
-    hold = tracker.enter_hold(
-        _ISOLATED_HOLD_PREFIX + _offloaded_callable_name(func), timeout
-    )
-    try:
+    #
+    # Inside a `holding_progress` block this stands down like `run_in_thread`'s
+    # does — see `_auto_hold`. Harmless even when this call's own `timeout` is
+    # tighter than the declared allowance: `timeout` is enforced here by killing
+    # the child, so the call returns at its deadline whether or not a hold is
+    # watching.
+    with _auto_hold(_ISOLATED_HOLD_PREFIX + _offloaded_callable_name(func), timeout):
         future = loop.run_in_executor(
             _get_process_executor(workers), functools.partial(func, *args, **kwargs)
         )
@@ -849,11 +890,6 @@ async def run_fault_isolated(
             raise BrokenProcessPool(
                 "process pool was discarded while this call was queued"
             ) from None
-    finally:
-        # Every exit releases this call's own token: a crashed child, a timeout,
-        # a foreign pool discard, a real cancellation. A leaked hold would vouch
-        # for the rest of the attempt.
-        tracker.exit_hold(hold)
 
 
 async def run_best_effort(

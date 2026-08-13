@@ -412,6 +412,34 @@ _progress_tracker: ContextVar[ProgressTracker | None] = ContextVar(
     "progress_tracker", default=None
 )
 
+#: Whether a :func:`holding_progress` block covers the current context.
+#: Set for the block's dynamic extent, which is what makes it answer *"is this
+#: work already covered by an allowance a human declared?"* rather than the
+#: tracker-wide *"is anything vouching?"* that :meth:`ProgressTracker.held`
+#: answers. The distinction matters because the tracker's hold set is flat: it
+#: cannot tell an enclosing hold from a concurrent one, and only the enclosing
+#: relationship should suppress anything.
+_declared_hold: ContextVar[bool] = ContextVar("declared_hold", default=False)
+
+
+def declared_hold_active() -> bool:
+    """Whether an explicit declared allowance already covers this context.
+
+    Read by the automatic holds (FND-290) so they can stand down inside a
+    :func:`holding_progress` block. An author who declares an allowance is
+    making a statement the SDK must not quietly outvote: an unbounded auto-hold
+    added *inside* a bounded one keeps vouching after the declared allowance
+    lapses — ``held()`` and ``stalled_for()`` treat the hold set as a union, and
+    an unbounded hold never lapses — which would hand a site its author had
+    bounded back to the duration backstop.
+
+    Context-scoped rather than tracker-scoped on purpose. A concurrent task that
+    never entered the block does not observe the mark, so its own offload is
+    still auto-held; suppressing that one would leave real blocking work
+    unvouched, which is the false-kill this whole mechanism exists to prevent.
+    """
+    return _declared_hold.get()
+
 
 def current_progress_tracker() -> ProgressTracker:
     """Get the :class:`ProgressTracker` for the current activity attempt.
@@ -510,6 +538,13 @@ async def holding_progress(label: str, *, timeout: float | None) -> AsyncIterato
     effective kill time for a wedged call is ``timeout + budget`` rather than the
     duration backstop's 24h.
 
+    **The allowance you declare governs everything inside the block**, including
+    the automatic holds ``run_in_thread`` and ``run_fault_isolated`` would
+    otherwise add (FND-290): those stand down here, so the blocking example below
+    lapses at ``timeout`` like the async one rather than inheriting an unbounded
+    auto-hold that would outlive it. That is why the two examples have the same
+    kill time despite one of them offloading.
+
     **Expect to need this in almost every connector.** Blocking calls are
     auto-held because ``run_in_thread`` is a mandatory seam, but async source
     calls have no equivalent SDK-owned seam — a connector talks to its source
@@ -562,7 +597,9 @@ async def holding_progress(label: str, *, timeout: float | None) -> AsyncIterato
     # spanning a context change releases the wrong deadline.
     tracker = current_progress_tracker()
     token = tracker.enter_hold(label, timeout)
+    declared = _declared_hold.set(True)
     try:
         yield
     finally:
+        _declared_hold.reset(declared)
         tracker.exit_hold(token)
