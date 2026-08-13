@@ -230,11 +230,14 @@ async def download_s3_prefix_with_structure(
 ) -> None:
     """Download files under *s3_prefix* into *local_destination*, prefix stripped.
 
-    Thin wrapper over :func:`~application_sdk.storage.batch.download_prefix`
+    Supported alias for :func:`~application_sdk.storage.batch.download_prefix`
     with ``strip_prefix=True``: ``<s3_prefix>/table/chunk-0.json`` lands at
-    ``<local_destination>/table/chunk-0.json``. Retained because app code
-    outside the SDK imports it; new SDK call sites use ``download_prefix``
-    directly so the incremental path has one download implementation and one
+    ``<local_destination>/table/chunk-0.json``.
+
+    This is a **supported** compatibility alias, not a deprecated one — it is
+    retained indefinitely because app code outside the SDK imports it, and there
+    is no removal target. New SDK call sites should prefer ``download_prefix``
+    directly so the incremental path keeps one download implementation and one
     path policy (FND-340).
 
     Args:

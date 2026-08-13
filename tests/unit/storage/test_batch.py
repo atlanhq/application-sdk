@@ -216,6 +216,21 @@ class TestDownloadPrefix:
             tmp_path / "run" / "transformed" / "table" / "a.json"
         ).read_bytes() == b"alpha"
 
+    async def test_strip_prefix_does_not_misstrip_sibling_keys(self) -> None:
+        """The strip matches on a path boundary, never a bare string prefix.
+
+        A sibling key sharing a string prefix (``a/b2/x`` under strip ``a/b``)
+        must be preserved whole, not mis-stripped to ``2/x``. The store listing
+        is itself boundary-aware (obstore returns only keys under ``a/b/``), so
+        this exercises ``_local_relative_key`` directly to pin the defensive
+        contract independent of any backend's listing semantics.
+        """
+        from application_sdk.storage.batch import _local_relative_key
+
+        assert _local_relative_key("a/b/file.json", "a/b") == "file.json"
+        assert _local_relative_key("a/b2/file.json", "a/b") == "a/b2/file.json"
+        assert _local_relative_key("a/b", "a/b") == "b"
+
     async def test_suffix_filter_restricts_download(self, store, tmp_path) -> None:
         await _put("d/x.parquet", b"p", store, normalize=False)
         await _put("d/x.json", b"j", store, normalize=False)

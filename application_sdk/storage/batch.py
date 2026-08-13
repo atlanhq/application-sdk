@@ -367,8 +367,14 @@ def _local_relative_key(key: str, strip: str) -> str:
     With *strip* empty the key is used whole (full-store-path layout). Otherwise
     *strip* — the normalised listing prefix, without its trailing ``/`` — is
     removed, so the tree *under* the prefix is what lands locally.
+
+    The strip is boundary-aware: only a key that *is* the prefix or sits under
+    it (``<strip>/...``) is stripped. A bare ``startswith`` match would also
+    mis-strip a sibling key sharing a string prefix (``a/b2/x`` under strip
+    ``a/b`` → ``2/x``) — reachable when the caller passes ``normalize=False``
+    with a slash-less prefix, where the listing itself is not boundary-safe.
     """
-    if not strip or not key.startswith(strip):
+    if not strip or not (key == strip or key.startswith(strip + "/")):
         return key
     relative = key[len(strip) :].lstrip("/")
     # A key that *is* the prefix (only reachable with normalize=False and a
