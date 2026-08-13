@@ -1,65 +1,44 @@
-"""Execution layer for running Apps on Temporal."""
+"""Execution layer for running Apps on Temporal.
 
-# Re-export the temporalio Client as TemporalClient for app-side type annotations.
-from temporalio.client import Client as TemporalClient
-from temporalio.client import WorkflowFailureError as TemporalWorkflowFailureError
+BOOT-TIME: all re-exports are lazy (PEP 562). The eager version imported
+the full _temporal backend + temporalio (Rust bridge, grpc, protobuf) onto
+every boot path. Lazy exceptions still work in `except` clauses as long as
+they are imported (which triggers resolution) before use.
+"""
 
-# Re-export the client-side failure types apps need to catch around
-# `TemporalClient.execute_workflow(...)`. Renamed with a `Temporal` prefix (matching
-# `TemporalClient`) so they don't collide with unrelated SDK types of the same short
-# name, e.g. `application_sdk.common.error_codes.ActivityError` and
-# `application_sdk.errors.leaves.CancelledError`.
-#
-# These are raw temporalio exceptions for code awaiting `TemporalClient.execute_workflow(...)`
-# or a workflow handle. For SDK-classified domain failures inside `@task`/`@entrypoint` code,
-# raise/catch `application_sdk.errors.AppError` leaves (`CancelledError`, `AppTimeoutError`,
-# etc.) instead.
-from temporalio.exceptions import ActivityError as TemporalActivityError
-from temporalio.exceptions import CancelledError as TemporalCancelledError
-from temporalio.exceptions import ChildWorkflowError as TemporalChildWorkflowError
-from temporalio.exceptions import TerminatedError as TemporalTerminatedError
-from temporalio.exceptions import TimeoutError as TemporalTimeoutError
+_LAZY_EXPORTS = {
+    "AppWorker": ("application_sdk.execution._temporal.worker", "AppWorker"),
+    "ApplicationError": ("application_sdk.execution.errors", "ApplicationError"),
+    "RetryPolicy": ("application_sdk.execution.retry", "RetryPolicy"),
+    "TemporalActivityError": ("temporalio.exceptions", "ActivityError"),
+    "TemporalAuthConfig": ("application_sdk.execution._temporal.auth", "TemporalAuthConfig"),
+    "TemporalAuthManager": ("application_sdk.execution._temporal.auth", "TemporalAuthManager"),
+    "TemporalCancelledError": ("temporalio.exceptions", "CancelledError"),
+    "TemporalChildWorkflowError": ("temporalio.exceptions", "ChildWorkflowError"),
+    "TemporalClient": ("temporalio.client", "Client"),
+    "TemporalExecutorBackend": ("application_sdk.execution._temporal.backend", "TemporalExecutorBackend"),
+    "TemporalTerminatedError": ("temporalio.exceptions", "TerminatedError"),
+    "TemporalTimeoutError": ("temporalio.exceptions", "TimeoutError"),
+    "TemporalWorkflowFailureError": ("temporalio.client", "WorkflowFailureError"),
+    "build_output_path": ("application_sdk.execution._temporal.activity_utils", "build_output_path"),
+    "create_data_converter": ("application_sdk.execution._temporal.converter", "create_data_converter"),
+    "create_data_converter_for_app": ("application_sdk.execution._temporal.converter", "create_data_converter_for_app"),
+    "create_temporal_client": ("application_sdk.execution._temporal.backend", "create_temporal_client"),
+    "create_worker": ("application_sdk.execution._temporal.worker", "create_worker"),
+    "get_object_store_prefix": ("application_sdk.execution._temporal.activity_utils", "get_object_store_prefix"),
+    "needs_lock": ("application_sdk.execution.decorators", "needs_lock"),
+}
 
-from application_sdk.execution._temporal.activity_utils import (
-    build_output_path,
-    get_object_store_prefix,
-)
-from application_sdk.execution._temporal.auth import (
-    TemporalAuthConfig,
-    TemporalAuthManager,
-)
-from application_sdk.execution._temporal.backend import (
-    TemporalExecutorBackend,
-    create_temporal_client,
-)
-from application_sdk.execution._temporal.converter import (
-    create_data_converter,
-    create_data_converter_for_app,
-)
-from application_sdk.execution._temporal.worker import AppWorker, create_worker
-from application_sdk.execution.decorators import needs_lock
-from application_sdk.execution.errors import ApplicationError
-from application_sdk.execution.retry import RetryPolicy
+__all__ = list(_LAZY_EXPORTS)
 
-__all__ = [
-    "AppWorker",
-    "ApplicationError",
-    "RetryPolicy",
-    "TemporalActivityError",
-    "TemporalAuthConfig",
-    "TemporalAuthManager",
-    "TemporalCancelledError",
-    "TemporalChildWorkflowError",
-    "TemporalClient",
-    "TemporalExecutorBackend",
-    "TemporalTerminatedError",
-    "TemporalTimeoutError",
-    "TemporalWorkflowFailureError",
-    "build_output_path",
-    "create_data_converter",
-    "create_data_converter_for_app",
-    "create_temporal_client",
-    "create_worker",
-    "get_object_store_prefix",
-    "needs_lock",
-]
+
+def __getattr__(name: str):
+    entry = _LAZY_EXPORTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+
+    module_path, attr = entry
+    value = getattr(importlib.import_module(module_path), attr)
+    globals()[name] = value
+    return value
