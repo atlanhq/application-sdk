@@ -35,6 +35,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from application_sdk.common.atomic import PARTIAL_DIRNAME
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.common.types import DataframeType
 from application_sdk.storage.formats import _STAGING_ROOT_DIRNAME
@@ -64,6 +65,19 @@ WORKER_THREAD_PREFIX = "sdk-blocking-"
 #: Captured before any patching so :class:`GatedParquetFile` can delegate to the
 #: real reader while ``pq.ParquetFile`` itself is patched out.
 REAL_PARQUET_FILE = pq.ParquetFile
+
+
+def _published_path(where: object) -> str:
+    """Map a path handed to ``pq.write_table`` to the artifact it publishes to.
+
+    Writers stage each chunk as ``<dir>/.sdk-partial/<name>.<token>`` and rename
+    it onto ``<dir>/<name>`` once the write succeeds (FND-318). A path that is
+    not staged is returned unchanged.
+    """
+    staged = Path(str(where))
+    if staged.parent.name != PARTIAL_DIRNAME:
+        return str(staged)
+    return str(staged.parent.parent / staged.name.rsplit(".", 1)[0])
 
 
 async def wait_until(predicate) -> bool:
@@ -425,14 +439,19 @@ class TestWriterAttemptIsolation:
 
         def gated_write_table(table, where, **kwargs):
             # Gate only the orphan's own write; the retry must run at full speed
-            # so it provably reaches consolidation first.
-            gated = str(where) == orphan_chunk and not write_started.is_set()
+            # so it provably reaches consolidation first. Compared on the
+            # published path because the writer hands `pq.write_table` a staged
+            # one (FND-318) — the chunk this test is about is still `chunk-0`,
+            # it just does not carry that name until the write succeeds.
+            gated = (
+                _published_path(where) == orphan_chunk and not write_started.is_set()
+            )
             if gated:
                 write_started.set()
                 may_write.wait(timeout=BLOCK_TIMEOUT_SECONDS)
             result = real_write_table(table, where, **kwargs)
             if gated:
-                orphan_writes_done.append(str(where))
+                orphan_writes_done.append(_published_path(where))
             return result
 
         with patch.object(pq, "write_table", side_effect=gated_write_table):
@@ -457,9 +476,12 @@ class TestWriterAttemptIsolation:
             # Wait for the orphan's write to *land*, not merely for the path to
             # exist: on a shared directory the file is already there, written by
             # the retry, and the whole failure is the orphan replacing it
-            # afterwards.
+            # afterwards. Both halves are required — `orphan_writes_done` proves
+            # it was the orphan's own write that ran, and the path check proves
+            # the staged chunk was published (FND-318 publishes after the write
+            # returns, so the two are not simultaneous).
             assert await wait_until(
-                lambda: bool(orphan_writes_done)
+                lambda: bool(orphan_writes_done) and os.path.exists(orphan_chunk)
             ), "the orphaned worker never landed its chunk"
 
             await retry._consolidate_current_folder()
@@ -532,13 +554,18 @@ class TestWriterOutputIsolation:
         orphan_chunk = os.path.join(orphan._write_root, "chunk-0-part0.parquet")
 
         def gated_write_table(table, where, **kwargs):
-            gated = str(where) == orphan_chunk and not write_started.is_set()
+            # Compared on the published path: each chunk is also staged
+            # individually inside the writer's staging tree (FND-318), so the
+            # path pq.write_table is handed is not the one this test names.
+            gated = (
+                _published_path(where) == orphan_chunk and not write_started.is_set()
+            )
             if gated:
                 write_started.set()
                 may_write.wait(timeout=BLOCK_TIMEOUT_SECONDS)
             result = real_write_table(table, where, **kwargs)
             if gated:
-                orphan_writes_done.append(str(where))
+                orphan_writes_done.append(_published_path(where))
             return result
 
         with patch.object(pq, "write_table", side_effect=gated_write_table):
@@ -562,8 +589,12 @@ class TestWriterOutputIsolation:
                 # is never left parked on the gate.
                 may_write.set()
 
+            # Both halves: `orphan_writes_done` proves the orphan's own write
+            # ran, and the path check proves its staged chunk was published
+            # into the orphan's tree — the two are not simultaneous, since
+            # FND-318 renames after the write returns.
             assert await wait_until(
-                lambda: bool(orphan_writes_done)
+                lambda: bool(orphan_writes_done) and os.path.exists(orphan_chunk)
             ), "the orphaned worker never landed its chunk"
 
         assert files_under(retry.path) == [
@@ -765,3 +796,66 @@ class TestWriterOutputIsolation:
         assert published["value"].tolist() == [
             "retry"
         ], "the orphaned writer's rows were appended to the retry's chunk"
+
+    async def test_a_cross_filesystem_publish_never_writes_directly_to_the_final_name(
+        self, tmp_path: Path
+    ) -> None:
+        """The EXDEV fallback is staged, not direct-to-final (FND-318 review).
+
+        When the output directory is itself a mount point, staging and output
+        sit on different filesystems, ``os.replace`` raises ``EXDEV``, and the
+        publish must fall back to a copy. That copy used to be ``shutil.move``
+        straight onto the artifact's real name — an interruption or ``ENOSPC``
+        mid-copy left a truncated file at the very path staging exists to keep
+        clean. The fallback now routes through ``atomic_copy`` (stage next to
+        the destination, fsync, rename) and unlinks the source itself, so the
+        final name only ever appears complete even on that layout.
+        """
+        import errno as errno_module
+
+        writer = make_output_writer(tmp_path)
+        await writer.write(pd.DataFrame({"id": [1, 2, 3], "value": ["a", "b", "c"]}))
+
+        real_replace = os.replace
+        moved: list[tuple[str, str]] = []
+
+        # Refuse only renames that land in the output directory — staging tree
+        # → ``writer.path`` — with EXDEV, as a mount-point output directory
+        # would. Renames that stay inside the staging tree (atomic_write's own
+        # publish of the statistics sidecar) or stage next to their
+        # destination inside the output directory (atomic_copy's publish) are
+        # same-filesystem by construction and must pass through, or the fake
+        # would simulate a filesystem that cannot rename within one directory
+        # — a different failure entirely.
+        output_dir = os.path.normpath(writer.path)
+
+        def refuse_cross_filesystem_rename(src, dst, **kwargs):
+            if str(dst).startswith(
+                output_dir + os.sep
+            ) and _STAGING_ROOT_DIRNAME in str(src):
+                raise OSError(errno_module.EXDEV, "Invalid cross-device link")
+            return real_replace(src, dst, **kwargs)
+
+        def no_direct_move(src, dst, **kwargs):
+            moved.append((str(src), str(dst)))
+            return real_replace(src, dst, **kwargs)
+
+        with (
+            patch.object(os, "replace", side_effect=refuse_cross_filesystem_rename),
+            patch("shutil.move", side_effect=no_direct_move),
+        ):
+            await writer.close()
+
+        assert moved == [], (
+            "the cross-filesystem fallback published with shutil.move "
+            f"direct-to-final: {moved}"
+        )
+        # The staged copy still landed the chunk under its real name.
+        assert "chunk-0-part0.parquet" in files_under(writer.path)
+        assert set(
+            pd.read_parquet(os.path.join(writer.path, "chunk-0-part0.parquet"))["value"]
+        ) == {
+            "a",
+            "b",
+            "c",
+        }

@@ -231,6 +231,11 @@ When reviewing code, check for:
       PreconditionError, RateLimitedError, AppTimeoutError,
       ResourceExhaustedError, DataIntegrityError, InternalError,
       UnimplementedError, AppPermissionDeniedError, CancelledError,
+      # Specialized subtypes of the leaves above, e.g. DiskFullError
+      # (ResourceExhaustedError; a local write hit ENOSPC/EDQUOT) and
+      # TaskStalledError (AppTimeoutError) — raise the subtype when it
+      # describes the failure precisely.
+      DiskFullError,
   )
 
   # DependencyUnavailableError — retryable=True, audience=PLATFORM

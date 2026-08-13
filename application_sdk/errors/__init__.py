@@ -13,7 +13,7 @@ Canonical API (v3.x+)::
         InvalidInputError, PreconditionError,
         RateLimitedError, UnimplementedError,
         DependencyUnavailableError, SourceUnavailableError,
-        ResourceExhaustedError,
+        ResourceExhaustedError, DiskFullError,
         DataIntegrityError, CancelledError, InternalError,
     )
 
@@ -43,6 +43,7 @@ from application_sdk.errors.leaves import (
     DaprSidecarUnreachableError,
     DataIntegrityError,
     DependencyUnavailableError,
+    DiskFullError,
     InternalError,
     InvalidInputError,
     NotFoundError,
@@ -144,6 +145,7 @@ __all__ = [
     "DaprSidecarUnreachableError",
     "DataIntegrityError",
     "DependencyUnavailableError",
+    "DiskFullError",
     "SourceUnavailableError",
     "InternalError",
     "InvalidInputError",
