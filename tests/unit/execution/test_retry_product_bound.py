@@ -27,11 +27,9 @@ from application_sdk.app.task import (
     task,
 )
 from application_sdk.contracts.base import Input, Output
+from application_sdk.execution import retry_product_seconds
 from application_sdk.execution._temporal.activities import get_activity_options
-from application_sdk.execution.retry import (
-    resolve_activity_time_bounds,
-    retry_product_seconds,
-)
+from application_sdk.execution.retry import resolve_activity_time_bounds
 
 _EVICTION_RETRY_PATH = (
     "application_sdk.execution._temporal.eviction_retry."
