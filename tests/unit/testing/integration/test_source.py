@@ -69,6 +69,87 @@ def test_lookup_is_case_and_separator_insensitive_with_aliases():
     assert src.get("basic_auth_host", "host", default="none") == "none"
 
 
+def test_alias_ordering_prefers_the_first_name_that_resolves():
+    # Only the canonical field present: the alias falls back to it.
+    env = {
+        "E2E_SOURCE_DATASOURCE": "postgres",
+        "E2E_SOURCE_RAW_JSON": json.dumps({"host": "canonical"}),
+    }
+    src = DataForgeSource.from_env(environ=env)
+    assert src.get("basic_auth_host", "host") == "canonical"
+
+    # Both present: the first (most-specific) name wins.
+    env["E2E_SOURCE_RAW_JSON"] = json.dumps(
+        {"host": "canonical", "basic_auth_host": "specific"}
+    )
+    src = DataForgeSource.from_env(environ=env)
+    assert src.get("basic_auth_host", "host") == "specific"
+
+
+def test_datasource_names_with_spaces_and_hyphens_derive_the_prefix():
+    # Prefix derivation uppercases and folds non-alphanumerics to "_", so a
+    # spaced/hyphenated datasource name still scopes its flat vars correctly.
+    env = {
+        "E2E_MY_DS_HOST": "db.internal",
+        "E2E_OTHER_HOST": "unrelated",
+    }
+    src = DataForgeSource.from_env("my ds", environ=env)
+    assert src.get("host") == "db.internal"
+    assert src.as_dict() == {"host": "db.internal"}
+
+    src = DataForgeSource.from_env("my-ds", environ=env)
+    assert src.get("host") == "db.internal"
+
+
+def test_blob_loads_with_no_datasource_anywhere():
+    # No datasource argument and no breadcrumb: the blob still resolves; the
+    # flat pass is skipped (there is no prefix to scope it to).
+    env = {
+        "E2E_SOURCE_RAW_JSON": json.dumps({"host": "db.internal"}),
+        "E2E_POSTGRES_HOST": "ignored",
+    }
+    src = DataForgeSource.from_env(environ=env)
+
+    assert src.datasource == ""
+    assert src.get("host") == "db.internal"
+    assert src.as_dict() == {"host": "db.internal"}
+
+
+def test_datasource_that_normalises_to_empty_skips_the_flat_pass():
+    # A datasource of only separator characters derives no usable prefix; the
+    # flat pass must not match every E2E_* var in the environment.
+    env = {"E2E_POSTGRES_HOST": "db.internal"}
+    src = DataForgeSource.from_env("-", environ=env)
+
+    assert not src.available
+    assert src.as_dict() == {}
+
+
+def test_blob_field_left_empty_is_not_backfilled_by_a_flat_var():
+    # Precedence policy: a blob field present but empty RESERVES its key, so
+    # the fetch's explicit "this field is empty" beats a stale flat var.
+    env = {
+        "E2E_SOURCE_DATASOURCE": "postgres",
+        "E2E_SOURCE_RAW_JSON": json.dumps({"host": "db", "password": ""}),
+        "E2E_POSTGRES_PASSWORD": "stale-static",
+    }
+    src = DataForgeSource.from_env(environ=env)
+
+    assert src.get("password") is None
+    assert not src.require("host", "password")
+
+
+def test_whitespace_only_flat_var_reads_as_absent():
+    env = {
+        "E2E_POSTGRES_HOST": "   ",
+        "E2E_POSTGRES_USERNAME": "u",
+    }
+    src = DataForgeSource.from_env("postgres", environ=env)
+
+    assert src.get("host") is None
+    assert src.as_dict() == {"username": "u"}
+
+
 def test_absent_source_is_unavailable_not_an_error():
     src = DataForgeSource.from_env("postgres", environ={})
 

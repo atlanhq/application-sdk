@@ -130,8 +130,11 @@ class DataForgeSource:
 
         # 1) The uniform blob, present only when the DataForge fetch ran. It is
         #    the authoritative field map, so it is read first and wins over the
-        #    flat vars below on any collision.
+        #    flat vars below on any collision — a blob field RESERVES its
+        #    normalised key even when empty/None, so a flat var can never
+        #    backfill a field the fetch explicitly reported as empty.
         raw = env.get("E2E_SOURCE_RAW_JSON")
+        blob_keys: set[str] = set()
         if raw:
             try:
                 parsed = json.loads(raw)
@@ -139,18 +142,35 @@ class DataForgeSource:
                 parsed = None
             if isinstance(parsed, dict):
                 for key, value in parsed.items():
-                    if value is not None and str(value) != "":
-                        fields[_normalise(str(key))] = str(value)
+                    normalised = _normalise(str(key))
+                    blob_keys.add(normalised)
+                    if value is not None and str(value).strip() != "":
+                        fields[normalised] = str(value)
 
         # 2) The flat ``E2E_<PREFIX>_<FIELD>`` vars — written by BOTH the static
         #    E2E_SOURCE_ENV_JSON export and the fetch — so the static path (which
         #    writes no blob) still resolves. Scoped to the datasource prefix, so
         #    unrelated E2E_* vars (tenant creds, feature flags) never leak into
-        #    the source bag. ``setdefault`` keeps the blob's value on collision.
+        #    the source bag. Values are stripped so a whitespace-only var reads
+        #    as absent, matching the blob path's empty handling. Keys the blob
+        #    already claimed are skipped, keeping the blob authoritative.
+        #    A datasource that is only separators (or empty) would derive the
+        #    bare "E2E_" prefix and match every E2E_* var in the environment —
+        #    tenant creds, flags, everything — so the flat pass requires a real
+        #    datasource-specific prefix.
+        prefix = ""
         if resolved_ds:
-            prefix = "E2E_" + re.sub(r"[^A-Za-z0-9]", "_", resolved_ds.upper()) + "_"
+            derived = re.sub(r"[^A-Za-z0-9]", "_", resolved_ds.upper())
+            if derived:
+                prefix = "E2E_" + derived + "_"
+        if prefix:
             for key, value in env.items():
-                if key.startswith(prefix) and value:
-                    fields.setdefault(_normalise(key[len(prefix) :]), value)
+                if key.startswith(prefix):
+                    normalised = _normalise(key[len(prefix) :])
+                    if normalised in blob_keys:
+                        continue
+                    stripped = value.strip() if value else ""
+                    if stripped:
+                        fields.setdefault(normalised, stripped)
 
         return cls(datasource=resolved_ds, fields=fields)
