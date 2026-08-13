@@ -654,7 +654,7 @@ class TestActivityFnExecution:
                 return_value=None,
             ),
             mock.patch(
-                "application_sdk.execution._temporal.activities.auto_heartbeat_loop",
+                "application_sdk.execution.heartbeat.auto_heartbeat_loop",
                 new=fake_loop,
             ),
         ):

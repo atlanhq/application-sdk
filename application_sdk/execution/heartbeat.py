@@ -25,6 +25,7 @@ import math
 import os
 import time
 from collections.abc import Callable
+from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Protocol
 
 from application_sdk._runtime.offload import (
@@ -33,21 +34,41 @@ from application_sdk._runtime.offload import (
     run_in_thread,
     submit_in_thread,
 )
-from application_sdk._runtime.progress import ProgressTracker, ProgressWatchdogMode
+from application_sdk._runtime.progress import (
+    ProgressTracker,
+    ProgressWatchdogMode,
+    current_progress_tracker,
+    declared_hold_active,
+)
 from application_sdk.execution.progress_telemetry import record_no_progress_gap
 from application_sdk.observability import (
     resource_sampler as _resource_sampler,  # module alias kept so tests can patch _resource_sampler.sample()
 )
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
 from application_sdk.observability.resource_sampler import parse_pod_memory_limit
 
 logger = get_logger(__name__)
 
+# Names this module never used itself but which were importable from it before the
+# offload seam moved out (FND-316), because the pre-split file imported them for its
+# own implementation. Nothing in the SDK or any consumer imports them from here
+# today — but they resolved, so removing them would be a breaking change dressed up
+# as a refactor. Kept so `from application_sdk.execution.heartbeat import <name>`
+# never regresses; their real homes are `_runtime.progress`,
+# `observability.logger_adaptor` and `concurrent.futures.process`. Pinned by
+# `tests/unit/runtime/test_layering.py`.
 __all__ = [
+    "AtlanLoggerAdapter",
+    "BrokenProcessPool",
     "HeartbeatController",
     "NoopHeartbeatController",
+    "ProgressTracker",
+    "ProgressWatchdogMode",
     "TemporalHeartbeatController",
     "auto_heartbeat_loop",
+    "current_progress_tracker",
+    "declared_hold_active",
+    "record_no_progress_gap",
     "run_best_effort",
     "run_fault_isolated",
     "run_in_thread",

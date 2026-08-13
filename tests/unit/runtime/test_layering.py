@@ -127,6 +127,83 @@ def test_the_app_facing_facades_re_export_the_substrate_objects() -> None:
     assert progress_facade.ProgressTracker is progress.ProgressTracker
 
 
+#: Every name that resolved as an attribute of ``application_sdk.execution.heartbeat``
+#: before the offload seam moved out (FND-316) and is a real SDK or library symbol
+#: rather than incidental import leakage (a stdlib module alias, a ``TypeVar``, a
+#: ``typing`` helper). Several were never used by that module — it imported them for
+#: the implementation that has since moved — but they *resolved*, so dropping them
+#: would be a breaking change dressed up as a refactor.
+_HEARTBEAT_BACK_COMPAT = (
+    "AtlanLoggerAdapter",
+    "BrokenProcessPool",
+    "HeartbeatController",
+    "NoopHeartbeatController",
+    "ProgressTracker",
+    "ProgressWatchdogMode",
+    "TemporalHeartbeatController",
+    "auto_heartbeat_loop",
+    "current_progress_tracker",
+    "declared_hold_active",
+    "parse_pod_memory_limit",
+    "record_no_progress_gap",
+    "run_best_effort",
+    "run_fault_isolated",
+    "run_in_thread",
+    "submit_in_thread",
+)
+
+
+@pytest.mark.parametrize("name", _HEARTBEAT_BACK_COMPAT)
+def test_heartbeat_still_resolves_every_name_it_used_to(name: str) -> None:
+    """``from application_sdk.execution.heartbeat import <name>`` must not regress.
+
+    A module split silently narrows the namespace of the file it splits: names the
+    original imported for its own use stop resolving through it. Nothing in the SDK
+    imports these from here, so no other test would notice — which is exactly why
+    this one enumerates them.
+    """
+    from application_sdk.execution import heartbeat
+
+    assert hasattr(heartbeat, name), (
+        f"application_sdk.execution.heartbeat.{name} no longer resolves; it did "
+        "before FND-316, so removing it is a breaking change for any consumer that "
+        "imported it from here."
+    )
+
+
+def test_execution_progress_resolves_as_a_package_attribute() -> None:
+    """``import application_sdk.execution`` must still bind ``.progress``.
+
+    Before FND-316 this held by accident: ``heartbeat`` imported the submodule, so the
+    attribute was set as a side effect. ``heartbeat`` now reaches ``_runtime.progress``
+    instead, so without an explicit import in ``execution/__init__`` the pattern
+    ``import application_sdk.execution as ex; ex.progress.holding_progress(...)``
+    would raise AttributeError.
+    """
+    import application_sdk.execution as execution_package
+
+    assert hasattr(execution_package, "progress")
+    assert callable(execution_package.progress.holding_progress)
+
+
+def test_auto_heartbeat_loop_stays_patchable_through_the_heartbeat_module() -> None:
+    """Consumers neutralise the beat in their tests by patching it here.
+
+    At least one connector's ``conftest.py`` patches
+    ``application_sdk.execution.heartbeat.auto_heartbeat_loop``. That only intercepts
+    the activity's call if the activity resolves the name through this module at call
+    time, so ``activities.py`` must not bind it at module scope. The failure mode this
+    guards is silent: the patch still applies, and the real loop runs anyway.
+    """
+    from application_sdk.execution._temporal import activities
+
+    assert not hasattr(activities, "auto_heartbeat_loop"), (
+        "activities.py bound auto_heartbeat_loop at module scope, which silently "
+        "breaks consumers patching application_sdk.execution.heartbeat."
+        "auto_heartbeat_loop — keep it a call-time import."
+    )
+
+
 def test_serializable_enum_keeps_its_public_identity() -> None:
     """The contracts re-export is the substrate class, so subclass checks hold.
 

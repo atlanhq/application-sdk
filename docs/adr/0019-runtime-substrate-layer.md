@@ -125,6 +125,47 @@ Two lazy imports on this edge deliberately remain, and neither is about
 * `execution/_temporal/activities.py` still defers `app.context`, because
   `app ↔ execution` is a separate cycle that this ADR does not claim to fix.
 
+**What a consumer can and cannot still rely on.** Every module path and every symbol
+that resolved before still resolves — verified by snapshotting `dir()` for all 294
+`application_sdk` modules before and after and diffing. Two things needed explicit
+work to keep that true, because a module split silently narrows the namespace of the
+file it splits:
+
+* `execution/heartbeat.py` re-exports names it no longer uses itself but which used to
+  resolve through it — `current_progress_tracker`, `declared_hold_active`,
+  `AtlanLoggerAdapter`, `BrokenProcessPool`. Nothing in the SDK imports them from
+  there, so no other test would have noticed them disappearing.
+* `execution/__init__.py` imports `execution.progress` explicitly. That attribute used
+  to be bound as a side effect of `heartbeat` importing the submodule, so
+  `import application_sdk.execution as ex; ex.progress.…` worked; `heartbeat` now
+  reaches `_runtime.progress` instead.
+
+Both are pinned per-name in `tests/unit/runtime/test_layering.py`. What is *not*
+preserved is incidental import leakage — stdlib module aliases (`threading`,
+`functools`), typing helpers (`Iterator`, `TypeVar`), and module privates
+(`_BLOCKING_EXECUTOR`, `_auto_hold`, `_progress_tracker`) that were reachable only
+because the pre-split file happened to import them. An org-wide code search found no
+consumer of any of them.
+
+**Monkeypatch seams move when a lazy import is hoisted, and that is the one real
+behavioural change here.** `application_sdk.execution.heartbeat.run_in_thread` only
+intercepts an SDK-internal offload if the SDK resolves that name through the
+`heartbeat` module at call time. Hoisting `storage/`, `app/base.py` and
+`app/context.py` to module-scope `_runtime.offload` imports — the point of this ADR —
+means a `patch()` on the old path no longer reaches them. The failure mode is silent:
+the patch applies and the call is simply not intercepted. Consumers intercepting SDK
+offloads must patch `application_sdk._runtime.offload.run_in_thread`, or better, the
+consuming module (`patch.object(storage.integrity, "run_in_thread")`), which is the
+correct target either way.
+
+That cost is worth paying where the cycle required it, and **not** worth paying
+anywhere else. `execution/_temporal/activities.py` therefore keeps its call-time
+import of `auto_heartbeat_loop`: at least one connector's `conftest.py` patches
+`application_sdk.execution.heartbeat.auto_heartbeat_loop` to neutralise the beat in
+its tests, and that import is intra-`execution` — not a `storage/` edge — so hoisting
+it would have broken a real consumer for no benefit to the goal. A test asserts
+`activities.py` does not bind the name at module scope.
+
 **The rule is enforced, not remembered.**
 `tests/unit/runtime/test_layering.py` imports each `_runtime` module in a
 subprocess and fails if any layer above it was pulled in, asserts

@@ -340,7 +340,7 @@ class TestActivityBinding:
             await stop_event.wait()
 
         with mock.patch(
-            "application_sdk.execution._temporal.activities.auto_heartbeat_loop",
+            "application_sdk.execution.heartbeat.auto_heartbeat_loop",
             new=fake_loop,
         ):
             result = await activity_fn(
@@ -467,7 +467,7 @@ class TestActivityBinding:
 
         with (
             mock.patch(
-                "application_sdk.execution._temporal.activities.auto_heartbeat_loop",
+                "application_sdk.execution.heartbeat.auto_heartbeat_loop",
                 new=cancelling_loop,
             ),
             pytest.raises(asyncio.CancelledError),

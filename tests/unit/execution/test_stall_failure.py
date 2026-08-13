@@ -53,7 +53,7 @@ from application_sdk.execution.progress import (
     current_progress_tracker,
 )
 
-_HEARTBEAT_LOOP = "application_sdk.execution._temporal.activities.auto_heartbeat_loop"
+_HEARTBEAT_LOOP = "application_sdk.execution.heartbeat.auto_heartbeat_loop"
 
 
 class _StallIn(Input, allow_unbounded_fields=True):
