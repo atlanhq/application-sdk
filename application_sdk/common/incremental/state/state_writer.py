@@ -34,7 +34,6 @@ from pathlib import Path
 from application_sdk.common.incremental.helpers import (
     copy_directory_parallel,
     count_json_files_recursive,
-    download_s3_prefix_with_structure,
     get_persistent_artifacts_path,
     get_persistent_s3_prefix,
 )
@@ -113,9 +112,13 @@ async def download_transformed_data(output_path: str) -> Path:
     transformed_dir = Path(transformed_local_path)
     transformed_dir.mkdir(parents=True, exist_ok=True)
 
+    # strip_prefix: transformed_dir already *is* the run's transformed directory,
+    # so the store prefix must not be repeated inside it — downstream readers
+    # (table_scope, column extraction) key off <transformed_dir>/table (FND-340).
     await download_prefix(
         prefix=transformed_s3_prefix,
         local_dir=str(transformed_dir),
+        strip_prefix=True,
     )
 
     return transformed_dir
@@ -171,9 +174,10 @@ async def prepare_previous_state(
     # Download previous state from S3 to temporary location
     logger.info("Downloading previous state from S3: %s", current_state_s3_prefix)
     try:
-        await download_s3_prefix_with_structure(
-            s3_prefix=current_state_s3_prefix,
-            local_destination=previous_state_temp_dir,
+        await download_prefix(
+            prefix=current_state_s3_prefix,
+            local_dir=previous_state_temp_dir,
+            strip_prefix=True,
         )
         logger.info(
             "Previous state downloaded to temporary location: %s",
