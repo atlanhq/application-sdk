@@ -207,6 +207,9 @@ def create_activity_from_task(
             ProgressTracker,
             bind_progress_tracker,
         )
+        from application_sdk.execution.progress_telemetry import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            closed_hold_observer,
+        )
 
         app_registry = AppRegistry.get_instance()
         app_metadata = app_registry.get(context.app_name)
@@ -270,10 +273,20 @@ def create_activity_from_task(
         # leave a dead attempt's tracker bound to this context — not a raise
         # from `create_task` while the loop is closing, and not a
         # `CancelledError` (a `BaseException`) landing in the cleanup below.
+        #
+        # The hold observer is the second half of the warn-mode report: every
+        # hold this attempt releases is measured, so long *unbounded* holds —
+        # invisible to any code audit precisely because they are
+        # auto-vouched-for — show up on the app's work-list alongside the
+        # no-progress gaps the watchdog reports. Attached here rather than left
+        # to the watchdog's own wiring because a hold is worth observing on any
+        # task, including one with heartbeating disabled.
         stop_event = asyncio.Event()
         heartbeat_task = None
 
-        with bind_progress_tracker(ProgressTracker()) as tracker:
+        with bind_progress_tracker(
+            ProgressTracker(on_hold_closed=closed_hold_observer(context.task_name))
+        ) as tracker:
             try:
                 if (
                     context.heartbeat_timeout_seconds is not None
