@@ -587,6 +587,39 @@ class TestWriterOutputIsolation:
         assert set(pd.read_parquet(orphan_chunk)["value"]) == {"orphan"}
         assert not orphan_chunk.startswith(retry.path + os.sep)
 
+    async def test_pre_existing_files_in_the_output_directory_are_adopted(
+        self, tmp_path: Path
+    ) -> None:
+        """Pin the contract for content already in the output directory.
+
+        ``_publish_staged_files`` only ever *adds* this writer's staged files —
+        it never removes what was already under ``self.path``. And because the
+        deferred writer returns ``FileReference.from_local(self.path)``, which
+        walks the directory recursively, that pre-existing content is adopted
+        into the writer's returned reference and uploaded as part of its output.
+
+        This is the same adoption mechanism this PR removes for a cancelled
+        attempt's orphan files — those now live in the orphan's private staging
+        tree. But the hole stays open for files that pre-date the writer, which
+        staging does not (and by design cannot) clean. This test pins that
+        behavior so the contract is explicit rather than accidental.
+        """
+        output_dir = os.path.join(str(tmp_path), "test_type")
+        os.makedirs(output_dir)
+        stale = os.path.join(output_dir, "stale-chunk.parquet")
+        pq.write_table(pa.table({"id": [999]}), stale)
+
+        writer = make_output_writer(tmp_path)
+        await writer.write(pd.DataFrame({"id": [1, 2, 3], "value": ["a", "b", "c"]}))
+        result = await writer.close()
+
+        # The pre-existing file survived the publish (not cleaned)...
+        assert "stale-chunk.parquet" in files_under(writer.path)
+        # ...and was adopted into the returned FileReference: the writer's own
+        # chunk + statistics sidecar + the stale file it did not write.
+        assert result.files is not None
+        assert result.files.file_count == 3
+
     async def test_two_writers_never_resolve_the_same_output_filename(
         self, tmp_path: Path
     ) -> None:

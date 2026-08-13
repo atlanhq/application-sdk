@@ -343,7 +343,10 @@ class Writer(ABC):
             # otherwise make dirname() return self.path itself, siting the
             # staging tree *inside* the output directory.
             parent = os.path.dirname(os.path.normpath(self.path)) or "."
-            root = os.path.join(parent, _STAGING_ROOT_DIRNAME, uuid.uuid4().hex[:8])
+            # Full hex, not a truncated slice: a shorter token plus the
+            # non-exclusive makedirs below could collide two writers into one
+            # staging tree. 128 bits makes that a non-event.
+            root = os.path.join(parent, _STAGING_ROOT_DIRNAME, uuid.uuid4().hex)
             os.makedirs(os.path.join(root, _STAGED_OUTPUT_DIRNAME), exist_ok=True)
             os.makedirs(os.path.join(root, _STAGED_SCRATCH_DIRNAME), exist_ok=True)
             self._staging_root = root

@@ -1046,9 +1046,11 @@ class ParquetFileWriter(Writer):
         Default mode returns ``None`` so the activity interceptor does not
         re-upload files that are already in the store from inline uploads.
 
-        Called after ``close()`` has published, so the directory holds this
-        writer's own output and nothing else — a cancelled attempt's files
-        never leave its private staging tree (FND-317).
+        Called after ``close()`` has published. The reference walks the whole
+        output directory, so it covers this writer's own published output plus
+        anything already in that directory from another writer — staging
+        guarantees only that *this* writer's staging tree is never adopted
+        (FND-317), not that a shared output directory holds this writer alone.
         """
         if not self.defer_uploads:
             return None
