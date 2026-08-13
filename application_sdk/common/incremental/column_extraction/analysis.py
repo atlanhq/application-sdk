@@ -20,7 +20,8 @@ def get_transformed_dir(workflow_args: dict[str, Any]) -> Path:
     """Return current run's transformed directory.
 
     Caller must ensure files are downloaded from S3 before calling this.
-    Files are at output_path/transformed after ObjectStore.download_prefix().
+    Files are at output_path/transformed after
+    ``download_prefix(..., strip_prefix=True)``.
 
     Args:
         workflow_args: Dictionary containing workflow configuration with output_path.

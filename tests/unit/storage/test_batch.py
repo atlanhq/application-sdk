@@ -148,6 +148,74 @@ class TestDownloadPrefix:
         assert (tmp_path / "dl" / "sub" / "a.txt").read_bytes() == b"alpha"
         assert (tmp_path / "dl" / "b.txt").read_bytes() == b"beta"
 
+    async def test_strip_prefix_reproduces_only_the_tree_under_prefix(
+        self, store, tmp_path
+    ) -> None:
+        """strip_prefix=True drops the prefix instead of repeating it locally."""
+        await _put("run/transformed/table/a.json", b"alpha", store, normalize=False)
+        await _put("run/transformed/column/b.json", b"beta", store, normalize=False)
+
+        dests = await download_prefix(
+            "run/transformed",
+            tmp_path,
+            store,
+            normalize=False,
+            strip_prefix=True,
+        )
+
+        assert len(dests) == 2
+        assert (tmp_path / "table" / "a.json").read_bytes() == b"alpha"
+        assert (tmp_path / "column" / "b.json").read_bytes() == b"beta"
+        # The defining property: no second copy of the prefix under local_dir.
+        assert not (tmp_path / "run").exists()
+
+    async def test_strip_prefix_handles_trailing_slash(self, store, tmp_path) -> None:
+        """A slash-terminated prefix strips identically (no leading-slash join)."""
+        await _put("run/transformed/table/a.json", b"alpha", store, normalize=False)
+
+        await download_prefix(
+            "run/transformed/", tmp_path, store, normalize=False, strip_prefix=True
+        )
+
+        assert (tmp_path / "table" / "a.json").read_bytes() == b"alpha"
+
+    async def test_strip_prefix_strips_the_normalised_prefix(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        """A v2-style staging path strips as its normalised ``artifacts/...`` key.
+
+        Stripping the caller's raw argument would miss — the listing matched the
+        normalised form — and every file would land under a full copy of the key
+        path instead.
+        """
+        from application_sdk import constants
+
+        monkeypatch.setattr(constants, "TEMPORARY_PATH", str(tmp_path / "staging"))
+        await _put(
+            "artifacts/run/transformed/table/a.json", b"a", store, normalize=False
+        )
+
+        dest = tmp_path / "out"
+        await download_prefix(
+            f"{tmp_path}/staging/artifacts/run/transformed",
+            dest,
+            store,
+            strip_prefix=True,
+        )
+
+        assert (dest / "table" / "a.json").read_bytes() == b"a"
+        assert not (dest / "artifacts").exists()
+
+    async def test_default_keeps_full_store_path(self, store, tmp_path) -> None:
+        """Without strip_prefix the full key layout is preserved (unchanged default)."""
+        await _put("run/transformed/table/a.json", b"alpha", store, normalize=False)
+
+        await download_prefix("run/transformed", tmp_path, store, normalize=False)
+
+        assert (
+            tmp_path / "run" / "transformed" / "table" / "a.json"
+        ).read_bytes() == b"alpha"
+
     async def test_suffix_filter_restricts_download(self, store, tmp_path) -> None:
         await _put("d/x.parquet", b"p", store, normalize=False)
         await _put("d/x.json", b"j", store, normalize=False)

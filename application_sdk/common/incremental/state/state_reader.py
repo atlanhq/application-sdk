@@ -79,9 +79,13 @@ async def download_current_state(
     json_count = 0
 
     try:
+        # strip_prefix: current_state_dir already *is* the current-state
+        # directory, so the store prefix must not be repeated inside it —
+        # readers key off <current_state_dir>/table etc. (FND-340).
         await download_prefix(
             prefix=current_state_s3_prefix,
             local_dir=str(current_state_dir),
+            strip_prefix=True,
         )
 
         json_count = count_json_files_recursive(current_state_dir)

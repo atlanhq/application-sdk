@@ -9,7 +9,6 @@ Tests cover public functions with real business logic:
 - copy_directory_parallel: Parallel file copy operations
 """
 
-import asyncio
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -30,6 +29,7 @@ from application_sdk.common.incremental.incremental_errors import (
     ConnectionQualifiedNameFormatError,
     ConnectionQualifiedNameMissingError,
 )
+from application_sdk.storage.ops import _put
 
 # ---------------------------------------------------------------------------
 # extract_epoch_id_from_qualified_name
@@ -263,121 +263,59 @@ class TestCopyDirectoryParallel:
 
 
 class TestDownloadS3PrefixWithStructure:
-    """Tests for parallel S3 prefix download with structure preservation."""
+    """Tests for the prefix-stripping download wrapper.
 
-    async def test_downloads_all_listed_files_to_correct_paths(self):
-        """All listed files are downloaded to correct local paths preserving structure."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            local_dest = Path(temp_dir) / "output"
-            s3_prefix = "bucket/tenant/data/"
-            items = [
-                ("bucket/tenant/data/subdir/file1.json", 11, '"etag-1"'),
-                ("bucket/tenant/data/file2.json", 22, '"etag-2"'),
-            ]
+    Exercised against a real (in-memory) object store rather than a mocked
+    download: the whole point of this helper is *where the bytes land*, which a
+    mock asserting "was awaited" cannot see (FND-340).
+    """
 
-            mock_download = AsyncMock()
-            mock_list = AsyncMock(return_value=items)
+    async def test_strips_prefix_so_tree_lands_directly_in_destination(
+        self, memory_store, tmp_path
+    ) -> None:
+        """``<prefix>/table/x.json`` → ``<dest>/table/x.json``, prefix not repeated."""
+        prefix = "persistent-artifacts/apps/app/connection/1/current-state"
+        await _put(
+            f"{prefix}/table/chunk-0.json", b'{"a": 1}', memory_store, normalize=False
+        )
+        await _put(
+            f"{prefix}/column/chunk-0.json", b'{"b": 2}', memory_store, normalize=False
+        )
 
-            with (
-                patch(
-                    "application_sdk.common.incremental.helpers.list_keys_with_meta",
-                    mock_list,
-                ),
-                patch(
-                    "application_sdk.common.incremental.helpers.download_file_chunked",
-                    mock_download,
-                ),
-            ):
-                await download_s3_prefix_with_structure(s3_prefix, local_dest)
+        dest = tmp_path / "current-state"
+        await download_s3_prefix_with_structure(prefix, dest)
 
-            mock_list.assert_awaited_once_with(prefix=s3_prefix)
-            assert mock_download.await_count == 2
-            # Size + etag from the listing are threaded through so large files
-            # chunk without a per-file HEAD and range GETs stay version-pinned.
-            mock_download.assert_any_await(
-                key="bucket/tenant/data/subdir/file1.json",
-                local_path=str(local_dest / "subdir" / "file1.json"),
-                file_size=11,
-                etag='"etag-1"',
-            )
-            mock_download.assert_any_await(
-                key="bucket/tenant/data/file2.json",
-                local_path=str(local_dest / "file2.json"),
-                file_size=22,
-                etag='"etag-2"',
-            )
+        assert (dest / "table" / "chunk-0.json").read_bytes() == b'{"a": 1}'
+        assert (dest / "column" / "chunk-0.json").read_bytes() == b'{"b": 2}'
+        # No second copy of the store prefix underneath the destination.
+        assert not (dest / "persistent-artifacts").exists()
 
-    async def test_concurrency_bounded_by_semaphore(self):
-        """No more than MAX_CONCURRENT_STORAGE_TRANSFERS (4) concurrent downloads run at once."""
+    async def test_empty_prefix_downloads_nothing(self, memory_store, tmp_path) -> None:
+        """A prefix with no objects leaves the destination empty (no error)."""
+        dest = tmp_path / "out"
+        await download_s3_prefix_with_structure("nothing/here", dest)
 
-        max_concurrent = 0
-        current_concurrent = 0
-        lock = asyncio.Lock()
+        assert not dest.exists() or not any(dest.rglob("*"))
 
-        async def _tracking_download(**kwargs):
-            nonlocal max_concurrent, current_concurrent
-            async with lock:
-                current_concurrent += 1
-                max_concurrent = max(max_concurrent, current_concurrent)
-            await asyncio.sleep(0.01)
-            async with lock:
-                current_concurrent -= 1
+    async def test_forwards_concurrency_bound_to_download_prefix(
+        self, tmp_path
+    ) -> None:
+        """The caller's concurrency bound reaches the underlying primitive.
 
-        items = [(f"prefix/file{i}.json", 10, None) for i in range(50)]
-
-        with (
-            tempfile.TemporaryDirectory() as temp_dir,
-            patch(
-                "application_sdk.common.incremental.helpers.list_keys_with_meta",
-                AsyncMock(return_value=items),
-            ),
-            patch(
-                "application_sdk.common.incremental.helpers.download_file_chunked",
-                side_effect=_tracking_download,
-            ),
-        ):
-            await download_s3_prefix_with_structure("prefix/", Path(temp_dir))
-
-        assert max_concurrent <= 4
-
-    async def test_empty_file_list(self):
-        """No downloads when prefix has no files."""
+        Bounding itself is ``download_prefix``'s contract (and its tests); what
+        this wrapper owns is passing the value through along with
+        ``strip_prefix=True``.
+        """
         mock_download = AsyncMock()
-        with (
-            patch(
-                "application_sdk.common.incremental.helpers.list_keys_with_meta",
-                AsyncMock(return_value=[]),
-            ),
-            patch(
-                "application_sdk.common.incremental.helpers.download_file_chunked",
-                mock_download,
-            ),
+        with patch(
+            "application_sdk.common.incremental.helpers.download_prefix",
+            mock_download,
         ):
-            await download_s3_prefix_with_structure("prefix/", Path("/tmp/out"))
+            await download_s3_prefix_with_structure("p/", tmp_path, max_concurrency=7)
 
-        mock_download.assert_not_awaited()
-
-    async def test_path_without_prefix_used_as_is(self):
-        """Files not starting with the prefix are used as relative path directly."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            local_dest = Path(temp_dir) / "output"
-            mock_download = AsyncMock()
-
-            with (
-                patch(
-                    "application_sdk.common.incremental.helpers.list_keys_with_meta",
-                    AsyncMock(return_value=[("other/path/file.json", 5, None)]),
-                ),
-                patch(
-                    "application_sdk.common.incremental.helpers.download_file_chunked",
-                    mock_download,
-                ),
-            ):
-                await download_s3_prefix_with_structure("prefix/", local_dest)
-
-            mock_download.assert_awaited_once_with(
-                key="other/path/file.json",
-                local_path=str(local_dest / "other" / "path" / "file.json"),
-                file_size=5,
-                etag=None,
-            )
+        mock_download.assert_awaited_once_with(
+            prefix="p/",
+            local_dir=tmp_path,
+            strip_prefix=True,
+            max_concurrency=7,
+        )
