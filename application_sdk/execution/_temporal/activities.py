@@ -53,10 +53,10 @@ _MAX_CHAIN_DEPTH = 50
 
 #: Tick interval for the stall-watchdog loop on an attempt that has heartbeating
 #: disabled. The loop there exists only to run the watchdog — the heartbeat
-#: controller is the Noop one, so nothing is heartbeated — and a pure watchdog
-#: tick needs no operator-facing knob. Twenty seconds matches the default
-#: heartbeat interval, so a no-heartbeat attempt is observed at the same cadence
-#: as a heartbeating one.
+#: function is a Noop, so nothing is heartbeated — and a pure watchdog tick
+#: needs no operator-facing knob. Twenty seconds simply keeps a no-heartbeat
+#: attempt observed at a heartbeat-like cadence; it is not derived from the
+#: auto-heartbeat default (10s, per the ``@task`` decorator).
 _WATCHDOG_ONLY_TICK_SECONDS = 20
 
 
@@ -428,7 +428,20 @@ def create_activity_from_task(
                                 if context.auto_heartbeat_seconds is not None
                                 else _WATCHDOG_ONLY_TICK_SECONDS
                             ),
-                            heartbeat_fn=heartbeat_controller.heartbeat_keepalive,
+                            # The heartbeat the tick emits — *not* the controller
+                            # built above. With auto-heartbeating disabled
+                            # (``auto_heartbeat_seconds=None``) the author opted
+                            # out of automatic keepalives, so the loop ticks the
+                            # watchdog through a Noop beat and the task's manual
+                            # ``heartbeat()`` calls — on the real controller —
+                            # stay the only Temporal heartbeats sent. (With
+                            # heartbeating off entirely the Noop beat is a
+                            # no-op either way, so one selection covers both.)
+                            heartbeat_fn=(
+                                heartbeat_controller.heartbeat_keepalive
+                                if context.auto_heartbeat_seconds is not None
+                                else NoopHeartbeatController().heartbeat_keepalive
+                            ),
                             stop_event=stop_event,
                             task_name=context.task_name,
                             watchdog_mode=watchdog_mode,

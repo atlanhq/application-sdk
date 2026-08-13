@@ -51,7 +51,10 @@ from application_sdk.execution._temporal.activities import (
     create_activity_from_task,
 )
 from application_sdk.execution.errors import ApplicationError
-from application_sdk.execution.heartbeat import NoopHeartbeatController
+from application_sdk.execution.heartbeat import (
+    NoopHeartbeatController,
+    TemporalHeartbeatController,
+)
 from application_sdk.execution.heartbeat import (
     auto_heartbeat_loop as _real_auto_heartbeat_loop,
 )
@@ -86,11 +89,16 @@ def _activity_for(app_name: str, task_name: str) -> ActivityFn:
     )
 
 
+_HEARTBEAT_DEFAULT = object()
+
+
 def _task_context(
     app_name: str,
     task_name: str,
     *,
     heartbeating: bool = True,
+    heartbeat_timeout_seconds: int | None | object = _HEARTBEAT_DEFAULT,
+    auto_heartbeat_seconds: int | None | object = _HEARTBEAT_DEFAULT,
     progress_watchdog: ProgressWatchdogMode | None = None,
     max_no_progress_seconds: float | None = None,
 ) -> TaskContext:
@@ -98,8 +106,16 @@ def _task_context(
         app_name=app_name,
         task_name=task_name,
         run_id="run-1",
-        heartbeat_timeout_seconds=60 if heartbeating else None,
-        auto_heartbeat_seconds=10 if heartbeating else None,
+        heartbeat_timeout_seconds=(
+            (60 if heartbeating else None)
+            if heartbeat_timeout_seconds is _HEARTBEAT_DEFAULT
+            else cast("int | None", heartbeat_timeout_seconds)
+        ),
+        auto_heartbeat_seconds=(
+            (10 if heartbeating else None)
+            if auto_heartbeat_seconds is _HEARTBEAT_DEFAULT
+            else cast("int | None", auto_heartbeat_seconds)
+        ),
         progress_watchdog=progress_watchdog,
         max_no_progress_seconds=max_no_progress_seconds,
     )
@@ -653,13 +669,105 @@ class TestWatchdogWiring:
 
         assert result.msg == "ok"
         # One loop, in the inherited warn mode, ticking on the watchdog-only beat
-        # (no heartbeat interval to reuse) and heartbeating through the Noop
-        # controller — so nothing reaches Temporal, but a gap is still observed.
+        # (no heartbeat interval to reuse) and heartbeating through a Noop beat —
+        # so nothing reaches Temporal, but a gap is still observed.
         assert len(loop_calls) == 1
         assert loop_calls[0]["watchdog_mode"] is ProgressWatchdogMode.WARN
         assert loop_calls[0]["interval_seconds"] == _WATCHDOG_ONLY_TICK_SECONDS
         assert isinstance(
             loop_calls[0]["heartbeat_fn"].__self__, NoopHeartbeatController
+        )
+
+    async def test_manual_heartbeats_get_no_automatic_keepalive(self) -> None:
+        """Manual-heartbeat tasks opted out of auto-heartbeats, watchdog or not.
+
+        The seam must not widen: ``heartbeat_timeout_seconds`` set with
+        ``auto_heartbeat_seconds=None`` means *manual* heartbeating — the task's
+        own ``heartbeat()`` calls, on the real Temporal controller — and the
+        loop the watchdog rides must not add automatic keepalives the author
+        disabled. So the loop ticks through a Noop beat while the controller
+        handed to the task stays Temporal.
+        """
+        loop_calls: list[dict[str, Any]] = []
+
+        class _ManualApp(App):
+            @task(timeout_seconds=600)
+            async def manual(self, input: _StallIn) -> _StallOut:
+                return _StallOut(msg="ok")
+
+            async def run(self, input: _StallIn) -> _StallOut:
+                return await self.manual(input)
+
+        async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
+            loop_calls.append(kwargs)
+            await stop_event.wait()
+
+        _ManualApp()
+        activity_fn = _activity_for("_manual-app", "manual")
+
+        with mock.patch(_HEARTBEAT_LOOP, new=loop):
+            result = await activity_fn(
+                _task_context(
+                    "_manual-app",
+                    "manual",
+                    heartbeat_timeout_seconds=60,
+                    auto_heartbeat_seconds=None,
+                ),
+                _StallIn(),
+            )
+
+        assert result.msg == "ok"
+        # One loop — the watchdog still runs in the inherited warn mode — but
+        # ticking on the watchdog-only beat through a Noop heartbeat, so no
+        # automatic Temporal keepalive is emitted for a task that asked for
+        # none.
+        assert len(loop_calls) == 1
+        assert loop_calls[0]["watchdog_mode"] is ProgressWatchdogMode.WARN
+        assert loop_calls[0]["interval_seconds"] == _WATCHDOG_ONLY_TICK_SECONDS
+        assert isinstance(
+            loop_calls[0]["heartbeat_fn"].__self__, NoopHeartbeatController
+        )
+
+    async def test_auto_heartbeat_keeps_the_temporal_beat(self) -> None:
+        """The ordinary path is untouched: auto-heartbeating rides the real beat.
+
+        With an auto-heartbeat interval configured the loop must keep emitting
+        keepalives through the task's own Temporal controller — the beat is the
+        crash detector, and selecting the Noop here would silently blind it.
+        """
+        loop_calls: list[dict[str, Any]] = []
+
+        class _BeatApp(App):
+            @task(timeout_seconds=600)
+            async def beat(self, input: _StallIn) -> _StallOut:
+                return _StallOut(msg="ok")
+
+            async def run(self, input: _StallIn) -> _StallOut:
+                return await self.beat(input)
+
+        async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
+            loop_calls.append(kwargs)
+            await stop_event.wait()
+
+        _BeatApp()
+        activity_fn = _activity_for("_beat-app", "beat")
+
+        with mock.patch(_HEARTBEAT_LOOP, new=loop):
+            result = await activity_fn(
+                _task_context(
+                    "_beat-app",
+                    "beat",
+                    heartbeat_timeout_seconds=60,
+                    auto_heartbeat_seconds=10,
+                ),
+                _StallIn(),
+            )
+
+        assert result.msg == "ok"
+        assert len(loop_calls) == 1
+        assert loop_calls[0]["interval_seconds"] == 10
+        assert isinstance(
+            loop_calls[0]["heartbeat_fn"].__self__, TemporalHeartbeatController
         )
 
 
