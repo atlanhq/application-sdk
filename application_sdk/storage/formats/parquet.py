@@ -33,8 +33,8 @@ if TYPE_CHECKING:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-#: Directory under a writer's output path holding accumulation chunks until they
-#: are consolidated. Each writer owns a token-named subdirectory of it — see
+#: Directory under a writer's private scratch root holding accumulation chunks
+#: until they are consolidated — see
 #: :meth:`ParquetFileWriter._get_temp_base_path`.
 _TEMP_ACCUMULATION_DIRNAME = "temp_accumulation"
 
@@ -608,24 +608,6 @@ class ParquetFileWriter(Writer):
         self.temp_folders_created: list[int] = []  # Track temp folders for cleanup
         self.current_temp_folder_path: str | None = None  # Current temp folder path
 
-        # Token scoping the accumulation tree to this writer instance.
-        #
-        # Cancelling an activity leaves the orphaned `_convert_and_write` worker
-        # alive (a thread cannot be killed, ADR-0010) and still writing
-        # `chunk-{n}` files. Every part of the old path was attempt-independent
-        # — `temp_accumulation/folder-{i}`, with `temp_folder_index` reset to 0
-        # both here and in `_cleanup_temp_folders` — so a retry landed on the
-        # exact directory that orphan was writing into: its file count shifted
-        # the retry's `chunk-{n}` numbering (mixing the orphan's partial output
-        # into a consolidation, or skipping the retry's own), and the retry's
-        # cleanup could rmtree a live directory (FND-315).
-        #
-        # Per writer instance rather than per activity attempt: strictly
-        # stronger (two writers within one attempt are covered too) and it
-        # needs no activity context in `storage/`, which would deepen the
-        # layering debt tracked in FND-316.
-        self._temp_run_id = uuid.uuid4().hex[:8]
-
         if self.chunk_start:
             self.chunk_count = self.chunk_start + self.chunk_count
 
@@ -748,19 +730,37 @@ class ParquetFileWriter(Writer):
     def _get_temp_base_path(self) -> str:
         """Root of this writer's accumulation tree.
 
-        Token-scoped, so no two writers — and therefore no two activity attempts
-        — can ever share an accumulation directory. See ``_temp_run_id``.
+        Lives under the writer's private scratch root, so no two writers — and
+        therefore no two activity attempts — can ever share an accumulation
+        directory.
+
+        That sharing was FND-315: every part of the old path was
+        attempt-independent (``<output>/temp_accumulation/folder-{i}``, with
+        ``temp_folder_index`` reset to 0 on each writer), so a retry landed on
+        the exact directory an orphaned ``_convert_and_write`` worker was still
+        writing into. The orphan's files shifted the retry's ``chunk-{n}``
+        numbering — mixing partial output into a consolidation, or skipping the
+        retry's own — and the retry's cleanup could ``rmtree`` a live
+        directory.
+
+        Being under the *scratch* root rather than the staged output root is
+        FND-317: a folder a failed cleanup leaves behind can never be published
+        as output or swept into a ``FileReference``.
         """
-        return os.path.join(self.path, _TEMP_ACCUMULATION_DIRNAME, self._temp_run_id)
+        return os.path.join(self._scratch_root, _TEMP_ACCUMULATION_DIRNAME)
 
     def _get_temp_folder_path(self, folder_index: int) -> str:
         """Generate temp folder path consistent with existing structure."""
         return os.path.join(self._get_temp_base_path(), f"folder-{folder_index}")
 
     def _get_consolidated_file_path(self, folder_index: int, chunk_part: int) -> str:
-        """Generate final consolidated file path using existing path_gen logic."""
+        """Staged path for a consolidated file, under its published name.
+
+        The name is the published one; only the directory is private until
+        ``close()`` publishes it (FND-317).
+        """
         return os.path.join(
-            self.path,
+            self._write_root,
             path_gen(
                 chunk_count=folder_index,
                 chunk_part=chunk_part,
@@ -872,7 +872,16 @@ class ParquetFileWriter(Writer):
                 await self._write_chunk(chunk, consolidated_file_path)
 
                 if not self.defer_uploads:
-                    await _upload_file(consolidated_file_path, consolidated_file_path)
+                    # The module-level upload, not `self._upload_file`: the
+                    # consolidation path has always kept its local files
+                    # regardless of `retain_local_copy`, and routing through
+                    # the base method would start deleting them. The key is
+                    # still the published one so staging stays invisible to
+                    # the store (FND-317).
+                    await _upload_file(
+                        self._published_path(consolidated_file_path),
+                        consolidated_file_path,
+                    )
                 partitions += 1
 
                 # One consolidated file written (and uploaded) is one unit.
@@ -947,27 +956,20 @@ class ParquetFileWriter(Writer):
                         exc_info=True,
                     )
 
-            # Clean up this writer's temp root, then the shared parent, each only
-            # when empty — a sibling writer's tree is never removed here.
-            for directory in (
-                self._get_temp_base_path(),
-                os.path.join(self.path, _TEMP_ACCUMULATION_DIRNAME),
-            ):
-                if SafeFileOps.exists(directory) and not SafeFileOps.listdir(directory):
-                    try:
-                        SafeFileOps.rmdir(directory)
-                    except OSError:
-                        # A concurrent writer can claim its own token directory
-                        # between the emptiness check and the rmdir, which is
-                        # exactly the outcome the check wanted. Debug, not
-                        # warning: an empty directory left behind costs nothing,
-                        # and the next writer to finish removes it.
-                        logger.debug(
-                            "Left %s in place; another writer claimed it between "
-                            "the emptiness check and removal",
-                            directory,
-                            exc_info=True,
-                        )
+            # Drop this writer's accumulation root once it is empty. No sibling
+            # can be inside it — the whole tree is private to this writer — so
+            # a failure here is this writer's own and worth surfacing.
+            temp_base = self._get_temp_base_path()
+            if SafeFileOps.exists(temp_base) and not SafeFileOps.listdir(temp_base):
+                try:
+                    SafeFileOps.rmdir(temp_base)
+                except OSError:
+                    logger.warning(
+                        "Failed to remove parquet accumulation root %s; "
+                        "it will be left on local disk until the writer closes",
+                        temp_base,
+                        exc_info=True,
+                    )
 
             # Reset state
             self.temp_folders_created.clear()
@@ -996,7 +998,10 @@ class ParquetFileWriter(Writer):
         """
         await super()._flush_buffer(chunk, chunk_part)
         if not self.defer_uploads:
-            output_file_name = f"{self.path}/{path_gen(self.chunk_count, chunk_part, extension=self.extension)}"
+            output_file_name = os.path.join(
+                self._write_root,
+                path_gen(self.chunk_count, chunk_part, extension=self.extension),
+            )
             if os.path.exists(output_file_name):
                 try:
                     await self._upload_file(output_file_name)
@@ -1040,6 +1045,12 @@ class ParquetFileWriter(Writer):
         Returned in ``WriterResult.files`` only when ``defer_uploads=True``.
         Default mode returns ``None`` so the activity interceptor does not
         re-upload files that are already in the store from inline uploads.
+
+        Called after ``close()`` has published. The reference walks the whole
+        output directory, so it covers this writer's own published output plus
+        anything already in that directory from another writer — staging
+        guarantees only that *this* writer's staging tree is never adopted
+        (FND-317), not that a shared output directory holds this writer alone.
         """
         if not self.defer_uploads:
             return None
