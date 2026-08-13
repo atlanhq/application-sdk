@@ -14,16 +14,6 @@ attempt is failed with a `TaskStalledError` naming the last signal it saw.
 This page is what an app author needs in order to act. [ADR-0018](../adr/0018-progress-aware-heartbeat.md)
 is the design record behind it; you should not need to read it to fix your app.
 
-!!! note "Rollout status"
-
-    The progress signals described here — the framework hooks, the automatic holds and
-    `holding_progress()` — are live now. The two settings that *act* on them,
-    `progress_watchdog` and `max_no_progress_seconds`, arrive together with the 24h
-    `start_to_close` backstop in the release that turns the watchdog on fleet-wide in
-    `warn`. Until then `timeout_seconds` keeps its 600s default and nothing observes the
-    signals. Nothing below changes when that release lands; it is written for the state
-    you will be in.
-
 ---
 
 ## The one rule
@@ -87,6 +77,43 @@ Three clarifications, because each is a real misread:
 
 There is a fourth setting, `progress_watchdog`, which is a mode rather than a
 duration: `off`, `warn` or `enforce`. See [Modes](#modes-off-warn-enforce).
+
+### Setting them
+
+Both are `@task` arguments, and both default to *"inherit the fleet-wide value"* — which
+is what almost every task should do:
+
+```python
+class MyConnector(App):
+    # The normal case: declare nothing. warn mode, a 900s allowance, a 24h backstop.
+    @task
+    async def extract(self, input: MyInput) -> MyOutput: ...
+
+    # Once this task's gaps are inside declared holds or under budget — verified
+    # against a large tenant, not a smoke test.
+    @task(progress_watchdog="enforce")
+    async def transform(self, input: MyInput) -> MyOutput: ...
+```
+
+The fleet-wide values come from the environment, so an operator can change them without
+an app release:
+
+| Env var | Default | Controls |
+|---|---|---|
+| `ATLAN_PROGRESS_WATCHDOG` | `warn` | The mode for every task that does not declare one |
+| `ATLAN_MAX_NO_PROGRESS_SECONDS` | `900` | The allowance for every task that does not declare one |
+
+`ATLAN_PROGRESS_WATCHDOG=off` is the **kill-switch**, and it is the one place the
+environment beats a per-task declaration: a task pinned to `enforce` still goes inert.
+A switch that a decorator could out-vote would be no use to the operator holding it
+during an incident, which is the only time it gets thrown. In the other direction the
+env var only fills in a blank — it can never shrink an allowance a task declared for
+itself, because that would be a fleet-wide false-kill generator wearing a config knob's
+clothes.
+
+Both are read on the **worker running the activity**, not on the workflow side, so a
+change takes effect on the next attempt rather than needing every in-flight run
+re-dispatched.
 
 ## What the SDK covers for you
 
@@ -341,7 +368,8 @@ release channel, k8s topology) is reachable through `target_info` — see
 | `enforce` | Reports the gap, then fails the attempt |
 
 Warn is the default fleet-wide because it cannot fail anything, which means nobody has
-to opt in and every app starts producing its own work-list on upgrade.
+to opt in and every app starts producing its own work-list on upgrade. See
+[Setting them](#setting-them) for the `@task` arguments and the env vars behind them.
 
 ### When a stall does fail an attempt
 

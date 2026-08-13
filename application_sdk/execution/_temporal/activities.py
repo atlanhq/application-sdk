@@ -25,6 +25,11 @@ from application_sdk.app.task import TaskMetadata
 from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference
+from application_sdk.execution.progress import (
+    ProgressWatchdogMode,
+    resolve_max_no_progress_seconds,
+    resolve_watchdog_mode,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -171,6 +176,21 @@ class TaskContext:
     still in flight across an SDK upgrade. Epoch seconds rather than a
     ``datetime`` so the value is one float on the wire and needs no timezone
     round-trip to be subtracted from this worker's clock."""
+
+    progress_watchdog: ProgressWatchdogMode | None = None
+    """This task's declared stall-watchdog mode, or ``None`` for "declares nothing".
+
+    Carries the *declaration*, not the resolved mode, so the fleet-wide default
+    and the ``off`` kill-switch are read in the worker actually running the
+    watchdog (:func:`~application_sdk.execution.progress.resolve_watchdog_mode`).
+    That also makes the field's absence do the right thing: a run dispatched by a
+    workflow that predates it lands on the fleet default, so a worker upgrade is
+    enough to start producing that app's warn-mode work-list."""
+
+    max_no_progress_seconds: float | None = None
+    """This task's declared no-progress allowance in seconds, or ``None`` to
+    inherit the fleet-wide one. Resolved alongside
+    :attr:`progress_watchdog`, for the same reasons."""
 
 
 def _current_workflow_type() -> str:
@@ -369,12 +389,18 @@ def create_activity_from_task(
                             heartbeat_fn=heartbeat_controller.heartbeat_keepalive,
                             stop_event=stop_event,
                             task_name=context.task_name,
-                            # `watchdog_mode` and `max_no_progress_seconds` are
-                            # deliberately absent: their defaults leave the
-                            # watchdog inert, and the per-task flag and budget
-                            # that turn it on are FND-296's. Injecting the
-                            # handler now means enabling the watchdog is a config
-                            # change rather than a second seam.
+                            # Resolved here rather than on the workflow side so
+                            # the environment consulted is the one the watchdog
+                            # runs in — which is what makes `off` a kill-switch
+                            # an operator can throw on the worker, and what makes
+                            # a run dispatched before these fields existed land
+                            # on the fleet default rather than on nothing.
+                            watchdog_mode=resolve_watchdog_mode(
+                                context.progress_watchdog
+                            ),
+                            max_no_progress_seconds=resolve_max_no_progress_seconds(
+                                context.max_no_progress_seconds
+                            ),
                             progress=tracker,
                             on_stall=on_stall,
                         )

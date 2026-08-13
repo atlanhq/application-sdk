@@ -69,13 +69,16 @@ Tasks are where side effects happen. Each completed task is a durable checkpoint
 
 ```python
 @task(
-    timeout_seconds=600,            # Activity start-to-close timeout (default 10 min)
     retry_max_attempts=3,           # Default 3 retries
     retry_max_interval_seconds=30,  # Max backoff between retries
 )
 async def my_task(self, input: TaskInput) -> TaskOutput:
     ...
 ```
+
+`timeout_seconds` (the activity's `start_to_close` bound) defaults to a **24-hour
+backstop** and is not a number to tune — a wedged-but-alive attempt is caught by the
+stall watchdog in minutes instead. See [Progress and Stalls](../concepts/progress-and-stalls.md).
 
 - `@task` validates the single-model contract (one `Input` model, one `Output` model) **at class definition time** — before any code runs.
 - Tasks run outside the Temporal sandbox; they can import any library without passthrough concerns.

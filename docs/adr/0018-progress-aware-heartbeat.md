@@ -970,6 +970,26 @@ Warn mode is what makes this checkable rather than aspirational.
    repository, the exported Prometheus contract is pinned by
    `tests/unit/execution/test_progress_telemetry_exposition.py` so a rename here
    cannot silently disable the containment.
+
+   The step itself landed as FND-296. Two details of the shape are worth recording
+   because they are not obvious from the description above:
+
+   - **The flag carries a declaration, not a resolved mode.** `TaskMetadata.progress_watchdog`
+     and the `TaskContext` field are `None` for a task that declares nothing, and the
+     activity worker resolves `None` against `ATLAN_PROGRESS_WATCHDOG` on its own side.
+     That is what makes `off` a kill-switch an operator can throw on a worker without
+     re-dispatching in-flight runs, and what makes a run dispatched by a workflow
+     predating the field land on the fleet default rather than on nothing. `off` in the
+     environment beats a per-task `enforce` for the same reason; the allowance
+     (`ATLAN_MAX_NO_PROGRESS_SECONDS`) deliberately has no such override, since an env
+     var that could silently shrink a declared allowance would be a fleet-wide
+     false-kill generator.
+   - **`app/` cannot import `execution/` at module scope** (`execution/__init__` →
+     `_temporal` → `app.registry` → `app.base` → `app.task`), so `app/task.py` reaches
+     `ProgressWatchdogMode` only inside the validation path that an explicit declaration
+     triggers. This is why the enum stays where [ADR-0019](0019-runtime-substrate-layer.md)
+     put it and the default resolution lives in `execution/progress.py` rather than
+     beside the other `@task` env defaults.
 4. **Ship the conformance rule and the toolkit floor.** Both are independent of the
    `@task` work and both deliver immediately: the floor stops the next app shipping
    a 2h node timeout, and the rule keeps un-held opaque sites visible once teams

@@ -12,19 +12,23 @@ and still be wrong in production:
    eviction won that race the attempt would be re-dispatched by the
    workflow-side eviction-retry loop *outside* the normal retry budget, so the
    matrix of (stall, shutting down) is pinned in all four corners.
-3. **What is wired, and what deliberately is not.** The handler is injected now;
-   the mode and the budget that make the watchdog act are FND-296's, so on this
-   branch the watchdog is inert and the behaviour change is zero. A test asserts
-   that absence rather than trusting it.
+3. **What the activity supplies to the watchdog.** Since FND-296 the mode and the
+   budget are resolved in the activity and passed to the loop, and a task that
+   declares nothing arrives in ``warn`` — the fleet default, with no opt-in.
+   Resolution happens on the activity side so ``off`` in the worker's
+   environment is a real kill-switch, and so a run dispatched before these
+   fields existed lands on the default rather than on nothing. All of that is
+   asserted rather than trusted.
 
 The end-to-end test drives the *real* watchdog inside the *real* activity body,
-with only the enforce config injected — no patched clock (an asyncio loop shares
-``time.monotonic``), just a 10 ms tick against a 50 ms budget.
+with only the enforce config overridden — no patched clock (an asyncio loop
+shares ``time.monotonic``), just a 10 ms tick against a 50 ms budget.
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 from unittest import mock
@@ -37,6 +41,7 @@ from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.leaves import WORKER_EVICTED_TYPE, TaskStalledError
 from application_sdk.errors.wire import FailureDetails
+from application_sdk.execution import progress as progress_module
 from application_sdk.execution import shutdown as shutdown_module
 from application_sdk.execution._temporal import activities as activities_module
 from application_sdk.execution._temporal.activities import (
@@ -48,9 +53,11 @@ from application_sdk.execution.heartbeat import (
     auto_heartbeat_loop as _real_auto_heartbeat_loop,
 )
 from application_sdk.execution.progress import (
+    MAX_NO_PROGRESS_SECONDS,
     ProgressTracker,
     ProgressWatchdogMode,
     current_progress_tracker,
+    resolve_watchdog_mode,
 )
 
 _HEARTBEAT_LOOP = "application_sdk.execution.heartbeat.auto_heartbeat_loop"
@@ -76,7 +83,12 @@ def _activity_for(app_name: str, task_name: str) -> ActivityFn:
 
 
 def _task_context(
-    app_name: str, task_name: str, *, heartbeating: bool = True
+    app_name: str,
+    task_name: str,
+    *,
+    heartbeating: bool = True,
+    progress_watchdog: ProgressWatchdogMode | None = None,
+    max_no_progress_seconds: float | None = None,
 ) -> TaskContext:
     return TaskContext(
         app_name=app_name,
@@ -84,27 +96,30 @@ def _task_context(
         run_id="run-1",
         heartbeat_timeout_seconds=60 if heartbeating else None,
         auto_heartbeat_seconds=10 if heartbeating else None,
+        progress_watchdog=progress_watchdog,
+        max_no_progress_seconds=max_no_progress_seconds,
     )
 
 
 def _enforcing_watchdog(
     *, budget_seconds: float = 0.05, tick_seconds: float = 0.01
 ) -> Callable[..., Awaitable[None]]:
-    """The real auto-heartbeat loop, with the config FND-296 will supply.
+    """The real auto-heartbeat loop, sped up and pinned to ``enforce``.
 
     Everything under test stays real — the tick, the gap arithmetic, the
-    ``on_stall`` call, the loop returning immediately after enforcing. Only
-    ``watchdog_mode`` and ``max_no_progress_seconds`` are injected, since
-    ``activities.py`` has nothing to read them from yet.
+    ``on_stall`` call, the loop returning immediately after enforcing. The three
+    values ``activities.py`` supplies are *overridden* rather than added: since
+    FND-296 it does pass a mode and a budget, and a test that waited for the
+    fleet default (``warn``, 900s) would neither enforce nor finish this decade.
+    That the real wiring passes the resolved pair at all is asserted separately,
+    in :meth:`TestWatchdogWiring.test_the_activity_supplies_the_resolved_config`.
     """
 
     async def loop(**kwargs: Any) -> None:
         kwargs["interval_seconds"] = tick_seconds
-        await _real_auto_heartbeat_loop(
-            **kwargs,
-            max_no_progress_seconds=budget_seconds,
-            watchdog_mode=ProgressWatchdogMode.ENFORCE,
-        )
+        kwargs["max_no_progress_seconds"] = budget_seconds
+        kwargs["watchdog_mode"] = ProgressWatchdogMode.ENFORCE
+        await _real_auto_heartbeat_loop(**kwargs)
 
     return loop
 
@@ -441,35 +456,109 @@ class TestWatchdogWiring:
         assert seen["progress"] is from_body[0]
         assert callable(seen["on_stall"])
 
-    async def test_the_watchdog_config_is_left_to_the_flag(self) -> None:
-        """No mode and no budget, so the watchdog is inert on this branch.
+    async def test_the_activity_supplies_the_resolved_config(self) -> None:
+        """A task that declares nothing still arrives at the loop in warn mode.
 
-        This is what makes the claim "zero behaviour change" checkable rather
-        than argued: the handler is injected, and turning the watchdog on is a
-        config change (FND-296), not another seam.
+        The whole of FND-296 in one assertion: no opt-in, no per-app step, and
+        the mode reaching the watchdog is the fleet default rather than ``OFF``.
+        The budget comes with it, since a mode with no allowance is inert.
         """
         seen: dict[str, Any] = {}
 
-        class _InertApp(App):
-            @task(timeout_seconds=600)
-            async def inert(self, input: _StallIn) -> _StallOut:
+        class _InheritingApp(App):
+            @task
+            async def inherits(self, input: _StallIn) -> _StallOut:
                 return _StallOut(msg="ok")
 
             async def run(self, input: _StallIn) -> _StallOut:
-                return await self.inert(input)
+                return await self.inherits(input)
 
         async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
             seen.update(kwargs)
             await stop_event.wait()
 
-        _InertApp()
-        activity_fn = _activity_for("_inert-app", "inert")
+        _InheritingApp()
+        activity_fn = _activity_for("_inheriting-app", "inherits")
 
         with mock.patch(_HEARTBEAT_LOOP, new=loop):
-            await activity_fn(_task_context("_inert-app", "inert"), _StallIn())
+            await activity_fn(_task_context("_inheriting-app", "inherits"), _StallIn())
 
-        assert "watchdog_mode" not in seen
-        assert "max_no_progress_seconds" not in seen
+        assert seen["watchdog_mode"] is ProgressWatchdogMode.WARN
+        assert seen["max_no_progress_seconds"] == MAX_NO_PROGRESS_SECONDS
+
+    async def test_a_declaration_on_the_wire_reaches_the_loop(self) -> None:
+        """What an app flips in rollout step 6, arriving from the dispatch side."""
+        seen: dict[str, Any] = {}
+
+        class _EnforcingApp(App):
+            @task(progress_watchdog="enforce", max_no_progress_seconds=42)
+            async def strict(self, input: _StallIn) -> _StallOut:
+                return _StallOut(msg="ok")
+
+            async def run(self, input: _StallIn) -> _StallOut:
+                return await self.strict(input)
+
+        async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
+            seen.update(kwargs)
+            await stop_event.wait()
+
+        _EnforcingApp()
+        activity_fn = _activity_for("_enforcing-app", "strict")
+
+        with mock.patch(_HEARTBEAT_LOOP, new=loop):
+            await activity_fn(
+                _task_context(
+                    "_enforcing-app",
+                    "strict",
+                    progress_watchdog=ProgressWatchdogMode.ENFORCE,
+                    max_no_progress_seconds=42.0,
+                ),
+                _StallIn(),
+            )
+
+        assert seen["watchdog_mode"] is ProgressWatchdogMode.ENFORCE
+        assert seen["max_no_progress_seconds"] == 42.0
+
+    async def test_the_kill_switch_is_read_on_the_worker(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``off`` in the activity worker's environment beats a per-task ``enforce``.
+
+        Resolution happens here rather than on the workflow side precisely so an
+        operator can throw the switch without every in-flight run needing to be
+        re-dispatched to notice.
+        """
+        seen: dict[str, Any] = {}
+
+        class _PinnedApp(App):
+            @task(progress_watchdog="enforce")
+            async def pinned(self, input: _StallIn) -> _StallOut:
+                return _StallOut(msg="ok")
+
+            async def run(self, input: _StallIn) -> _StallOut:
+                return await self.pinned(input)
+
+        async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
+            seen.update(kwargs)
+            await stop_event.wait()
+
+        _PinnedApp()
+        activity_fn = _activity_for("_pinned-app", "pinned")
+        monkeypatch.setattr(
+            progress_module, "PROGRESS_WATCHDOG_MODE", ProgressWatchdogMode.OFF
+        )
+
+        with mock.patch(_HEARTBEAT_LOOP, new=loop):
+            await activity_fn(
+                _task_context(
+                    "_pinned-app",
+                    "pinned",
+                    progress_watchdog=ProgressWatchdogMode.ENFORCE,
+                ),
+                _StallIn(),
+            )
+
+        assert seen["watchdog_mode"] is ProgressWatchdogMode.OFF
 
     async def test_no_heartbeat_loop_means_no_watchdog(self) -> None:
         """A task with heartbeating disabled runs no loop, so nothing can stall it.
@@ -500,3 +589,121 @@ class TestWatchdogWiring:
 
         assert result.msg == "ok"
         assert loop_calls == []
+
+
+class TestDeclarationReachesTheWire:
+    """The dispatch half: a ``@task`` declaration has to survive the trip.
+
+    ``TaskMetadata`` → ``_create_task_activity_wrapper`` → ``TaskContext`` →
+    (Temporal) → the activity. The activity end is covered above; this is
+    everything before it.
+    """
+
+    async def _dispatched_context(
+        self,
+        *,
+        progress_watchdog: ProgressWatchdogMode | None = None,
+        max_no_progress_seconds: float | None = None,
+    ) -> TaskContext:
+        from application_sdk.app.base import (  # noqa: PLC0415 — private dispatch seam, imported where it is used
+            _create_task_activity_wrapper,
+        )
+
+        with mock.patch(
+            "application_sdk.execution._temporal.eviction_retry."
+            "execute_activity_with_eviction_retry",
+            new_callable=mock.AsyncMock,
+        ) as dispatched:
+            dispatched.return_value = mock.MagicMock()
+            wrapper = _create_task_activity_wrapper(
+                app_name="_dispatch-app",
+                task_name="extract",
+                timeout_seconds=600,
+                retry_max_attempts=3,
+                retry_max_interval_seconds=30,
+                output_type=_StallOut,
+                context_data={"run_id": "r1"},
+                progress_watchdog=progress_watchdog,
+                max_no_progress_seconds=max_no_progress_seconds,
+            )
+            await wrapper(mock.MagicMock())
+
+        return cast("TaskContext", dispatched.call_args.kwargs["args"][0])
+
+    async def test_a_task_that_declares_nothing_sends_nothing(self) -> None:
+        """``None`` on the wire, not a resolved ``warn``.
+
+        The distinction is the kill-switch: a resolved mode baked in at dispatch
+        would make an operator's ``off`` on the worker a no-op for every run
+        already in flight.
+        """
+        context = await self._dispatched_context()
+
+        assert context.progress_watchdog is None
+        assert context.max_no_progress_seconds is None
+
+    async def test_a_declaration_is_carried_verbatim(self) -> None:
+        context = await self._dispatched_context(
+            progress_watchdog=ProgressWatchdogMode.ENFORCE,
+            max_no_progress_seconds=42.0,
+        )
+
+        assert context.progress_watchdog is ProgressWatchdogMode.ENFORCE
+        assert context.max_no_progress_seconds == 42.0
+
+    async def test_the_declaration_survives_the_converter(self) -> None:
+        """Pinned against the real converter, not assumed.
+
+        A ``StrEnum`` on an activity argument is a new shape for ``TaskContext``,
+        and every dispatch would fail on decode if it did not round-trip.
+        """
+        from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path, imported where it is used
+            create_data_converter,
+        )
+
+        converter = create_data_converter()
+        context = TaskContext(
+            app_name="a",
+            task_name="t",
+            run_id="r",
+            progress_watchdog=ProgressWatchdogMode.ENFORCE,
+            max_no_progress_seconds=42.0,
+        )
+
+        payloads = await converter.encode([context])
+        decoded = await converter.decode(payloads, [TaskContext])
+
+        assert decoded[0].progress_watchdog is ProgressWatchdogMode.ENFORCE
+        assert decoded[0].max_no_progress_seconds == 42.0
+
+    async def test_a_dispatch_from_before_these_fields_lands_on_the_default(
+        self,
+    ) -> None:
+        """A run in flight across the upgrade decodes to "declares nothing".
+
+        Which is the whole reason the wire carries the declaration rather than
+        the resolved mode: that run starts producing warn-mode telemetry as soon
+        as the *worker* is upgraded, with no re-dispatch.
+        """
+        from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path, imported where it is used
+            create_data_converter,
+        )
+
+        @dataclasses.dataclass
+        class _OldTaskContext:
+            """``TaskContext`` as a worker from before FND-296 built it."""
+
+            app_name: str
+            task_name: str
+            run_id: str
+
+        converter = create_data_converter()
+        payloads = await converter.encode(
+            [_OldTaskContext(app_name="a", task_name="t", run_id="r")]
+        )
+        decoded = await converter.decode(payloads, [TaskContext])
+
+        assert decoded[0].progress_watchdog is None
+        assert resolve_watchdog_mode(decoded[0].progress_watchdog) is (
+            ProgressWatchdogMode.WARN
+        )
