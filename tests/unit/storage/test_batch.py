@@ -6,8 +6,10 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import obstore
 import pytest
 
+from application_sdk.storage import batch as batch_module
 from application_sdk.storage.batch import (
     delete_prefix,
     download_prefix,
@@ -16,7 +18,7 @@ from application_sdk.storage.batch import (
     upload_prefix,
 )
 from application_sdk.storage.errors import StorageError
-from application_sdk.storage.factory import create_memory_store
+from application_sdk.storage.factory import create_local_store, create_memory_store
 from application_sdk.storage.ops import _get_bytes, _put
 
 
@@ -78,6 +80,27 @@ class TestListKeys:
 # ---------------------------------------------------------------------------
 
 
+def _bulk_delete_raising_not_found(vanished_key: str):
+    """Side effect where the bulk (list) delete reports *vanished_key* as gone.
+
+    Single-key deletes still reach the real store, so ``delete_prefix``'s
+    per-key fallback behaves as it would against GCS or Azure.  Patching
+    ``batch.obstore.delete_async`` patches the shared obstore module, which
+    ``ops.delete`` calls too — hence the passthrough rather than a blanket raise.
+    """
+    real_delete_async = obstore.delete_async
+
+    async def side_effect(target, paths):
+        if isinstance(paths, str):
+            return await real_delete_async(target, paths)
+        raise FileNotFoundError(
+            f"Object at location {vanished_key} not found: "
+            "Error performing DeleteObjects request"
+        )
+
+    return side_effect
+
+
 class TestDeletePrefix:
     async def test_deletes_all_under_prefix(self, store) -> None:
         await _put("p/a.txt", b"1", store, normalize=False)
@@ -96,12 +119,12 @@ class TestDeletePrefix:
         assert n == 0
 
     async def test_delete_async_failure_raises_storage_error(self, store) -> None:
-        """If obstore.delete_async raises (e.g. GCS 404 on concurrent modification),
+        """A genuine bulk-delete failure (not a vanished key) stays fatal:
         delete_prefix wraps it as StorageError rather than swallowing or retrying."""
         await _put("q/a.txt", b"1", store, normalize=False)
 
         async def boom(*args, **kwargs):
-            raise RuntimeError("simulated GCS not-found")
+            raise RuntimeError("connection reset by peer")
 
         with (
             patch(
@@ -111,6 +134,104 @@ class TestDeletePrefix:
         ):
             await delete_prefix("q/", store, normalize=False)
         assert "Failed to delete" in str(exc_info.value)
+
+    async def test_vanished_key_during_bulk_delete_is_benign(self, store) -> None:
+        """FND-341: a key that disappears between the listing and the bulk delete
+        must not fail the caller — the end state it wants is already true.
+
+        The per-key fallback also has to finish the job: obstore stops the bulk
+        delete at the first per-key failure, so the keys behind it are still
+        there and the prefix would otherwise be left half-deleted.
+        """
+        await _put("s/a.txt", b"1", store, normalize=False)
+        await _put("s/b.txt", b"2", store, normalize=False)
+
+        with patch(
+            "application_sdk.storage.batch.obstore.delete_async",
+            side_effect=_bulk_delete_raising_not_found("s/a.txt"),
+        ):
+            n = await delete_prefix("s/", store, normalize=False)
+
+        assert n == 2  # both keys still existed; the per-key pass removed them
+        assert await _get_bytes("s/a.txt", store, normalize=False) is None
+        assert await _get_bytes("s/b.txt", store, normalize=False) is None
+
+    async def test_vanished_key_is_not_counted_as_deleted(self, tmp_path) -> None:
+        """FND-341: the returned count reflects objects this call removed, so a
+        key the race already took is excluded.
+
+        Uses a LocalStore rather than the MemoryStore fixture: only stores that
+        report a missing key (local, GCS, Azure) can show the exclusion — S3 and
+        MemoryStore treat deleting a gone key as success, so ``ops.delete``
+        legitimately counts it.
+        """
+        store = create_local_store(tmp_path / "store")
+        await _put("t/gone.txt", b"1", store, normalize=False)
+        await _put("t/here.txt", b"2", store, normalize=False)
+
+        real_delete_async = obstore.delete_async
+
+        async def bulk_deletes_one_then_hits_a_vanished_key(target, paths):
+            if isinstance(paths, str):
+                return await real_delete_async(target, paths)
+            # Emulate a partially-applied bulk delete: "t/gone.txt" is removed by
+            # the concurrent writer we are racing, then the store reports it.
+            await real_delete_async(target, "t/gone.txt")
+            raise FileNotFoundError(
+                "Object at location t/gone.txt not found: "
+                "Error performing DeleteObjects request"
+            )
+
+        with patch(
+            "application_sdk.storage.batch.obstore.delete_async",
+            side_effect=bulk_deletes_one_then_hits_a_vanished_key,
+        ):
+            n = await delete_prefix("t/", store, normalize=False)
+
+        assert n == 1  # only "t/here.txt" was actually removed by this call
+        assert await _get_bytes("t/here.txt", store, normalize=False) is None
+
+    async def test_vanished_key_is_reported_as_a_warning(self, store) -> None:
+        """FND-341: the 'two apps share this prefix' signal is kept — as a
+        WARNING naming the prefix, not as an exception."""
+        await _put("u/a.txt", b"1", store, normalize=False)
+
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.delete_async",
+                side_effect=_bulk_delete_raising_not_found("u/a.txt"),
+            ),
+            patch.object(batch_module.logger, "warning") as warn,
+        ):
+            await delete_prefix("u/", store, normalize=False)
+
+        assert warn.call_count == 1
+        message, *args = warn.call_args.args
+        assert "vanished" in message
+        assert "u/" in args
+        assert "u/a.txt" in str(args[-1])
+
+    async def test_genuine_failure_in_per_key_fallback_still_raises(
+        self, store
+    ) -> None:
+        """The fallback is idempotent, not forgiving: a real error during the
+        per-key pass surfaces as StorageError."""
+        await _put("v/a.txt", b"1", store, normalize=False)
+
+        async def not_found_then_denied(target, paths):
+            if isinstance(paths, str):
+                raise RuntimeError("permission denied")
+            raise FileNotFoundError("Object at location v/a.txt not found")
+
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.delete_async",
+                side_effect=not_found_then_denied,
+            ),
+            pytest.raises(StorageError) as exc_info,
+        ):
+            await delete_prefix("v/", store, normalize=False)
+        assert "Failed to delete key" in str(exc_info.value)
 
     async def test_head_probe_non404_raises_storage_error(self, store) -> None:
         """If head_async raises a non-404 error during root-marker probe,
