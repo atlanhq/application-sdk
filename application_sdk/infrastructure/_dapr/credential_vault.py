@@ -13,7 +13,10 @@ from typing import Any
 
 import orjson
 
-from application_sdk.errors.leaves import ColdStartRaceError
+from application_sdk.errors.leaves import (
+    ColdStartRaceError,
+    DaprSidecarUnreachableError,
+)
 from application_sdk.infrastructure._dapr.client import (
     classify_secret_fetch_error,
     is_dapr_transport_unavailable,
@@ -29,6 +32,7 @@ from application_sdk.infrastructure.bindings import BindingError
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreUnavailableError,
+    SecretStoreUnreachableError,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -491,6 +495,18 @@ class DaprCredentialVault:
             single_secret = await self._get_secret(
                 value, log_label=f"sha256:{value_hash}"
             )
+        except DaprSidecarUnreachableError as exc:
+            # Terminal: budget exhausted without one usable answer — not a race a
+            # later attempt warms. Keep the terminal type so a persistent outage
+            # stays distinguishable from a still-cold one, with the same
+            # redaction as the transient branch below (hash label, no cause) and
+            # the secret-free component/attempts/elapsed diagnostics preserved.
+            raise SecretStoreUnreachableError(
+                f"sha256:{value_hash}",
+                component=exc.component,
+                attempts=exc.attempts,
+                elapsed_seconds=exc.elapsed_seconds,
+            ) from None
         except ColdStartRaceError:
             # The store never actually answered — a cold-start outage
             # that exhausted the full retry budget, not "this field

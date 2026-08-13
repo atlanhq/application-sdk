@@ -57,7 +57,11 @@ from application_sdk.credentials.errors import (
     CredentialNotFoundError,
     CredentialParseError,
 )
-from application_sdk.errors import ColdStartRaceError, redact_secrets
+from application_sdk.errors import (
+    ColdStartRaceError,
+    DaprSidecarUnreachableError,
+    redact_secrets,
+)
 from application_sdk.errors.leaves import DependencyUnavailableError
 from application_sdk.infrastructure import (
     DAPR_SECRET_STORE_COMPONENT,
@@ -66,6 +70,7 @@ from application_sdk.infrastructure import (
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreUnavailableError,
+    SecretStoreUnreachableError,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -397,6 +402,18 @@ async def _probe_one(secret_store: SecretStore, value: str) -> tuple[str, str, A
             description=f"single-key probe for sha256:{value_hash}",
             component=DAPR_SECRET_STORE_COMPONENT,
         )
+    except DaprSidecarUnreachableError as exc:
+        # Terminal: the budget was exhausted without one usable answer, so this
+        # is not a race that a later attempt warms — keep the terminal type so a
+        # persistent outage stays distinguishable from a still-cold one. Same
+        # redaction as the transient branch below (hash label, no cause); the
+        # secret-free component/attempts/elapsed diagnostics are carried through.
+        raise SecretStoreUnreachableError(
+            f"sha256:{value_hash}",
+            component=exc.component,
+            attempts=exc.attempts,
+            elapsed_seconds=exc.elapsed_seconds,
+        ) from None
     except ColdStartRaceError:
         # The store never actually answered — a cold-start outage that
         # exhausted the full retry budget, not "this field isn't a

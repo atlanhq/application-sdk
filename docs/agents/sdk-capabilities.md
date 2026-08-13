@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.27.2
-source-sha:    74add93cbdce86cee6da7d5f86566614bc74f3fe
-source-date:   2026-08-13T02:50:34+05:30
+source-sha:    726872605677d6bad35cdcb0c0130180de50f686
+source-date:   2026-08-13T10:57:39+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,14 +23,14 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 11 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 57 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 60 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 37 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 39 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -1052,6 +1052,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Customer-controlled source system is temporarily unreachable.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
+#### `TaskStalledError`
+
+- **Import:** `from application_sdk.errors import TaskStalledError`
+- **Signature:** `class TaskStalledError(*, ...)`
+- **Summary:** An activity attempt was failed for making no observable progress (ADR-0018).
+- **Defined in:** `application_sdk/errors/leaves.py`
+
 #### `UnimplementedError`
 
 - **Import:** `from application_sdk.errors import UnimplementedError`
@@ -1273,6 +1280,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
+#### `STORAGE_INTEGRITY`
+
+- **Import:** `from application_sdk.errors import STORAGE_INTEGRITY`
+- **Signature:** `STORAGE_INTEGRITY`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
 #### `STORAGE_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import STORAGE_NOT_FOUND`
@@ -1291,6 +1305,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import STORAGE_PERMISSION`
 - **Signature:** `STORAGE_PERMISSION`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STORAGE_PREFLIGHT`
+
+- **Import:** `from application_sdk.errors import STORAGE_PREFLIGHT`
+- **Signature:** `STORAGE_PREFLIGHT`
 - **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
@@ -1792,6 +1813,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Summary:** The secret store / Dapr sidecar was *unreachable* — a transport failure
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
+#### `SecretStoreUnreachableError`
+
+- **Import:** `from application_sdk.infrastructure import SecretStoreUnreachableError`
+- **Signature:** `class SecretStoreUnreachableError(secret_name: str, ...)`
+- **Summary:** Terminal counterpart of :class:`SecretStoreUnavailableError`: the secret
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
+
 #### `StateStore`
 
 - **Import:** `from application_sdk.infrastructure import StateStore`
@@ -2051,6 +2079,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Async client for external customer-provided cloud object stores.
 - **Defined in:** `application_sdk/storage/cloud.py`
 
+#### `DataObject`
+
+- **Import:** `from application_sdk.storage import DataObject`
+- **Signature:** `class DataObject(key: str, size: int, etag: str | None, has_sidecar: bool)`
+- **Summary:** One data object from a listing, with everything a transfer needs.
+- **Defined in:** `application_sdk/storage/batch.py`
+
 #### `ObjectStoreCheckResult`
 
 - **Import:** `from application_sdk.storage import ObjectStoreCheckResult`
@@ -2091,6 +2126,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import StorageError`
 - **Signature:** `class StorageError(message: str, ...)`
 - **Summary:** Generic storage-subsystem failure (category=DEPENDENCY_UNAVAILABLE).
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `StorageIntegrityError`
+
+- **Import:** `from application_sdk.storage import StorageIntegrityError`
+- **Signature:** `class StorageIntegrityError(message: str, ...)`
+- **Summary:** Transferred bytes do not match the digest recorded for them (FND-306).
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageNotFoundError`
@@ -2204,8 +2246,8 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 
 - **Import:** `from application_sdk.storage import is_sidecar_key`
 - **Signature:** `is_sidecar_key(key: str)`
-- **Summary:** Return ``True`` if *key* is a SHA-256 sidecar rather than a data object.
-- **Defined in:** `application_sdk/storage/batch.py`
+- **Summary:** Return ``True`` when *key* is a SHA-256 sidecar rather than a data object.
+- **Defined in:** `application_sdk/storage/integrity.py`
 
 #### `list_data_keys`
 
@@ -2219,6 +2261,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import list_data_keys_with_meta`
 - **Signature:** `list_data_keys_with_meta(prefix: str = '', store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Like :func:`list_data_keys`, but return ``(key, size_bytes, e_tag)`` tuples.
+- **Defined in:** `application_sdk/storage/batch.py`
+
+#### `list_data_objects`
+
+- **Import:** `from application_sdk.storage import list_data_objects`
+- **Signature:** `list_data_objects(prefix: str = '', store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
+- **Summary:** List data objects under *prefix*, pairing each with its sidecar flag.
 - **Defined in:** `application_sdk/storage/batch.py`
 
 #### `list_keys`
@@ -2305,7 +2354,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import SIDECAR_SUFFIX`
 - **Signature:** `SIDECAR_SUFFIX`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/storage/batch.py`
+- **Defined in:** `application_sdk/storage/integrity.py`
 
 ## `application_sdk.templates`
 

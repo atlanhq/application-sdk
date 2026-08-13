@@ -6,14 +6,58 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.errors.categories import FailureCategory
+from application_sdk.errors.leaves import (
+    ColdStartRaceError,
+    DaprSidecarUnreachableError,
+)
 from application_sdk.infrastructure.secrets import (
     EnvironmentSecretStore,
     SecretNotFoundError,
     SecretStoreError,
     SecretStoreUnavailableError,
+    SecretStoreUnreachableError,
     get_deployment_secret,
 )
 from application_sdk.testing.mocks import MockSecretStore
+
+
+class TestSecretStoreUnreachableError:
+    """The terminal secret-store outage type — distinct from the transient
+    SecretStoreUnavailableError, catchable by both hierarchies, and secret-safe."""
+
+    def test_multiply_inherits_both_hierarchies(self) -> None:
+        err = SecretStoreUnreachableError("sha256:abcd1234")
+        # Caught by the domain umbrella AND the cold-start marker chain.
+        assert isinstance(err, SecretStoreError)
+        assert isinstance(err, DaprSidecarUnreachableError)
+        assert isinstance(err, ColdStartRaceError)
+        # Distinct from the transient sibling, not a subtype of it.
+        assert not isinstance(err, SecretStoreUnavailableError)
+
+    def test_terminal_code_and_category(self) -> None:
+        err = SecretStoreUnreachableError("sha256:abcd1234")
+        assert err.code == "DEPENDENCY_UNAVAILABLE_SIDECAR_UNREACHABLE"
+        assert err.category == FailureCategory.DEPENDENCY_UNAVAILABLE
+
+    def test_carries_secret_free_diagnostics(self) -> None:
+        err = SecretStoreUnreachableError(
+            "sha256:abcd1234",
+            component="secretstore",
+            attempts=2,
+            elapsed_seconds=120.0,
+        )
+        assert err.component == "secretstore"
+        assert err.attempts == 2
+        assert err.elapsed_seconds == 120.0
+
+    def test_is_secret_safe_no_ref_key_no_cause(self) -> None:
+        # secret_name is the hash label, never the raw ref-key; no cause chain
+        # that could re-embed the ref-key via a percent-encoded URL.
+        err = SecretStoreUnreachableError("sha256:abcd1234")
+        assert "sha256:abcd1234" in str(err)
+        assert err.secret_name == "sha256:abcd1234"
+        assert err.cause is None
 
 
 class TestMockSecretStore:

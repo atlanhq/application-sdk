@@ -8,6 +8,7 @@ from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCo
 from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import (
     ColdStartRaceError,
+    DaprSidecarUnreachableError,
     DependencyUnavailableError,
     NotFoundError,
 )
@@ -150,6 +151,48 @@ class SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError):
             secret_name=secret_name,
             cause=cause,
         )
+
+
+class SecretStoreUnreachableError(SecretStoreError, DaprSidecarUnreachableError):
+    """Terminal counterpart of :class:`SecretStoreUnavailableError`: the secret
+    store's Dapr sidecar stayed unreachable for the *entire* cold-start budget —
+    "waited the whole budget, done waiting", not "not reachable yet".
+
+    Raised (hash-labelled, cause-free) at the secret-resolution catch sites when
+    :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start` gives up
+    with a :class:`~application_sdk.errors.leaves.DaprSidecarUnreachableError`.
+    Stays a ``SecretStoreError`` (so ``except SecretStoreError:`` still catches
+    it) and — via ``DaprSidecarUnreachableError`` — a ``ColdStartRaceError`` (so
+    the probe aggregators' ``isinstance(result, ColdStartRaceError)`` branch
+    still routes it), while its distinct type name and ``code`` keep a persistent
+    outage distinguishable from a still-cold race end-to-end. Shares
+    ``DaprSidecarUnreachableError``'s ``code`` so the terminal signal is one
+    dashboard filter across domains; the *type name* carries the domain.
+
+    Secret-safe: the ref-key stays hashed in ``secret_name`` and no ``cause`` is
+    attached (the underlying httpx error can re-embed the ref-key via a
+    percent-encoded URL). Carries only the secret-free ``component`` /
+    ``attempts`` / ``elapsed_seconds`` diagnostics.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SIDECAR_UNREACHABLE"
+
+    def __init__(
+        self,
+        secret_name: str,
+        *,
+        component: str | None = None,
+        attempts: int | None = None,
+        elapsed_seconds: float | None = None,
+    ) -> None:
+        SecretStoreError.__init__(
+            self,
+            f"Secret store unreachable while fetching secret '{secret_name}'",
+            secret_name=secret_name,
+        )
+        self.component = component
+        self.attempts = attempts
+        self.elapsed_seconds = elapsed_seconds
 
 
 @dataclass(kw_only=True)

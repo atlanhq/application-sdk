@@ -74,7 +74,8 @@ AppError  (base — application_sdk.errors)
     │   └── StorageConfigError(InvalidInputError, StorageError)
     └── SecretStoreError(DependencyUnavailableError)
         ├── SecretNotFoundError(NotFoundError, SecretStoreError)
-        └── SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError)
+        ├── SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError)          # transient
+        └── SecretStoreUnreachableError(SecretStoreError, DaprSidecarUnreachableError)  # terminal
 ```
 
 The **categorical leaf** (listed first in the MRO) drives `category`, `audience`, and
@@ -111,6 +112,16 @@ when the whole cold-start budget elapses without one usable answer — "waited t
 `code = DEPENDENCY_UNAVAILABLE_SIDECAR_UNREACHABLE` — plus `component` / `attempts` /
 `elapsed_seconds` — let an operator tell a persistent sidecar outage from a still-booting one. Catch
 `ColdStartRaceError` to retry the race; read the concrete subtype to report the fault.
+
+The secrets domain carries both forms as a pair: `SecretStoreUnavailableError` (transient) and
+`SecretStoreUnreachableError(SecretStoreError, DaprSidecarUnreachableError)` (terminal). The
+secret-resolution catch sites re-raise the terminal one — hash-labelled and cause-free, same
+redaction as the transient — when `retry_past_dapr_cold_start` exhausts its budget, so a
+budget-exhausted outage stays distinguishable from a still-cold race end-to-end even after the raw
+`DaprSidecarUnreachableError` is redacted at the secret boundary. Both stay `SecretStoreError` (so
+`except SecretStoreError:` catches either) and `ColdStartRaceError` (so the probe aggregators route
+either); only a store that has already answered once (steady state, not first contact) surfaces the
+transient type on a later blip.
 
 ### TaskStalledError — raised by the SDK, never by an app
 
