@@ -166,6 +166,52 @@ An app that has worked through its work-list can then flip to `enforce`, verifie
 against a large-tenant/tail profile — at which point the SDK kills these attempts
 in minutes and this runbook stops applying to it.
 
+## If wedging turns out to be far more common than expected
+
+Everything above assumes a wedge is rare enough that a human per firing is a
+sensible control. ADR-0018 accepts that regression explicitly *because the wedge
+rate was unknown* — warn mode is what measures it. If the measurement comes back
+saying wedges are common, and worker slots are being burnt doing nothing, this is
+the section you want.
+
+**First, the counter-intuitive part: `ATLAN_PROGRESS_WATCHDOG=off` is not the
+lever.** The resources are being burnt by the **24h backstop**, not by the
+watchdog. The watchdog costs one metric per gap and is the only reason you can
+see the problem at all; turning it off leaves every wedge exactly where it is and
+blinds you to it. It is the switch for *"I want the telemetry gone"*, not for
+*"wedges are eating my fleet"*.
+
+| Lever (env var) | What it does | Reach for it when |
+|---|---|---|
+| `ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS=600` | The real revert — restores the pre-ADR-0018 ceiling and its ~30-min-per-dispatch worst case, including the accidental kill | You want the previous behaviour back, fleet-wide or for one app |
+| `ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS=<seconds>` | Bounds the **retry product** (72h → whatever you set) while leaving one attempt generous | You want the blast radius capped but long single attempts still working |
+| `ATLAN_PROGRESS_WATCHDOG=enforce` | The SDK kills each wedge itself at `max_no_progress_seconds`, collapsing the worst case from 72h to roughly 45 min | The wedges are visible as *gaps* **and** the affected apps are instrumented |
+| `ATLAN_PROGRESS_WATCHDOG=off` | Stops gap reporting and enforcement. **Does not reduce wedge exposure** | Never, for this problem |
+
+### Which lever depends on where the wedges are
+
+The two shapes need different levers, and the metrics already tell them apart:
+
+| What you see | Shape | What works |
+|---|---|---|
+| `task_no_progress_gap_seconds` firing | Wedged in async code or a quiet loop | `enforce` catches it one budget in |
+| `task_hold_duration_seconds{hold_bounded="false"}` long, **no** gap metric | Wedged inside a blocking `run_in_thread` call | `enforce` does **nothing** — the unbounded auto-hold is vouching for it by design. Only the backstop revert or a `schedule_to_close` ceiling bounds these |
+
+If the wedges are the second shape, do not reach for `enforce` and expect relief.
+
+### Two things to know before you flip anything
+
+- **All of these are read once at process start**, so any of them needs a **worker
+  restart** to take effect. None is a live toggle. Plan the restart into the
+  mitigation rather than discovering it mid-incident.
+- **An explicit `@task(timeout_seconds=...)` beats the env var.** Apps that
+  hard-code their own timeouts never took the 24h backstop, so the revert does not
+  reach them — and they are not the apps whose exposure changed.
+
+Whichever lever you use, record it: the wedge rate is the number ADR-0018 →
+*Migration* says decides whether the fleet enforces, and a mitigation applied
+without a note is a measurement lost.
+
 ## If you suspect a wedge and no alert fired
 
 The alert is only as good as its inputs. In order of likelihood:
@@ -177,8 +223,8 @@ The alert is only as good as its inputs. In order of likelihood:
    SDK series, e.g. `temporal_activity_executions_total{app_name="<app>"}`. If
    that is missing while activities are visibly running, fix the metrics path
    first — the stall alert cannot fire for that app.
-2. **The watchdog is off for that task.** `watchdog_mode="off"` observes nothing.
-   Confirm on the dashboard's mode panel.
+2. **The watchdog is off for that task.** `watchdog_mode="off"` reports no gaps
+   (its hold observations still record). Confirm on the dashboard's mode panel.
 3. **A hold is vouching for the site.** An unbounded hold — every
    `run_in_thread` offload takes one — suppresses the stall watchdog for the
    whole call by design, so a wedged *blocking* call produces **no gap metric**.

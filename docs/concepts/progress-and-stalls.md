@@ -363,9 +363,20 @@ release channel, k8s topology) is reachable through `target_info` — see
 
 | Mode | Behaviour |
 |---|---|
-| `off` | Inert. Nothing is observed, nothing is reported. A kill-switch, not a normal state |
+| `off` | No gap is reported and nothing is ever failed. A kill-switch, not a normal state |
 | `warn` | The watchdog runs and reports; it can never fail an activity. **The default** |
 | `enforce` | Reports the gap, then fails the attempt |
+
+Two things `off` does **not** do, both worth knowing before you reach for it:
+
+- **It is not fully inert.** The gap metric and its log stop, but the hold
+  telemetry does not — `task_hold_duration_seconds` still records once per
+  released hold, i.e. once per `run_in_thread` offload, because a hold
+  observation is a work-list entry rather than a watchdog action.
+- **It does not shorten anything.** A wedged attempt is bounded by
+  `timeout_seconds`, which `off` does not touch — so it makes a wedge *invisible*
+  without making it *cheaper*. If that is the problem you have, the lever is the
+  backstop; see the [stalled-task runbook](../runbooks/stalled-task.md#if-wedging-turns-out-to-be-far-more-common-than-expected).
 
 Warn is the default fleet-wide because it cannot fail anything, which means nobody has
 to opt in and every app starts producing its own work-list on upgrade. See

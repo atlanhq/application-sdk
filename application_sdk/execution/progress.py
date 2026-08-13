@@ -73,8 +73,21 @@ class ProgressWatchdogMode(SerializableEnum):
     """
 
     OFF = "off"
-    """Inert. Nothing is observed and nothing is reported — byte-identical to
-    pre-ADR-0018 behaviour. A kill-switch, not the normal state."""
+    """No gap is reported and no attempt is ever failed. A kill-switch, not the
+    normal state.
+
+    Precisely: the watchdog does not run, so ``task_no_progress_gap_seconds`` and
+    its INFO log stop entirely. What does *not* stop is the hold telemetry —
+    ``activities.py`` attaches the ``on_hold_closed`` observer to every attempt's
+    tracker regardless of mode, so ``task_hold_duration_seconds`` still records
+    once per released hold (i.e. once per ``run_in_thread`` offload). Marking
+    progress also still happens, at the cost of a clock read.
+
+    That is deliberate — a hold observation is an author's work-list entry, not a
+    watchdog action — but it means ``off`` is *not* byte-identical to
+    pre-ADR-0018 behaviour, and it is not the lever for reducing wedge exposure:
+    the bound on a wedged attempt is ``start_to_close``, which this does not
+    touch. See the [stalled-task runbook](../../docs/runbooks/stalled-task.md)."""
 
     WARN = "warn"
     """Report every gap as a metric and an INFO log; never fail an activity.

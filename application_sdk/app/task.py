@@ -21,7 +21,16 @@ import re
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast, get_type_hints, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    NoReturn,
+    TypeVar,
+    cast,
+    get_type_hints,
+    overload,
+)
 
 from application_sdk.common._env import env_int
 from application_sdk.contracts.base import Input, Output
@@ -114,13 +123,15 @@ def _validate_watchdog_declaration(
 
     budget: float | None = None
     if max_no_progress_seconds is not None:
-        try:
-            budget = float(max_no_progress_seconds)
-        # A non-numeric allowance is the same author error as a nonsensical one,
-        # and gets the same message: `not math.isfinite(nan)` is True.
-        except (TypeError, ValueError):
-            budget = float("nan")
-        if not math.isfinite(budget) or budget <= 0:
+
+        def _reject_allowance() -> NoReturn:
+            """Both ways an allowance can be unusable get the same message.
+
+            A closure rather than a pre-built exception because
+            ``TaskContractError.__init__`` warns on construction, and rather than
+            a NaN sentinel threaded to a later branch because a non-numeric
+            allowance should visibly raise where it is detected.
+            """
             raise TaskContractError(
                 f"max_no_progress_seconds={max_no_progress_seconds!r} must be a "
                 "finite positive number of seconds. A zero or negative allowance "
@@ -128,6 +139,13 @@ def _validate_watchdog_declaration(
                 "progress_watchdog='off' to disable the watchdog deliberately, or "
                 "omit this to inherit the fleet-wide allowance."
             ) from None
+
+        try:
+            budget = float(max_no_progress_seconds)
+        except (TypeError, ValueError):
+            _reject_allowance()
+        if not math.isfinite(budget) or budget <= 0:
+            _reject_allowance()
 
     return mode, budget
 

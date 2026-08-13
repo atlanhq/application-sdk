@@ -42,6 +42,7 @@ from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.leaves import WORKER_EVICTED_TYPE, TaskStalledError
 from application_sdk.errors.wire import FailureDetails
 from application_sdk.execution import progress as progress_module
+from application_sdk.execution import progress_telemetry as telemetry_module
 from application_sdk.execution import shutdown as shutdown_module
 from application_sdk.execution._temporal import activities as activities_module
 from application_sdk.execution._temporal.activities import (
@@ -54,9 +55,11 @@ from application_sdk.execution.heartbeat import (
 )
 from application_sdk.execution.progress import (
     MAX_NO_PROGRESS_SECONDS,
+    ClosedHold,
     ProgressTracker,
     ProgressWatchdogMode,
     current_progress_tracker,
+    holding_progress,
     resolve_watchdog_mode,
 )
 
@@ -707,3 +710,79 @@ class TestDeclarationReachesTheWire:
         assert resolve_watchdog_mode(decoded[0].progress_watchdog) is (
             ProgressWatchdogMode.WARN
         )
+
+
+class TestOffIsNotFullyInert:
+    """``off`` stops the watchdog, not every observation — and not the exposure.
+
+    Documented in three places (the enum, Progress & Stalls, the stalled-task
+    runbook) because it is the kind of claim an operator acts on mid-incident.
+    Pinned here so the docs and the code cannot drift apart: someone "fixing"
+    ``off`` to be genuinely inert would silently drop the hold work-list, and
+    someone reading ``off`` as a way to shorten a wedge would be reaching for a
+    lever that does not move.
+    """
+
+    async def _run_in_off_mode(self) -> tuple[dict[str, Any], list[ClosedHold]]:
+        """Run one attempt in ``off`` mode; the task body takes and releases a hold.
+
+        Returns what the heartbeat loop was handed, and every hold observation
+        that actually reached the telemetry layer.
+        """
+        seen: dict[str, Any] = {}
+        observed: list[ClosedHold] = []
+
+        class _OffApp(App):
+            @task
+            async def quiet_step(self, input: _StallIn) -> _StallOut:
+                # The shape every `run_in_thread` offload produces: one hold,
+                # entered and released inside the attempt.
+                async with holding_progress("vendor.export", timeout=None):
+                    pass
+                return _StallOut(msg="ok")
+
+            async def run(self, input: _StallIn) -> _StallOut:
+                return await self.quiet_step(input)
+
+        async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
+            seen.update(kwargs)
+            await stop_event.wait()
+
+        _OffApp()
+        activity_fn = _activity_for("_off-app", "quiet_step")
+
+        with (
+            mock.patch(_HEARTBEAT_LOOP, new=loop),
+            mock.patch.object(
+                telemetry_module,
+                "record_closed_hold",
+                side_effect=lambda closed, **_kw: observed.append(closed),
+            ),
+        ):
+            await activity_fn(
+                _task_context(
+                    "_off-app", "quiet_step", progress_watchdog=ProgressWatchdogMode.OFF
+                ),
+                _StallIn(),
+            )
+
+        return seen, observed
+
+    async def test_the_watchdog_never_acts(self) -> None:
+        """``auto_heartbeat_loop`` leaves the budget unset for ``OFF``, so no gap
+        is ever measured and ``on_stall`` can never be called."""
+        seen, _ = await self._run_in_off_mode()
+
+        assert seen["watchdog_mode"] is ProgressWatchdogMode.OFF
+
+    async def test_hold_telemetry_still_records(self) -> None:
+        """The observer is attached at ``bind_progress_tracker``, not gated on mode.
+
+        So ``task_hold_duration_seconds`` keeps recording once per released hold
+        — once per ``run_in_thread`` offload — which is why ``off`` is not
+        byte-identical to pre-ADR-0018 behaviour, and why the docs no longer say
+        it is.
+        """
+        _, observed = await self._run_in_off_mode()
+
+        assert [h.label for h in observed] == ["vendor.export"]

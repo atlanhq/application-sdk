@@ -1045,9 +1045,13 @@ Two histograms and the occasional INFO log line. Warn-mode findings are delibera
 **never** WARNING-level — a stall observation under a fleet-wide default is an expected
 observation, not an alert.
 
-If you need even that gone, `ATLAN_PROGRESS_WATCHDOG=off` — or `progress_watchdog="off"`
-on a single `@task` — is the kill-switch. It makes the whole mechanism inert. It is not
-the normal state, and it also switches off the report you would otherwise use later.
+If you need most of that gone, `ATLAN_PROGRESS_WATCHDOG=off` — or
+`progress_watchdog="off"` on a single `@task` — is the kill-switch: no gap is reported
+and nothing is ever failed. It is not the normal state, and it also switches off the
+report you would otherwise use later. Note it is not *completely* inert — hold
+observations still record, since those are a work-list entry rather than a watchdog
+action — and it does not shorten a wedged attempt, which is bounded by
+`timeout_seconds` either way.
 
 ### One knob did change value: `timeout_seconds`
 
