@@ -139,6 +139,23 @@ class TestResolveMode:
             ProgressWatchdogMode.ENFORCE
         )
 
+    def test_a_declaration_beats_a_stronger_fleet_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The boundary that proves a declaration — not just ``None`` — wins.
+
+        Fleet ``enforce`` with a task pinned to ``warn`` resolves to ``warn``:
+        the matrix above pins a declaration beating a weaker fleet mode, and this
+        pins it beating a stronger one. Only ``off`` overrides a declaration.
+        """
+        monkeypatch.setattr(
+            progress_mod, "PROGRESS_WATCHDOG_MODE", ProgressWatchdogMode.ENFORCE
+        )
+
+        assert resolve_watchdog_mode(ProgressWatchdogMode.WARN) is (
+            ProgressWatchdogMode.WARN
+        )
+
     def test_the_fleet_can_be_moved_without_touching_a_decorator(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

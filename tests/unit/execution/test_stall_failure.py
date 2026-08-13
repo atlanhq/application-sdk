@@ -46,15 +46,16 @@ from application_sdk.execution import progress_telemetry as telemetry_module
 from application_sdk.execution import shutdown as shutdown_module
 from application_sdk.execution._temporal import activities as activities_module
 from application_sdk.execution._temporal.activities import (
+    _WATCHDOG_ONLY_TICK_SECONDS,
     TaskContext,
     create_activity_from_task,
 )
 from application_sdk.execution.errors import ApplicationError
+from application_sdk.execution.heartbeat import NoopHeartbeatController
 from application_sdk.execution.heartbeat import (
     auto_heartbeat_loop as _real_auto_heartbeat_loop,
 )
 from application_sdk.execution.progress import (
-    MAX_NO_PROGRESS_SECONDS,
     ClosedHold,
     ProgressTracker,
     ProgressWatchdogMode,
@@ -459,13 +460,23 @@ class TestWatchdogWiring:
         assert seen["progress"] is from_body[0]
         assert callable(seen["on_stall"])
 
-    async def test_the_activity_supplies_the_resolved_config(self) -> None:
+    async def test_the_activity_supplies_the_resolved_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A task that declares nothing still arrives at the loop in warn mode.
 
         The whole of FND-296 in one assertion: no opt-in, no per-app step, and
         the mode reaching the watchdog is the fleet default rather than ``OFF``.
         The budget comes with it, since a mode with no allowance is inert.
+
+        Both constants are pinned rather than read from the environment: a worker
+        started with ``ATLAN_PROGRESS_WATCHDOG=enforce`` (or a custom allowance)
+        would otherwise make this assert a non-default.
         """
+        monkeypatch.setattr(
+            progress_module, "PROGRESS_WATCHDOG_MODE", ProgressWatchdogMode.WARN
+        )
+        monkeypatch.setattr(progress_module, "MAX_NO_PROGRESS_SECONDS", 900.0)
         seen: dict[str, Any] = {}
 
         class _InheritingApp(App):
@@ -487,7 +498,54 @@ class TestWatchdogWiring:
             await activity_fn(_task_context("_inheriting-app", "inherits"), _StallIn())
 
         assert seen["watchdog_mode"] is ProgressWatchdogMode.WARN
-        assert seen["max_no_progress_seconds"] == MAX_NO_PROGRESS_SECONDS
+        assert seen["max_no_progress_seconds"] == 900.0
+
+    async def test_the_hold_observer_gets_the_resolved_allowance(self) -> None:
+        """A declared ``max_no_progress_seconds`` reaches the hold observer too.
+
+        The observer's ``budget_seconds`` is the floor above which an unbounded
+        hold is worth naming; left at the default it would ignore the task's own
+        allowance, under-reporting holds past a smaller budget and over-reporting
+        ones under a larger one.
+        """
+        built: dict[str, Any] = {}
+
+        def observer(task_name: str, *, budget_seconds: float) -> None:
+            built["task_name"] = task_name
+            built["budget_seconds"] = budget_seconds
+            return None
+
+        class _DeclaringApp(App):
+            @task(max_no_progress_seconds=42)
+            async def declares(self, input: _StallIn) -> _StallOut:
+                return _StallOut(msg="ok")
+
+            async def run(self, input: _StallIn) -> _StallOut:
+                return await self.declares(input)
+
+        async def loop(*, stop_event: asyncio.Event, **_kwargs: Any) -> None:
+            await stop_event.wait()
+
+        _DeclaringApp()
+        activity_fn = _activity_for("_declaring-app", "declares")
+
+        # ``closed_hold_observer`` is imported function-locally from
+        # ``progress_telemetry`` (a circular-import workaround), so the patch has
+        # to land on the source module, not on ``activities``.
+        with (
+            mock.patch(_HEARTBEAT_LOOP, new=loop),
+            mock.patch.object(
+                telemetry_module, "closed_hold_observer", side_effect=observer
+            ),
+        ):
+            await activity_fn(
+                _task_context(
+                    "_declaring-app", "declares", max_no_progress_seconds=42.0
+                ),
+                _StallIn(),
+            )
+
+        assert built["budget_seconds"] == 42.0
 
     async def test_a_declaration_on_the_wire_reaches_the_loop(self) -> None:
         """What an app flips in rollout step 6, arriving from the dispatch side."""
@@ -529,9 +587,10 @@ class TestWatchdogWiring:
 
         Resolution happens here rather than on the workflow side precisely so an
         operator can throw the switch without every in-flight run needing to be
-        re-dispatched to notice.
+        re-dispatched to notice. A resolved ``off`` starts no loop at all — the
+        one mode that is genuinely inert for no-progress *detection*.
         """
-        seen: dict[str, Any] = {}
+        loop_calls: list[dict[str, Any]] = []
 
         class _PinnedApp(App):
             @task(progress_watchdog="enforce")
@@ -542,7 +601,7 @@ class TestWatchdogWiring:
                 return await self.pinned(input)
 
         async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
-            seen.update(kwargs)
+            loop_calls.append(kwargs)
             await stop_event.wait()
 
         _PinnedApp()
@@ -561,14 +620,15 @@ class TestWatchdogWiring:
                 _StallIn(),
             )
 
-        assert seen["watchdog_mode"] is ProgressWatchdogMode.OFF
+        assert loop_calls == []
 
-    async def test_no_heartbeat_loop_means_no_watchdog(self) -> None:
-        """A task with heartbeating disabled runs no loop, so nothing can stall it.
+    async def test_no_heartbeat_still_runs_the_watchdog(self) -> None:
+        """A task with heartbeating disabled is exactly the one the watchdog protects.
 
-        Recorded rather than asserted as desirable: the tracker is bound for such
-        a task, but the watchdog lives in the auto-heartbeat loop, so today the
-        duration backstop is that task's only bound.
+        The seam gates on the resolved mode, not the heartbeat config: with the
+        fleet default (``warn``) and no heartbeat, the loop still starts — riding
+        a NoopHeartbeatController beat that emits no Temporal heartbeat — so a
+        wedge is observed rather than left to the duration backstop alone.
         """
         loop_calls: list[dict[str, Any]] = []
 
@@ -580,8 +640,9 @@ class TestWatchdogWiring:
             async def run(self, input: _StallIn) -> _StallOut:
                 return await self.nobeat(input)
 
-        async def loop(**kwargs: Any) -> None:
+        async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
             loop_calls.append(kwargs)
+            await stop_event.wait()
 
         activity_fn = _activity_for("_no-beat-app", "nobeat")
 
@@ -591,7 +652,15 @@ class TestWatchdogWiring:
             )
 
         assert result.msg == "ok"
-        assert loop_calls == []
+        # One loop, in the inherited warn mode, ticking on the watchdog-only beat
+        # (no heartbeat interval to reuse) and heartbeating through the Noop
+        # controller — so nothing reaches Temporal, but a gap is still observed.
+        assert len(loop_calls) == 1
+        assert loop_calls[0]["watchdog_mode"] is ProgressWatchdogMode.WARN
+        assert loop_calls[0]["interval_seconds"] == _WATCHDOG_ONLY_TICK_SECONDS
+        assert isinstance(
+            loop_calls[0]["heartbeat_fn"].__self__, NoopHeartbeatController
+        )
 
 
 class TestDeclarationReachesTheWire:
@@ -723,13 +792,13 @@ class TestOffIsNotFullyInert:
     lever that does not move.
     """
 
-    async def _run_in_off_mode(self) -> tuple[dict[str, Any], list[ClosedHold]]:
+    async def _run_in_off_mode(self) -> tuple[list[dict[str, Any]], list[ClosedHold]]:
         """Run one attempt in ``off`` mode; the task body takes and releases a hold.
 
-        Returns what the heartbeat loop was handed, and every hold observation
+        Returns every call made to the heartbeat loop, and every hold observation
         that actually reached the telemetry layer.
         """
-        seen: dict[str, Any] = {}
+        loop_calls: list[dict[str, Any]] = []
         observed: list[ClosedHold] = []
 
         class _OffApp(App):
@@ -745,7 +814,7 @@ class TestOffIsNotFullyInert:
                 return await self.quiet_step(input)
 
         async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
-            seen.update(kwargs)
+            loop_calls.append(kwargs)
             await stop_event.wait()
 
         _OffApp()
@@ -766,14 +835,18 @@ class TestOffIsNotFullyInert:
                 _StallIn(),
             )
 
-        return seen, observed
+        return loop_calls, observed
 
     async def test_the_watchdog_never_acts(self) -> None:
-        """``auto_heartbeat_loop`` leaves the budget unset for ``OFF``, so no gap
-        is ever measured and ``on_stall`` can never be called."""
-        seen, _ = await self._run_in_off_mode()
+        """``off`` starts no watchdog loop at all, so no gap is ever measured and
+        ``on_stall`` can never be called.
 
-        assert seen["watchdog_mode"] is ProgressWatchdogMode.OFF
+        The seam gates on the resolved mode now, not the heartbeat config: a
+        resolved ``off`` is the one mode that starts nothing, which is what makes
+        it a real kill-switch for no-progress *detection*."""
+        loop_calls, _ = await self._run_in_off_mode()
+
+        assert loop_calls == []
 
     async def test_hold_telemetry_still_records(self) -> None:
         """The observer is attached at ``bind_progress_tracker``, not gated on mode.

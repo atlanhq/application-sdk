@@ -51,6 +51,14 @@ logger = get_logger(__name__)
 # 50–250 KB — well inside Temporal's default 2 MB payload limit.
 _MAX_CHAIN_DEPTH = 50
 
+#: Tick interval for the stall-watchdog loop on an attempt that has heartbeating
+#: disabled. The loop there exists only to run the watchdog — the heartbeat
+#: controller is the Noop one, so nothing is heartbeated — and a pure watchdog
+#: tick needs no operator-facing knob. Twenty seconds matches the default
+#: heartbeat interval, so a no-heartbeat attempt is observed at the same cadence
+#: as a heartbeating one.
+_WATCHDOG_ONLY_TICK_SECONDS = 20
+
 
 def _sever_cause_chain(exc: BaseException) -> None:
     """Sever the __cause__/__context__ chain at _MAX_CHAIN_DEPTH.
@@ -340,14 +348,39 @@ def create_activity_from_task(
         stop_event = asyncio.Event()
         heartbeat_task = None
 
+        # Resolve the allowance once per attempt and hand it to both consumers —
+        # the hold observer (whose ``budget_seconds`` docstring names the task's
+        # ``max_no_progress_seconds``) and the watchdog below. Resolving here
+        # rather than inside each keeps the environment consulted the one the
+        # attempt runs in, and keeps the two reports agreeing on one number.
+        resolved_no_progress_seconds = resolve_max_no_progress_seconds(
+            context.max_no_progress_seconds
+        )
+
         with bind_progress_tracker(
-            ProgressTracker(on_hold_closed=closed_hold_observer(context.task_name))
+            ProgressTracker(
+                on_hold_closed=closed_hold_observer(
+                    context.task_name, budget_seconds=resolved_no_progress_seconds
+                )
+            )
         ) as tracker:
             try:
-                if (
-                    context.heartbeat_timeout_seconds is not None
-                    and context.auto_heartbeat_seconds is not None
-                ):
+                # Resolved here rather than on the workflow side so the
+                # environment consulted is the one the watchdog runs in — which
+                # is what makes `off` a kill-switch an operator can throw on the
+                # worker, and what makes a run dispatched before these fields
+                # existed land on the fleet default rather than on nothing.
+                watchdog_mode = resolve_watchdog_mode(context.progress_watchdog)
+
+                # The watchdog must run on every attempt it governs — including
+                # one with heartbeating disabled, where a wedge is otherwise
+                # bounded only by the duration backstop. Gating the loop on the
+                # heartbeat config would let a declared `enforce` silently never
+                # kill a wedge on exactly the tasks the design says it protects.
+                # So the loop starts whenever the resolved mode is not `off`;
+                # with heartbeating disabled it rides a NoopHeartbeatController
+                # beat (a pure watchdog tick that emits no Temporal heartbeat).
+                if watchdog_mode is not ProgressWatchdogMode.OFF:
                     # Captured here, in the attempt's own task. The handler below
                     # runs inside the heartbeat task, where
                     # `asyncio.current_task()` would be the watchdog itself — it
@@ -385,22 +418,21 @@ def create_activity_from_task(
                                 task_name=context.task_name,
                                 workflow_type=_current_workflow_type(),
                             ),
-                            interval_seconds=context.auto_heartbeat_seconds,
+                            # The beat interval. With heartbeating disabled the
+                            # loop exists only to run the watchdog, so it ticks on
+                            # a fixed beat rather than a (``None``) heartbeat
+                            # interval — the controller below is then the Noop
+                            # one, so the tick emits no Temporal heartbeat.
+                            interval_seconds=(
+                                context.auto_heartbeat_seconds
+                                if context.auto_heartbeat_seconds is not None
+                                else _WATCHDOG_ONLY_TICK_SECONDS
+                            ),
                             heartbeat_fn=heartbeat_controller.heartbeat_keepalive,
                             stop_event=stop_event,
                             task_name=context.task_name,
-                            # Resolved here rather than on the workflow side so
-                            # the environment consulted is the one the watchdog
-                            # runs in — which is what makes `off` a kill-switch
-                            # an operator can throw on the worker, and what makes
-                            # a run dispatched before these fields existed land
-                            # on the fleet default rather than on nothing.
-                            watchdog_mode=resolve_watchdog_mode(
-                                context.progress_watchdog
-                            ),
-                            max_no_progress_seconds=resolve_max_no_progress_seconds(
-                                context.max_no_progress_seconds
-                            ),
+                            watchdog_mode=watchdog_mode,
+                            max_no_progress_seconds=resolved_no_progress_seconds,
                             progress=tracker,
                             on_stall=on_stall,
                         )

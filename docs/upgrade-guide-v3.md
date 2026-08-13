@@ -1026,7 +1026,7 @@ guess.
 
 **There is no migration task here.** This step exists to tell you that, precisely.
 
-### On upgrade, nothing fails differently
+### On upgrade, no failure *semantics* change (the default timeout and telemetry do)
 
 - You land in **`warn` mode**, which cannot fail an activity. It observes and reports.
 - `heartbeat_timeout_seconds` keeps its meaning and its 60s default. Crash, OOM and
