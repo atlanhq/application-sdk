@@ -64,7 +64,6 @@ scope.**
 ```
 application_sdk/_runtime/
 ├── __init__.py     # the rule, and no imports
-├── enums.py        # SerializableEnum
 ├── offload.py      # run_in_thread, submit_in_thread, run_fault_isolated, run_best_effort
 └── progress.py     # ProgressTracker, current_progress_tracker, holding_progress, …
 ```
@@ -75,25 +74,35 @@ Nothing else from `application_sdk`. In particular not `contracts`,
 `credentials`, `storage`, `execution` or `app` — each of those reaches
 `storage.ops` transitively, which re-creates the cycle.
 
-Three consequences follow from that rule.
+Two consequences follow from that rule.
 
-**`SerializableEnum` moved down too.** `ProgressWatchdogMode` is a
-`SerializableEnum` because the mode rides on the task's Temporal payload and is
-used as a metric attribute value. `contracts.base` is not importable from
-`storage/` (`contracts.types` → `credentials.ref` → … → `storage.ops`), so the
-class — which has no dependencies of its own — now lives in `_runtime/enums.py`
-and is re-exported from `contracts.base`. `from application_sdk.contracts import
-SerializableEnum` resolves to the same class object, so every `issubclass` check
-and Temporal round-trip is unaffected. The alternative — giving
-`ProgressWatchdogMode` a bare `StrEnum` base — would have been behaviourally
-identical for that one enum while quietly exempting it from the SDK's own
-convention, i.e. one more local constraint for a reader to puzzle over.
+**`ProgressWatchdogMode` stays in `execution/`, and nothing about `contracts`
+changes.** The enum subclasses `SerializableEnum` (it rides on the task's Temporal
+payload and is used as a metric attribute value), and `contracts.base` is not
+importable from `storage/` — `contracts.types` → `credentials.ref` → … →
+`storage.ops`. That reads like a reason to move `SerializableEnum` down to the
+substrate, and a first pass did exactly that.
+
+It was the wrong call, for a simple reason: **nothing in `_runtime` reads
+`ProgressWatchdogMode`.** `progress.py` merely *defined* it; every consumer — the
+stall check, `auto_heartbeat_loop`, the telemetry that labels a gap with it — is in
+`execution/`. So the enum belongs in `execution/progress.py` next to the watchdog
+whose vocabulary it is, and the substrate needs no `contracts` dependency at all.
+
+That matters beyond tidiness. `SerializableEnum` is a **base class app code
+subclasses** to make its own enums Temporal-serialisable, so its definition site is
+part of the contract rather than an implementation detail: `__module__` feeds
+pickling and schema naming for every downstream subclass. Relocating a public base
+class to a private package to satisfy an import constraint that turned out not to
+exist would have been a real cost for no benefit. It stays exactly where it was, and
+a test asserts both its identity and its `__module__`.
 
 **`execution/heartbeat.py` split along the seam it already had.** The heartbeat
 concern (`HeartbeatController` and its two implementations, `auto_heartbeat_loop`,
 the stall watchdog) stays in `execution/` — it is genuinely execution-layer, and
 `TemporalHeartbeatController` imports `temporalio`. The offload primitives moved
-out. `execution/progress.py` became a re-export of `_runtime/progress.py` in full.
+out. `execution/progress.py` re-exports the whole seam from `_runtime/progress.py`
+and owns `ProgressWatchdogMode`.
 
 **The app-facing paths did not change.** `application_sdk.execution.heartbeat`
 and `application_sdk.execution.progress` remain the documented imports for app

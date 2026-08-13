@@ -60,6 +60,7 @@ import hashlib
 import posixpath
 import re
 import warnings
+from enum import StrEnum
 from typing import (
     Annotated,
     Any,
@@ -76,7 +77,6 @@ import orjson
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
-from application_sdk._runtime.enums import SerializableEnum
 from application_sdk.contracts.types import MaxItems
 from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
@@ -88,13 +88,45 @@ _logger = get_logger(__name__)
 # Serializable Enum Base Class
 # =============================================================================
 
-# `SerializableEnum` is defined in the dependency-neutral substrate
-# (`application_sdk._runtime.enums`) and re-exported from here, which stays its
-# public home. It moved because `application_sdk._runtime.progress` needs it and
-# this module is not importable from `storage/` at module scope —
-# `contracts.types` reaches `storage.ops` through `credentials.ref`. Same class
-# object either way, so subclass checks and Temporal serialisation are
-# unaffected (ADR-0019).
+
+class SerializableEnum(StrEnum):
+    """Base class for enums that need to be serialized through Temporal.
+
+    Enums that inherit from this class are automatically JSON serializable
+    because they inherit from both ``str`` and ``Enum``. The enum value is used
+    as the serialized string representation.
+
+    This solves the "Object of type XEnum is not JSON serializable" error
+    that occurs when using regular enums in Temporal activity/workflow payloads.
+
+    Usage:
+        class MyStatus(SerializableEnum):
+            PENDING = "pending"
+            RUNNING = "running"
+            COMPLETED = "completed"
+            FAILED = "failed"
+
+        class MyOutput(Output):
+            status: MyStatus  # Works with Temporal serialization
+
+    The enum values should be strings that match the desired serialized form.
+    When deserialized, Temporal will reconstruct the enum from the string value.
+    """
+
+    @staticmethod
+    def _generate_next_value_(  # type: ignore[override]
+        name: str, start: int, count: int, last_values: list[str]
+    ) -> str:
+        """Auto-generate value from name in lowercase.
+
+        This allows defining enums without explicit values:
+
+            class Status(SerializableEnum):
+                PENDING = auto()  # value will be "pending"
+                RUNNING = auto()  # value will be "running"
+        """
+        return name.lower()
+
 
 T = TypeVar("T")
 

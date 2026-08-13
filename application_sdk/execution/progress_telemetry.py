@@ -44,8 +44,8 @@ from typing import Any
 from application_sdk._runtime.progress import (
     DEFAULT_MAX_NO_PROGRESS_SECONDS,
     ClosedHold,
-    ProgressWatchdogMode,
 )
+from application_sdk.execution.progress import ProgressWatchdogMode
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)

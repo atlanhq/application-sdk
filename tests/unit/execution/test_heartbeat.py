@@ -20,12 +20,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from application_sdk._runtime.progress import ProgressTracker, ProgressWatchdogMode
+from application_sdk._runtime.progress import ProgressTracker
 from application_sdk.execution.heartbeat import (
     NoopHeartbeatController,
     TemporalHeartbeatController,
     auto_heartbeat_loop,
 )
+from application_sdk.execution.progress import ProgressWatchdogMode
 
 # ---------------------------------------------------------------------------
 # NoopHeartbeatController

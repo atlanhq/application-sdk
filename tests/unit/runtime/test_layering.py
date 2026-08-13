@@ -30,7 +30,6 @@ import pytest
 #: about its dependencies is exactly what this test exists to catch, and a
 #: discovery loop would silently accept it.
 _RUNTIME_MODULES = [
-    "application_sdk._runtime.enums",
     "application_sdk._runtime.offload",
     "application_sdk._runtime.progress",
 ]
@@ -204,17 +203,44 @@ def test_auto_heartbeat_loop_stays_patchable_through_the_heartbeat_module() -> N
     )
 
 
-def test_serializable_enum_keeps_its_public_identity() -> None:
-    """The contracts re-export is the substrate class, so subclass checks hold.
+def test_serializable_enum_never_left_contracts_base() -> None:
+    """``SerializableEnum`` stays exactly where consumers already subclass it.
 
-    ``SerializableEnum`` moved down to ``_runtime.enums`` because
-    ``_runtime.progress`` needs it and ``contracts`` is not importable from
-    ``storage/``. Two distinct classes would silently break every
-    ``issubclass`` check and Temporal round-trip that relies on the base.
+    App code subclasses this to make its own enums Temporal-serialisable, so its
+    definition site is part of the contract, not an implementation detail:
+    ``__module__`` feeds pickling and schema naming, and relocating it would
+    change both for every downstream subclass.
+
+    It briefly moved to the substrate on the theory that
+    ``_runtime.progress.ProgressWatchdogMode`` needed it. It did not — nothing in
+    ``_runtime`` reads that enum, so the enum belongs in ``execution/`` with the
+    watchdog that does, and the substrate needs no ``contracts`` dependency at all.
     """
-    from application_sdk._runtime.enums import SerializableEnum as substrate_enum
     from application_sdk.contracts import SerializableEnum as public_enum
     from application_sdk.contracts.base import OutputStatus
+    from application_sdk.contracts.base import SerializableEnum as base_enum
 
-    assert public_enum is substrate_enum
-    assert issubclass(OutputStatus, substrate_enum)
+    assert public_enum is base_enum
+    assert base_enum.__module__ == "application_sdk.contracts.base"
+    assert issubclass(OutputStatus, base_enum)
+
+    class AppOwnedStatus(base_enum):
+        READY = "ready"
+
+    assert AppOwnedStatus.READY == "ready"
+    assert isinstance(AppOwnedStatus.READY, str)
+
+
+def test_the_watchdog_mode_lives_with_the_watchdog() -> None:
+    """``ProgressWatchdogMode`` is the execution layer's vocabulary, not the tracker's.
+
+    Its documented import path is ``execution.progress``, and keeping it there is
+    what allows :mod:`application_sdk._runtime.progress` to import nothing from
+    ``application_sdk.contracts`` — the dependency that would otherwise drag
+    ``storage.ops`` back into the substrate.
+    """
+    from application_sdk._runtime import progress as substrate
+    from application_sdk.execution.progress import ProgressWatchdogMode
+
+    assert not hasattr(substrate, "ProgressWatchdogMode")
+    assert ProgressWatchdogMode.WARN == "warn"

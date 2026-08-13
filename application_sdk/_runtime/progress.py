@@ -36,7 +36,10 @@ activity attempt.
 
 The watchdog that consumes the tracker lives in
 :func:`~application_sdk.execution.heartbeat.auto_heartbeat_loop` and runs in one
-of the three :class:`ProgressWatchdogMode` states. It is handed the tracker by
+of the three
+:class:`~application_sdk.execution.progress.ProgressWatchdogMode` states — that
+enum stays in the execution layer, since nothing here reads it and it is the
+watchdog's own vocabulary. It is handed the tracker by
 injection rather than reading the ContextVar, so it stays unit-testable without
 an activity. The framework hooks (FND-288), the ``run_in_thread`` auto-holds
 (FND-290) and the warn-mode telemetry that consumes :class:`ClosedHold`
@@ -69,7 +72,6 @@ from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 
-from application_sdk._runtime.enums import SerializableEnum
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -85,33 +87,6 @@ logger = get_logger(__name__)
 #: hold that *would* have tripped the watchdog had it not been vouched for,
 #: which is the work-list criterion.
 DEFAULT_MAX_NO_PROGRESS_SECONDS = 900.0
-
-
-class ProgressWatchdogMode(SerializableEnum):
-    """How the stall watchdog reacts to a no-progress gap (ADR-0018).
-
-    Three states, not two, because the watchdog is also the audit tool that
-    tells an app *where* it needs holds — a job that only works if it can
-    observe without being able to fail anything.
-
-    ``SerializableEnum`` (a ``StrEnum``) rather than a plain ``Enum``: the mode
-    ends up on the task's Temporal payload alongside
-    ``heartbeat_timeout_seconds``, and it is used directly as a metric
-    attribute value.
-    """
-
-    OFF = "off"
-    """Inert. Nothing is observed and nothing is reported — byte-identical to
-    pre-ADR-0018 behaviour. A kill-switch, not the normal state."""
-
-    WARN = "warn"
-    """Report every gap as a metric and an INFO log; never fail an activity.
-    The fleet-wide default, and the audit tool that produces each app's
-    work-list."""
-
-    ENFORCE = "enforce"
-    """Report the gap, then fail the activity through the injected
-    ``on_stall`` handler."""
 
 
 @dataclass(frozen=True)

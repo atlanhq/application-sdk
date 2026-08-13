@@ -36,10 +36,10 @@ from application_sdk._runtime.offload import (
 )
 from application_sdk._runtime.progress import (
     ProgressTracker,
-    ProgressWatchdogMode,
     current_progress_tracker,
     declared_hold_active,
 )
+from application_sdk.execution.progress import ProgressWatchdogMode
 from application_sdk.execution.progress_telemetry import record_no_progress_gap
 from application_sdk.observability import (
     resource_sampler as _resource_sampler,  # module alias kept so tests can patch _resource_sampler.sample()
