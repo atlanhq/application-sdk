@@ -313,6 +313,13 @@ def _is_not_found(exc: BaseException) -> bool:
     * Substring fallback (``"not found"``, ``"404"``, …) for generic obstore
       errors that surface only as ``GenericError`` with the underlying HTTP
       status in the message.
+    * ``"access is denied"`` / ``"is a directory"`` — how a *local* store
+      reports a key that resolves to a directory rather than an object (the
+      Windows ``LocalStore`` raises ``GenericError`` "Access is denied" on a
+      directory stat, where POSIX surfaces ``FileNotFoundError``).  A key that
+      collides with a directory cannot exist as a retrievable object, so every
+      caller contract here — "False / None / skip when the object is not
+      there" — is served by treating it as missing.
 
     Class-based detection runs first so we don't misclassify a generic
     ``GenericError("HTTP 503: 404 not in title")`` style flake.
@@ -328,6 +335,8 @@ def _is_not_found(exc: BaseException) -> bool:
         or "does not exist" in msg
         or "404" in msg
         or "key not found" in msg
+        or "access is denied" in msg
+        or "is a directory" in msg
     )
 
 

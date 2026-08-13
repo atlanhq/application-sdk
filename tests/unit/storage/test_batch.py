@@ -163,7 +163,9 @@ class TestDeletePrefix:
         Uses a LocalStore rather than the MemoryStore fixture: only stores that
         report a missing key (local, GCS, Azure) can show the exclusion — S3 and
         MemoryStore treat deleting a gone key as success, so ``ops.delete``
-        legitimately counts it.
+        legitimately counts it.  The head probe is pinned to the Windows
+        directory-stat response (see below) so the test fails on every OS if
+        ``_is_not_found`` stops recognising it.
         """
         store = create_local_store(tmp_path / "store")
         await _put("t/gone.txt", b"1", store, normalize=False)
@@ -182,9 +184,31 @@ class TestDeletePrefix:
                 "Error performing DeleteObjects request"
             )
 
-        with patch(
-            "application_sdk.storage.batch.obstore.delete_async",
-            side_effect=bulk_deletes_one_then_hits_a_vanished_key,
+        # The root-marker probe for "t/" is the bare key "t", which the local
+        # store maps onto the *directory* holding the two keys.  POSIX reports
+        # that stat as not-found, but the Windows LocalStore raises
+        # GenericError("Access is denied") — a directory can never be an
+        # object, so the probe must read it as "no marker" on every OS.
+        # Pin that response so this regression is exercised everywhere.
+        real_head_async = obstore.head_async
+
+        async def head_reports_directory_as_denied(target, path):
+            if path == "t":
+                raise obstore.exceptions.GenericError(
+                    "Generic LocalFileSystem error: Unable to open file "
+                    f"{tmp_path / 'store' / 't'}: Access is denied. (os error 5)"
+                )
+            return await real_head_async(target, path)
+
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.delete_async",
+                side_effect=bulk_deletes_one_then_hits_a_vanished_key,
+            ),
+            patch(
+                "application_sdk.storage.batch.obstore.head_async",
+                side_effect=head_reports_directory_as_denied,
+            ),
         ):
             n = await delete_prefix("t/", store, normalize=False)
 
