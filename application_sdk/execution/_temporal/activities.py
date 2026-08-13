@@ -158,6 +158,33 @@ class TaskContext:
     auto_heartbeat_seconds: int | None = 20
     """Auto-heartbeat interval in seconds. Set to None for manual heartbeats only."""
 
+    run_started_at_epoch: float = 0.0
+    """When the *run* started, as wall-clock seconds since the epoch.
+
+    Set by the workflow side from ``workflow.info().start_time``, because nothing
+    in ``activity.info()`` carries it and the run-length SLA observation
+    (:mod:`application_sdk.execution.run_length`) has to measure the run rather
+    than the attempt.
+
+    ``0.0`` means unknown, and no observation is made: a task invoked outside a
+    workflow, or a run dispatched by a workflow that predates this field and is
+    still in flight across an SDK upgrade. Epoch seconds rather than a
+    ``datetime`` so the value is one float on the wire and needs no timezone
+    round-trip to be subtracted from this worker's clock."""
+
+
+def _current_workflow_type() -> str:
+    """The run's workflow type, or ``""`` outside an activity context.
+
+    Only ever used as a bounded metric attribute (one value per registered
+    workflow), so an empty string on the local path is the right answer rather
+    than a reason to raise.
+    """
+    try:
+        return activity.info().workflow_type or ""
+    except RuntimeError:  # not inside an activity context
+        return ""  # conformance: ignore[E007] activity-context probe; an empty metric attribute is the answer on the local path, not an error worth a log line
+
 
 def _track_file_refs(workflow_id: str, *refs: FileReference) -> None:
     """Add FileReference objects to the per-workflow tracking set in _app_state.
@@ -215,6 +242,9 @@ def create_activity_from_task(
         )
         from application_sdk.execution.progress_telemetry import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             closed_hold_observer,
+        )
+        from application_sdk.execution.run_length import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            build_run_length_watch,
         )
 
         app_registry = AppRegistry.get_instance()
@@ -325,6 +355,16 @@ def create_activity_from_task(
 
                     heartbeat_task = asyncio.create_task(
                         auto_heartbeat_loop(
+                            # ADR-0018's duration *alert*: the run-length SLA
+                            # rides the same tick as the beat and the stall
+                            # watchdog. `None` whenever there is nothing to
+                            # measure — SLA disabled, or a dispatching workflow
+                            # that predates `run_started_at_epoch`.
+                            run_length=build_run_length_watch(
+                                context.run_started_at_epoch,
+                                task_name=context.task_name,
+                                workflow_type=_current_workflow_type(),
+                            ),
                             interval_seconds=context.auto_heartbeat_seconds,
                             heartbeat_fn=heartbeat_controller.heartbeat_keepalive,
                             stop_event=stop_event,
@@ -546,7 +586,9 @@ def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
         task_metadata: The task metadata.
 
     Returns:
-        Dict of activity options for workflow.execute_activity().
+        Dict of activity options for workflow.execute_activity(). Carries
+        ``schedule_to_close_timeout`` only when the task declares a ceiling on
+        its retry product — omitted, as before, when it does not.
     """
     from temporalio.common import (  # noqa: PLC0415 — cold path: only used in retry policy reconstruction
         RetryPolicy as TemporalRetryPolicy,
@@ -554,6 +596,7 @@ def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
 
     from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + retry imports errors transitively
         _with_worker_evicted_non_retryable,
+        resolve_activity_time_bounds,
     )
 
     if task_metadata.retry_policy is not None:
@@ -576,7 +619,14 @@ def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
             non_retryable_error_types=_with_worker_evicted_non_retryable([]),
         )
 
-    return {
-        "start_to_close_timeout": timedelta(seconds=task_metadata.timeout_seconds),
+    start_to_close, schedule_to_close = resolve_activity_time_bounds(
+        task_metadata.timeout_seconds, task_metadata.schedule_to_close_seconds
+    )
+
+    options: dict[str, Any] = {
+        "start_to_close_timeout": timedelta(seconds=start_to_close),
         "retry_policy": retry_policy,
     }
+    if schedule_to_close is not None:
+        options["schedule_to_close_timeout"] = timedelta(seconds=schedule_to_close)
+    return options

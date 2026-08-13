@@ -26,9 +26,12 @@ from application_sdk.common._env import env_int
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors import CONTRACT_VALIDATION, ErrorCode
 from application_sdk.errors.leaves import InvalidInputError
+from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
     from application_sdk.execution.retry import RetryPolicy
+
+logger = get_logger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -40,6 +43,42 @@ _USE_DEFAULT = object()
 # Apps that need a different per-task value pass it explicitly to @task().
 _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: int = env_int("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60)
 _DEFAULT_TIMEOUT_SECONDS: int = env_int("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", 600)
+
+
+def _load_default_schedule_to_close_seconds() -> int | None:
+    """Read the fleet-wide total-time ceiling. ``None`` when unset or unusable.
+
+    ``0`` reads as unset, so a deployment can clear an inherited value the same
+    way it sets one. Never raises, and never lets a bad value reach a
+    decoration: a negative ceiling would make every ``@task`` in the process
+    raise at import, so a typo in one deployment manifest would stop the worker
+    booting rather than cost one config value.
+    """
+    raw = env_int("ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS", 0)
+    if raw > 0:
+        return raw
+    if raw < 0:
+        logger.warning(
+            "Ignoring ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS=%d: a total-time "
+            "ceiling must be positive. Leaving the retry product unbounded "
+            "(start_to_close bounds one attempt, the retry policy multiplies it)",
+            raw,
+        )
+    return None
+
+
+#: The fleet-wide ceiling on a task's *total* time across every retry (ADR-0018
+#: → *Bounding total time*). ``None`` — the SDK default — leaves the retry
+#: product unbounded, exactly as before this knob existed: ``start_to_close``
+#: bounds one attempt and the retry policy multiplies it.
+#:
+#: An env var first and a decorator argument second, on purpose. ADR-0018's
+#: accepted position is to *start* unbounded and size the ceiling from warn-mode
+#: data rather than guess it up front; making the fleet-wide decision an env var
+#: is what keeps that decision a config change instead of a redesign.
+_DEFAULT_SCHEDULE_TO_CLOSE_SECONDS: int | None = (
+    _load_default_schedule_to_close_seconds()
+)
 
 # Type alias for methods with single Input param returning Output
 TaskMethod = Callable[..., Any]
@@ -104,7 +143,22 @@ class TaskMetadata:
 
     timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS
     """Default timeout for this task. Defaults to ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS
-    env var, or 600s (10 minutes) if unset."""
+    env var, or 600s (10 minutes) if unset.
+
+    Bounds ONE attempt. The retry policy multiplies it — see
+    :attr:`schedule_to_close_seconds` for the ceiling on the product."""
+
+    schedule_to_close_seconds: int | None = _DEFAULT_SCHEDULE_TO_CLOSE_SECONDS
+    """Ceiling on this task's total time across every retry, in seconds.
+
+    ``None`` leaves the retry product unbounded: ``max_attempts ×
+    timeout_seconds`` is the real worst case. Defaults to
+    ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS, and to ``None`` when that env var is
+    unset or ``0``.
+
+    Resolved against :attr:`timeout_seconds` by
+    :func:`~application_sdk.execution.retry.resolve_activity_time_bounds`, which
+    both dispatch paths share."""
 
     pool: str | None = None
     """Logical worker-pool name for this task.
@@ -246,6 +300,7 @@ def task(
     name: str | None = None,
     description: str = "",
     timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS,
+    schedule_to_close_seconds: int | None | object = _USE_DEFAULT,
     retry_policy: "RetryPolicy | None" = None,
     retry_max_attempts: int = 3,
     retry_max_interval_seconds: int = 30,
@@ -261,6 +316,7 @@ def task(
     name: str | None = None,
     description: str = "",
     timeout_seconds: int | object = _USE_DEFAULT,
+    schedule_to_close_seconds: int | None | object = _USE_DEFAULT,
     retry_policy: "RetryPolicy | None" = None,
     retry_max_attempts: int = 3,
     retry_max_interval_seconds: int = 30,
@@ -326,9 +382,23 @@ def task(
         func: The function to decorate (when used without parentheses).
         name: Override the task name (defaults to function name).
         description: Human-readable description.
-        timeout_seconds: Activity timeout in seconds. Defaults to
-            ``ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS`` env var, or 600 s (10 min)
-            if unset. Explicit values take precedence over the env var.
+        timeout_seconds: Activity timeout in seconds — the ``start_to_close``
+            budget for **one attempt**, which the retry policy then multiplies.
+            Defaults to ``ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS`` env var, or
+            600 s (10 min) if unset. Explicit values take precedence over the
+            env var.
+        schedule_to_close_seconds: Ceiling on the task's **total** time across
+            every attempt, in seconds. ``None`` — the default — leaves the retry
+            product unbounded, so the real worst case is
+            ``retry_max_attempts × timeout_seconds``; see
+            :func:`~application_sdk.execution.retry.retry_product_seconds` to
+            declare exactly that product, and ``retry_max_attempts=1`` to bound
+            a backstop-class task by dropping retries instead. A ceiling below
+            ``timeout_seconds`` caps one attempt too, so declaring only a total
+            works while inheriting a generous per-attempt backstop. Defaults to
+            ``ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS`` when that env var is set
+            to a positive value; passing ``None`` explicitly opts this task out
+            of that fleet-wide ceiling.
         retry_policy: Full retry policy. When provided, takes precedence over
             retry_max_attempts and retry_max_interval_seconds.
         retry_max_attempts: Maximum retry attempts (default 3). Ignored when
@@ -395,6 +465,18 @@ def task(
         if auto_heartbeat_seconds is _USE_DEFAULT
         else cast("int | None", auto_heartbeat_seconds)
     )
+    resolved_schedule_to_close: int | None = (
+        _DEFAULT_SCHEDULE_TO_CLOSE_SECONDS
+        if schedule_to_close_seconds is _USE_DEFAULT
+        else cast("int | None", schedule_to_close_seconds)
+    )
+    if resolved_schedule_to_close is not None and resolved_schedule_to_close <= 0:
+        raise TaskContractError(
+            f"schedule_to_close_seconds={resolved_schedule_to_close!r} must be a "
+            "positive number of seconds. Pass None to leave the retry product "
+            "unbounded (the default); a ceiling of zero would fail every attempt "
+            "before it started."
+        )
 
     def decorator(fn: F) -> F:
         task_name = name or getattr(fn, "__name__", repr(fn))
@@ -411,6 +493,7 @@ def task(
             app_name="",  # Will be set by App registration
             description=description or fn.__doc__ or "",
             timeout_seconds=resolved_timeout,
+            schedule_to_close_seconds=resolved_schedule_to_close,
             pool=pool,
             retry_policy=retry_policy,
             retry_max_attempts=retry_max_attempts,
