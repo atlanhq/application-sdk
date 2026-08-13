@@ -307,7 +307,7 @@ pytest==9.1.1
     #   pytest-socket
     #   pytest-timeout
 pytest-asyncio==1.4.0
-pytest-rerunfailures==16.4
+pytest-rerunfailures==16.5
 pytest-socket==0.8.0
 pytest-timeout==2.4.0
 python-dateutil==2.9.0.post0
@@ -420,7 +420,7 @@ urllib3==2.7.0
     #   botocore
     #   requests
     #   sentry-sdk
-uvicorn==0.52.1
+uvicorn==0.52.2
     # via
     #   fastapi
     #   fastapi-cli

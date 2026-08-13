@@ -37,6 +37,7 @@ from application_sdk.execution.progress import (
     current_progress_tracker,
     declared_hold_active,
 )
+from application_sdk.execution.progress_telemetry import record_no_progress_gap
 from application_sdk.observability import (
     resource_sampler as _resource_sampler,  # module alias kept so tests can patch _resource_sampler.sample()
 )
@@ -49,14 +50,6 @@ _MEMORY_WARN_THRESHOLD = 0.80
 _MEMORY_WARN_HYSTERESIS = (
     0.05  # re-arm only once ratio drops below threshold - hysteresis
 )
-
-#: Meter for signals this module owns. Deliberately not the Temporal meter: the
-#: stall watchdog has no Temporal dependency, so it also reports from local runs.
-_METER_NAME = "application_sdk.execution"
-
-#: Lazily created singletons — one instrument per process, built on first use so
-#: nothing is bound before ``run_main()`` configures the ``MeterProvider``.
-_INSTRUMENTS: dict[str, Any] = {}
 
 # Dedicated executor for blocking operations dispatched via run_in_thread().
 #
@@ -151,67 +144,6 @@ class NoopHeartbeatController:
         return self._details
 
 
-def _no_progress_gap_histogram() -> Any:
-    """Gap-duration histogram, created on first stall observation.
-
-    A histogram rather than a counter because the fleet-wide *distribution* of
-    no-progress gaps is what sizes ``max_no_progress_seconds`` before anything
-    enforces (ADR-0018 → *Decisions taken*).
-    """
-    if "no_progress_gap" not in _INSTRUMENTS:
-        from opentelemetry import (  # noqa: PLC0415 — cold path: only reached on a stall observation
-            metrics as _otel_metrics,
-        )
-
-        _INSTRUMENTS["no_progress_gap"] = _otel_metrics.get_meter(
-            _METER_NAME
-        ).create_histogram(
-            "task.no_progress_gap",
-            unit="s",
-            description=(
-                "Seconds a task attempt went without an observable progress "
-                "signal, recorded once per gap that exceeded "
-                "max_no_progress_seconds. Partitioned by task, the last "
-                "progress label seen, and the watchdog mode — so warn-mode "
-                "observations and enforced kills aggregate separately."
-            ),
-        )
-    return _INSTRUMENTS["no_progress_gap"]
-
-
-def _record_no_progress_gap(
-    task_name: str, stalled_for: float, last_label: str, mode: ProgressWatchdogMode
-) -> None:
-    """Record one no-progress gap. Never raises.
-
-    The metric is emitted in *both* warn and enforce mode: in warn mode it is
-    the whole point (nothing else reports the gap), and in enforce mode it is
-    what makes the kill rate measurable.
-    """
-    try:
-        _no_progress_gap_histogram().record(
-            stalled_for,
-            {
-                "task.name": task_name,
-                # A progress label identifies a call site, never a value — see
-                # ProgressTracker.enter_hold — so this stays bounded.
-                "progress.last_label": last_label,
-                "watchdog.mode": mode.value,
-            },
-        )
-    # Best-effort observability: a metric-backend problem must never fail the
-    # activity the watchdog is only observing.
-    except Exception:
-        logger.warning(
-            "Failed to record the no-progress gap metric for task '%s' (%.0fs gap); "
-            "the stall is still logged but will be missing from the fleet-wide "
-            "gap distribution",
-            task_name,
-            stalled_for,
-            exc_info=True,
-        )
-
-
 def _check_for_stall(
     progress: ProgressTracker,
     budget_seconds: float,
@@ -245,7 +177,7 @@ def _check_for_stall(
         return False
 
     last_label = progress.last_label
-    _record_no_progress_gap(task_name, stalled, last_label, mode)
+    record_no_progress_gap(task_name, stalled, last_label, mode)
 
     if mode is not ProgressWatchdogMode.ENFORCE or on_stall is None:
         # INFO, never WARNING: under a fleet-wide default this is an expected

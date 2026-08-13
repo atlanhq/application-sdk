@@ -631,6 +631,7 @@ async def _drive(
     not wall time, is what the watchdog reads.
     """
     from application_sdk.execution import heartbeat as hb_mod
+    from application_sdk.execution import progress_telemetry as pt_mod
 
     stop = asyncio.Event()
     beats: list[int] = []
@@ -646,9 +647,12 @@ async def _drive(
         if len(beats) >= ticks:
             stop.set()
 
+    # Two loggers: the watchdog's decisions are logged from the loop, the metric
+    # is recorded (and its failures reported) from the telemetry module.
     with (
         patch.object(hb_mod, "logger") as mock_logger,
-        patch.object(hb_mod, "_no_progress_gap_histogram", return_value=histogram),
+        patch.object(pt_mod, "logger") as mock_metric_logger,
+        patch.object(pt_mod, "_no_progress_gap_histogram", return_value=histogram),
     ):
         await auto_heartbeat_loop(
             interval_seconds=0.001,
@@ -670,7 +674,10 @@ async def _drive(
         ],
         stall_warnings=[
             c
-            for c in mock_logger.warning.call_args_list
+            for c in (
+                *mock_logger.warning.call_args_list,
+                *mock_metric_logger.warning.call_args_list,
+            )
             if any(
                 marker in str(c)
                 for marker in ("progress", "Stall watchdog", "Stall handler")
