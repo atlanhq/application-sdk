@@ -78,6 +78,28 @@ found = await exists("artifacts/my-app/output.json")
 keys = await list_keys("artifacts/my-app/")  # returns list[str]
 ```
 
+### Prefix downloads
+
+`download_prefix` writes one of two layouts, and picking the wrong one is
+silent — the bytes arrive, just not where the reader looks:
+
+```python
+from application_sdk.storage import download_prefix
+
+# Default: the full store path is preserved under local_dir.
+# key "artifacts/run/transformed/table/a.json" → "<out>/artifacts/run/transformed/table/a.json"
+await download_prefix("artifacts/run/transformed", "<out>")
+
+# strip_prefix=True: only the tree *under* the prefix lands in local_dir.
+# key "artifacts/run/transformed/table/a.json" → "<out>/table/a.json"
+await download_prefix("artifacts/run/transformed", "<out>", strip_prefix=True)
+```
+
+Use `strip_prefix=True` whenever `local_dir` already names the same directory as
+the prefix (the usual shape when recovering a run's `transformed/` or
+`current-state/` tree), otherwise the prefix appears twice and a reader keyed on
+a fixed subpath such as `<out>/table` finds nothing.
+
 ---
 
 ## FileReference

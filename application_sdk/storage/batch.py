@@ -361,6 +361,28 @@ async def delete_prefix(
     return len(paths)
 
 
+def _local_relative_key(key: str, strip: str) -> str:
+    """Return the path *key* should occupy under a download destination.
+
+    With *strip* empty the key is used whole (full-store-path layout). Otherwise
+    *strip* — the normalised listing prefix, without its trailing ``/`` — is
+    removed, so the tree *under* the prefix is what lands locally.
+
+    The strip is boundary-aware: only a key that *is* the prefix or sits under
+    it (``<strip>/...``) is stripped. A bare ``startswith`` match would also
+    mis-strip a sibling key sharing a string prefix (``a/b2/x`` under strip
+    ``a/b`` → ``2/x``) — reachable when the caller passes ``normalize=False``
+    with a slash-less prefix, where the listing itself is not boundary-safe.
+    """
+    if not strip or not (key == strip or key.startswith(strip + "/")):
+        return key
+    relative = key[len(strip) :].lstrip("/")
+    # A key that *is* the prefix (only reachable with normalize=False and a
+    # slash-less prefix) leaves nothing to join, which would target the
+    # destination directory itself — keep its basename so a file is written.
+    return relative or PurePosixPath(key).name
+
+
 async def download_prefix(
     prefix: str,
     local_dir: str | Path,
@@ -368,12 +390,28 @@ async def download_prefix(
     *,
     suffix: str = "",
     normalize: bool = True,
+    strip_prefix: bool = False,
     max_concurrency: int = 4,
 ) -> list[str]:
     """Download all objects under *prefix* to a local directory.
 
-    Each key's full store path is preserved under *local_dir*
-    (e.g. key ``artifacts/run/file.json`` → ``local_dir/artifacts/run/file.json``).
+    *strip_prefix* selects between the two layouts:
+
+    * ``False`` (default) — each key's full store path is preserved under
+      *local_dir* (key ``artifacts/run/file.json`` →
+      ``local_dir/artifacts/run/file.json``).
+    * ``True`` — *prefix* is stripped, so the tree beneath it is reproduced
+      directly in *local_dir* (key ``artifacts/run/file.json`` under prefix
+      ``artifacts/run`` → ``local_dir/file.json``).
+
+    Pass ``strip_prefix=True`` whenever *local_dir* already names the same
+    directory as *prefix* — otherwise the prefix appears twice in the result
+    (``<out>/transformed/artifacts/.../transformed/table/``) and any reader that
+    looks for a fixed subpath such as ``<out>/transformed/table`` finds nothing
+    (FND-340). It is the exact inverse of
+    :func:`upload_prefix` ``(local_dir, prefix)``, which writes each file's path
+    *relative to* ``local_dir`` under ``prefix``.
+
     Downloads run concurrently (up to *max_concurrency* at a time).
 
     ``{key}.sha256`` sidecars are not mirrored to disk: they are SDK
@@ -388,6 +426,9 @@ async def download_prefix(
         store: Source store, or ``None`` to use the infrastructure store.
         suffix: Optional extension filter (e.g. ``".parquet"``).
         normalize: When ``True`` (default), normalise *prefix* before use.
+        strip_prefix: When ``True``, drop *prefix* from each key so only the
+            tree below it is written under *local_dir*.  Defaults to ``False``
+            (full store path preserved).
         max_concurrency: Maximum parallel downloads (default 4).
 
     Returns:
@@ -405,8 +446,18 @@ async def download_prefix(
         lsuffix = suffix.lower()
         objects = [o for o in objects if o.key.lower().endswith(lsuffix)]
     local = Path(local_dir)
+    # Strip against the *normalised* listing prefix rather than the caller's raw
+    # argument: normalisation is what the listing matched on, so a v2-style
+    # "./local/tmp/artifacts/..." prefix strips exactly like its "artifacts/..."
+    # key form.
+    strip = (
+        _normalize_listing_prefix(prefix, normalize).rstrip("/") if strip_prefix else ""
+    )
     # Reject keys whose resolved path escapes local_dir (e.g. via ".." segments).
-    destinations = [str(_safe_join_under(local, obj.key)) for obj in objects]
+    destinations = [
+        str(_safe_join_under(local, _local_relative_key(obj.key, strip)))
+        for obj in objects
+    ]
 
     sem = asyncio.Semaphore(max_concurrency)
 
@@ -452,7 +503,9 @@ async def upload_prefix(
     Note:
         Param order is ``(local_dir, prefix)`` — source first, destination second.
         This is the inverse of :func:`download_prefix` ``(prefix, local_dir)`` which
-        also follows source-first convention.
+        also follows source-first convention. The *layout* round-trips only with
+        ``download_prefix(..., strip_prefix=True)``; the default download keeps
+        each key's full store path, which nests the prefix under *local_dir*.
 
     Args:
         local_dir: Local directory to upload from.
