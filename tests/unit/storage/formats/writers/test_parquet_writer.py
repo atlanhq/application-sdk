@@ -1,6 +1,9 @@
+import asyncio
 import contextlib
 import os
 import shutil
+import threading
+import time
 from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -668,13 +671,16 @@ class TestParquetFileWriterConsolidation:
             typename="test_type",
         )
 
-        # Test temp folder path generation
+        # Test temp folder path generation. The writer's own token sits between
+        # the shared "temp_accumulation" root and the folder, so no two writers
+        # can share an accumulation directory (FND-315).
         temp_path = parquet_output._get_temp_folder_path(0)
         expected_path = os.path.join(
             base_output_path,
             "test_suffix",
             "test_type",
             "temp_accumulation",
+            parquet_output._temp_run_id,
             "folder-0",
         )
         assert temp_path == expected_path
@@ -1211,24 +1217,55 @@ class TestWriteChunkNullColumns:
         assert combined.column("extra").to_pylist() == [None, None, 10, 18]
 
     async def test_write_chunk_offloaded_to_thread(self, tmp_path) -> None:
-        """pq.write_table() must not run inline on the event loop.
+        """Chunk conversion and the disk write must not run on the event loop.
 
-        A large chunk's disk write can take long enough to stall every other
-        coroutine — including the enclosing @task's auto-heartbeat — for the
-        write's full duration.
+        A large chunk's Arrow conversion plus disk write can take long enough
+        to stall every other coroutine — including the enclosing @task's
+        auto-heartbeat — for the operation's full duration (ADR-0010).
+
+        Asserts the thread the work actually lands on rather than which
+        callable was handed to run_in_thread, so the guarantee survives the
+        blocking section being regrouped.
         """
         df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
         file_name = str(tmp_path / "offloaded.parquet")
         writer = ParquetFileWriter(str(tmp_path / "output"))
 
-        with patch(
-            "application_sdk.storage.formats.parquet.run_in_thread",
-            new_callable=AsyncMock,
-            side_effect=lambda func, *a, **kw: func(*a, **kw),
-        ) as mock_offload:
-            await writer._write_chunk(df, file_name)
+        loop_thread = threading.current_thread().name
+        write_thread: list[str] = []
+        real_write_table = pq.write_table
 
-        assert mock_offload.await_args_list, "pq.write_table was not offloaded"
-        assert mock_offload.await_args_list[0].args[0] is pq.write_table
+        def _slow_write_table(*args, **kwargs):
+            write_thread.append(threading.current_thread().name)
+            # Stand in for a large chunk's write cost, so a regression that
+            # puts this back on the loop actually stalls the ticker below.
+            time.sleep(0.3)
+            return real_write_table(*args, **kwargs)
+
+        ticks = 0
+
+        async def _ticker() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        with patch("pyarrow.parquet.write_table", side_effect=_slow_write_table):
+            ticker = asyncio.create_task(_ticker())
+            try:
+                await writer._write_chunk(df, file_name)
+            finally:
+                ticker.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await ticker
+
+        assert write_thread, "pq.write_table was never called"
+        assert write_thread[0] != loop_thread, "the write ran on the event loop"
+        assert write_thread[0].startswith(
+            "sdk-blocking-"
+        ), f"the write ran on {write_thread[0]}, not the SDK blocking pool"
+        # The loop kept running coroutines for the whole write — which is what
+        # lets the enclosing @task's auto-heartbeat keep beating.
+        assert ticks >= 5, f"event loop stalled during the write ({ticks} ticks)"
         table = pq.read_table(file_name)
         assert table.num_rows == 3

@@ -19,8 +19,10 @@ import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 
 import e2e_tenant_app as app  # noqa: E402
+from _gha_expr import evaluate, evaluate_operand  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
@@ -248,7 +250,152 @@ def test_prepare_tenant_is_gated_on_the_lease(jobs: dict) -> None:  # type: igno
     # Installing without the lease is precisely the race the lease closes, so
     # this is a gate and not merely an ordering edge.
     assert "lease-tenant" in jobs["prepare-tenant"]["needs"]
-    assert "needs.lease-tenant.result == 'success'" in jobs["prepare-tenant"]["if"]
+    assert "needs.lease-tenant.result != 'skipped'" in jobs["prepare-tenant"]["if"]
+
+
+def test_prepare_tenant_confirms_its_own_clouds_lease_before_installing(
+    jobs: dict,  # type: ignore[type-arg]
+) -> None:
+    """The job's `if:` can only see the lease matrix AGGREGATE, so it cannot tell
+    "my cloud's lease succeeded" from "some cloud's did". Observed live: one
+    cloud's acquire failed on a transient TLS error and the aggregate skipped the
+    install for the two clouds whose leases HAD been taken — a run holding two
+    tenants that installed onto neither.
+
+    So the gate is widened to "the lease job ran" and each leg confirms its own
+    tenant. That verify step must come FIRST, before anything touches the tenant.
+    """
+    steps = jobs["prepare-tenant"]["steps"]
+    verify_at = _index_of(steps, "e2e_tenant_lease.py")
+    assert verify_at is not None, (
+        "prepare-tenant no longer confirms it holds its cloud's lease, so the "
+        "install's precondition is back to the matrix aggregate"
+    )
+    assert "--mode verify" in steps[verify_at]["run"]
+    assert steps[verify_at]["env"]["CLOUD"] == "${{ matrix.cloud }}"
+    assert steps[verify_at]["env"]["APP"] == "${{ inputs.app-name }}"
+
+    # Every step before it must be inert with respect to the tenant. Checkouts
+    # qualify; anything that resolves credentials, publishes or installs does not.
+    for step in steps[:verify_at]:
+        assert "checkout" in str(step.get("uses", "")), (
+            f"{step.get('name') or step.get('uses')} runs before the lease is "
+            "confirmed; only steps that cannot touch the tenant may precede it"
+        )
+
+
+def test_prepare_tenant_verifies_with_its_own_driver_not_mains(jobs: dict) -> None:  # type: ignore[type-arg]
+    """`uses:` cannot take an expression, so an action reference is always @main.
+
+    That opens a stale window in both directions: a PR adding a mode to the driver
+    would call a main without it and die at argument parsing, and a PR changing the
+    driver would exercise main's copy rather than its own. Invoking the driver
+    checked out at job.workflow_sha closes both, and is the pattern the sibling
+    SDK scripts in this job already use.
+    """
+    steps = jobs["prepare-tenant"]["steps"]
+    checkout_at = _index_of(steps, "application-sdk-scripts")
+    verify_at = _index_of(steps, "e2e_tenant_lease.py")
+    assert checkout_at is not None and verify_at is not None
+    assert checkout_at < verify_at, "the driver must be fetched before it is run"
+
+    fetch = steps[checkout_at]
+    assert fetch["with"]["ref"] == "${{ job.workflow_sha }}"
+    assert ".github/actions/e2e-tenant-lease" in fetch["with"]["sparse-checkout"], (
+        "the sparse checkout must include the lease action, or the verify step "
+        "cannot run this ref's driver"
+    )
+    assert (
+        "application-sdk-scripts/.github/actions/e2e-tenant-lease"
+        in (steps[verify_at]["run"])
+    )
+
+
+def _index_of(steps: list, needle: str) -> int | None:  # type: ignore[type-arg]
+    for index, step in enumerate(steps):
+        haystack = (
+            f"{step.get('uses', '')} {step.get('run', '')} {step.get('with', {})}"
+        )
+        if needle in haystack:
+            return index
+    return None
+
+
+def test_prepare_tenant_overrides_the_implicit_success_over_needs(jobs: dict) -> None:  # type: ignore[type-arg]
+    """Without a status-check function the widened gate below is INERT.
+
+    GitHub applies an implicit success() over every `needs` entry and skips the
+    job before the `if:` is consulted, so on a failed lease leg prepare-tenant
+    would still be skipped for every cloud and the per-cloud verify step would
+    never run — the exact misbehaviour the widening exists to fix, passing its own
+    expression test because a pure evaluator cannot model a needs-level skip.
+
+    This is the same assertion `test_e2e_tolerates_skipped_but_not_failed_prepare`
+    already makes for the legs. It is here because the gap it catches shipped once.
+    """
+    condition = " ".join(jobs["prepare-tenant"]["if"].split())
+    assert "always()" in condition or "!cancelled()" in condition, (
+        "prepare-tenant's `if:` has no status-check function, so GitHub's "
+        "implicit success() over `needs` skips the job whenever ANY lease leg "
+        "fails. The `!= 'skipped'` clause is dead without it."
+    )
+
+
+def test_prepare_tenant_names_every_need_it_requires(jobs: dict) -> None:  # type: ignore[type-arg]
+    """always() lifts the implicit success() over ALL needs, so anything that must
+    have succeeded has to be named — otherwise widening the lease gate silently
+    also stopped requiring discovery and the image."""
+    condition = " ".join(jobs["prepare-tenant"]["if"].split())
+    for job in ("discover-e2e", "merge-e2e-image"):
+        assert f"needs.{job}.result == 'success'" in condition, (
+            f"missing `needs.{job}.result == 'success'`. With always() present, "
+            "this is the only thing still requiring it."
+        )
+
+
+@pytest.mark.parametrize(
+    ("lease_result", "should_install"),
+    [
+        ("success", True),
+        # The case that was broken: another cloud's lease failed. This leg must
+        # still get the chance to install, and its verify step decides.
+        ("failure", True),
+        ("cancelled", True),
+        ("skipped", False),
+    ],
+)
+def test_install_runs_whenever_the_lease_job_ran(
+    lease_result: str, should_install: bool
+) -> None:
+    """Note the limit of this test, which is why the two above it exist: the
+    evaluator models the `if:` expression only, not GitHub's needs-level skip. It
+    passed on a gate that could never actually run."""
+    expression = _load_gate("prepare-tenant")
+    contexts = {
+        "inputs": {"install-app-to-tenant": True},
+        "needs": {
+            "discover-e2e": {"result": "success"},
+            "merge-e2e-image": {"result": "success"},
+            "lease-tenant": {"result": lease_result},
+        },
+    }
+    assert evaluate(expression, contexts) is should_install
+
+
+@pytest.mark.parametrize("blocker", ["discover-e2e", "merge-e2e-image"])
+def test_install_does_not_run_without_its_upstreams(blocker: str) -> None:
+    # always() would otherwise let the install proceed with no image to install.
+    expression = _load_gate("prepare-tenant")
+    contexts = {
+        "inputs": {"install-app-to-tenant": True},
+        "needs": {
+            "discover-e2e": {"result": "success"},
+            "merge-e2e-image": {"result": "success"},
+            "lease-tenant": {"result": "success"},
+        },
+    }
+    contexts["needs"][blocker] = {"result": "failure"}
+    assert evaluate(expression, contexts) is False
 
 
 def test_the_legs_refuse_to_run_on_a_failed_lease(jobs: dict) -> None:  # type: ignore[type-arg]
@@ -268,8 +415,41 @@ def test_the_lease_is_released_even_when_the_legs_fail(jobs: dict) -> None:  # t
     # having taken the lease — not on the outcome of anything after it.
     gate = jobs["release-tenant"]["if"]
     assert "always()" in gate
-    assert "needs.lease-tenant.result == 'success'" in gate
     assert "e2e" in jobs["release-tenant"]["needs"]
+
+
+@pytest.mark.parametrize(
+    ("lease_result", "should_release"),
+    [
+        ("success", True),
+        # THE case that was broken. lease-tenant is a per-cloud MATRIX job, so
+        # `.result` is the aggregate: one cloud's acquire timing out made it
+        # 'failure' and skipped the release for EVERY cloud, including the legs
+        # that did acquire. Their leases then waited for the next contender's
+        # reaper instead of being handed back — directly against this job's stated
+        # purpose. Gating on "ran" rather than "succeeded" fixes it.
+        ("failure", True),
+        ("cancelled", True),
+        # Never ran, so there is nothing to release.
+        ("skipped", False),
+    ],
+)
+def test_release_runs_whenever_any_lease_leg_may_hold_a_tenant(
+    lease_result: str, should_release: bool
+) -> None:
+    """Evaluated rather than pattern-matched: `&&` binds tighter than `||` in
+    GitHub expressions, so a gate that merely *mentions* the right terms can
+    still be wrong. Widening this is only safe because the release driver checks
+    ownership before deleting, so a leg that never acquired no-ops."""
+    expression = _load_gate("release-tenant")
+    assert (
+        evaluate(expression, {"needs": {"lease-tenant": {"result": lease_result}}})
+        is should_release
+    )
+
+
+def _load_gate(job: str) -> str:
+    return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))["jobs"][job]["if"]
 
 
 def test_the_lease_wait_fits_inside_the_job_timeout(jobs: dict) -> None:  # type: ignore[type-arg]
@@ -286,30 +466,20 @@ def test_the_lease_wait_fits_inside_the_job_timeout(jobs: dict) -> None:  # type
     assert timeout_seconds > wait_seconds
 
 
-#: Every job on the path from run creation to the last leg finishing. The TTL is
-#: measured from run CREATION, so all of it counts — not just the part after the
-#: lease is acquired. Sizing the TTL against install-plus-legs alone was an
-#: actual latent bug, not a theoretical one: that pair is 160 min against a chain
-#: of 325, so a healthy run that queued for runners could cross a 4h TTL partway
-#: through its own install and have a contender reap it mid-flight.
-_PRE_RELEASE_CHAIN = (
-    "discover-e2e",
-    "build-e2e-image",
-    "merge-e2e-image",
-    "lease-tenant",
-    "prepare-tenant",
-    "e2e",
-)
+#: The jobs a lease is actually HELD across: acquired before the install, released
+#: after the last leg. The TTL is measured from the acquisition time the holder
+#: records for itself, so only this span counts — none of the pre-lease work
+#: (discovery, image build, manifest merge, runner queue time) does.
+_LEASE_HELD_ACROSS = ("prepare-tenant", "e2e")
 
 
 def test_the_lease_ttl_cannot_fire_on_a_healthy_holder(jobs: dict) -> None:  # type: ignore[type-arg]
     """The TTL breaking a LIVE holder's lease puts a second installer on the
-    tenant — the exact race the lease exists to close — so it must clear the
-    whole chain, with room left for runner queue time, which has no timeout.
+    tenant — the exact race the lease exists to close — so it has to clear the
+    longest legitimate hold with room to spare.
 
-    Derived from the workflow's own timeouts rather than hard-coded, so adding a
-    job to the chain or raising a timeout forces the TTL up instead of quietly
-    eating the margin.
+    Derived from the workflow's own timeouts rather than hard-coded, so raising
+    either of them forces the TTL up instead of quietly eating the margin.
     """
     action = yaml.safe_load(
         (_REPO_ROOT / ".github/actions/e2e-tenant-lease/action.yaml").read_text(
@@ -317,20 +487,20 @@ def test_the_lease_ttl_cannot_fire_on_a_healthy_holder(jobs: dict) -> None:  # t
         )
     )
     ttl_seconds = int(action["inputs"]["ttl-seconds"]["default"])
-    chain_seconds = (
-        sum(int(jobs[job]["timeout-minutes"]) for job in _PRE_RELEASE_CHAIN) * 60
+    hold_seconds = (
+        sum(int(jobs[job]["timeout-minutes"]) for job in _LEASE_HELD_ACROSS) * 60
     )
 
-    assert ttl_seconds > chain_seconds, (
-        f"ttl-seconds ({ttl_seconds}s) does not clear the "
-        f"{'+'.join(_PRE_RELEASE_CHAIN)} chain ({chain_seconds}s). A healthy "
-        "holder that queued for runners would have its lease broken mid-install."
+    assert ttl_seconds > hold_seconds, (
+        f"ttl-seconds ({ttl_seconds}s) does not clear the longest legitimate hold "
+        f"({'+'.join(_LEASE_HELD_ACROSS)} = {hold_seconds}s). A healthy holder "
+        "would have its lease broken mid-run and a second installer would start."
     )
-    # Queue time between those jobs is unbounded, so clearing the chain exactly is
-    # not enough; require real headroom rather than a one-second pass.
-    assert ttl_seconds >= 2 * chain_seconds, (
-        f"ttl-seconds ({ttl_seconds}s) clears the chain ({chain_seconds}s) but "
-        "leaves no room for runner queue time, which has no timeout"
+    # Runner queue time between the held jobs is unbounded, so clearing the sum
+    # exactly is not enough; require real headroom rather than a one-second pass.
+    assert ttl_seconds >= 1.5 * hold_seconds, (
+        f"ttl-seconds ({ttl_seconds}s) clears the hold ({hold_seconds}s) but "
+        "leaves little room for runner queue time, which has no timeout"
     )
 
 
@@ -529,6 +699,189 @@ def test_a_missing_tenant_id_is_rejected_before_anything_is_published(
             f"the tenant-ID gate must run before {later!r} — the whole point is "
             "rejecting the misconfiguration before any work or any publish"
         )
+
+
+# ── Two checks, at two altitudes, neither redundant (FND-203) ────────────────
+# The install path has one precondition ("a tenant_id can be resolved") that is
+# knowable in two halves at two different times, so it is checked twice. Nothing
+# in the workflow says that, and each check looks redundant next to the other —
+# which is exactly how one of them gets deleted.
+
+#: In discover-e2e, the first job on the e2e path. Catches "no tenant matrix
+#: shared with this repo at all", the openapi case: knowable from a secret's
+#: presence, so it costs seconds.
+_EARLY_CHECK = "Require the tenant matrix on the install path"
+
+#: In prepare-tenant, after tenant resolution. Catches "matrix present, this
+#: cloud's entry has no `tenant_id`" — invisible to the early check, which only
+#: ever sees whether the secret exists.
+_LATE_CHECK = "Require a tenant ID before publishing anything"
+
+#: The distinct-id breadcrumb, the one step allowed to precede the early check.
+#: It is a free ``echo`` — the workflow header comment names it as the only thing
+#: ahead of the gate, so a costly ``run:`` inserted before the check must trip the
+#: placement test rather than slip past a narrower first-``uses:`` comparison.
+_DISTINCT_ID_BREADCRUMB = "distinct-id ${{ inputs.distinct-id }}"
+
+
+def _named_step(jobs: dict, job: str, name: str) -> dict:  # type: ignore[type-arg]
+    matches = [s for s in jobs[job]["steps"] if str(s.get("name", "")) == name]
+    assert (
+        len(matches) == 1
+    ), f"expected exactly one {name!r} step in {job}, found {len(matches)}"
+    return matches[0]
+
+
+def test_both_install_preconditions_are_checked(jobs: dict) -> None:  # type: ignore[type-arg]
+    """Neither check subsumes the other, so removing either is a regression.
+
+    ``HAS_TENANT_MATRIX`` proves the secret *exists*; it says nothing about
+    whether the cloud's entry inside it carries a ``tenant_id``. So the early
+    check cannot cover the late one's case. And the late check cannot cover the
+    early one's cheaply: it runs after two per-arch image builds and a manifest
+    merge, which is the ~4 minutes of runner time FND-203 is about.
+
+    Dropping the early one restores the waste. Dropping the late one lets a run
+    with a matrix but no ``tenant_id`` for its cloud reach the publish and fail
+    inside the driver on an empty ``--tenant``, several steps past the cause.
+    """
+    _named_step(jobs, "discover-e2e", _EARLY_CHECK)
+    _named_step(jobs, "prepare-tenant", _LATE_CHECK)
+
+
+def test_the_install_path_precondition_is_checked_at_discovery(jobs: dict) -> None:  # type: ignore[type-arg]
+    step = _named_step(jobs, "discover-e2e", _EARLY_CHECK)
+    condition = " ".join(str(step["if"]).split())
+
+    assert "inputs.install-app-to-tenant" in condition, (
+        "the early check must fire only on the install path — a caller that never "
+        "installs is entitled to the single-tenant fallback, which is what the "
+        "'Warn that the cross-CSP matrix is unavailable' step covers instead"
+    )
+    assert "env.HAS_TENANT_MATRIX == ''" in condition, (
+        "the early check must key on the tenant-matrix signal; a step `if:` cannot "
+        "read the `secrets` context directly, which is why the job carries it as env"
+    )
+    assert "exit 1" in step["run"], (
+        "the early check must FAIL the run. A warning would let it go on to spend "
+        "two image builds discovering the same thing in prepare-tenant."
+    )
+
+
+@pytest.mark.parametrize("install", [True, False])
+@pytest.mark.parametrize("signal", ["", "true"])
+def test_the_early_check_fires_only_on_the_install_path_without_a_matrix(
+    jobs: dict,  # type: ignore[type-arg]
+    install: bool,
+    signal: str,
+) -> None:
+    """The full condition, evaluated — substring asserts cannot see a broken gate.
+
+    Matching on the two operand substrings stays green under an edit that keeps
+    both while wrecking the logic (an appended ``|| true``, regrouped operators).
+    Evaluating the whole expression across the install × signal truth table pins
+    what the gate actually does: fire only when installing with no matrix.
+    """
+    step = _named_step(jobs, "discover-e2e", _EARLY_CHECK)
+    fires = evaluate(
+        step["if"],
+        {
+            "inputs": {"install-app-to-tenant": install},
+            "env": {"HAS_TENANT_MATRIX": signal},
+        },
+    )
+    assert fires is (install and signal == "")
+
+
+def test_the_early_check_precedes_every_step_that_costs_anything(jobs: dict) -> None:  # type: ignore[type-arg]
+    """Placement is the entire value: a correct check in the wrong place saves
+    nothing. It must precede the checkout and both discovery invocations, so the
+    job fails in seconds rather than after the tree is fetched and globbed.
+
+    Measuring only against the first ``uses:`` step would miss a costly ``run:``
+    step inserted ahead of the check, so everything before it must be the named
+    distinct-id breadcrumb — the one free ``echo`` the workflow header allows."""
+    steps = jobs["discover-e2e"]["steps"]
+    labels = [str(step.get("name") or step.get("uses", "")) for step in steps]
+    position = labels.index(_EARLY_CHECK)
+
+    first_uses = next(
+        index for index, step in enumerate(steps) if step.get("uses") is not None
+    )
+    assert position < first_uses, (
+        f"the early check runs after {labels[first_uses]!r}; it needs no checkout "
+        "and no action, so nothing may precede it except the distinct-id breadcrumb"
+    )
+
+    preceding = steps[:position]
+    assert [str(step.get("name", "")) for step in preceding] == [
+        _DISTINCT_ID_BREADCRUMB
+    ], (
+        "a step that is not the distinct-id breadcrumb runs before the early "
+        "check; anything with a `uses:` or a costly `run:` ahead of it delays the "
+        "failure past the point where it saves the two image builds"
+    )
+
+    for later in ("Discover suites", "Discover clouds"):
+        assert position < labels.index(later)
+
+
+@pytest.mark.parametrize(
+    "secret,expected",
+    [
+        ("", ""),
+        ('{"aws":{"tenant":"t","tenant_id":"i"}}', "true"),
+    ],
+)
+def test_the_early_checks_signal_is_empty_exactly_when_the_secret_is(
+    jobs: dict,  # type: ignore[type-arg]
+    secret: str,
+    expected: str,
+) -> None:
+    """The signal must resolve to '' — not 'false' — when the secret is absent.
+
+    The check reads ``env.HAS_TENANT_MATRIX == ''``, so a plausible-looking
+    simplification of the expression to a bare ``secrets.X != ''`` would render
+    the signal ``'false'``, never match, and disable the check silently. That is
+    the failure mode worth a test: the loud direction (losing the job-level env
+    entirely, making the comparison always true) fails every install-path run on
+    its first use.
+    """
+    env = jobs["discover-e2e"].get("env") or {}
+    assert "HAS_TENANT_MATRIX" in env, (
+        "discover-e2e no longer carries HAS_TENANT_MATRIX at JOB level, so the "
+        "early check's `if:` cannot see it — a step condition cannot read `secrets`"
+    )
+    resolved = evaluate_operand(
+        env["HAS_TENANT_MATRIX"], {"secrets": {"E2E_TENANT_MATRIX_JSON": secret}}
+    )
+    assert resolved == expected
+
+
+@pytest.mark.parametrize(
+    "discovery,builds",
+    [("failure", False), ("success", True)],
+)
+def test_a_failed_discovery_skips_the_image_builds(
+    jobs: dict,  # type: ignore[type-arg]
+    discovery: str,
+    builds: bool,
+) -> None:
+    """What converts the early failure into an actual saving.
+
+    Failing discover-e2e only avoids the two builds because build-e2e-image gates
+    on discover-e2e having SUCCEEDED. Widen that to `always()` or to
+    `result != 'skipped'` — both of which read as harmless robustness — and the
+    builds run anyway, at which point the early check saves nothing at all.
+    """
+    ran = evaluate(
+        jobs["build-e2e-image"]["if"],
+        {
+            "inputs": {"install-app-to-tenant": True},
+            "needs": {"discover-e2e": {"result": discovery, "outputs": {"count": "2"}}},
+        },
+    )
+    assert ran is builds
 
 
 def test_job_timeout_stays_above_the_scripts_own_waits(jobs: dict) -> None:  # type: ignore[type-arg]

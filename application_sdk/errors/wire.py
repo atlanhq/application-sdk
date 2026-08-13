@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -21,6 +22,37 @@ _EVIDENCE_KEY_DENYLIST: frozenset[str] = frozenset(
         "private_key",
     }
 )
+
+# Compound variants like ``client_secret`` or ``db_password``, matched by
+# suffix so generic names such as ``object_key`` or ``cache_key`` still pass.
+_EVIDENCE_KEY_SUFFIX_DENYLIST: tuple[str, ...] = ("_secret", "_password", "_token")
+
+
+def secret_named_evidence_keys(evidence: Mapping[str, Any]) -> frozenset[str]:
+    """Return the ``evidence`` keys :class:`FailureDetails` rejects as secret-named.
+
+    The envelope's validator refuses secret-named keys outright, so a producer
+    holding a rejected verdict has no way to ask *which* key was the problem
+    without re-deriving the denylist. Exposing the predicate keeps that single
+    source of truth here, at the wire layer where the rule lives.
+
+    Args:
+        evidence: Candidate evidence mapping, keyed by the producing
+            dataclass's field names.
+
+    Returns:
+        The offending keys, empty when the mapping is acceptable.
+
+    Example:
+        >>> sorted(secret_named_evidence_keys({"host": "db", "api_key": "x"}))
+        ['api_key']
+    """
+    return frozenset(
+        k
+        for k in evidence
+        if k.lower() in _EVIDENCE_KEY_DENYLIST
+        or any(k.lower().endswith(s) for s in _EVIDENCE_KEY_SUFFIX_DENYLIST)
+    )
 
 
 class FailureDetails(BaseModel):
@@ -67,16 +99,7 @@ class FailureDetails(BaseModel):
     @field_validator("evidence")
     @classmethod
     def _no_secret_keys(cls, v: dict[str, Any]) -> dict[str, Any]:
-        # Exact match covers standalone names; suffix match catches compound variants
-        # like ``client_secret`` or ``db_password`` without blocking generic names
-        # such as ``object_key`` or ``cache_key``.
-        _SUFFIX_DENYLIST = ("_secret", "_password", "_token")
-        bad = {
-            k
-            for k in v
-            if k.lower() in _EVIDENCE_KEY_DENYLIST
-            or any(k.lower().endswith(s) for s in _SUFFIX_DENYLIST)
-        }
+        bad = secret_named_evidence_keys(v)
         if bad:
             raise ValueError(  # stdlib-interop: pydantic field_validator requires ValueError
                 "evidence keys may not use secret-named fields: %s" % sorted(bad)

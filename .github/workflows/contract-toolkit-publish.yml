@@ -48,12 +48,9 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Install PKL
-        run: |
-          set -euo pipefail
-          curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
-          chmod +x /tmp/pkl
-          sudo mv /tmp/pkl /usr/local/bin/pkl
+      - uses: ./.github/actions/install-pkl
+        with:
+          version: ${{ env.PKL_VERSION }}
 
       - name: Read release version
         id: meta

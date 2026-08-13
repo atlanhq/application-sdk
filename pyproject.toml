@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.27.1"
+version = "3.27.2"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -358,6 +358,9 @@ extend-select = [
 "application_sdk/testing/integration/models.py" = ["E402"]
 # Post-importorskip imports required so the test module skips cleanly when rocksdict is absent.
 "tests/unit/common/test_spillable_dict.py" = ["E402"]
+# sys.path bootstrap required so the test module can import the sibling script it tests.
+".github/scripts/tests/test_fetch_dataforge_source.py" = ["E402"]
+".github/scripts/tests/test_resolve_e2e_source.py" = ["E402"]
 
 [tool.uv]
 default-groups = ["dev", "test"]

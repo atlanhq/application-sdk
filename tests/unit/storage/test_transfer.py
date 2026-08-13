@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import sys
-import threading
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from application_sdk.contracts.storage import UploadOutput
-from application_sdk.storage import transfer as transfer_mod
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.transfer import download, upload
 
@@ -30,72 +27,8 @@ def _hash_bytes(data: bytes) -> str:
     return h.hexdigest()
 
 
-class TestSha256FileAsync:
-    """``_sha256_file_async`` must offload the synchronous, no-``await``
-    ``_sha256_file`` to a worker thread — the same failure mode fixed in
-    ``storage.reference._sha256_hex_file_async``: hashing a file on the event
-    loop blocks it for the full read+digest, starving the SDK's auto-heartbeat
-    coroutine and heartbeat-timing-out ``App.upload``/``App.download`` on
-    large files (``skip_if_exists=True``) even while making progress.
-    """
-
-    async def test_async_digest_matches_sync(self, tmp_path) -> None:
-        f = tmp_path / "data.bin"
-        content = b"some bytes here" * 1024
-        f.write_bytes(content)
-        assert await transfer_mod._sha256_file_async(f) == _hash_bytes(content)
-
-    async def test_hashing_does_not_block_event_loop(
-        self, tmp_path, monkeypatch
-    ) -> None:
-        # Hold whatever thread the sync hash runs on until released, so the loop
-        # stays responsive ONLY if the hash was offloaded off the event loop.
-        entered = threading.Event()
-        release = threading.Event()
-
-        def blocking_hash(_path: Path) -> str:
-            entered.set()
-            if not release.wait(timeout=5):
-                raise AssertionError("release was never signaled")
-            return "deadbeef"
-
-        monkeypatch.setattr(transfer_mod, "_sha256_file", blocking_hash)
-
-        f = tmp_path / "f.bin"
-        f.write_bytes(b"data")
-        task = asyncio.create_task(transfer_mod._sha256_file_async(f))
-
-        # If hashing ran on the loop, blocking_hash() would freeze the loop here
-        # and these awaits would never progress. Offloaded → loop stays live.
-        for _ in range(500):
-            if entered.is_set():
-                break
-            await asyncio.sleep(0.005)
-        assert entered.is_set(), "hash never started"
-
-        progressed = 0
-        for _ in range(10):
-            await asyncio.sleep(0.005)
-            progressed += 1
-        assert progressed == 10  # loop advanced while the hash held its thread
-
-        release.set()
-        assert await task == "deadbeef"
-
-    async def test_uses_run_in_thread_pool(self, tmp_path) -> None:
-        """Pins the pool choice: must go through ``run_in_thread``, not
-        ``asyncio.to_thread`` (see reference.py's equivalent test for why).
-        """
-        f = tmp_path / "data.bin"
-        f.write_bytes(b"payload")
-
-        with patch.object(
-            transfer_mod, "run_in_thread", wraps=transfer_mod.run_in_thread
-        ) as mock_run_in_thread:
-            digest = await transfer_mod._sha256_file_async(f)
-
-        mock_run_in_thread.assert_awaited_once_with(transfer_mod._sha256_file, f)
-        assert digest == _hash_bytes(b"payload")
+# ``_sha256_file`` / ``_sha256_file_async`` moved to
+# ``storage.integrity.sha256_file``; see ``test_integrity.py``.
 
 
 class TestUploadSingleFile:
@@ -508,8 +441,6 @@ class TestUploadDirectoryListingRace:
     async def test_upload_finds_files_when_rglob_returns_empty(
         self, store, tmp_path, monkeypatch
     ) -> None:
-        from pathlib import Path
-
         (tmp_path / "a.txt").write_bytes(b"a")
         (tmp_path / "b.txt").write_bytes(b"b")
         sub = tmp_path / "sub"
@@ -533,8 +464,6 @@ class TestUploadDirectoryListingRace:
     ) -> None:
         """Partial-result variant: rglob silently truncates after a
         mid-walk OSError. The caller would see an undercount."""
-        from pathlib import Path
-
         (tmp_path / "a.txt").write_bytes(b"a")
         (tmp_path / "b.txt").write_bytes(b"b")
         (tmp_path / "c.txt").write_bytes(b"c")
@@ -556,8 +485,6 @@ class TestUploadDirectoryListingRace:
     ) -> None:
         """raise_on_empty=True must not misfire on a transient empty
         rglob when the directory actually has files."""
-        from pathlib import Path
-
         (tmp_path / "a.txt").write_bytes(b"a")
         (tmp_path / "b.txt").write_bytes(b"b")
 
@@ -800,8 +727,12 @@ class TestUploadDirectorySourceStoreReconcile:
         src_prefix = "pfx/transformed"
         await self._seed(source, f"{src_prefix}/table/entities.json", b"T")
         # A sidecar next to the data file — must be excluded from reconcile.
+        # Real digest of the data: the reconcile streams the object through the
+        # transfer layer, which now verifies it against this sidecar (FND-306).
         await self._seed(
-            source, f"{src_prefix}/table/entities.json.sha256", b"deadbeef"
+            source,
+            f"{src_prefix}/table/entities.json.sha256",
+            _hash_bytes(b"T").encode(),
         )
 
         local = tmp_path / "transformed"

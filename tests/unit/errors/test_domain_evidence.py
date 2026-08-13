@@ -8,6 +8,7 @@ from application_sdk.credentials.errors import (
     CredentialParseError,
     CredentialValidationError,
 )
+from application_sdk.errors.categories import FailureCategory
 from application_sdk.infrastructure.secrets import SecretNotFoundError, SecretStoreError
 from application_sdk.storage.errors import (
     StorageConfigError,
@@ -73,7 +74,47 @@ def test_secret_not_found_evidence_includes_secret_name() -> None:
 )
 def test_domain_fields_not_in_secret_denylist(evidence_key: str) -> None:
     """References (not secrets themselves) must be allowed in evidence."""
-    from application_sdk.errors.wire import _EVIDENCE_KEY_DENYLIST
+    from application_sdk.errors.wire import FailureDetails, secret_named_evidence_keys
 
-    assert evidence_key not in _EVIDENCE_KEY_DENYLIST
-    assert not any(evidence_key.endswith(s) for s in ("_secret", "_password", "_token"))
+    assert not secret_named_evidence_keys({evidence_key: "value"})
+    # The predicate is only worth trusting if the envelope agrees with it.
+    assert FailureDetails(
+        category=FailureCategory.INTERNAL,
+        code="INTERNAL",
+        retryable=False,
+        message="x",
+        evidence={evidence_key: "value"},
+    ).evidence == {evidence_key: "value"}
+
+
+@pytest.mark.parametrize(
+    "evidence_key",
+    ["api_key", "password", "Authorization", "client_secret", "db_password", "x_token"],
+)
+def test_secret_named_keys_are_named_and_rejected(evidence_key: str) -> None:
+    """``secret_named_evidence_keys`` exists so a producer holding a rejected
+    verdict can act on it — it has to name exactly what the envelope refuses,
+    or the degrade built on it strips the wrong keys."""
+    from pydantic import ValidationError
+
+    from application_sdk.errors.wire import FailureDetails, secret_named_evidence_keys
+
+    evidence = {"host": "db.internal", evidence_key: "…"}
+
+    assert secret_named_evidence_keys(evidence) == frozenset({evidence_key})
+    with pytest.raises(ValidationError):
+        FailureDetails(
+            category=FailureCategory.INTERNAL,
+            code="INTERNAL",
+            retryable=False,
+            message="x",
+            evidence=evidence,
+        )
+    # And stripping exactly what it named clears the envelope.
+    assert FailureDetails(
+        category=FailureCategory.INTERNAL,
+        code="INTERNAL",
+        retryable=False,
+        message="x",
+        evidence={"host": "db.internal"},
+    ).evidence == {"host": "db.internal"}

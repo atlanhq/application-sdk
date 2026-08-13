@@ -43,6 +43,50 @@ class AppTimeoutError(AppError):
 
 
 @dataclass(kw_only=True)
+class TaskStalledError(AppTimeoutError):
+    """An activity attempt was failed for making no observable progress (ADR-0018).
+
+    Raised by the SDK's activity wrapper, not by app code: the stall watchdog in
+    the auto-heartbeat loop cancels the attempt, and the cancellation handler
+    turns that cancel into this error. It means the attempt kept heartbeating —
+    the event loop was alive — while nothing observable advanced for longer than
+    the task's ``max_no_progress_seconds``.
+
+    A subtype of :class:`AppTimeoutError` rather than a sixteenth categorical
+    leaf: a stall *is* a TIMEOUT-category failure, so ``except AppTimeoutError``
+    catch sites and TIMEOUT-keyed consumers keep working, while the distinct
+    ``code`` and the Temporal wire type ``"TaskStalledError"`` let a stall kill
+    be counted separately from a ``StartToClose`` or heartbeat timeout. The
+    ``TIMEOUT_`` prefix on the code is the convention every leaf subclass follows
+    (P003) so the code column carries its category without a join.
+
+    ``stalled_for_seconds`` is not the inherited ``elapsed_seconds``, and both
+    can be meaningful at once: ``elapsed_seconds`` measures how long a bounded
+    wait ran before it was abandoned, while this measures the *quiet gap* inside
+    an attempt that may have been productively running for hours before it went
+    silent. A stall has no bounded wait that elapsed — that absence is the whole
+    problem the watchdog exists to detect — so ``timeout_seconds`` and
+    ``elapsed_seconds`` are left unset on this path.
+
+    **Retryable, deliberately.** The dominant cause is a transient source-side
+    hang in an app whose error handling never surfaced it, which self-heals on a
+    fresh attempt; a genuine wedge re-stalls and costs at most a few multiples of
+    ``max_no_progress_seconds``, not of the duration backstop. Non-retryable
+    would convert the self-healing majority into failed runs needing a manual
+    re-run that restarts from zero anyway (ADR-0018 → *Failing the activity*).
+    Pinned here rather than inherited so a future change to
+    :class:`AppTimeoutError`'s default cannot silently flip it.
+    """
+
+    stalled_for_seconds: float | None = None
+    last_progress_label: str | None = None
+
+    default_retryable: ClassVar[bool] = True
+    code: ClassVar[str] = "TIMEOUT_TASK_STALLED"
+    audience: ClassVar[Audience] = Audience.APP_OWNER
+
+
+@dataclass(kw_only=True)
 class RateLimitedError(AppError):
     limit_type: str | None = None
     retry_after_seconds: float | None = None

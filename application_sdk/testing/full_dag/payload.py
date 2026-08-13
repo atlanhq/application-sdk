@@ -253,7 +253,7 @@ def build_seed_dag(
                     "output_prefix": "$.extract.outputs.view_lineage_output_prefix",
                 },
             },
-            "depends_on": {"node_id": "extract"},
+            "depends_on": {"node_id": "extract", "tag": "success"},
         },
         "publish": {
             "node_type": "workflow",
@@ -283,7 +283,7 @@ def build_seed_dag(
                     "current_state_prefix": "$.extract.outputs.current_state_prefix",
                 },
             },
-            "depends_on": {"node_id": "extract"},
+            "depends_on": {"node_id": "extract", "tag": "success"},
         },
         "lineage-app": {
             "node_type": "workflow",

@@ -21,6 +21,7 @@ import pytest
 from application_sdk.storage.batch import (
     delete_prefix,
     download_prefix,
+    list_data_keys,
     list_keys,
     upload_prefix,
 )
@@ -129,7 +130,10 @@ async def test_upload_prefix_download_prefix_roundtrip(local_store, tmp_path):
         "matrix/tree/root.txt",
     ]
 
-    keys = await list_keys("matrix/tree", local_store)
+    # list_data_keys, not list_keys: every upload also writes a
+    # ``{key}.sha256`` integrity sidecar (FND-306), which is SDK bookkeeping
+    # rather than part of the tree being mirrored.
+    keys = await list_data_keys("matrix/tree", local_store)
     assert keys == ["matrix/tree/nested/leaf.txt", "matrix/tree/root.txt"]
 
     dest_dir = tmp_path / "restored"
@@ -150,10 +154,14 @@ async def test_delete_prefix_returns_deleted_count(local_store, tmp_path):
     keeper.write_text("keep")
     await upload_file("matrix/keep/keep.txt", keeper, local_store)
 
-    assert await delete_prefix("matrix/wipe", local_store) == 3
+    # 6 = 3 data objects + their integrity sidecars. delete_prefix counts every
+    # object it removed, and removing the sidecars too is the point: a sidecar
+    # left behind after its data object is gone would be an orphan advertising
+    # a digest for nothing.
+    assert await delete_prefix("matrix/wipe", local_store) == 6
     assert await list_keys("matrix/wipe", local_store) == []
     # Sibling prefix is untouched — listing never bleeds across prefixes.
-    assert await list_keys("matrix/keep", local_store) == ["matrix/keep/keep.txt"]
+    assert await list_data_keys("matrix/keep", local_store) == ["matrix/keep/keep.txt"]
 
 
 # ------------------------------------------------------------------
@@ -233,7 +241,14 @@ async def test_empty_prefix_lists_entire_store(local_store, tmp_path):
     await upload_file("a/one.txt", src, local_store)
     await upload_file("b/two.txt", src, local_store)
 
-    assert await list_keys("", local_store) == ["a/one.txt", "b/two.txt"]
+    assert await list_data_keys("", local_store) == ["a/one.txt", "b/two.txt"]
+    # The unfiltered listing is the whole store, integrity sidecars included.
+    assert await list_keys("", local_store) == [
+        "a/one.txt",
+        "a/one.txt.sha256",
+        "b/two.txt",
+        "b/two.txt.sha256",
+    ]
 
 
 @pytest.mark.integration
@@ -253,7 +268,8 @@ async def test_empty_prefix_download_and_delete_cover_entire_store(
         "b/two.txt",
     ]
 
-    assert await delete_prefix("", local_store) == 2
+    # 4 = 2 data objects + their integrity sidecars.
+    assert await delete_prefix("", local_store) == 4
     assert await list_keys("", local_store) == []
 
 

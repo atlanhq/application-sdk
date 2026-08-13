@@ -1,0 +1,98 @@
+/// Regression test (FND-261): a single-parent `dependsOn` must gate on the
+/// parent reaching SUCCESS, matching the multi-parent `and_conditions` form.
+///
+/// Background: `renderNode()` used to emit a bare `{"node_id": "<parent>"}`
+/// for the common single-parent case (no `tag`), which AE schedules once the
+/// parent reaches ANY terminal state — including FAILED. That let downstream
+/// nodes (e.g. `publish`, `promote-incremental-marker`) run after their
+/// upstream `extract` node failed, producing confusing secondary failures
+/// (jsonpath lookups against outputs the failed extract never wrote) instead
+/// of being skipped like a properly gated sibling branch. Only the 2+-parent
+/// `and_conditions` path added `tag: "success"` per condition; the fix makes
+/// the single-parent shorthand match it.
+amends "pkl:test"
+
+import "pkl:json"
+import "fixtures/default_pipeline.pkl" as defaultPipelineApp
+import "fixtures/native_app_pipeline.pkl" as nativeAppPipelineApp
+import "../examples/fanin/app.pkl" as faninExampleApp
+
+// App.pkl: default (undeclared) pipeline — publish depends solely on extract.
+local appDag = new json.Parser { useMapping = true }.parse(
+  defaultPipelineApp.output.files["app/generated/manifest.json"].text
+)["dag"]
+
+// NativeApp.pkl: same single-parent shape via the legacy native template.
+local nativeAppDag = new json.Parser { useMapping = true }.parse(
+  nativeAppPipelineApp.output.files["manifest.json"].text
+)["dag"]
+
+// Multi-parent fan-in example — regression guard that the 2+-parent path is untouched.
+local faninDag = new json.Parser { useMapping = true }.parse(
+  faninExampleApp.output.files["app/generated/manifest.json"].text
+)["dag"]
+
+facts {
+  // ---- App.pkl -----------------------------------------------------------
+
+  ["App.pkl: default publish node's single-parent depends_on gates on success"] {
+    appDag["publish"]["depends_on"] == new Mapping {
+      ["node_id"] = "extract"
+      ["tag"] = "success"
+    }
+  }
+
+  // ---- NativeApp.pkl -------------------------------------------------------
+
+  ["NativeApp.pkl: default publish node's single-parent depends_on gates on success"] {
+    nativeAppDag["publish"]["depends_on"] == new Mapping {
+      ["node_id"] = "extract"
+      ["tag"] = "success"
+    }
+  }
+
+  // ---- Multi-parent shape is unaffected (regression guard) ---------------
+
+  ["App.pkl: single-parent extraNodes ('left'/'right') gate on extract succeeding"] {
+    faninDag["left"]["depends_on"] == new Mapping {
+      ["node_id"] = "extract"
+      ["tag"] = "success"
+    } && faninDag["right"]["depends_on"] == new Mapping {
+      ["node_id"] = "extract"
+      ["tag"] = "success"
+    }
+  }
+
+  ["App.pkl: multi-parent dependsOn still renders and_conditions with tag=success per entry"] {
+    faninDag["join"]["depends_on"] == new Mapping {
+      ["and_conditions"] = new Listing {
+        new Mapping { ["node_id"] = "left"; ["tag"] = "success" }
+        new Mapping { ["node_id"] = "right"; ["tag"] = "success" }
+      }
+    }
+  }
+
+  // ---- Ordering-only opt-out stays available -----------------------------
+  //
+  // Gating `dependsOn` on success is the right default, but sequencing a node
+  // after a parent *without* the gate must stay expressible. AE's evaluator
+  // (`graph.py`) treats an untagged node condition as ready once the parent's
+  // status is SUCCESS or FAILURE, so `renderDependencyCondition` must keep
+  // omitting `tag` when the author omits it — otherwise the success gate
+  // becomes mandatory and cleanup/audit nodes lose their escape hatch.
+
+  ["App.pkl: untagged dependsOnCondition renders no tag (ordering-only opt-out)"] {
+    faninDag["audit"]["depends_on"] == new Mapping {
+      ["node_id"] = "join"
+    }
+  }
+
+  ["App.pkl: and_conditions preserve per-parent tagging (one gated, one ordering-only)"] {
+    faninDag["mixed-gate"]["depends_on"] == new Mapping {
+      ["and_conditions"] = new Listing {
+        new Mapping { ["node_id"] = "left"; ["tag"] = "success" }
+        new Mapping { ["node_id"] = "right" }
+      }
+    }
+  }
+}

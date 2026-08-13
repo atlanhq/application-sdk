@@ -73,6 +73,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
 import time
 from collections.abc import Callable
@@ -81,6 +82,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, Union
 
 import orjson
+from pydantic import ValidationError
 from temporalio import workflow as _temporal_workflow
 
 from application_sdk.app.base import App
@@ -91,17 +93,28 @@ from application_sdk.common.sql_filters import (
     safe_substitute_placeholders,
 )
 from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
+from application_sdk.contracts.base import OutputStatus
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.credentials.ref import CredentialRef
-from application_sdk.errors import safe_traceback
+from application_sdk.errors import (
+    AppError,
+    FailureDetails,
+    redact_secrets,
+    safe_traceback,
+    sanitize_cause_repr,
+)
+from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
     AppTimeoutError,
     AuthError,
     InternalError,
     SourceUnavailableError,
 )
+from application_sdk.errors.wire import secret_named_evidence_keys
 from application_sdk.execution import build_output_path, get_object_store_prefix
+from application_sdk.execution.heartbeat import run_in_thread
+from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.contracts.sql_metadata import (
@@ -113,6 +126,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     TransformInput,
     TransformOutput,
 )
+from application_sdk.templates.sql_app_errors import SqlProbeTimeoutError
 
 if TYPE_CHECKING:
     from pyatlan_v9.model.assets import Asset
@@ -132,6 +146,350 @@ _MapperFn = Callable[[dict[str, Any], str], Union["Asset", dict[str, Any]]]
 #: through ``client.run_query()``. Caps the in-flight set at
 #: ``_EXTRACT_BATCH_SIZE * row_size`` regardless of total result size.
 _EXTRACT_BATCH_SIZE: int = 10_000
+
+#: Leaves ``_classify_probe_strings`` can emit, keyed by wire code. Used to
+#: rebuild the typed error on the far side of the activity boundary, where only
+#: the ``FailureDetails`` envelope survives. The base ``TIMEOUT`` code is
+#: accepted alongside the probe-specific one so a verdict from any other
+#: producer still rebuilds as a timeout rather than degrading to internal.
+_PROBE_FAILURE_LEAVES: dict[str, type[AppError]] = {
+    AuthError.code: AuthError,
+    SqlProbeTimeoutError.code: SqlProbeTimeoutError,
+    AppTimeoutError.code: AppTimeoutError,
+    SourceUnavailableError.code: SourceUnavailableError,
+    InternalError.code: InternalError,
+}
+
+
+# Field names every ``AppError`` declares on the base dataclass — the evidence
+# redactor skips these (they are handled individually) and redacts only the
+# per-leaf custom fields, mirroring what ``to_failure_details()`` treats as
+# evidence.
+_BASE_ERROR_FIELD_NAMES: frozenset[str] = frozenset(
+    f.name for f in dataclasses.fields(AppError)
+)
+
+#: Recursion bound for the evidence redaction walker. A pathologically deep
+#: hand-built structure must truncate rather than overflow the stack.
+_REDACT_MAX_DEPTH: int = 32
+
+
+@dataclasses.dataclass(kw_only=True)
+class _EnvelopeError(AppError):
+    """Reconstruction leaf for a wire ``code`` this consumer has no leaf for.
+
+    Routing (``category`` / ``audience``) is taken from the envelope, not from
+    class-level constants, so a newer producer's verdict keeps its original
+    routing instead of degrading to ``INTERNAL`` / ``APP_OWNER``.
+
+    ``category`` / ``audience`` are instance values here, but the base
+    ``to_failure_details()`` reads ``audience`` class-level
+    (``type(self).audience``) — which would return the raw ``property`` object
+    on this subclass and fail validation. The serializer is therefore
+    overridden to read both instance-level, so a reconstructed unknown-code
+    error round-trips.
+
+    ``code`` / ``cause_repr`` / ``evidence`` are likewise carried as
+    passthrough instance fields so the producer's diagnostic context and
+    fine-grained code survive re-serialisation — not just the routing.
+    """
+
+    category_override: FailureCategory
+    audience_override: Audience
+    code_override: str | None = None
+    cause_repr: str | None = None
+    evidence: dict[str, Any] = dataclasses.field(default_factory=dict)
+
+    @property
+    def category(self) -> FailureCategory:  # type: ignore[override]
+        return self.category_override
+
+    @property
+    def audience(self) -> Audience:  # type: ignore[override]
+        return self.audience_override
+
+    @property
+    def code(self) -> str:  # type: ignore[override]
+        return self.code_override or super().code
+
+    def to_failure_details(self) -> FailureDetails:
+        # ``category_override`` / ``audience_override`` / ``code_override``
+        # carry routing, not evidence — exclude them alongside the base
+        # fields; the producer's evidence returns as the envelope's evidence.
+        # ``cause_repr`` serialises as its own envelope field, not evidence.
+        evidence: dict[str, Any] = {
+            f.name: getattr(self, f.name)
+            for f in dataclasses.fields(self)
+            if f.name
+            not in _BASE_ERROR_FIELD_NAMES
+            | {
+                "category_override",
+                "audience_override",
+                "code_override",
+                "cause_repr",
+                "evidence",
+            }
+        }
+        evidence.update(self.evidence)
+        return FailureDetails(
+            category=self.category,
+            code=self.code,
+            retryable=self.effective_retryable,
+            audience=self.audience,
+            message=self.message,
+            suggested_action=self.suggested_action,
+            evidence=evidence,
+            app_name=self.app_name,
+            run_id=self.run_id,
+            cause_repr=self.cause_repr,
+        )
+
+
+def _root_cause(exc: BaseException) -> BaseException:
+    """Walk ``__cause__`` to the innermost exception.
+
+    The SDK's SQL client rewraps driver exceptions, so the outermost
+    exception describes the wrapper and the innermost describes what
+    actually happened. Cycle-guarded — a hand-built ``__cause__`` loop
+    would otherwise hang the worker.
+    """
+    seen = {id(exc)}
+    while exc.__cause__ is not None and id(exc.__cause__) not in seen:
+        exc = exc.__cause__
+        seen.add(id(exc))
+    return exc
+
+
+def _redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0) -> Any:
+    """Redact every string reachable inside a value bound for the wire.
+
+    Strings are redacted wherever they appear inside dict / list / tuple / set
+    structures; other non-string values are left untouched. Used for evidence
+    on both wire crossings — serialising a typed error
+    (:func:`SqlApp._redact_typed_error`) and rebuilding one from an envelope
+    (:func:`_error_from_failure_details`).
+    """
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, dict):
+        if seen is None:
+            seen = set()
+        # Guard the two ways a hand-built container can crash the probe — both
+        # escape the ``except ValidationError`` degrade, and a crashed activity
+        # is retried, stacking failed_login_attempts on the source (the cycle
+        # this classifier exists to break):
+        #   * a self-referential container recurses forever — prune a revisit
+        #     rather than render it (the same id-tracking pattern
+        #     ``_root_cause`` uses for the ``__cause__`` walk);
+        #   * a pathologically deep acyclic structure overflows the stack —
+        #     bound depth and truncate past it.
+        # ``seen`` is a mutable add/remove recursion stack shared along the
+        # path, so diamond-shared (acyclic) subcontainers are redacted, not
+        # falsely pruned, and no frozenset is allocated per level.
+        if id(value) in seen:
+            return None
+        if depth >= _REDACT_MAX_DEPTH:
+            return "…"
+        seen.add(id(value))
+        try:
+            return {k: _redact_wire_value(v, seen, depth + 1) for k, v in value.items()}
+        finally:
+            seen.discard(id(value))
+    if isinstance(value, (list, tuple, set, frozenset)):
+        if seen is None:
+            seen = set()
+        if id(value) in seen:
+            return None
+        if depth >= _REDACT_MAX_DEPTH:
+            return "…"
+        seen.add(id(value))
+        try:
+            redacted = [_redact_wire_value(v, seen, depth + 1) for v in value]
+        finally:
+            seen.discard(id(value))
+        if isinstance(value, tuple) and hasattr(type(value), "_fields"):
+            # A NamedTuple takes positional fields, not an iterable —
+            # ``type(value)(redacted)`` crashes a 2+-field one and silently
+            # retypes a 1-field one (its sole field becomes the redacted
+            # *list*). Rebuild with positional expansion so the shape survives.
+            try:
+                return type(value)(*redacted)
+            except Exception:  # noqa: BLE001 — see fallback below
+                return tuple(redacted)
+        try:
+            return type(value)(redacted)
+        except Exception:  # noqa: BLE001 — a connector-authored container
+            # subclass whose constructor raises (any type, not just
+            # TypeError/ValueError) must not crash through the degrade either;
+            # fall back to a plain container of the same shape. Values are
+            # redacted either way, and evidence serialises as JSON arrays
+            # regardless.
+            return tuple(redacted) if isinstance(value, tuple) else redacted
+    return value
+
+
+def _redact_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    """Redact every string reachable inside an evidence mapping's values.
+
+    Keys are left alone — a secret-*named* key is the wire denylist's job
+    (:func:`secret_named_evidence_keys`); this handles secret-*carrying*
+    values under any key.
+    """
+    return {k: _redact_wire_value(v) for k, v in evidence.items()}
+
+
+def _failure_details_degraded(err: AppError) -> FailureDetails | None:
+    """Re-serialise a verdict the wire envelope rejected, keeping its routing.
+
+    Reached when ``to_failure_details()`` raises — in practice a connector leaf
+    carrying a secret-named evidence field (``api_key``, ``db_password``, …),
+    which the ``FailureDetails`` denylist refuses. Falling straight back to
+    ``error_type`` / ``error_message`` would throw away the connector's
+    explicit verdict and re-derive it from a class name no string hint matches,
+    silently inverting e.g. ``AuthError`` / ``USER`` into ``InternalError`` /
+    ``APP_OWNER`` — the exact CNCT-197 misrouting the typed path exists to fix.
+
+    So degrade the *evidence*, never the routing: drop the offending keys, and
+    if the envelope still refuses, drop evidence entirely. Only a verdict that
+    fails both attempts returns ``None`` (the caller then falls back to
+    strings). ``category`` / ``audience`` / ``code`` / ``retryable`` are read
+    instance-level so a reconstruction leaf's property overrides are honoured
+    alongside a normal leaf's class constants.
+
+    Args:
+        err: The classified verdict whose serialisation was rejected.
+
+    Returns:
+        The degraded envelope, or ``None`` if it could not be built at all.
+    """
+    evidence: dict[str, Any] = {
+        f.name: getattr(err, f.name)
+        for f in dataclasses.fields(err)
+        if f.name not in _BASE_ERROR_FIELD_NAMES
+    }
+    cause_repr = sanitize_cause_repr(err.cause) if err.cause else None
+    if isinstance(err, _EnvelopeError):
+        # Mirror its ``to_failure_details()``: routing overrides are not
+        # evidence, ``cause_repr`` is its own wire field, and the producer's
+        # evidence rides in a field rather than as per-leaf dataclass fields.
+        for name in (
+            "category_override",
+            "audience_override",
+            "code_override",
+            "cause_repr",
+            "evidence",
+        ):
+            evidence.pop(name, None)
+        evidence.update(err.evidence)
+        cause_repr = err.cause_repr or cause_repr
+
+    dropped = secret_named_evidence_keys(evidence)
+    attempts: list[dict[str, Any]] = [
+        {k: v for k, v in evidence.items() if k not in dropped}
+    ]
+    if attempts[0]:
+        # Second attempt only differs if the first still carried something.
+        attempts.append({})
+    for attempt in attempts:
+        try:
+            return FailureDetails(
+                category=err.category,
+                code=err.code,
+                retryable=err.effective_retryable,
+                audience=err.audience,
+                message=err.message,
+                suggested_action=err.suggested_action,
+                evidence=_redact_evidence(attempt),
+                app_name=err.app_name,
+                run_id=err.run_id,
+                cause_repr=cause_repr,
+            )
+        except ValidationError as degrade_error:
+            logger.warning(
+                "Degraded prime failure verdict (%s) still would not serialise "
+                "with %d evidence key(s); retrying with less. %s",
+                type(err).__name__,
+                len(attempt),
+                _redacted_validation_reason(degrade_error),
+            )
+    return None
+
+
+def _redacted_validation_reason(exc: ValidationError) -> str:
+    """Return the validator messages only, dropping the rejected input.
+
+    ``str(ValidationError)`` embeds ``input_value=…`` — for a rejected
+    ``evidence`` dict that is the secret-named payload the denylist exists to
+    keep off the wire, so neither the exception nor ``exc_info`` may be logged.
+    The ``msg`` fields name the offending keys and nothing else.
+    """
+    return "; ".join(str(err.get("msg", "")) for err in exc.errors())
+
+
+def _error_from_failure_details(details: FailureDetails) -> AppError:
+    """Rebuild a typed error from its wire envelope.
+
+    ``evidence`` keys are the producing dataclass's field names, so they map
+    straight back onto the leaf's constructor. Keys the leaf does not declare
+    are dropped rather than raising — a newer producer must not break an older
+    consumer replaying its history.
+
+    An unknown ``code`` (a newer producer than this consumer) has no registered
+    leaf. Rebuilding it as ``InternalError`` would force ``INTERNAL`` /
+    ``APP_OWNER`` routing and silently re-route a customer-owned failure to
+    Atlan, so the unknown-code path instead preserves the envelope's own
+    ``category`` / ``audience`` / ``retryable`` on a generic reconstruction
+    leaf.
+
+    Reconstruction is an unredacted trust boundary, so every field copied off
+    the envelope is re-redacted here. The ``FailureDetails`` denylist rejects
+    secret-named evidence *keys* only — never a nested value, and never the
+    ``message`` / ``suggested_action`` / ``cause_repr`` strings — so a
+    pre-redaction-era envelope replayed from Temporal history, a hand-built
+    ``PrimeAuthOutput``, or a future producer that forgets to redact would
+    otherwise put a live DSN back onto the wire when this error re-serialises.
+    """
+    message = redact_secrets(details.message)
+    suggested_action = (
+        redact_secrets(details.suggested_action)
+        if details.suggested_action is not None
+        else None
+    )
+    leaf = _PROBE_FAILURE_LEAVES.get(details.code)
+    if leaf is None:
+        return _EnvelopeError(
+            category_override=details.category,
+            audience_override=details.audience,
+            code_override=details.code,
+            cause_repr=(
+                redact_secrets(details.cause_repr)
+                if details.cause_repr is not None
+                else None
+            ),
+            evidence=_redact_evidence(dict(details.evidence)),
+            message=message,
+            retryable=details.retryable,
+            suggested_action=suggested_action,
+            app_name=details.app_name,
+            run_id=details.run_id,
+        )
+    # ``declared`` must exclude the base ``AppError`` fields: they are passed
+    # as explicit constructor arguments below, so an evidence key that shadows
+    # one (``message``, ``retryable``, …) would splat alongside the explicit
+    # arg and crash reconstruction with ``TypeError: got multiple values``.
+    # Mirrors the serializer, which never serialises base fields as evidence.
+    declared = {f.name for f in dataclasses.fields(leaf)} - _BASE_ERROR_FIELD_NAMES
+    evidence = _redact_evidence(
+        {k: v for k, v in details.evidence.items() if k in declared}
+    )
+    return leaf(
+        message=message,
+        retryable=details.retryable,
+        suggested_action=suggested_action,
+        app_name=details.app_name,
+        run_id=details.run_id,
+        **evidence,
+    )
 
 
 def _orjson_default(obj: Any) -> Any:
@@ -301,12 +659,20 @@ class SqlApp(App):
 
         Failure semantics (return-not-raise + zero Temporal retries):
             If the probe fails (auth rejected, network unreachable,
-            wrong host, etc.) this task catches the exception, populates
-            ``success=False`` + ``error_type`` + ``error_message`` on the
-            returned ``PrimeAuthOutput``, and lets ``run()`` short-circuit
-            the workflow with a typed error (``AuthError``,
-            ``AppTimeoutError`` or ``SourceUnavailableError``
-            depending on ``error_type``).
+            wrong host, etc.) this task catches the exception, classifies
+            it *here* — while the live exception and its ``__cause__``
+            chain are still available — and returns the verdict as
+            ``failure`` (plus ``success=False`` and the root cause's
+            ``error_type`` / ``error_message``) on the returned
+            ``PrimeAuthOutput``. ``run()`` rebuilds that typed error
+            (``AuthError``, ``SqlProbeTimeoutError`` or
+            ``SourceUnavailableError``) and raises it.
+
+            Classification has to happen here, not in ``run()``: only two
+            strings cross the activity boundary, and
+            ``BaseSQLClient.get_results`` rewraps every driver exception as
+            ``SqlPandasResultError`` with one fixed message, so those two
+            strings are identical for every failure mode (CNCT-197).
 
             Why return failure instead of raising and letting Temporal
             retry: the failure mode this task was added to prevent is
@@ -338,12 +704,44 @@ class SqlApp(App):
         # conformance: ignore[E004] exc_info=True would embed the SQLAlchemy connection string (incl. password) in structured logs; safe_traceback with secrets redacted is logged instead
         except Exception as exc:
             duration_ms = (time.perf_counter() - start) * 1000.0
-            # Truncate driver messages so the contract field stays bounded;
-            # secret-sanitisation happens later when run() wraps this into
-            # an AuthError (errors.base.sanitize_cause_repr).
-            error_message = str(exc)
+            # Report the ROOT cause, not whatever wrapper reached this
+            # clause. ``BaseSQLClient.get_results`` rewraps every driver
+            # exception as ``SqlPandasResultError`` with one fixed message, so
+            # the wrapper's class name and message are identical for a DNS
+            # failure, a TLS error and a credential rejection — nothing
+            # downstream can tell them apart. See CNCT-197.
+            root = _root_cause(exc)
+            # Redact here, not downstream: the root driver message can embed a
+            # connection string, and this value lands in the activity result,
+            # the classified error's evidence, and the logs.
+            error_message = redact_secrets(str(root))
             if len(error_message) > 500:
                 error_message = error_message[:500] + "…"
+            classified = self._classify_probe_exception(exc)
+            # Serialising the verdict must never turn a probe failure into a
+            # crashed activity — a crash is retried, and retrying this task is
+            # what stacks failed_login_attempts on the source. A
+            # connector-defined AppError can carry an evidence key the
+            # FailureDetails denylist rejects, so degrade the evidence while
+            # keeping the typed verdict: dropping to the
+            # error_type / error_message path instead would re-derive routing
+            # from a class name no string hint matches, inverting the
+            # connector's explicit verdict (CNCT-197 all over again).
+            try:
+                failure = classified.to_failure_details()
+            except ValidationError as verdict_error:
+                failure = _failure_details_degraded(classified)
+                logger.warning(
+                    "Could not serialise the prime failure verdict (%s) as-is; "
+                    "%s. %s",
+                    type(classified).__name__,
+                    (
+                        "kept the typed verdict with degraded evidence"
+                        if failure is not None
+                        else "falling back to error_type/error_message classification"
+                    ),
+                    _redacted_validation_reason(verdict_error),
+                )
             # We want the traceback frames in worker logs — the long-tail
             # (TLS negotiation, driver bugs, version skew) is only diagnosable
             # from the original frames. But exc_info=True would render the
@@ -351,17 +749,20 @@ class SqlApp(App):
             # connection string incl. password. safe_traceback preserves the
             # frames and strips credentials before logging.
             logger.error(  # conformance: ignore[E005,L004] exc_info would expose SQLAlchemy password in traceback; safe_traceback redacts secrets from the frames
-                "SQL auth cache prime FAILED after %.1fms (%s) — short-circuiting "
+                "SQL auth cache prime FAILED after %.1fms (%s → %s) — short-circuiting "
                 "before parallel extract burst to avoid stacking failed_login_attempts "
                 "on the source.\n%s",
                 duration_ms,
-                type(exc).__name__,
+                type(root).__name__,
+                classified.qualified_code,
                 safe_traceback(exc),
             )
             return PrimeAuthOutput(
+                status=OutputStatus.FAILURE,
                 duration_ms=duration_ms,
                 success=False,
-                error_type=type(exc).__name__,
+                failure=failure,
+                error_type=type(root).__name__,
                 error_message=error_message,
             )
         duration_ms = (time.perf_counter() - start) * 1000.0
@@ -377,19 +778,94 @@ class SqlApp(App):
 
     @staticmethod
     def _classify_prime_failure(prime_result: PrimeAuthOutput) -> Exception:
-        """Map a failed ``PrimeAuthOutput`` to the right typed error.
+        """Rebuild the typed error for a failed ``PrimeAuthOutput``.
+
+        ``prime_sql_auth`` already classified the failure against the live
+        exception, so the work here is reconstruction, not classification —
+        one classifier, one implementation, no chance of the two diverging.
+
+        The string-matching fallback stays for outputs that carry no
+        ``failure``: activity results produced by an older SDK and replayed
+        from Temporal history, and connectors that build a
+        ``PrimeAuthOutput`` by hand.
+        """
+        if prime_result.failure is not None:
+            return _error_from_failure_details(prime_result.failure)
+        # Defence-in-depth: the fallback trusts a hand-built or pre-redaction-era
+        # replayed output whose producer may not have redacted. Re-redact at this
+        # trust boundary so a secret in error_message never reaches the verdict.
+        return SqlApp._classify_probe_strings(
+            prime_result.error_type or "",
+            redact_secrets(prime_result.error_message or ""),
+        )
+
+    @staticmethod
+    def _classify_probe_exception(exc: BaseException) -> AppError:
+        """Classify a live probe exception, cause chain included.
+
+        Classifying here rather than at the activity boundary is the whole
+        point: ``BaseSQLClient.get_results`` rewraps every driver exception as
+        ``SqlPandasResultError``, so by the time only a class name and a
+        message survive there is nothing left to discriminate on (CNCT-197).
+
+        An already-typed root cause keeps its verdict — if a connector took
+        the trouble to raise a typed ``AppError``, that beats anything string
+        matching can infer. But the typed path reaches ``to_failure_details()``
+        without the redaction the plain-driver path gets, so a connection
+        string in the message or a custom evidence field would serialise onto
+        the wire verbatim. Redact before returning, as the sibling string path
+        already does.
+        """
+        root = _root_cause(exc)
+        if isinstance(root, AppError):
+            return SqlApp._redact_typed_error(root)
+        return SqlApp._classify_probe_strings(
+            type(root).__name__, redact_secrets(str(root)), cause=root
+        )
+
+    @staticmethod
+    def _redact_typed_error(err: AppError) -> AppError:
+        """Redact everything on a typed error that serialises onto the wire.
+
+        Only ``cause_repr`` is sanitised by ``to_failure_details()``; the
+        ``message``, ``suggested_action`` and per-leaf evidence fields are
+        not. Redact them in place so the wire envelope (and the Temporal
+        payload) never carries a secret the producer embedded in any field —
+        a base wire field or a nested evidence structure alike.
+        """
+        err.message = redact_secrets(err.message)
+        if err.suggested_action is not None:
+            err.suggested_action = redact_secrets(err.suggested_action)
+        for f in dataclasses.fields(err):
+            if f.name in _BASE_ERROR_FIELD_NAMES:
+                continue
+            setattr(err, f.name, _redact_wire_value(getattr(err, f.name)))
+        return err
+
+    @staticmethod
+    def _classify_probe_strings(
+        error_type: str,
+        error_message: str,
+        cause: BaseException | None = None,
+    ) -> AppError:
+        """Map a probe failure's class name and message to a typed error.
 
         Painting every probe failure as ``AuthError`` would mis-direct
         on-call: a DBA who follows the lockout-specific
         ``suggested_action`` for a DNS misconfiguration wastes time on
         a non-existent account-lockout. We discriminate based on
-        ``error_type`` / ``error_message`` and raise:
+        ``error_type`` / ``error_message`` and return:
 
         - ``AuthError`` for actual credential rejections
           (``Access denied``, MySQL code 1045,
           ``AuthenticationError`` class names).
-        - ``AppTimeoutError`` for probe timeouts (``TimeoutError`` /
-          ``asyncio.TimeoutError`` / message contains ``timed out``).
+        - ``SqlProbeTimeoutError`` for probe timeouts (``TimeoutError`` /
+          ``asyncio.TimeoutError`` / message contains ``timed out``, and the
+          ODBC login-timeout shape ``HYT00`` / ``login timeout`` /
+          ``timeout expired``). It overrides ``AppTimeoutError``'s
+          ``APP_OWNER`` default to USER: the only timeouts that can reach here
+          are the driver's and the socket's, so the clock always ran out
+          waiting for the customer's source.
         - ``SourceUnavailableError`` for network / DNS / TLS /
           connection-refused failures — the customer-owned source is
           presumed reachable but didn't respond cleanly, so the failure
@@ -397,22 +873,33 @@ class SqlApp(App):
         - ``InternalError`` as the last-resort fallback so we never
           return ``None`` and never accidentally swallow an unknown
           driver exception class.
+
+        ``error_message`` must already be secret-redacted — it is copied
+        verbatim into the returned error's evidence fields.
         """
-        error_type = prime_result.error_type or ""
-        error_message = prime_result.error_message or ""
         msg_lower = error_message.lower()
 
-        is_timeout = "timeout" in error_type.lower() or "timed out" in msg_lower
+        # ODBC renders SQLSTATE HYT00 as "Login timeout expired" — no "timeout"
+        # in the class name and no "timed out" in the message, so a generic
+        # substring check misses the production CNCT-197 shape. Match the
+        # driver phrasings explicitly.
+        is_timeout = (
+            "timeout" in error_type.lower()
+            or "timed out" in msg_lower
+            or "login timeout" in msg_lower
+            or "timeout expired" in msg_lower
+            or "hyt00" in msg_lower
+        )
         if is_timeout:
-            return AppTimeoutError(
+            return SqlProbeTimeoutError(
                 message=(
                     "SQL auth-cache prime probe timed out before parallel "
                     f"extract burst ({error_type}): {error_message}"
                 ),
-                operation="prime_sql_auth",
+                cause=cause,
                 suggested_action=(
                     "Check network reachability and source health: the probe "
-                    "did not get an auth response within the 60s task "
+                    "did not get an auth response within the 120s task "
                     "deadline. Verify the source listener is up and the "
                     "worker → source network path is healthy before "
                     "retrying the workflow."
@@ -447,6 +934,7 @@ class SqlApp(App):
                     "lockout counter."
                 ),
                 auth_method="sql_client",
+                cause=cause,
                 failure_reason=error_message,
                 suggested_action=(
                     "Verify the SQL connection credentials. If the source is "
@@ -485,6 +973,7 @@ class SqlApp(App):
                     f"parallel extract burst ({error_type})."
                 ),
                 source_type="sql",
+                cause=cause,
                 network_error=error_message,
                 suggested_action=(
                     "Check DNS resolution, NAT/firewall rules, TLS "
@@ -505,13 +994,14 @@ class SqlApp(App):
                 f"with an unclassified error ({error_type}): {error_message}"
             ),
             component="sql_app.prime_sql_auth",
+            cause=cause,
             classification_pending=True,
             suggested_action=(
                 "Inspect the worker logs (the prime task logs the original "
-                "traceback via exc_info=True). The error type was not "
-                "recognised as auth / timeout / network — please file a "
-                "ticket so the classifier in SqlApp._classify_prime_failure "
-                "can be extended."
+                "traceback, with secrets redacted, via safe_traceback). The "
+                "error type was not recognised as auth / timeout / network — "
+                "please file a ticket so the classifier in "
+                "SqlApp._classify_probe_strings can be extended."
             ),
         )
 
@@ -777,11 +1267,11 @@ class SqlApp(App):
         # and never trip ``FAILED_LOGIN_ATTEMPTS`` lockouts.
         #
         # Failure handling: prime_sql_auth catches probe exceptions and
-        # returns them as ``success=False`` on its output. We classify
-        # ``error_type`` / ``error_message`` and raise the matching typed
-        # error so operators get actionable guidance for the *actual*
-        # failure mode (not a one-size-fits-all auth-lockout message —
-        # which would mislead an on-call investigating a DNS or TLS
+        # returns them as ``success=False`` on its output, carrying the
+        # verdict it classified against the live exception. We rebuild that
+        # typed error and raise it, so operators get actionable guidance for
+        # the *actual* failure mode (not a one-size-fits-all auth-lockout
+        # message — which would mislead an on-call investigating a DNS or TLS
         # misconfiguration). The parallel extract burst still never
         # runs on prime failure regardless of which error type we raise.
         prime_result = await self.prime_sql_auth(task_input)
@@ -1040,14 +1530,49 @@ class SqlApp(App):
         count = 0
         try:
             sql = self._prepare_sql(sql_template.strip(), input)
+
+            def _serialize_batch(batch: list[dict[str, Any]]) -> bytes:
+                return b"".join(
+                    orjson.dumps(
+                        record,
+                        default=_orjson_default,
+                        option=orjson.OPT_APPEND_NEWLINE,
+                    )
+                    for record in batch
+                )
+
             with open(output_file, "wb") as f:
                 async for batch in client.run_query(
                     sql, batch_size=_EXTRACT_BATCH_SIZE
                 ):
-                    for record in batch:
-                        f.write(orjson.dumps(record, default=_orjson_default))
-                        f.write(b"\n")
-                        count += 1
+                    # Only the serialisation is offloaded — 10k orjson.dumps
+                    # calls per batch is the part that outlasts the heartbeat
+                    # interval on wide rows (ADR-0010). The write stays on the
+                    # loop as one buffered call, which costs microseconds.
+                    #
+                    # Deliberately NOT passing `f` into the thread: if the
+                    # activity is cancelled at this await, the `with` block
+                    # unwinds and closes the handle while a worker thread is
+                    # still writing to it — and per ADR-0010 that thread cannot
+                    # be killed, so it would write on into a closed (or
+                    # retry-reopened) file. Serialise off-loop, write on-loop:
+                    # the handle never crosses the thread boundary, so the
+                    # single-handle streaming loop stays cancellation-safe.
+                    payload = await run_in_thread(_serialize_batch, batch)
+                    f.write(payload)
+                    count += len(batch)
+                    # One fetched page serialised and written is one observable
+                    # unit (ADR-0018). Marked here rather than per record: one
+                    # page is already the unit, and a mark per record would be a
+                    # hot-path cost for no extra signal.
+                    #
+                    # This is the whole reason the read side needs no hold — the
+                    # fetch → serialise → write cycle marks on every page, so
+                    # only a *single* cycle slower than max_no_progress_seconds
+                    # needs an explicit hold from the app. (FND-290's auto-hold
+                    # around the `run_in_thread` above already covers the
+                    # serialise leg of that cycle.)
+                    current_progress_tracker().mark_progress("extract.page")
         finally:
             await client.close()
 
@@ -1152,30 +1677,51 @@ class SqlApp(App):
         output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / "entities.json"
 
-        count = 0
-        with open(raw_file, "rb") as r, open(output_file, "wb") as w:
-            for line in r:
-                line = line.strip()
-                if not line:
-                    continue
-                record = orjson.loads(line)
-                asset = mapper_fn(record, connection_qn)
-                # Inject connectionName if the mapper returned a dict
-                if isinstance(asset, dict) and connection_name:
-                    asset.setdefault("attributes", {}).setdefault(
-                        "connectionName", connection_name
-                    )
-                if hasattr(asset, "to_nested_dict"):
-                    payload = asset.to_nested_dict()
-                elif hasattr(asset, "model_dump"):
-                    payload = asset.model_dump()
-                elif isinstance(asset, dict):
-                    payload = asset
-                else:
-                    payload = record
-                w.write(orjson.dumps(payload, default=_orjson_default))
-                w.write(b"\n")
-                count += 1
+        def _map_records() -> int:
+            written = 0
+            with open(raw_file, "rb") as r, open(output_file, "wb") as w:
+                for line in r:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    record = orjson.loads(line)
+                    asset = mapper_fn(record, connection_qn)
+                    # Inject connectionName if the mapper returned a dict
+                    if isinstance(asset, dict) and connection_name:
+                        asset.setdefault("attributes", {}).setdefault(
+                            "connectionName", connection_name
+                        )
+                    if hasattr(asset, "to_nested_dict"):
+                        payload = asset.to_nested_dict()
+                    elif hasattr(asset, "model_dump"):
+                        payload = asset.model_dump()
+                    elif isinstance(asset, dict):
+                        payload = asset
+                    else:
+                        payload = record
+                    w.write(orjson.dumps(payload, default=_orjson_default))
+                    w.write(b"\n")
+                    written += 1
+            return written
+
+        # Offloaded as one hop: this maps every raw record for the entity —
+        # JSON parse, the connector's mapper_fn (which builds pyatlan asset
+        # objects), serialise, write — with no await anywhere in the loop.
+        # A large table's records.json therefore holds the event loop for the
+        # whole transform, which stops the auto-heartbeat and gets a healthy
+        # activity killed on heartbeat_timeout. Every SQL connector inherits
+        # this method, so the fix applies fleet-wide (ADR-0010).
+        #
+        # No framework progress hook inside `_map_records`, deliberately
+        # (ADR-0018). The loop is line-by-line with no batch boundary to mark
+        # at, and the never-per-record rule forbids the only boundary it has.
+        # It does not need one: the whole map is a single `run_in_thread` hop,
+        # which FND-290 wraps in an unbounded auto-hold — so the stall watchdog
+        # is vouched for across the entire transform by mechanism 2 rather than
+        # mechanism 1. That leaves the 24h backstop as its only bound, which is
+        # the ADR's accepted residual for opaque offloaded work and is exactly
+        # what warn mode is meant to surface with an observed duration.
+        count = await run_in_thread(_map_records)
 
         logger.info("Transformed %s: %d records", entity_type, count)
         # Emit a FileReference to entities.json so the activity

@@ -95,6 +95,34 @@ inputs:
     required: false
     default: ""
     description: Required when wait-mode is 'callback'. SHA on this repo to attach the check run to (the PR head or merge-queue SHA).
+  retry-once:
+    required: false
+    default: "false"
+    description: |
+      Poll mode only. 'false' (default) preserves the historical behaviour: one
+      dispatch, and its conclusion is the job's. 'true' re-dispatches once if
+      the first run concludes 'failure' or 'cancelled'.
+
+      Deliberately a boolean rather than a `max-attempts: N` count. Only one
+      retry is implemented, and a count-shaped input invites `max-attempts: 3`
+      — which would silently behave like 2.
+
+      Why this exists: this action's poll-mode leg is a cross-repo dispatch into
+      a k8s e2e that installs its whole toolchain from github.com at job time.
+      Its failures are overwhelmingly transient infrastructure (release-asset
+      503s, refused HTTP/2 streams), not regressions — and because it gates the
+      merge queue, one such blip ejects the PR and costs a full re-queue plus
+      another ~10 minutes. A single retry is a far better trade there than
+      either dropping the check or moving it off the queue.
+
+      NOT retried: 'timeout' (the run already burned the full 2h budget, so a
+      retry buys another 2h for the same answer) and 'unreadable' (the poller
+      could not see the run at all — retrying dispatches a second run while the
+      first may still be going).
+
+      A retry is never silent: it emits a ::warning:: and a step-summary line
+      naming both attempts, so a genuinely flaky connector still shows up in the
+      log rather than being smoothed away.
 
 runs:
   using: "composite"
@@ -172,7 +200,7 @@ runs:
       id: return_dispatch_callback
       if: inputs.wait-mode == 'callback'
       continue-on-error: true
-      uses: codex-/return-dispatch@2e404d40b641ba1deb44be941660bb34828e4f6d # v4.0.0
+      uses: codex-/return-dispatch@85e564d60eaec3cc4aca885373d510cfe4bd5b19 # v4.0.1
       with:
         token: "${{ inputs.github-token }}"
         ref: ${{ inputs.target-branch }}
@@ -200,7 +228,7 @@ runs:
     # ── poll mode (legacy): dispatch, busy-poll, fetch artifact, comment ──
     - name: Trigger E2E Integrations Tests
       if: inputs.wait-mode != 'callback'
-      uses: codex-/return-dispatch@2e404d40b641ba1deb44be941660bb34828e4f6d # v4.0.0
+      uses: codex-/return-dispatch@85e564d60eaec3cc4aca885373d510cfe4bd5b19 # v4.0.1
       id: return_dispatch
       with:
         token: "${{ inputs.github-token }}"
@@ -222,73 +250,93 @@ runs:
         echo ${{steps.return_dispatch.outputs.run_id}}
         echo ${{steps.return_dispatch.outputs.run_url}}
 
+    # The poll loop lives in poll_dispatched_run.py, not inlined here: it is a
+    # while/if block, which docs/standards/ci.md keeps out of workflow YAML
+    # precisely because it cannot be regression-tested there. The extraction
+    # also fixed a latent flake — the old inlined version read the status with
+    # `jq -r '.status'` and no error handling, so one transient API blip in a
+    # two-hour poll produced `null`, fell out of the loop, and failed the job
+    # while the dispatched run was still going. See the module docstring.
     - name: Check Workflow Status
       if: inputs.wait-mode != 'callback'
       id: status
       shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
       run: |
-        repo_owner="atlanhq"
-        repo_name="${{ inputs.repo-name }}"
-        run_id="${{steps.return_dispatch.outputs.run_id}}"
+        python3 .github/scripts/poll_dispatched_run.py \
+          --repo "atlanhq/${{ inputs.repo-name }}" \
+          --run-id "${{ steps.return_dispatch.outputs.run_id }}"
 
-        echo "Checking status of workflow run $run_id in $repo_name"
+    # ── retry (poll mode, retry-once) ────────────────────────────────────────
+    # Only 'failure' and 'cancelled' are retried; see the retry-once input for
+    # why 'timeout' and 'unreadable' deliberately are not.
+    - name: Re-key the retry dispatch
+      id: retry_inputs
+      if: |
+        inputs.wait-mode != 'callback' && inputs.retry-once == 'true' &&
+        (steps.status.outputs.conclusion == 'failure' || steps.status.outputs.conclusion == 'cancelled')
+      shell: bash
+      env:
+        WORKFLOW_INPUTS: ${{ inputs.workflow-inputs }}
+        FIRST_CONCLUSION: ${{ steps.status.outputs.conclusion }}
+      run: |
+        set -euo pipefail
+        echo "::warning::dispatched run to ${{ inputs.repo-name }} concluded ${FIRST_CONCLUSION}; retrying once."
+        # A retry MUST NOT reuse attempt 1's distinct_id — the receiver locates
+        # runs by it and keys a cancel-in-progress group on it, so reuse can
+        # re-report the first (concluded) run. The rule lives in the script that
+        # already owns distinct_id semantics.
+        payload="$(python3 .github/scripts/validate_dispatch_inputs.py \
+          --workflow-inputs "$WORKFLOW_INPUTS" --attempt 2)"
+        echo "workflow-inputs=${payload}" >> "$GITHUB_OUTPUT"
 
-        status="in_progress"
-        conclusion=""
-        start_time=$(date +%s)
-        # Match the dispatched workflow's own timeout-minutes ceiling.
-        # mysql-app's e2e-full-reusable.yaml sets timeout-minutes: 120
-        # (the full-DAG harness needs ~20-40 min wall-time; the SDR
-        # testcontainer suite stays well under this). 600s was the
-        # earlier value tuned only for SDR — full-DAG was timing out
-        # the SDK-side poll loop while the dispatched run was still
-        # legitimately running.
-        timeout=7200
-        # Heartbeat cadence: 60s matches the connector-side AE poll
-        # cadence emitted by AEWorkflowClient.poll_native_status so
-        # the SDK-side log doesn't out-spam the dispatched run's own
-        # progress glyphs. Drop to 30s only when nearing the timeout.
-        poll_interval=60
-        glyph_for_status() {
-          case "$1" in
-            queued|waiting|pending) echo "🟡" ;;
-            in_progress)            echo "🔄" ;;
-            completed)              echo "✅" ;;
-            *)                      echo "❔" ;;
-          esac
-        }
-        while [[ "$status" == "in_progress" || "$status" == "queued" || "$status" == "pending" || "$status" == "waiting" ]]; do
-          sleep $poll_interval
-          response=$(curl -s -H "Authorization: Bearer ${{ inputs.github-token }}" \
-            https://api.github.com/repos/$repo_owner/$repo_name/actions/runs/$run_id)
-          status=$(echo $response | jq -r '.status')
-          conclusion=$(echo $response | jq -r '.conclusion')
+    - name: Trigger E2E Integrations Tests (retry)
+      # Keyed on the re-keyed payload existing, not on the re-key step's
+      # outcome: a skipped step yields an empty output, so this is one
+      # condition instead of two that could drift apart.
+      if: steps.retry_inputs.outputs.workflow-inputs != ''
+      uses: codex-/return-dispatch@2e404d40b641ba1deb44be941660bb34828e4f6d # v4.0.0
+      id: return_dispatch_retry
+      with:
+        token: "${{ inputs.github-token }}"
+        ref: ${{ inputs.target-branch }}
+        repo: ${{ inputs.repo-name }}
+        owner: "atlanhq"
+        workflow: "${{ inputs.workflow }}"
+        workflow_inputs: ${{ steps.retry_inputs.outputs.workflow-inputs }}
 
-          current_time=$(date +%s)
-          elapsed_time=$((current_time - start_time))
+    - name: Check Workflow Status (retry)
+      if: steps.return_dispatch_retry.outputs.run_id != ''
+      id: status_retry
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        python3 .github/scripts/poll_dispatched_run.py \
+          --repo "atlanhq/${{ inputs.repo-name }}" \
+          --run-id "${{ steps.return_dispatch_retry.outputs.run_id }}"
 
-          # Mirror the connector-side poll-line shape:
-          #   🔄 dispatched run [120s] in_progress
-          # so the SDK PR's log scans the same way as the mysql-app
-          # PR's worker log (test-tube emoji + elapsed + status).
-          printf '%s dispatched run [%3ds] %s\n' \
-            "$(glyph_for_status "$status")" "$elapsed_time" "$status"
-
-          if [[ $elapsed_time -ge $timeout ]]; then
-            echo "⏰ Workflow run timeout reached after $timeout seconds"
-            echo "status=timeout" >> "$GITHUB_OUTPUT"
-            echo "conclusion=timeout" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-        done
-
-        echo "status=$status" >> "$GITHUB_OUTPUT"
-        echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
-        if [[ "$conclusion" != "success" ]]; then
-          echo "Workflow run $run_id in $repo_name failed with conclusion $conclusion"
-        else
-          echo "Workflow run $run_id in $repo_name succeeded"
-        fi
+    # Single source of truth for "which attempt counts" — every downstream step
+    # (artifact fetch, PR comment, fail-the-job) reads this rather than picking
+    # between the two attempts itself, so they cannot disagree about which run
+    # the comment describes and which conclusion gates the job.
+    - name: Resolve final dispatched-run outcome
+      id: attempt
+      if: always() && inputs.wait-mode != 'callback'
+      shell: bash
+      env:
+        FIRST_RUN_ID: ${{ steps.return_dispatch.outputs.run_id }}
+        FIRST_RUN_URL: ${{ steps.return_dispatch.outputs.run_url }}
+        FIRST_STATUS: ${{ steps.status.outputs.status }}
+        FIRST_CONCLUSION: ${{ steps.status.outputs.conclusion }}
+        RETRY_RUN_ID: ${{ steps.return_dispatch_retry.outputs.run_id }}
+        RETRY_RUN_URL: ${{ steps.return_dispatch_retry.outputs.run_url }}
+        RETRY_STATUS: ${{ steps.status_retry.outputs.status }}
+        RETRY_CONCLUSION: ${{ steps.status_retry.outputs.conclusion }}
+      run: |
+        set -euo pipefail
+        python3 .github/scripts/resolve_dispatch_attempt.py
 
     # Pull the dispatched run's rendered PR-comment body out of the
     # uploaded results artifact so the SDK-side sticky shows the same
@@ -302,12 +350,12 @@ runs:
     # (dispatch failed, run cancelled before tests, etc.).
     - name: Fetch dispatched-run report body
       id: dispatched_summary
-      if: always() && inputs.wait-mode != 'callback' && steps.return_dispatch.outputs.run_id != ''
+      if: always() && inputs.wait-mode != 'callback' && steps.attempt.outputs.run_id != ''
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         REPO_NAME: ${{ inputs.repo-name }}
-        RUN_ID: ${{ steps.return_dispatch.outputs.run_id }}
+        RUN_ID: ${{ steps.attempt.outputs.run_id }}
       run: |
         set -uo pipefail
         artifact_id=$(gh api \
@@ -347,10 +395,10 @@ runs:
       env:
         REPO_NAME: ${{ inputs.repo-name }}
         WORKFLOW: ${{ inputs.workflow }}
-        RUN_ID: ${{ steps.return_dispatch.outputs.run_id }}
-        RUN_URL: ${{ steps.return_dispatch.outputs.run_url }}
-        DISPATCHED_CONCLUSION: ${{ steps.status.outputs.conclusion }}
-        DISPATCHED_STATUS: ${{ steps.status.outputs.status }}
+        RUN_ID: ${{ steps.attempt.outputs.run_id }}
+        RUN_URL: ${{ steps.attempt.outputs.run_url }}
+        DISPATCHED_CONCLUSION: ${{ steps.attempt.outputs.conclusion }}
+        DISPATCHED_STATUS: ${{ steps.attempt.outputs.status }}
         RENDERED_BODY_PATH: ${{ steps.dispatched_summary.outputs.body_path }}
       with:
         github-token: ${{ github.token }}
@@ -453,7 +501,10 @@ runs:
       if: always() && inputs.wait-mode != 'callback'
       shell: bash
       env:
-        DISPATCHED_CONCLUSION: ${{ steps.status.outputs.conclusion }}
+        # The RESOLVED conclusion — the retry's when one ran, the first
+        # attempt's otherwise. Reading steps.status directly here would fail the
+        # job on attempt 1's result even after a passing retry.
+        DISPATCHED_CONCLUSION: ${{ steps.attempt.outputs.conclusion }}
       run: |
         if [[ "$DISPATCHED_CONCLUSION" != "success" ]]; then
           echo "Dispatched run conclusion: $DISPATCHED_CONCLUSION"

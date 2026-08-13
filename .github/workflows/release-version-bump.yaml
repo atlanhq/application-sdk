@@ -41,6 +41,11 @@ on:
         required: false
         type: string
         default: "main"
+      first_release_version:
+        description: "Minimum version for an app's *first* release (a repo with no v* tag yet). Apps are scaffolded at 0.1.0, so without this their first ever release would be 0.2.0; a first release is a 1.0.0 event. Applied as a floor, not an assignment — an app already at or past it keeps bumping normally. Set to an empty string to disable and use the plain conventional-commit bump."
+        required: false
+        type: string
+        default: "1.0.0"
       private_git_auth:
         description: "Set true if the app has a private-org (atlanhq) git dependency that `uv lock` must resolve during the version bump. When true, atlanhq GitHub remotes are rewritten to token auth (via ORG_PAT_GITHUB) before `uv lock` runs, so resolution of the private git source succeeds. Default false — apps with only PyPI deps are unaffected. Mirrors the `private_git_auth` input in build-and-publish-app.yaml."
         required: false
@@ -105,7 +110,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
         with:
           version: "0.12.3"
 
@@ -148,7 +153,13 @@ jobs:
         run: |
           python3 -m venv /tmp/bump-venv
           /tmp/bump-venv/bin/pip install semver packaging -q
-          /tmp/bump-venv/bin/python .sdk-scripts/.github/scripts/release.py "${{ inputs.target_branch }}" "${{ steps.versions.outputs.current }}"
+          # --first-release-version is always passed; an empty value disables the
+          # floor in the script, so the caller opts out via the input rather than
+          # via a shell conditional here (docs/standards/ci.md).
+          /tmp/bump-venv/bin/python .sdk-scripts/.github/scripts/release.py \
+            "${{ inputs.target_branch }}" \
+            "${{ steps.versions.outputs.current }}" \
+            --first-release-version "${{ inputs.first_release_version }}"
           uv lock
           NEW=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
           echo "new=${NEW}" >> "$GITHUB_OUTPUT"

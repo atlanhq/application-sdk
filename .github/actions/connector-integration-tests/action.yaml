@@ -49,7 +49,7 @@ description: |
   steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - uses: ./.github/actions/mssql-native-deps   # connector-local action
-    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.27.1
+    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.27.2
       with:
         app-name: mssql
   ```
@@ -450,8 +450,16 @@ runs:
     # dedicated `scorecard` aggregation job in tests-reusable.yaml, which
     # combines this job's integration evidence with the unit job's. This job
     # just uploads its junit + coverage.json (below) for that job to consume.
+    # `upload-artifact` classifies the artifact service's finalize 403 as
+    # non-retryable and fails on the first occurrence, even though the bytes
+    # already landed and the next attempt normally succeeds. That failed this
+    # composite, which failed the caller's Tests check, which ejected its
+    # merge-queue entry. Retry once, and never fail on it: the scorecard job
+    # downloads this with continue-on-error already.
     - name: Upload test results
+      id: upload-integration-results
       if: always()
+      continue-on-error: true
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         name: integration-test-results
@@ -462,6 +470,21 @@ runs:
           results/
           coverage.json
         retention-days: 14
+
+    - name: Upload test results (retry)
+      if: steps.upload-integration-results.outcome == 'failure'
+      continue-on-error: true
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: integration-test-results
+        # coverage.json is written at the repo root by --cov-report=json; include
+        # it alongside results/ so the scorecard aggregation job can read the
+        # integration tier's coverage.
+        path: |
+          results/
+          coverage.json
+        retention-days: 14
+        overwrite: true
 
     - name: Cleanup
       if: always()

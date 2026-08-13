@@ -11,6 +11,7 @@ import threading
 import warnings
 from abc import ABC
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -41,6 +42,7 @@ from application_sdk.app._ep_registration import (
 from application_sdk.app.base_errors import (
     AbstractRunNotImplementedError,
     ObjectStoreNotConfiguredError,
+    UpstreamObjectStoreNotConfiguredError,
 )
 from application_sdk.app.context import (
     AppContext,
@@ -933,7 +935,14 @@ class App(ABC):
     ) -> Any:
         """Run a blocking function in a thread pool.
 
-        Only available in @task methods.
+        Only available in @task methods. The offload is automatically wrapped in
+        an unbounded progress hold (ADR-0018), so a legitimately long blocking
+        call is never read as a stall. To bound it instead, wrap the offload in
+        :meth:`holding_progress` with the allowance you would give this one
+        call::
+
+            async with self.holding_progress("full table scan", timeout=7200):
+                rows = await self.run_in_thread(cursor.execute, sql)
 
         Args:
             func: Blocking function to run.
@@ -951,6 +960,39 @@ class App(ABC):
                 "run_in_thread() can only be called inside @task methods."
             )
         return await self._task_context.run_in_thread(func, *args, **kwargs)
+
+    def holding_progress(
+        self, label: str, *, timeout: float | None
+    ) -> AbstractAsyncContextManager[None]:
+        """Vouch for one opaque operation for as long as you would let it run.
+
+        Pauses the stall watchdog (ADR-0018) for a call the SDK cannot see into,
+        and records the completed call as progress on exit::
+
+            async with self.holding_progress("snapshot metadata query", timeout=1800):
+                rows = await long_single_query(...)
+
+        Only available in @task methods — outside one there is no attempt to
+        vouch for, so a hold there would claim coverage it cannot provide.
+
+        Args:
+            label: The call site being vouched for. Must identify a *site*,
+                never a query, key, credential or customer value.
+            timeout: How long you would let this one operation run before you
+                would rather it failed — not a prediction of its duration.
+                Keyword-only and required; ``None`` declares an unbounded hold.
+
+        Returns:
+            An async context manager. Use it with ``async with``.
+
+        Raises:
+            AppContextError: If called outside a @task method.
+        """
+        if self._task_context is None:
+            raise AppContextError(
+                "holding_progress() can only be called inside @task methods."
+            )
+        return self._task_context.holding_progress(label, timeout=timeout)
 
     # =========================================================================
     # State accessors
@@ -1163,6 +1205,7 @@ class App(ABC):
         from application_sdk.constants import (  # noqa: PLC0415 — import here to avoid module-level circular import (same pattern as normalize_key)
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED,
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED,
+            ENABLE_ATLAN_UPLOAD,
         )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: app.base is imported by execution which imports storage
             normalize_key,
@@ -1171,14 +1214,21 @@ class App(ABC):
             upload as _upload,
         )
 
+        deployment = self.context.storage
+        upstream = self.context.upstream_storage
+
+        # BLDX-1619: a deployment that set ENABLE_ATLAN_UPLOAD expects artifacts
+        # in Atlan's bucket. Falling back to the deployment store here returns a
+        # positive file count for a write publish will never see, so fail before
+        # doing any work rather than after.
+        if ENABLE_ATLAN_UPLOAD and upstream is None:
+            raise UpstreamObjectStoreNotConfiguredError()
+
         # BLDX-1555 defense-in-depth: validate transformed assets against the
         # pyatlan_v9 backbone before the handoff. Warn-only, best-effort, and
         # run in an isolated child process (CNCT-85) so a native decode fault
         # kills only the child and never blocks or crashes the event loop.
         await _warn_on_invalid_transformed_assets(input.local_path, self._app_name)
-
-        deployment = self.context.storage
-        upstream = self.context.upstream_storage
 
         # Build the ordered list of (store, label, fatal) upload targets.
         # See ADR-0014 §"BLDX-1464 dual-write" for the full routing decision.

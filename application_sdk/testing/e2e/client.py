@@ -552,7 +552,7 @@ class AEWorkflowClient:
                 # `attempt` is the actual count made — 1 when retries are
                 # disabled (submit), up to _REQUEST_MAX_ATTEMPTS otherwise — so
                 # a submit timeout doesn't misreport 4 tries when it made 1.
-                f"{method} {path} failed after {attempt} attempt(s): " f"{last_exc!r}"
+                f"{method} {path} failed after {attempt} attempt(s): {last_exc!r}"
             ),
             operation=path,
         )
@@ -841,8 +841,10 @@ class AEWorkflowClient:
             # the credential name before every retry so the re-sent submit can't
             # collide. ``retry_network_errors=False`` keeps submit safe on an
             # ambiguous timeout (AE may already have accepted it).
-            retryable=lambda s, b: (s >= 500 and not _is_already_active_run(s, b))
-            or _is_credential_name_conflict(s, b),
+            retryable=lambda s, b: (
+                (s >= 500 and not _is_already_active_run(s, b))
+                or _is_credential_name_conflict(s, b)
+            ),
             op_name="submit_workflow",
             mutate_before_retry=_rotate_submit_credential_name,
             retry_network_errors=False,
@@ -1167,6 +1169,7 @@ class AEWorkflowClient:
             async with self._build_async_atlan_client() as client:
                 request = (
                     FluentSearch()
+                    .where(FluentSearch.active_assets())
                     .where(Asset.QUALIFIED_NAME.eq(qualified_name))
                     .where(Asset.TYPE_NAME.eq("Connection"))
                 ).to_request()
@@ -1279,6 +1282,13 @@ class AEWorkflowClient:
         the default 5 types, concurrent should land under 700ms once
         the TLS handshake is paid (one-time per harness run).
 
+        Counts ACTIVE assets only: the raw index-search API returns
+        archived (``__state=DELETED``) assets too, which silently
+        inflates counts after any re-crawl that archives — the
+        evolution scenario's "dropped table must leave the active
+        count at baseline" assertion is meaningless without this
+        filter (seen on a prior connector e2e run).
+
         Returns ``{typeName: count}`` with zeros for types that
         produced no matches. Used by the harness to assert extract +
         publish actually landed assets in Atlas, not just the
@@ -1316,6 +1326,7 @@ class AEWorkflowClient:
             async with self._build_async_atlan_client() as client:
                 request = (
                     FluentSearch()
+                    .where(FluentSearch.active_assets())
                     .where(Asset.QUALIFIED_NAME.startswith(prefix))
                     .to_request()
                 )
@@ -1379,6 +1390,7 @@ class AEWorkflowClient:
             try:
                 builder = (
                     FluentSearch()
+                    .where(FluentSearch.active_assets())
                     .where(Asset.QUALIFIED_NAME.startswith(prefix))
                     .where(Asset.TYPE_NAME.eq(type_name))
                 )
@@ -1451,6 +1463,7 @@ class AEWorkflowClient:
             try:
                 request = (
                     FluentSearch()
+                    .where(FluentSearch.active_assets())
                     .where(Asset.QUALIFIED_NAME.startswith(prefix))
                     .where(Asset.CONNECTION_QUALIFIED_NAME.eq(connection_qn))
                     .where(Asset.TYPE_NAME.eq(type_name))

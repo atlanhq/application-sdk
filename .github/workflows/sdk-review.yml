@@ -1133,6 +1133,23 @@ jobs:
             });
             console.log(`Stamped starter comment ${commentId}: status=${finalStatus} cost=${finalCost} duration=${durationTxt} err=${errCode || '(none)'}`);
 
+      # Minted HERE rather than at the top of the job on purpose: App
+      # installation tokens expire after an hour, and this job blocks on the
+      # sandbox for up to 2h. A token minted before the review would be dead by
+      # the time we need it.
+      - name: Mint fleet App token
+        # Carries its own rate-limit quota, independent of the `atlan-ci` user
+        # quota ORG_PAT_GITHUB draws on. Needs `issues: write` as well as
+        # `pull_requests: write` — labels are an Issues-scope resource.
+        id: app-token
+        if: success() && steps.parse.outputs.pr_number != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       # The mothership sandbox cannot approve PRs in a way that satisfies
       # the `require_code_owner_review` rule on `main`:
       # `mothership-ai[bot]` is a GitHub App, and Apps cannot be listed in
@@ -1149,190 +1166,39 @@ jobs:
       # require a fresh human approval. Identifying "the bot's approval"
       # uses a body-text signature so we never touch other atlan-ci
       # reviews.
+      #
+      # This is the SLOW path: it runs once the sandbox's SSE stream closes,
+      # 30–60s after `sdk-review-approve-on-verdict.yml` has usually already
+      # stamped. Both paths share
+      # .github/scripts/sdk_review_approve.py and both check for an existing
+      # bot-signature approval, so whichever gets there first wins and the
+      # other no-ops.
       - name: Approve PR as atlan-ci (counts as code-owner)
         if: success() && steps.parse.outputs.pr_number != ''
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
-          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          # Everything except the APPROVE call. Keeping the reads, label writes
+          # and dismissals off the `atlan-ci` PAT is what stops the one call
+          # that genuinely needs that identity from being starved of quota.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # The APPROVE call only.
+          APPROVER_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
           REPO: ${{ github.repository }}
-          DISPATCH_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
-        run: |
-          set -euo pipefail
-
-          # Staleness guard: a review can take 10–30 min. If a new commit
-          # landed mid-review, branch protection has already dismissed the
-          # atlan-ci approval (dismiss_stale_reviews_on_push) and
-          # sdk-review-reset-on-push.yml has cleared the labels — but if
-          # we proceed here we'd happily re-stamp labels and re-post an
-          # approval based on a verdict that described the old HEAD.
-          # Bail before we touch anything visible.
-          CURRENT_HEAD=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha')
-          if [ "$CURRENT_HEAD" != "$DISPATCH_HEAD_SHA" ]; then
-            echo "::warning::PR #${PR_NUMBER} HEAD moved from ${DISPATCH_HEAD_SHA} to ${CURRENT_HEAD} during the review. Skipping approval + labeling — a fresh @sdk-review on the new HEAD will produce a verdict that matches the actual diff."
-            exit 0
-          fi
-
-          # Re-read the just-posted summary comment to extract the verdict.
-          # The mothership orchestration (.mothership/pr-review/ORCHESTRATION.md
-          # §3e) posts a comment with the `<!-- SDK_REVIEW -->` HTML
-          # marker and a `### Verdict: <state>` line. If a prior summary
-          # exists from a re-trigger on the same PR head, the most recent
-          # comment wins.
-          #
-          # Marker tolerance: open PRs that were branched off main BEFORE
-          # the `test-sdk-review` → `sdk-review` promotion still carry the
-          # old orchestration on their head, which emits the legacy
-          # `<!-- TEST_SDK_REVIEW -->` marker. Accept either marker so the
-          # formal-approval path keeps working until those PRs rebase.
-          #
-          # The jq pattern wraps `.[] | select(...)` in `[ ... ] | last` so
-          # we get the full body of the last matching comment as a single
-          # string. A naive `.[] | select(...) | .body | tail -1` truncates
-          # the multiline body to its last line, which silently breaks the
-          # verdict grep below.
-          #
-          # --slurp collapses all pages into one array so `last` picks the
-          # genuinely most-recent matching comment. Without it, `--paginate`
-          # runs the jq filter once PER PAGE, so on a PR whose comments span
-          # multiple API pages this would emit one body per matching page
-          # (concatenated) and the verdict grep below would read the verdict
-          # from the EARLIEST matching page rather than the latest — acting
-          # on a stale verdict. `gh api` rejects `--slurp` with `--jq`, so the
-          # slurped array (array-of-pages) is piped into a standalone `jq`,
-          # which flattens with `.[][]` (same idiom as the two guards above).
-          SUMMARY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            --paginate --slurp 2>/dev/null \
-            | jq -r '[.[][] | select((.body | contains("<!-- SDK_REVIEW -->")) or (.body | contains("<!-- TEST_SDK_REVIEW -->")))] | last | .body // ""')
-
-          if [ -z "$SUMMARY" ]; then
-            echo "::warning::No SDK_REVIEW summary comment found on PR #${PR_NUMBER} — skipping approval (the sandbox may have errored before posting)"
-            exit 0
-          fi
-
-          # S1 guard — REVIEWED_HEAD: belt-and-suspenders over the
-          # DISPATCH_HEAD_SHA vs CURRENT_HEAD check above (line ~1169).
-          # That check verifies the PR HEAD didn't move while the sandbox
-          # ran. This check verifies the summary comment explicitly claims
-          # to have reviewed DISPATCH_HEAD_SHA — catching the (rare but
-          # possible) case where the sandbox checked out a different commit
-          # (e.g., the REVIEWED_HEAD placeholder was not substituted, or the
-          # sandbox started from a stale snapshot). If REVIEWED_HEAD is
-          # absent the comment pre-dates the marker; treat it as unverifiable
-          # rather than approving blind, matching the fast-path behaviour.
-          REVIEWED_HEAD=$(printf '%s' "$SUMMARY" | grep -oP '<!--\s*REVIEWED_HEAD:\s*\K[0-9a-f]+' | head -1 || true)
-          if [ -z "$REVIEWED_HEAD" ]; then
-            echo "::warning::PR #${PR_NUMBER}: verdict comment has no REVIEWED_HEAD marker — cannot confirm which sha was reviewed; skipping all stamps."
-            exit 0
-          fi
-          if [ "$REVIEWED_HEAD" != "$DISPATCH_HEAD_SHA" ]; then
-            echo "::warning::PR #${PR_NUMBER}: verdict was computed for ${REVIEWED_HEAD} but this run was dispatched for ${DISPATCH_HEAD_SHA} — skipping all stamps."
-            exit 0
-          fi
-
-          # Extract the verdict. Prefer the structured marker
-          # `<!-- VERDICT: READY_TO_MERGE -->` (deterministic, formatting-
-          # invariant). Fall back to the `### Verdict:` grep for legacy
-          # comments from orchestration versions that pre-date the
-          # structured marker.
-          #
-          # `|| true` is load-bearing here: under `set -euo pipefail`,
-          # grep returning 1 on a no-match (the structured marker isn't
-          # present yet in the verdict comment we're parsing) would kill
-          # the script BEFORE the prose-grep fallback below got a chance
-          # to run. Tolerate the no-match so we fall through cleanly.
-          VERDICT=$(printf '%s' "$SUMMARY" | grep -oP '<!--\s*VERDICT:\s*\K[A-Z_]+' | head -1 || true)
-          if [ -z "$VERDICT" ]; then
-            RAW=$(printf '%s' "$SUMMARY" | grep -oiP '###\s*Verdict:\s*\K[A-Z][A-Z _]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
-            VERDICT=$(printf '%s' "$RAW" | tr -s ' ' '_' | sed 's/_*$//')
-          fi
-          echo "Detected verdict: '${VERDICT}'"
-
-          # Apply the canonical sdk-review-* labels from the GHA layer.
-          # The orchestration on a PR's head may still emit legacy
-          # `test-sdk-review-*` labels — strip those here and reapply the
-          # promoted names so labels are a single-source-of-truth read
-          # from the verdict, not from whichever orchestration the PR
-          # head happened to have.
-          for stale in "test-sdk-review-approved" "test-sdk-review-needs-human" "test-sdk-review-needs-rebase"; do
-            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "$stale" 2>/dev/null || true
-          done
-
-          case "$VERDICT" in
-            "READY_TO_MERGE")
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-approved" 2>/dev/null || true
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-needs-human" 2>/dev/null || true
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-needs-rebase" 2>/dev/null || true
-              # Idempotency guards: sdk-review-approve-on-verdict.yml posts
-              # the approval within ~5s of the verdict comment. This slow
-              # path runs 30–60s later when the sandbox finishes cleanup.
-              # By that time the fast path's approval may already be in
-              # place, OR the downgrade-on-ci-failure / dismiss-on-human
-              # workflow may have stripped the label and dismissed it. We
-              # must not re-approve in either case.
-              #
-              # The label is the canonical "this verdict still stands"
-              # signal: fast path stamps it, downgrade/dismiss strip it,
-              # reset-on-push strips it. If it's gone we treat the
-              # READY_TO_MERGE comment as stale.
-              LABEL_PRESENT=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" \
-                --jq '[.[] | select(.name == "sdk-review-approved")] | length')
-              # --slurp collapses all pages into one array so the jq filter emits
-              # a SINGLE count. `gh api` rejects `--slurp` with `--jq`, so the
-              # slurped array is piped into a standalone `jq` (same idiom as the
-              # verdict-posted guard above). Without slurp, `--paginate` runs the
-              # jq per page and prints one number per page — on a PR with >30
-              # reviews that multi-line output breaks `[ ... != "0" ]`.
-              EXISTING_APPROVAL=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" --paginate --slurp 2>/dev/null \
-                | jq '[.[][] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | length' 2>/dev/null || echo "0")
-              if [ "$LABEL_PRESENT" = "0" ]; then
-                echo "sdk-review-approved label not present on PR #${PR_NUMBER} (downgrade or reset-on-push likely ran) — skipping approval."
-              elif [ "${EXISTING_APPROVAL:-0}" != "0" ]; then
-                echo "atlan-ci already approved PR #${PR_NUMBER} (likely from the fast path) — skipping."
-              else
-                # NOTE: the leading line of the body is a STABLE SIGNATURE used
-                # by the dismiss-on-human workflow to identify approvals posted
-                # by this flow. Keep this in sync with
-                # sdk-review-approve-on-verdict.yml.
-                #
-                # S2: pin to commit_id=DISPATCH_HEAD_SHA (which we verified ==
-                # REVIEWED_HEAD above). If a push landed between our checks and
-                # this POST, GitHub attaches the approval to the OLD (reviewed)
-                # commit rather than the new HEAD. Full protection against that
-                # window additionally requires `dismiss_stale_reviews_on_push`
-                # enabled on the main branch protection rule — that setting could
-                # not be verified from a non-admin token; confirm it is ON before
-                # relying on this guard.
-                # `gh pr review --approve` does not expose commit_id; use raw API.
-                APPROVE_BODY=$(printf '%s\n' \
-                  "**SDK reviewer's verdict:** READY TO MERGE." \
-                  "" \
-                  "Full review summary is in the comment posted on this PR." \
-                  "")
-                gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
-                  -X POST \
-                  -f commit_id="$DISPATCH_HEAD_SHA" \
-                  -f event=APPROVE \
-                  -f body="$APPROVE_BODY"
-                echo "Approved PR #${PR_NUMBER} as atlan-ci (slow path fallback, commit_id=${DISPATCH_HEAD_SHA})."
-              fi
-              ;;
-            "NEEDS_HUMAN")
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-needs-human" 2>/dev/null || true
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-approved" 2>/dev/null || true
-              echo "Verdict NEEDS_HUMAN — labeled, no approval posted."
-              ;;
-            "NEEDS_REBASE")
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "sdk-review-needs-rebase" 2>/dev/null || true
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-approved" 2>/dev/null || true
-              echo "Verdict NEEDS_REBASE — labeled, no approval posted."
-              ;;
-            *)
-              # NEEDS_FIXES, BLOCKED, or unknown — clear approval/human labels.
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-approved" 2>/dev/null || true
-              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "sdk-review-needs-human" 2>/dev/null || true
-              echo "Verdict '${VERDICT}' is not READY TO MERGE — not posting an approval."
-              ;;
-          esac
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          # Empty: read the newest summary comment off the PR rather than an
+          # event payload. The sandbox posted it minutes ago.
+          COMMENT_BODY: ""
+          # Staleness guard: bail unless the PR's live head is still the sha this
+          # review was dispatched for.
+          EXPECTED_HEAD: ${{ steps.pr.outputs.head_sha }}
+          # The `Set sdk-review status to failure` step below owns this
+          # workflow's status writes; the fast path owns the success case.
+          WRITE_STATUS: "false"
+          # Solo-approval guard: refuse to approve if `sdk-review-approved` was
+          # already gone when this step started — dismiss-on-human,
+          # downgrade-on-ci-failure and reset-on-push all clear it, and any of
+          # them running means this verdict no longer stands.
+          REQUIRE_APPROVED_LABEL: "true"
+        run: python3 .github/scripts/sdk_review_approve.py
 
       - name: Set sdk-review status to failure (only on workflow failure)
         if: failure() && steps.pr.outputs.head_sha != ''

@@ -57,6 +57,7 @@ AppError  (base — application_sdk.errors)
 │   ├── SourceUnavailableError   SOURCE_UNAVAILABLE        retryable=True   audience=USER
 │   ├── ResourceExhaustedError RESOURCE_EXHAUSTED         retryable=True   audience=PLATFORM
 │   ├── AppTimeoutError        TIMEOUT                    retryable=True   audience=APP_OWNER
+│   │   └── TaskStalledError   TIMEOUT (TIMEOUT_TASK_STALLED)  retryable=True   audience=APP_OWNER
 │   ├── CancelledError         CANCELLED                  retryable=False  audience=APP_OWNER
 │   ├── DataIntegrityError     DATA_INTEGRITY             retryable=False  audience=APP_OWNER
 │   ├── InternalError          INTERNAL                   retryable=False  audience=APP_OWNER
@@ -99,6 +100,18 @@ config fetches tomorrow) just by catching this one marker, with no new per-domai
 `SecretStoreUnavailableError` above is the first concrete example: it multiply-inherits
 `SecretStoreError` (so `except SecretStoreError:` still catches it) and `ColdStartRaceError`
 (so the retry helper does too).
+
+### TaskStalledError — raised by the SDK, never by an app
+
+`TaskStalledError(AppTimeoutError)` is the failure the stall watchdog produces when an activity
+attempt keeps heartbeating but nothing observable advances for longer than the task's
+no-progress budget (ADR-0018). It carries `stalled_for_seconds` and `last_progress_label`, so
+the failure names *where* the attempt went quiet rather than only that it did, and it is
+**retryable**: the dominant cause is a transient source-side hang that self-heals on a fresh
+attempt. A subtype rather than a sixteenth leaf, so `except AppTimeoutError:` still catches it
+while the distinct `TIMEOUT_TASK_STALLED` code and the `TaskStalledError` Temporal wire type keep stall
+kills countable apart from `StartToClose` and heartbeat timeouts. App code should not raise it —
+raise the leaf that describes what the source actually did.
 
 ### Raise by failure shape
 
@@ -179,6 +192,27 @@ fd = e.to_failure_details()
 Tenant identity is intentionally absent from `FailureDetails`. Per-tenant attribution is
 the consumer's responsibility (e.g., the Automation Engine attaches tenant from its own
 session at ingest time).
+
+#### Evidence keys may not be secret-named
+
+`FailureDetails` refuses evidence keys that advertise a secret -- exact names
+(`password`, `token`, `secret`, `api_key`, `private_key`, `authorization`, `auth_header`,
+`cookie`) and compound suffixes (`*_password`, `*_token`, `*_secret`, so `client_secret`
+and `db_password` are rejected while `object_key` and `cache_key` pass). Construction
+raises `ValidationError`, so a leaf that declares such a dataclass field cannot serialise
+at all:
+
+```python
+from application_sdk.errors.wire import secret_named_evidence_keys
+
+# Ask before you build — the rejection names no keys you can act on.
+bad = secret_named_evidence_keys({"host": "db.internal", "api_key": "…"})
+# frozenset({'api_key'})
+```
+
+The denylist is a name check, not a value check: it cannot see a credential sitting in an
+innocently-named key, or nested inside a dict or list value. Redact values yourself with
+`redact_secrets` before attaching them as evidence.
 
 ### Legacy error-code namespaces (backward-compat only)
 

@@ -241,3 +241,159 @@ class TestGetCommitsSinceLastTag:
     ) -> None:
         monkeypatch.chdir(git_repo)
         assert isinstance(release.get_commits_since_last_tag(), list)
+
+
+# ---------------------------------------------------------------------------
+# Untagged repositories — the no-tag branch of _resolve_rev_range
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def multi_root_untagged_repo(tmp_path: Path) -> Path:
+    """Return a temp git repo with no release tag and *two* root commits.
+
+    Reproduces a repository whose history was grafted from two independent
+    starting points and that has never been tagged. That combination made the
+    previous `git rev-list --max-parents=0 HEAD` fallback emit one SHA per root,
+    producing a multi-line value that split the subsequent `git log` command in
+    two and aborted the bump with exit 127.
+    """
+
+    def git(*args: str) -> None:
+        subprocess.check_call(
+            ["git", *args],
+            cwd=tmp_path,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    git("init")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    git("config", "commit.gpgsign", "false")
+
+    # First root
+    (tmp_path / "a.txt").write_text("a\n")
+    git("add", ".")
+    git("commit", "-m", "feat: first history")
+    main_branch = (
+        subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=tmp_path
+        )
+        .decode()
+        .strip()
+    )
+
+    # Second, entirely unrelated root
+    git("checkout", "--orphan", "second-root")
+    git("rm", "-rf", ".")
+    (tmp_path / "b.txt").write_text("b\n")
+    git("add", ".")
+    git("commit", "-m", "fix: second history")
+
+    # Graft them together — HEAD now reaches two root commits
+    git("checkout", main_branch)
+    git("merge", "--allow-unrelated-histories", "--no-edit", "second-root")
+
+    return tmp_path
+
+
+class TestUntaggedRepo:
+    def test_fixture_really_has_two_roots(self, multi_root_untagged_repo: Path) -> None:
+        """Guard the fixture: without two roots the regression below is vacuous."""
+        roots = subprocess.check_output(
+            ["git", "rev-list", "--max-parents=0", "HEAD"], cwd=multi_root_untagged_repo
+        )
+        assert len(roots.decode().strip().split("\n")) == 2
+
+    def test_rev_range_is_head_when_untagged(
+        self, multi_root_untagged_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No release tag must resolve to a bare HEAD walk, never a `a..HEAD` range."""
+        monkeypatch.chdir(multi_root_untagged_repo)
+        assert release._resolve_rev_range() == ["HEAD"]
+
+    def test_multi_root_untagged_repo_does_not_crash(
+        self, multi_root_untagged_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: this raised CalledProcessError (exit 127) before the fix."""
+        monkeypatch.chdir(multi_root_untagged_repo)
+        commits = release.get_commits_since_last_tag()
+        # Both roots must be represented — a `head -1` style fix would drop one.
+        assert "feat: first history" in commits
+        assert "fix: second history" in commits
+
+    def test_tagged_repo_still_uses_a_range(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The tagged path is unchanged: walk from the last release tag."""
+        monkeypatch.chdir(git_repo)
+        assert release._resolve_rev_range() == ["v1.0.0..HEAD"]
+
+    def test_last_release_tag_is_none_when_untagged(
+        self, multi_root_untagged_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(multi_root_untagged_repo)
+        assert release.last_release_tag() is None
+
+    def test_last_release_tag_returns_the_tag_when_tagged(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(git_repo)
+        assert release.last_release_tag() == "v1.0.0"
+
+
+# ---------------------------------------------------------------------------
+# apply_first_release_floor — apps' first release is a 1.0.0 event
+# ---------------------------------------------------------------------------
+
+
+class TestApplyFirstReleaseFloor:
+    def test_first_release_below_floor_is_raised(self) -> None:
+        """An app scaffolded at 0.1.0 releases as 1.0.0, not 0.2.0."""
+        assert (
+            release.apply_first_release_floor(
+                "0.2.0", floor="1.0.0", has_release_tag=False
+            )
+            == "1.0.0"
+        )
+
+    def test_first_release_already_at_floor_bumps_normally(self) -> None:
+        """A floor, not an assignment.
+
+        13 of the 36 currently-untagged apps sit at exactly 1.0.0. Forcing the
+        floor there would emit a bump PR that does not change the version.
+        """
+        assert (
+            release.apply_first_release_floor(
+                "1.0.1", floor="1.0.0", has_release_tag=False
+            )
+            == "1.0.1"
+        )
+
+    def test_first_release_past_floor_bumps_normally(self) -> None:
+        assert (
+            release.apply_first_release_floor(
+                "2.3.1", floor="1.0.0", has_release_tag=False
+            )
+            == "2.3.1"
+        )
+
+    def test_already_released_repo_is_untouched(self) -> None:
+        """Only the *first* release gets the floor — later ones bump normally."""
+        assert (
+            release.apply_first_release_floor(
+                "0.2.0", floor="1.0.0", has_release_tag=True
+            )
+            == "0.2.0"
+        )
+
+    @pytest.mark.parametrize("floor", ["", None])
+    def test_empty_floor_disables_the_behaviour(self, floor: str | None) -> None:
+        """The SDK's own release passes no floor and must be unaffected."""
+        assert (
+            release.apply_first_release_floor(
+                "0.2.0", floor=floor, has_release_tag=False
+            )
+            == "0.2.0"
+        )

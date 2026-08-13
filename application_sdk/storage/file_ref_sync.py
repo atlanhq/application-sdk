@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from application_sdk.contracts.types import FileReference, Lazy
+from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -242,6 +243,12 @@ async def _replace_refs(
     ) -> tuple[str, FileReference]:
         async with sem:
             result = await factory()
+        # One ref persisted or materialised is one unit of work (ADR-0018).
+        # The per-file and per-part marks inside transfer/ops already keep a
+        # single large ref visible; this coarser mark exists for the label,
+        # which tells an operator the interceptor was moving typed I/O rather
+        # than the app being mid-transfer on one file.
+        current_progress_tracker().mark_progress(f"file_ref.{mode}")
         return key, result
 
     pairs = await asyncio.gather(*[_run(k, f) for k, f in _factories.items()])

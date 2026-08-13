@@ -56,12 +56,11 @@ from application_sdk.storage.errors import (
     StorageNotFoundError,
 )
 from application_sdk.storage.ops import (
-    _azure_container_not_found_message,
-    _compute_part_size,
-    _is_azure_container_not_found,
+    BoundStore,
     _list_items,
     _safe_join_under,
     download_file_chunked,
+    upload_file,
 )
 
 # Lazy import: direct get_logger() at module load would create a circular
@@ -245,8 +244,16 @@ class CloudStore:
         # ones via bounded parallel range GETs (each with its own timeout /
         # retry budget) so a slow-egress GB-class file doesn't die on one long
         # request. No hash — external stores skip the integrity sidecar
-        # protocol. (BLDX-1513)
-        await download_file_chunked(key, local_path, store=self._store, normalize=False)
+        # protocol, so sidecar_present=False saves a guaranteed-miss probe per
+        # file; the byte-count check against the declared size still runs.
+        # (BLDX-1513 / FND-306)
+        await download_file_chunked(
+            key,
+            local_path,
+            store=self._store,
+            normalize=False,
+            sidecar_present=False,
+        )
         _log().info("Downloaded key=%s local_path=%s", key, str(local_path))
         return [local_path]
 
@@ -295,6 +302,9 @@ class CloudStore:
                     normalize=False,
                     file_size=size,
                     etag=etag,
+                    # External bucket: the SDK never wrote sidecars here, so
+                    # skip the per-file probe that could only ever miss.
+                    sidecar_present=False,
                 )
                 return local_path
 
@@ -373,35 +383,57 @@ class CloudStore:
     ) -> int:
         """Upload a local file to the cloud store by streaming without buffering.
 
+        Routes through the shared :func:`~application_sdk.storage.ops.upload_file`
+        primitive so the FND-306 write-side validations hold on external stores
+        exactly as they do on the tenant store: a file truncated under the
+        reader raises ``StorageIntegrityError`` rather than landing a partial
+        artifact, and a post-write HEAD confirms the store recorded the bytes
+        that were sent (a silently-dropped object becomes a ``StorageError``).
+        The key is used exactly as supplied (no normalisation) and no
+        ``.sha256`` sidecar is written — external customer buckets do not
+        participate in the SDK sidecar protocol (mirrors the download path's
+        ``sidecar_present=False``).
+
+        Transport policy is the primitive's, not this class's: that includes the
+        deployment part-size override (``ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES``,
+        DISTR-899), which now reaches external buckets too. The default is
+        unchanged at 8 MiB, so only a deployment that has explicitly tuned the
+        part size sees a difference — and a deployment that had to tune it for
+        its egress path almost certainly wants it applied uniformly.
+
         Args:
             local_path: Path to the local file.
             key: Destination object key.
 
         Returns:
-            Number of bytes uploaded.
+            Size of the local file when the upload began. The truncation guard
+            makes that the exact byte count in every case but one: a file being
+            appended to concurrently streams to EOF, so *more* bytes may reach
+            the store than are reported here. ``upload_file`` owns the true
+            count and does not surface it; no caller needs the exact figure, so
+            this does not spend a second HEAD to recover it.
         """
         path = Path(local_path)
         try:
             size = path.stat().st_size
-            chunk = _compute_part_size(size, 8 * 1024 * 1024)
-            async with obs.open_writer_async(
-                self._store, key, buffer_size=chunk, attributes=self._put_attributes
-            ) as writer:
-                with path.open("rb") as fh:
-                    while True:
-                        buf = fh.read(chunk)
-                        if not buf:
-                            break
-                        await writer.write(buf)
-        except StorageError:
-            raise
-        # conformance: ignore[E004] re-raise only; checks azure container-not-found then wraps in StorageConfigError/StorageError
-        except Exception as exc:
-            if _is_azure_container_not_found(exc):
-                raise StorageConfigError(
-                    _azure_container_not_found_message(key)
-                ) from exc
+        # conformance: ignore[E004] re-raise only; a missing/unreadable source file is wrapped in StorageError, matching the pre-FND-306 contract
+        except OSError as exc:
             raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
+        # BoundStore carries the credential-level put attributes (e.g. an S3
+        # storageClass) into the primitive; compute_hash=False skips hashing
+        # and implies write_sidecar=False.
+        #
+        # The per-part ``mark_progress`` hook FND-288 added to this method's own
+        # write loop is not lost with the loop: ``upload_file`` marks
+        # ``storage.upload_part`` per part, so the stall watchdog still sees a
+        # long external upload making progress. Only the label changed.
+        await upload_file(
+            key,
+            path,
+            BoundStore(self._store, self._put_attributes),
+            normalize=False,
+            compute_hash=False,
+        )
         _log().info("Uploaded key=%s bytes=%d", key, size)
         return size
 
@@ -432,8 +464,10 @@ class CloudStore:
         """Upload all files in a local directory to the cloud store.
 
         Note: Unlike ``batch.upload_prefix``, this uploads to an *external*
-        store without SHA-256 hashing or key normalization — those features
-        are specific to the tenant's internal storage layer.
+        store without SHA-256 sidecars or key normalization — those features
+        are specific to the tenant's internal storage layer.  The byte-level
+        validations (truncation, post-write readback) still apply, via
+        :meth:`upload`.
 
         Args:
             local_dir: Local directory to upload from.
@@ -444,15 +478,34 @@ class CloudStore:
             List of uploaded object keys.
         """
         local = Path(local_dir)
-        files: list[tuple[str, Path]] = []
-        for root, _dirs, filenames in os.walk(local, followlinks=False):
-            for fname in filenames:
-                file_path = Path(root) / fname
-                if file_path.is_symlink():
-                    continue
-                rel = file_path.relative_to(local)
-                key = f"{prefix}/{rel}" if prefix else str(rel)
-                files.append((key, file_path))
+
+        def _collect_files() -> list[tuple[str, Path]]:
+            collected: list[tuple[str, Path]] = []
+            for root, _dirs, filenames in os.walk(local, followlinks=False):
+                for fname in filenames:
+                    file_path = Path(root) / fname
+                    if file_path.is_symlink():
+                        continue
+                    rel = file_path.relative_to(local)
+                    key = f"{prefix}/{rel}" if prefix else str(rel)
+                    collected.append((key, file_path))
+            return collected
+
+        # Offloaded: the walk is one stat per entry over the whole directory,
+        # thousands of syscalls with no await between them on a large upload.
+        # Inline it holds the event loop — and the enclosing activity's
+        # auto-heartbeat — for the entire traversal (ADR-0010).
+        # Imported lazily, and it has to be: this module is in
+        # `storage/__init__`'s eager chain, so importing
+        # `application_sdk.execution.heartbeat` at module scope runs
+        # `execution/__init__` -> Temporal activity utils ->
+        # `application_sdk.app` -> back to a still-initialising
+        # `contracts.base`, raising ImportError. The cycle is via
+        # `execution/__init__`, not a direct storage -> execution edge.
+        # See `storage/batch.py` for the full chain.
+        from application_sdk.execution.heartbeat import run_in_thread  # noqa: PLC0415
+
+        files: list[tuple[str, Path]] = await run_in_thread(_collect_files)
 
         sem = asyncio.Semaphore(max_concurrency)
 

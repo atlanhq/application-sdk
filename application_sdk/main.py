@@ -391,12 +391,13 @@ def _parse_all_component_yamls(components_dir: Path) -> dict[str, dict[str, str]
     Returns a mapping of component name → dict of allowlisted metadata values.
     Non-allowlisted keys (secrets, connection strings, credentials) are never included.
     Silently returns an empty dict on any parse error.
+
+    Values sourced from a ``secretKeyRef`` are redacted to ``"(from secret)"``:
+    they resolve to secret-store contents on the secure k8s path, so emitting
+    them would leak to startup INFO logs even when the key itself is on the
+    allowlist (``endpoint``, ``accountName``).
     """
     import yaml  # noqa: PLC0415 — cold path: yaml only when reading dapr binding YAML
-
-    from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
-        _parse_dapr_metadata,
-    )
 
     result: dict[str, dict[str, str]] = {}
     try:
@@ -409,8 +410,15 @@ def _parse_all_component_yamls(components_dir: Path) -> dict[str, dict[str, str]
             if not name:
                 continue
             spec = doc.get("spec", {})
-            all_meta = _parse_dapr_metadata(spec.get("metadata", []))
-            safe = {k: v for k, v in all_meta.items() if k in _SAFE_METADATA_KEYS}
+            safe: dict[str, str] = {}
+            for item in spec.get("metadata", []) or []:
+                key = item.get("name")
+                if not key or key not in _SAFE_METADATA_KEYS:
+                    continue
+                if "secretKeyRef" in item:
+                    safe[key] = "(from secret)"
+                elif "value" in item:
+                    safe[key] = str(item["value"])
             result[name] = safe
     except Exception:
         logger.warning("Could not parse component YAMLs for diagnostics", exc_info=True)
@@ -559,6 +567,65 @@ async def _log_dapr_components(
     return set(registered)
 
 
+async def _fetch_binding_secrets(
+    dapr_client: AsyncDaprClient,
+    name: str,
+    *,
+    components_dir: Path | str,
+    required: bool = False,
+) -> dict[str, dict[str, str]]:
+    """Fetch the secrets a Dapr component's ``secretKeyRef`` entries point at.
+
+    The obstore resolver is synchronous and public, so it cannot call the Dapr
+    secret API itself.  This runs after ``wait_for_dapr_sidecar()``, where the
+    sidecar is known ready, and hands the result to the resolver as ``secrets=``.
+
+    Returns ``{}`` when the component declares no ``auth.secretStore`` — that
+    is the Docker Compose / ``secretstores.local.env`` shape, which the
+    resolver already covers through environment variables.
+
+    When ``required`` is true (e.g. the upstream store under
+    ``ENABLE_ATLAN_UPLOAD=true``), a secret that cannot be read is re-raised
+    with ``from exc`` so a secret-store outage surfaces as the real failure
+    instead of being misreported downstream as ``StorageBindingBrokenError``.
+    When ``required`` is false the failure is logged and skipped: the resolver
+    reports the resulting broken fields by name, which says far more than a
+    lookup failure would.
+    """
+    from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: startup wiring only
+        read_binding_secret_refs,
+    )
+
+    declared = read_binding_secret_refs(name, components_dir=components_dir)
+    if declared.secret_store is None:
+        return {}
+
+    secrets: dict[str, dict[str, str]] = {}
+    for secret_name in declared.secret_names:
+        try:
+            secrets[secret_name] = await dapr_client.get_secret(
+                declared.secret_store, secret_name
+            )
+        # conformance: ignore[E004] one unreadable secret must not mask the rest; the resolver names the broken fields
+        except Exception as exc:
+            if required:
+                raise RuntimeError(
+                    f"Could not read secret '{secret_name}' from secret store "
+                    f"'{declared.secret_store}' for Dapr component '{name}' — "
+                    f"the binding is required, so the secret-store failure is "
+                    f"fatal"
+                ) from exc
+            logger.warning(
+                "Could not read secret '%s' from secret store '%s' for Dapr "
+                "component '%s' — the binding may resolve as broken",
+                secret_name,
+                declared.secret_store,
+                name,
+                exc_info=True,
+            )
+    return secrets
+
+
 async def _create_infrastructure(
     credential_stores: Mapping[str, SecretStore] | None = None,
 ) -> InfrastructureContext:
@@ -617,18 +684,44 @@ async def _create_infrastructure(
         registered_components = await _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
 
+        # BLDX-1619: on the k8s SDR secure path the upstream component resolves
+        # its credentials through auth.secretStore, and the matching env vars are
+        # deliberately absent. Fetch those secrets here — the sidecar is up — so
+        # the resolver sees the same values the sidecar does.  Publish them to
+        # the binding-layer cache so later sync consumers (notably
+        # ``DaprCredentialVault.__init__``) reach the same upstream-vs-deployment
+        # verdict instead of re-deriving a different one env-only.
+        from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: startup wiring only
+            set_fetched_binding_secrets,
+        )
+
+        upstream_secrets = await _fetch_binding_secrets(
+            dapr_client,
+            UPSTREAM_OBJECT_STORE_NAME,
+            components_dir=components_dir,
+            required=ENABLE_ATLAN_UPLOAD,
+        )
+        set_fetched_binding_secrets(UPSTREAM_OBJECT_STORE_NAME, upstream_secrets)
         upstream_storage, upstream_put_attrs = (
             _create_store_from_binding_optional_with_put_attrs(
                 UPSTREAM_OBJECT_STORE_NAME,
                 components_dir=components_dir,
                 required=ENABLE_ATLAN_UPLOAD,
+                secrets=upstream_secrets,
             )
         )
 
+        deployment_secrets = await _fetch_binding_secrets(
+            dapr_client,
+            DEPLOYMENT_OBJECT_STORE_NAME,
+            components_dir=components_dir,
+        )
+        set_fetched_binding_secrets(DEPLOYMENT_OBJECT_STORE_NAME, deployment_secrets)
         deployment_store, deployment_put_attrs = (
             create_store_from_binding_with_put_attrs(
                 DEPLOYMENT_OBJECT_STORE_NAME,
                 components_dir=components_dir,
+                secrets=deployment_secrets,
             )
         )
         return InfrastructureContext(

@@ -7,26 +7,36 @@ Two modes of heartbeating are supported:
 2. Manual (developer-controlled): developer calls heartbeat() with progress info
    for resume-on-retry support.
 
-This module is also the SDK's offload seam, with three sanctioned primitives:
+This module is also the SDK's offload seam, with four sanctioned primitives:
 ``run_in_thread`` offloads blocking calls so they don't starve the heartbeat
-loop (ADR-0010); ``run_fault_isolated`` runs work in a child process so a native
-fault can't kill the worker; and ``run_best_effort`` is the policy layer over it
-for non-essential work — it isolates *and* swallows failures so best-effort work
-can never break the caller.
+loop (ADR-0010); ``submit_in_thread`` is its detached variant for cleanup that
+cancellation must not be able to skip; ``run_fault_isolated`` runs work in a
+child process so a native fault can't kill the worker; and ``run_best_effort``
+is the policy layer over it for non-essential work — it isolates *and* swallows
+failures so best-effort work can never break the caller.
 """
 
 import asyncio
 import concurrent.futures
+import contextlib
 import contextvars
 import functools
+import math
 import multiprocessing
 import os
+import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Protocol, TypeVar
 
+from application_sdk.execution.progress import (
+    ProgressTracker,
+    ProgressWatchdogMode,
+    current_progress_tracker,
+    declared_hold_active,
+)
 from application_sdk.observability import (
     resource_sampler as _resource_sampler,  # module alias kept so tests can patch _resource_sampler.sample()
 )
@@ -39,6 +49,14 @@ _MEMORY_WARN_THRESHOLD = 0.80
 _MEMORY_WARN_HYSTERESIS = (
     0.05  # re-arm only once ratio drops below threshold - hysteresis
 )
+
+#: Meter for signals this module owns. Deliberately not the Temporal meter: the
+#: stall watchdog has no Temporal dependency, so it also reports from local runs.
+_METER_NAME = "application_sdk.execution"
+
+#: Lazily created singletons — one instrument per process, built on first use so
+#: nothing is bound before ``run_main()`` configures the ``MeterProvider``.
+_INSTRUMENTS: dict[str, Any] = {}
 
 # Dedicated executor for blocking operations dispatched via run_in_thread().
 #
@@ -133,11 +151,153 @@ class NoopHeartbeatController:
         return self._details
 
 
+def _no_progress_gap_histogram() -> Any:
+    """Gap-duration histogram, created on first stall observation.
+
+    A histogram rather than a counter because the fleet-wide *distribution* of
+    no-progress gaps is what sizes ``max_no_progress_seconds`` before anything
+    enforces (ADR-0018 → *Decisions taken*).
+    """
+    if "no_progress_gap" not in _INSTRUMENTS:
+        from opentelemetry import (  # noqa: PLC0415 — cold path: only reached on a stall observation
+            metrics as _otel_metrics,
+        )
+
+        _INSTRUMENTS["no_progress_gap"] = _otel_metrics.get_meter(
+            _METER_NAME
+        ).create_histogram(
+            "task.no_progress_gap",
+            unit="s",
+            description=(
+                "Seconds a task attempt went without an observable progress "
+                "signal, recorded once per gap that exceeded "
+                "max_no_progress_seconds. Partitioned by task, the last "
+                "progress label seen, and the watchdog mode — so warn-mode "
+                "observations and enforced kills aggregate separately."
+            ),
+        )
+    return _INSTRUMENTS["no_progress_gap"]
+
+
+def _record_no_progress_gap(
+    task_name: str, stalled_for: float, last_label: str, mode: ProgressWatchdogMode
+) -> None:
+    """Record one no-progress gap. Never raises.
+
+    The metric is emitted in *both* warn and enforce mode: in warn mode it is
+    the whole point (nothing else reports the gap), and in enforce mode it is
+    what makes the kill rate measurable.
+    """
+    try:
+        _no_progress_gap_histogram().record(
+            stalled_for,
+            {
+                "task.name": task_name,
+                # A progress label identifies a call site, never a value — see
+                # ProgressTracker.enter_hold — so this stays bounded.
+                "progress.last_label": last_label,
+                "watchdog.mode": mode.value,
+            },
+        )
+    # Best-effort observability: a metric-backend problem must never fail the
+    # activity the watchdog is only observing.
+    except Exception:
+        logger.warning(
+            "Failed to record the no-progress gap metric for task '%s' (%.0fs gap); "
+            "the stall is still logged but will be missing from the fleet-wide "
+            "gap distribution",
+            task_name,
+            stalled_for,
+            exc_info=True,
+        )
+
+
+def _check_for_stall(
+    progress: ProgressTracker,
+    budget_seconds: float,
+    mode: ProgressWatchdogMode,
+    task_name: str,
+    on_stall: Callable[[float, str], None] | None,
+) -> bool:
+    """Report a no-progress gap if one is open. Returns True to stop the loop.
+
+    Called once per heartbeat tick, so detection latency is ``budget_seconds``
+    plus at most one tick.
+
+    Args:
+        progress: The attempt's tracker. ``stalled_for()`` already accounts for
+            holds, so a vouched-for operation reads as no gap at all.
+        budget_seconds: ``max_no_progress_seconds`` for this task.
+        mode: ``WARN`` reports; ``ENFORCE`` reports and fails the activity.
+        task_name: Task name, for the log and the metric.
+        on_stall: Injected by the activity layer to fail the attempt — the
+            watchdog itself stays free of activity/Temporal semantics. Only
+            called in ``ENFORCE``.
+
+    Returns:
+        ``True`` when the caller must return immediately: the watchdog *is*
+        ``heartbeat_task``, and the activity's ``finally`` sets ``stop_event``
+        and awaits it with a 1s bound, so it must not keep looping after
+        deciding to fail the attempt.
+    """
+    stalled = progress.stalled_for()
+    if stalled < budget_seconds:
+        return False
+
+    last_label = progress.last_label
+    _record_no_progress_gap(task_name, stalled, last_label, mode)
+
+    if mode is not ProgressWatchdogMode.ENFORCE or on_stall is None:
+        # INFO, never WARNING: under a fleet-wide default this is an expected
+        # observation, and emitting it at WARNING would manufacture exactly the
+        # alert noise ADR-0018 exists to reduce. Dashboards read the metric.
+        logger.info(
+            "Task '%s' made no observable progress for %.0fs (budget %.0fs); last "
+            "signal was '%s' — not failing (warn mode)",
+            task_name,
+            stalled,
+            budget_seconds,
+            last_label or "<none>",
+        )
+        # Re-arm so each gap is reported once rather than every tick. The empty
+        # label deliberately leaves last_label alone: the signal just reported
+        # is still the most useful thing to name in the next report.
+        progress.mark_progress()
+        return False
+
+    logger.warning(
+        "Task '%s' made no observable progress for %.0fs (budget %.0fs); last "
+        "signal was '%s' — failing the activity",
+        task_name,
+        stalled,
+        budget_seconds,
+        last_label or "<none>",
+    )
+    try:
+        on_stall(stalled, last_label)
+    # The watchdog must not keep beating for an attempt it has already decided
+    # to fail; the failure is handled by stopping the loop below.
+    except Exception:
+        logger.warning(
+            "Stall handler for task '%s' raised, so the attempt was not failed "
+            "in-process; stopping the heartbeat loop so Temporal's "
+            "heartbeat_timeout reclaims it instead",
+            task_name,
+            exc_info=True,
+        )
+    return True
+
+
 async def auto_heartbeat_loop(
     interval_seconds: float,
     heartbeat_fn: Callable[[], None],
     stop_event: asyncio.Event,
     task_name: str,
+    *,
+    progress: ProgressTracker | None = None,
+    max_no_progress_seconds: float | None = None,
+    watchdog_mode: ProgressWatchdogMode = ProgressWatchdogMode.OFF,
+    on_stall: Callable[[float, str], None] | None = None,
 ) -> None:
     """Background task that sends heartbeats at regular intervals.
 
@@ -148,15 +308,73 @@ async def auto_heartbeat_loop(
     They WILL FAIL for blocking I/O, CPU-bound computation, or long-running
     C extensions. Use run_in_thread() to wrap blocking operations.
 
+    When a ``progress`` tracker and a budget are supplied, the same loop also
+    runs the ADR-0018 **stall watchdog**. The beat itself stays
+    **unconditional** — it is the crash detector (OOM, SIGKILL, node loss,
+    partition, starved loop) and ``heartbeat_timeout`` keeps its meaning and its
+    60s default. The watchdog is a second, independent question asked on the
+    same tick: *has this attempt done anything observable lately?*
+
     Args:
         interval_seconds: How often to send heartbeats.
         heartbeat_fn: Function to call for each heartbeat.
         stop_event: Event to signal loop termination.
         task_name: Name of the task (for warning messages).
+        progress: The attempt's :class:`ProgressTracker`. ``None`` leaves the
+            watchdog inert.
+        max_no_progress_seconds: How long this task may go without an
+            observable progress signal. ``None`` leaves the watchdog inert.
+        watchdog_mode: ``OFF`` (inert), ``WARN`` (report only) or ``ENFORCE``
+            (report, then fail the attempt via ``on_stall``).
+        on_stall: Called as ``on_stall(stalled_for, last_label)`` when a stall
+            is enforced. Injected by the activity layer — the same way
+            ``heartbeat_fn`` already is — so this module stays free of
+            activity/Temporal semantics and the watchdog is unit-testable
+            without a worker.
     """
     warning_threshold = interval_seconds * 0.5
     _limit_bytes = parse_pod_memory_limit(os.environ.get("K8S_POD_MEMORY_LIMIT", ""))
     _memory_warn_active = False
+
+    watchdog_budget: float | None = (
+        max_no_progress_seconds
+        if progress is not None and watchdog_mode is not ProgressWatchdogMode.OFF
+        else None
+    )
+    if watchdog_budget is not None and (
+        not math.isfinite(watchdog_budget) or watchdog_budget <= 0
+    ):
+        # Refuse rather than obey. A budget of zero makes every attempt stall on
+        # its first tick, so honouring it in enforce mode would turn one bad
+        # config value into a fleet-wide kill switch. NaN slips past the
+        # `<= 0` check (comparisons against NaN are always False) and would
+        # enforce on the first tick, while +inf would silently never enforce —
+        # so only a finite positive allowance counts as a real budget.
+        logger.warning(
+            "Stall watchdog for task '%s' was given a non-positive or "
+            "non-finite no-progress budget (%ss); disabling the watchdog — set "
+            "max_no_progress_seconds to a finite positive allowance, or the "
+            "mode to 'off' to disable it deliberately",
+            task_name,
+            watchdog_budget,
+        )
+        watchdog_budget = None
+    if (
+        watchdog_budget is not None
+        and watchdog_mode is ProgressWatchdogMode.ENFORCE
+        and on_stall is None
+    ):
+        # A wiring bug, not a config choice. Downgrade rather than raise: the
+        # watchdog must never itself be the thing that fails an activity, and
+        # reporting is strictly better than going silent. Downgraded here rather
+        # than at the call site so the metric's mode attribute describes what
+        # the watchdog actually did.
+        logger.warning(
+            "Stall watchdog for task '%s' was asked to enforce but no on_stall "
+            "handler was injected; reporting gaps without failing the attempt",
+            task_name,
+        )
+        watchdog_mode = ProgressWatchdogMode.WARN
 
     while not stop_event.is_set():
         loop_start = time.monotonic()
@@ -230,6 +448,150 @@ async def auto_heartbeat_loop(
                     exc_info=True,
                 )
 
+        # The stall watchdog runs last in the tick: the beat is the crash
+        # detector and goes out first, and an enforced stall returns from here,
+        # so putting it after the memory sample means the tick that kills a
+        # wedged attempt still carries that attempt's last memory observation.
+        if (
+            progress is not None
+            and watchdog_budget is not None
+            and _check_for_stall(
+                progress=progress,
+                budget_seconds=watchdog_budget,
+                mode=watchdog_mode,
+                task_name=task_name,
+                on_stall=on_stall,
+            )
+        ):
+            return
+
+
+#: Label prefixes for the auto-holds on the two offload seams (ADR-0018 →
+#: *Feeding the tracker*, mechanism 2). The offloaded callable's own name is
+#: appended, so warn mode ranks *sites* — "run_in_thread.Cursor.execute, p99
+#: 40min, unbounded" is a work-list entry — instead of collapsing every blocking
+#: call in an app into one bucket. Naming the seam is part of the signal: it
+#: tells an operator which primitive to wrap in ``holding_progress()``.
+_THREAD_HOLD_PREFIX = "run_in_thread."
+_ISOLATED_HOLD_PREFIX = "run_fault_isolated."
+
+#: What a dotted Python qualname can contain, and nothing else: identifier
+#: characters, the dots joining them, and the angle brackets CPython puts around
+#: ``<lambda>`` and ``<locals>``. A name carrying anything outside this — a
+#: space, a quote, a path separator, a newline — is not a code identifier, so it
+#: is not something this label may repeat.
+_CALLABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.<>]+$")
+
+#: Longest callable name kept in a label. Real qualnames are short; the deepest
+#: shape in the SDK's own tests (a lambda nested in a test method) is under 90.
+_MAX_CALLABLE_NAME_LENGTH = 120
+
+#: Stand-in for a callable whose name is unusable. A stable constant, so a name
+#: this function refuses adds exactly one series to a metric rather than one per
+#: distinct value.
+_UNNAMEABLE_CALLABLE = "<callable>"
+
+
+def _offloaded_callable_name(func: Callable[..., Any]) -> str:
+    """Name the offloaded callable, for its auto-hold label.
+
+    Reads the callable's own ``__qualname__`` rather than inspecting the caller's
+    frame. All three ``run_in_thread`` entry points funnel into one
+    implementation, so a frame walk would name an SDK wrapper on two of the
+    three; and the callee is the half of the site an operator can act on anyway.
+
+    Only ever a code identifier — never an argument — so no query, path,
+    credential or customer value can reach a hold label.
+
+    Each fallback exists because something real lacks a usable ``__qualname__``:
+    ``functools.partial`` carries no name of its own (the wrapped callable
+    does), a callable *instance* has one only on its class, and a ``Mock``
+    fabricates a child mock for whatever attribute is asked of it, which would
+    otherwise put a repr into a label.
+
+    The name is then checked against what a qualname can actually look like, and
+    replaced with :data:`_UNNAMEABLE_CALLABLE` if it is not. ``__qualname__`` is
+    an ordinary writable attribute, so "it comes from code" is a convention
+    rather than a guarantee — a decorator, a factory or a dynamically-built
+    class can set it to anything, including a per-call value. That matters here
+    and not at a normal call site: this string lands in the stall log and in the
+    ``last_label`` *metric attribute*, where a per-call value is unbounded
+    series cardinality and a long one is dead weight on every stall report. This
+    is defence in depth, not a live threat — but the guarantee this function
+    advertises is cheap to actually enforce.
+    """
+    target: Any = func
+    while isinstance(target, functools.partial):
+        target = target.func
+    for attribute in ("__qualname__", "__name__"):
+        name = getattr(target, attribute, None)
+        if isinstance(name, str) and _is_usable_callable_name(name):
+            return name
+    fallback = type(target).__name__
+    return fallback if _is_usable_callable_name(fallback) else _UNNAMEABLE_CALLABLE
+
+
+def _is_usable_callable_name(name: str) -> bool:
+    """Whether ``name`` is short enough and shaped like a dotted qualname."""
+    return (
+        0 < len(name) <= _MAX_CALLABLE_NAME_LENGTH
+        and _CALLABLE_NAME_PATTERN.match(name) is not None
+    )
+
+
+@contextlib.contextmanager
+def _auto_hold(label: str, timeout: float | None) -> Iterator[None]:
+    """Vouch for an offload — unless a human already vouched for it.
+
+    The automatic half of ADR-0018's mechanism 2, shared by both offload seams so
+    the precedence rule below cannot be right at one and wrong at the other.
+
+    **An explicit allowance wins.** Inside a ``holding_progress`` block the auto-
+    hold stands down entirely and the declared hold governs. It has to: the
+    tracker's hold set is a union — ``held()`` and ``stalled_for()`` say
+    "vouched" while *any* hold is unlapsed — so an unbounded auto-hold nested
+    inside a bounded declared one keeps vouching after the declared allowance
+    lapses. The author asked for a wedged call to be caught at
+    ``timeout + budget``; adding a hold they did not ask for would silently hand
+    the site back to the duration backstop, which is the exact outcome
+    ``holding_progress`` exists to prevent. Standing down is also the honest
+    reading: the operation *is* already vouched for, by someone who knows the
+    number.
+
+    That leaves exactly one hold around the offload rather than two, so the
+    warn-mode work-list ranks the site an author can act on — the declared one —
+    instead of double-counting the same wall-clock under a second label.
+
+    The suppression is context-scoped (:func:`declared_hold_active`), never
+    tracker-scoped: a concurrent offload in a task that never entered the block
+    still gets its own hold. Suppressing on "some hold is open somewhere on this
+    tracker" would leave real blocking work unvouched and re-introduce the
+    false-kill this mechanism exists to remove.
+
+    Args:
+        label: Hold label — a site, never a value.
+        timeout: Allowance for the hold, or ``None`` for an unbounded one.
+
+    Yields:
+        Nothing; the caller runs its offload inside the block.
+    """
+    if declared_hold_active():
+        yield
+        return
+    # The tracker is read once and both calls go to that same object. Re-reading
+    # for the release would pick up whatever tracker the context has by then,
+    # which for a hold spanning a context change releases the wrong deadline.
+    tracker = current_progress_tracker()
+    hold = tracker.enter_hold(label, timeout)
+    try:
+        yield
+    finally:
+        # `finally`, not the success path: an offload that raises, and an
+        # activity cancelled mid-offload, must still release *their own* token.
+        # A leaked unbounded hold vouches for the rest of the attempt, which
+        # turns one exception into a watchdog that never fires again.
+        tracker.exit_hold(hold)
+
 
 async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     """Last-resort escape hatch: run a blocking function in a thread pool.
@@ -283,6 +645,21 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
       isolated from the caller (copy semantics).
     - Threads run on a dedicated ``sdk-blocking-*`` pool, separate from
       Temporal's activity pool, to avoid deadlocking the worker.
+    - The offload is automatically wrapped in an **unbounded** progress hold
+      (ADR-0018), so the stall watchdog never accuses a legitimately long
+      blocking call of stalling. Nothing to do at the call site, and nothing
+      about a long blocking call behaves differently than it did before the
+      watchdog existed. The SDK does not invent a duration for somebody else's
+      blocking call, so the watchdog is inactive for the call's whole duration
+      and the activity's duration bound is the only thing still holding it.
+      If you can say how long you would let this one call run before you would
+      rather it failed, declare it — wrap the offload in
+      ``holding_progress(label, timeout=...)``
+      (:func:`application_sdk.execution.progress.holding_progress`) and a wedged
+      call is caught at ``timeout`` + the no-progress budget instead of at the
+      backstop. Inside such a block the automatic hold **stands down** and your
+      declared allowance governs; the SDK never adds a vouch that would outlive
+      the one you asked for.
 
     **CRITICAL: your blocking code MUST have its own timeout.**
     Python threads cannot be forcibly killed. If the wrapped call hangs
@@ -303,10 +680,93 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     """
     ctx = contextvars.copy_context()
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        _BLOCKING_EXECUTOR,
-        functools.partial(ctx.run, functools.partial(func, *args, **kwargs)),
-    )
+    # Auto-hold, unbounded (ADR-0018 → *Feeding the tracker*, mechanism 2).
+    # `run_in_thread` is a mandatory seam, so this is the one place the SDK can
+    # vouch for blocking work for free — and it must vouch without inventing a
+    # duration. `func`'s own `timeout=` kwarg is not one: it is per-operation (a
+    # `requests` read timeout bounds the gap between socket reads, a
+    # `statement_timeout` bounds one statement of many), so a bound derived from
+    # it is systematically *smaller* than the call's legitimate duration, and
+    # the dominant shape — `run_in_thread(cursor.execute, sql)` — carries no
+    # timeout at all. Any fallback tight enough to be useful would be tighter
+    # than today's `start_to_close`, i.e. the upgrade would make legitimate long
+    # blocking work fail sooner than before. So: unbounded, the watchdog is
+    # inactive for the call's duration, the duration backstop owns it, and warn
+    # mode reports every closed hold with its observed duration. That residual
+    # is accepted and surfaced, not closed.
+    with _auto_hold(_THREAD_HOLD_PREFIX + _offloaded_callable_name(func), None):
+        return await loop.run_in_executor(
+            _BLOCKING_EXECUTOR,
+            functools.partial(ctx.run, functools.partial(func, *args, **kwargs)),
+        )
+
+
+def submit_in_thread(
+    func: Callable[..., Any], *args: Any, **kwargs: Any
+) -> "concurrent.futures.Future[Any]":
+    """Run a blocking *cleanup* call on the offload pool without awaiting it.
+
+    ``run_in_thread`` is the primitive to reach for. This is its narrow
+    companion for one specific problem: **cleanup that cancellation must not be
+    able to skip.** An ``await`` inside a ``finally`` is itself a cancellation
+    point, so a cancelled coroutine can be cut off before its own cleanup runs
+    and leak whatever it was holding. Submitting instead of awaiting takes the
+    event loop out of the path entirely: the call is handed to the pool and runs
+    to completion whether or not the caller survives — and, because it is not on
+    the loop, it may block on a lock held by an orphaned worker thread.
+
+    Nothing awaits the result, so a failure has nowhere to surface. It is logged
+    here rather than being swallowed by an unretrieved future.
+
+    Use only for short, self-contained cleanup — closing a handle, releasing a
+    lock — whose result no caller needs. Anything a caller must observe, or must
+    know has finished before the next step, belongs in ``run_in_thread``.
+
+    Args:
+        func: Blocking cleanup callable.
+        *args: Positional arguments for ``func``.
+        **kwargs: Keyword arguments for ``func``.
+
+    Returns:
+        The pool future, for callers (in practice, tests) that want to wait on
+        it. A cancelled future means the pool was already shut down and the call
+        never ran. Ignoring the return value is the normal case.
+    """
+    ctx = contextvars.copy_context()
+    try:
+        future = _BLOCKING_EXECUTOR.submit(
+            ctx.run, functools.partial(func, *args, **kwargs)
+        )
+    except RuntimeError:
+        # The pool refuses work only once it has been shut down, which happens
+        # at interpreter exit. Nothing is left running to clean up after, and the
+        # OS reclaims whatever the process was holding — so this is ordinary
+        # shutdown ordering rather than a failure, and a caller unwinding in a
+        # ``finally`` must not have an exception raised at it here.
+        logger.debug(
+            "Offload pool is shut down; skipped detached cleanup call to %r",
+            getattr(func, "__qualname__", func),
+            exc_info=True,
+        )
+        skipped: concurrent.futures.Future[Any] = concurrent.futures.Future()
+        skipped.cancel()
+        return skipped
+    future.add_done_callback(_report_detached_failure)
+    return future
+
+
+def _report_detached_failure(future: "concurrent.futures.Future[Any]") -> None:
+    """Log a detached cleanup failure, since no caller will ever await it."""
+    if future.cancelled():
+        return
+    error = future.exception()
+    if error is not None:
+        logger.warning(
+            "Detached cleanup call failed: %s: %s",
+            type(error).__name__,
+            error,
+            exc_info=error,
+        )
 
 
 # Executor for work that must not be able to take the worker down with it.
@@ -412,6 +872,13 @@ async def run_fault_isolated(
     - The child imports ``func``'s module on first use (one-time cost,
       amortized by the pooled worker).
 
+    Like :func:`run_in_thread`, the call is automatically wrapped in a progress
+    hold (ADR-0018) so an isolated call — which emits nothing at all until the
+    child returns — is never read as a stall. Here the hold is *bounded* by
+    ``timeout`` when one is given, because that number is already a wall-clock
+    kill enforced below; ``timeout=None`` gives an unbounded hold, matching its
+    "wait forever" semantics.
+
     Args:
         func: Module-level function to run in the child.
         timeout: Seconds to wait before killing the child and raising
@@ -436,37 +903,62 @@ async def run_fault_isolated(
     if workers < 1:
         raise ValueError(f"max_workers must be >= 1, got {workers}")
     loop = asyncio.get_running_loop()
-    future = loop.run_in_executor(
-        _get_process_executor(workers), functools.partial(func, *args, **kwargs)
-    )
-    if timeout is not None:
-        # Not asyncio.wait_for: on timeout it cancels the future and then waits
-        # for the cancellation to land — but a running executor call cannot be
-        # cancelled, so wait_for would hang exactly when the child hangs.
-        # asyncio.wait just stops waiting; we then kill the child ourselves.
-        done, _ = await asyncio.wait({future}, timeout=timeout)
-        if not done:
+    # Auto-hold, bounded by this call's own `timeout` (ADR-0018 → *Feeding the
+    # tracker*, mechanism 2 — the same treatment as `run_in_thread`, since this
+    # is the SDK's other offload seam and an isolated call emits nothing at all
+    # until the child returns; the SDK's own default `timeout` for the upload
+    # validation scan is 600s, well past any plausible no-progress budget).
+    #
+    # Bounded rather than unbounded because unlike `run_in_thread` there is a
+    # real wall-clock number here and it belongs to *this* function, not to
+    # `func`: the block below enforces `timeout` by killing the child and raising
+    # `TimeoutError`, so it means precisely what `enter_hold`'s allowance means —
+    # how long the caller would let this one operation run before it would rather
+    # it failed. What ADR-0018 rejects is deriving a bound from the *callee's*
+    # per-operation kwargs, which is a different number. `timeout=None` still
+    # means an unbounded hold, matching `None`'s "wait forever" here.
+    #
+    # Inside a `holding_progress` block this stands down like `run_in_thread`'s
+    # does — see `_auto_hold`. Harmless even when this call's own `timeout` is
+    # tighter than the declared allowance: `timeout` is enforced here by killing
+    # the child, so the call returns at its deadline whether or not a hold is
+    # watching.
+    with _auto_hold(_ISOLATED_HOLD_PREFIX + _offloaded_callable_name(func), timeout):
+        future = loop.run_in_executor(
+            _get_process_executor(workers), functools.partial(func, *args, **kwargs)
+        )
+        if timeout is not None:
+            # Not asyncio.wait_for: on timeout it cancels the future and then
+            # waits for the cancellation to land — but a running executor call
+            # cannot be cancelled, so wait_for would hang exactly when the child
+            # hangs. asyncio.wait just stops waiting; we then kill the child
+            # ourselves.
+            done, _ = await asyncio.wait({future}, timeout=timeout)
+            if not done:
+                _discard_process_executor(workers)
+                # The kill resolves the abandoned future with BrokenProcessPool;
+                # consume it so asyncio never logs "exception was never
+                # retrieved".
+                future.add_done_callback(
+                    lambda f: None if f.cancelled() else f.exception()
+                )
+                raise TimeoutError(f"run_fault_isolated timed out after {timeout}s")
+        try:
+            return await future
+        except BrokenProcessPool:
             _discard_process_executor(workers)
-            # The kill resolves the abandoned future with BrokenProcessPool;
-            # consume it so asyncio never logs "exception was never retrieved".
-            future.add_done_callback(lambda f: None if f.cancelled() else f.exception())
-            raise TimeoutError(f"run_fault_isolated timed out after {timeout}s")
-    try:
-        return await future
-    except BrokenProcessPool:
-        _discard_process_executor(workers)
-        raise
-    except asyncio.CancelledError:
-        task = asyncio.current_task()
-        if task is not None and task.cancelling():
-            raise  # real cancellation of the caller — must propagate
-        # Foreign cancellation: a concurrent caller's timeout discarded the
-        # shared pool while this call was still queued. From this caller's
-        # perspective that is exactly a broken pool — surface it as the
-        # catchable exception the contract promises, never CancelledError.
-        raise BrokenProcessPool(
-            "process pool was discarded while this call was queued"
-        ) from None
+            raise
+        except asyncio.CancelledError:
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                raise  # real cancellation of the caller — must propagate
+            # Foreign cancellation: a concurrent caller's timeout discarded the
+            # shared pool while this call was still queued. From this caller's
+            # perspective that is exactly a broken pool — surface it as the
+            # catchable exception the contract promises, never CancelledError.
+            raise BrokenProcessPool(
+                "process pool was discarded while this call was queued"
+            ) from None
 
 
 async def run_best_effort(

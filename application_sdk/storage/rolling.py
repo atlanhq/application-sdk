@@ -76,6 +76,7 @@ from typing import Any, Generic, TypeVar
 
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.contracts.types import FileReference
+from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.rolling_errors import (
     InvalidRollingFileWriterError,
@@ -104,6 +105,40 @@ def _monotonic() -> float:
     flaked ``test_time_rollover_after_interval_elapsed`` on Python 3.13.
     """
     return time.monotonic()
+
+
+async def _call_maybe_blocking(fn: Callable[..., Any], *args: Any) -> Any:
+    """Invoke a caller-supplied callback without risking the event loop.
+
+    ``flush_fn`` and ``on_chunk_complete`` may be either async or plain
+    functions. An ``async def`` yields at its own await points, so it is called
+    directly. A plain function does not yield at all — and the documented
+    parquet example (``pd.concat(...).to_parquet(path)``) is seconds of
+    CPU-bound conversion and blocking disk I/O per chunk. Calling that inline
+    holds the event loop for the whole flush, which stops the enclosing
+    activity's auto-heartbeat and gets a healthy activity killed. So a plain
+    function is dispatched to the SDK's blocking pool instead (ADR-0010).
+
+    ``run_in_thread`` copies the current ``contextvars`` context into the
+    worker thread, so a synchronous ``on_chunk_complete`` that calls
+    ``activity.heartbeat()`` still finds its activity context.
+
+    A plain function that *returns* an awaitable keeps working: the awaitable
+    is produced in the thread and returned unawaited for the caller to await
+    back on the loop.
+    """
+    if inspect.iscoroutinefunction(fn):
+        return await fn(*args)
+    # Imported lazily, and it has to be: this module is in
+    # `storage/__init__`'s eager chain, so importing
+    # `application_sdk.execution.heartbeat` at module scope runs
+    # `execution/__init__` -> Temporal activity utils -> `application_sdk.app`
+    # -> back to a still-initialising `contracts.base`, raising ImportError.
+    # The cycle is via `execution/__init__`, not a direct storage -> execution
+    # edge. See `storage/batch.py` for the full chain.
+    from application_sdk.execution.heartbeat import run_in_thread  # noqa: PLC0415
+
+    return await run_in_thread(fn, *args)
 
 
 FlushFn = Callable[[list[T], str], Awaitable[None] | None]
@@ -483,7 +518,7 @@ class RollingFileWriter(Generic[T]):
             self.output_dir, f"chunk-{self._chunk_index}{self.extension}"
         )
         try:
-            result = self.flush_fn(self._buffer, chunk_path)
+            result = await _call_maybe_blocking(self.flush_fn, self._buffer, chunk_path)
             if inspect.isawaitable(result):
                 await result
         except Exception:
@@ -499,6 +534,15 @@ class RollingFileWriter(Generic[T]):
             )
             raise
 
+        # One rolled chunk on disk is one observable unit (ADR-0018). This class
+        # is not a `Writer` subclass, so it does not inherit
+        # `Writer._flush_buffer`'s hook — and since it is the *recommended*
+        # replacement for the v4.0-deprecated writers, leaving it unhooked would
+        # mean the migration target had less stall coverage than what it
+        # replaces. Marked before `on_chunk_complete` so a slow callback is
+        # measured as the quiet window it is.
+        current_progress_tracker().mark_progress("writer.rolling_flush")
+
         completed_index = self._chunk_index
         self._chunk_index += 1
         self._buffer = []
@@ -509,7 +553,9 @@ class RollingFileWriter(Generic[T]):
 
         if self.on_chunk_complete is not None:
             try:
-                cb_result = self.on_chunk_complete(completed_index, chunk_path)
+                cb_result = await _call_maybe_blocking(
+                    self.on_chunk_complete, completed_index, chunk_path
+                )
                 if inspect.isawaitable(cb_result):
                     await cb_result
             except Exception:

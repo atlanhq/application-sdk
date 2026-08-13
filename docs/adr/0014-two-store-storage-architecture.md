@@ -54,6 +54,23 @@ SDR deploy time and points to `{tenant}/api/blobstorage` with the deployment's
 OAuth client credentials for SigV4 signing. In non-SDR deployments (local dev,
 Atlan-hosted) the component is absent and `upstream_storage` is `None`.
 
+### Credential resolution — `auth.secretStore` and env vars (BLDX-1619)
+
+A component may supply its credentials as plain `value` entries, or as
+`secretKeyRef` entries backed by an `auth.secretStore`. The Dapr sidecar
+resolves both; the SDK builds its own obstore store from the same YAML and must
+match. `main.py` runs after `wait_for_dapr_sidecar()`, so it reads the
+component's `auth.secretStore`, fetches those secrets, and passes them into the
+(synchronous, public) resolver as `secrets=`. Environment variables remain the
+fallback — that is what `secretstores.local.env` resolves to in Docker Compose
+and SDR-local runs.
+
+Before this, the resolver read env vars only. On the k8s SDR secure path the
+component uses `secretKeyRef` **and** the matching env vars are deliberately
+absent, so the resolver saw an unresolvable component, treated it as absent, and
+left `upstream_storage` as `None` while the sidecar binding worked — a silent
+write to the wrong bucket.
+
 ### Activity interceptor — always uses `infra.storage`
 
 The activity interceptor's persist step automatically uploads every ephemeral
@@ -143,9 +160,12 @@ async def run(self, input: ExtractionInput) -> ExtractionOutput:
   app-to-app distinction visible in the code: `FileReference` + interceptor =
   intra-run, `App.upload()` = cross-system hand-off.
 - **Graceful local-dev fallback.** When `atlan-objectstore` is absent
-  `upstream_storage` is `None` and `App.upload()` silently falls back to the
-  deployment store. Local dev and integration tests work without any special
-  configuration.
+  `upstream_storage` is `None` and `App.upload()` falls back to the deployment
+  store. Local dev and integration tests work without any special
+  configuration. The fallback is gated on `ENABLE_ATLAN_UPLOAD` (BLDX-1619): a
+  deployment that set it asked for Atlan's bucket, so `App.upload()` raises
+  `UpstreamObjectStoreNotConfiguredError` instead of writing elsewhere and
+  reporting a positive file count.
 - **Retained audit copy (BLDX-1464).** In SDR deployments the customer's bucket
   receives a mirror copy of every metadata artifact at the identical run-scoped
   key (`artifacts/apps/{app}/workflows/{run_id}/…`). Customers can apply their

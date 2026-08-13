@@ -9,8 +9,13 @@ pre-set events to avoid hangs.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import functools
 import sys
 import types
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,6 +26,7 @@ from application_sdk.execution.heartbeat import (
     auto_heartbeat_loop,
     run_in_thread,
 )
+from application_sdk.execution.progress import ProgressTracker, ProgressWatchdogMode
 
 # ---------------------------------------------------------------------------
 # NoopHeartbeatController
@@ -441,3 +447,688 @@ class TestRunInThread:
         with patch.object(hb_mod.asyncio, "get_running_loop", return_value=fake_loop):
             with pytest.raises(ValueError):
                 await run_in_thread(bad)
+
+
+# ---------------------------------------------------------------------------
+# submit_in_thread — detached cleanup, also no real threads
+# ---------------------------------------------------------------------------
+
+
+class InlineExecutor:
+    """Stand-in for the SDK pool that runs submitted work on the calling thread."""
+
+    def __init__(self) -> None:
+        self.submissions: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def submit(self, fn, *args, **kwargs):
+        self.submissions.append((args, kwargs))
+        future: concurrent.futures.Future[Any] = concurrent.futures.Future()
+        future.set_running_or_notify_cancel()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except BaseException as exc:  # noqa: BLE001 — mirrors executor semantics
+            future.set_exception(exc)
+        return future
+
+
+class TestSubmitInThread:
+    def test_submits_to_the_sdk_pool_with_args_propagated(self) -> None:
+        """Detached dispatch goes to the SDK-owned pool, not the default executor."""
+        from application_sdk.execution import heartbeat as hb_mod
+
+        executor = InlineExecutor()
+        calls: list[tuple[int, int]] = []
+
+        with patch.object(hb_mod, "_BLOCKING_EXECUTOR", executor):
+            future = hb_mod.submit_in_thread(lambda a, b: calls.append((a, b)), 1, b=2)
+
+        assert calls == [(1, 2)]
+        assert future.done() and future.exception() is None
+        assert len(executor.submissions) == 1
+
+    def test_a_failure_is_reported_rather_than_swallowed(self) -> None:
+        """Nothing awaits the future, so the failure has to surface in the log."""
+        from application_sdk.execution import heartbeat as hb_mod
+
+        def boom() -> None:
+            raise OSError("handle already gone")
+
+        with patch.object(hb_mod, "_BLOCKING_EXECUTOR", InlineExecutor()):
+            with patch.object(hb_mod.logger, "warning") as warning:
+                future = hb_mod.submit_in_thread(boom)
+
+        assert isinstance(future.exception(), OSError)
+        warning.assert_called_once()
+        assert "handle already gone" in str(warning.call_args)
+
+    def test_submission_is_detached_the_callable_does_not_run_inline(self) -> None:
+        """The contract InlineExecutor cannot see: submit returns *before* running.
+
+        ``InlineExecutor`` runs the callable synchronously inside ``submit``, so
+        a regression that ran cleanup inline would still pass every other test
+        here. A pool that holds the callable pending makes the detached contract
+        observable: submission returns with the callable not yet run, and the
+        failure-callback path fires when the recorded callable is later driven.
+        """
+        from application_sdk.execution import heartbeat as hb_mod
+
+        submitted: list[Callable[[], Any]] = []
+
+        class PendingExecutor:
+            """A pool that records the callable and returns an unfinished future."""
+
+            def submit(
+                self, fn: Callable[..., Any], *args: Any, **kwargs: Any
+            ) -> concurrent.futures.Future[Any]:
+                submitted.append(functools.partial(fn, *args, **kwargs))
+                return concurrent.futures.Future()
+
+        calls: list[str] = []
+        with patch.object(hb_mod, "_BLOCKING_EXECUTOR", PendingExecutor()):
+            future = hb_mod.submit_in_thread(lambda: calls.append("ran"))
+
+        assert calls == [], "submit_in_thread ran the cleanup inline"
+        assert submitted and not future.done()
+
+        # Drive the recorded callable's future to failure; the done-callback logs it.
+        with patch.object(hb_mod.logger, "warning") as warning:
+            future.set_exception(OSError("drive failure"))
+        warning.assert_called_once()
+        assert "drive failure" in str(warning.call_args)
+
+    def test_a_shut_down_pool_does_not_raise_at_the_unwinding_caller(self) -> None:
+        """Callers submit from a ``finally``; interpreter exit must not raise there."""
+        from application_sdk.execution import heartbeat as hb_mod
+
+        shut_down = MagicMock()
+        shut_down.submit.side_effect = RuntimeError(
+            "cannot schedule new futures after shutdown"
+        )
+
+        with patch.object(hb_mod, "_BLOCKING_EXECUTOR", shut_down):
+            with patch.object(hb_mod.logger, "warning") as warning:
+                future = hb_mod.submit_in_thread(lambda: None)
+
+        assert future.cancelled(), "a skipped cleanup call must report as cancelled"
+        warning.assert_not_called()
+
+    def test_a_cancelled_submission_is_not_reported_as_a_failure(self) -> None:
+        """A future cancelled before it ran never failed, so it must stay quiet."""
+        from application_sdk.execution import heartbeat as hb_mod
+
+        cancelled: concurrent.futures.Future[Any] = concurrent.futures.Future()
+        cancelled.cancel()
+
+        with patch.object(hb_mod.logger, "warning") as warning:
+            hb_mod._report_detached_failure(cancelled)
+
+        warning.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Stall watchdog (ADR-0018 / FND-286)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class WatchdogClock:
+    """A monotonic clock the test advances explicitly.
+
+    The tracker takes its clock by injection precisely so tests never patch
+    ``time.monotonic``: the asyncio loop driving ``auto_heartbeat_loop`` shares
+    that global, so patching it makes the loop itself misbehave.
+    """
+
+    now: float = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@dataclass
+class StallRecorder:
+    """Captures the (stalled_for, last_label) pairs on_stall is called with."""
+
+    calls: list[tuple[float, str]] = field(default_factory=list)
+    raises: bool = False
+
+    def __call__(self, stalled_for: float, last_label: str) -> None:
+        self.calls.append((stalled_for, last_label))
+        if self.raises:
+            raise RuntimeError("cancelling the activity task failed")
+
+
+@dataclass
+class LoopRun:
+    """What one driven run of the loop observed."""
+
+    beats: int
+    stall_infos: list[Any]
+    stall_warnings: list[Any]
+    recorded: list[Any]
+
+
+async def _drive(
+    *,
+    tracker: ProgressTracker | None,
+    clock: WatchdogClock,
+    mode: ProgressWatchdogMode = ProgressWatchdogMode.OFF,
+    budget: float | None = None,
+    on_stall: Callable[[float, str], None] | None = None,
+    step: float = 1.0,
+    ticks: int = 1,
+    per_tick: Callable[[int], None] | None = None,
+    record_raises: bool = False,
+) -> LoopRun:
+    """Run ``auto_heartbeat_loop`` for at most ``ticks`` ticks.
+
+    Each tick advances ``clock`` by ``step`` *before* the watchdog runs, so at
+    tick ``n`` the watchdog sees a gap of ``n * step`` unless something marked
+    progress. The real loop interval stays sub-millisecond — the fake clock,
+    not wall time, is what the watchdog reads.
+    """
+    from application_sdk.execution import heartbeat as hb_mod
+
+    stop = asyncio.Event()
+    beats: list[int] = []
+    histogram = MagicMock()
+    if record_raises:
+        histogram.record.side_effect = RuntimeError("metric backend down")
+
+    def hb_fn() -> None:
+        beats.append(1)
+        clock.advance(step)
+        if per_tick is not None:
+            per_tick(len(beats))
+        if len(beats) >= ticks:
+            stop.set()
+
+    with (
+        patch.object(hb_mod, "logger") as mock_logger,
+        patch.object(hb_mod, "_no_progress_gap_histogram", return_value=histogram),
+    ):
+        await auto_heartbeat_loop(
+            interval_seconds=0.001,
+            heartbeat_fn=hb_fn,
+            stop_event=stop,
+            task_name="extract",
+            progress=tracker,
+            max_no_progress_seconds=budget,
+            watchdog_mode=mode,
+            on_stall=on_stall,
+        )
+
+    return LoopRun(
+        beats=len(beats),
+        stall_infos=[
+            c
+            for c in mock_logger.info.call_args_list
+            if "no observable progress" in str(c)
+        ],
+        stall_warnings=[
+            c
+            for c in mock_logger.warning.call_args_list
+            if any(
+                marker in str(c)
+                for marker in ("progress", "Stall watchdog", "Stall handler")
+            )
+        ],
+        recorded=list(histogram.record.call_args_list),
+    )
+
+
+class TestStallWatchdogInert:
+    """Purely additive: with nothing injected, the loop behaves exactly as before."""
+
+    @pytest.mark.asyncio
+    async def test_no_tracker_means_no_watchdog(self) -> None:
+        run = await _drive(tracker=None, clock=WatchdogClock(), budget=1.0, ticks=3)
+
+        assert run.beats == 3
+        assert not run.stall_infos and not run.stall_warnings and not run.recorded
+
+    @pytest.mark.asyncio
+    async def test_off_mode_observes_nothing(self) -> None:
+        clock = WatchdogClock()
+        run = await _drive(
+            tracker=ProgressTracker(clock=clock),
+            clock=clock,
+            mode=ProgressWatchdogMode.OFF,
+            budget=1.0,
+            step=100.0,
+            ticks=3,
+        )
+
+        assert run.beats == 3
+        assert not run.stall_infos and not run.stall_warnings and not run.recorded
+
+    @pytest.mark.asyncio
+    async def test_no_budget_means_no_watchdog(self) -> None:
+        clock = WatchdogClock()
+        run = await _drive(
+            tracker=ProgressTracker(clock=clock),
+            clock=clock,
+            mode=ProgressWatchdogMode.ENFORCE,
+            budget=None,
+            step=100.0,
+            ticks=3,
+        )
+
+        assert run.beats == 3
+        assert not run.stall_infos and not run.stall_warnings and not run.recorded
+
+
+class TestStallWatchdogEnforce:
+    @pytest.mark.asyncio
+    async def test_gap_at_the_budget_fails_the_activity_and_stops_the_loop(
+        self,
+    ) -> None:
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+        tracker.mark_progress("write_batch")
+        stalls = StallRecorder()
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.ENFORCE,
+            budget=5.0,
+            on_stall=stalls,
+            step=2.0,
+            ticks=20,
+        )
+
+        # Gap reaches the budget on tick 3 (2s per tick); the watchdog *is*
+        # heartbeat_task, so it returns there rather than beating 17 more times.
+        assert stalls.calls == [(6.0, "write_batch")]
+        assert run.beats == 3
+
+    @pytest.mark.asyncio
+    async def test_stall_is_reported_at_warning_and_names_the_last_signal(self) -> None:
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+        tracker.mark_progress("fetch_page")
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.ENFORCE,
+            budget=5.0,
+            on_stall=StallRecorder(),
+            step=5.0,
+            ticks=5,
+        )
+
+        assert len(run.stall_warnings) == 1
+        assert not run.stall_infos
+        assert "failing the activity" in run.stall_warnings[0].args[0]
+        assert run.stall_warnings[0].args[1:] == ("extract", 5.0, 5.0, "fetch_page")
+
+    @pytest.mark.asyncio
+    async def test_detection_latency_is_budget_plus_at_most_one_tick(self) -> None:
+        """The tick that first sees ``stalled >= budget`` is the tick that fires."""
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+        stalls = StallRecorder()
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.ENFORCE,
+            budget=10.0,
+            on_stall=stalls,
+            step=3.0,
+            ticks=20,
+        )
+
+        # Gaps go 3, 6, 9, 12 — the first tick at or past the budget is the 4th,
+        # i.e. one tick's worth of overshoot and no more.
+        assert run.beats == 4
+        assert stalls.calls == [(12.0, "")]
+
+    @pytest.mark.asyncio
+    async def test_progress_each_tick_never_stalls(self) -> None:
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+        stalls = StallRecorder()
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.ENFORCE,
+            budget=5.0,
+            on_stall=stalls,
+            step=4.0,
+            ticks=10,
+            per_tick=lambda _n: tracker.mark_progress("write_batch"),
+        )
+
+        assert not stalls.calls
+        assert run.beats == 10
+
+    @pytest.mark.asyncio
+    async def test_unbounded_hold_suppresses_the_stall(self) -> None:
+        """A vouched-for opaque call is never accused of stalling."""
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+        tracker.enter_hold("full table scan", timeout=None)
+        stalls = StallRecorder()
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.ENFORCE,
+            budget=5.0,
+            on_stall=stalls,
+            step=50.0,
+            ticks=6,
+        )
+
+        assert not stalls.calls
+        assert run.beats == 6
+
+    @pytest.mark.asyncio
+    async def test_lapsed_bounded_hold_fires_at_allowance_plus_budget(self) -> None:
+        """Kill time for a wedged held call is ``allowance + budget``."""
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+        tracker.enter_hold("snapshot metadata query", timeout=10.0)
+        stalls = StallRecorder()
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.ENFORCE,
+            budget=5.0,
+            on_stall=stalls,
+            step=1.0,
+            ticks=40,
+        )
+
+        # The allowance vouches to t+10; the stall clock then runs from the
+        # deadline, so the gap first reaches 5s at t+15.
+        assert run.beats == 15
+        assert stalls.calls == [(5.0, "")]
+
+    @pytest.mark.asyncio
+    async def test_beat_stays_unconditional_while_stalled(self) -> None:
+        """The keepalive is the crash detector; a stall must not gate it."""
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.WARN,
+            budget=1.0,
+            step=100.0,
+            ticks=5,
+        )
+
+        assert run.beats == 5
+
+    @pytest.mark.asyncio
+    async def test_on_stall_failure_stops_the_loop_anyway(self) -> None:
+        """If the handler can't fail the attempt, stop beating and let
+        Temporal's heartbeat_timeout reclaim it — never keep beating for an
+        attempt already judged wedged."""
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+        stalls = StallRecorder(raises=True)
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.ENFORCE,
+            budget=5.0,
+            on_stall=stalls,
+            step=5.0,
+            ticks=20,
+        )
+
+        assert len(stalls.calls) == 1
+        assert run.beats == 1
+        assert any("Stall handler" in str(c) for c in run.stall_warnings)
+
+
+class TestStallWatchdogWarn:
+    @pytest.mark.asyncio
+    async def test_warn_reports_each_gap_once_and_never_fails(self) -> None:
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+        tracker.mark_progress("write_batch")
+        stalls = StallRecorder()
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.WARN,
+            budget=5.0,
+            on_stall=stalls,
+            step=2.0,
+            ticks=12,
+        )
+
+        # Gaps of 6s open at ticks 3, 6, 9 and 12 — reported once each, not on
+        # every one of the 12 ticks, because reporting re-arms the stall clock.
+        assert len(run.stall_infos) == 4
+        assert not stalls.calls
+        assert run.beats == 12
+
+    @pytest.mark.asyncio
+    async def test_warn_never_logs_at_warning(self) -> None:
+        """A fleet-wide default that logged at WARNING would manufacture exactly
+        the alert noise ADR-0018 exists to reduce."""
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.WARN,
+            budget=5.0,
+            step=10.0,
+            ticks=4,
+        )
+
+        assert run.stall_infos
+        assert not run.stall_warnings
+
+    @pytest.mark.asyncio
+    async def test_re_arm_keeps_the_label_it_just_reported(self) -> None:
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+        tracker.mark_progress("fetch_page")
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.WARN,
+            budget=5.0,
+            step=10.0,
+            ticks=3,
+        )
+
+        assert len(run.stall_infos) == 3
+        for call in run.stall_infos:
+            assert call.args[-1] == "fetch_page"
+        assert tracker.last_label == "fetch_page"
+
+    @pytest.mark.asyncio
+    async def test_unlabelled_gap_reads_as_none(self) -> None:
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.WARN,
+            budget=5.0,
+            step=10.0,
+            ticks=1,
+        )
+
+        assert run.stall_infos[0].args[-1] == "<none>"
+
+
+class TestStallWatchdogMetric:
+    @pytest.mark.asyncio
+    async def test_gap_is_recorded_with_task_label_and_mode(self) -> None:
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+        tracker.mark_progress("write_batch")
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.WARN,
+            budget=5.0,
+            step=6.0,
+            ticks=1,
+        )
+
+        assert len(run.recorded) == 1
+        value, attributes = run.recorded[0].args
+        assert value == 6.0
+        assert attributes == {
+            "task.name": "extract",
+            "progress.last_label": "write_batch",
+            "watchdog.mode": "warn",
+        }
+
+    @pytest.mark.asyncio
+    async def test_enforced_gap_is_recorded_too(self) -> None:
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.ENFORCE,
+            budget=5.0,
+            on_stall=StallRecorder(),
+            step=5.0,
+            ticks=1,
+        )
+
+        assert len(run.recorded) == 1
+        assert run.recorded[0].args[1]["watchdog.mode"] == "enforce"
+
+    @pytest.mark.asyncio
+    async def test_metric_failure_never_breaks_the_watchdog(self) -> None:
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+        stalls = StallRecorder()
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.ENFORCE,
+            budget=5.0,
+            on_stall=stalls,
+            step=5.0,
+            ticks=10,
+            record_raises=True,
+        )
+
+        assert stalls.calls == [(5.0, "")]
+        assert any("gap metric" in str(c) for c in run.stall_warnings)
+
+
+class TestStallWatchdogWiring:
+    @pytest.mark.asyncio
+    async def test_enforce_without_a_handler_downgrades_to_warn(self) -> None:
+        """A wiring bug must not silence the watchdog, and must not let it
+        pretend it enforced."""
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.ENFORCE,
+            budget=5.0,
+            on_stall=None,
+            step=10.0,
+            ticks=3,
+        )
+
+        assert any("no on_stall handler" in str(c) for c in run.stall_warnings)
+        assert len(run.stall_infos) == 3
+        assert run.beats == 3
+        assert all(c.args[1]["watchdog.mode"] == "warn" for c in run.recorded)
+
+    @pytest.mark.asyncio
+    async def test_non_positive_budget_disables_the_watchdog(self) -> None:
+        """One bad config value must not become a fleet-wide kill switch."""
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+        stalls = StallRecorder()
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.ENFORCE,
+            budget=0.0,
+            on_stall=stalls,
+            step=10.0,
+            ticks=3,
+        )
+
+        assert any("non-positive" in str(c) for c in run.stall_warnings)
+        assert not stalls.calls
+        assert not run.stall_infos and not run.recorded
+        assert run.beats == 3
+
+    @pytest.mark.asyncio
+    async def test_negative_budget_disables_the_watchdog(self) -> None:
+        """A negative allowance vouches for nothing: the guard must refuse it
+        the same way it refuses zero."""
+        clock = WatchdogClock()
+        tracker = ProgressTracker(clock=clock)
+        stalls = StallRecorder()
+
+        run = await _drive(
+            tracker=tracker,
+            clock=clock,
+            mode=ProgressWatchdogMode.ENFORCE,
+            budget=-5.0,
+            on_stall=stalls,
+            step=10.0,
+            ticks=3,
+        )
+
+        assert any("non-positive" in str(c) for c in run.stall_warnings)
+        assert not stalls.calls
+        assert not run.stall_infos and not run.recorded
+        assert run.beats == 3
+
+    @pytest.mark.asyncio
+    async def test_non_finite_budget_disables_the_watchdog(self) -> None:
+        """NaN slips past a `<= 0` check (every comparison against NaN is
+        False) and +inf would silently never enforce — both must disable the
+        watchdog like any other invalid budget."""
+        for bad_budget in (float("nan"), float("inf")):
+            clock = WatchdogClock()
+            tracker = ProgressTracker(clock=clock)
+            stalls = StallRecorder()
+
+            run = await _drive(
+                tracker=tracker,
+                clock=clock,
+                mode=ProgressWatchdogMode.ENFORCE,
+                budget=bad_budget,
+                on_stall=stalls,
+                step=10.0,
+                ticks=3,
+            )
+
+            assert any(
+                "non-positive" in str(c) for c in run.stall_warnings
+            ), f"budget={bad_budget} did not trip the guard"
+            assert not stalls.calls, f"budget={bad_budget} enforced a stall"
+            assert not run.stall_infos and not run.recorded
+            assert run.beats == 3

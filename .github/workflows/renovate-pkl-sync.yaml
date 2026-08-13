@@ -104,17 +104,16 @@ jobs:
           fetch-depth: 0
 
       # Provides `uvx ruff`, used by the driver to format generated Python.
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
         with:
           version: "0.12.3"
 
-      - name: Install pkl
-        run: |
-          set -euo pipefail
-          curl -fsSL -o /tmp/pkl \
-            "https://github.com/apple/pkl/releases/download/${{ inputs.pkl-version }}/pkl-linux-amd64"
-          chmod +x /tmp/pkl
-          sudo mv /tmp/pkl /usr/local/bin/pkl
+      # Absolute ref, not `./…`: this is a reusable workflow, so a relative
+      # action path would resolve against the CONSUMER repo's workspace, which
+      # has no copy of the SDK's actions.
+      - uses: atlanhq/application-sdk/.github/actions/install-pkl@main
+        with:
+          version: ${{ inputs.pkl-version }}
 
       # Fetch the driver from the SDK default branch — a `uses:` reusable
       # workflow does NOT bring its repo's files into the caller's checkout, so
