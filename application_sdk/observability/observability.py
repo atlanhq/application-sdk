@@ -537,7 +537,7 @@ class AtlanObservability(Generic[T], ABC):
         - Syncs changes with object store
         """
         try:
-            from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — circular: heartbeat imports observability.logger_adaptor, which imports this module
+            from application_sdk._runtime.offload import (  # noqa: PLC0415 — circular: offload imports observability.logger_adaptor, which imports this module
                 run_in_thread,
             )
             from application_sdk.storage import delete  # noqa: PLC0415

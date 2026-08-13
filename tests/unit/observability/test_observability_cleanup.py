@@ -118,7 +118,7 @@ class TestCleanupOldRecordsOffload:
                 return_value=mock.MagicMock(),
             ),
             mock.patch(
-                "application_sdk.execution.heartbeat.run_in_thread",
+                "application_sdk._runtime.offload.run_in_thread",
                 new_callable=mock.AsyncMock,
                 side_effect=lambda func, *a, **kw: func(*a, **kw),
             ) as mock_offload,

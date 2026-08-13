@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from temporalio import activity
 
+from application_sdk._runtime.progress import ProgressTracker, bind_progress_tracker
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata
 from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
@@ -198,14 +199,19 @@ def create_activity_from_task(
             AppContext,
             TaskExecutionContext,
         )
-        from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+
+        # Resolved per call through the `heartbeat` module rather than bound at
+        # module scope, and deliberately so: `application_sdk.execution.heartbeat.
+        # auto_heartbeat_loop` is a patch target consumers rely on to neutralise the
+        # beat in their own tests, and a module-scope `from ... import` would hold a
+        # direct reference that their `patch()` could no longer reach — silently, with
+        # the patch succeeding and the real loop still running. The FND-316 cycle does
+        # not require hoisting this (it is an intra-`execution` import, not a
+        # `storage/` one), so the seam wins.
+        from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — preserves the auto_heartbeat_loop patch seam; see above
             NoopHeartbeatController,
             TemporalHeartbeatController,
             auto_heartbeat_loop,
-        )
-        from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-            ProgressTracker,
-            bind_progress_tracker,
         )
         from application_sdk.execution.progress_telemetry import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             closed_hold_observer,

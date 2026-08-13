@@ -493,7 +493,25 @@ def test_p031_silent_on_custom_executor() -> None:
     assert _rule(body, "P031", header="") == []
 
 
-def test_p031_exempts_heartbeat_module() -> None:
+def test_p031_exempts_the_offload_module() -> None:
+    from conformance.suite.checks.determinism import scan_text as _scan_text
+
+    body = "import asyncio\nasync def f():\n    return await asyncio.to_thread(g)\n"
+    findings = [
+        f
+        for f in _scan_text(body, "application_sdk/_runtime/offload.py")
+        if f.rule_id == "P031"
+    ]
+    assert findings == []
+
+
+def test_p031_does_not_exempt_the_app_facing_reexport() -> None:
+    """The exemption follows the implementation, not the façade (ADR-0019).
+
+    ``execution/heartbeat.py`` re-exports ``run_in_thread`` but constructs no
+    executor of its own, so exempting it would hand a free pass to a module that
+    has no reason to need one.
+    """
     from conformance.suite.checks.determinism import scan_text as _scan_text
 
     body = "import asyncio\nasync def f():\n    return await asyncio.to_thread(g)\n"
@@ -502,7 +520,7 @@ def test_p031_exempts_heartbeat_module() -> None:
         for f in _scan_text(body, "application_sdk/execution/heartbeat.py")
         if f.rule_id == "P031"
     ]
-    assert findings == []
+    assert len(findings) == 1
 
 
 def test_p031_suppression() -> None:
@@ -561,7 +579,28 @@ def test_p036_silent_on_thread_pool_executor() -> None:
     assert _rule(body, "P036", header="") == []
 
 
-def test_p036_exempts_heartbeat_module() -> None:
+def test_p036_exempts_the_offload_module() -> None:
+    from conformance.suite.checks.determinism import scan_text as _scan_text
+
+    body = (
+        "import concurrent.futures\n"
+        "def f():\n"
+        "    return concurrent.futures.ProcessPoolExecutor()\n"
+    )
+    findings = [
+        f
+        for f in _scan_text(body, "application_sdk/_runtime/offload.py")
+        if f.rule_id == "P036"
+    ]
+    assert findings == []
+
+
+def test_p036_does_not_exempt_the_app_facing_reexport() -> None:
+    """The exemption follows the implementation, not the façade (ADR-0019).
+
+    ``execution/heartbeat.py`` re-exports ``run_fault_isolated`` but constructs no
+    process pool of its own, so it must be held to the rule like any other module.
+    """
     from conformance.suite.checks.determinism import scan_text as _scan_text
 
     body = (
@@ -574,7 +613,7 @@ def test_p036_exempts_heartbeat_module() -> None:
         for f in _scan_text(body, "application_sdk/execution/heartbeat.py")
         if f.rule_id == "P036"
     ]
-    assert findings == []
+    assert len(findings) == 1
 
 
 def test_p036_suppression() -> None:

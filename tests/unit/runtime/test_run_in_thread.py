@@ -4,7 +4,7 @@ import contextvars
 
 import pytest
 
-from application_sdk.execution.heartbeat import run_in_thread
+from application_sdk._runtime.offload import run_in_thread
 
 _test_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "_test_var", default="unset"

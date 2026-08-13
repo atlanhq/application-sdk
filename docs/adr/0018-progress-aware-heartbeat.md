@@ -510,8 +510,9 @@ Detection latency is `max_no_progress_seconds` plus at most one loop tick (10s).
 The tracker reaches `run_in_thread` and `holding_progress` through a ContextVar set
 by `activities.py`. There is no such ContextVar today — the controller is passed
 into `TaskExecutionContext` — so this is new plumbing, and it must cover the
-module-level `run_in_thread` (`execution/heartbeat.py:234`), not only the
-`TaskExecutionContext` wrapper, since both are used.
+module-level `run_in_thread` (implemented in `_runtime/offload.py` since
+[ADR-0019](0019-runtime-substrate-layer.md); `execution/heartbeat.py` when this
+was written), not only the `TaskExecutionContext` wrapper, since both are used.
 
 ### Holds: the SDK never invents a duration
 
@@ -1010,7 +1011,8 @@ removal is part of the work, not a follow-up.
 - Whether long stalls actually happen becomes a measured question rather than an
   argued one, fleet-wide, before anything can be killed for it.
 - Streaming connectors get correct behavior with no code changes.
-- Change is localized to `execution/heartbeat.py` (tracker + loop + hold plumbing),
+- Change is localized to `execution/heartbeat.py` (tracker + loop + hold plumbing;
+  the tracker and the offload holds since moved to `_runtime/` — [ADR-0019](0019-runtime-substrate-layer.md)),
   the `activities.py` wiring and cancellation branch, one new error leaf, and
   one-line `mark_progress()` calls in existing SDK write/transfer loops.
 

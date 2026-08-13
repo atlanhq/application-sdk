@@ -31,6 +31,7 @@ import asyncio
 import warnings
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
+from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.app.task import task
 from application_sdk.common.sql_filters import (
     normalize_filters,
@@ -39,7 +40,6 @@ from application_sdk.common.sql_filters import (
 from application_sdk.contracts.storage import UploadInput
 from application_sdk.contracts.types import StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
-from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates._template_errors import (

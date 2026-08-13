@@ -12,6 +12,8 @@ from uuid import uuid4
 from loguru import logger as _loguru_logger
 from temporalio import workflow as _workflow
 
+from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.progress import holding_progress
 from application_sdk.app.base_errors import (
     SecretStoreNotConfiguredError,
     StateStoreNotConfiguredError,
@@ -630,10 +632,6 @@ class TaskExecutionContext:
         See Also:
             ``docs/adr/0010-async-first-blocking-code.md`` for full rationale.
         """
-        from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-            run_in_thread,
-        )
-
         return await run_in_thread(func, *args, **kwargs)
 
     def holding_progress(
@@ -682,8 +680,4 @@ class TaskExecutionContext:
             ``docs/adr/0018-progress-aware-heartbeat.md`` → *Holds* and
             *Choosing the allowance*.
         """
-        from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-            holding_progress,
-        )
-
         return holding_progress(label, timeout=timeout)

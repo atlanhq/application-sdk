@@ -20,6 +20,13 @@ from temporalio.exceptions import ChildWorkflowError as TemporalChildWorkflowErr
 from temporalio.exceptions import TerminatedError as TemporalTerminatedError
 from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 
+# Imported for its side effect of binding `application_sdk.execution.progress` as an
+# attribute of this package. Before FND-316, `heartbeat` imported that submodule, so
+# `import application_sdk.execution` was enough to make `execution.progress.<name>`
+# resolve; `heartbeat` now reaches `_runtime.progress` instead, which would have made
+# that attribute access an AttributeError. Explicit here so the access keeps working
+# without depending on another module's imports to arrange it.
+from application_sdk.execution import progress as progress  # noqa: F401 — re-export
 from application_sdk.execution._temporal.activity_utils import (
     build_output_path,
     get_object_store_prefix,

@@ -231,6 +231,10 @@ Key chart features: KEDA `ScaledObject` (worker scales to zero on empty queue), 
 
 ```
 application_sdk/
+├── _runtime/               # Dependency-neutral substrate — importable at module scope from ANY layer (ADR-0019)
+│   ├── offload.py          # run_in_thread, submit_in_thread, run_fault_isolated, run_best_effort
+│   └── progress.py         # ProgressTracker, current_progress_tracker, holding_progress
+│
 ├── app/                    # Core: App ABC, @task, AppRegistry, TaskRegistry
 │   ├── base.py             # App class, run() wrapper, determinism helpers
 │   ├── client.py           # App client bootstrap helpers
@@ -256,7 +260,8 @@ application_sdk/
 ├── execution/              # Temporal abstraction layer (not for direct use)
 │   ├── decorators.py       # Execution-layer decorators
 │   ├── errors.py           # Execution error types
-│   ├── heartbeat.py        # HeartbeatController (Protocol + implementations), blocking executor backing run_in_thread
+│   ├── heartbeat.py        # HeartbeatController (Protocol + implementations), auto-heartbeat loop + stall watchdog; re-exports the _runtime/ offload primitives
+│   ├── progress.py         # App-facing re-export of _runtime/progress.py + ProgressWatchdogMode
 │   ├── retry.py            # RetryPolicy (framework wrapper)
 │   ├── sandbox.py          # SandboxConfig with framework defaults
 │   ├── settings.py         # Worker and activity settings

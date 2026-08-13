@@ -39,6 +39,7 @@ from azure.core.credentials import TokenCredential
 from azure.core.exceptions import AzureError, ClientAuthenticationError
 from pydantic import BaseModel
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 from application_sdk.clients.azure.auth import AzureAuthProvider
@@ -47,7 +48,6 @@ from application_sdk.clients.azure.azure_errors import (
     AzureInputValidationError,
 )
 from application_sdk.errors import AppError
-from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)

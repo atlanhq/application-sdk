@@ -4,7 +4,8 @@ Flags direct construction of a process-based execution primitive —
 ``ProcessPoolExecutor`` or ``multiprocessing.Process`` / ``Pool`` — instead of
 routing crash-prone or best-effort native work through the SDK's sanctioned
 child-process seam, ``run_fault_isolated`` / ``run_best_effort``
-(``application_sdk.execution.heartbeat``).
+(``application_sdk.execution.heartbeat``, implemented in
+``application_sdk._runtime.offload``).
 
 Why this matters: a native fault (a ``SIGSEGV`` in a C extension) is not a Python
 exception — it bypasses every ``try/except`` and, in a worker thread, kills the
@@ -23,8 +24,11 @@ primitives is flagged, resolved through imports/aliases (so
 object — is not statically resolvable and is not flagged. ``ThreadPoolExecutor``
 is not a process and is out of scope (thread offload is governed by P031).
 
-``execution/heartbeat.py`` is exempt: that is where the sanctioned seam's own
-``ProcessPoolExecutor`` lives.
+``_runtime/offload.py`` is exempt: that is where the sanctioned seam's own
+``ProcessPoolExecutor`` lives. It was ``execution/heartbeat.py`` until the seam
+moved to the dependency-neutral substrate (ADR-0019 / FND-316); the exemption
+follows the implementation rather than the app-facing re-export, so
+``heartbeat.py`` is no longer exempt — it no longer constructs a pool.
 """
 
 from __future__ import annotations
@@ -74,7 +78,7 @@ def _callable_final_name(func: ast.expr) -> str | None:
 
 # The one file allowed to construct a process pool directly: this is where the
 # sanctioned run_fault_isolated() / run_best_effort() seam lives.
-_EXEMPT_SUFFIX = "execution/heartbeat.py"
+_EXEMPT_SUFFIX = "_runtime/offload.py"
 
 _HINT = (
     "This hand-rolls process isolation. A native fault (segfault in a C "

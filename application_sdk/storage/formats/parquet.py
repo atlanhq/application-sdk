@@ -6,13 +6,13 @@ import warnings
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
 from typing import TYPE_CHECKING, cast
 
+from application_sdk._runtime.offload import run_in_thread, submit_in_thread
+from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common.atomic import atomic_path
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.contracts.types import FileReference
 from application_sdk.errors import AppError
-from application_sdk.execution.heartbeat import run_in_thread, submit_in_thread
-from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.storage.batch import delete_prefix as _delete_prefix
@@ -56,7 +56,7 @@ class _ThreadConfinedParquetReader:
       instead of landing underneath it. The lock is held for a whole decode, so
       it must never be acquired from the event loop.
     * The event loop never *awaits* the close — see
-      :func:`~application_sdk.execution.heartbeat.submit_in_thread`. That is
+      :func:`~application_sdk._runtime.offload.submit_in_thread`. That is
       what keeps the original reason the close was never offloaded intact: an
       ``await`` in a ``finally`` can itself be cancelled, leaking the handle.
     """
