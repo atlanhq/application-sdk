@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.27.2
-source-sha:    aaaed3a54415a5dba8626bd74796c586cfa1c168
-source-date:   2026-08-13T03:04:30+01:00
+source-sha:    a7417bf843fab7dfbdafd50c47227e79d54cb0d5
+source-date:   2026-08-13T15:40:55+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,7 +18,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 26 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 29 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 11 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
@@ -162,7 +162,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import canonical_workflow_type`
 - **Signature:** `canonical_workflow_type(app_name: str, ep: EntryPointMetadata)`
-- **Summary:** The convention-derived Temporal workflow type for an entry point.
+- **Summary:** The convention-derived Temporal workflow type for *ep*.
 - **Defined in:** `application_sdk/app/entrypoint.py`
 
 #### `entrypoint_module_segment`
@@ -172,24 +172,24 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Convert a kebab-case entry-point name to its Python module segment.
 - **Defined in:** `application_sdk/app/entrypoint.py`
 
+#### `mcp_tool`
+
+- **Import:** `from application_sdk.app import mcp_tool`
+- **Summary:** _(no docstring)_
+
 #### `primary_workflow_type`
 
 - **Import:** `from application_sdk.app import primary_workflow_type`
 - **Signature:** `primary_workflow_type(app_name: str, ep: EntryPointMetadata)`
-- **Summary:** The Temporal workflow type new runs of an entry point should start on.
+- **Summary:** The Temporal workflow type new runs of *ep* should start on.
 - **Defined in:** `application_sdk/app/entrypoint.py`
 
 #### `workflow_types_for`
 
 - **Import:** `from application_sdk.app import workflow_types_for`
 - **Signature:** `workflow_types_for(app_name: str, ep: EntryPointMetadata)`
-- **Summary:** Every Temporal workflow type an entry point registers, primary first.
+- **Summary:** Every Temporal workflow type *ep* registers, primary first.
 - **Defined in:** `application_sdk/app/entrypoint.py`
-
-#### `mcp_tool`
-
-- **Import:** `from application_sdk.app import mcp_tool`
-- **Summary:** _(no docstring)_
 
 ### Constants and Enums
 
@@ -3382,3 +3382,4 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `incremental_diff_s3_prefix: str` `= ''`
   - `incremental_diff_files: int` `= 0`
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
+
