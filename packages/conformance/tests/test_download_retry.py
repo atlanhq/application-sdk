@@ -145,6 +145,85 @@ def test_fetcher_hidden_behind_a_variable_is_not_detected() -> None:
     assert scan_text(text, "f.sh") == []
 
 
+# ── Tuning-only companion flags do not enable a retry ──────────────────────────
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # wget --waitretry paces retries but only --tries enables them: with no
+        # --tries, wget makes exactly one attempt.
+        "wget --waitretry=10 https://example.invalid/x -O /tmp/x",
+        # curl --retry-delay / --retry-max-time tune a retry that --retry never
+        # enabled — the fetch is still one-shot.
+        "curl --retry-delay 5 -o /tmp/x https://example.invalid/x",
+        "curl --retry-max-time 30 -o /tmp/x https://example.invalid/x",
+    ],
+)
+def test_tuning_only_flags_alone_are_still_flagged(command: str) -> None:
+    """A companion flag without its enabling flag must not read as retried —
+    that is exactly the false negative a guard for this class must not have."""
+    assert not is_retried(command)
+    findings = scan_text(command, "f.sh")
+    assert len(findings) == 1
+    # The message must be the generic "add a retry" remediation, NOT the
+    # "add --retry-all-errors" variant — the command has no --retry to complete.
+    assert "with-retry.sh" in findings[0].message
+    assert "Add `--retry-all-errors`" not in findings[0].message
+
+
+# ── Per-segment evaluation: one command's flags do not excuse a sibling ────────
+
+
+def test_complete_retry_does_not_mask_incomplete_sibling() -> None:
+    """`--retry-all-errors` on the second curl must not suppress the finding
+    for the first — a 503 on the first download still fails the job."""
+    text = (
+        "curl --retry 5 -o /tmp/a https://example.invalid/a && "
+        "curl --retry 5 --retry-all-errors -o /tmp/b https://example.invalid/b"
+    )
+    findings = scan_text(text, "f.sh")
+    assert len(findings) == 1
+    assert "--retry-all-errors" in findings[0].message
+
+
+def test_two_complete_curls_on_one_line_stay_clean() -> None:
+    text = (
+        "curl --retry 5 --retry-all-errors -o /tmp/a https://example.invalid/a && "
+        "curl --retry 5 --retry-all-errors -o /tmp/b https://example.invalid/b"
+    )
+    assert scan_text(text, "f.sh") == []
+
+
+def test_retried_sibling_does_not_excuse_an_unretried_download() -> None:
+    """Flags are scoped to their own segment: a retried wget cannot satisfy a
+    bare curl in the next command of the same logical line."""
+    text = (
+        "wget --tries=5 -O /tmp/a https://example.invalid/a && "
+        "curl -o /tmp/b https://example.invalid/b"
+    )
+    assert len(scan_text(text, "f.sh")) == 1
+
+
+def test_wrapper_in_one_segment_does_not_cover_a_sibling_fetcher() -> None:
+    """The wrapper wraps the command it invokes — a curl in the NEXT segment
+    is not re-run by it."""
+    text = (
+        "with-retry.sh wget -O /tmp/a https://example.invalid/a && "
+        "curl -o /tmp/b https://example.invalid/b"
+    )
+    assert len(scan_text(text, "f.sh")) == 1
+
+
+def test_pipe_into_tar_is_one_segment_and_stays_clean_when_complete() -> None:
+    """The pipe split must not orphan the fetcher's flags from its download:
+    `curl --retry … | tar xz` is one command for retry purposes."""
+    text = (
+        "curl --retry 5 --retry-all-errors -fsSL https://get.helm.sh/x.tar.gz | tar xz"
+    )
+    assert scan_text(text, "f.sh") == []
+
+
 # ── curl --retry without --retry-all-errors ────────────────────────────────────
 
 

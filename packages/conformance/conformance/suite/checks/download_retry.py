@@ -27,12 +27,27 @@ Recognised as retried:
 * ``curl --retry`` / ``--retry-all-errors`` / ``--retry-connrefused``;
 * ``wget --tries`` / ``--retry-on-http-error`` / ``--retry-connrefused``.
 
+Tuning-only companion flags — ``curl --retry-delay`` / ``--retry-max-time``,
+``wget --waitretry`` — shape a retry's pacing but do not *enable* one: a
+``wget --waitretry=10`` with no ``--tries`` still makes exactly one attempt.
+They never count as retried.
+
 Exempt: URLs on localhost/127.0.0.1 (a service health probe, not a download).
 
 Note on ``curl --retry`` alone: without ``--retry-all-errors``, curl retries
 transient *transport* errors but NOT an HTTP 503, which is the failure mode this
 rule exists for. The message says so rather than silently accepting a flag that
 does not cover the actual incident.
+
+Retry flags are evaluated **per command segment**, not per logical line: the
+line is split on ``&&``/``||``/``;`` and each segment's flags apply to the
+download(s) inside it. Otherwise a complete retry on one ``curl``
+(``--retry-all-errors``) would mask an incomplete retry on a sibling ``curl``
+in the same line, and a wrapper at the head of a compound command would read
+as covering fetchers the wrapper never invokes. A bare ``|`` does NOT split:
+a pipeline is one command for retry purposes — splitting it would orphan the
+fetcher from the shell/tar it pipes into, and the fetcher's flags apply to
+the whole pipeline.
 
 Line continuations are joined before matching, because the wrapper and the
 command it wraps are conventionally written on separate physical lines::
@@ -45,8 +60,14 @@ Known limits (deliberate — this is a textual check, not a shell parser):
 * A fetcher reached through a variable (``"$TOOL" -o ...``) is not detected;
   detection keys on a literal ``curl``/``wget`` token. Under-reporting is the
   right failure direction for a rule whose findings a human triages.
-* A logical line carrying both a wrapped and an unwrapped fetch reads as
-  wrapped. Not observed in the fleet.
+* Within one command segment carrying several downloads, flags are shared
+  (``curl --retry 5 -o a U1; curl -o b U2`` evaluates per segment, so the
+  second curl is flagged; but ``curl --retry 5 -o a U1 -o b U2`` treats both
+  outputs as retried, which is how curl actually behaves).
+* A wrapped command whose wrapped segment also *contains* the download
+  (``with-retry.sh sh -c 'curl …'``) is correctly seen as retried; a wrapper
+  in one segment and the fetcher in another (``with-retry.sh make setup &&
+  curl -o a U``) flags the curl — the wrapper wraps ``make``, not the curl.
 """
 
 from __future__ import annotations
@@ -87,11 +108,23 @@ _EXECUTING_PIPE_RE = re.compile(
 # started the incident behind this rule.
 _MANAGED_INSTALLER_RE = re.compile(r"(?:^|[\s;&|(`])uv\s+python\s+install\b")
 
+# Flags that *enable* a retry. Tuning-only companions (`--retry-delay`,
+# `--retry-max-time`, `--waitretry`) are deliberately absent: they shape a
+# retry's pacing but a `wget --waitretry=10` with no `--tries` still makes
+# exactly one attempt, so they must not count as retried.
 _RETRY_FLAG_RE = re.compile(
-    r"(?:^|\s)--(?:retry|retry-all-errors|retry-connrefused|retry-delay|"
-    r"retry-max-time|retry-on-http-error|tries|waitretry)(?:[\s=]|$)"
+    r"(?:^|\s)--(?:retry|retry-all-errors|retry-connrefused|"
+    r"retry-on-http-error|tries)(?:[\s=]|$)"
 )
 _RETRY_WRAPPER_RE = re.compile(r"with-retry\.sh")
+
+# Splits a logical line into shell command segments: `a && b || c; d`. A bare
+# `|` does NOT split — a pipeline is one command for retry purposes, and
+# splitting it would orphan the fetcher from the shell/tar it pipes into.
+# Naive on purpose (no quote awareness) — this is a textual check, not a shell
+# parser, and a separator inside a quoted URL merely splits one segment into
+# two that still carry the same flags.
+_SEGMENT_SPLIT_RE = re.compile(r"\s*(?:&&|\|\||;)\s*")
 
 # Scripts conventionally hoist the wrapper path into a variable and invoke it as
 # `"$WITH_RETRY" wget ...`. Without resolving that, every such (correct) call
@@ -153,6 +186,18 @@ def wrapper_variables(text: str) -> frozenset[str]:
     return frozenset(m.group("var") for m in _WRAPPER_ASSIGN_RE.finditer(text))
 
 
+def command_segments(text: str) -> list[str]:
+    """Split a logical line into shell command segments.
+
+    `curl -o a U1 && curl -o b U2` is two commands; flags in one must not
+    satisfy the other. Splitting on `&&`/`||`/`;` is deliberately naive — this
+    is a textual check, and a separator inside a quoted URL just yields two
+    segments that still carry the same flags. A bare `|` does not split: the
+    fetcher and the shell/tar it pipes into are one command for retry purposes.
+    """
+    return [seg.strip() for seg in _SEGMENT_SPLIT_RE.split(text) if seg.strip()]
+
+
 def is_tool_download(text: str) -> bool:
     """True when the command fetches something it will then run or install."""
     if not _FETCHER_RE.search(text):
@@ -172,8 +217,19 @@ def is_wrapped(text: str, wrapper_vars: frozenset[str] = frozenset()) -> bool:
 
 
 def is_retried(text: str, wrapper_vars: frozenset[str] = frozenset()) -> bool:
-    """True when the command carries a retry wrapper or retry flag."""
-    return is_wrapped(text, wrapper_vars) or bool(_RETRY_FLAG_RE.search(text))
+    """True when the command carries a retry wrapper or retry flag.
+
+    Per segment: a download is retried when *its own* segment is wrapped or
+    carries an enabling retry flag — a sibling segment's flags do not count.
+    """
+    segments = command_segments(text)
+    if len(segments) <= 1:
+        return is_wrapped(text, wrapper_vars) or bool(_RETRY_FLAG_RE.search(text))
+    return all(
+        is_wrapped(seg, wrapper_vars) or bool(_RETRY_FLAG_RE.search(seg))
+        for seg in segments
+        if is_tool_download(seg)
+    )
 
 
 def retry_is_complete(text: str, wrapper_vars: frozenset[str] = frozenset()) -> bool:
@@ -181,12 +237,28 @@ def retry_is_complete(text: str, wrapper_vars: frozenset[str] = frozenset()) -> 
 
     A retry wrapper covers everything (it re-runs the whole command on any
     non-zero exit), so only a bare curl-flag retry needs the extra check.
+    Evaluated per segment: a complete retry on one curl does not excuse an
+    incomplete retry on a sibling curl in the same logical line.
     """
-    if is_wrapped(text, wrapper_vars):
+    segments = command_segments(text)
+    if len(segments) <= 1:
+        return _segment_retry_is_complete(text, wrapper_vars)
+    return all(
+        _segment_retry_is_complete(seg, wrapper_vars)
+        for seg in segments
+        if is_tool_download(seg)
+    )
+
+
+def _segment_retry_is_complete(
+    segment: str, wrapper_vars: frozenset[str] = frozenset()
+) -> bool:
+    """Single-segment completeness check (the pre-segmentation behaviour)."""
+    if is_wrapped(segment, wrapper_vars):
         return True
-    if not re.search(r"(?:^|[\s;&|(`$])curl(?=\s)", text):
+    if not re.search(r"(?:^|[\s;&|(`$])curl(?=\s)", segment):
         return True
-    return bool(_CURL_RETRY_ALL_ERRORS_RE.search(text))
+    return bool(_CURL_RETRY_ALL_ERRORS_RE.search(segment))
 
 
 def _first_url(text: str) -> str:
