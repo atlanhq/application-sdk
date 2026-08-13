@@ -43,7 +43,10 @@ pytestmark = pytest.mark.asyncio
 # hang fails the test rather than the job.
 BLOCK_TIMEOUT_SECONDS = 10.0
 POLL_SECONDS = 0.01
-POLL_ATTEMPTS = 500
+# The readiness poll must outlast BLOCK_TIMEOUT_SECONDS: a gated worker parks for
+# up to that long, so a shorter budget can fail the readiness assert while the
+# worker is still legitimately waiting on its own gate.
+POLL_ATTEMPTS = 1200  # 12 s > BLOCK_TIMEOUT_SECONDS
 
 WORKER_THREAD_PREFIX = "sdk-blocking-"
 
@@ -198,21 +201,23 @@ class TestReaderCancellation:
                 pass
 
         task = asyncio.create_task(consume())
-        assert await wait_until(gated.batch_started.is_set), "decode never started"
+        try:
+            assert await wait_until(gated.batch_started.is_set), "decode never started"
 
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
-        # The worker is provably still inside the decode here — nothing has
-        # released `may_finish`. Any close recorded at this point is the race.
-        assert gated.closes == [], (
-            "the handle was closed while a worker thread was still decoding "
-            f"from it: {gated.closes}"
-        )
-
-        # Let the orphan unwind rather than leaving it parked on the gate.
-        gated.may_finish.set()
+            # The worker is provably still inside the decode here — nothing has
+            # released `may_finish`. Any close recorded at this point is the race.
+            assert gated.closes == [], (
+                "the handle was closed while a worker thread was still decoding "
+                f"from it: {gated.closes}"
+            )
+        finally:
+            # Let the orphan unwind rather than leaving it parked on the gate,
+            # even if a readiness assertion failed above.
+            gated.may_finish.set()
 
     async def test_the_close_waits_for_the_orphaned_decode_then_runs(
         self, tmp_path: Path
@@ -230,12 +235,13 @@ class TestReaderCancellation:
                 pass
 
         task = asyncio.create_task(consume())
-        assert await wait_until(gated.batch_started.is_set), "decode never started"
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        gated.may_finish.set()
+        try:
+            assert await wait_until(gated.batch_started.is_set), "decode never started"
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            gated.may_finish.set()
         assert await wait_until(
             lambda: bool(gated.closes)
         ), "the handle the orphaned worker was left holding was never closed"
@@ -408,23 +414,27 @@ class TestWriterAttemptIsolation:
 
         with patch.object(pq, "write_table", side_effect=gated_write_table):
             task = asyncio.create_task(orphan._accumulate_dataframe(orphan_rows))
-            assert await wait_until(
-                write_started.is_set
-            ), "orphan never started writing"
+            try:
+                assert await wait_until(
+                    write_started.is_set
+                ), "orphan never started writing"
 
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
 
-            # The retry runs while the orphan's worker is still parked inside
-            # pq.write_table, holding a chunk path it resolved before cancel.
-            await retry._accumulate_dataframe(retry_rows)
+                # The retry runs while the orphan's worker is still parked inside
+                # pq.write_table, holding a chunk path it resolved before cancel.
+                await retry._accumulate_dataframe(retry_rows)
+            finally:
+                # Release the orphan even on a failed readiness assert, so its
+                # worker is never left parked on the gate.
+                may_write.set()
 
-            # Release the orphan and wait for its write to *land*, not merely for
-            # the path to exist: on a shared directory the file is already there,
-            # written by the retry, and the whole failure is the orphan replacing
-            # it afterwards.
-            may_write.set()
+            # Wait for the orphan's write to *land*, not merely for the path to
+            # exist: on a shared directory the file is already there, written by
+            # the retry, and the whole failure is the orphan replacing it
+            # afterwards.
             assert await wait_until(
                 lambda: bool(orphan_writes_done)
             ), "the orphaned worker never landed its chunk"

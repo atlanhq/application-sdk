@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import functools
 import sys
 import types
 from collections.abc import Callable
@@ -499,6 +500,41 @@ class TestSubmitInThread:
         assert isinstance(future.exception(), OSError)
         warning.assert_called_once()
         assert "handle already gone" in str(warning.call_args)
+
+    def test_submission_is_detached_the_callable_does_not_run_inline(self) -> None:
+        """The contract InlineExecutor cannot see: submit returns *before* running.
+
+        ``InlineExecutor`` runs the callable synchronously inside ``submit``, so
+        a regression that ran cleanup inline would still pass every other test
+        here. A pool that holds the callable pending makes the detached contract
+        observable: submission returns with the callable not yet run, and the
+        failure-callback path fires when the recorded callable is later driven.
+        """
+        from application_sdk.execution import heartbeat as hb_mod
+
+        submitted: list[Callable[[], Any]] = []
+
+        class PendingExecutor:
+            """A pool that records the callable and returns an unfinished future."""
+
+            def submit(
+                self, fn: Callable[..., Any], *args: Any, **kwargs: Any
+            ) -> concurrent.futures.Future[Any]:
+                submitted.append(functools.partial(fn, *args, **kwargs))
+                return concurrent.futures.Future()
+
+        calls: list[str] = []
+        with patch.object(hb_mod, "_BLOCKING_EXECUTOR", PendingExecutor()):
+            future = hb_mod.submit_in_thread(lambda: calls.append("ran"))
+
+        assert calls == [], "submit_in_thread ran the cleanup inline"
+        assert submitted and not future.done()
+
+        # Drive the recorded callable's future to failure; the done-callback logs it.
+        with patch.object(hb_mod.logger, "warning") as warning:
+            future.set_exception(OSError("drive failure"))
+        warning.assert_called_once()
+        assert "drive failure" in str(warning.call_args)
 
     def test_a_shut_down_pool_does_not_raise_at_the_unwinding_caller(self) -> None:
         """Callers submit from a ``finally``; interpreter exit must not raise there."""
