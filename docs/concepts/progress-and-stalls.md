@@ -290,6 +290,20 @@ default a warn-mode observation is an expected observation, not an actionable fa
 and emitting it at WARNING would manufacture the alert noise this design exists to
 reduce.
 
+!!! note "One of these two metrics is also an alert surface"
+
+    A *single* gap is your work-list, and nobody is paged for it. But **sustained**
+    silence on one task is a wedged-but-alive attempt holding a worker slot, and while
+    your app is in `warn` nothing will kill it before the 24h backstop — so
+    `task_no_progress_gap_seconds` also backs the `AtlanAppTaskStalled` alert, which
+    pages at an hour of accumulated silence per hour. If an operator brings you one,
+    they arrive with the task name and the last progress label already in hand; the
+    triage below is what they need from you. See the
+    [stalled-task runbook](../runbooks/stalled-task.md) for their side of it.
+
+    `task_hold_duration_seconds` is **not** alerted on — a long hold is a site that
+    wants an allowance, not an incident.
+
 ### Triaging the list
 
 Most of the list is *ignore it*. Work down it with this:

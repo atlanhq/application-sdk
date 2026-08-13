@@ -1,0 +1,375 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Stall watchdog (ADR-0018) for Atlan apps: no-progress gaps, the per-app hold work-list, and the telemetry-coverage check. Paged by AtlanAppTaskStalled; runbook at https://k.atlan.dev/application-sdk/runbooks/stalled-task/",
+  "editable": true,
+  "graphTooltip": 1,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "doc",
+      "tags": [],
+      "targetBlank": true,
+      "title": "Runbook: stalled task",
+      "tooltip": "What to do with a stalled-but-alive activity",
+      "type": "link",
+      "url": "https://k.atlan.dev/application-sdk/runbooks/stalled-task/"
+    },
+    {
+      "asDropdown": false,
+      "icon": "doc",
+      "tags": [],
+      "targetBlank": true,
+      "title": "ADR-0018",
+      "tooltip": "Progress-aware stall watchdog and duration-backstop timeouts",
+      "type": "link",
+      "url": "https://github.com/atlanhq/application-sdk/blob/main/docs/adr/0018-progress-aware-heartbeat.md"
+    }
+  ],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "panels": [],
+      "title": "Containment — is anything wedged right now?",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Worst offender: seconds of unexplained silence accumulated in the last hour by a single (tenant, app, task, last-label) series. 3600 is one permanently-silent attempt, which is where AtlanAppTaskStalled pages.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1800 },
+              { "color": "red", "value": 3600 }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "max(\n  sum by (clusterName, domainName, app_name, task_name, progress_last_label, watchdog_mode) (\n    increase(task_no_progress_gap_seconds_sum{app_name=~\"$app_name\"}[1h])\n  )\n)",
+          "legendFormat": "worst series",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Peak silence per hour",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "The alert's own expression, one series per (app, task, last progress label). A line pinned at or above 3600 is an attempt that is alive and has stopped doing anything observable; a bump that falls back is a legitimate quiet spot longer than the no-progress budget.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisSoftMin": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 3600 }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 10, "w": 18, "x": 6, "y": 1 },
+      "id": 2,
+      "options": {
+        "legend": { "calcs": ["max"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "topk(15,\n  sum by (app_name, task_name, progress_last_label) (\n    increase(task_no_progress_gap_seconds_sum{app_name=~\"$app_name\"}[1h])\n  )\n)",
+          "legendFormat": "{{app_name}} · {{task_name}} · {{progress_last_label}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Silence accumulated per hour, by task and last progress signal",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Gap observations per hour split by watchdog mode. warn = reported only, nothing killed it — this is the fleet-wide work-list. enforce = the SDK failed the attempt, and the failure is also visible as a TaskStalledError workflow failure.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 0, "stacking": { "mode": "normal" } },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 6 },
+      "id": 3,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "sum by (watchdog_mode) (\n  increase(task_no_progress_gap_seconds_count{app_name=~\"$app_name\"}[1h])\n)",
+          "legendFormat": "{{watchdog_mode}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Gaps per hour by watchdog mode",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 11 },
+      "id": 101,
+      "panels": [],
+      "title": "Work-list — the sites that need a hold or a beat",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Sites that went quiet for longer than the no-progress budget with nothing vouching for them, ranked over 24h. Each row is a site that needs either a progress signal at its loop boundary or a declared allowance. Ranked by count of gaps, not by duration, because one site producing many gaps is the one worth fixing first.",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "custom": { "align": "auto" }, "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 12 },
+      "id": 4,
+      "options": { "cellHeight": "sm", "footer": { "show": false }, "showHeader": true },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "topk(25,\n  sum by (app_name, task_name, progress_last_label) (\n    increase(task_no_progress_gap_seconds_count{app_name=~\"$app_name\"}[24h])\n  )\n)",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "__auto",
+          "refId": "A"
+        }
+      ],
+      "title": "No-progress gaps, last 24h (needs a beat or a hold)",
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true }, "renameByName": { "Value": "gaps" } } },
+        { "id": "sortBy", "options": { "fields": {}, "sort": [{ "desc": true, "field": "gaps" }] } }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Holds longer than ~the no-progress budget with NO declared allowance — the residual the 24h backstop owns. Invisible to any code audit precisely because run_in_thread auto-vouches for them. Counted as (all holds - holds under 1000s) because the histogram's boundaries are coarse above 1000s; treat 1000s as 'past the 900s budget'.",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "custom": { "align": "auto" }, "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 12 },
+      "id": 5,
+      "options": { "cellHeight": "sm", "footer": { "show": false }, "showHeader": true },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "topk(25,\n  sum by (app_name, task_name, hold_label) (\n    increase(task_hold_duration_seconds_count{app_name=~\"$app_name\", hold_bounded=\"false\"}[24h])\n    - increase(task_hold_duration_seconds_bucket{app_name=~\"$app_name\", hold_bounded=\"false\", le=\"1000\"}[24h])\n  )\n)",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "__auto",
+          "refId": "A"
+        }
+      ],
+      "title": "Long unbounded holds, last 24h (wants an explicit allowance)",
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true }, "renameByName": { "Value": "holds > ~budget" } } },
+        { "id": "sortBy", "options": { "fields": {}, "sort": [{ "desc": true, "field": "holds > ~budget" }] } }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Holds whose operation outlived the allowance a human declared for it. Notable at any duration: too tight an allowance is what turns a healthy slow call into a false kill once the watchdog enforces. Raise the allowance if the site is healthy.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 0 },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+      "id": 6,
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "topk(10,\n  sum by (app_name, task_name, hold_label) (\n    increase(task_hold_duration_seconds_count{app_name=~\"$app_name\", hold_lapsed=\"true\"}[1h])\n  )\n)",
+          "legendFormat": "{{app_name}} · {{task_name}} · {{hold_label}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Lapsed holds — allowances that are too tight",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Mean hold duration per site. Deliberately a mean and not a p99: the histogram's boundaries above 1000s are 1000/2500/5000/7500/10000, so a quantile over the long tail brackets far too loosely to size an allowance from. Use this for the order of magnitude, and the site's own p99 from a targeted query when you set the number.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 0, "lineWidth": 1, "showPoints": "never" },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
+      "id": 7,
+      "options": {
+        "legend": { "calcs": ["max"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "topk(10,\n  sum by (app_name, task_name, hold_label) (increase(task_hold_duration_seconds_sum{app_name=~\"$app_name\"}[1h]))\n  /\n  sum by (app_name, task_name, hold_label) (increase(task_hold_duration_seconds_count{app_name=~\"$app_name\"}[1h]))\n)",
+          "legendFormat": "{{app_name}} · {{task_name}} · {{hold_label}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Mean hold duration per site",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 },
+      "id": 102,
+      "panels": [],
+      "title": "Coverage — can the alert fire at all?",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "An empty stall panel means one of two very different things: nothing stalled, or this app's metrics never reach VictoriaMetrics. This panel separates them. An app running activities MUST show a rate here; a split-deployment worker with no ATLAN_PROMETHEUS_PUSHGATEWAY_URL shows nothing at all, and the stall alert cannot fire for it.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 0, "lineWidth": 1, "showPoints": "never" },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 30 },
+      "id": 8,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "sum by (app_name) (\n  increase(temporal_activity_executions_total{app_name=~\"$app_name\"}[1h])\n)",
+          "legendFormat": "{{app_name}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "SDK metrics reaching VictoriaMetrics (activity executions per hour)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "tags": ["atlan-apps", "application-sdk", "adr-0018"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(temporal_activity_executions_total, app_name)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "App",
+        "multi": true,
+        "name": "app_name",
+        "options": [],
+        "query": {
+          "query": "label_values(temporal_activity_executions_total, app_name)",
+          "refId": "app_name"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "Atlan Apps — Stall Watchdog (ADR-0018)",
+  "uid": "atlan-apps-stall-watchdog",
+  "version": 1,
+  "weekStart": ""
+}

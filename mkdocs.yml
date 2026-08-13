@@ -155,6 +155,8 @@ nav:
       - CLI: reference/cli.md
       - HTTP API: reference/http-api.md
       - Configuration: configuration.md
+  - Runbooks:
+      - Stalled Task: runbooks/stalled-task.md
   - Postmortems:
       - Shutdown Drain Delay (2026-03-27): rca-shutdown-drain-delay-2026-03-27.md
   - API Reference: https://k.atlan.dev/application-sdk/main/api
