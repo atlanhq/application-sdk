@@ -243,13 +243,62 @@ disk and *then* uploaded it gets a sidecar recording the truncated content as
 the expected digest, and every downstream check passes — exactly the intended
 bytes moved, as far as the transfer layer can tell.
 
-Closing that half is the producer's job: fail hard on write errors, and delete
-partial output rather than upload it. That is tracked against the connector
-apps. What the transfer layer buys against a mid-write producer failure is
-narrower, and still worth having: a file truncated *while the upload reads it*
-is caught; any corruption after a good upload is caught on the next download
-rather than surfacing as a parser error; and the failure is attributed to the
-artifact and its producing key instead of to whichever consumer opened it.
+Closing that half is [atomic artifact writes](#atomic-artifact-writes) below.
+What the transfer layer buys on top of it is narrower, and still worth having:
+a file truncated *while the upload reads it* is caught; any corruption after a
+good upload is caught on the next download rather than surfacing as a parser
+error; and the failure is attributed to the artifact and its producing key
+instead of to whichever consumer opened it.
+
+---
+
+## Atomic artifact writes
+
+Every SDK writer that produces an app artifact writes it **atomically**: the
+bytes go to a staging file, are flushed to the filesystem, and are renamed onto
+the artifact's path in one step. The artifact's final path therefore either does
+not exist or holds a complete file. A partial artifact is *unnameable*.
+
+That matters because a truncated file at an artifact's real name is
+indistinguishable from a correct one. It gets carried forward, uploaded, and
+integrity-checked against its own truncated bytes, and the failure surfaces much
+later inside a consuming app's parser — at a byte offset that is identical on
+every retry, which is what makes it look like a consumer bug.
+
+Covered writers: the incremental carry-forward state copy, the incremental
+marker, incremental diff metadata, writer chunk output and its statistics
+sidecar, and the local `.sha256` sidecar. `JsonFileWriter` chunks are the one
+exception — successive calls append to the same file, and an append cannot be
+staged and renamed without rewriting it — so those get the typed error below
+without the atomicity.
+
+Staging lives in a `.sdk-partial/` directory beside the artifact rather than as
+a `.tmp` suffix next to it, so it is never picked up by a directory listing, a
+directory `FileReference`, or a prefix upload. `safe_list_directory` and
+`upload_prefix` read one shared definition of what to skip.
+
+An app that opens its own file handle bypasses all of this. The guarantee covers
+the writers the SDK owns, which is where app artifacts actually come from.
+
+### Running out of disk
+
+A write that fails for lack of space raises `DiskFullError` — a
+`ResourceExhaustedError` leaf naming the path, the step, the bytes needed, and
+the bytes free. A bare `OSError` is what this replaces: it carries no category,
+so it lands in whatever broad `except` is in the call stack and the run reports
+some unrelated downstream symptom instead.
+
+**This error is the signal that a deployment needs more ephemeral storage.**
+Requests and limits are deployment configuration and are deliberately not
+requested from the SDK or from app code — neither can know the number. The error
+tells the operator which deployment to raise and roughly by how much.
+
+Before a large write whose size is known up front, the SDK checks free space
+first, so a plainly undersized volume fails in seconds with `needs ~N GiB, has
+M` rather than corrupting output forty minutes in. The check is strict — free
+space is not padded with an invented margin — so it catches the impossible write,
+not the marginal one; a marginal write that still runs out is caught during the
+write and reported identically.
 
 ---
 

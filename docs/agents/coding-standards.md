@@ -150,6 +150,40 @@ result = requests.get(url)
 result = await self.run_in_thread(requests.get, url)
 ```
 
+## Writing Files
+
+Never write an artifact directly to its final name. Use `application_sdk.common.atomic`:
+
+```python
+from application_sdk.common.atomic import atomic_write
+
+# Wrong — a write that dies part-way leaves a truncated file at the real name.
+# Nothing downstream can tell it from a correct one, so it gets carried forward
+# and uploaded, and the failure surfaces in a consuming app's parser instead.
+Path(out).write_text(payload)
+
+# Right — the final path either does not exist or holds a complete file.
+with atomic_write(out, operation="entity export") as handle:
+    handle.write(payload.encode())
+```
+
+`operation` is a short phrase naming the step; it goes into the failure message and
+its evidence. Two companions:
+
+- `atomic_path(path, operation=...)` for writers that take a filename rather than a
+  handle (`pq.write_table`, `shutil.copy2`), and `atomic_copy(src, dst)` for copies.
+- `disk_full_guard(path, operation=...)` for a write that genuinely cannot be atomic
+  — an append across calls. It types the failure without the atomicity.
+
+A full disk raises `DiskFullError` naming the path and the shortfall, which is the
+signal an operator reads to raise a deployment's ephemeral storage. Pass
+`required_bytes=` when the size is known up front and the check happens before the
+first byte moves. See `docs/concepts/storage.md` → *Atomic artifact writes*.
+
+Every SDK writer already goes through this, so a `Writer`, `FileReference`, or the
+incremental helpers need nothing from you. This rule is for code that opens a file
+itself.
+
 ## Long-Running Tasks: Progress and Stalls
 
 A task that goes quiet for longer than `max_no_progress_seconds` (900s) is reported as a

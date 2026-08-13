@@ -29,6 +29,7 @@ import obstore
 # and writes them. Re-exported here (``batch.SIDECAR_SUFFIX`` /
 # ``batch.is_sidecar_key``) because the listing filters are the historical
 # import site and ``application_sdk.storage`` re-exports both from batch.
+from application_sdk.common._listing import prune_internal_dirs
 from application_sdk.storage.integrity import (
     SIDECAR_SUFFIX as SIDECAR_SUFFIX,  # re-export
 )
@@ -447,7 +448,10 @@ async def upload_prefix(
     """Upload all files under *local_dir* to the store under *prefix*.
 
     Each file's relative path is preserved under *prefix*.
-    Symlinks are skipped to prevent path-traversal.
+    Symlinks are skipped to prevent path-traversal, and SDK working
+    directories (:data:`~application_sdk.common._listing.INTERNAL_DIRNAMES`) are
+    not descended into — an artifact still being staged by an atomic write must
+    not be uploaded as though it were finished (FND-318).
 
     Note:
         Param order is ``(local_dir, prefix)`` — source first, destination second.
@@ -473,7 +477,8 @@ async def upload_prefix(
 
     def _collect_files() -> list[tuple[str, Path]]:
         collected: list[tuple[str, Path]] = []
-        for root, _dirs, filenames in os.walk(local, followlinks=False):
+        for root, dirs, filenames in os.walk(local, followlinks=False):
+            prune_internal_dirs(dirs)
             for fname in filenames:
                 file_path = Path(root) / fname
                 if file_path.is_symlink():

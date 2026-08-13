@@ -982,6 +982,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Required Atlan-internal platform service is temporarily down or degraded.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
+#### `DiskFullError`
+
+- **Import:** `from application_sdk.errors import DiskFullError`
+- **Signature:** `class DiskFullError(*, ...)`
+- **Summary:** A local write failed because the filesystem had no room for it (FND-318).
+- **Defined in:** `application_sdk/errors/leaves.py`
+
 #### `ErrorCode`
 
 - **Import:** `from application_sdk.errors import ErrorCode`

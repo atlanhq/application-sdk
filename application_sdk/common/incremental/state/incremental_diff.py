@@ -36,6 +36,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 
 import orjson
 
+from application_sdk.common.atomic import atomic_write
 from application_sdk.common.incremental.helpers import (
     copy_directory_parallel,
     count_json_files_recursive,
@@ -568,10 +569,12 @@ def _write_metadata(
         "total_files": result.total_files,
     }
 
+    # Atomic: a truncated metadata.json is not a file Argo fails on, it is a
+    # file Argo *routes on* — a half-written counts block is what turns a
+    # stream publish into a skipped one (FND-318).
     metadata_path = incremental_diff_dir.joinpath("metadata.json")
-    metadata_path.write_text(
-        orjson.dumps(metadata, option=orjson.OPT_INDENT_2).decode(), encoding="utf-8"
-    )
+    with atomic_write(metadata_path, operation="diff metadata write") as metadata_file:
+        metadata_file.write(orjson.dumps(metadata, option=orjson.OPT_INDENT_2))
     logger.info("Wrote metadata.json: %s", metadata_path)
 
 

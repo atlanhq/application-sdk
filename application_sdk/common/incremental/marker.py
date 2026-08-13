@@ -28,6 +28,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from application_sdk.common.atomic import atomic_write
 from application_sdk.common.incremental.helpers import (
     download_marker_from_s3,
     get_persistent_artifacts_path,
@@ -184,6 +185,9 @@ async def persist_marker_to_storage(
         - s3_key: S3 key where marker was uploaded
 
     Raises:
+        DiskFullError: If the local marker write runs out of disk. No marker
+            file is left behind — the next run reads the previous marker and
+            re-extracts rather than skipping the window this one covered.
         Exception: If upload to S3 fails
 
     Example:
@@ -202,9 +206,14 @@ async def persist_marker_to_storage(
     # Ensure local directory exists
     local_marker_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Write marker to local file
+    # Write marker to local file. Atomic because a truncated marker is its own
+    # incident: it is the timestamp the *next* run starts from, it is uploaded
+    # and retained, and a half-written one is still a parseable-looking string
+    # — so the damage is a silently wrong extraction window rather than a
+    # failure anyone sees (FND-318).
     logger.info("Writing marker to local file: %s", local_marker_path)
-    local_marker_path.write_text(marker_value, encoding="utf-8")
+    with atomic_write(local_marker_path, operation="marker write") as marker_file:
+        marker_file.write(marker_value.encode("utf-8"))
 
     # Upload marker to S3
     logger.info("Uploading marker to S3: %s", marker_s3_key)

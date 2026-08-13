@@ -49,6 +49,21 @@ class PathEmptyError(InvalidInputError):
 
 
 @dataclass(kw_only=True)
+class AtomicWriteModeError(InvalidInputError):
+    """``atomic_write`` was given a mode it cannot honour.
+
+    An append mode is the case worth naming: the staging file starts empty, so
+    appending to it would discard the existing artifact rather than extend it —
+    silently, and only for callers who happen to append. Raised eagerly so that
+    mistake is a startup-shaped failure rather than a data-loss one.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_ATOMIC_WRITE_MODE"
+    message: str = "Unsupported mode for an atomic write"
+    field: str | None = "mode"
+
+
+@dataclass(kw_only=True)
 class FileConverterNotFoundError(UnimplementedError):
     """No converter registered for the given file type."""
 

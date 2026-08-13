@@ -11,11 +11,11 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import shutil
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from application_sdk.common.atomic import atomic_copy, ensure_free_space
 from application_sdk.constants import (
     APPLICATION_NAME,
     MARKER_TIMESTAMP_FORMAT,
@@ -313,9 +313,12 @@ def copy_directory_parallel(
         Number of files copied
 
     Raises:
+        DiskFullError: If the destination filesystem cannot hold the copy —
+            either because it plainly has less room than the whole batch needs,
+            or because it ran out part-way through.
         FileNotFoundError: If a source file disappears during copy
         PermissionError: If lacking permissions to read src or write dest
-        OSError: For disk space issues or other I/O errors
+        OSError: For other I/O errors
     """
     if not src_dir.exists():
         return 0
@@ -326,9 +329,36 @@ def copy_directory_parallel(
 
     dest_dir.mkdir(parents=True, exist_ok=True)
 
+    # This is the carry-forward copy behind FND-318. It ran out of space
+    # part-way through and `shutil.copy2` left a truncated file at the
+    # artifact's real name; the run then carried it forward and uploaded it,
+    # and a publish forty minutes later failed in DuckDB at the same byte
+    # offset on every retry. Two changes close that: the batch's total size is
+    # checked before the first byte moves, so a plainly-undersized volume fails
+    # in seconds with a number an operator can act on; and each file is staged
+    # and renamed, so a failure part-way through leaves no file at all rather
+    # than a partial one.
+    total_bytes = 0
+    for src_file in files:
+        try:
+            total_bytes += src_file.stat().st_size
+        except OSError:
+            # Only the estimate is affected — this file is still copied below,
+            # and that copy raises its own error if the file is really gone.
+            # DEBUG because a file disappearing between the glob and the stat
+            # is a benign race, not a condition anyone acts on.
+            logger.debug(
+                "Could not size %s for the carry-forward space check; the "
+                "estimate will be low by that file",
+                src_file,
+                exc_info=True,
+            )
+            continue
+    ensure_free_space(dest_dir, total_bytes, operation="carry-forward copy")
+
     def copy_single_file(src_file: Path) -> None:
-        """Copy a single file to dest_dir. Raises on failure."""
-        shutil.copy2(src_file, dest_dir / src_file.name)
+        """Copy a single file to dest_dir, atomically. Raises on failure."""
+        atomic_copy(src_file, dest_dir / src_file.name, operation="carry-forward copy")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         list(executor.map(copy_single_file, files))

@@ -337,6 +337,54 @@ class ResourceExhaustedError(AppError):
 
 
 @dataclass(kw_only=True)
+class DiskFullError(ResourceExhaustedError):
+    """A local write failed because the filesystem had no room for it (FND-318).
+
+    Raised by the SDK's write boundary (:mod:`application_sdk.common.atomic`)
+    for ``ENOSPC`` and ``EDQUOT`` — either the volume is out of blocks or the
+    writing identity is over its quota. Both mean the same thing to whoever has
+    to act, which is why they share one type.
+
+    A bare ``OSError`` is the failure this replaces. It carries no category, so
+    it lands in whatever broad ``except`` happens to be in the call stack and
+    the run reports some downstream symptom instead — in the incident that
+    motivated this, a truncated JSON artifact that failed in a *consuming*
+    app's parser forty minutes later. A typed error is classified, attributable
+    to the writing step, and alertable.
+
+    **This error is also the operator's signal that the deployment needs more
+    ephemeral storage.** Requests and limits are deployment configuration and
+    are deliberately not requested from either the SDK or the app — neither can
+    know the number. Naming the path, what the write needed, and what was free
+    tells the operator which deployment to raise and by roughly how much,
+    without either codebase guessing.
+
+    **Retryable, inherited deliberately.** Disk pressure is often not ours: a
+    co-tenant's scratch space frees, or a fresh attempt starts on a node that
+    has room. A genuinely undersized deployment re-fails at
+    :func:`~application_sdk.common.atomic.ensure_free_space` in seconds rather
+    than part-way through a long write, so the retries are cheap and each one
+    re-emits the same operator signal.
+    """
+
+    path: str | None = None
+    operation: str | None = None
+    required_bytes: int | None = None
+    free_bytes: int | None = None
+
+    code: ClassVar[str] = "RESOURCE_EXHAUSTED_DISK_FULL"
+    resource: str | None = "disk"
+    # Defaulted on the class rather than passed at each raise site: the
+    # remediation is the same wherever this is raised from, and a raise site
+    # that forgot it would ship the one failure whose whole purpose is telling
+    # an operator what to change with no instruction attached.
+    suggested_action: str | None = (
+        "Raise the ephemeral-storage request/limit on this deployment, or "
+        "reduce the volume this step stages on local disk."
+    )
+
+
+@dataclass(kw_only=True)
 class DataIntegrityError(AppError):
     expectation: str | None = None
     observed: str | None = None

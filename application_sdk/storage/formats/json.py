@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 import orjson
 
+from application_sdk.common.atomic import disk_full_guard
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
@@ -421,7 +422,18 @@ class JsonFileWriter(Writer):
             self.chunk_count = self.chunk_start + self.chunk_count
 
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
-        """Write a chunk to a JSON file using orjson."""
+        """Write a chunk to a JSON file using orjson.
+
+        Not an atomic write, unlike the SDK's other artifact writers (FND-318):
+        successive calls *append* to the same chunk file, and an append cannot
+        be staged-and-renamed without rewriting everything already in the file
+        on every call. What it does get is :func:`disk_full_guard`, so running
+        out of disk here is a typed ``DiskFullError`` naming this file and this
+        step rather than a bare ``OSError`` that some broad ``except`` upstream
+        swallows. A chunk left short by that failure is still short — the run
+        fails, and the residue is bounded by the writer's staging (FND-317)
+        rather than by this method.
+        """
 
         def _default_serializer(obj: object) -> str:
             # pandas.Timestamp and similar datetime-like objects are not
@@ -431,15 +443,16 @@ class JsonFileWriter(Writer):
         mode = "ab+" if SafeFileOps.exists(file_name) else "wb"
 
         def _serialize_and_write() -> None:
-            with SafeFileOps.open(file_name, mode=mode) as f:
-                for record in chunk.to_dict(orient="records"):
-                    f.write(
-                        orjson.dumps(
-                            record,
-                            default=_default_serializer,
-                            option=orjson.OPT_APPEND_NEWLINE,
+            with disk_full_guard(file_name, operation="json chunk write"):
+                with SafeFileOps.open(file_name, mode=mode) as f:
+                    for record in chunk.to_dict(orient="records"):
+                        f.write(
+                            orjson.dumps(
+                                record,
+                                default=_default_serializer,
+                                option=orjson.OPT_APPEND_NEWLINE,
+                            )
                         )
-                    )
 
         # Offloaded as one hop: `to_dict` materialises the whole chunk and the
         # write loop is one blocking syscall per record. Neither yields, so
