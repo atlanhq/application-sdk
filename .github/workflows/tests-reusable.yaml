@@ -719,6 +719,11 @@ jobs:
     permissions:
       pull-requests: write
       contents: read
+      # For the dataforge fetch's OIDC path (no stored dataforge secret): the
+      # runner mints a per-run identity token the fetch script exchanges for a
+      # 1h credentials:read token. Harmless when the dataforge inputs are unset.
+      # Mirrors the e2e job — both tiers resolve the SAME pinned instance.
+      id-token: write
     outputs:
       summary: ${{ steps.integration.outputs.summary }}
     env:
@@ -726,6 +731,11 @@ jobs:
       # Surfaced as env because a step-level `if:` cannot read the secrets
       # context, and the export steps below are gated on it being set.
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
+      # Pinned dataforge instance UUID (dataforge-mode "resource"). The e2e job
+      # reads the same secret, so pinning it makes both tiers fetch byte-identical
+      # source credentials from one locked instance, never two. Empty when the
+      # caller does not use dataforge; the fetch chain below then self-skips.
+      DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
       # Same reason: the rewrite step gates on the credential, not the flag.
       GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
@@ -759,12 +769,15 @@ jobs:
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
 
-      # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON). Exported here rather
-      # than passed to the composite action below, because every action this
-      # workflow calls is pinned @main: an input added on a feature branch is
-      # silently ignored until it lands. Sparse-checks-out only .github/scripts.
-      - name: Fetch SDK CI scripts (source-credential export)
-        if: env.E2E_SOURCE_ENV_JSON != ''
+      # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON) and, when the caller
+      # sets dataforge-datasource, the dataforge fetch scripts + the VPN action.
+      # Exported/run here rather than passed to the composite action below,
+      # because every action this workflow calls is pinned @main: an input added
+      # on a feature branch is silently ignored until it lands. Sparse-checks-out
+      # .github/scripts and globalprotect-connect (the latter needed only on the
+      # dataforge path — a couple of extra files otherwise).
+      - name: Fetch SDK CI scripts (source-credential export + dataforge fetch)
+        if: env.E2E_SOURCE_ENV_JSON != '' || inputs.dataforge-datasource != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
@@ -778,10 +791,17 @@ jobs:
           # Enterprise Server (no effect on github.com callers), and actionlint
           # <=1.7.7 predates them, so it reports a false "property not defined".
           ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/globalprotect-connect
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          # Falls back to the run's own token: application-sdk is public, so
+          # github.token suffices, and the dataforge path can be exercised by a
+          # caller that has no ORG_PAT. Matches the e2e job. `token: ''` would
+          # override checkout's default and 403 on the clone, so the fallback is
+          # explicit rather than omitted.
+          token: ${{ secrets.ORG_PAT_GITHUB || github.token }}
           persist-credentials: false
 
       # Two invocations, and the order is the security property. `E2E_SOURCE_ENV_JSON`
@@ -804,6 +824,78 @@ jobs:
             --json "$E2E_SOURCE_ENV_JSON" --mask-only
           python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
             --json "$E2E_SOURCE_ENV_JSON" >> "$GITHUB_ENV"
+
+      # ── dataforge-first source resolution (FND-205), integration tier ─────
+      # A step-for-step mirror of the e2e job's dataforge chain, reading the SAME
+      # dataforge-datasource + DATAFORGE_RESOURCE_ID so both tiers resolve the
+      # identical pinned instance — the whole point of extending it here.
+      #
+      # Order = precedence: the static E2E_SOURCE_ENV_JSON exported above is the
+      # FALLBACK; a successful dataforge fetch below overwrites it (the later
+      # $GITHUB_ENV write wins). Every step here is continue-on-error, so when
+      # dataforge is unavailable (VPN, workload binding, dataforge down) the
+      # repo's own creds carry the run — or, if there are none, the source-gated
+      # integration scenarios self-skip via their `skipif`. That is the one
+      # deliberate divergence from e2e: the e2e job's "fail fast when no source"
+      # step is intentionally NOT mirrored, because failing the integration job
+      # on an absent source would break that skip-not-fail fallback contract.
+      # READ-ONLY: the job only fetches credentials; it never seeds or mutates
+      # the instance (curation is the instance owner's one-time setup).
+      #
+      # Atlan's internal ELBs share Docker's default 172.17/16 bridge subnet;
+      # re-subnet Docker BEFORE the tunnel so containers keep working while
+      # 172.17/16 routes via tun0.
+      - name: Move docker networks off Atlan's 172.17/16 (dataforge path)
+        if: inputs.dataforge-datasource != ''
+        continue-on-error: true
+        run: |
+          set -e
+          sudo mkdir -p /etc/docker
+          echo '{"bip": "192.168.49.1/24", "default-address-pools": [{"base": "192.168.128.0/17", "size": 24}]}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+
+      # dataforge's api host and the provisioned sources admit only the VPN
+      # egress IPs. This repo's own globalprotect-connect action (unmodified),
+      # from the job.workflow_sha sparse checkout — same provenance pinning as
+      # the scripts above.
+      - name: Connect to GlobalProtect VPN (dataforge path)
+        if: inputs.dataforge-datasource != ''
+        continue-on-error: true
+        uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          mothership-url: https://api.dataforge.atlan.dev
+
+      # Dataforge-sourced connector credentials. The fetch's stdout is captured
+      # into a shell variable — values never reach the log — and handed to
+      # export_extra_env.py, whose mask-first two-pass protocol is the audited
+      # path into $GITHUB_ENV. One fetch feeds both passes, so the masked strings
+      # and the written strings can never diverge. Auth is the run's GitHub OIDC
+      # token exchanged at dataforge — no stored dataforge secret (needs the
+      # job's id-token permission, added above, and a dataforge workload binding
+      # for the repo).
+      - name: Fetch connector source credentials from dataforge
+        if: inputs.dataforge-datasource != ''
+        continue-on-error: true
+        env:
+          DF_DATASOURCE: ${{ inputs.dataforge-datasource }}
+          DF_MODE: ${{ inputs.dataforge-mode }}
+          DF_ENV_TIER: ${{ inputs.dataforge-env-tier }}
+          DF_OUTPUT_PREFIX: ${{ inputs.dataforge-output-prefix }}
+        run: |
+          set -euo pipefail
+          DF_ENV_JSON="$(python3 application-sdk-scripts/.github/scripts/fetch_dataforge_source.py \
+            --datasource "$DF_DATASOURCE" \
+            --mode "$DF_MODE" \
+            --resource-id "$DATAFORGE_RESOURCE_ID" \
+            --env-tier "$DF_ENV_TIER" \
+            --output-prefix "$DF_OUTPUT_PREFIX")"
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$DF_ENV_JSON" --mask-only
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$DF_ENV_JSON" >> "$GITHUB_ENV"
 
       # Unit runs in its own job; integration defaults to tests/integration/.
       # A caller test-paths override scopes THIS job only. The ternary is a
