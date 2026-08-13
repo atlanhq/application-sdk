@@ -250,10 +250,17 @@ async def test_cloudstore_upload_marks_once_per_part(
 
     await cloud.upload(src, "exports/export.bin")
 
-    # CloudStore fixes its own 8 MiB target part size, so a small file is one
-    # part — the assertion that matters is that the loop marks at all, since a
-    # GB-class export to a customer bucket is the failure shape this covers.
-    assert progress_marks.count("cloudstore.upload_part") >= 1
+    # The assertion that matters is that an external upload marks at all: a
+    # GB-class export to a customer bucket is the failure shape this covers,
+    # and a small file is one part at the 8 MiB target part size.
+    #
+    # The label is ``storage.upload_part``, not ``cloudstore.upload_part``:
+    # FND-306 routed CloudStore.upload through ``ops.upload_file`` so the
+    # write-side integrity validations reach external buckets too, which
+    # deleted this method's own part loop. The per-part hook came along with
+    # the loop it lived in — the watchdog still sees progress, under the
+    # primitive's label.
+    assert progress_marks.count("storage.upload_part") >= 1
 
 
 # ---------------------------------------------------------------------------

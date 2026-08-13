@@ -309,6 +309,34 @@ STORAGE_RESUME_DOWNLOADS = (
     os.getenv("ATLAN_STORAGE_RESUME_DOWNLOADS", "true").strip().lower() != "false"
 )
 
+#: Kill-switch for transfer integrity validation (FND-306). When enabled
+#: (default), every upload and download performed by the SDK transfer
+#: primitives validates the bytes it moved:
+#:
+#: * upload — the local file did not shrink while it was being read, and the
+#:   object the store reports afterwards is the size we sent;
+#: * download — the bytes written to disk match the size the store declared,
+#:   and (when a ``{key}.sha256`` sidecar exists) hash to the digest the
+#:   producer recorded.
+#:
+#: Set to "false" to skip the checks fleet-wide — the escape hatch for a
+#: backend whose HEAD-after-write is not read-your-writes consistent.
+STORAGE_VERIFY_TRANSFERS = (
+    os.getenv("ATLAN_STORAGE_VERIFY_TRANSFERS", "true").strip().lower() != "false"
+)
+
+#: Kill-switch for ``{key}.sha256`` sidecar emission (FND-306). When enabled
+#: (default), :func:`~application_sdk.storage.ops.upload_file` writes a digest
+#: sidecar next to every object it uploads with ``compute_hash=True``, which is
+#: what lets a *downstream* app detect an artifact its producer truncated. Set
+#: to "false" for a deployment whose object-store consumers cannot tolerate the
+#: extra keys (e.g. a reader that globs a prefix without filtering sidecars).
+#: Sidecar *verification* is independent: a download still verifies whatever
+#: sidecars it finds.
+STORAGE_WRITE_SIDECARS = (
+    os.getenv("ATLAN_STORAGE_WRITE_SIDECARS", "true").strip().lower() != "false"
+)
+
 #: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
 #: When set, workers identify themselves with this build ID so the Temporal server can
 #: route tasks to the correct version during versioned deployments.

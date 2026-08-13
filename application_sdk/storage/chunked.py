@@ -20,7 +20,6 @@ the remote object is unchanged, which is what the etag match enforces.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import time
@@ -174,7 +173,14 @@ async def _fetch_chunk(
     progress: _ChunkProgress,
     progress_interval: float,
 ) -> None:
-    """Fetch one range and write it at its fixed offset; checkpoint + heartbeat."""
+    """Fetch one range and write it at its fixed offset; checkpoint + heartbeat.
+
+    Raises:
+        StorageError: If the store served fewer bytes than the requested range.
+            The file is pre-allocated to its full size, so a short range would
+            otherwise leave a hole of NUL bytes that reads back as a
+            plausible-looking file of exactly the right length.
+    """
     # Lazy, and it cannot be hoisted to module scope: application_sdk.execution's
     # package __init__ reaches back into storage.ops, which imports this module.
     # A sys.modules lookup per chunk is nothing against a multi-MiB range GET.
@@ -199,6 +205,16 @@ async def _fetch_chunk(
         else:
             raw = bytes(
                 await obstore.get_range_async(store, key, start=offset, length=length)
+            )
+        if len(raw) != length:
+            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                StorageError,
+            )
+
+            raise StorageError(
+                f"Short range read on chunked download of '{key}': requested "
+                f"{length} bytes at offset {offset}, received {len(raw)}.",
+                key=key,
             )
         # lseek+write instead of pwrite (Windows lacks pwrite). Safe only
         # because asyncio is single-threaded: no await between the two
@@ -311,6 +327,9 @@ async def download_file_chunked(
     file_size: int | None = None,
     etag: str | None = None,
     resume: bool | None = None,
+    verify: bool | None = None,
+    expected_sha256: str | None = None,
+    sidecar_present: bool | None = None,
 ) -> str | None:
     """Download *key* using parallel range GETs, writing chunks at fixed offsets.
 
@@ -332,6 +351,13 @@ async def download_file_chunked(
     chunks can never mix two object generations. On a 412 the partial file is
     discarded and the download restarts fresh **once** against the new
     generation; a second 412 raises.
+
+    **Resume requires a pinned generation (FND-306).** Resume is honoured only
+    when an etag is known. Without one the range GETs are unpinned, so reusing
+    a previous attempt's chunks could splice two generations of a rewritten
+    object into a file of exactly the right length — and on a download with no
+    sidecar, nothing downstream could tell. An unpinned download therefore
+    always starts fresh.
 
     **Resume (BLDX-1523):** when *resume* is enabled, completed chunk indices
     are checkpointed to a ``{local_path}.transfer-state`` sidecar after every
@@ -368,14 +394,30 @@ async def download_file_chunked(
         resume: Resume an interrupted download from its checkpoint sidecar.
             ``None`` (default) follows ``ATLAN_STORAGE_RESUME_DOWNLOADS``
             (enabled unless set to ``"false"``).
+        verify: Validate the completed file against the digest its producer
+            recorded (FND-306).  ``None`` (default) follows
+            ``ATLAN_STORAGE_VERIFY_TRANSFERS``.  Unlike the single-stream path,
+            verifying here costs a re-read of the finished file (chunks land
+            out of order, so they cannot feed one hasher) — the re-read runs in
+            a worker thread so it never blocks the heartbeat loop.
+        expected_sha256: Digest to verify against.  Pass it when the caller
+            already holds the producer's digest — the sidecar lookup is then
+            skipped, saving a round trip.  ``None`` (default) fetches the
+            sidecar when verification is on.
+        sidecar_present: Whether ``{key}.sha256`` exists, when a prior listing
+            already established it.  Saves the existence probe on prefix
+            downloads, where the listing has already enumerated every sidecar.
 
     Returns:
         Hex-encoded SHA-256 digest if *compute_hash* is ``True``, else ``None``.
 
     Raises:
         StorageNotFoundError: If *key* does not exist.
-        StorageError: If a chunk download or the disk write fails, or the
-            object was rewritten during both the original and restarted attempt.
+        StorageError: If a chunk download or the disk write fails, a range came
+            back short, or the object was rewritten during both the original
+            and restarted attempt.
+        StorageIntegrityError: If the completed file does not match the digest
+            its producer recorded.
         ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: ops re-exports download_file_chunked for back-compat
@@ -398,6 +440,12 @@ async def download_file_chunked(
         from application_sdk.constants import STORAGE_RESUME_DOWNLOADS  # noqa: PLC0415
 
         resume = STORAGE_RESUME_DOWNLOADS
+
+    from application_sdk.storage import (  # noqa: PLC0415 — circular: ops imports this module at top level
+        integrity,
+    )
+
+    verifying = integrity.verification_enabled(verify)
 
     from application_sdk.constants import (  # noqa: PLC0415
         STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
@@ -447,9 +495,35 @@ async def download_file_chunked(
         if size <= chunk_size_bytes:
             state_path.unlink(missing_ok=True)
             return await download_file(
-                key, local_path, resolved, compute_hash=compute_hash, normalize=False
+                key,
+                local_path,
+                resolved,
+                compute_hash=compute_hash,
+                normalize=False,
+                # Resolved above — pass through so the delegate does not
+                # re-decide the kill-switch and an explicit verify=False holds.
+                verify=verifying,
+                expected_sha256=expected_sha256,
+                sidecar_present=sidecar_present,
             )
 
+        # Resume needs something that pins the object generation. The etag is
+        # that something: every range GET carries If-Match, so chunks cannot
+        # come from two generations. Without one — a store whose HEAD returns
+        # no e_tag, or a caller that supplied file_size without an etag — the
+        # range GETs are unpinned, and reusing a previous attempt's chunks
+        # would silently splice the old generation onto the new one if the
+        # object were rewritten in between. The result is a file of exactly
+        # the right length that reads as a clean transfer.
+        #
+        # The digest check added in FND-306 catches that, but only where a
+        # sidecar exists; on a bare download of an object nobody wrote a
+        # sidecar for, nothing would. So an unpinned download always starts
+        # fresh: correctness over the bandwidth a resume would have saved, in
+        # the one case where a mistake is undetectable.
+        can_resume = resume and etag is not None
+        if resume and etag is None:
+            state_path.unlink(missing_ok=True)
         done: set[int] = (
             _load_and_validate_checkpoint(
                 state_path,
@@ -459,7 +533,7 @@ async def download_file_chunked(
                 etag=etag,
                 path=path,
             )
-            if resume
+            if can_resume
             else set()
         )
         resuming = bool(done)
@@ -526,7 +600,9 @@ async def download_file_chunked(
                     etag=etag,
                     fd=fd,
                     sem=sem,
-                    resume=resume,
+                    # can_resume, not resume: checkpointing an unpinned
+                    # download only strands a sidecar no attempt may use.
+                    resume=can_resume,
                     state_path=state_path,
                     state_base=state_base,
                     progress=progress,
@@ -559,7 +635,14 @@ async def download_file_chunked(
                 error_class=_exc_class_name(exc),
             )
             if _handle_chunk_failure(
-                exc, key=key, path=path, resume=resume, attempt=attempt
+                # can_resume: with nothing pinning the generation the partial
+                # file can never be reused, so it is garbage — delete it rather
+                # than leave it for an attempt that will start over anyway.
+                exc,
+                key=key,
+                path=path,
+                resume=can_resume,
+                attempt=attempt,
             ):
                 # First 412: restart fresh once against the new generation.
                 file_size = None
@@ -592,31 +675,35 @@ async def download_file_chunked(
                 size_bytes=progress.fetched_bytes,
             )
 
-            if not compute_hash:
+            # Every range was requested and every one returned its full
+            # length (enforced per chunk in _fetch_chunk), so the file is
+            # complete at the pre-allocated size. What that cannot tell us is
+            # whether the *object* was intact to begin with — that needs the
+            # producer's digest (FND-306). Look it up only now: a store-wide
+            # failure has already surfaced as a chunk error above, so anything
+            # that goes wrong here is genuinely sidecar-specific.
+            if verifying and expected_sha256 is None:
+                expected_sha256 = await integrity.read_expected_digest(
+                    resolved, key, sidecar_present=sidecar_present
+                )
+            if not compute_hash and expected_sha256 is None:
                 return None
 
-            def _digest() -> str:
-                h = hashlib.sha256()
-                with path.open("rb") as fh:
-                    for chunk in iter(lambda: fh.read(1 << 20), b""):
-                        h.update(chunk)
-                return h.hexdigest()
-
-            # Offloaded: this re-reads and digests the whole downloaded file
-            # with no await in between, so on a multi-GB download it holds the
-            # event loop — and the enclosing activity's auto-heartbeat — for
-            # the full read+hash. Same treatment as
-            # ``storage.reference._sha256_hex_file_async`` (ADR-0010, P031).
-            # Imported lazily, and it has to be: this module is in
-            # `storage/__init__`'s eager chain, so importing
-            # `application_sdk.execution.heartbeat` at module scope runs
-            # `execution/__init__` -> Temporal activity utils ->
-            # `application_sdk.app` -> back to a still-initialising
-            # `contracts.base`, raising ImportError. The cycle is via
-            # `execution/__init__`, not a direct storage -> execution edge.
-            # See `storage/batch.py` for the full chain.
-            from application_sdk.execution.heartbeat import (  # noqa: PLC0415
-                run_in_thread,
-            )
-
-            return await run_in_thread(_digest)
+            # Chunks land out of order, so no single hasher can be fed during
+            # the transfer: both the caller's digest and the integrity check
+            # cost one re-read of the finished file. ``integrity.sha256_file``
+            # runs it through ``run_in_thread`` — inline, a multi-GB re-read
+            # holds the event loop, and with it the enclosing activity's
+            # auto-heartbeat, for the full read+hash, so a transfer that
+            # actually succeeded gets retried (ADR-0010, P031; FND-282 made
+            # this offload here, FND-306 moved the body to the shared helper).
+            digest = await integrity.sha256_file(path)
+            if verifying and expected_sha256 is not None:
+                integrity.check_transfer_digest(
+                    "download",
+                    key,
+                    expected=expected_sha256,
+                    actual=digest,
+                    local_path=path,
+                )
+            return digest if compute_hash else None

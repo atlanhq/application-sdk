@@ -22,7 +22,14 @@ Public API:
     list_keys_with_meta(prefix, ...)  → list[(key, size, e_tag)]
     list_data_keys(prefix, ...)       → list[str]  (sidecars excluded)
     list_data_keys_with_meta(prefix)  → list[(key, size, e_tag)]  (sidecars excluded)
+    list_data_objects(prefix, ...)    → list[DataObject]  (adds per-object has_sidecar)
     is_sidecar_key(key)               → bool  (single source of truth; SIDECAR_SUFFIX)
+
+Transfer integrity (FND-306): every upload validates what landed in the store
+and records a ``{key}.sha256`` sidecar; every download validates the bytes it
+wrote and, when a sidecar exists, that they hash to what the producer recorded.
+A mismatch raises ``StorageIntegrityError`` (non-retryable) instead of letting a
+truncated artifact reach a parser. See ``application_sdk.storage.integrity``.
 
 For directory upload/download, use App.upload / App.download (framework tasks)
 or call application_sdk.storage.transfer.upload / .download directly.
@@ -39,11 +46,13 @@ from __future__ import annotations
 
 from application_sdk.storage.batch import (
     SIDECAR_SUFFIX,
+    DataObject,
     delete_prefix,
     download_prefix,
     is_sidecar_key,
     list_data_keys,
     list_data_keys_with_meta,
+    list_data_objects,
     list_keys,
     list_keys_with_meta,
     upload_file_from_bytes,
@@ -65,6 +74,7 @@ from application_sdk.storage.errors import (
     StorageBindingNotFoundError,
     StorageConfigError,
     StorageError,
+    StorageIntegrityError,
     StorageNotFoundError,
     StoragePermissionError,
 )
@@ -111,12 +121,15 @@ __all__ = [
     "list_keys_with_meta",
     "list_data_keys",
     "list_data_keys_with_meta",
+    "list_data_objects",
+    "DataObject",
     "is_sidecar_key",
     "SIDECAR_SUFFIX",
     "normalize_key",
     "put_json",
     # Errors
     "StorageError",
+    "StorageIntegrityError",
     "StorageNotFoundError",
     "StoragePermissionError",
     "StorageConfigError",

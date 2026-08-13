@@ -69,6 +69,11 @@ if TYPE_CHECKING:
     JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 from application_sdk.observability.logger_adaptor import get_logger
+
+# Transfer integrity validation (FND-306). ``integrity`` holds no top-level
+# storage-sibling imports — it reaches back into ``ops`` lazily — so this
+# top-level import is acyclic regardless of module load order.
+from application_sdk.storage import integrity
 from application_sdk.storage._telemetry import (
     _log_transfer_progress,
     _record_transfer_metric,
@@ -460,6 +465,80 @@ def _compute_part_size(file_size: int, chunk_size: int) -> int:
     return max(chunk_size, math.ceil(file_size / 9900))
 
 
+async def _finalize_upload_integrity(
+    key: str,
+    path: Path,
+    store: BoundStore | ObjectStore | None,
+    resolved: ObjectStore,
+    *,
+    declared_size: int,
+    bytes_sent: int,
+    digest: str | None,
+    verify: bool | None,
+    write_sidecar: bool | None,
+) -> None:
+    """Validate a completed upload, then record its digest (FND-306).
+
+    Kept out of :func:`upload_file`'s body: the transport there (part sizing,
+    the streaming loop, error translation, cleanup) and this validation
+    sequence change for unrelated reasons, and the next edit to either should
+    review on its own.
+
+    The order is load-bearing. The local-truncation check comes first because
+    it invalidates the object itself; the readback next; and the sidecar only
+    after both pass — a sidecar must never advertise a digest for an object
+    this same upload just rejected, or a downstream reader would "verify" a
+    corrupt file successfully.
+
+    Args:
+        key: Normalised destination key, as written.
+        path: Local source file.
+        store: Caller's store argument — passed to the sidecar write so a
+            ``BoundStore``'s put attributes still apply.
+        resolved: Underlying store, for the readback HEAD.
+        declared_size: ``st_size`` observed before the read began.
+        bytes_sent: Bytes actually streamed to the store.
+        digest: Streaming SHA-256, or ``None`` when hashing was off.
+        verify: Per-call verification flag (``None`` → env default).
+        write_sidecar: Per-call sidecar flag (``None`` → env default).
+
+    Raises:
+        StorageIntegrityError: If the local file shrank while being read.
+        StorageError: If the object is absent afterwards, or is not the size
+            that was sent.
+    """
+    if integrity.verification_enabled(verify):
+        integrity.check_local_file_stable(
+            key, path, declared_size=declared_size, bytes_read=bytes_sent
+        )
+        remote_meta = await get_file_meta(key, resolved, normalize=False)
+        if remote_meta is None:
+            # The writer reported success but the object is not there. The
+            # zero-byte case is the known one (some S3-style backends drop
+            # empty objects), and a size comparison would pass it — 0 sent,
+            # 0 found — so absence is checked separately from length.
+            from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+
+            raise StorageError(
+                f"Upload of '{key}' reported success but the object is absent "
+                f"from the store afterwards ({bytes_sent} bytes sent from "
+                f"{path}). Some S3-style backends silently drop empty objects; "
+                f"others need read-your-writes consistency that this store "
+                f"does not offer.",
+                key=key,
+            )
+        integrity.check_transfer_size(
+            "upload",
+            key,
+            expected=bytes_sent,
+            actual=remote_meta[0],
+            local_path=path,
+        )
+
+    if digest is not None and integrity.sidecar_writes_enabled(write_sidecar):
+        await integrity.write_digest_sidecar(store, key, digest)
+
+
 async def upload_file(
     key: str,
     local_path: str | Path,
@@ -469,6 +548,8 @@ async def upload_file(
     normalize: bool = True,
     retain_local_copy: bool = True,
     compute_hash: bool = True,
+    verify: bool | None = None,
+    write_sidecar: bool | None = None,
 ) -> str | None:
     """Stream-upload a local file to *key* in the store.
 
@@ -478,6 +559,21 @@ async def upload_file(
 
     A single pass over the file simultaneously feeds each chunk to the
     SHA-256 hasher and the store writer.
+
+    **Integrity (FND-306).** This is the single upstream convergence point for
+    every upload in the SDK, so the write-side validations live here rather
+    than at each call site.  After the writer closes, three things happen (all
+    governed by ``ATLAN_STORAGE_VERIFY_TRANSFERS``):
+
+    1. the local file is confirmed not to have shrunk while it was being read
+       — a truncation under the reader would have put a partial artifact in the
+       store (:class:`~application_sdk.storage.errors.StorageIntegrityError`);
+    2. a HEAD confirms the store recorded exactly the bytes we sent — this is
+       what catches the S3-style backends that silently drop an object
+       (retryable ``StorageError``);
+    3. the streamed SHA-256 is written to a ``{key}.sha256`` sidecar so a
+       *downstream* app — a different process, on a different pod, days later
+       — can detect an artifact whose producer died mid-write.
 
     Args:
         key: Destination object key.  Normalised by default.
@@ -501,19 +597,30 @@ async def upload_file(
             integrity record alongside the uploaded object, enabling
             deduplication and corruption detection on subsequent downloads.
             Pass ``False`` for external stores (e.g. ``CloudStore``) that do
-            not participate in the SDK integrity protocol.
+            not participate in the SDK integrity protocol.  Implies
+            ``write_sidecar=False``.
+        verify: Run the post-upload integrity validations described above.
+            ``None`` (default) follows ``ATLAN_STORAGE_VERIFY_TRANSFERS``.
+        write_sidecar: Write the ``{key}.sha256`` sidecar.  ``None`` (default)
+            follows ``ATLAN_STORAGE_WRITE_SIDECARS``.  Ignored when
+            *compute_hash* is ``False`` (there is no digest to record).
 
     Returns:
         Hex-encoded SHA-256 digest of the uploaded file if *compute_hash* is
         ``True``, else ``None``.
 
     Raises:
-        StorageError: If the upload fails.
+        StorageError: If the upload fails, or the object the store reports
+            after the write is not the size that was sent.
+        StorageIntegrityError: If the local file shrank while it was being
+            read, so the uploaded object is a truncated prefix of it.
         ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
 
     Note:
         Zero-byte uploads are allowed but emit a warning — some S3-style backends
         may not persist an empty object.  GCS and local stores handle them correctly.
+        With verification on, a backend that drops the object is no longer silent:
+        the post-upload HEAD turns it into a ``StorageError``.
     """
     resolved = _resolve_store(store)
     put_attributes = _resolve_put_attributes(store)
@@ -648,9 +755,21 @@ async def upload_file(
         key,
         outcome="success",
         elapsed_ms=elapsed_ms,
-        size_bytes=file_size,
+        size_bytes=bytes_sent,
     )
     digest = h.hexdigest() if h is not None else None
+
+    await _finalize_upload_integrity(
+        key,
+        path,
+        store,
+        resolved,
+        declared_size=file_size,
+        bytes_sent=bytes_sent,
+        digest=digest,
+        verify=verify,
+        write_sidecar=write_sidecar,
+    )
 
     if not retain_local_copy:
         from application_sdk.constants import TEMPORARY_PATH  # noqa: PLC0415
@@ -677,11 +796,26 @@ async def download_file(
     compute_hash: bool = False,
     min_chunk_size: int = 10 * 1024 * 1024,
     normalize: bool = True,
+    verify: bool | None = None,
+    expected_sha256: str | None = None,
+    sidecar_present: bool | None = None,
 ) -> str | None:
     """Stream-download *key* from the store to a local file.
 
     Uses obstore's streaming GET so arbitrarily large files are written to
     disk without materialising the whole content in memory.
+
+    **Integrity (FND-306).** This is the downstream convergence point for every
+    small-file download in the SDK (``download_file_chunked`` delegates here
+    below its chunking threshold), so the read-side validations live here.
+    With verification on, the bytes written to disk are compared against the
+    size the store declared for the object, and — when the producer left a
+    ``{key}.sha256`` sidecar — the content is hashed and compared against it.
+    A digest mismatch means the stored object is corrupt at source and raises
+    a non-retryable
+    :class:`~application_sdk.storage.errors.StorageIntegrityError` naming the
+    key and both digests, instead of letting a truncated file reach a parser
+    and surface as an unattributable ``Malformed JSON`` deep inside DuckDB.
 
     Args:
         key: Source object key.  Normalised by default.
@@ -690,16 +824,30 @@ async def download_file(
         store: Source store, or ``None`` to use the infrastructure store.
         compute_hash: When ``True``, compute and return the SHA-256 digest
             while streaming.  When ``False`` (default), returns ``None``.
+            Verification may enable hashing internally; the digest is still
+            only *returned* when this is ``True``.
         min_chunk_size: Minimum chunk size hint passed to the stream iterator
             (default 10 MiB).
         normalize: When ``True`` (default), normalise *key* before use.
+        verify: Run the integrity validations described above.  ``None``
+            (default) follows ``ATLAN_STORAGE_VERIFY_TRANSFERS``.
+        expected_sha256: Digest to verify the content against.  Pass it when
+            the caller already holds the producer's digest — the sidecar
+            lookup is then skipped, saving a round trip.  ``None`` (default)
+            fetches the sidecar when verification is on.
+        sidecar_present: Whether ``{key}.sha256`` exists, when a prior listing
+            already established it.  Saves the existence probe on prefix
+            downloads, where the listing has already enumerated every sidecar.
 
     Returns:
         Hex-encoded SHA-256 digest if *compute_hash* is ``True``, else ``None``.
 
     Raises:
         StorageNotFoundError: If *key* does not exist in the store.
-        StorageError: If the download or write fails.
+        StorageError: If the download or write fails, or fewer bytes reached
+            disk than the store declared for the object.
+        StorageIntegrityError: If the downloaded content does not match the
+            digest its producer recorded.
         ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
@@ -709,7 +857,13 @@ async def download_file(
     path = Path(local_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    h = hashlib.sha256() if compute_hash else None
+    verifying = integrity.verification_enabled(verify)
+    # Hash while streaming whenever verification is on: the bytes are already
+    # in hand, so this costs CPU only and no re-read. The sidecar lookup that
+    # decides whether the digest is *compared* runs after the transfer — doing
+    # it first would let a store-wide failure surface as a sidecar error and
+    # mask the real download failure (and its telemetry) behind it.
+    h = hashlib.sha256() if (compute_hash or verifying) else None
     started = time.monotonic()
 
     try:
@@ -812,7 +966,39 @@ async def download_file(
         elapsed_ms=elapsed_ms,
         size_bytes=bytes_written,
     )
-    return h.hexdigest() if h is not None else None
+
+    digest = h.hexdigest() if h is not None else None
+
+    # ── Integrity: validate before the caller can parse it (FND-306) ─────────
+    if verifying:
+        # result.meta came back with the GET — the declared length costs no
+        # extra round trip. A stream that ended early is a truncated download,
+        # distinct from an object that is corrupt in the store.
+        integrity.check_transfer_size(
+            "download",
+            key,
+            expected=int(result.meta["size"]),
+            actual=bytes_written,
+            local_path=path,
+        )
+        if expected_sha256 is None:
+            expected_sha256 = await integrity.read_expected_digest(
+                resolved, key, sidecar_present=sidecar_present
+            )
+        if expected_sha256 is not None and digest is not None:
+            # The corrupt file is deliberately left on disk: byte-stability
+            # across fresh downloads is what distinguishes "corrupt at source"
+            # from "flaky transfer", and an operator cannot check that against
+            # a file we deleted. A retry re-downloads over it (O_TRUNC).
+            integrity.check_transfer_digest(
+                "download",
+                key,
+                expected=expected_sha256,
+                actual=digest,
+                local_path=path,
+            )
+
+    return digest if compute_hash else None
 
 
 async def get_file_size(
