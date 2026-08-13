@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.27.2
-source-sha:    d17c44d109b54a9bed98a6170cb41de1df3c0987
-source-date:   2026-08-13T10:58:48+05:30
+source-sha:    eca64286e05f3c2f2cdb0e4fc4addbccd7cdabd1
+source-date:   2026-08-13T13:08:47+00:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,7 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 11 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 60 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 61 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
@@ -980,6 +980,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import DependencyUnavailableError`
 - **Signature:** `class DependencyUnavailableError(*, ...)`
 - **Summary:** Required Atlan-internal platform service is temporarily down or degraded.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `DiskFullError`
+
+- **Import:** `from application_sdk.errors import DiskFullError`
+- **Signature:** `class DiskFullError(*, ...)`
+- **Summary:** A local write failed because the filesystem had no room for it (FND-318).
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `ErrorCode`

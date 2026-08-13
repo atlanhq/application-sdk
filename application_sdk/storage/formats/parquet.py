@@ -6,6 +6,7 @@ import warnings
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
 from typing import TYPE_CHECKING, cast
 
+from application_sdk.common.atomic import atomic_path
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.contracts.types import FileReference
@@ -1083,11 +1084,25 @@ class ParquetFileWriter(Writer):
                     len(table), 16_000_000 // max(1, table.nbytes // max(1, len(table)))
                 ),
             )
-            pq.write_table(
-                table,
+            # Staged and renamed rather than written in place (FND-318).
+            # `pq.write_table` always overwrites its target, so this chunk is a
+            # whole-file write and can be made atomic without changing what
+            # lands: a chunk that runs out of disk leaves no file at
+            # `file_name` at all, rather than a parquet footer-less prefix that
+            # every downstream reader fails on identically. `table.nbytes` is
+            # the pre-compression size, so it over-estimates what snappy will
+            # actually need — deliberately, since the preflight is only meant
+            # to catch the plainly impossible write.
+            with atomic_path(
                 file_name,
-                compression="snappy",
-                row_group_size=row_group_size,
-            )
+                operation="parquet chunk write",
+                required_bytes=table.nbytes or None,
+            ) as staging:
+                pq.write_table(
+                    table,
+                    str(staging),
+                    compression="snappy",
+                    row_group_size=row_group_size,
+                )
 
         await run_in_thread(_convert_and_write)
