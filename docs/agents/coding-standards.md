@@ -394,12 +394,14 @@ return MyOutput(statistics=result, data=result.files)
 The opt-in flag is a bridge for in-flight migrations only. New code should
 go straight to the direct copy-paste pattern above.
 
-**Output files appear only after `close()`.** Both legacy writers stage their
-chunks in a private directory (a hidden `.sdk-writer-staging/` sibling of the
-output path) and move them into the output directory in one step at `close()`.
-Chunk filenames, object-store keys, and the `statistics/` layout are exactly
-what they always were — only the moment the files land changes. Do not read a
-writer's output directory before its `close()` returns.
+**A writer's own files appear only after `close()`.** Both legacy writers stage
+their chunks in a private directory (a hidden `.sdk-writer-staging/` sibling of
+the output path) and move them into the output directory in one step at
+`close()`. Chunk filenames, object-store keys, and the `statistics/` layout are
+exactly what they always were — only the moment the files land changes. Do not
+read a writer's output directory before its `close()` returns. Publishing only
+adds: anything already in a reused output directory stays there, and a deferred
+writer's `FileReference` covers it too.
 
 The reason is cancellation. A cancelled activity leaves an orphaned worker
 thread that cannot be killed and is still writing to a path it resolved before

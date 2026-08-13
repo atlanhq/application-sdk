@@ -749,10 +749,13 @@ class Writer(ABC):
         closed. Calling close() multiple times is safe — subsequent calls
         return the cached :class:`WriterResult`.
 
-        Publishing is what makes the output directory this writer's alone: the
+        Publishing is what keeps one attempt's files out of another's: the
         chunks live in a private staging tree until here, so a cancelled
         attempt's orphaned worker can neither overwrite a retry's file nor slip
-        its own files into the retry's ``FileReference`` (FND-317).
+        its own files into the retry's ``FileReference`` (FND-317). It only
+        ever *adds* — content already under ``self.path`` when the writer
+        started is left in place, and a directory ``FileReference`` still walks
+        it.
 
         The returned :class:`WriterResult` carries an ephemeral
         :class:`FileReference` pointing at the writer-owned output directory
