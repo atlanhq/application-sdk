@@ -41,6 +41,7 @@ from application_sdk._runtime.progress import (
 )
 from application_sdk.execution.progress import ProgressWatchdogMode
 from application_sdk.execution.progress_telemetry import record_no_progress_gap
+from application_sdk.execution.run_length import RunLengthWatch
 from application_sdk.observability import (
     resource_sampler as _resource_sampler,  # module alias kept so tests can patch _resource_sampler.sample()
 )
@@ -236,6 +237,7 @@ async def auto_heartbeat_loop(
     max_no_progress_seconds: float | None = None,
     watchdog_mode: ProgressWatchdogMode = ProgressWatchdogMode.OFF,
     on_stall: Callable[[float, str], None] | None = None,
+    run_length: RunLengthWatch | None = None,
 ) -> None:
     """Background task that sends heartbeats at regular intervals.
 
@@ -253,6 +255,14 @@ async def auto_heartbeat_loop(
     60s default. The watchdog is a second, independent question asked on the
     same tick: *has this attempt done anything observable lately?*
 
+    A ``run_length`` watch is a third such question, and the one the watchdog
+    cannot answer: *has the whole run been going too long?* A run that dribbles
+    progress re-arms the watchdog on every mark and stalls by no definition it
+    has, so with the duration ceiling raised to a backstop the only thing left
+    to bound it is a human — which needs an alert (ADR-0018 → *Bounding total
+    time*). It rides this tick because the tick already exists; it throttles
+    itself and reports nothing while the run is inside its SLA.
+
     Args:
         interval_seconds: How often to send heartbeats.
         heartbeat_fn: Function to call for each heartbeat.
@@ -269,6 +279,10 @@ async def auto_heartbeat_loop(
             ``heartbeat_fn`` already is — so this module stays free of
             activity/Temporal semantics and the watchdog is unit-testable
             without a worker.
+        run_length: This attempt's :class:`~application_sdk.execution.run_length.RunLengthWatch`.
+            ``None`` — the default — makes the loop byte-identical to before:
+            no run-length observation is made. Injected rather than built here
+            because only the activity layer knows when the *run* started.
     """
     warning_threshold = interval_seconds * 0.5
     _limit_bytes = parse_pod_memory_limit(os.environ.get("K8S_POD_MEMORY_LIMIT", ""))
@@ -385,6 +399,13 @@ async def auto_heartbeat_loop(
                     e,
                     exc_info=True,
                 )
+
+        # Ahead of the watchdog for the same reason the memory sample is: an
+        # enforced stall returns out of the loop, and the tick that kills a
+        # wedged attempt is exactly the tick on which "this run is also 30 hours
+        # long" is worth having recorded. `observe()` swallows its own failures.
+        if run_length is not None:
+            run_length.observe()
 
         # The stall watchdog runs last in the tick: the beat is the crash
         # detector and goes out first, and an enforced stall returns from here,

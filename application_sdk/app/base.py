@@ -329,6 +329,27 @@ def _safe_uuid() -> UUID:
     return UUID(str(workflow.uuid4()))
 
 
+def _run_started_at_epoch() -> float:
+    """When this run started, in wall-clock seconds since the epoch.
+
+    Deterministic for replay: ``workflow.info().start_time`` comes from the
+    run's own history, so every replay of a run reads the same instant and the
+    run-length observation measures the run rather than the attempt that
+    happens to be replaying it.
+
+    Returns ``0.0`` outside a workflow context — a task invoked directly in a
+    test or a local run has no run to measure. Never raises: this value only
+    feeds an alert, so failing to read it must cost the observation and nothing
+    else.
+    """
+    try:
+        start_time = workflow.info().start_time
+    # conformance: ignore[E004] probe for Temporal workflow context; the value only feeds an observability signal, so any failure degrades to "unknown run start"
+    except Exception:
+        return 0.0  # conformance: ignore[E007] workflow-context probe; "no run to measure" is the answer, and a log line here would fire per dispatch on every local run
+    return start_time.timestamp() if start_time is not None else 0.0
+
+
 def _safe_log(level: str, message: str, **attrs: Any) -> None:
     """Log using Temporal's workflow logger.
 
@@ -2391,6 +2412,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     task_meta.auto_heartbeat_seconds,
                     task_meta.retry_policy,
                     pool=task_meta.pool,
+                    schedule_to_close_seconds=task_meta.schedule_to_close_seconds,
                 )
                 setattr(app_instance, attr_name, wrapper)
 
@@ -2408,13 +2430,14 @@ def _create_task_activity_wrapper(
     retry_policy: Any = None,
     *,
     pool: str | None = None,
+    schedule_to_close_seconds: int | None = None,
 ) -> Any:
     """Create a wrapper that executes a task as a Temporal activity.
 
     Args:
         app_name: Name of the app.
         task_name: Name of the task (simple name, no prefix).
-        timeout_seconds: Activity timeout.
+        timeout_seconds: Activity timeout for one attempt (``start_to_close``).
         retry_max_attempts: Maximum retry attempts.
         retry_max_interval_seconds: Maximum interval between retries.
         output_type: The typed output class for deserialization.
@@ -2428,6 +2451,11 @@ def _create_task_activity_wrapper(
             2. ``{ATLAN_TASK_QUEUE}-{pool}`` derived from the app's base queue
                (default — ensures different apps with the same pool name get
                different Temporal queues automatically).
+        schedule_to_close_seconds: Ceiling on the task's total time across every
+            attempt. ``None`` (the default) sends no ``schedule_to_close_timeout``
+            and leaves the retry product unbounded — ``retry_max_attempts ×
+            timeout_seconds``. Resolved against ``timeout_seconds`` by
+            :func:`~application_sdk.execution.retry.resolve_activity_time_bounds`.
 
     Returns:
         Async function that executes the task as an activity.
@@ -2443,6 +2471,17 @@ def _create_task_activity_wrapper(
     )
     from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
         _to_temporal_retry_policy,
+        resolve_activity_time_bounds,
+    )
+
+    # Resolved once, outside the wrapper: the pair is fixed for the task's
+    # lifetime, so a dispatch does no arithmetic.
+    start_to_close_seconds, total_seconds = resolve_activity_time_bounds(
+        timeout_seconds, schedule_to_close_seconds
+    )
+    start_to_close_timeout = timedelta(seconds=start_to_close_seconds)
+    schedule_to_close_timeout = (
+        timedelta(seconds=total_seconds) if total_seconds is not None else None
     )
 
     with workflow.unsafe.imports_passed_through():
@@ -2473,6 +2512,12 @@ def _create_task_activity_wrapper(
             workflow_id=context_data.get("workflow_id", LOCAL_WORKFLOW_ID),
             heartbeat_timeout_seconds=heartbeat_timeout_seconds,
             auto_heartbeat_seconds=auto_heartbeat_seconds,
+            # The workflow is the only side that knows when the *run* started —
+            # nothing in `activity.info()` carries it — and the activity needs it
+            # for the run-length SLA alert (ADR-0018 → *Bounding total time*).
+            # Sourced from history rather than a clock, so a replayed run
+            # measures its real age instead of restarting the clock.
+            run_started_at_epoch=_run_started_at_epoch(),
         )
 
         # Build heartbeat timeout if enabled
@@ -2493,11 +2538,20 @@ def _create_task_activity_wrapper(
         result: Output = await execute_activity_with_eviction_retry(
             f"{app_name}:{task_name}",
             args=[task_context, input_data],
-            start_to_close_timeout=timedelta(seconds=timeout_seconds),
+            start_to_close_timeout=start_to_close_timeout,
             heartbeat_timeout=heartbeat_timeout,
             retry_policy=temporal_retry_policy,
             result_type=output_type,
             summary=summary,
+            # Sent only when the task declares a ceiling on its retry product.
+            # Passing ``schedule_to_close_timeout=None`` would be equivalent, but
+            # omitting the key keeps the call byte-identical to before this knob
+            # existed for every task that has not opted in.
+            **(
+                {"schedule_to_close_timeout": schedule_to_close_timeout}
+                if schedule_to_close_timeout is not None
+                else {}
+            ),
             **({"task_queue": pool_queue} if pool_queue else {}),
         )
 

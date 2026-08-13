@@ -188,6 +188,7 @@ deliberately not one-gap-sensitive — see the threshold below.
 | Elevated workflow latency | `histogram_quantile(0.99, temporal_workflow_endtoend_latency_bucket) > 300` | Warning |
 | Temporal server errors | `rate(temporal_long_request_failure_total[5m]) > 0` | Warning |
 | Task stalled (wedged but alive) | `AtlanAppTaskStalled` — see below | High |
+| Run past its length SLA | `increase(task_run_length_over_sla_seconds_count[15m]) > 0` — see below | Warning |
 
 The stall alert is **not optional while an app is in `warn`.** Warn mode cannot fail an
 activity, so an alert on this metric is what stands in for the kill: a wedged attempt is
@@ -214,6 +215,53 @@ because both emit nothing and only the wedge keeps emitting nothing. `3600` is o
 permanently-silent attempt, and N concurrent wedges reach it N times faster — so the page
 arrives soonest exactly when worker-slot exhaustion is the real risk. A single gap belongs
 on the dashboard and in the app's own work-list, not in an operator's inbox.
+
+### Run length: the run no stall and no timeout catches
+
+The stall alert above catches an attempt that goes *silent*. It cannot catch a run
+that keeps making **some** progress: every progress signal re-arms the watchdog, so
+no gap is ever observed, and with `start_to_close` raised to a backstop no timeout
+fires either. `temporal_workflow_duration_seconds` does not help — it is recorded
+when a run *ends*, so it can never describe a run that has not ended. That run is
+bounded by nothing, which is why ADR-0018 → *Bounding total time* replaces the
+duration **kill** with a duration **alert**.
+
+Every executing task attempt compares its run's age against
+`ATLAN_RUN_LENGTH_SLA_SECONDS` (24 h by default; `0` disables) on the same tick as
+its heartbeat. Past the SLA it emits:
+
+| Signal | Shape |
+|---|---|
+| `task_run_length_over_sla_seconds` | Histogram of the run's age, labels `task_name`, `temporal_workflow_type`. Recorded **only** while a run is over its SLA, and re-asserted once a minute for as long as it stays over |
+| One `WARNING` log line per attempt | The age, the SLA, the task that was running and the workflow type |
+
+```promql
+increase(task_run_length_over_sla_seconds_count[15m]) > 0
+```
+
+**A count, here, where the stall alert needs accumulated seconds** — and the
+asymmetry is the point. Gaps are emitted by every warn-mode app with an
+uninstrumented quiet spot, so only sustained silence distinguishes a wedge from a
+healthy pause. This series is emitted *only* by a run already past the length its
+own operator declared, so there is nothing to threshold: one observation is the
+finding. `histogram_quantile` over `_bucket` then answers "how far over". Because
+the observation re-asserts every minute, the window only has to exceed a minute —
+`[15m]` leaves slack and resolves within one window of the run ending.
+
+**Runbook:** [Long-running run](../runbooks/long-running-run.md) — how an operator
+separates healthy-but-slow from wedged, and what to do with each.
+
+!!! warning "Same Pushgateway requirement as the stall metric"
+
+    This series is emitted from the worker process, so in a split deployment it
+    only reaches VictoriaMetrics if `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` is set.
+
+**Blind spot, stated.** The observation rides an activity's heartbeat tick, so a
+run is measured only while at least one of its tasks is executing. A run parked
+between activities, a run whose worker is gone entirely, and a task with
+heartbeating disabled are not covered — those are "no worker / no activity"
+conditions, and the worker-liveness and activity-failure alerts above are what see
+them.
 
 ---
 

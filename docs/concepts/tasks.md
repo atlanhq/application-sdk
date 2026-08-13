@@ -164,8 +164,9 @@ process startup:
 
 | Env var | Default | Controls |
 |---|---|---|
-| `ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` | `600` (10 min) | `timeout_seconds` — Temporal kills the activity after this many seconds |
+| `ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` | `600` (10 min) | `timeout_seconds` — Temporal kills the activity attempt after this many seconds |
 | `ATLAN_HEARTBEAT_TIMEOUT_SECONDS` | `60` | `heartbeat_timeout_seconds` — Temporal restarts the activity if no heartbeat is received within this window |
+| `ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS` | unset | `schedule_to_close_seconds` — ceiling on the task's **total** time across every retry. Unset (or `0`) leaves the retry product unbounded |
 
 Set these in `atlan.yaml` (or your deployment env) to apply a fleet-wide default
 without touching every `@task` decorator:
@@ -202,6 +203,85 @@ progress signals, so a nine-hour task that writes a batch every thirty seconds n
 approaches it. See [Progress and Stalls](progress-and-stalls.md) for the full picture:
 what counts as progress, when you need `holding_progress()`, and how to read the report
 the watchdog produces for your app.
+
+All three bound **one attempt**. The ceiling on a task's *total* time across every
+attempt is a separate question, with its own answer below.
+
+### Bounding the retry product
+
+`timeout_seconds` bounds **one attempt**. The retry policy multiplies it, and
+`StartToClose` is a retryable failure in Temporal, so a wedged task can spend the
+whole product:
+
+```
+worst case per dispatch = retry_max_attempts x timeout_seconds
+```
+
+At the defaults that is 30 minutes. Against a 24-hour backstop it is 72 hours.
+The SDK leaves that product unbounded on purpose ([ADR-0018](../adr/0018-progress-aware-heartbeat.md)
+→ *Bounding total time*) — picking a total duration up front is the guess the
+whole design removes — so the ceiling is a declaration, available three ways:
+
+```python
+from application_sdk.execution.retry import retry_product_seconds
+
+class MyConnector(App):
+    # 1. Bound the total. A ceiling below timeout_seconds caps the attempt too,
+    #    so this works while inheriting a generous per-attempt backstop.
+    @task(schedule_to_close_seconds=7200)
+    async def extract(self, input: MyInput) -> MyOutput: ...
+
+    # 2. Bound at exactly what the retry policy already implies — makes today's
+    #    worst case explicit and enforced, and changes nothing about one attempt.
+    @task(
+        timeout_seconds=3600,
+        retry_max_attempts=3,
+        schedule_to_close_seconds=retry_product_seconds(3600, 3),
+    )
+    async def transform(self, input: MyInput) -> MyOutput: ...
+
+    # 3. Drop the multiplier instead — the right shape for a backstop-class task
+    #    where a retry cannot rescue anything.
+    @task(retry_max_attempts=1)
+    async def publish(self, input: MyInput) -> MyOutput: ...
+```
+
+Set `ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS` to apply a ceiling to every task in
+the app without touching a decorator. Two caveats worth stating:
+
+- A ceiling smaller than **two** attempts makes the retry policy cosmetic — the
+  second attempt cannot start inside the window. `retry_product_seconds` exists
+  so that arithmetic is explicit rather than accidental.
+- The ceiling bounds one *dispatch*, which is what the retry policy spends.
+  Worker-eviction re-dispatches (pod SIGTERM: KEDA scale-down, spot reclaim,
+  rolling deploy) each get a fresh window by design, and are bounded separately
+  by `ATLAN_WORKER_EVICTION_MAX_RETRIES`.
+
+### The run-length SLA alert
+
+A ceiling on the retry product does not bound a run that keeps making *some*
+progress: every progress signal re-arms the stall watchdog, so it never fires,
+and no per-attempt timeout is ever reached. For that shape the SDK raises a
+duration **alert** rather than a duration kill — it cannot know how long a
+healthy run takes against a tenant it has never seen, but a run past the length
+its own operator declared is worth a human look.
+
+Every executing task attempt compares its run's age against the SLA on the same
+tick as its heartbeat. Past the SLA it logs one `WARNING` and records
+`task.run_length_over_sla` (a histogram of the run's age, re-asserted once a
+minute for as long as the run stays over), so the alert keeps firing while the
+run does and resolves once it ends.
+
+| Env var | Default | Controls |
+|---|---|---|
+| `ATLAN_RUN_LENGTH_SLA_SECONDS` | `86400` (24 h) | How long a run may take before the alert is raised. `0` disables it |
+
+Nothing terminates the run. See
+[Monitoring → Run length](monitoring.md#run-length-the-run-no-stall-and-no-timeout-catches)
+for the alert rule and the [long-running-run runbook](../runbooks/long-running-run.md)
+for what an operator does with one. An app whose healthy runs legitimately outlast
+24 hours declares its own value; that declaration is the point, and it costs one env
+var rather than a code change.
 
 ## Manual Heartbeats with Progress
 
