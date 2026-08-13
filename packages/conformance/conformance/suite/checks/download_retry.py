@@ -176,9 +176,7 @@ def is_retried(text: str, wrapper_vars: frozenset[str] = frozenset()) -> bool:
     return is_wrapped(text, wrapper_vars) or bool(_RETRY_FLAG_RE.search(text))
 
 
-def retry_is_complete(
-    text: str, wrapper_vars: frozenset[str] = frozenset()
-) -> bool:
+def retry_is_complete(text: str, wrapper_vars: frozenset[str] = frozenset()) -> bool:
     """True unless this is a `curl --retry` with no `--retry-all-errors`.
 
     A retry wrapper covers everything (it re-runs the whole command on any

@@ -126,7 +126,9 @@ def test_wrapper_held_in_a_shell_variable_counts_as_retried() -> None:
 def test_unrelated_variable_does_not_count_as_a_wrapper() -> None:
     """Only a variable holding with-retry.sh suppresses a finding — any other
     variable on the line must leave the unretried download flagged."""
-    text = 'PREFIX="/usr/bin/time"\n"$PREFIX" curl -o /tmp/x https://example.invalid/x\n'
+    text = (
+        'PREFIX="/usr/bin/time"\n"$PREFIX" curl -o /tmp/x https://example.invalid/x\n'
+    )
     assert wrapper_variables(text) == frozenset()
     assert len(scan_text(text, "f.sh")) == 1
 
