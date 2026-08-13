@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Union, cast
 import orjson
 
 from application_sdk.common._listing import WRITER_STAGING_DIRNAME, prune_internal_dirs
-from application_sdk.common.atomic import atomic_write
+from application_sdk.common.atomic import atomic_copy, atomic_write, disk_full_guard
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
 from application_sdk.contracts.types import FileReference
@@ -432,8 +432,15 @@ class Writer(ABC):
                         raise
                     # Staging is a sibling of the output directory, so this only
                     # happens when the output directory is itself a mount point.
-                    # Copy rather than fail.
-                    shutil.move(source, destination)
+                    # Copy rather than fail — but never straight to the final
+                    # name: a copy interrupted there leaves a truncated file at
+                    # the artifact's real path, the exact incident class this
+                    # staging exists to kill. atomic_copy stages the copy next
+                    # to the destination and publishes it with a rename, so the
+                    # final name only ever appears complete; the source unlink
+                    # after a successful copy completes the move.
+                    atomic_copy(source, destination, operation="writer publish")
+                    os.unlink(source)
                     copied += 1
 
         if copied:
@@ -966,7 +973,12 @@ class Writer(ABC):
 
             # Write the statistics to a json file inside a dedicated statistics/ folder
             statistics_dir = os.path.join(self._write_root, "statistics")
-            os.makedirs(statistics_dir, exist_ok=True)
+            # Inside the guard: creating the directory is itself a write, and
+            # on a full filesystem it fails with the same ENOSPC the sidecar
+            # write would have — classified identically rather than escaping as
+            # a raw OSError that FormatStatisticsWriteError would wrap untyped.
+            with disk_full_guard(statistics_dir, operation="writer statistics write"):
+                os.makedirs(statistics_dir, exist_ok=True)
             output_file_name = os.path.join(statistics_dir, "statistics.json.ignore")
             # If chunk_start is provided, include it in the statistics filename
             try:

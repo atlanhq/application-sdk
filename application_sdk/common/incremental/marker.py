@@ -28,7 +28,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from application_sdk.common.atomic import atomic_write
+from application_sdk.common.atomic import atomic_write, disk_full_guard
 from application_sdk.common.incremental.helpers import (
     download_marker_from_s3,
     get_persistent_artifacts_path,
@@ -203,8 +203,12 @@ async def persist_marker_to_storage(
         connection_qualified_name, "marker.txt", application_name
     )
 
-    # Ensure local directory exists
-    local_marker_path.parent.mkdir(parents=True, exist_ok=True)
+    # Ensure local directory exists. Inside the guard: the mkdir is itself a
+    # write, and on a full filesystem it fails with the same ENOSPC the marker
+    # write below would have — classified identically rather than escaping the
+    # typed handling the atomic_write provides.
+    with disk_full_guard(local_marker_path, operation="marker write"):
+        local_marker_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Write marker to local file. Atomic because a truncated marker is its own
     # incident: it is the timestamp the *next* run starts from, it is uploaded

@@ -15,7 +15,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from application_sdk.common.atomic import atomic_copy, ensure_free_space
+from application_sdk.common.atomic import (
+    atomic_copy,
+    disk_full_guard,
+    ensure_free_space,
+)
 from application_sdk.constants import (
     APPLICATION_NAME,
     MARKER_TIMESTAMP_FORMAT,
@@ -327,7 +331,11 @@ def copy_directory_parallel(
     if not files:
         return 0
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    # Inside the guard: creating the destination is itself a write, and on a
+    # full filesystem it fails with the same ENOSPC/EDQUOT the copies below
+    # would have — the docstring promises DiskFullError for exactly this.
+    with disk_full_guard(dest_dir, operation="carry-forward copy"):
+        dest_dir.mkdir(parents=True, exist_ok=True)
 
     # This is the carry-forward copy behind FND-318. It ran out of space
     # part-way through and `shutil.copy2` left a truncated file at the

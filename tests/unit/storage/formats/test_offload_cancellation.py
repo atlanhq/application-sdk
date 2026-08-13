@@ -796,3 +796,66 @@ class TestWriterOutputIsolation:
         assert published["value"].tolist() == [
             "retry"
         ], "the orphaned writer's rows were appended to the retry's chunk"
+
+    async def test_a_cross_filesystem_publish_never_writes_directly_to_the_final_name(
+        self, tmp_path: Path
+    ) -> None:
+        """The EXDEV fallback is staged, not direct-to-final (FND-318 review).
+
+        When the output directory is itself a mount point, staging and output
+        sit on different filesystems, ``os.replace`` raises ``EXDEV``, and the
+        publish must fall back to a copy. That copy used to be ``shutil.move``
+        straight onto the artifact's real name — an interruption or ``ENOSPC``
+        mid-copy left a truncated file at the very path staging exists to keep
+        clean. The fallback now routes through ``atomic_copy`` (stage next to
+        the destination, fsync, rename) and unlinks the source itself, so the
+        final name only ever appears complete even on that layout.
+        """
+        import errno as errno_module
+
+        writer = make_output_writer(tmp_path)
+        await writer.write(pd.DataFrame({"id": [1, 2, 3], "value": ["a", "b", "c"]}))
+
+        real_replace = os.replace
+        moved: list[tuple[str, str]] = []
+
+        # Refuse only renames that land in the output directory — staging tree
+        # → ``writer.path`` — with EXDEV, as a mount-point output directory
+        # would. Renames that stay inside the staging tree (atomic_write's own
+        # publish of the statistics sidecar) or stage next to their
+        # destination inside the output directory (atomic_copy's publish) are
+        # same-filesystem by construction and must pass through, or the fake
+        # would simulate a filesystem that cannot rename within one directory
+        # — a different failure entirely.
+        output_dir = os.path.normpath(writer.path)
+
+        def refuse_cross_filesystem_rename(src, dst, **kwargs):
+            if str(dst).startswith(
+                output_dir + os.sep
+            ) and _STAGING_ROOT_DIRNAME in str(src):
+                raise OSError(errno_module.EXDEV, "Invalid cross-device link")
+            return real_replace(src, dst, **kwargs)
+
+        def no_direct_move(src, dst, **kwargs):
+            moved.append((str(src), str(dst)))
+            return real_replace(src, dst, **kwargs)
+
+        with (
+            patch.object(os, "replace", side_effect=refuse_cross_filesystem_rename),
+            patch("shutil.move", side_effect=no_direct_move),
+        ):
+            await writer.close()
+
+        assert moved == [], (
+            "the cross-filesystem fallback published with shutil.move "
+            f"direct-to-final: {moved}"
+        )
+        # The staged copy still landed the chunk under its real name.
+        assert "chunk-0-part0.parquet" in files_under(writer.path)
+        assert set(
+            pd.read_parquet(os.path.join(writer.path, "chunk-0-part0.parquet"))["value"]
+        ) == {
+            "a",
+            "b",
+            "c",
+        }
