@@ -931,7 +931,14 @@ class App(ABC):
     ) -> Any:
         """Run a blocking function in a thread pool.
 
-        Only available in @task methods.
+        Only available in @task methods. The offload is automatically wrapped in
+        an unbounded progress hold (ADR-0018), so a legitimately long blocking
+        call is never read as a stall. To bound it instead, wrap the offload in
+        :meth:`holding_progress` with the allowance you would give this one
+        call::
+
+            async with self.holding_progress("full table scan", timeout=7200):
+                rows = await self.run_in_thread(cursor.execute, sql)
 
         Args:
             func: Blocking function to run.

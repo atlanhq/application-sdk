@@ -18,18 +18,25 @@ failures so best-effort work can never break the caller.
 
 import asyncio
 import concurrent.futures
+import contextlib
 import contextvars
 import functools
 import math
 import multiprocessing
 import os
+import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Protocol, TypeVar
 
-from application_sdk.execution.progress import ProgressTracker, ProgressWatchdogMode
+from application_sdk.execution.progress import (
+    ProgressTracker,
+    ProgressWatchdogMode,
+    current_progress_tracker,
+    declared_hold_active,
+)
 from application_sdk.observability import (
     resource_sampler as _resource_sampler,  # module alias kept so tests can patch _resource_sampler.sample()
 )
@@ -459,6 +466,133 @@ async def auto_heartbeat_loop(
             return
 
 
+#: Label prefixes for the auto-holds on the two offload seams (ADR-0018 →
+#: *Feeding the tracker*, mechanism 2). The offloaded callable's own name is
+#: appended, so warn mode ranks *sites* — "run_in_thread.Cursor.execute, p99
+#: 40min, unbounded" is a work-list entry — instead of collapsing every blocking
+#: call in an app into one bucket. Naming the seam is part of the signal: it
+#: tells an operator which primitive to wrap in ``holding_progress()``.
+_THREAD_HOLD_PREFIX = "run_in_thread."
+_ISOLATED_HOLD_PREFIX = "run_fault_isolated."
+
+#: What a dotted Python qualname can contain, and nothing else: identifier
+#: characters, the dots joining them, and the angle brackets CPython puts around
+#: ``<lambda>`` and ``<locals>``. A name carrying anything outside this — a
+#: space, a quote, a path separator, a newline — is not a code identifier, so it
+#: is not something this label may repeat.
+_CALLABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.<>]+$")
+
+#: Longest callable name kept in a label. Real qualnames are short; the deepest
+#: shape in the SDK's own tests (a lambda nested in a test method) is under 90.
+_MAX_CALLABLE_NAME_LENGTH = 120
+
+#: Stand-in for a callable whose name is unusable. A stable constant, so a name
+#: this function refuses adds exactly one series to a metric rather than one per
+#: distinct value.
+_UNNAMEABLE_CALLABLE = "<callable>"
+
+
+def _offloaded_callable_name(func: Callable[..., Any]) -> str:
+    """Name the offloaded callable, for its auto-hold label.
+
+    Reads the callable's own ``__qualname__`` rather than inspecting the caller's
+    frame. All three ``run_in_thread`` entry points funnel into one
+    implementation, so a frame walk would name an SDK wrapper on two of the
+    three; and the callee is the half of the site an operator can act on anyway.
+
+    Only ever a code identifier — never an argument — so no query, path,
+    credential or customer value can reach a hold label.
+
+    Each fallback exists because something real lacks a usable ``__qualname__``:
+    ``functools.partial`` carries no name of its own (the wrapped callable
+    does), a callable *instance* has one only on its class, and a ``Mock``
+    fabricates a child mock for whatever attribute is asked of it, which would
+    otherwise put a repr into a label.
+
+    The name is then checked against what a qualname can actually look like, and
+    replaced with :data:`_UNNAMEABLE_CALLABLE` if it is not. ``__qualname__`` is
+    an ordinary writable attribute, so "it comes from code" is a convention
+    rather than a guarantee — a decorator, a factory or a dynamically-built
+    class can set it to anything, including a per-call value. That matters here
+    and not at a normal call site: this string lands in the stall log and in the
+    ``last_label`` *metric attribute*, where a per-call value is unbounded
+    series cardinality and a long one is dead weight on every stall report. This
+    is defence in depth, not a live threat — but the guarantee this function
+    advertises is cheap to actually enforce.
+    """
+    target: Any = func
+    while isinstance(target, functools.partial):
+        target = target.func
+    for attribute in ("__qualname__", "__name__"):
+        name = getattr(target, attribute, None)
+        if isinstance(name, str) and _is_usable_callable_name(name):
+            return name
+    fallback = type(target).__name__
+    return fallback if _is_usable_callable_name(fallback) else _UNNAMEABLE_CALLABLE
+
+
+def _is_usable_callable_name(name: str) -> bool:
+    """Whether ``name`` is short enough and shaped like a dotted qualname."""
+    return (
+        0 < len(name) <= _MAX_CALLABLE_NAME_LENGTH
+        and _CALLABLE_NAME_PATTERN.match(name) is not None
+    )
+
+
+@contextlib.contextmanager
+def _auto_hold(label: str, timeout: float | None) -> Iterator[None]:
+    """Vouch for an offload — unless a human already vouched for it.
+
+    The automatic half of ADR-0018's mechanism 2, shared by both offload seams so
+    the precedence rule below cannot be right at one and wrong at the other.
+
+    **An explicit allowance wins.** Inside a ``holding_progress`` block the auto-
+    hold stands down entirely and the declared hold governs. It has to: the
+    tracker's hold set is a union — ``held()`` and ``stalled_for()`` say
+    "vouched" while *any* hold is unlapsed — so an unbounded auto-hold nested
+    inside a bounded declared one keeps vouching after the declared allowance
+    lapses. The author asked for a wedged call to be caught at
+    ``timeout + budget``; adding a hold they did not ask for would silently hand
+    the site back to the duration backstop, which is the exact outcome
+    ``holding_progress`` exists to prevent. Standing down is also the honest
+    reading: the operation *is* already vouched for, by someone who knows the
+    number.
+
+    That leaves exactly one hold around the offload rather than two, so the
+    warn-mode work-list ranks the site an author can act on — the declared one —
+    instead of double-counting the same wall-clock under a second label.
+
+    The suppression is context-scoped (:func:`declared_hold_active`), never
+    tracker-scoped: a concurrent offload in a task that never entered the block
+    still gets its own hold. Suppressing on "some hold is open somewhere on this
+    tracker" would leave real blocking work unvouched and re-introduce the
+    false-kill this mechanism exists to remove.
+
+    Args:
+        label: Hold label — a site, never a value.
+        timeout: Allowance for the hold, or ``None`` for an unbounded one.
+
+    Yields:
+        Nothing; the caller runs its offload inside the block.
+    """
+    if declared_hold_active():
+        yield
+        return
+    # The tracker is read once and both calls go to that same object. Re-reading
+    # for the release would pick up whatever tracker the context has by then,
+    # which for a hold spanning a context change releases the wrong deadline.
+    tracker = current_progress_tracker()
+    hold = tracker.enter_hold(label, timeout)
+    try:
+        yield
+    finally:
+        # `finally`, not the success path: an offload that raises, and an
+        # activity cancelled mid-offload, must still release *their own* token.
+        # A leaked unbounded hold vouches for the rest of the attempt, which
+        # turns one exception into a watchdog that never fires again.
+        tracker.exit_hold(hold)
+
+
 async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     """Last-resort escape hatch: run a blocking function in a thread pool.
 
@@ -511,6 +645,21 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
       isolated from the caller (copy semantics).
     - Threads run on a dedicated ``sdk-blocking-*`` pool, separate from
       Temporal's activity pool, to avoid deadlocking the worker.
+    - The offload is automatically wrapped in an **unbounded** progress hold
+      (ADR-0018), so the stall watchdog never accuses a legitimately long
+      blocking call of stalling. Nothing to do at the call site, and nothing
+      about a long blocking call behaves differently than it did before the
+      watchdog existed. The SDK does not invent a duration for somebody else's
+      blocking call, so the watchdog is inactive for the call's whole duration
+      and the activity's duration bound is the only thing still holding it.
+      If you can say how long you would let this one call run before you would
+      rather it failed, declare it — wrap the offload in
+      ``holding_progress(label, timeout=...)``
+      (:func:`application_sdk.execution.progress.holding_progress`) and a wedged
+      call is caught at ``timeout`` + the no-progress budget instead of at the
+      backstop. Inside such a block the automatic hold **stands down** and your
+      declared allowance governs; the SDK never adds a vouch that would outlive
+      the one you asked for.
 
     **CRITICAL: your blocking code MUST have its own timeout.**
     Python threads cannot be forcibly killed. If the wrapped call hangs
@@ -531,10 +680,25 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     """
     ctx = contextvars.copy_context()
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        _BLOCKING_EXECUTOR,
-        functools.partial(ctx.run, functools.partial(func, *args, **kwargs)),
-    )
+    # Auto-hold, unbounded (ADR-0018 → *Feeding the tracker*, mechanism 2).
+    # `run_in_thread` is a mandatory seam, so this is the one place the SDK can
+    # vouch for blocking work for free — and it must vouch without inventing a
+    # duration. `func`'s own `timeout=` kwarg is not one: it is per-operation (a
+    # `requests` read timeout bounds the gap between socket reads, a
+    # `statement_timeout` bounds one statement of many), so a bound derived from
+    # it is systematically *smaller* than the call's legitimate duration, and
+    # the dominant shape — `run_in_thread(cursor.execute, sql)` — carries no
+    # timeout at all. Any fallback tight enough to be useful would be tighter
+    # than today's `start_to_close`, i.e. the upgrade would make legitimate long
+    # blocking work fail sooner than before. So: unbounded, the watchdog is
+    # inactive for the call's duration, the duration backstop owns it, and warn
+    # mode reports every closed hold with its observed duration. That residual
+    # is accepted and surfaced, not closed.
+    with _auto_hold(_THREAD_HOLD_PREFIX + _offloaded_callable_name(func), None):
+        return await loop.run_in_executor(
+            _BLOCKING_EXECUTOR,
+            functools.partial(ctx.run, functools.partial(func, *args, **kwargs)),
+        )
 
 
 def submit_in_thread(
@@ -708,6 +872,13 @@ async def run_fault_isolated(
     - The child imports ``func``'s module on first use (one-time cost,
       amortized by the pooled worker).
 
+    Like :func:`run_in_thread`, the call is automatically wrapped in a progress
+    hold (ADR-0018) so an isolated call — which emits nothing at all until the
+    child returns — is never read as a stall. Here the hold is *bounded* by
+    ``timeout`` when one is given, because that number is already a wall-clock
+    kill enforced below; ``timeout=None`` gives an unbounded hold, matching its
+    "wait forever" semantics.
+
     Args:
         func: Module-level function to run in the child.
         timeout: Seconds to wait before killing the child and raising
@@ -732,37 +903,62 @@ async def run_fault_isolated(
     if workers < 1:
         raise ValueError(f"max_workers must be >= 1, got {workers}")
     loop = asyncio.get_running_loop()
-    future = loop.run_in_executor(
-        _get_process_executor(workers), functools.partial(func, *args, **kwargs)
-    )
-    if timeout is not None:
-        # Not asyncio.wait_for: on timeout it cancels the future and then waits
-        # for the cancellation to land — but a running executor call cannot be
-        # cancelled, so wait_for would hang exactly when the child hangs.
-        # asyncio.wait just stops waiting; we then kill the child ourselves.
-        done, _ = await asyncio.wait({future}, timeout=timeout)
-        if not done:
+    # Auto-hold, bounded by this call's own `timeout` (ADR-0018 → *Feeding the
+    # tracker*, mechanism 2 — the same treatment as `run_in_thread`, since this
+    # is the SDK's other offload seam and an isolated call emits nothing at all
+    # until the child returns; the SDK's own default `timeout` for the upload
+    # validation scan is 600s, well past any plausible no-progress budget).
+    #
+    # Bounded rather than unbounded because unlike `run_in_thread` there is a
+    # real wall-clock number here and it belongs to *this* function, not to
+    # `func`: the block below enforces `timeout` by killing the child and raising
+    # `TimeoutError`, so it means precisely what `enter_hold`'s allowance means —
+    # how long the caller would let this one operation run before it would rather
+    # it failed. What ADR-0018 rejects is deriving a bound from the *callee's*
+    # per-operation kwargs, which is a different number. `timeout=None` still
+    # means an unbounded hold, matching `None`'s "wait forever" here.
+    #
+    # Inside a `holding_progress` block this stands down like `run_in_thread`'s
+    # does — see `_auto_hold`. Harmless even when this call's own `timeout` is
+    # tighter than the declared allowance: `timeout` is enforced here by killing
+    # the child, so the call returns at its deadline whether or not a hold is
+    # watching.
+    with _auto_hold(_ISOLATED_HOLD_PREFIX + _offloaded_callable_name(func), timeout):
+        future = loop.run_in_executor(
+            _get_process_executor(workers), functools.partial(func, *args, **kwargs)
+        )
+        if timeout is not None:
+            # Not asyncio.wait_for: on timeout it cancels the future and then
+            # waits for the cancellation to land — but a running executor call
+            # cannot be cancelled, so wait_for would hang exactly when the child
+            # hangs. asyncio.wait just stops waiting; we then kill the child
+            # ourselves.
+            done, _ = await asyncio.wait({future}, timeout=timeout)
+            if not done:
+                _discard_process_executor(workers)
+                # The kill resolves the abandoned future with BrokenProcessPool;
+                # consume it so asyncio never logs "exception was never
+                # retrieved".
+                future.add_done_callback(
+                    lambda f: None if f.cancelled() else f.exception()
+                )
+                raise TimeoutError(f"run_fault_isolated timed out after {timeout}s")
+        try:
+            return await future
+        except BrokenProcessPool:
             _discard_process_executor(workers)
-            # The kill resolves the abandoned future with BrokenProcessPool;
-            # consume it so asyncio never logs "exception was never retrieved".
-            future.add_done_callback(lambda f: None if f.cancelled() else f.exception())
-            raise TimeoutError(f"run_fault_isolated timed out after {timeout}s")
-    try:
-        return await future
-    except BrokenProcessPool:
-        _discard_process_executor(workers)
-        raise
-    except asyncio.CancelledError:
-        task = asyncio.current_task()
-        if task is not None and task.cancelling():
-            raise  # real cancellation of the caller — must propagate
-        # Foreign cancellation: a concurrent caller's timeout discarded the
-        # shared pool while this call was still queued. From this caller's
-        # perspective that is exactly a broken pool — surface it as the
-        # catchable exception the contract promises, never CancelledError.
-        raise BrokenProcessPool(
-            "process pool was discarded while this call was queued"
-        ) from None
+            raise
+        except asyncio.CancelledError:
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                raise  # real cancellation of the caller — must propagate
+            # Foreign cancellation: a concurrent caller's timeout discarded the
+            # shared pool while this call was still queued. From this caller's
+            # perspective that is exactly a broken pool — surface it as the
+            # catchable exception the contract promises, never CancelledError.
+            raise BrokenProcessPool(
+                "process pool was discarded while this call was queued"
+            ) from None
 
 
 async def run_best_effort(

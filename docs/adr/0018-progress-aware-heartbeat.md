@@ -471,6 +471,36 @@ Detection latency is `max_no_progress_seconds` plus at most one loop tick (10s).
    duration of the call and the 24h backstop is the only bound — a real, documented
    residual. Warn mode surfaces each one with its observed duration, and the
    conformance rule keeps them visible afterwards.
+
+   As landed (FND-290), the hold wraps the *single* implementation all three
+   public entry points funnel into — the module-level `run_in_thread`, the
+   `TaskExecutionContext` wrapper and `App.run_in_thread` — so a blocking call
+   gets exactly one hold no matter which one an app reaches for. It starts before
+   the executor dispatch, so it also covers time queued behind a saturated
+   `sdk-blocking-` pool, and it is released in a `finally`: an offload that
+   raises, and an activity cancelled mid-offload, must release their *own* token,
+   because a leaked unbounded hold vouches for the rest of the attempt and
+   silences the watchdog for good. Holds are keyed by token, so concurrent
+   offloads under one `asyncio.gather`, and an auto-hold nested inside an
+   author's declared `holding_progress`, never release each other.
+
+   The label is `run_in_thread.<callable qualname>` — the offloaded callable's
+   own name, never an argument, so warn mode ranks *sites*
+   (`run_in_thread.Cursor.execute`, p99 40min, unbounded) instead of collapsing
+   an app's blocking work into one bucket, and no query, path or credential can
+   reach a log or metric label through this route.
+
+   `run_fault_isolated` — the SDK's other offload seam, and `run_best_effort`'s
+   mechanism — is held on the same grounds: an isolated call emits nothing at all
+   until the child returns, and the SDK's own default allowance for the upload
+   validation scan is 600s, well past any plausible no-progress budget. Its hold
+   is **bounded by its own `timeout`** where `run_in_thread`'s is unbounded, and
+   that is not the derived bound rejected above: what is rejected is inferring an
+   allowance from the *callee's* per-operation kwargs, whereas
+   `run_fault_isolated(timeout=...)` is this function's own parameter, enforced
+   here as a wall-clock kill of the child — which is exactly what an allowance
+   means. `timeout=None` still yields an unbounded hold, matching its "wait
+   forever" semantics.
 3. **Manual `context.heartbeat(...)` or `holding_progress(...)` (explicit, app
    action).** The residual: a custom async loop, or an opaque single `await`
    against the connector's own source client (see the asymmetry below — this is

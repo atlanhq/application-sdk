@@ -298,6 +298,26 @@ class ProgressTracker:
             )
         )
 
+    def has_open_hold(self, token: int) -> bool:
+        """Whether ``token`` names a hold that has not been released yet.
+
+        Deliberately *not* :meth:`held`: this asks whether one specific hold is
+        still open, not whether anything is still vouching. A bounded hold whose
+        allowance has lapsed answers ``True`` here and stops counting in
+        :meth:`held` — which is what the automatic holds need, since a lapsed
+        declared hold must keep them suppressed (re-arming an unbounded auto-hold
+        at the moment an allowance lapses would defeat the allowance) while the
+        watchdog is free to resume.
+
+        Args:
+            token: A token from :meth:`enter_hold`.
+
+        Returns:
+            ``True`` while that hold is open on *this* tracker.
+        """
+        with self._lock:
+            return token in self._holds
+
     def held(self) -> bool:
         """Whether any hold is currently vouching for the attempt.
 
@@ -397,6 +417,15 @@ class _InertProgressTracker(ProgressTracker):
     def exit_hold(self, token: int) -> None:
         """Release nothing, and stay quiet: there was no hold to release."""
 
+    def has_open_hold(self, token: int) -> bool:
+        """Always ``False`` — an inert tracker never opened one.
+
+        Overridden rather than inherited for the same reason the mutators are:
+        this instance is a process-wide singleton, and the inherited reader would
+        take its shared lock on every offload made outside an activity.
+        """
+        return False
+
     def held(self) -> bool:
         """Always ``False`` — an inert tracker vouches for nothing."""
         return False
@@ -411,6 +440,62 @@ _INERT_TRACKER = _InertProgressTracker()
 _progress_tracker: ContextVar[ProgressTracker | None] = ContextVar(
     "progress_tracker", default=None
 )
+
+#: The declared hold covering the current context, as ``(tracker, token)``.
+#: Set by :func:`holding_progress` for its block's dynamic extent, which is what
+#: makes it answer *"is this work already covered by an allowance a human
+#: declared?"* rather than the tracker-wide *"is anything vouching?"* that
+#: :meth:`ProgressTracker.held` answers. The distinction matters because the
+#: tracker's hold set is flat: it cannot tell an enclosing hold from a concurrent
+#: one, and only the enclosing relationship should suppress anything.
+#:
+#: A *reference to the hold* rather than a boolean, because a boolean can outlive
+#: what it describes. ``asyncio.create_task`` copies the creating context
+#: (PEP 567), so a task spawned inside the block carries the mark into a lifetime
+#: the parent's ``reset`` can never reach — and a *detached* one, still running
+#: after the block exits, would then suppress its own auto-hold with no declared
+#: hold left to cover it. Naming the hold makes the mark falsifiable: the token
+#: is either still open on that tracker or it is not.
+_declared_hold: ContextVar[tuple["ProgressTracker", int] | None] = ContextVar(
+    "declared_hold", default=None
+)
+
+
+def declared_hold_active() -> bool:
+    """Whether an explicit declared allowance is *still* covering this context.
+
+    Read by the automatic holds (FND-290) so they can stand down inside a
+    :func:`holding_progress` block. An author who declares an allowance is
+    making a statement the SDK must not quietly outvote: an unbounded auto-hold
+    added *inside* a bounded one keeps vouching after the declared allowance
+    lapses — ``held()`` and ``stalled_for()`` treat the hold set as a union, and
+    an unbounded hold never lapses — which would hand a site its author had
+    bounded back to the duration backstop.
+
+    Both halves of the check earn their place:
+
+    - **The hold is still open** (:meth:`ProgressTracker.has_open_hold`), not
+      merely marked. A task spawned inside the block inherits a *copy* of the
+      context, so the mark survives in that task after the block exits and
+      releases the hold. Trusting the mark alone would let such a task stand
+      down with nothing vouching for it at all — no declared hold, and no
+      auto-hold either — which is a worse hole than the one this suppression
+      closes. Once the declared hold is released, that task's next offload is
+      auto-held again like any other.
+    - **It is open on the tracker bound right now.** A hold belonging to a
+      different attempt cannot govern this one, so a rebind in between must not
+      suppress anything.
+
+    Context-scoped rather than tracker-scoped on purpose. A concurrent task that
+    never entered the block does not observe the mark, so its own offload is
+    still auto-held; suppressing that one would leave real blocking work
+    unvouched, which is the false-kill this whole mechanism exists to prevent.
+    """
+    declared = _declared_hold.get()
+    if declared is None:
+        return False
+    tracker, token = declared
+    return tracker is current_progress_tracker() and tracker.has_open_hold(token)
 
 
 def current_progress_tracker() -> ProgressTracker:
@@ -510,6 +595,13 @@ async def holding_progress(label: str, *, timeout: float | None) -> AsyncIterato
     effective kill time for a wedged call is ``timeout + budget`` rather than the
     duration backstop's 24h.
 
+    **The allowance you declare governs everything inside the block**, including
+    the automatic holds ``run_in_thread`` and ``run_fault_isolated`` would
+    otherwise add (FND-290): those stand down here, so the blocking example below
+    lapses at ``timeout`` like the async one rather than inheriting an unbounded
+    auto-hold that would outlive it. That is why the two examples have the same
+    kill time despite one of them offloading.
+
     **Expect to need this in almost every connector.** Blocking calls are
     auto-held because ``run_in_thread`` is a mandatory seam, but async source
     calls have no equivalent SDK-owned seam — a connector talks to its source
@@ -562,7 +654,13 @@ async def holding_progress(label: str, *, timeout: float | None) -> AsyncIterato
     # spanning a context change releases the wrong deadline.
     tracker = current_progress_tracker()
     token = tracker.enter_hold(label, timeout)
+    declared = _declared_hold.set((tracker, token))
     try:
         yield
     finally:
+        # Reset first, then release. Both orders are correct for this context —
+        # the mark names this token either way — but releasing last keeps the
+        # window in which the mark points at a live hold as small as possible for
+        # any task still reading a *copy* of this context.
+        _declared_hold.reset(declared)
         tracker.exit_hold(token)
