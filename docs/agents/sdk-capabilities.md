@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.27.2
-source-sha:    aaaed3a54415a5dba8626bd74796c586cfa1c168
-source-date:   2026-08-13T03:04:30+01:00
+source-sha:    46754b0e6be87b5991af70045f5258a71711f647
+source-date:   2026-08-13T10:53:27+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -528,7 +528,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Import:** `from application_sdk.contracts import SerializableEnum`
 - **Signature:** `class SerializableEnum`
 - **Summary:** Base class for enums that need to be serialized through Temporal.
-- **Defined in:** `application_sdk/contracts/base.py`
+- **Defined in:** `application_sdk/_runtime/enums.py`
 
 #### `StorageTier`
 
