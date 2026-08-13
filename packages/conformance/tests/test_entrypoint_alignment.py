@@ -494,7 +494,10 @@ def test_p016_aliased_entrypoint_import(tmp_path: Path) -> None:
 
 
 def _write_single_manifest_with_routes(
-    tmp_path: Path, workflow_types: list[str]
+    tmp_path: Path,
+    workflow_types: list[str],
+    *,
+    local_bare_workflow_types: frozenset[str] = frozenset(),
 ) -> None:
     """Write app/generated/manifest.json (single mode) whose DAG declares the
     given ``workflow_type`` values (``"<app>:<wire>"`` for routes)."""
@@ -502,7 +505,16 @@ def _write_single_manifest_with_routes(
 
     gen = tmp_path / "app" / "generated"
     gen.mkdir(parents=True)
-    dag = {f"node{i}": {"workflow_type": wt} for i, wt in enumerate(workflow_types)}
+    dag = {}
+    for i, workflow_type in enumerate(workflow_types):
+        is_local = ":" in workflow_type or workflow_type in local_bare_workflow_types
+        dag[f"node{i}"] = {
+            "workflow_type": workflow_type,
+            "inputs": {
+                "app_name": "app" if is_local else "foreign-app",
+                "task_queue": "atlan-app" if is_local else "atlan-foreign-app",
+            },
+        }
     (gen / "manifest.json").write_text(json.dumps({"dag": dag}))
 
 
@@ -646,7 +658,9 @@ def test_p016_single_mode_bare_override_is_recognised_as_a_route(
     positive on an app that is correctly wired.
     """
     _write_single_manifest_with_routes(
-        tmp_path, ["app:extract-metadata", "KeifuWorkflow"]
+        tmp_path,
+        ["app:extract-metadata", "KeifuWorkflow"],
+        local_bare_workflow_types=frozenset({"KeifuWorkflow"}),
     )
     paths = _write_py(
         tmp_path,
@@ -736,15 +750,10 @@ def test_p016_multi_mode_override_does_not_move_the_wire_name(
     assert _p016_ids(findings) == []
 
 
-def test_p016_override_naming_a_platform_node_launders_the_route(
+def test_p016_override_naming_a_platform_node_does_not_launder_the_route(
     tmp_path: Path,
 ) -> None:
-    """Declaring a platform node's type as your own override suppresses P016.
-
-    Accepted, not a bug: the SDK really would register that type, so the DAG
-    node really would reach this entry point. Pinned so the behaviour is a
-    decision rather than an accident.
-    """
+    """A same-named node on another app/queue does not route the local EP."""
     _write_single_manifest_with_routes(
         tmp_path, ["app:extract-metadata", "PublishWorkflow"]
     )
@@ -754,6 +763,7 @@ def test_p016_override_naming_a_platform_node_launders_the_route(
             "app/connector.py": dedent("""\
                 from application_sdk.app import App, entrypoint
                 class MyApp(App):
+                    name = "app"
                     @entrypoint(name="extract-metadata")
                     async def extract_metadata(self, input: Input) -> Output: ...
                     @entrypoint(name="rogue", workflow_type="PublishWorkflow")
@@ -762,7 +772,8 @@ def test_p016_override_naming_a_platform_node_launders_the_route(
         },
     )
     findings = scan_all(paths, tmp_path)
-    assert _p016_ids(findings) == []
+    msgs = [f.message for f in findings if f.rule_id == "P016"]
+    assert len(msgs) == 1 and "rogue" in msgs[0]
 
 
 def test_p016_non_literal_workflow_type_does_not_rescue(tmp_path: Path) -> None:

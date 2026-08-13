@@ -91,12 +91,14 @@ class EntryPointContractError(InvalidInputError):
         return f"[{self._legacy_error_code}] {self.message}"
 
 
-@dataclass
+@dataclass(frozen=True)
 class EntryPointMetadata:
     """Metadata about a registered entry point.
 
     Entry points are independently-triggerable execution paths on an App.
-    Each entry point generates one Temporal workflow at worker startup.
+    Each entry point registers its canonical Temporal workflow type at worker
+    startup. A ``workflow_type`` override adds a second, primary registration
+    that dispatches to the same entry point.
     """
 
     name: str
@@ -170,9 +172,11 @@ def workflow_type_class_segment(workflow_type: str) -> str:
         workflow_type_class_segment("query-intelligence:keifu") → "query_intelligence_keifu"
         workflow_type_class_segment("com.acme.MyWorkflow")      → "com_acme_MyWorkflow"
     """
-    return "".join(
-        char if char.isalnum() or char == "_" else "_" for char in workflow_type
-    )
+    # ``str.isalnum()`` is wider than Python's identifier grammar: characters
+    # such as superscript two are alphanumeric but cannot appear in an
+    # identifier. Test each code point in a non-leading position instead, since
+    # the generated class always has the ``_Workflow_`` prefix.
+    return "".join(char if f"x{char}".isidentifier() else "_" for char in workflow_type)
 
 
 def canonical_workflow_type(app_name: str, ep: EntryPointMetadata) -> str:
@@ -378,15 +382,18 @@ def entrypoint(
 ) -> F | Callable[[F], F]:
     """Decorator to mark a method as an independently-triggerable entry point.
 
-    Each entry point generates one Temporal workflow at worker startup. Multiple
-    entry points on the same App share @task methods as Temporal activities.
+    Each entry point registers its canonical Temporal workflow type at worker
+    startup. A ``workflow_type`` override also registers a primary alias;
+    multiple entry points on the same App share @task methods as activities.
 
     Entry points are triggered via HTTP POST /workflows/v1/start?entrypoint=<name>.
     The body field 'workflow_type' is also accepted as a transitional fallback.
 
     Workflow naming:
-    - Single-entry-point apps: ``{app-name}`` (backward compat, no colon)
-    - Multi-entry-point apps: ``{app-name}:{entry-point-name}``
+    - An implicit ``run()`` entry point: ``{app-name}``.
+    - An explicit ``@entrypoint``: ``{app-name}:{entry-point-name}``.
+    - With ``workflow_type=``: the override is primary and the convention-derived
+      name above remains registered as an alias.
 
     Example::
 

@@ -46,7 +46,7 @@ class PooledTaskApp(App):
         # Never invoked — declaring it is enough to exercise pool resolution.
         return PoolOutput(length=len(input.value))
 
-    @entrypoint
+    @entrypoint(workflow_type="LegacyPooledWorkflow")
     async def run_light(self, input: PoolInput) -> PoolOutput:
         return PoolOutput(length=len(input.value))
 
@@ -57,9 +57,9 @@ async def test_pooled_task_declaration_does_not_break_activation(
 ):
     """P1.1: a declared pooled task must not fail the workflow at activation.
 
-    Pool resolution runs inside the sandbox. If it reaches ``os`` in a way the
-    sandbox restricts, every app with a pooled task fails its first activation —
-    the app never runs at all, regardless of whether the pooled task is used.
+    Pool resolution runs inside the sandbox. The workflow-type override also
+    exercises the alias class path used by migrated multi-entry-point apps. If
+    either seam is sandbox-unsafe, the app fails before its entry point runs.
     """
     reregister_app(PooledTaskApp)
     async with run_worker():

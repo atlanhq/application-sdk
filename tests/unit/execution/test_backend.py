@@ -152,6 +152,25 @@ class TestTemporalExecutorBackendExecute:
         assert wf_name == "mep:extract"
 
     @pytest.mark.asyncio
+    async def test_execute_with_entry_point_uses_workflow_type_override(self) -> None:
+        ep_meta = _make_ep_meta("extract", workflow_type="LegacyExtractWorkflow")
+        client = mock.MagicMock()
+        client.execute_workflow = mock.AsyncMock(return_value=None)
+        backend = TemporalExecutorBackend(client=client)
+        app_cls = _make_app_cls(name="mep", entry_points={"extract": ep_meta})
+        ctx = mock.MagicMock(app_name="mep", correlation_id="x")
+
+        await backend.execute(
+            app_cls,
+            _make_input_data(),
+            context=ctx,
+            retry_policy=SdkRetryPolicy(),
+            entry_point="extract",
+        )
+
+        assert client.execute_workflow.await_args.args[0] == "LegacyExtractWorkflow"
+
+    @pytest.mark.asyncio
     async def test_execute_with_unknown_entry_point_raises_value_error(self) -> None:
         client = mock.MagicMock()
         client.execute_workflow = mock.AsyncMock()
@@ -275,6 +294,26 @@ class TestTemporalExecutorBackendStart:
             entry_point="do",
         )
         assert client.start_workflow.await_args.args[0] == "ep:do"
+
+    @pytest.mark.asyncio
+    async def test_start_uses_workflow_type_override(self) -> None:
+        handle = mock.MagicMock(id="abc")
+        client = mock.MagicMock()
+        client.start_workflow = mock.AsyncMock(return_value=handle)
+        backend = TemporalExecutorBackend(client=client)
+        ep_meta = _make_ep_meta("do", workflow_type="LegacyDoWorkflow")
+        app_cls = _make_app_cls(name="ep", entry_points={"do": ep_meta})
+        ctx = mock.MagicMock(app_name="ep", correlation_id="c")
+
+        await backend.start(
+            app_cls,
+            _make_input_data(),
+            context=ctx,
+            retry_policy=SdkRetryPolicy(),
+            entry_point="do",
+        )
+
+        assert client.start_workflow.await_args.args[0] == "LegacyDoWorkflow"
 
     @pytest.mark.asyncio
     async def test_start_with_unknown_entry_point_raises(self) -> None:

@@ -26,7 +26,7 @@ from collections import Counter
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
-from ._code_entrypoints import CodeEntrypointScan
+from ._code_entrypoints import CodeEntrypointScan, EntrypointLocation
 from ._contract_entrypoints import ContractEntrypointScan
 
 _RULE_ID = "P016"
@@ -42,6 +42,32 @@ def _synthetic_node() -> ast.AST:
     node.lineno = 1  # type: ignore[attr-defined]
     node.col_offset = 0  # type: ignore[attr-defined]
     return node
+
+
+def _override_is_routed(
+    ep: EntrypointLocation, contract: ContractEntrypointScan
+) -> bool:
+    workflow_type = ep.workflow_type
+    app_name = ep.app_name
+    if not workflow_type or not app_name:
+        return False
+
+    local_targets = {
+        target
+        for candidate_type, candidate_app, candidate_queue in contract.workflow_targets
+        if ":" in candidate_type
+        for target in (candidate_app, candidate_queue)
+        if target is not None
+    }
+    return any(
+        candidate_type == workflow_type
+        and (
+            candidate_app == app_name
+            or (candidate_app is not None and candidate_app in local_targets)
+            or (candidate_queue is not None and candidate_queue in local_targets)
+        )
+        for candidate_type, candidate_app, candidate_queue in contract.workflow_targets
+    )
 
 
 def _best_anchor(
@@ -141,9 +167,7 @@ def check_p016(
     # ── Single-entry-point mode ──────────────────────────────────────────────
     if contract.mode == "single":
         routes = contract.routes | {
-            ep.name
-            for ep in code.entrypoints
-            if ep.workflow_type and ep.workflow_type in contract.workflow_types
+            ep.name for ep in code.entrypoints if _override_is_routed(ep, contract)
         }
         if routes:
             # Route/card split (BLDX-1342): a secondary @entrypoint is valid when

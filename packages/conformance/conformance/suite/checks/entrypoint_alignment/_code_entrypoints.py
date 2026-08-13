@@ -146,6 +146,9 @@ class EntrypointLocation:
     The manifest names this verbatim rather than the ``<app>:<wire>`` form, so
     the route matcher needs it to recognise the DAG node as this entry point's."""
 
+    app_name: str | None = None
+    """Literal or convention-derived name of the containing App class."""
+
 
 @dataclass
 class AppClassLocation:
@@ -198,6 +201,36 @@ def scan_file_for_entrypoints(
     if not ep_aliases and not app_aliases:
         return  # No SDK imports in this file — skip entirely.
 
+    method_app_names: dict[int, str | None] = {}
+    for class_node in (
+        node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+    ):
+        app_name = _method_name_to_kebab(class_node.name)
+        for stmt in class_node.body:
+            value: ast.expr | None = None
+            if isinstance(stmt, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == "name"
+                for target in stmt.targets
+            ):
+                value = stmt.value
+            elif (
+                isinstance(stmt, ast.AnnAssign)
+                and isinstance(stmt.target, ast.Name)
+                and stmt.target.id == "name"
+            ):
+                value = stmt.value
+            if value is not None:
+                if not isinstance(value, ast.Constant) or not isinstance(
+                    value.value, str
+                ):
+                    app_name = ""
+                elif value.value:
+                    app_name = value.value
+                break
+        for stmt in class_node.body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                method_app_names[id(stmt)] = app_name or None
+
     for node in ast.walk(tree):
         # ── App subclass detection ────────────────────────────────────────────
         if app_aliases and isinstance(node, ast.ClassDef):
@@ -244,6 +277,7 @@ def scan_file_for_entrypoints(
                         filename=filename,
                         node=deco,
                         workflow_type=_extract_workflow_type(deco),
+                        app_name=method_app_names.get(id(node)),
                     )
                 )
             break  # Only the first @entrypoint decorator on a method counts.

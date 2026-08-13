@@ -145,7 +145,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `@entrypoint`
 
 - **Import:** `from application_sdk.app import entrypoint`
-- **Signature:** `entrypoint(func: F | None = None, *, name: str | None = None, default: bool = False) -> F | Callable[[F], F]`
+- **Signature:** `entrypoint(func: F | None = None, *, ...)`
 - **Summary:** Decorator to mark a method as an independently-triggerable entry point.
 - **Defined in:** `application_sdk/app/entrypoint.py`
 
@@ -3382,4 +3382,3 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `incremental_diff_s3_prefix: str` `= ''`
   - `incremental_diff_files: int` `= 0`
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
-

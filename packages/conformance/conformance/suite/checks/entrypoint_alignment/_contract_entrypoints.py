@@ -60,30 +60,27 @@ class ContractEntrypointScan:
     ``workflow_type`` convention.
     """
 
-    workflow_types: frozenset[str] = field(default_factory=frozenset)
-    """Every DAG ``workflow_type`` verbatim, including colon-free values.
-
-    A colon-free value is either a platform/other-app node or one of this app's
-    own entry points carrying a ``workflow_type`` override; ``routes`` alone
-    cannot see the latter. :func:`~._check.check_p016` resolves the difference
-    against the overrides declared in code."""
+    workflow_targets: frozenset[tuple[str, str | None, str | None]] = field(
+        default_factory=frozenset
+    )
+    """DAG workflow types with their target app and task queue identities."""
 
 
-def _routes_from_manifest(manifest_path: Path) -> tuple[frozenset[str], frozenset[str]]:
+def _routes_from_manifest(
+    manifest_path: Path,
+) -> tuple[frozenset[str], frozenset[tuple[str, str | None, str | None]]]:
     """Collect DAG-declared workflow types from a manifest.
 
-    Returns ``(routes, workflow_types)``:
+    Returns ``(routes, workflow_targets)``:
 
     ``routes``
         Wire names taken from every ``workflow_type`` of the form
         ``"<app>:<wire-name>"`` (the part after the colon).
 
-    ``workflow_types``
-        Every ``workflow_type`` value verbatim, colon or not.  A colon-free
-        value is ambiguous on its own — it is either a platform/other-app node
-        (``"PublishWorkflow"``) or this app's own entry point carrying a
-        ``workflow_type`` override.  Only the code side can tell them apart, so
-        the values are handed up rather than discarded here.
+    ``workflow_targets``
+        Every workflow type plus its DAG node's ``app_name`` and ``task_queue``.
+        The code-side check uses that identity to distinguish local bare
+        overrides from same-named foreign platform nodes.
 
     The walk is scoped to the ``dag`` subtree, so a ``workflow_type`` appearing
     elsewhere in the manifest is not collected.  It does **not** pin the
@@ -102,13 +99,24 @@ def _routes_from_manifest(manifest_path: Path) -> tuple[frozenset[str], frozense
         return frozenset(), frozenset()
 
     wire_names: set[str] = set()
-    workflow_types: set[str] = set()
+    nodes: list[tuple[str, str | None, str | None]] = []
+
+    def _target(node: dict[str, Any]) -> tuple[str | None, str | None]:
+        inputs = node.get("inputs")
+        source = inputs if isinstance(inputs, dict) else node
+        app_name = source.get("app_name")
+        task_queue = source.get("task_queue")
+        return (
+            app_name if isinstance(app_name, str) and app_name else None,
+            task_queue if isinstance(task_queue, str) and task_queue else None,
+        )
 
     def _walk(node: Any) -> None:
         if isinstance(node, dict):
             wt = node.get("workflow_type")
             if isinstance(wt, str) and wt:
-                workflow_types.add(wt)
+                app_name, task_queue = _target(node)
+                nodes.append((wt, app_name, task_queue))
                 if ":" in wt:
                     wire_names.add(wt.split(":", 1)[1])
             for value in node.values():
@@ -118,7 +126,7 @@ def _routes_from_manifest(manifest_path: Path) -> tuple[frozenset[str], frozense
                 _walk(item)
 
     _walk(dag)
-    return frozenset(wire_names), frozenset(workflow_types)
+    return frozenset(wire_names), frozenset(nodes)
 
 
 def scan_contract(root: Path) -> ContractEntrypointScan:
@@ -153,12 +161,12 @@ def scan_contract(root: Path) -> ContractEntrypointScan:
     # Single-EP: a manifest.json at the root of app/generated/
     single_manifest = generated / "manifest.json"
     if single_manifest.is_file():
-        routes, workflow_types = _routes_from_manifest(single_manifest)
+        routes, workflow_targets = _routes_from_manifest(single_manifest)
         return ContractEntrypointScan(
             names=frozenset(),
             mode="single",
             routes=routes,
-            workflow_types=workflow_types,
+            workflow_targets=workflow_targets,
         )
 
     # app/generated/ exists but contains no manifest.json anywhere — treat as absent

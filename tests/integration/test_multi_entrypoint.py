@@ -292,6 +292,25 @@ async def test_override_and_alias_both_dispatch(
 
 
 @pytest.mark.integration
+async def test_executor_dispatches_override_by_entry_point_name(
+    run_worker, executor, task_queue, reregister_app
+):
+    """The public executor bridge must start the override the worker registers."""
+    reregister_app(OverrideApp)
+    async with run_worker():
+        context = AppContext(app_name=OverrideApp._app_name, app_version="1.0.0")
+        result = await executor.execute(
+            OverrideApp,
+            OverrideInput(value="abcd"),
+            context=context,
+            retry_policy=NO_RETRY,
+            entry_point="modern-name",
+        )
+    assert isinstance(result, OverrideOutput)
+    assert result.length == 4
+
+
+@pytest.mark.integration
 async def test_entry_point_without_override_keeps_canonical_type(
     run_worker, temporal_client, task_queue, reregister_app
 ):

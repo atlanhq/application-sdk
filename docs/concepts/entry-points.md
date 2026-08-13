@@ -196,11 +196,13 @@ class QueryIntelligenceApp(App):
 | `KeifuWorkflow` | `keifu` (primary) |
 | `query-intelligence:keifu` | `keifu` (canonical alias) |
 
-The canonical name stays registered, so adopting an override cannot break a caller already using it, and an app can migrate in either direction without a flag day.
+The canonical name stays registered, so adopting an override does not break a caller already using the canonical type. Keep the override registered for as long as legacy callers can still use it.
+
+Before assigning an established type to new code, drain its open workflows or route them to the previous worker build with Temporal worker versioning. An open workflow replays against whichever implementation now owns its type; changing that implementation can make its history nondeterministic even though new runs dispatch correctly.
 
 What does **not** move: `?entrypoint=` still selects by entry-point name, task activity names keep their `{app-name}:{task-name}` prefix, and `App.name` is untouched — so state and storage namespaces stay put.
 
-Use it only to preserve an existing wire contract. For a new entry point, take the canonical name. Registration fails at class-definition time if two entry points claim the same type, or if two types differ only by characters that collapse in the generated class name (`-` and `:` both become `_`).
+Use it only to preserve an existing wire contract. For a new entry point, take the canonical name. Worker startup fails if two apps claim the same type, an app claims an SDK-reserved `sdr:*` handler type, or two types in one module collapse to the same generated class name (`-` and `:` both become `_`).
 
 ### HTTP dispatch
 

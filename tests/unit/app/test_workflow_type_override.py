@@ -185,6 +185,13 @@ class TestClassSegment:
         assert segment == expected
         assert f"_Workflow_{segment}".isidentifier()
 
+    @pytest.mark.parametrize("workflow_type", ["²Workflow", "Workflow¼"])
+    def test_folds_unicode_alphanumeric_that_is_not_identifier_safe(
+        self, workflow_type: str
+    ) -> None:
+        segment = workflow_type_class_segment(workflow_type)
+        assert f"_Workflow_{segment}".isidentifier()
+
 
 class TestWorkflowTypesFor:
     def test_canonical_without_override(self) -> None:
@@ -344,6 +351,15 @@ class TestAppMetadataIndex:
         )
         assert dict(meta.workflow_types) == {}
 
+    def test_entry_point_metadata_cannot_drift_after_index_construction(self) -> None:
+        meta = self._meta()
+        with pytest.raises(AttributeError):
+            meta.entry_points["keifu"].workflow_type = "UnregisteredWorkflow"
+        assert set(meta.workflow_types) == {
+            "KeifuWorkflow",
+            "query-intelligence:keifu",
+        }
+
 
 # ---------------------------------------------------------------------------
 # End-to-end through App registration
@@ -420,6 +436,33 @@ class TestAppRegistration:
             for wf_cls in get_all_app_workflows()
         }
         assert {"AliasedWorkflow", "aliased:extract"} <= registered
+
+    def test_postgres_like_mixed_app_keeps_all_existing_workflow_types(
+        self, clean_app_registry: object, clean_task_registry: object
+    ) -> None:
+        """A run() + crawler + miner app must keep its established type set."""
+
+        class PostgresLikeApp(App):
+            name = "postgres"
+
+            async def run(self, input: _QiInput) -> _QiOutput:
+                return _QiOutput()
+
+            @entrypoint
+            async def crawler(self, input: _QiInput) -> _QiOutput:
+                return _QiOutput()
+
+            @entrypoint
+            async def miner(self, input: _KeifuInput) -> _KeifuOutput:
+                return _KeifuOutput()
+
+        meta = AppRegistry.get_instance().get("postgres")
+        assert set(meta.workflow_types) == {
+            "postgres",
+            "postgres:crawler",
+            "postgres:miner",
+        }
+        assert meta.entry_points["run"].default is True
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
@@ -111,6 +113,49 @@ class TestGetAllAppWorkflows:
         names = {getattr(wf, "__temporal_workflow_definition").name for wf in workflows}
         assert "multi-app:extract-data" in names
         assert "multi-app:mine-queries" in names
+
+    def test_rejects_duplicate_workflow_types_across_apps(self) -> None:
+        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+
+        class FirstApp(App):
+            @entrypoint(workflow_type="SharedWorkflow")
+            async def extract(self, input: _WfInput) -> _WfOutput:
+                return _WfOutput()
+
+        class SecondApp(App):
+            @entrypoint(workflow_type="SharedWorkflow")
+            async def extract(self, input: _WfInput) -> _WfOutput:
+                return _WfOutput()
+
+        with pytest.raises(EntryPointContractError, match="SharedWorkflow"):
+            get_all_app_workflows()
+
+    def test_rejects_generated_class_collision_across_apps_in_same_module(self) -> None:
+        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+
+        class ColonApp(App):
+            @entrypoint(workflow_type="shared:type")
+            async def extract(self, input: _WfInput) -> _WfOutput:
+                return _WfOutput()
+
+        class HyphenApp(App):
+            @entrypoint(workflow_type="shared-type")
+            async def extract(self, input: _WfInput) -> _WfOutput:
+                return _WfOutput()
+
+        with pytest.raises(EntryPointContractError, match="_Workflow_shared_type"):
+            get_all_app_workflows()
+
+    def test_rejects_sdk_reserved_sdr_workflow_type(self) -> None:
+        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+
+        class ReservedApp(App):
+            @entrypoint(workflow_type="sdr:test_auth")
+            async def extract(self, input: _WfInput) -> _WfOutput:
+                return _WfOutput()
+
+        with pytest.raises(EntryPointContractError, match="reserved"):
+            get_all_app_workflows()
 
 
 class TestGenerateWorkflowClassBehaviour:

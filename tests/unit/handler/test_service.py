@@ -1249,6 +1249,85 @@ class TestStartWorkflowRouting:
         finally:
             patcher.stop()
 
+    def test_legacy_workflow_type_prefers_registered_type_over_sibling_name(
+        self,
+    ) -> None:
+        """The deprecated body field carries a Temporal type, not an EP name."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _AmbiguousApp(App):
+            name = "routing-test"
+
+            @entrypoint(name="legacy", workflow_type="target")
+            async def legacy(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint(name="target")
+            async def target(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="routing-test",
+            app_class=_AmbiguousApp,
+            temporal_host="temporal:7233",
+        )
+        mock_handle = MagicMock(id="wf-123", result_run_id="run-abc")
+        mock_client = MagicMock()
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+
+        with patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        ):
+            client = TestClient(svc, raise_server_exceptions=False)
+            with pytest.warns(DeprecationWarning, match="workflow_type.*deprecated"):
+                response = client.post(
+                    "/workflows/v1/start",
+                    json={"workflow_type": "target", "name": "x"},
+                )
+
+        assert response.status_code == 200
+        assert mock_client.start_workflow.await_args.args[0] == "target"
+
+    def test_entrypoint_query_dispatches_workflow_type_override(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _OverrideApp(App):
+            name = "routing-test"
+
+            @entrypoint(workflow_type="LegacyExtractWorkflow")
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="routing-test",
+            app_class=_OverrideApp,
+            temporal_host="temporal:7233",
+        )
+        mock_handle = MagicMock(id="wf-123", result_run_id="run-abc")
+        mock_client = MagicMock()
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+
+        with patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        ):
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.post(
+                "/workflows/v1/start?entrypoint=extract", json={"name": "x"}
+            )
+
+        assert response.status_code == 200
+        assert mock_client.start_workflow.await_args.args[0] == "LegacyExtractWorkflow"
+
     def test_query_param_takes_precedence_over_body_workflow_type(self) -> None:
         """?entrypoint= wins over body 'workflow_type' when both are provided."""
         from unittest.mock import AsyncMock, MagicMock, patch
