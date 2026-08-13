@@ -94,7 +94,9 @@ def test_datasource_prefix_scoping_never_leaks_unrelated_env():
 def test_empty_and_null_fields_are_dropped():
     env = {
         "E2E_SOURCE_DATASOURCE": "postgres",
-        "E2E_SOURCE_RAW_JSON": json.dumps({"host": "db", "password": "", "extra": None}),
+        "E2E_SOURCE_RAW_JSON": json.dumps(
+            {"host": "db", "password": "", "extra": None}
+        ),
     }
     src = DataForgeSource.from_env(environ=env)
 
