@@ -671,19 +671,21 @@ class TestParquetFileWriterConsolidation:
             typename="test_type",
         )
 
-        # Test temp folder path generation. The writer's own token sits between
-        # the shared "temp_accumulation" root and the folder, so no two writers
-        # can share an accumulation directory (FND-315).
+        # Test temp folder path generation. The accumulation tree hangs off the
+        # writer's own token-named staging root, so no two writers can share an
+        # accumulation directory (FND-315) and nothing left there by a
+        # cancelled attempt sits inside the output directory (FND-317).
         temp_path = parquet_output._get_temp_folder_path(0)
         expected_path = os.path.join(
-            base_output_path,
-            "test_suffix",
-            "test_type",
+            parquet_output._scratch_root,
             "temp_accumulation",
-            parquet_output._temp_run_id,
             "folder-0",
         )
         assert temp_path == expected_path
+        assert parquet_output._scratch_root.startswith(
+            os.path.join(base_output_path, "test_suffix", ".sdk-writer-staging")
+            + os.sep
+        )
 
     def test_consolidated_file_path_generation(self, base_output_path: str):
         """Test consolidated file path generation."""
@@ -692,14 +694,17 @@ class TestParquetFileWriterConsolidation:
             typename="test_type",
         )
 
-        # Test consolidated file path generation
+        # A consolidated file carries its published name from the moment it is
+        # written; only the directory is private until close() publishes it.
         consolidated_path = parquet_output._get_consolidated_file_path(
             folder_index=0, chunk_part=0
         )
-        expected_path = os.path.join(
+        assert consolidated_path == os.path.join(
+            parquet_output._write_root, "chunk-0-part0.parquet"
+        )
+        assert parquet_output._published_path(consolidated_path) == os.path.join(
             base_output_path, "test_suffix", "test_type", "chunk-0-part0.parquet"
         )
-        assert consolidated_path == expected_path
 
     def test_start_new_temp_folder(self, base_output_path: str):
         """Test starting a new temp folder."""
@@ -1054,7 +1059,7 @@ class TestParquetFileWriterConsolidation:
         assert parquet_output.total_record_count == 600
         assert parquet_output.chunk_count >= 1
 
-        temp_base = os.path.join(parquet_output.path, "temp_accumulation")
+        temp_base = parquet_output._get_temp_base_path()
         assert not os.path.exists(temp_base) or not os.listdir(temp_base)
 
     @pytest.mark.asyncio
