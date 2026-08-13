@@ -9,6 +9,7 @@ pre-set events to avoid hangs.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import sys
 import types
 from collections.abc import Callable
@@ -445,6 +446,87 @@ class TestRunInThread:
         with patch.object(hb_mod.asyncio, "get_running_loop", return_value=fake_loop):
             with pytest.raises(ValueError):
                 await run_in_thread(bad)
+
+
+# ---------------------------------------------------------------------------
+# submit_in_thread — detached cleanup, also no real threads
+# ---------------------------------------------------------------------------
+
+
+class InlineExecutor:
+    """Stand-in for the SDK pool that runs submitted work on the calling thread."""
+
+    def __init__(self) -> None:
+        self.submissions: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def submit(self, fn, *args, **kwargs):
+        self.submissions.append((args, kwargs))
+        future: concurrent.futures.Future[Any] = concurrent.futures.Future()
+        future.set_running_or_notify_cancel()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except BaseException as exc:  # noqa: BLE001 — mirrors executor semantics
+            future.set_exception(exc)
+        return future
+
+
+class TestSubmitInThread:
+    def test_submits_to_the_sdk_pool_with_args_propagated(self) -> None:
+        """Detached dispatch goes to the SDK-owned pool, not the default executor."""
+        from application_sdk.execution import heartbeat as hb_mod
+
+        executor = InlineExecutor()
+        calls: list[tuple[int, int]] = []
+
+        with patch.object(hb_mod, "_BLOCKING_EXECUTOR", executor):
+            future = hb_mod.submit_in_thread(lambda a, b: calls.append((a, b)), 1, b=2)
+
+        assert calls == [(1, 2)]
+        assert future.done() and future.exception() is None
+        assert len(executor.submissions) == 1
+
+    def test_a_failure_is_reported_rather_than_swallowed(self) -> None:
+        """Nothing awaits the future, so the failure has to surface in the log."""
+        from application_sdk.execution import heartbeat as hb_mod
+
+        def boom() -> None:
+            raise OSError("handle already gone")
+
+        with patch.object(hb_mod, "_BLOCKING_EXECUTOR", InlineExecutor()):
+            with patch.object(hb_mod.logger, "warning") as warning:
+                future = hb_mod.submit_in_thread(boom)
+
+        assert isinstance(future.exception(), OSError)
+        warning.assert_called_once()
+        assert "handle already gone" in str(warning.call_args)
+
+    def test_a_shut_down_pool_does_not_raise_at_the_unwinding_caller(self) -> None:
+        """Callers submit from a ``finally``; interpreter exit must not raise there."""
+        from application_sdk.execution import heartbeat as hb_mod
+
+        shut_down = MagicMock()
+        shut_down.submit.side_effect = RuntimeError(
+            "cannot schedule new futures after shutdown"
+        )
+
+        with patch.object(hb_mod, "_BLOCKING_EXECUTOR", shut_down):
+            with patch.object(hb_mod.logger, "warning") as warning:
+                future = hb_mod.submit_in_thread(lambda: None)
+
+        assert future.cancelled(), "a skipped cleanup call must report as cancelled"
+        warning.assert_not_called()
+
+    def test_a_cancelled_submission_is_not_reported_as_a_failure(self) -> None:
+        """A future cancelled before it ran never failed, so it must stay quiet."""
+        from application_sdk.execution import heartbeat as hb_mod
+
+        cancelled: concurrent.futures.Future[Any] = concurrent.futures.Future()
+        cancelled.cancel()
+
+        with patch.object(hb_mod.logger, "warning") as warning:
+            hb_mod._report_detached_failure(cancelled)
+
+        warning.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
