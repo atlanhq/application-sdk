@@ -149,6 +149,44 @@ scrape_configs:
 | Worker slots exhausted | `temporal_worker_task_slots_available == 0` | Critical |
 | Elevated workflow latency | `histogram_quantile(0.99, temporal_workflow_endtoend_latency_bucket) > 300` | Warning |
 | Temporal server errors | `rate(temporal_long_request_failure_total[5m]) > 0` | Warning |
+| Task stalled (wedged but alive) | `increase(task_no_progress_gap_seconds_sum[1h]) >= 3600` | High |
+
+---
+
+## Stall watchdog signals
+
+The stall watchdog (see [ADR-0018](../adr/0018-progress-aware-heartbeat.md)) is the
+only thing that observes an activity that is **alive and heartbeating but no longer
+doing anything**. `heartbeat_timeout` cannot see it — beats keep arriving — and
+with `start_to_close` reduced to a 24h backstop, nothing kills it automatically
+while an app runs the watchdog in `warn` mode. Two series carry the evidence:
+
+| Series | One record per | Read by |
+|--------|----------------|---------|
+| `task_no_progress_gap_seconds` | no-progress gap past `max_no_progress_seconds`, labelled with `task_name`, `progress_last_label` and `watchdog_mode` | The `AtlanAppTaskStalled` alert — **this is the containment while nothing enforces** — and the stall dashboard |
+| `task_hold_duration_seconds` | hold released, labelled with `hold_label`, `hold_bounded`, `hold_lapsed` | The per-app work-list: long *unbounded* holds want an explicit allowance, lapsed ones have an allowance that is too tight. Dashboard only |
+
+The matching log lines are **INFO by design**, not WARNING: warn mode is a
+fleet-wide default, so one gap observation is an expected observation rather than
+an actionable failure, and alerting off the log level would manufacture exactly
+the fleet-wide noise ADR-0018 exists to reduce. The alert reads the metric.
+
+- **Alert rule:** `AtlanAppTaskStalled` in
+  [`atlanhq/atlan-alerts`](https://github.com/atlanhq/atlan-alerts/blob/main/alerting/rules/App-Platform/atlan-apps-task-stall-alerts.yaml)
+  — pages when a task accumulates an hour of unexplained silence per hour.
+- **Runbook:** [Stalled task](../runbooks/stalled-task.md) — how to tell a wedge
+  from a healthy-but-quiet spot, and what to do with each.
+- **Dashboard:** import
+  [`task-stall-dashboard.json`](../static/observability/task-stall-dashboard.json)
+  into Grafana against the Prometheus/VictoriaMetrics datasource.
+
+!!! warning "Split-deployment workers need the Pushgateway to be configured"
+
+    Activities run in the worker process, so in a split deployment these series
+    only reach VictoriaMetrics if `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` is set. With
+    it unset the worker logs a warning at startup and pushes nothing — no
+    task-level series exists for that app and the stall alert cannot fire for it.
+    Combined-mode pods are covered by the FastAPI `/metrics` scrape.
 
 ---
 
