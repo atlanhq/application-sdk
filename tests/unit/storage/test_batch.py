@@ -81,6 +81,15 @@ class TestListKeys:
 # ---------------------------------------------------------------------------
 
 
+class _ForeignBaseError(BaseException):
+    """A leaf ``ops.delete``'s ``except Exception`` cannot wrap.
+
+    Not ``SystemExit`` / ``KeyboardInterrupt``: asyncio re-raises those directly
+    into the event loop, so they never reach the TaskGroup's ExceptionGroup and
+    would not exercise the branch under test.
+    """
+
+
 def _bulk_delete_raising_not_found(vanished_key: str):
     """Side effect where the bulk (list) delete reports *vanished_key* as gone.
 
@@ -275,6 +284,33 @@ class TestDeletePrefix:
             await delete_prefix("r", store)
         assert "Failed to check root marker" in str(exc_info.value)
 
+    async def test_foreign_failure_in_fallback_is_not_demoted_to_a_cause(
+        self, store
+    ) -> None:
+        """Unwrapping the ExceptionGroup is only safe when every leaf is a
+        StorageError. A leaf that is not (here a BaseException, which
+        ``ops.delete``'s ``except Exception`` does not wrap) must reach the
+        caller as the group — demoting it to ``__cause__`` would leave it
+        reachable in a traceback but invisible to an ``except`` clause.
+        """
+        await _put("x/a.txt", b"1", store, normalize=False)
+
+        async def not_found_then_foreign(target, paths):
+            if isinstance(paths, str):
+                raise _ForeignBaseError("not an Exception subclass")
+            raise FileNotFoundError("Object at location x/a.txt not found")
+
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.delete_async",
+                side_effect=not_found_then_foreign,
+            ),
+            pytest.raises(BaseExceptionGroup) as exc_info,
+        ):
+            await delete_prefix("x/", store, normalize=False)
+
+        assert [type(leaf) for leaf in exc_info.value.exceptions] == [_ForeignBaseError]
+
     async def test_fallback_awaits_sibling_cancellation_before_raising(
         self, store
     ) -> None:
@@ -291,6 +327,7 @@ class TestDeletePrefix:
         await _put("w/slow.txt", b"2", store, normalize=False)
 
         unwound: list[str] = []
+        never_set = asyncio.Event()  # the sibling can only end via cancellation
 
         async def one_fails_one_hangs(target, paths):
             if not isinstance(paths, str):
@@ -298,10 +335,13 @@ class TestDeletePrefix:
             if paths == "w/bad.txt":
                 raise RuntimeError("permission denied")
             try:
-                await asyncio.sleep(30)  # only ever ends via cancellation
+                await never_set.wait()
             finally:
                 unwound.append(paths)
 
+        # wait_for bounds the whole call: if cancellation ever stops being
+        # delivered, this fails in seconds with a TimeoutError instead of
+        # parking the suite on the sibling.
         with (
             patch(
                 "application_sdk.storage.batch.obstore.delete_async",
@@ -309,7 +349,9 @@ class TestDeletePrefix:
             ),
             pytest.raises(StorageError),
         ):
-            await delete_prefix("w/", store, normalize=False)
+            await asyncio.wait_for(
+                delete_prefix("w/", store, normalize=False), timeout=5
+            )
 
         assert unwound == ["w/slow.txt"]
 

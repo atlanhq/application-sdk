@@ -14,7 +14,7 @@ import pytest
 from application_sdk import constants
 from application_sdk.storage.batch import download_prefix, list_keys
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
-from application_sdk.storage.factory import create_memory_store
+from application_sdk.storage.factory import create_local_store, create_memory_store
 from application_sdk.storage.ops import (
     _get_bytes,
     _put,
@@ -467,41 +467,118 @@ class TestIsNotFound:
 class TestIsLocalDirCollision:
     """A local store key that resolves to a directory is 'no object', not a 403.
 
-    The predicate is conjunctive on purpose (FND-341): matching "access is
-    denied" alone would reclassify genuine permission failures as missing keys.
+    FND-341: the relaxation exists so the root-marker probe does not read a
+    directory stat as a permission failure. It must be decided by what the key
+    resolves to — never by message wording alone, which would reclassify a
+    genuine failure that happens to be worded the same way.
     """
 
-    @pytest.mark.parametrize(
-        "message",
-        [
-            # Windows LocalStore stat of a directory.
-            "Generic LocalFileSystem error: Unable to open file "
-            "C:\\store\\t: Access is denied. (os error 5)",
-            # POSIX open() of a directory, should a backend surface it that way.
-            "Generic LocalFileSystem error: Unable to open file "
-            "/store/t: Is a directory (os error 21)",
-        ],
-        ids=["windows-access-denied", "posix-is-a-directory"],
+    # The wording a Windows LocalStore produces when it stats a directory; used
+    # to prove the *facts* outrank it in both directions.
+    WINDOWS_DIR_STAT = (
+        "Generic LocalFileSystem error: Unable to open file "
+        "C:\\store\\t: Access is denied. (os error 5)"
     )
-    def test_recognises_the_directory_stat_shapes(self, message) -> None:
+
+    def test_directory_key_is_a_collision(self, tmp_path) -> None:
         from application_sdk.storage.ops import _is_local_dir_collision
 
-        assert _is_local_dir_collision(RuntimeError(message)) is True
+        store = create_local_store(tmp_path)
+        (tmp_path / "t").mkdir()
 
-    @pytest.mark.parametrize(
-        "message",
-        [
-            "Access is denied. (os error 5)",
-            "403 Forbidden: caller lacks storage.objects.get",
-            "Unable to open file /store/a.txt: Too many open files (os error 24)",
-            "internal failure",
-        ],
-        ids=["bare-denied", "http-403", "unrelated-open-failure", "unrelated"],
-    )
-    def test_does_not_match_permission_or_unrelated_failures(self, message) -> None:
+        assert (
+            _is_local_dir_collision(RuntimeError(self.WINDOWS_DIR_STAT), store, "t")
+            is True
+        )
+
+    def test_nested_directory_key_is_a_collision(self, tmp_path) -> None:
+        """Keys are '/'-separated regardless of the host OS separator."""
         from application_sdk.storage.ops import _is_local_dir_collision
 
-        assert _is_local_dir_collision(RuntimeError(message)) is False
+        store = create_local_store(tmp_path)
+        (tmp_path / "a" / "b").mkdir(parents=True)
+
+        assert (
+            _is_local_dir_collision(RuntimeError(self.WINDOWS_DIR_STAT), store, "a/b")
+            is True
+        )
+
+    def test_unreadable_file_is_not_a_collision(self, tmp_path) -> None:
+        """The case a message match would get wrong: an inaccessible *file* at
+        the key. It is a real permission failure and must stay fatal, even
+        though the error is worded exactly like the directory stat."""
+        from application_sdk.storage.ops import _is_local_dir_collision
+
+        store = create_local_store(tmp_path)
+        (tmp_path / "t").write_bytes(b"x")
+
+        assert (
+            _is_local_dir_collision(RuntimeError(self.WINDOWS_DIR_STAT), store, "t")
+            is False
+        )
+
+    def test_missing_key_is_not_a_collision(self, tmp_path) -> None:
+        """Nothing at the key at all — `_is_not_found` owns that, not this."""
+        from application_sdk.storage.ops import _is_local_dir_collision
+
+        store = create_local_store(tmp_path)
+
+        assert (
+            _is_local_dir_collision(RuntimeError(self.WINDOWS_DIR_STAT), store, "t")
+            is False
+        )
+
+    def test_non_local_store_is_never_a_collision(self) -> None:
+        """Cloud backends have no directories, so a 403 worded like Windows'
+        ERROR_ACCESS_DENIED must not be reclassified as a missing object."""
+        from application_sdk.storage.ops import _is_local_dir_collision
+
+        store = create_memory_store()
+
+        assert (
+            _is_local_dir_collision(RuntimeError(self.WINDOWS_DIR_STAT), store, "t")
+            is False
+        )
+
+    @pytest.mark.parametrize(
+        "message,expected",
+        [
+            (WINDOWS_DIR_STAT, True),
+            (
+                "Generic LocalFileSystem error: Unable to open file "
+                "/store/t: Is a directory (os error 21)",
+                True,
+            ),
+            ("Access is denied. (os error 5)", False),
+            ("403 Forbidden: caller lacks storage.objects.get", False),
+            (
+                "Unable to open file /store/a.txt: Too many open files (os error 24)",
+                False,
+            ),
+            ("internal failure", False),
+        ],
+        ids=[
+            "windows-dir-stat",
+            "posix-is-a-directory",
+            "bare-denied",
+            "http-403",
+            "unrelated-open-failure",
+            "unrelated",
+        ],
+    )
+    def test_rootless_store_falls_back_to_the_conjunctive_message_shape(
+        self, message, expected
+    ) -> None:
+        """A LocalStore with no prefix cannot resolve a key to a path here, so
+        the message shape is all there is — and it stays conjunctive."""
+        from obstore.store import LocalStore
+
+        from application_sdk.storage.ops import _is_local_dir_collision
+
+        store = LocalStore()
+        assert store.prefix is None  # premise of the fallback branch
+
+        assert _is_local_dir_collision(RuntimeError(message), store, "t") is expected
 
 
 # ---------------------------------------------------------------------------

@@ -349,7 +349,12 @@ async def delete_prefix(
             # prefix holds, and its stat does not surface as "not found" (on
             # Windows it is a GenericError "Access is denied") — that is a
             # directory collision (no marker object), not a permission error.
-            if not (_is_not_found(exc) or _is_local_dir_collision(exc)):
+            # The store and key are threaded in so the relaxation is decided by
+            # what the key actually resolves to, not by the message wording.
+            if not (
+                _is_not_found(exc)
+                or _is_local_dir_collision(exc, resolved, root_marker)
+            ):
                 from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
                     StorageError,
                 )
@@ -445,11 +450,14 @@ async def _delete_paths_individually(
         async with asyncio.TaskGroup() as tg:
             tasks = [tg.create_task(_delete_one(p)) for p in paths]
     except BaseExceptionGroup as group:
-        storage_error = next(
-            (e for e in group.exceptions if isinstance(e, StorageError)), None
-        )
-        if storage_error is not None:
-            raise storage_error from group
+        # Unwrap only a group that is *entirely* StorageError. Picking the first
+        # StorageError out of a mixed group would demote every other leaf to
+        # ``__cause__`` — reachable in a traceback, invisible to an
+        # ``except`` clause. ops.delete wraps every per-key failure, so the
+        # homogeneous case is the only one that happens in practice; a foreign
+        # leaf means something unforeseen and is better surfaced as the group.
+        if all(isinstance(leaf, StorageError) for leaf in group.exceptions):
+            raise group.exceptions[0] from group
         raise
     return sum(t.result() for t in tasks)
 
