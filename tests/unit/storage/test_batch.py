@@ -164,8 +164,9 @@ class TestDeletePrefix:
         report a missing key (local, GCS, Azure) can show the exclusion — S3 and
         MemoryStore treat deleting a gone key as success, so ``ops.delete``
         legitimately counts it.  The head probe is pinned to the Windows
-        directory-stat response (see below) so the test fails on every OS if
-        ``_is_not_found`` stops recognising it.
+        LocalStore directory-stat response (see below) so the test fails on
+        every OS if the root-marker probe stops recognising a directory
+        collision as "no marker".
         """
         store = create_local_store(tmp_path / "store")
         await _put("t/gone.txt", b"1", store, normalize=False)
@@ -186,10 +187,11 @@ class TestDeletePrefix:
 
         # The root-marker probe for "t/" is the bare key "t", which the local
         # store maps onto the *directory* holding the two keys.  POSIX reports
-        # that stat as not-found, but the Windows LocalStore raises
-        # GenericError("Access is denied") — a directory can never be an
-        # object, so the probe must read it as "no marker" on every OS.
-        # Pin that response so this regression is exercised everywhere.
+        # that stat as not-found, but the Windows LocalStore raises a
+        # GenericError "Unable to open file …: Access is denied" — a directory
+        # can never be an object, so the probe must read it as "no marker" on
+        # every OS.  Pin that exact response so this regression is exercised
+        # everywhere.
         real_head_async = obstore.head_async
 
         async def head_reports_directory_as_denied(target, path):
@@ -270,6 +272,24 @@ class TestDeletePrefix:
             pytest.raises(StorageError) as exc_info,
         ):
             await delete_prefix("r", store)
+        assert "Failed to check root marker" in str(exc_info.value)
+
+    async def test_head_probe_plain_access_denied_still_raises(self, store) -> None:
+        """The directory-collision relaxation is conjunctive: a *plain*
+        "Access is denied" (no "Unable to open file …" directory-stat shape)
+        is a permission failure, not a missing marker, and must stay fatal."""
+        await _put("r2/a.txt", b"1", store, normalize=False)
+
+        async def denied(*args, **kwargs):
+            raise obstore.exceptions.GenericError("Access is denied. (os error 5)")
+
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.head_async", side_effect=denied
+            ),
+            pytest.raises(StorageError) as exc_info,
+        ):
+            await delete_prefix("r2", store)
         assert "Failed to check root marker" in str(exc_info.value)
 
 

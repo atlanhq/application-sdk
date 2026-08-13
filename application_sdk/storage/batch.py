@@ -38,6 +38,7 @@ from application_sdk.storage.integrity import (
 )
 from application_sdk.storage.integrity import is_sidecar_key, sidecar_key
 from application_sdk.storage.ops import (
+    _is_local_dir_collision,
     _is_not_found,
     _list_items,
     _normalize_listing_prefix,
@@ -344,7 +345,11 @@ async def delete_prefix(
             paths.append(root_marker)
         # conformance: ignore[E004] probe for directory marker existence; not-found is expected and swallowed intentionally
         except Exception as exc:
-            if not _is_not_found(exc):
+            # A local store maps the bare marker key onto the directory the
+            # prefix holds, and its stat does not surface as "not found" (on
+            # Windows it is a GenericError "Access is denied") — that is a
+            # directory collision (no marker object), not a permission error.
+            if not (_is_not_found(exc) or _is_local_dir_collision(exc)):
                 from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
                     StorageError,
                 )
@@ -414,6 +419,9 @@ async def _delete_paths_individually(
 
     Raises:
         StorageError: If a delete fails for any reason other than not-found.
+            The first failure also cancels the remaining per-key deletes and
+            *waits* for that cancellation to finish before propagating, so no
+            sibling delete outlives the raised error.
     """
     import asyncio  # noqa: PLC0415 — stdlib asyncio; lazy use only
 
@@ -423,10 +431,27 @@ async def _delete_paths_individually(
         async with sem:
             return await _delete_object(path, store, normalize=False)
 
-    # gather() with the default return_exceptions=False keeps genuine failures
-    # fatal: the first StorageError from ops.delete propagates to the caller.
-    deleted: list[bool] = await asyncio.gather(*[_delete_one(p) for p in paths])
-    return sum(deleted)
+    # A TaskGroup (vs gather) gives structured cancel-and-await semantics: on
+    # the first StorageError the group cancels the remaining per-key tasks and
+    # does not return until they have actually finished unwinding, so no delete
+    # is left in flight to complete after the caller has seen the failure.  The
+    # group wraps the failure in an ExceptionGroup; unwrap the StorageError so
+    # the caller sees the original contract (a bare StorageError), not a group.
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageError,
+    )
+
+    try:
+        async with asyncio.TaskGroup() as tg:
+            tasks = [tg.create_task(_delete_one(p)) for p in paths]
+    except BaseExceptionGroup as group:
+        storage_error = next(
+            (e for e in group.exceptions if isinstance(e, StorageError)), None
+        )
+        if storage_error is not None:
+            raise storage_error from group
+        raise
+    return sum(t.result() for t in tasks)
 
 
 def _local_relative_key(key: str, strip: str) -> str:

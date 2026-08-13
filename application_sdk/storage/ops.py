@@ -313,13 +313,6 @@ def _is_not_found(exc: BaseException) -> bool:
     * Substring fallback (``"not found"``, ``"404"``, …) for generic obstore
       errors that surface only as ``GenericError`` with the underlying HTTP
       status in the message.
-    * ``"access is denied"`` / ``"is a directory"`` — how a *local* store
-      reports a key that resolves to a directory rather than an object (the
-      Windows ``LocalStore`` raises ``GenericError`` "Access is denied" on a
-      directory stat, where POSIX surfaces ``FileNotFoundError``).  A key that
-      collides with a directory cannot exist as a retrievable object, so every
-      caller contract here — "False / None / skip when the object is not
-      there" — is served by treating it as missing.
 
     Class-based detection runs first so we don't misclassify a generic
     ``GenericError("HTTP 503: 404 not in title")`` style flake.
@@ -335,8 +328,33 @@ def _is_not_found(exc: BaseException) -> bool:
         or "does not exist" in msg
         or "404" in msg
         or "key not found" in msg
-        or "access is denied" in msg
-        or "is a directory" in msg
+    )
+
+
+def _is_local_dir_collision(exc: BaseException) -> bool:
+    """Return True when a *local* store reports a key that resolves to a directory.
+
+    A :class:`~obstore.store.LocalStore` maps an object key onto a filesystem
+    path, so a probe of a key that names a directory (e.g. the bare root marker
+    ``"t"`` when ``t/`` holds children) does not surface as "not found": on
+    Windows the ``LocalStore`` raises ``GenericError("… Unable to open file …:
+    Access is denied. (os error 5)")`` on the directory stat, and on any
+    platform a failed open can surface as "… Is a directory".  A key that
+    resolves to a directory can never exist as an object, so this is a
+    directory-collision — not a permission or I/O failure — and every caller
+    contract here ("False / None / skip when the object is not there") is
+    served by treating it as missing.
+
+    The match is deliberately conjunctive (an "unable to open file" prefix
+    *and* the directory-stat suffix) so a plain ``ERROR_ACCESS_DENIED`` or a
+    cloud 403 containing "access is denied" is **not** reclassified as
+    not-found — permission failures stay fatal (see the ``StorageError``
+    contract on :func:`delete` / :func:`exists` and ``StoragePermissionError``
+    in ``storage.preflight``).
+    """
+    msg = str(exc).lower()
+    return "unable to open file" in msg and (
+        "access is denied" in msg or "is a directory" in msg
     )
 
 

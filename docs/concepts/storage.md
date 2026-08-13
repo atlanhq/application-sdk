@@ -78,6 +78,13 @@ found = await exists("artifacts/my-app/output.json")
 keys = await list_keys("artifacts/my-app/")  # returns list[str]
 ```
 
+`delete_prefix(prefix)` removes every object under a prefix and returns the
+number of objects this call actually removed. A key that vanishes between the
+listing and the delete — a concurrent writer removed it first — is benign (the
+desired end state is already true for it): it is logged as a warning naming the
+prefix and excluded from the returned count rather than failing the caller.
+Every other deletion error still raises `StorageError`.
+
 ### Prefix downloads
 
 `download_prefix` writes one of two layouts, and picking the wrong one is
