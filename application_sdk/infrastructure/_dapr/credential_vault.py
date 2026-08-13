@@ -13,7 +13,10 @@ from typing import Any
 
 import orjson
 
-from application_sdk.errors.leaves import ColdStartRaceError
+from application_sdk.errors.leaves import (
+    ColdStartRaceError,
+    DaprSidecarUnreachableError,
+)
 from application_sdk.infrastructure._dapr.client import (
     classify_secret_fetch_error,
     is_dapr_transport_unavailable,
@@ -29,6 +32,7 @@ from application_sdk.infrastructure.bindings import BindingError
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreUnavailableError,
+    SecretStoreUnreachableError,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -435,8 +439,14 @@ class DaprCredentialVault:
 
         for (label, value), result in zip(candidates, results, strict=True):
             if isinstance(result, BaseException):
-                # Only _probe_single_key's ColdStartRaceError branch raises;
-                # anything else is a bug, not "this field isn't a secret".
+                # Only _probe_single_key's two cold-start branches raise (the
+                # terminal SecretStoreUnreachableError and the transient
+                # SecretStoreUnavailableError, both ColdStartRaceError
+                # subtypes); anything else is a bug, not "this field isn't a
+                # secret". First-in-candidate-order wins, which within one
+                # sweep is unambiguous: every probe checks the per-component
+                # readiness gate before any of them can arm it, so a single
+                # gather never mixes the terminal and transient labels.
                 if isinstance(result, ColdStartRaceError):
                     cold_start_exc = cold_start_exc or result
                     continue
@@ -483,20 +493,42 @@ class DaprCredentialVault:
         ``{}`` without raising.
 
         Raises:
-            SecretStoreUnavailableError: On a cold-start outage that exhausted
-                the retry budget, hash-labelled (see below).
+            SecretStoreUnreachableError: If the store never answered across the
+                whole cold-start budget (the terminal case), hash-labelled (see
+                below).
+            SecretStoreUnavailableError: If the store failed *without* the
+                budget being spent (the transient case) — only reachable once
+                this component has already answered once, so
+                ``retry_past_dapr_cold_start`` short-circuits its wait. Also
+                hash-labelled.
         """
         value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
         try:
             single_secret = await self._get_secret(
                 value, log_label=f"sha256:{value_hash}"
             )
+        except DaprSidecarUnreachableError as exc:
+            # Terminal: budget exhausted without one usable answer — not a race a
+            # later attempt warms. Keep the terminal type so a persistent outage
+            # stays distinguishable from a still-cold one, with the same
+            # redaction as the transient branch below (hash label, no cause) and
+            # the secret-free component/attempts/elapsed diagnostics preserved.
+            raise SecretStoreUnreachableError(
+                f"sha256:{value_hash}",
+                component=exc.component,
+                attempts=exc.attempts,
+                elapsed_seconds=exc.elapsed_seconds,
+            ) from None
         except ColdStartRaceError:
-            # The store never actually answered — a cold-start outage
-            # that exhausted the full retry budget, not "this field
-            # isn't a secret" (that case is already collapsed to {} by
-            # _get_secret without raising). Propagate so the caller
-            # raises a typed CredentialVaultError instead of silently
+            # A *steady-state* blip, not an exhausted budget: budget exhaustion
+            # always raises DaprSidecarUnreachableError and is caught above, so
+            # the only way a bare ColdStartRaceError reaches here is
+            # retry_past_dapr_cold_start short-circuiting its wait — this
+            # component has already answered once, so the error propagates from
+            # `call()` without any retry. Either way the store did not answer,
+            # which is not "this field isn't a secret" (that case is already
+            # collapsed to {} by _get_secret without raising). Propagate so the
+            # caller raises a typed CredentialVaultError instead of silently
             # proceeding with an incomplete credential, mirroring the
             # multi-key branch above.
             #

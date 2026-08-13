@@ -248,6 +248,51 @@ class ColdStartRaceError(DependencyUnavailableError):
 
 
 @dataclass(kw_only=True)
+class DaprSidecarUnreachableError(ColdStartRaceError):
+    """Terminal form of a cold-start race: the Dapr sidecar never became
+    reachable for the entire cold-start budget, across every attempt.
+
+    Raised by
+    :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start` only at
+    budget exhaustion — the point at which no attempt ever got a usable
+    answer. A transient race that eventually resolves returns normally and
+    never reaches this type, so this type distinguishes a budget-exhausted
+    outage from a still-booting one for diagnosis.
+
+    It stays wire-retryable (inherits ``default_retryable = True``): naming the
+    terminal state does not by itself change retry or fail-open behaviour. An
+    activity-level retry can still recover when a later attempt lands on a
+    healthy worker (a single bad pod in a multi-replica pool), so the retry
+    hint is left on deliberately — the same topology reasoning that keeps a
+    platform fault failing open rather than blocking the run. Choosing to
+    *stop* on this state instead of retrying is a separate policy decision, not
+    made here.
+
+    Distinct from a plain ``ColdStartRaceError`` purely so the two read
+    differently to an operator or a triaging agent: a bare
+    ``ColdStartRaceError`` says "not reachable yet, still waiting"; this says
+    "not reachable for the whole budget, done waiting". Reporting a persistent
+    platform fault as a transient race is the defect this fixes. Subclasses
+    ``ColdStartRaceError`` (not ``DependencyUnavailableError`` directly) so it
+    inherits ``DEPENDENCY_UNAVAILABLE`` — keeping error routing and the
+    preflight gate's ``gate_broken`` classification unchanged — and so every
+    existing ``except ColdStartRaceError`` catch site keeps catching it.
+
+    Carries the diagnosis an operator needs with no secret surface:
+    ``component`` (a Dapr config identifier), ``attempts``, and
+    ``elapsed_seconds`` are all safe to render. The underlying transport error
+    rides the inherited ``cause`` field and is never string-interpolated into
+    the message.
+    """
+
+    component: str | None = None
+    attempts: int | None = None
+    elapsed_seconds: float | None = None
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SIDECAR_UNREACHABLE"
+
+
+@dataclass(kw_only=True)
 class SourceUnavailableError(AppError):
     """Customer-controlled source system is temporarily unreachable.
 

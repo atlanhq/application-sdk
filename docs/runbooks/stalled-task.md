@@ -145,7 +145,10 @@ few minutes it takes.
 
 Every firing of this alert is also a work-list entry for the owning app team, and
 the fix is a one-line observability change at the site named by
-`progress_last_label` (ADR-0018 → *Feeding the tracker*):
+`progress_last_label`. Hand them
+[Progress & Stalls → Reading your warn report](../concepts/progress-and-stalls.md#reading-your-warn-report),
+which is the author-side version of this page: the same two metrics, read as a
+ranked list with a triage table. In short:
 
 - **A loop the SDK cannot see** — add `context.heartbeat()` or a
   `mark_progress()`-equivalent at the batch/page boundary. Never per record.

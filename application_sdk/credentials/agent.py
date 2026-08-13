@@ -57,7 +57,11 @@ from application_sdk.credentials.errors import (
     CredentialNotFoundError,
     CredentialParseError,
 )
-from application_sdk.errors import ColdStartRaceError, redact_secrets
+from application_sdk.errors import (
+    ColdStartRaceError,
+    DaprSidecarUnreachableError,
+    redact_secrets,
+)
 from application_sdk.errors.leaves import DependencyUnavailableError
 from application_sdk.infrastructure import (
     DAPR_SECRET_STORE_COMPONENT,
@@ -66,6 +70,7 @@ from application_sdk.infrastructure import (
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreUnavailableError,
+    SecretStoreUnreachableError,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -387,8 +392,12 @@ async def _probe_one(secret_store: SecretStore, value: str) -> tuple[str, str, A
     """Probe one candidate ref-key. Returns ``(outcome, value, secret)``.
 
     Raises:
-        SecretStoreUnavailableError: If the store never answered (cold-start
-            outage that exhausted the retry budget).
+        SecretStoreUnreachableError: If the store never answered across the
+            whole cold-start budget (the terminal case).
+        SecretStoreUnavailableError: If the store failed *without* the budget
+            being spent — only reachable once this component has already
+            answered once, so ``retry_past_dapr_cold_start`` short-circuits its
+            wait and a later blip surfaces raw (the transient case).
     """
     value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
     try:
@@ -397,10 +406,26 @@ async def _probe_one(secret_store: SecretStore, value: str) -> tuple[str, str, A
             description=f"single-key probe for sha256:{value_hash}",
             component=DAPR_SECRET_STORE_COMPONENT,
         )
+    except DaprSidecarUnreachableError as exc:
+        # Terminal: the budget was exhausted without one usable answer, so this
+        # is not a race that a later attempt warms — keep the terminal type so a
+        # persistent outage stays distinguishable from a still-cold one. Same
+        # redaction as the transient branch below (hash label, no cause); the
+        # secret-free component/attempts/elapsed diagnostics are carried through.
+        raise SecretStoreUnreachableError(
+            f"sha256:{value_hash}",
+            component=exc.component,
+            attempts=exc.attempts,
+            elapsed_seconds=exc.elapsed_seconds,
+        ) from None
     except ColdStartRaceError:
-        # The store never actually answered — a cold-start outage that
-        # exhausted the full retry budget, not "this field isn't a
-        # secret" (that case is already collapsed to None by
+        # A *steady-state* blip, not an exhausted budget: budget exhaustion
+        # always raises DaprSidecarUnreachableError and is caught above, so the
+        # only way a bare ColdStartRaceError reaches here is
+        # retry_past_dapr_cold_start short-circuiting its wait — this component
+        # has already answered once, so the error propagates from `call()`
+        # without any retry. Either way the store did not answer, which is not
+        # "this field isn't a secret" (that case is already collapsed to None by
         # get_optional without raising). Propagate so the caller sees
         # a typed outage instead of silently proceeding with a
         # corrupt credential, mirroring the vault sibling

@@ -141,6 +141,44 @@ scrape_configs:
     metrics_path: /metrics
 ```
 
+### Stall-watchdog metrics
+
+The in-process stall watchdog (ADR-0018) emits two histograms, and they have **two
+different audiences**: an app author reading their own work-list, and an operator being
+paged. See [Progress and Stalls](progress-and-stalls.md#reading-your-warn-report) for the
+author-side queries.
+
+| Metric | Records | Labels | Read by |
+|---|---|---|---|
+| `task_no_progress_gap_seconds` | one entry per gap that exceeded `max_no_progress_seconds` | `task_name`, `progress_last_label`, `watchdog_mode` | The author's work-list **and** the `AtlanAppTaskStalled` alert — while an app is in `warn`, this is the containment |
+| `task_hold_duration_seconds` | one entry per hold released — every hold, not only long ones | `task_name`, `hold_label`, `hold_bounded`, `hold_lapsed` | The author's work-list only — deliberately not alerted |
+
+`watchdog_mode` is what keeps warn-mode observations and enforced kills aggregating
+separately; `hold_bounded="false"` isolates the sites still relying on the duration
+backstop.
+
+The accompanying log lines are **INFO by design**, not WARNING: warn mode is a
+fleet-wide default, so one gap observation is an expected observation rather than an
+actionable failure, and alerting off the log level would manufacture exactly the
+fleet-wide noise ADR-0018 exists to reduce. **The alert reads the metric**, and it is
+deliberately not one-gap-sensitive — see the threshold below.
+
+- **Alert rule:** `AtlanAppTaskStalled` in
+  [`atlanhq/atlan-alerts`](https://github.com/atlanhq/atlan-alerts/blob/main/alerting/rules/App-Platform/atlan-apps-task-stall-alerts.yaml).
+- **Runbook:** [Stalled task](../runbooks/stalled-task.md) — how an operator tells a
+  wedge from a healthy-but-quiet spot, and what to do with each.
+- **Dashboard:** import
+  [`task-stall-dashboard.json`](../static/observability/task-stall-dashboard.json)
+  into Grafana against the Prometheus/VictoriaMetrics datasource.
+
+!!! warning "Split-deployment workers need the Pushgateway to be configured"
+
+    Activities run in the worker process, so in a split deployment these series only
+    reach VictoriaMetrics if `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` is set. With it unset the
+    worker logs a warning at startup and pushes nothing — no task-level series exists for
+    that app, so neither the work-list nor the stall alert works for it.
+    Combined-mode pods are covered by the FastAPI `/metrics` scrape.
+
 ### Recommended Alerts
 
 | Alert | Condition | Severity |
@@ -149,44 +187,33 @@ scrape_configs:
 | Worker slots exhausted | `temporal_worker_task_slots_available == 0` | Critical |
 | Elevated workflow latency | `histogram_quantile(0.99, temporal_workflow_endtoend_latency_bucket) > 300` | Warning |
 | Temporal server errors | `rate(temporal_long_request_failure_total[5m]) > 0` | Warning |
-| Task stalled (wedged but alive) | `increase(task_no_progress_gap_seconds_sum[1h]) >= 3600` | High |
+| Task stalled (wedged but alive) | `AtlanAppTaskStalled` — see below | High |
 
----
+The stall alert is **not optional while an app is in `warn`.** Warn mode cannot fail an
+activity, so an alert on this metric is what stands in for the kill: a wedged attempt is
+visible within `max_no_progress_seconds`, but it will hold its worker slot until the 24h
+backstop unless a human intervenes. Once an app runs in `enforce`, the same series
+measures its kill rate instead.
 
-## Stall watchdog signals
+It is the one alert here that ships as a real rule rather than a suggestion —
+`AtlanAppTaskStalled` in `atlanhq/atlan-alerts`, with the
+[stalled-task runbook](../runbooks/stalled-task.md) behind it:
 
-The stall watchdog (see [ADR-0018](../adr/0018-progress-aware-heartbeat.md)) is the
-only thing that observes an activity that is **alive and heartbeating but no longer
-doing anything**. `heartbeat_timeout` cannot see it — beats keep arriving — and
-with `start_to_close` reduced to a 24h backstop, nothing kills it automatically
-while an app runs the watchdog in `warn` mode. Two series carry the evidence:
+```promql
+sum by (clusterName, domainName, app_name, task_name,
+        progress_last_label, watchdog_mode) (
+  increase(task_no_progress_gap_seconds_sum{app_name!="", task_name!=""}[1h])
+) >= 3600
+```
 
-| Series | One record per | Read by |
-|--------|----------------|---------|
-| `task_no_progress_gap_seconds` | no-progress gap past `max_no_progress_seconds`, labelled with `task_name`, `progress_last_label` and `watchdog_mode` | The `AtlanAppTaskStalled` alert — **this is the containment while nothing enforces** — and the stall dashboard |
-| `task_hold_duration_seconds` | hold released, labelled with `hold_label`, `hold_bounded`, `hold_lapsed` | The per-app work-list: long *unbounded* holds want an explicit allowance, lapsed ones have an allowance that is too tight. Dashboard only |
-
-The matching log lines are **INFO by design**, not WARNING: warn mode is a
-fleet-wide default, so one gap observation is an expected observation rather than
-an actionable failure, and alerting off the log level would manufacture exactly
-the fleet-wide noise ADR-0018 exists to reduce. The alert reads the metric.
-
-- **Alert rule:** `AtlanAppTaskStalled` in
-  [`atlanhq/atlan-alerts`](https://github.com/atlanhq/atlan-alerts/blob/main/alerting/rules/App-Platform/atlan-apps-task-stall-alerts.yaml)
-  — pages when a task accumulates an hour of unexplained silence per hour.
-- **Runbook:** [Stalled task](../runbooks/stalled-task.md) — how to tell a wedge
-  from a healthy-but-quiet spot, and what to do with each.
-- **Dashboard:** import
-  [`task-stall-dashboard.json`](../static/observability/task-stall-dashboard.json)
-  into Grafana against the Prometheus/VictoriaMetrics datasource.
-
-!!! warning "Split-deployment workers need the Pushgateway to be configured"
-
-    Activities run in the worker process, so in a split deployment these series
-    only reach VictoriaMetrics if `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` is set. With
-    it unset the worker logs a warning at startup and pushes nothing — no
-    task-level series exists for that app and the stall alert cannot fire for it.
-    Combined-mode pods are covered by the FastAPI `/metrics` scrape.
+**Seconds of silence per hour, not a count of gaps** — and the difference matters. In
+warn mode *every* app with an uninstrumented quiet spot emits gaps; that is what warn
+mode is for, and paging each one would manufacture the fleet-wide noise ADR-0018 exists
+to reduce. Only *sustained* silence separates a wedge from a healthy-but-quiet spot,
+because both emit nothing and only the wedge keeps emitting nothing. `3600` is one
+permanently-silent attempt, and N concurrent wedges reach it N times faster — so the page
+arrives soonest exactly when worker-slot exhaustion is the real risk. A single gap belongs
+on the dashboard and in the app's own work-list, not in an operator's inbox.
 
 ---
 

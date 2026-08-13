@@ -477,6 +477,12 @@ class TaskExecutionContext:
         IMPORTANT: If heartbeating is disabled (heartbeat_timeout_seconds=None),
         this is a no-op.
 
+        A manual beat also **marks progress** for the stall watchdog
+        (ADR-0018), under the label ``task.heartbeat``. That is the third of the
+        three progress mechanisms, and the one an author reaches for in a custom
+        loop the SDK cannot see into — a loop that beats every iteration needs no
+        hold.
+
         Args:
             *details: Serializable progress details (e.g., index, count).
                 These are stored by Temporal and available via
@@ -489,6 +495,18 @@ class TaskExecutionContext:
                 if i % 100 == 0:
                     self.task_context.heartbeat(i, len(records))
         """
+        # Marked here rather than inside the controller for two reasons. It must
+        # count on a task with heartbeating disabled
+        # (``heartbeat_timeout_seconds=None``), where the controller is a no-op
+        # and the stall watchdog is the *only* thing bounding a wedged attempt.
+        # And it must be this call, never ``heartbeat_keepalive`` — the keepalive
+        # is unconditional, so treating it as progress would make every attempt
+        # permanently look like it was progressing.
+        from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            current_progress_tracker,
+        )
+
+        current_progress_tracker().mark_progress("task.heartbeat")
         self.heartbeat_controller.heartbeat(*details)
 
     def get_last_heartbeat_details(self) -> tuple[Any, ...]:
