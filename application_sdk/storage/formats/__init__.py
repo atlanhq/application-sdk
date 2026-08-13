@@ -20,6 +20,8 @@ import orjson
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
+from application_sdk.common._listing import WRITER_STAGING_DIRNAME, prune_internal_dirs
+from application_sdk.common.atomic import atomic_copy, atomic_write, disk_full_guard
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
 from application_sdk.contracts.types import FileReference
@@ -61,7 +63,14 @@ logger = get_logger(__name__)
 #: Directory holding every writer's private staging tree. Created as a *sibling*
 #: of the writer's output directory, never inside it — see
 #: :meth:`Writer._ensure_staging_root`.
-_STAGING_ROOT_DIRNAME = ".sdk-writer-staging"
+#:
+#: The name itself lives in ``common._listing`` alongside every other
+#: SDK-working-directory name, because being a sibling only puts this tree out
+#: of reach of a walk of the *output* directory — a prefix upload of the run
+#: root walks a level higher and would ship a cancelled attempt's staging tree
+#: as run output. One definition, so the walkers and this module cannot
+#: disagree about what is an artifact (FND-318).
+_STAGING_ROOT_DIRNAME = WRITER_STAGING_DIRNAME
 
 #: Subdirectory of a writer's staging root holding files bound for the output
 #: directory. Its layout mirrors the output directory exactly, so publishing is
@@ -394,13 +403,21 @@ class Writer(ABC):
         never leave a half-published attempt for the next one to adopt. The
         cost is a burst of same-filesystem renames — metadata operations, no
         bytes moved — at the end of a writer's life.
+
+        SDK working directories under the staged tree are not descended into.
+        The writers below stage each individual file too (FND-318), so
+        ``.sdk-partial`` sits inside this tree by construction — publishing it
+        would recreate the directory in the output and, if an atomic write had
+        failed, hand a partial file the very name this staging exists to
+        withhold.
         """
         if self._staging_root is None or self._staging_published:
             return
 
         staged_output = os.path.join(self._staging_root, _STAGED_OUTPUT_DIRNAME)
         copied = 0
-        for directory, _subdirectories, file_names in os.walk(staged_output):
+        for directory, subdirectories, file_names in os.walk(staged_output):
+            prune_internal_dirs(subdirectories)
             destination_dir = os.path.normpath(
                 os.path.join(self.path, os.path.relpath(directory, staged_output))
             )
@@ -415,8 +432,15 @@ class Writer(ABC):
                         raise
                     # Staging is a sibling of the output directory, so this only
                     # happens when the output directory is itself a mount point.
-                    # Copy rather than fail.
-                    shutil.move(source, destination)
+                    # Copy rather than fail — but never straight to the final
+                    # name: a copy interrupted there leaves a truncated file at
+                    # the artifact's real path, the exact incident class this
+                    # staging exists to kill. atomic_copy stages the copy next
+                    # to the destination and publishes it with a rename, so the
+                    # final name only ever appears complete; the source unlink
+                    # after a successful copy completes the move.
+                    atomic_copy(source, destination, operation="writer publish")
+                    os.unlink(source)
                     copied += 1
 
         if copied:
@@ -949,7 +973,12 @@ class Writer(ABC):
 
             # Write the statistics to a json file inside a dedicated statistics/ folder
             statistics_dir = os.path.join(self._write_root, "statistics")
-            os.makedirs(statistics_dir, exist_ok=True)
+            # Inside the guard: creating the directory is itself a write, and
+            # on a full filesystem it fails with the same ENOSPC the sidecar
+            # write would have — classified identically rather than escaping as
+            # a raw OSError that FormatStatisticsWriteError would wrap untyped.
+            with disk_full_guard(statistics_dir, operation="writer statistics write"):
+                os.makedirs(statistics_dir, exist_ok=True)
             output_file_name = os.path.join(statistics_dir, "statistics.json.ignore")
             # If chunk_start is provided, include it in the statistics filename
             try:
@@ -964,8 +993,14 @@ class Writer(ABC):
                     exc_info=True,
                 )
 
-            # Write the statistics dictionary to the JSON file
-            with open(output_file_name, "wb") as f:
+            # Write the statistics dictionary to the JSON file. Atomic: the
+            # sidecar is the record of how many rows the chunks hold, so a
+            # truncated one does not fail loudly — it is read as a smaller,
+            # plausible count, and the shortfall is attributed to extraction
+            # rather than to the write (FND-318).
+            with atomic_write(
+                output_file_name, operation="writer statistics write"
+            ) as f:
                 f.write(orjson.dumps(statistics))
 
             # Push the file to the object store (key = local path for consistency).

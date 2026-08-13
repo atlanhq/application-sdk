@@ -213,6 +213,11 @@ canonical bounded label set is:
 | `mode` | `record_metric` callers | `WriteMode` enum (`append`, `overwrite`, …) |
 | `type` / `format` | `record_metric` callers | Bounded enumerations of write paths |
 | `error_type` | `record_metric` callers | `type(e).__name__` |
+| `task_name` | `execution/progress_telemetry.py` | Number of registered tasks per app |
+| `progress_last_label` | same | The SDK's fixed set of progress-hook labels plus each app's own hold labels — a call site, never a value |
+| `hold_label` | same | Same set. `run_in_thread` holds are labelled by the offloaded callable's qualname, never by an argument |
+| `watchdog_mode` | same | `off`, `warn`, `enforce` |
+| `hold_bounded` / `hold_lapsed` | same | `true`, `false` — **lowercase**, since dashboard panels and alert rules filter on those literals |
 
 Any new label not on this list needs justification: prove it's bounded.
 
@@ -242,6 +247,16 @@ Names emitted by the consolidated SDK surface (all use OTel base units
 | `temporal_*` (Rust-core families) | various | Temporal SDK Rust core, scraped via FastAPI proxy or pushed via `TemporalCoreCollector` |
 | `temporal_core_metrics_proxy_failures_total` | counter | `handler/service.py` — bumped (with `reason` label) when the in-process Temporal-core proxy fetch from `127.0.0.1:9464` fails (timeout, non-200, etc.) so `up=1` scrapes with missing `temporal_*` series are observable from VictoriaMetrics rather than only from logs |
 | `dapr_sidecar_wait_duration_seconds` | histogram | `infrastructure/_dapr/http.py` — `wait_for_dapr_sidecar()`, label `outcome` (`ready` / `reachable_not_ready` / `timed_out`); surfaces a slow/misconfigured sidecar as a boot-time metric instead of only as a downstream liveness-probe restart loop |
+| `task_no_progress_gap_seconds` | histogram | `execution/progress_telemetry.py` — one entry per no-progress gap exceeding `max_no_progress_seconds`, labels `task_name`, `progress_last_label`, `watchdog_mode` (ADR-0018). **Alertable**: `AtlanAppTaskStalled` in `atlanhq/atlan-alerts` pages on `increase(…_sum[1h]) >= 3600`, since in warn mode this signal stands in for the kill — see the [stalled-task runbook](../runbooks/stalled-task.md) |
+| `task_hold_duration_seconds` | histogram | same — one entry per released progress hold, labels `task_name`, `hold_label`, `hold_bounded`, `hold_lapsed`; every hold is recorded, since sizing an allowance means reading that site's own distribution. Work-list only, deliberately not alerted |
+
+!!! warning "Renaming either `task_*` series is a cross-repo change"
+
+    The alert rule and the dashboard live outside this repository, so a rename
+    here silently disables the only containment a wedged activity has while an
+    app is in warn mode. `tests/unit/execution/test_progress_telemetry_exposition.py`
+    pins the exported names, label keys and label *values* against the real
+    Prometheus exporter and names every consumer that has to be updated with them.
 
 ## User-facing Metrics Shim
 

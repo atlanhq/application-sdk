@@ -33,6 +33,7 @@ from application_sdk.app.context import (
     _WorkflowSafeLogger,
 )
 from application_sdk.contracts.base import HeartbeatDetails
+from application_sdk.execution.heartbeat import NoopHeartbeatController
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
@@ -47,6 +48,7 @@ from application_sdk.testing.mocks import (
     MockSecretStore,
     MockStateStore,
 )
+from tests.unit.conftest import RecordingProgressTracker
 
 # ---------------------------------------------------------------------------
 # AppMetadata
@@ -581,6 +583,31 @@ class TestTaskExecutionContextHeartbeat:
         tec = self._build(hb)
         tec.heartbeat(1, 100)
         assert hb.get_heartbeat_calls() == [(1, 100)]
+
+    def test_heartbeat_marks_progress(
+        self, progress_marks: RecordingProgressTracker
+    ) -> None:
+        """A manual beat marks progress for the stall watchdog (ADR-0018).
+
+        The docs tell an author to beat inside a custom loop the SDK cannot see
+        into *instead of* declaring a hold, so a beat that reached Temporal but
+        not the tracker would leave that advice false-killing at the tail.
+        """
+        tec = self._build()
+        tec.heartbeat(1, 100)
+        assert progress_marks.labels == ["task.heartbeat"]
+
+    def test_heartbeat_marks_progress_with_heartbeating_disabled(
+        self, progress_marks: RecordingProgressTracker
+    ) -> None:
+        """...including on a task whose ``heartbeat_timeout_seconds`` is None.
+
+        There the controller is a no-op and the stall watchdog is the only thing
+        bounding a wedged attempt, so it is the case where the beat matters most.
+        """
+        tec = self._build(NoopHeartbeatController())
+        tec.heartbeat(1, 100)
+        assert progress_marks.labels == ["task.heartbeat"]
 
     def test_get_last_heartbeat_details_delegates(self) -> None:
         hb = MockHeartbeatController()

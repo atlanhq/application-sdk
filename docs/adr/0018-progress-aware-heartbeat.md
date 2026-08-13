@@ -954,6 +954,22 @@ Warn mode is what makes this checkable rather than aspirational.
    time*). One hard prerequisite of this step: **the stall metric must be alertable**,
    since it stands in for the kill while nothing enforces. `off` ships alongside as an
    env kill-switch.
+
+   That prerequisite landed as FND-293, and it is three artifacts across two
+   repositories: the `AtlanAppTaskStalled` rule in
+   [`atlanhq/atlan-alerts`](https://github.com/atlanhq/atlan-alerts/blob/main/alerting/rules/App-Platform/atlan-apps-task-stall-alerts.yaml),
+   the [stalled-task runbook](../runbooks/stalled-task.md), and the panels in
+   `docs/static/observability/task-stall-dashboard.json`. The threshold is
+   *seconds of silence accumulated per hour* rather than a count of gaps, because
+   that is the exposure this step accepts: silent attempt-time holding worker
+   slots. One permanently-silent attempt reaches it in about an hour; N concurrent
+   wedges reach it N times faster, so the page arrives soonest exactly when slot
+   exhaustion is the real risk. A *single* gap is deliberately not paged — that is
+   the warn-mode work-list, and paging it fleet-wide would manufacture the noise
+   this ADR exists to reduce. Because the alert and the panels live outside this
+   repository, the exported Prometheus contract is pinned by
+   `tests/unit/execution/test_progress_telemetry_exposition.py` so a rename here
+   cannot silently disable the containment.
 4. **Ship the conformance rule and the toolkit floor.** Both are independent of the
    `@task` work and both deliver immediately: the floor stops the next app shipping
    a 2h node timeout, and the rule keeps un-held opaque sites visible once teams
@@ -1005,7 +1021,13 @@ removal is part of the work, not a follow-up.
   `start_to_close` is accidentally the only thing that kills a wedged activity;
   raising it to a backstop replaces that automatic kill with an alert and a human
   until an app enforces. Accepted deliberately, bounded by measurement — see
-  *Migration*. It makes the stall-metric alert mandatory, not optional.
+  *Migration*. It makes the stall-metric alert mandatory, not optional, and it
+  buys containment at the cost of latency: a wedge is *visible* one budget in and
+  *paged* about an hour in (`AtlanAppTaskStalled`, see *Rollout* step 3), against
+  a 24h backstop. Two residuals survive that alert and are stated in the runbook
+  rather than hidden: a wedge inside an **unbounded hold** emits no gap at all
+  (the hold is vouching for it, by design), and a split-deployment worker with no
+  Pushgateway configured emits nothing the alert can read.
 - Opaque single-operation calls need a declared hold to get the stronger guarantee,
   and `holding_progress()` is expected in nearly every connector rather than being a
   rare escape hatch — though this is now optional work an app schedules for itself,

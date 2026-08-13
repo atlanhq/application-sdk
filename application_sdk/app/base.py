@@ -1917,6 +1917,7 @@ async def _run_preflight_gate(
             gate_timeouts,
             is_preflight_block,
             preflight_gate_activity_name,
+            underlying_error_type,
         )
 
     entry = entrypoint or "<implicit>"
@@ -1974,7 +1975,7 @@ async def _run_preflight_gate(
             app_name=app_name,
             entrypoint=entry,
             outcome="no_verdict",
-            reason=type(e).__name__,
+            reason=underlying_error_type(e),
             gate_classification=CLASSIFICATION_GATE_BROKEN,
             **{CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX},
         )

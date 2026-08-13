@@ -1,4 +1,4 @@
-"""Race-safe directory listing.
+"""Race-safe directory listing, and what a listing is allowed to yield.
 
 Wraps ``os.scandir`` with a metadata-flush barrier so directories
 written immediately before the listing return their full contents:
@@ -10,6 +10,16 @@ written immediately before the listing return their full contents:
   finished write. ``F_FULLFSYNC`` on the directory FD forces the
   commit before the listing reads it. On Linux ``os.fsync`` covers
   the equivalent NFS / FUSE case. On Windows the barrier is a no-op.
+
+This module also owns :data:`INTERNAL_DIRNAMES` — the directory names
+the SDK uses for its own working files, which must never surface as
+artifacts. It lives here rather than beside the writer that creates
+them because *excluding* them is a property of every tree walk, and
+there is more than one walker: ``safe_list_directory`` below and
+``storage.batch.upload_prefix``. Both consult this one definition, so
+"invisible to a listing" and "invisible to a prefix upload" cannot
+drift apart. Keeping the vocabulary in this stdlib-only module also
+means neither walker takes on a new import to honour it.
 """
 
 from __future__ import annotations
@@ -22,6 +32,47 @@ from pathlib import Path
 # Darwin-only fcntl op: flush kernel buffer + drive cache. Value from
 # <sys/fcntl.h>; not exported by Python's fcntl module.
 _DARWIN_F_FULLFSYNC = 51
+
+#: Directory an atomic write stages its partial file in, sited as a
+#: sibling of the artifact rather than as a suffix beside it — a
+#: ``foo.json.tmp`` next to ``foo.json`` is picked up by every walk of
+#: the artifact directory, which is the leak this name exists to avoid.
+#: Written by :mod:`application_sdk.common.atomic` (FND-318).
+PARTIAL_DIRNAME = ".sdk-partial"
+
+#: Directory a ``Writer`` stages its whole output in until ``close()``
+#: publishes it, sited as a sibling of the output directory (FND-317).
+#: A sibling is out of reach of a walk of the *output* directory, but
+#: not of a walk of the run root a level up — which is what a prefix
+#: upload of a whole run does — so it belongs in the set below.
+#: Re-exported as ``_STAGING_ROOT_DIRNAME`` by ``storage.formats``,
+#: which owns the staging behaviour; defined here so the exclusion
+#: stays a single fact and this module keeps its stdlib-only imports.
+WRITER_STAGING_DIRNAME = ".sdk-writer-staging"
+
+#: Every directory name that holds SDK working files rather than
+#: artifacts. An explicit set rather than a ``.sdk-`` prefix rule: a
+#: denylist that silently swallowed a customer directory because its
+#: name matched a convention would be a data-loss bug, and the set is
+#: short enough that adding to it is a one-line change. Add here when
+#: introducing a new SDK-internal working directory — every walker
+#: picks it up with no further edit.
+INTERNAL_DIRNAMES: frozenset[str] = frozenset({PARTIAL_DIRNAME, WRITER_STAGING_DIRNAME})
+
+
+def is_internal_dirname(name: str) -> bool:
+    """Return ``True`` when *name* is an SDK working directory, not an artifact."""
+    return name in INTERNAL_DIRNAMES
+
+
+def prune_internal_dirs(dirnames: list[str]) -> None:
+    """Drop SDK working directories from ``os.walk``'s ``dirnames``, in place.
+
+    ``os.walk`` re-reads ``dirnames`` after yielding to decide where to
+    descend, so mutating it in place — rather than filtering the copy —
+    is what actually stops the descent.
+    """
+    dirnames[:] = [name for name in dirnames if not is_internal_dirname(name)]
 
 
 def _flush_directory_metadata(path: Path) -> None:
@@ -69,6 +120,11 @@ def _scandir_recursive(path: Path) -> Iterator[Path]:
     Symlinks are not followed: prevents loops on cyclic structures
     and excludes symlink-to-file entries (a behaviour change vs
     ``Path.rglob`` — see ``safe_list_directory``).
+
+    :data:`INTERNAL_DIRNAMES` are not descended into. The test is on
+    the entry name during descent, never on ``path`` itself, so a
+    caller that deliberately points the walk *at* one of these
+    directories still gets its contents.
     """
     stack: list[Path] = [path]
     while stack:
@@ -76,6 +132,8 @@ def _scandir_recursive(path: Path) -> Iterator[Path]:
         with os.scandir(current) as it:
             for entry in it:
                 if entry.is_dir(follow_symlinks=False):
+                    if is_internal_dirname(entry.name):
+                        continue
                     stack.append(Path(entry.path))
                 elif entry.is_file(follow_symlinks=False):
                     yield Path(entry.path)
@@ -104,6 +162,10 @@ def safe_list_directory(path: Path) -> list[Path]:
     NOT included (``follow_symlinks=False`` on every check). New
     callers needing symlink-following should add an opt-in parameter
     rather than changing the default.
+
+    Directories named in :data:`INTERNAL_DIRNAMES` are skipped — an
+    in-flight atomic write must not surface as an artifact in a
+    ``FileReference`` directory or anywhere else this listing feeds.
     """
     _flush_directory_metadata(path)
     return list(_scandir_recursive(path))

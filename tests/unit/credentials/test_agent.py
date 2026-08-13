@@ -34,10 +34,12 @@ from application_sdk.credentials.errors import (
     CredentialRoutingError,
 )
 from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.errors.leaves import ColdStartRaceError
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreError,
     SecretStoreUnavailableError,
+    SecretStoreUnreachableError,
 )
 from application_sdk.testing.mocks import MockSecretStore
 
@@ -828,6 +830,10 @@ class TestSingleKeyMode:
         test_agent_single_key_mode_outage_raises_not_silently_swallowed in
         test_credential_vault.py). An exhausted cold-start outage must
         raise, not fall back to the literal ref-key placeholder.
+
+        Because the outage persists past the whole budget, it surfaces as the
+        TERMINAL ``SecretStoreUnreachableError``, not the transient
+        ``SecretStoreUnavailableError`` — waited the whole budget, done waiting.
         """
         calls = {"n": 0}
 
@@ -845,18 +851,24 @@ class TestSingleKeyMode:
             }
         )
 
-        with pytest.raises(SecretStoreUnavailableError) as exc_info:
+        with pytest.raises(SecretStoreUnreachableError) as exc_info:
             await resolve_agent_json(agent_json, AlwaysDown())  # type: ignore[arg-type]
 
         # Retried once, then gave up at the deadline — same budget as every
         # other call site.
         assert calls["n"] == 2
 
+        # Terminal type, but still a ColdStartRaceError so the probe aggregator
+        # routes it and NOT the transient type.
+        assert isinstance(exc_info.value, ColdStartRaceError)
+        assert not isinstance(exc_info.value, SecretStoreUnavailableError)
+
         # The raised exception must not carry the raw ref-key — it's
         # rebuilt with a hashed label before propagating, not the original
-        # SecretStoreUnavailableError("ATLAN_USER", ...) the store raised.
+        # the store raised, and no cause is attached.
         assert "ATLAN_USER" not in str(exc_info.value)
         assert exc_info.value.secret_name != "ATLAN_USER"
+        assert exc_info.value.cause is None
 
     async def test_store_outage_does_not_leak_ref_key_in_logs(self) -> None:
         """On a store outage during a single-key probe, the WARNING must not
@@ -1825,7 +1837,9 @@ class TestSingleKeyProbeConcurrency:
     ) -> None:
         """A probe that never got an answer must surface as an outage rather
         than being masked by its siblings' success — and must carry a hashed
-        label, not the raw ref-key."""
+        label, not the raw ref-key. With no retry budget the first-contact
+        failure exhausts immediately, so it surfaces as the terminal
+        ``SecretStoreUnreachableError``."""
 
         class HalfDownStore:
             async def get_optional(self, name: str) -> str | None:
@@ -1837,7 +1851,7 @@ class TestSingleKeyProbeConcurrency:
             **{"basic.password": "unreachable-key", "database": "fine-key"}
         ).to_raw_dict()
 
-        with pytest.raises(SecretStoreUnavailableError) as exc_info:
+        with pytest.raises(SecretStoreUnreachableError) as exc_info:
             await _fetch_per_key_bundle(HalfDownStore(), raw)
 
         assert "unreachable-key" not in str(exc_info.value)

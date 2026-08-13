@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common._listing import safe_list_directory
+from application_sdk.common.atomic import atomic_write
 from application_sdk.contracts.types import FileReference
 
 if TYPE_CHECKING:
@@ -95,9 +96,20 @@ def _make_storage_prefix(ref: FileReference, *, output_path: str | None = None) 
 
 
 def _write_local_sidecar(local_path: str, sha256: str) -> None:
-    """Write a local ``.sha256`` sidecar next to *local_path*."""
+    """Write a local ``.sha256`` sidecar next to *local_path*.
+
+    Atomic even though the write is best-effort, and *because* it is: a
+    truncated digest is not a missing sidecar, it is a wrong one. A later
+    ``materialize`` would compare a good local file against a partial digest,
+    conclude the file is stale, and re-download it every time — a silent,
+    permanent tax rather than the visible failure a missing sidecar produces
+    (FND-318).
+    """
     try:
-        Path(local_path + ".sha256").write_text(sha256)
+        with atomic_write(
+            local_path + ".sha256", operation="local sidecar write"
+        ) as sidecar:
+            sidecar.write(sha256.encode())
     except Exception:
         logger.warning(
             "Sidecar write failed (best-effort, continuing without)", exc_info=True

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.27.2
-source-sha:    46754b0e6be87b5991af70045f5258a71711f647
-source-date:   2026-08-13T10:53:27+01:00
+source-sha:    dad8fef9b483a17d66c704e0fbdbffa7f1d05374
+source-date:   2026-08-13T16:06:02+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,10 +23,10 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 11 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 59 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 61 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 37 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
@@ -961,6 +961,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Marker for a :class:`DependencyUnavailableError` that specifically means
 - **Defined in:** `application_sdk/errors/leaves.py`
 
+#### `DaprSidecarUnreachableError`
+
+- **Import:** `from application_sdk.errors import DaprSidecarUnreachableError`
+- **Signature:** `class DaprSidecarUnreachableError(*, ...)`
+- **Summary:** Terminal form of a cold-start race: the Dapr sidecar never became
+- **Defined in:** `application_sdk/errors/leaves.py`
+
 #### `DataIntegrityError`
 
 - **Import:** `from application_sdk.errors import DataIntegrityError`
@@ -973,6 +980,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import DependencyUnavailableError`
 - **Signature:** `class DependencyUnavailableError(*, ...)`
 - **Summary:** Required Atlan-internal platform service is temporarily down or degraded.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `DiskFullError`
+
+- **Import:** `from application_sdk.errors import DiskFullError`
+- **Signature:** `class DiskFullError(*, ...)`
+- **Summary:** A local write failed because the filesystem had no room for it (FND-318).
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `ErrorCode`
@@ -1804,6 +1818,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Import:** `from application_sdk.infrastructure import SecretStoreUnavailableError`
 - **Signature:** `class SecretStoreUnavailableError(secret_name: str, *, cause: Exception | None = None)`
 - **Summary:** The secret store / Dapr sidecar was *unreachable* — a transport failure
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
+
+#### `SecretStoreUnreachableError`
+
+- **Import:** `from application_sdk.infrastructure import SecretStoreUnreachableError`
+- **Signature:** `class SecretStoreUnreachableError(secret_name: str, ...)`
+- **Summary:** Terminal counterpart of :class:`SecretStoreUnavailableError`: the secret
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
 #### `StateStore`

@@ -275,7 +275,7 @@ pyasn1==0.6.4
     # via pyasn1-modules
 pyasn1-modules==0.4.2
     # via google-auth
-pyatlan==9.11.0
+pyatlan==10.0.0
     # via atlan-application-sdk
 pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
     # via cffi
@@ -361,7 +361,7 @@ rpds-py==2026.6.3
 s3transfer==0.19.2
     # via boto3
 semver==3.0.4
-sentry-sdk==2.67.1
+sentry-sdk==2.68.0
     # via fastapi-cloud-cli
 shellingham==1.5.4
     # via typer

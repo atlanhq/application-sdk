@@ -8,14 +8,17 @@ This module contains helper functions for:
 
 from __future__ import annotations
 
-import asyncio
 import os
 import re
-import shutil
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from application_sdk.common.atomic import (
+    atomic_copy,
+    disk_full_guard,
+    ensure_free_space,
+)
 from application_sdk.constants import (
     APPLICATION_NAME,
     MARKER_TIMESTAMP_FORMAT,
@@ -24,8 +27,8 @@ from application_sdk.constants import (
     TEMPORARY_PATH,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.batch import list_keys_with_meta
-from application_sdk.storage.ops import download_file, download_file_chunked
+from application_sdk.storage.batch import download_prefix
+from application_sdk.storage.ops import download_file
 
 logger = get_logger(__name__)
 
@@ -229,51 +232,34 @@ async def download_s3_prefix_with_structure(
     local_destination: Path,
     max_concurrency: int = MAX_CONCURRENT_STORAGE_TRANSFERS,
 ) -> None:
-    """Download files from S3 preserving relative directory structure.
+    """Download files under *s3_prefix* into *local_destination*, prefix stripped.
 
-    This helper handles path stripping correctly to maintain the expected
-    directory structure locally.
+    Supported alias for :func:`~application_sdk.storage.batch.download_prefix`
+    with ``strip_prefix=True``: ``<s3_prefix>/table/chunk-0.json`` lands at
+    ``<local_destination>/table/chunk-0.json``.
+
+    This is a **supported** compatibility alias, not a deprecated one — it is
+    retained indefinitely because app code outside the SDK imports it, and there
+    is no removal target. New SDK call sites should prefer ``download_prefix``
+    directly so the incremental path keeps one download implementation and one
+    path policy (FND-340).
 
     Args:
-        s3_prefix: S3 prefix path to download from
-        local_destination: Local directory to download files into
-        max_concurrency: Maximum number of concurrent downloads (default: MAX_CONCURRENT_STORAGE_TRANSFERS).
+        s3_prefix: Object-store prefix to download from.
+        local_destination: Local directory to download files into.
+        max_concurrency: Maximum number of concurrent downloads
+            (default: ``MAX_CONCURRENT_STORAGE_TRANSFERS``).
 
     Raises:
-        Exception: If listing or downloading fails
+        StorageError: If listing or downloading fails.
+        StorageIntegrityError: If an object does not match its sidecar digest.
     """
-    # List files under the prefix from Object Store. Sizes + etags from the
-    # listing let large files fetch via bounded, version-pinned range GETs
-    # without a per-file HEAD (BLDX-1513 / BLDX-1523).
-    items = await list_keys_with_meta(
+    await download_prefix(
         prefix=s3_prefix,
+        local_dir=local_destination,
+        strip_prefix=True,
+        max_concurrency=max_concurrency,
     )
-
-    # Normalize source prefix for path stripping
-    source_prefix = s3_prefix.rstrip("/")
-
-    sem = asyncio.Semaphore(max_concurrency)
-
-    async def _download_one(file_path: str, size: int, etag: str | None) -> None:
-        # Strip source prefix to get relative path
-        if file_path.startswith(source_prefix):
-            relative_path = file_path[len(source_prefix) :].lstrip("/")
-        else:
-            relative_path = file_path
-
-        local_file_path = local_destination.joinpath(relative_path)
-        local_file_path.parent.mkdir(parents=True, exist_ok=True)
-
-        async with sem:
-            await download_file_chunked(
-                key=file_path,
-                local_path=str(local_file_path),
-                file_size=size,
-                etag=etag,
-            )
-
-    # Download all files concurrently with bounded parallelism
-    await asyncio.gather(*[_download_one(fp, size, etag) for fp, size, etag in items])
 
 
 # =============================================================================
@@ -313,9 +299,12 @@ def copy_directory_parallel(
         Number of files copied
 
     Raises:
+        DiskFullError: If the destination filesystem cannot hold the copy —
+            either because it plainly has less room than the whole batch needs,
+            or because it ran out part-way through.
         FileNotFoundError: If a source file disappears during copy
         PermissionError: If lacking permissions to read src or write dest
-        OSError: For disk space issues or other I/O errors
+        OSError: For other I/O errors
     """
     if not src_dir.exists():
         return 0
@@ -324,11 +313,42 @@ def copy_directory_parallel(
     if not files:
         return 0
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    # Inside the guard: creating the destination is itself a write, and on a
+    # full filesystem it fails with the same ENOSPC/EDQUOT the copies below
+    # would have — the docstring promises DiskFullError for exactly this.
+    with disk_full_guard(dest_dir, operation="carry-forward copy"):
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+    # This is the carry-forward copy behind FND-318. It ran out of space
+    # part-way through and `shutil.copy2` left a truncated file at the
+    # artifact's real name; the run then carried it forward and uploaded it,
+    # and a publish forty minutes later failed in DuckDB at the same byte
+    # offset on every retry. Two changes close that: the batch's total size is
+    # checked before the first byte moves, so a plainly-undersized volume fails
+    # in seconds with a number an operator can act on; and each file is staged
+    # and renamed, so a failure part-way through leaves no file at all rather
+    # than a partial one.
+    total_bytes = 0
+    for src_file in files:
+        try:
+            total_bytes += src_file.stat().st_size
+        except OSError:
+            # Only the estimate is affected — this file is still copied below,
+            # and that copy raises its own error if the file is really gone.
+            # DEBUG because a file disappearing between the glob and the stat
+            # is a benign race, not a condition anyone acts on.
+            logger.debug(
+                "Could not size %s for the carry-forward space check; the "
+                "estimate will be low by that file",
+                src_file,
+                exc_info=True,
+            )
+            continue
+    ensure_free_space(dest_dir, total_bytes, operation="carry-forward copy")
 
     def copy_single_file(src_file: Path) -> None:
-        """Copy a single file to dest_dir. Raises on failure."""
-        shutil.copy2(src_file, dest_dir / src_file.name)
+        """Copy a single file to dest_dir, atomically. Raises on failure."""
+        atomic_copy(src_file, dest_dir / src_file.name, operation="carry-forward copy")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         list(executor.map(copy_single_file, files))
