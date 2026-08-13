@@ -1,0 +1,156 @@
+"""Uniform access to the integration source credentials, however provisioned.
+
+Every connector's integration suite needs the same thing: the host / username /
+password (or client-id / secret / role-arn / …) of the source it extracts from.
+Those credentials reach the test runner one of two ways, both wired in the SDK's
+``tests-reusable.yaml`` (the integration and e2e jobs export them identically):
+
+* a static ``E2E_SOURCE_ENV_JSON`` the repo composes from its own secrets, or
+* a live DataForge fetch (``fetch_dataforge_source.py``), OIDC-authenticated in
+  CI against a curated instance.
+
+Both export the source's fields as ``E2E_<DATASOURCE>_<FIELD>`` environment
+variables — but the field *names* are source-shaped (``E2E_POSTGRES_HOST`` for a
+JDBC source, ``E2E_POWERBI_CLIENT_SECRET`` for a SaaS one), so there is no single
+fixed env contract 74 connectors can each hard-code. What IS uniform is the
+breadcrumb the fetch also writes: ``E2E_SOURCE_RAW_JSON`` (every scalar field as
+one JSON object) and ``E2E_SOURCE_DATASOURCE`` (the datasource name).
+
+:class:`DataForgeSource` reads both — the uniform blob and the flat
+``E2E_<DATASOURCE>_*`` vars — so every connector consumes its source the same
+way: a case- and separator-insensitive field bag plus an availability probe,
+instead of each repo re-implementing its own ``os.environ`` plumbing and its own
+``basic_available()`` predicate. The connector still maps the fields onto its own
+connection/config shape (that part is irreducibly per-connector); only the
+*reading* is unified.
+
+When no source resolved — the fetch was disabled, or it fell back to nothing —
+:attr:`~DataForgeSource.available` is ``False`` and the suite skips. That is the
+skip-not-fail contract the integration tier relies on: an absent source is a
+skipped scenario, never a hard failure on missing infrastructure.
+
+Example::
+
+    src = DataForgeSource.from_env("postgres")
+    if not src.require("host", "username", "password"):
+        pytest.skip("no postgres integration source available")
+    creds = {
+        "host": src.get("host"),
+        "port": int(src.get("port", default="5432")),
+        "username": src.get("username", "user"),
+        "password": src.get("password"),
+    }
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from dataclasses import dataclass
+from typing import Mapping
+
+
+def _normalise(key: str) -> str:
+    """Fold a field name to its comparison form: lowercase, alphanumerics only.
+
+    So ``E2E_POSTGRES_HOST``'s field ``HOST``, a JSON key ``host`` and a lookup
+    for ``Host`` all resolve to the same entry, and separator differences
+    (``iam_role_arn`` vs ``iamRoleArn``) never split one field into two.
+    """
+    return re.sub(r"[^a-z0-9]", "", key.lower())
+
+
+@dataclass(frozen=True)
+class DataForgeSource:
+    """The integration source's credential fields, read uniformly from env.
+
+    ``datasource`` is the DataForge datasource name — supplied by the connector
+    or taken from the ``E2E_SOURCE_DATASOURCE`` breadcrumb — or ``""`` when
+    unknown. ``fields`` maps each field's normalised name to its value; use
+    :meth:`get` / :meth:`require` rather than indexing it directly, so ``host`` /
+    ``hostname`` and case differences resolve the same way in every connector.
+    """
+
+    datasource: str
+    fields: Mapping[str, str]
+
+    @property
+    def available(self) -> bool:
+        """True when at least one source field resolved.
+
+        A cheap presence check; :meth:`require` is the one to gate a scenario on,
+        because it names the fields the connector actually needs.
+        """
+        return bool(self.fields)
+
+    def get(self, *names: str, default: str | None = None) -> str | None:
+        """First non-empty field among ``names`` (case/separator-insensitive).
+
+        Pass aliases most-specific first — ``get("basic_auth_host", "host")`` —
+        to prefer an auth-mode-specific field but fall back to the canonical one
+        the DataForge fetch exports.
+        """
+        for name in names:
+            value = self.fields.get(_normalise(name))
+            if value:
+                return value
+        return default
+
+    def require(self, *names: str) -> bool:
+        """True iff every name resolves to a non-empty value.
+
+        The availability predicate every connector's ``skipif`` should call, in
+        place of a hand-rolled ``bool(HOST and USER and PASSWORD)``.
+        """
+        return all(self.get(name) for name in names)
+
+    def as_dict(self) -> dict[str, str]:
+        """A copy of the field bag, keyed by normalised field name."""
+        return dict(self.fields)
+
+    @classmethod
+    def from_env(
+        cls,
+        datasource: str = "",
+        *,
+        environ: Mapping[str, str] | None = None,
+    ) -> "DataForgeSource":
+        """Build from the process environment (or an explicit ``environ`` map).
+
+        ``datasource`` is the connector's DataForge datasource name (``postgres``,
+        ``powerbi``, …). It is optional: when omitted, the ``E2E_SOURCE_DATASOURCE``
+        breadcrumb the fetch writes is used instead. Supplying it lets the flat
+        ``E2E_<DATASOURCE>_*`` vars be read even on the static path, where no
+        breadcrumb is written.
+        """
+        env = os.environ if environ is None else environ
+        resolved_ds = (datasource or env.get("E2E_SOURCE_DATASOURCE") or "").strip()
+        fields: dict[str, str] = {}
+
+        # 1) The uniform blob, present only when the DataForge fetch ran. It is
+        #    the authoritative field map, so it is read first and wins over the
+        #    flat vars below on any collision.
+        raw = env.get("E2E_SOURCE_RAW_JSON")
+        if raw:
+            try:
+                parsed = json.loads(raw)
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, dict):
+                for key, value in parsed.items():
+                    if value is not None and str(value) != "":
+                        fields[_normalise(str(key))] = str(value)
+
+        # 2) The flat ``E2E_<PREFIX>_<FIELD>`` vars — written by BOTH the static
+        #    E2E_SOURCE_ENV_JSON export and the fetch — so the static path (which
+        #    writes no blob) still resolves. Scoped to the datasource prefix, so
+        #    unrelated E2E_* vars (tenant creds, feature flags) never leak into
+        #    the source bag. ``setdefault`` keeps the blob's value on collision.
+        if resolved_ds:
+            prefix = "E2E_" + re.sub(r"[^A-Za-z0-9]", "_", resolved_ds.upper()) + "_"
+            for key, value in env.items():
+                if key.startswith(prefix) and value:
+                    fields.setdefault(_normalise(key[len(prefix) :]), value)
+
+        return cls(datasource=resolved_ds, fields=fields)
