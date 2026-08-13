@@ -832,13 +832,18 @@ jobs:
       #
       # Order = precedence: the static E2E_SOURCE_ENV_JSON exported above is the
       # FALLBACK; a successful dataforge fetch below overwrites it (the later
-      # $GITHUB_ENV write wins). Every step here is continue-on-error, so when
-      # dataforge is unavailable (VPN, workload binding, dataforge down) the
-      # repo's own creds carry the run — or, if there are none, the source-gated
-      # integration scenarios self-skip via their `skipif`. That is the one
-      # deliberate divergence from e2e: the e2e job's "fail fast when no source"
-      # step is intentionally NOT mirrored, because failing the integration job
-      # on an absent source would break that skip-not-fail fallback contract.
+      # $GITHUB_ENV write wins). The fetch steps are continue-on-error so a
+      # transient dataforge/VPN blip (the VPN connect already retries 3x) doesn't
+      # redden the job by itself. But when a connector OPTS INTO dataforge
+      # (dataforge-datasource set) and NOTHING resolves — no dataforge creds and
+      # no E2E_SOURCE_ENV_JSON fallback — the "Resolve source" step below FAILS
+      # the job. Integration is the merge gate; a silent skip there would let
+      # untested code into main, so an opted-in source that isn't there is a hard
+      # error, not a green skip. Unlike e2e this passes hermetic-fallback=false
+      # unconditionally: the integration tier is dataforge-only by doctrine (no
+      # seeded per-run containers), so there is no hermetic path to fall back to.
+      # Apps that do NOT set dataforge-datasource are unaffected — the whole
+      # chain, fail-fast included, self-skips.
       # READ-ONLY: the job only fetches credentials; it never seeds or mutates
       # the instance (curation is the instance owner's one-time setup).
       #
@@ -896,6 +901,20 @@ jobs:
             --json "$DF_ENV_JSON" --mask-only
           python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
             --json "$DF_ENV_JSON" >> "$GITHUB_ENV"
+
+      # The compensating control for the continue-on-error fetch above: with no
+      # continue-on-error, FAIL the job one minute in — with the fix in the
+      # message — when a connector declared a dataforge source but none resolved
+      # (E2E_SOURCE_DATASOURCE breadcrumb absent AND no E2E_SOURCE_ENV_JSON).
+      # hermetic-fallback is hard-wired false: the integration tier has no
+      # seeded-container path, so an unresolved opted-in source is always a hard
+      # error, never a silent skip that would green a merge-gating job on code it
+      # never tested. Reuses the e2e job's script verbatim.
+      - name: Resolve integration source (fail fast when none)
+        if: inputs.dataforge-datasource != ''
+        env:
+          DF_HERMETIC_FALLBACK: "false"
+        run: python3 application-sdk-scripts/.github/scripts/resolve_e2e_source.py
 
       # Unit runs in its own job; integration defaults to tests/integration/.
       # A caller test-paths override scopes THIS job only. The ternary is a
