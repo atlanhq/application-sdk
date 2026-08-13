@@ -10,8 +10,8 @@ description: >
   step — but always routed to residue for mandatory human sign-off afterward,
   since a live-resolved SHA cannot itself be judged trustworthy by any
   recheck; this is assisted, not autonomous, remediation.  C003's
-  missing-entry case and drifted `tests.yaml`/`renovate.json` still have no
-  authored prescription and route to residue for manual triage.
+  missing-entry case, C004, and drifted `tests.yaml`/`renovate.json` still
+  have no authored prescription and route to residue for manual triage.
 ---
 
 ### Maintains
@@ -34,7 +34,7 @@ Postcondition:
 > human sign-off (`external_influence`); a C001 fix whose recheck fails is
 > reverted and residues via the ordinary "recheck failed" path instead, like
 > any other rule.  Any C-series findings that remain
-> (C003 missing-entry, drifted `tests.yaml`/`renovate.json`) are not yet
+> (C003 missing-entry, C004, drifted `tests.yaml`/`renovate.json`) are not yet
 > remediable in this phase and are routed to residue for manual triage — see
 > the Fix Prescription for exactly which findings that covers and why.
 
@@ -168,6 +168,31 @@ remediability:
   `classification = "judgment"` — route to residue. A human should confirm
   the missing entry is actually wanted before it's appended (e.g. a repo
   that deliberately tracks `.env` for a documented reason).
+
+---
+
+**C004 UnretriedToolDownload** — a CI step downloads a tool over the network
+with no retry. `classification = "judgment"` — route to residue.
+
+Not mechanical, because the three available remediations differ in value and
+only a human can pick:
+
+- wrap the command in `.github/scripts/with-retry.sh`;
+- add `--retry 5 --retry-delay 5 --retry-all-errors` (curl) or
+  `--tries=5 --waitretry=10 --retry-on-http-error=429,500,502,503,504` (wget);
+- **stop downloading** — take the tool from the runner tool cache, or from
+  `atlanhq/application-sdk/.github/actions/setup-deps@main`, so the happy path
+  makes no network request at all.
+
+The third is usually best and is never derivable from the finding alone: it
+depends on whether the tool is already present on the runner image and whether
+the repo consumes the shared CI path. Auto-applying a retry would also
+entrench a download that should have been deleted, which is why this rule is
+`autofixable = false` rather than mechanically fixed with the cheapest option.
+
+Note this rule may not touch `.github/` mechanically in any case — see the
+Write-scope constraint in `remediate-finding.prose.md`; C001 is the sole
+exception there.
 
 ---
 

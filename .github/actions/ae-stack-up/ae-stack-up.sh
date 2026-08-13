@@ -77,11 +77,16 @@ log "DAG needs sibling apps: $(echo "$NEEDS" | cut -d'|' -f1 | tr '\n' ' ' )"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DAPR_VERSION="$(grep '^__dapr_version' "$SCRIPT_DIR/../../../application_sdk/version.py" | cut -d'"' -f2)"
 [ -n "$DAPR_VERSION" ] || err "could not read __dapr_version from application_sdk/version.py"
+# Both fetches go through with-retry: they are github.com release assets and a
+# third-party install endpoint, and a transient 503 on either one fails the job
+# outright. Same wrapper the connector-integration-tests action already uses
+# for these exact two downloads.
+WITH_RETRY="$SCRIPT_DIR/../../scripts/with-retry.sh"
 if ! command -v daprd >/dev/null 2>&1; then
-  wget -q "https://github.com/dapr/dapr/releases/download/v${DAPR_VERSION}/daprd_linux_amd64.tar.gz" -O /tmp/daprd.tar.gz
+  "$WITH_RETRY" wget -q "https://github.com/dapr/dapr/releases/download/v${DAPR_VERSION}/daprd_linux_amd64.tar.gz" -O /tmp/daprd.tar.gz
   tar -xzf /tmp/daprd.tar.gz -C /tmp && sudo mv /tmp/daprd /usr/local/bin/ && sudo chmod +x /usr/local/bin/daprd
 fi
-command -v temporal >/dev/null 2>&1 || curl -sSf https://temporal.download/cli.sh | sh
+command -v temporal >/dev/null 2>&1 || "$WITH_RETRY" bash -c "curl -sSf https://temporal.download/cli.sh | sh"
 export PATH="$HOME/.temporalio/bin:$PATH"
 
 # Shared object-store bucket so every app's localstorage binding resolves the
@@ -132,7 +137,7 @@ clone_app atlan-automation-engine-app
 AE_DIR="$WORKSPACE/atlan-automation-engine-app"
 
 # uv
-command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
+command -v uv >/dev/null 2>&1 || "$WITH_RETRY" bash -c "curl -LsSf https://astral.sh/uv/install.sh | sh"
 export PATH="$HOME/.local/bin:$PATH"
 
 # ── 3. Start Temporal dev server ─────────────────────────────────────────────

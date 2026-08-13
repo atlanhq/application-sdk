@@ -496,7 +496,8 @@ runs:
     - name: Download atlan-configurator
       shell: bash
       run: |
-        curl -fsSL -O https://atlan-public.s3.amazonaws.com/apps/docker-compose-configurator-amd64.tgz
+        "${{ github.action_path }}/../../scripts/with-retry.sh" \
+          curl -fsSL -O https://atlan-public.s3.amazonaws.com/apps/docker-compose-configurator-amd64.tgz
         tar -xvf docker-compose-configurator-amd64.tgz
         mv docker-compose-generator/generate atlan-configurator
         chmod +x atlan-configurator

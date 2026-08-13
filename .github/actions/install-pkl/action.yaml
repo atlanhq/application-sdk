@@ -1,0 +1,50 @@
+name: Install pkl
+description: |
+  Install the pkl runtime onto the runner, retrying the download.
+
+  pkl ships as a GitHub release asset, so every `curl` for it is a live
+  dependency on github.com's release CDN at job time. That CDN returns 503s in
+  bursts lasting minutes, and the SDK had seven separate copies of the same
+  bare `curl -fsSL .../pkl-linux-amd64` — most with no retry at all. A single
+  burst took out the Connector Tests Gate and ejected a PR from the merge
+  queue. This action is the one place that download lives now.
+
+  Two things it gets right that the hand-rolled copies did not:
+    - retry, via .github/scripts/with-retry.sh (reachable here through
+      github.action_path regardless of what the caller checked out);
+    - architecture, via runner.arch — pkl publishes a separate aarch64 asset,
+      and naming the x86 one on an arm64 runner fails as `cannot execute
+      binary file` several steps later, nowhere near anything about arch.
+
+  Reusable workflows must reference this as
+  `atlanhq/application-sdk/.github/actions/install-pkl@main`, not `./…` — a
+  relative path resolves against the CALLER's workspace, which for a consumer
+  repo has no copy of this action. Same convention as the composites in
+  tests-reusable.yaml.
+
+inputs:
+  version:
+    required: false
+    default: "0.27.2"
+    description: |
+      pkl runtime version to install. The default is the fleet-wide pin shared
+      by the contract-toolkit workflows and the regenerate-contract action;
+      pass an explicit value only when a caller must diverge.
+
+runs:
+  using: composite
+  steps:
+    - name: Install pkl
+      shell: bash
+      env:
+        PKL_VERSION: ${{ inputs.version }}
+        # Chosen in the expression layer rather than from `uname -m` in the
+        # shell, so there is no inlined conditional shell (docs/standards/ci.md).
+        PKL_ASSET: pkl-linux-${{ runner.arch == 'ARM64' && 'aarch64' || 'amd64' }}
+      run: |
+        set -euo pipefail
+        "${{ github.action_path }}/../../scripts/with-retry.sh" \
+          curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/${PKL_ASSET}"
+        chmod +x /tmp/pkl
+        sudo mv /tmp/pkl /usr/local/bin/pkl
+        pkl --version
