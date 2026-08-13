@@ -1,4 +1,4 @@
-"""Regression tests for FND-315: cancellation must not race an orphaned worker.
+"""Cancellation must not race an orphaned worker (FND-315, FND-317).
 
 ADR-0010 moved the parquet reader's decode and the writer's convert-and-write
 into worker threads. A thread cannot be killed, so cancelling the activity
@@ -6,10 +6,18 @@ unwinds the event loop while the worker is still touching the resource it was
 handed — and the lifecycle around both offloads was never re-examined against
 that.
 
-Every test here cancels *mid-offload*, with the blocking primitive held open so
-the orphan is provably still running when the loop unwinds. That is the part
-worth being strict about: a happy-path test passes against the broken code, so
-without cancellation coverage neither fix is verifiable.
+Three shapes of the same race live here:
+
+* the reader closing a handle out from under a live decode (FND-315);
+* two attempts sharing a consolidation *temp* directory (FND-315);
+* two attempts sharing the *output* directory and its chunk filenames
+  (FND-317) — where the orphan's late write replaced the retry's file, and the
+  retry's ``FileReference`` adopted whatever else the orphan had left behind.
+
+Every test cancels *mid-offload*, with the blocking primitive held open so the
+orphan is provably still running when the loop unwinds. That is the part worth
+being strict about: a happy-path test passes against the broken code, so
+without cancellation coverage none of these fixes is verifiable.
 """
 
 from __future__ import annotations
@@ -20,14 +28,17 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.common.types import DataframeType
+from application_sdk.storage.formats import _STAGING_ROOT_DIRNAME
+from application_sdk.storage.formats.json import JsonFileWriter
 from application_sdk.storage.formats.parquet import (
     ParquetFileReader,
     ParquetFileWriter,
@@ -304,10 +315,17 @@ class TestReaderCancellation:
 
 
 def consolidated_frame(writer: ParquetFileWriter) -> pd.DataFrame:
-    """Read back everything the writer consolidated into its output directory."""
+    """Read back everything the writer consolidated, before ``close()`` publishes.
+
+    Consolidated files carry their published names from the moment they are
+    written, but live in the writer's private staging tree until ``close()``
+    moves them into ``writer.path`` (FND-317). These tests stop short of
+    ``close()``, so they read the staged tree.
+    """
+    staged = writer._write_root
     files = sorted(
-        os.path.join(writer.path, name)
-        for name in os.listdir(writer.path)
+        os.path.join(staged, name)
+        for name in os.listdir(staged)
         if name.endswith(".parquet")
     )
     assert files, "the writer produced no consolidated output"
@@ -348,10 +366,15 @@ class TestWriterAttemptIsolation:
 
         assert first._get_temp_folder_path(0) != second._get_temp_folder_path(0)
         assert first._get_temp_base_path() != second._get_temp_base_path()
-        # Still one shared parent, so cleanup and inspection stay predictable.
-        assert os.path.dirname(first._get_temp_base_path()) == os.path.dirname(
-            second._get_temp_base_path()
+        # Still one shared staging parent, so cleanup and inspection stay
+        # predictable — the writer-scoped token now sits at the staging root
+        # rather than inside the accumulation tree (FND-317).
+        assert os.path.dirname(first._ensure_staging_root()) == os.path.dirname(
+            second._ensure_staging_root()
         )
+        # And that parent is outside the output directory, so nothing a
+        # cancelled attempt leaves behind is inside the retry's FileReference.
+        assert not first._get_temp_base_path().startswith(first.path + os.sep)
 
     async def test_cleanup_cannot_delete_another_attempts_live_directory(
         self, tmp_path: Path
@@ -450,3 +473,262 @@ class TestWriterAttemptIsolation:
         # And the orphan's own write landed in its own tree rather than being
         # deleted or redirected.
         assert set(pd.read_parquet(orphan_chunk)["value"]) == {"orphan"}
+
+
+def make_output_writer(path: Path, **overrides: object) -> ParquetFileWriter:
+    """Build a non-consolidating writer that shares its output path with peers.
+
+    The consolidation-free path is the one that reaches ``Writer._flush_buffer``
+    and therefore names its files with the base class's ``path_gen`` — the
+    attempt-independent name every writer subclass derives (FND-317).
+    """
+    kwargs: dict[str, object] = {
+        "path": str(path),
+        "typename": "test_type",
+        "chunk_size": 500,
+        "buffer_size": 100,
+        "defer_uploads": True,
+    }
+    kwargs.update(overrides)
+    return ParquetFileWriter(**kwargs)  # type: ignore[arg-type]
+
+
+def files_under(directory: str) -> list[str]:
+    """Every regular file under *directory*, as sorted relative paths."""
+    return sorted(
+        str(p.relative_to(directory)) for p in Path(directory).rglob("*") if p.is_file()
+    )
+
+
+class TestWriterOutputIsolation:
+    """``Writer`` output directory — one attempt's files, published at close."""
+
+    async def test_an_orphaned_writer_cannot_reach_the_retrys_published_output(
+        self, tmp_path: Path
+    ) -> None:
+        """The headline race, cancelled mid-offload.
+
+        Both attempts resolve ``chunk-0-part0.parquet`` under the same
+        ``typename`` directory, so before FND-317 the orphan's late write
+        replaced the retry's file — and any file of the orphan's that did *not*
+        collide was uploaded as part of the retry's output, because
+        ``_build_file_reference`` listed the directory rather than the writer.
+
+        The orphan is released only after the retry has published, so its write
+        provably lands second: exactly the ordering that used to win.
+        """
+        orphan, retry = make_output_writer(tmp_path), make_output_writer(tmp_path)
+        assert orphan.path == retry.path, "the attempts must share an output directory"
+
+        orphan_rows = pd.DataFrame({"id": [100, 101], "value": ["orphan", "orphan"]})
+        retry_rows = pd.DataFrame({"id": [0, 1], "value": ["retry", "retry"]})
+
+        write_started = threading.Event()
+        may_write = threading.Event()
+        orphan_writes_done: list[str] = []
+        real_write_table = pq.write_table
+        # Resolved before either writer runs, so it is the path the orphan is
+        # gated on — and, before the fix, the path the retry writes too.
+        orphan_chunk = os.path.join(orphan._write_root, "chunk-0-part0.parquet")
+
+        def gated_write_table(table, where, **kwargs):
+            gated = str(where) == orphan_chunk and not write_started.is_set()
+            if gated:
+                write_started.set()
+                may_write.wait(timeout=BLOCK_TIMEOUT_SECONDS)
+            result = real_write_table(table, where, **kwargs)
+            if gated:
+                orphan_writes_done.append(str(where))
+            return result
+
+        with patch.object(pq, "write_table", side_effect=gated_write_table):
+            task = asyncio.create_task(orphan.write(orphan_rows))
+            try:
+                assert await wait_until(
+                    write_started.is_set
+                ), "orphan never started writing"
+
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+                # The retry runs to completion — including the publish inside
+                # close() — while the orphan's worker is still parked inside
+                # pq.write_table, holding a path it resolved before the cancel.
+                await retry.write(retry_rows)
+                result = await retry.close()
+            finally:
+                # Release the orphan even on a failed assertion, so its worker
+                # is never left parked on the gate.
+                may_write.set()
+
+            assert await wait_until(
+                lambda: bool(orphan_writes_done)
+            ), "the orphaned worker never landed its chunk"
+
+        assert files_under(retry.path) == [
+            "chunk-0-part0.parquet",
+            os.path.join("statistics", "statistics.json.ignore"),
+        ], "the retry's output directory holds something it did not write"
+
+        published = pd.read_parquet(os.path.join(retry.path, "chunk-0-part0.parquet"))
+        assert sorted(published["id"].tolist()) == [0, 1]
+        assert set(published["value"]) == {
+            "retry"
+        }, "the orphaned writer's late write replaced the retry's chunk"
+
+        # The FileReference the interceptor persists covers that directory, so
+        # its file count is the mode-2 assertion stated directly.
+        assert result.files is not None
+        assert result.files.local_path == retry.path
+        assert result.files.file_count == 2
+
+        # The orphan's own write landed, in its own tree, outside the output.
+        assert set(pd.read_parquet(orphan_chunk)["value"]) == {"orphan"}
+        assert not orphan_chunk.startswith(retry.path + os.sep)
+
+    async def test_two_writers_never_resolve_the_same_output_filename(
+        self, tmp_path: Path
+    ) -> None:
+        """The property the fix rests on, asserted directly.
+
+        ``chunk_count`` and ``chunk_part`` both restart at 0 for a fresh
+        writer, so the *published* name is deliberately identical between
+        attempts — it is a downstream contract. What must differ is the path
+        each writer actually writes to.
+        """
+        first, second = make_output_writer(tmp_path), make_output_writer(tmp_path)
+
+        first_chunk = os.path.join(first._write_root, "chunk-0-part0.parquet")
+        second_chunk = os.path.join(second._write_root, "chunk-0-part0.parquet")
+
+        assert first_chunk != second_chunk
+        # ...while the published name each maps to is byte-identical, which is
+        # what makes this fix safe for consumers reading `chunk-*.parquet`.
+        published = os.path.join(str(tmp_path), "test_type", "chunk-0-part0.parquet")
+        assert first._published_path(first_chunk) == published
+        assert second._published_path(second_chunk) == published
+
+    async def test_the_output_directory_stays_empty_until_close(
+        self, tmp_path: Path
+    ) -> None:
+        """Nothing is published by a writer that never reaches ``close()``.
+
+        This is the whole mechanism: a cancelled attempt cannot leave a file
+        behind in the output directory because it never had one there.
+        """
+        writer = make_output_writer(tmp_path)
+        await writer.write(pd.DataFrame({"id": [1, 2, 3]}))
+
+        assert files_under(writer.path) == [], "a chunk reached the output before close"
+        assert os.path.exists(
+            os.path.join(writer._write_root, "chunk-0-part0.parquet")
+        ), "the chunk was not staged"
+        staging_root = writer._staging_root
+        assert staging_root is not None
+
+        await writer.close()
+
+        assert files_under(writer.path) == [
+            "chunk-0-part0.parquet",
+            os.path.join("statistics", "statistics.json.ignore"),
+        ]
+        assert not os.path.exists(staging_root), "the staging tree outlived the publish"
+
+    async def test_inline_uploads_use_the_published_key_not_the_staged_path(
+        self, tmp_path: Path
+    ) -> None:
+        """Staging is invisible to the object store.
+
+        ``defer_uploads=False`` uploads each chunk before ``close()`` publishes
+        it, so the key has to be derived from where the file *will* live, not
+        from where it is being read.
+        """
+        writer = make_output_writer(tmp_path, defer_uploads=False)
+        uploads: list[tuple[str, str]] = []
+
+        async def record_upload(key, local_path, **kwargs):
+            uploads.append((str(key), str(local_path)))
+
+        with patch(
+            "application_sdk.storage.formats._upload_file", side_effect=record_upload
+        ):
+            await writer.write(pd.DataFrame({"id": [1, 2, 3]}))
+            await writer.close()
+
+        assert uploads, "nothing was uploaded on the inline path"
+        keys = [key for key, _ in uploads]
+        assert os.path.join(writer.path, "chunk-0-part0.parquet") in keys
+        assert os.path.join(writer.path, "statistics", "statistics.json.ignore") in keys
+        assert not any(
+            _STAGING_ROOT_DIRNAME in key for key in keys
+        ), f"a staged path leaked into an object-store key: {keys}"
+        # ...and every upload still read the file from the staging tree.
+        assert all(_STAGING_ROOT_DIRNAME in local for _, local in uploads)
+
+    async def test_an_orphaned_json_writer_cannot_append_to_the_retrys_output(
+        self, tmp_path: Path
+    ) -> None:
+        """The same race on the JSON writer, where it is worse.
+
+        ``JsonFileWriter._write_chunk`` resolves its open mode — ``wb`` or
+        append — before the offload, so on a shared output directory an
+        orphan's late write either truncated the retry's chunk or appended to
+        it, depending on which attempt saw the file first. Both are silent
+        corruption of a file the retry believes it owns.
+        """
+        orphan = JsonFileWriter(
+            path=str(tmp_path), typename="test_type", buffer_size=100
+        )
+        retry = JsonFileWriter(
+            path=str(tmp_path), typename="test_type", buffer_size=100
+        )
+        assert orphan.path == retry.path
+
+        write_started = threading.Event()
+        may_write = threading.Event()
+        orphan_writes_done: list[str] = []
+        real_open = SafeFileOps.open
+        orphan_chunk = os.path.join(orphan._write_root, "chunk-0-part0.json")
+
+        def gated_open(file, mode="r", *args, **kwargs):
+            gated = str(file) == orphan_chunk and not write_started.is_set()
+            if gated:
+                write_started.set()
+                may_write.wait(timeout=BLOCK_TIMEOUT_SECONDS)
+                orphan_writes_done.append(str(file))
+            return real_open(file, mode, *args, **kwargs)
+
+        # JsonFileWriter has no deferred-upload mode, so stub the store out —
+        # this test is about what reaches the local output directory.
+        with (
+            patch("application_sdk.storage.formats._upload_file", new=AsyncMock()),
+            patch.object(SafeFileOps, "open", side_effect=gated_open),
+        ):
+            task = asyncio.create_task(
+                orphan.write(pd.DataFrame({"id": [100], "value": ["orphan"]}))
+            )
+            try:
+                assert await wait_until(
+                    write_started.is_set
+                ), "orphan never started writing"
+
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+                await retry.write(pd.DataFrame({"id": [0], "value": ["retry"]}))
+                await retry.close()
+            finally:
+                may_write.set()
+
+            assert await wait_until(
+                lambda: bool(orphan_writes_done)
+            ), "the orphaned worker never landed its chunk"
+
+        published = pd.read_json(
+            os.path.join(retry.path, "chunk-0-part0.json"), lines=True
+        )
+        assert published["value"].tolist() == [
+            "retry"
+        ], "the orphaned writer's rows were appended to the retry's chunk"

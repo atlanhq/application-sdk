@@ -394,6 +394,21 @@ return MyOutput(statistics=result, data=result.files)
 The opt-in flag is a bridge for in-flight migrations only. New code should
 go straight to the direct copy-paste pattern above.
 
+**Output files appear only after `close()`.** Both legacy writers stage their
+chunks in a private directory (a hidden `.sdk-writer-staging/` sibling of the
+output path) and move them into the output directory in one step at `close()`.
+Chunk filenames, object-store keys, and the `statistics/` layout are exactly
+what they always were — only the moment the files land changes. Do not read a
+writer's output directory before its `close()` returns.
+
+The reason is cancellation. A cancelled activity leaves an orphaned worker
+thread that cannot be killed and is still writing to a path it resolved before
+the cancel; the chunk name it holds (`chunk-<n>-part<m>`) is identical to the
+one the retry will resolve. Staging means only a writer that reaches `close()`
+ever touches the output directory, so a retry can neither have its file
+overwritten by that orphan nor sweep the orphan's other files into its own
+`FileReference` (FND-315, FND-317).
+
 ## Before Every Commit
 
 ```bash

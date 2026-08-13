@@ -456,7 +456,16 @@ class JsonFileWriter(Writer):
         after its own upload.
         """
         if self.current_buffer_size_bytes > 0:
-            output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
+            output_file_name = os.path.join(
+                self._write_root,
+                path_gen(
+                    self.chunk_count,
+                    self.chunk_part,
+                    self.start_marker,
+                    self.end_marker,
+                    extension=self.extension,
+                ),
+            )
             await self._upload_file(output_file_name)
             self.chunk_part += 1
             if self.chunk_start is None:
