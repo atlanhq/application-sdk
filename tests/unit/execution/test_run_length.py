@@ -135,6 +135,16 @@ class TestObservation:
         assert observed.recorded == []
         assert observed.warnings == []
 
+    def test_a_run_at_exactly_its_sla_reports_nothing(self) -> None:
+        """The load-bearing comparison is ``age <= sla_seconds``: a run at the
+        exact boundary is still inside its SLA and must not alert."""
+        harness = _Harness(run_age=_SLA)
+        harness.tick()
+
+        observed = harness.observed()
+        assert observed.recorded == []
+        assert observed.warnings == []
+
     def test_a_run_past_its_sla_records_its_age_and_warns(self) -> None:
         harness = _Harness(run_age=_SLA + 600)
         harness.tick()
@@ -295,6 +305,33 @@ class TestSlaFromEnv:
         monkeypatch.setenv("ATLAN_RUN_LENGTH_SLA_SECONDS", "a day or so")
 
         assert _load_sla_seconds() == float(_DEFAULT_SLA_SECONDS)
+
+    def test_the_import_time_constant_is_what_production_reads(self) -> None:
+        """``build_run_length_watch`` defaults to ``RUN_LENGTH_SLA_SECONDS``,
+        which is bound once at import — so the env var's effect on the constant
+        itself is the surface worth pinning, not only the loader beneath it.
+
+        Run in a subprocess: the constant binds at import, and re-importing the
+        module in this process would mint a second ``RunLengthWatch`` class and
+        break ``isinstance`` for every sibling test that imported it by name.
+        """
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import os; "
+                "os.environ['ATLAN_RUN_LENGTH_SLA_SECONDS'] = '7200'; "
+                "from application_sdk.execution import run_length as m; "
+                "assert m.RUN_LENGTH_SLA_SECONDS == 7200.0, "
+                "f'constant bound {m.RUN_LENGTH_SLA_SECONDS}, not the env var'",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -480,7 +517,7 @@ class TestWireCompatibility:
 
 
 class TestWorkflowStampsTheRunStart:
-    def _dispatched_context(self) -> Any:
+    async def _dispatched_context(self) -> Any:
         with patch(
             "application_sdk.execution._temporal.eviction_retry."
             "execute_activity_with_eviction_retry",
@@ -496,11 +533,11 @@ class TestWorkflowStampsTheRunStart:
                 output_type=_PlumbingOut,
                 context_data={"run_id": "r1", "correlation_id": "c1"},
             )
-            asyncio.run(wrapper(MagicMock()))
+            await wrapper(MagicMock())
 
         return mock_exec.call_args.kwargs["args"][0]
 
-    def test_the_run_start_comes_from_history_not_a_clock(self) -> None:
+    async def test_the_run_start_comes_from_history_not_a_clock(self) -> None:
         """``workflow.info().start_time`` is replayed from the run's own history,
         so a replay measures the run's real age instead of restarting the clock."""
         started = datetime(2026, 8, 13, 6, 0, tzinfo=UTC)
@@ -508,11 +545,11 @@ class TestWorkflowStampsTheRunStart:
         with patch.object(
             base_module.workflow, "info", return_value=MagicMock(start_time=started)
         ):
-            context = self._dispatched_context()
+            context = await self._dispatched_context()
 
         assert context.run_started_at_epoch == started.timestamp()
 
-    def test_unknown_outside_a_workflow_context(self) -> None:
+    async def test_unknown_outside_a_workflow_context(self) -> None:
         """A local run has no run to measure — and reading the start must never
         be the thing that fails a dispatch."""
         with patch.object(
@@ -520,6 +557,6 @@ class TestWorkflowStampsTheRunStart:
             "info",
             side_effect=RuntimeError("not in workflow event loop"),
         ):
-            context = self._dispatched_context()
+            context = await self._dispatched_context()
 
         assert context.run_started_at_epoch == 0.0

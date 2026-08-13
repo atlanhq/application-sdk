@@ -118,6 +118,18 @@ def retry_product_seconds(
     explicit and enforced. Passing anything smaller is a real bound, and
     :func:`resolve_activity_time_bounds` describes what it costs.
 
+    What the headroom is, honestly: a fixed allowance, not a sum computed from
+    the retry policy's shape. At the default backoff (1s initial interval, 2.0
+    coefficient) it covers roughly 3–4 attempts' inter-attempt waits; a deeper
+    policy (10 attempts at those settings waits ~17 minutes across its backoff,
+    against 10s of headroom) can still fire the ceiling during a late backoff
+    wait and forfeit the attempts the policy says remain. That is deliberate:
+    the number stays policy-independent so it can be declared at decoration time,
+    and slightly-tight is the right side to err on — the ceiling's job is to
+    expose a cosmetic retry policy, not to reproduce its backoff arithmetic. If
+    a task genuinely needs every deep-policy attempt, pass a larger
+    ``backoff_headroom_seconds`` with it.
+
     Args:
         timeout_seconds: One attempt's ``start_to_close`` budget.
         max_attempts: The retry policy's ``max_attempts`` (attempts, not
@@ -125,7 +137,8 @@ def retry_product_seconds(
         backoff_headroom_seconds: Seconds added for the retry backoff waits.
 
     Returns:
-        Total seconds across all attempts, including backoff headroom.
+        Total seconds across all attempts, plus the backoff headroom described
+        above.
     """
     return max(1, max_attempts) * timeout_seconds + backoff_headroom_seconds
 

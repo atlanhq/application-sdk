@@ -13,7 +13,6 @@ correctly but never reaches the wire still fails.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -48,7 +47,7 @@ class _Out(Output):
     pass
 
 
-def _dispatch_kwargs(**wrapper_kwargs: object) -> dict[str, object]:
+async def _dispatch_kwargs(**wrapper_kwargs: object) -> dict[str, object]:
     """Kwargs the workflow-side wrapper hands to Temporal for one dispatch."""
     with patch(_EVICTION_RETRY_PATH, new_callable=AsyncMock) as mock_exec:
         from application_sdk.app.base import _create_task_activity_wrapper
@@ -63,7 +62,7 @@ def _dispatch_kwargs(**wrapper_kwargs: object) -> dict[str, object]:
             retry_max_interval_seconds=30,
             **wrapper_kwargs,  # type: ignore[arg-type]
         )
-        asyncio.run(wrapper(MagicMock()))
+        await wrapper(MagicMock())
 
     return dict(mock_exec.call_args.kwargs)
 
@@ -121,6 +120,14 @@ class TestResolveActivityTimeBounds:
 
 
 class TestTaskDeclaration:
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
     def test_unset_by_default_so_todays_behaviour_is_unchanged(self) -> None:
         class _App(App):
             @task(timeout_seconds=600)
@@ -248,35 +255,37 @@ class TestGetActivityOptions:
 
 
 class TestWorkflowDispatch:
-    def test_no_schedule_to_close_kwarg_without_a_declared_ceiling(self) -> None:
+    async def test_no_schedule_to_close_kwarg_without_a_declared_ceiling(self) -> None:
         """Byte-identical to before this knob existed for every task that has
         not opted in — the kwarg is omitted, not passed as None."""
-        kwargs = _dispatch_kwargs(timeout_seconds=600)
+        kwargs = await _dispatch_kwargs(timeout_seconds=600)
 
         assert "schedule_to_close_timeout" not in kwargs
         assert kwargs["start_to_close_timeout"] == timedelta(seconds=600)
 
-    def test_a_declared_ceiling_reaches_the_dispatch(self) -> None:
-        kwargs = _dispatch_kwargs(timeout_seconds=600, schedule_to_close_seconds=1810)
+    async def test_a_declared_ceiling_reaches_the_dispatch(self) -> None:
+        kwargs = await _dispatch_kwargs(
+            timeout_seconds=600, schedule_to_close_seconds=1810
+        )
 
         assert kwargs["schedule_to_close_timeout"] == timedelta(seconds=1810)
         assert kwargs["start_to_close_timeout"] == timedelta(seconds=600)
 
-    def test_a_ceiling_below_one_attempt_caps_the_dispatched_start_to_close(
+    async def test_a_ceiling_below_one_attempt_caps_the_dispatched_start_to_close(
         self,
     ) -> None:
-        kwargs = _dispatch_kwargs(
+        kwargs = await _dispatch_kwargs(
             timeout_seconds=86_400, schedule_to_close_seconds=3600
         )
 
         assert kwargs["start_to_close_timeout"] == timedelta(seconds=3600)
         assert kwargs["schedule_to_close_timeout"] == timedelta(seconds=3600)
 
-    def test_bounding_at_the_retry_product_changes_nothing_about_one_attempt(
+    async def test_bounding_at_the_retry_product_changes_nothing_about_one_attempt(
         self,
     ) -> None:
         """The ceiling that makes today's worst case explicit and enforced."""
-        kwargs = _dispatch_kwargs(
+        kwargs = await _dispatch_kwargs(
             timeout_seconds=3600,
             schedule_to_close_seconds=retry_product_seconds(3600, 3),
         )

@@ -46,7 +46,7 @@ from application_sdk.execution._temporal.converter import (
 from application_sdk.execution._temporal.worker import AppWorker, create_worker
 from application_sdk.execution.decorators import needs_lock
 from application_sdk.execution.errors import ApplicationError
-from application_sdk.execution.retry import RetryPolicy
+from application_sdk.execution.retry import RetryPolicy, retry_product_seconds
 
 __all__ = [
     "AppWorker",
@@ -69,4 +69,5 @@ __all__ = [
     "create_worker",
     "get_object_store_prefix",
     "needs_lock",
+    "retry_product_seconds",
 ]
