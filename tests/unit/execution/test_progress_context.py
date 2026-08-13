@@ -168,6 +168,19 @@ class TestNoTrackerBound:
 
         assert warning.call_count == 0
 
+    def test_a_stall_verdict_cannot_stick_to_the_inert_singleton(self) -> None:
+        """The one no-op whose absence would leak across every later attempt.
+
+        The inert tracker is process-wide, so a verdict recorded on it would
+        outlive its caller and make every subsequent cancellation anywhere in the
+        process — a real worker eviction included — read as a stall kill.
+        """
+        current_progress_tracker().flag_stalled(
+            stalled_for_seconds=900.0, last_progress_label="writer.flush_buffer"
+        )
+
+        assert current_progress_tracker().stall is None
+
 
 class TestBinding:
     def test_the_block_yields_and_binds_the_same_tracker(self) -> None:
@@ -322,6 +335,7 @@ class TestActivityBinding:
             heartbeat_fn: Callable[[], None],
             stop_event: asyncio.Event,
             task_name: str,
+            **_watchdog: object,
         ) -> None:
             await stop_event.wait()
 
@@ -445,6 +459,7 @@ class TestActivityBinding:
             heartbeat_fn: Callable[[], None],
             stop_event: asyncio.Event,
             task_name: str,
+            **_watchdog: object,
         ) -> None:
             await stop_event.wait()
             raise asyncio.CancelledError

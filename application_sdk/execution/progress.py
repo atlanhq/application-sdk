@@ -42,6 +42,12 @@ an activity. The framework hooks (FND-288), the ``run_in_thread`` auto-holds
 (FND-290) and the warn-mode telemetry that consumes :class:`ClosedHold`
 (FND-292) are separate pieces built on this one; :func:`holding_progress`
 (FND-291) lives here, next to the tracker whose holds it opens.
+
+In enforce mode the watchdog's verdict comes back through
+:meth:`ProgressTracker.flag_stalled`, and that :class:`StallObservation` is what
+tells ``activities.py`` that a landing ``asyncio.CancelledError`` is a stall kill
+rather than a worker eviction — the two are otherwise indistinguishable at the
+handler that sees them.
 """
 
 from __future__ import annotations
@@ -128,6 +134,29 @@ class ClosedHold:
 
 
 @dataclass(frozen=True)
+class StallObservation:
+    """The no-progress gap the watchdog acted on, frozen at the moment it acted.
+
+    Written by the activity layer's ``on_stall`` handler and read by the
+    cancellation handler that turns the resulting ``CancelledError`` into a
+    typed ``TaskStalledError`` (ADR-0018 → *Failing the activity*). Frozen at
+    detection time rather than re-derived at the raise site because by then the
+    numbers have moved: :meth:`ProgressTracker.stalled_for` keeps growing while
+    the cancellation travels to the attempt's next ``await``, and any progress
+    signal in flight would re-arm it entirely.
+
+    Attributes:
+        stalled_for_seconds: Seconds without an observable progress signal, as
+            observed by the watchdog tick that decided to fail the attempt.
+        last_progress_label: The last progress label seen, ``""`` if the attempt
+            never reported one.
+    """
+
+    stalled_for_seconds: float
+    last_progress_label: str
+
+
+@dataclass(frozen=True)
 class _Hold:
     """An in-flight vouch. ``allowance_seconds=None`` means unbounded."""
 
@@ -183,6 +212,7 @@ class ProgressTracker:
         self._last_label: str = ""
         self._last_at: float = clock()
         self._holds: dict[int, _Hold] = {}
+        self._stall: StallObservation | None = None
         # Mutations are not confined to the event loop: contextvars propagate
         # into `run_in_thread`, so framework hooks and `context.heartbeat()`
         # inside an offloaded blocking call reach this object from a worker
@@ -357,6 +387,48 @@ class ProgressTracker:
                     since = max(since, deadline)
         return max(0.0, now - since)
 
+    @property
+    def stall(self) -> StallObservation | None:
+        """The gap the watchdog failed this attempt for, ``None`` if it has not.
+
+        The one thing that tells the activity's ``except CancelledError`` handler
+        *whose* cancellation it is holding: a stall kill and a worker eviction
+        arrive at the same handler as the same exception type, and only this
+        distinguishes them (ADR-0018 → *Failing the activity*). Read it before
+        the shutdown check — a stall and a SIGTERM can coincide, and attributing
+        such a cancel to eviction would re-dispatch a wedged attempt outside the
+        normal retry budget.
+        """
+        with self._lock:
+            return self._stall
+
+    def flag_stalled(
+        self, stalled_for_seconds: float, last_progress_label: str
+    ) -> None:
+        """Record that the watchdog has judged this attempt stalled.
+
+        Called by the activity layer's ``on_stall`` handler immediately before it
+        cancels the attempt, so the observation is already here when the
+        cancellation lands. Not progress, and deliberately not a mutation of the
+        stall clock: this records a verdict, it does not change what was
+        observed.
+
+        First flag wins. A second call cannot happen through the watchdog (the
+        loop returns as soon as it enforces), and if it ever did, the
+        observation that decided to cancel the attempt is the one worth naming in
+        the failure.
+
+        Args:
+            stalled_for_seconds: The gap the watchdog observed.
+            last_progress_label: The last progress label it saw, ``""`` if none.
+        """
+        with self._lock:
+            if self._stall is None:
+                self._stall = StallObservation(
+                    stalled_for_seconds=stalled_for_seconds,
+                    last_progress_label=last_progress_label,
+                )
+
     def _notify_hold_closed(self, closed: ClosedHold) -> None:
         observer = self._on_hold_closed
         if observer is None:
@@ -433,6 +505,22 @@ class _InertProgressTracker(ProgressTracker):
     def stalled_for(self) -> float:
         """Always ``0.0`` — nothing is watching, so nothing is stalled."""
         return 0.0
+
+    @property
+    def stall(self) -> StallObservation | None:
+        """Always ``None`` — no watchdog observes this context."""
+        return None
+
+    def flag_stalled(
+        self, stalled_for_seconds: float, last_progress_label: str
+    ) -> None:
+        """Record nothing.
+
+        Overridden for the same reason the other mutators are: this instance is a
+        process-wide singleton, so a verdict recorded on it would outlive its
+        caller and make every later cancellation anywhere in the process read as
+        a stall kill.
+        """
 
 
 _INERT_TRACKER = _InertProgressTracker()
