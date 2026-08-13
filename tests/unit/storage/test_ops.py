@@ -439,6 +439,70 @@ class TestIsNotFound:
         assert _is_not_found(RuntimeError("got HTTP 404 from S3")) is True
         assert _is_not_found(RuntimeError("key not found in bucket")) is True
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Access is denied. (os error 5)",
+            "Unable to open file /tmp/t: Access is denied. (os error 5)",
+            "Is a directory (os error 21)",
+            "403 Forbidden: caller lacks storage.objects.delete",
+        ],
+        ids=["denied", "denied-opening-a-directory", "is-a-directory", "http-403"],
+    )
+    def test_permission_and_io_wordings_are_never_not_found(self, message) -> None:
+        """FND-341: this helper backs delete(), exists(), the chunked download and
+        delete_prefix, so anything it calls not-found is downgraded fleet-wide —
+        delete()/exists() return False, delete_prefix() takes its benign path.
+        A permission or I/O failure must never reach those paths; it has to raise.
+
+        The Windows directory-stat shape is listed deliberately: the narrow
+        relaxation for it lives in :func:`_is_local_dir_collision` and is consulted
+        at exactly one call site, never widened into this shared classifier.
+        """
+        from application_sdk.storage.ops import _is_not_found
+
+        assert _is_not_found(RuntimeError(message)) is False
+
+
+class TestIsLocalDirCollision:
+    """A local store key that resolves to a directory is 'no object', not a 403.
+
+    The predicate is conjunctive on purpose (FND-341): matching "access is
+    denied" alone would reclassify genuine permission failures as missing keys.
+    """
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            # Windows LocalStore stat of a directory.
+            "Generic LocalFileSystem error: Unable to open file "
+            "C:\\store\\t: Access is denied. (os error 5)",
+            # POSIX open() of a directory, should a backend surface it that way.
+            "Generic LocalFileSystem error: Unable to open file "
+            "/store/t: Is a directory (os error 21)",
+        ],
+        ids=["windows-access-denied", "posix-is-a-directory"],
+    )
+    def test_recognises_the_directory_stat_shapes(self, message) -> None:
+        from application_sdk.storage.ops import _is_local_dir_collision
+
+        assert _is_local_dir_collision(RuntimeError(message)) is True
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Access is denied. (os error 5)",
+            "403 Forbidden: caller lacks storage.objects.get",
+            "Unable to open file /store/a.txt: Too many open files (os error 24)",
+            "internal failure",
+        ],
+        ids=["bare-denied", "http-403", "unrelated-open-failure", "unrelated"],
+    )
+    def test_does_not_match_permission_or_unrelated_failures(self, message) -> None:
+        from application_sdk.storage.ops import _is_local_dir_collision
+
+        assert _is_local_dir_collision(RuntimeError(message)) is False
+
 
 # ---------------------------------------------------------------------------
 # Structured transfer logs (BLDX-1155 #6: surface what's actually happening)

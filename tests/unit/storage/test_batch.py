@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -274,14 +275,67 @@ class TestDeletePrefix:
             await delete_prefix("r", store)
         assert "Failed to check root marker" in str(exc_info.value)
 
-    async def test_head_probe_plain_access_denied_still_raises(self, store) -> None:
+    async def test_fallback_awaits_sibling_cancellation_before_raising(
+        self, store
+    ) -> None:
+        """FND-341: the per-key fallback must not leave a delete in flight.
+
+        A delete that completes server-side *after* the caller has seen the
+        failure can land on a prefix the caller's retry has already rewritten, so
+        cancellation has to be awaited, not merely requested — the difference
+        between a TaskGroup and ``gather``.  Pinned by observing that the
+        surviving sibling has finished unwinding before the error propagates:
+        under ``gather`` the ``finally`` below would not have run yet.
+        """
+        await _put("w/bad.txt", b"1", store, normalize=False)
+        await _put("w/slow.txt", b"2", store, normalize=False)
+
+        unwound: list[str] = []
+
+        async def one_fails_one_hangs(target, paths):
+            if not isinstance(paths, str):
+                raise FileNotFoundError("Object at location w/bad.txt not found")
+            if paths == "w/bad.txt":
+                raise RuntimeError("permission denied")
+            try:
+                await asyncio.sleep(30)  # only ever ends via cancellation
+            finally:
+                unwound.append(paths)
+
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.delete_async",
+                side_effect=one_fails_one_hangs,
+            ),
+            pytest.raises(StorageError),
+        ):
+            await delete_prefix("w/", store, normalize=False)
+
+        assert unwound == ["w/slow.txt"]
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            obstore.exceptions.GenericError("Access is denied. (os error 5)"),
+            PermissionError("Access is denied"),
+        ],
+        ids=["obstore-generic", "builtin-permissionerror"],
+    )
+    async def test_head_probe_plain_access_denied_still_raises(
+        self, store, exc
+    ) -> None:
         """The directory-collision relaxation is conjunctive: a *plain*
         "Access is denied" (no "Unable to open file …" directory-stat shape)
-        is a permission failure, not a missing marker, and must stay fatal."""
+        is a permission failure, not a missing marker, and must stay fatal.
+
+        Covers both shapes it can arrive in: an obstore ``GenericError`` carrying
+        the OS message, and a bare built-in ``PermissionError`` — the latter is an
+        ``OSError``, so nothing about its class makes it look missing either.
+        """
         await _put("r2/a.txt", b"1", store, normalize=False)
 
         async def denied(*args, **kwargs):
-            raise obstore.exceptions.GenericError("Access is denied. (os error 5)")
+            raise exc
 
         with (
             patch(
