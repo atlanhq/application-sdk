@@ -525,6 +525,89 @@ class TestADeclaredAllowanceGoverns:
         ]
 
     @pytest.mark.asyncio
+    async def test_a_task_that_outlives_the_block_is_vouched_for_again(
+        self, tracker: RecordingProgressTracker
+    ) -> None:
+        """The detached-task escape: standing down must never leave *nothing*.
+
+        ``asyncio.create_task`` copies the creating context (PEP 567), so a task
+        spawned inside the block carries the suppression mark into a lifetime the
+        parent's ``reset`` cannot reach. If the mark were a plain boolean, such a
+        task offloading *after* the block exits would stand down with no declared
+        hold left to cover it — no vouch at all while the watchdog is live, which
+        is a worse hole than the one the suppression closes, and precisely the
+        false-kill this whole issue exists to prevent.
+
+        Naming the hold instead of flagging it makes the mark falsifiable, so the
+        detached task is auto-held again like any other caller.
+        """
+        block_exited = threading.Event()
+        vouched_during_offload: list[bool] = []
+
+        async def _detached() -> None:
+            await asyncio.to_thread(block_exited.wait, 5)
+            await run_in_thread(lambda: vouched_during_offload.append(tracker.held()))
+
+        async with holding_progress("full table scan", timeout=7200):
+            child = asyncio.create_task(_detached())
+            await asyncio.sleep(0)  # let it start and park
+
+        block_exited.set()
+        await child
+
+        assert vouched_during_offload == [
+            True
+        ], "an offload outliving the declared block must get its own auto-hold"
+        assert [hold.label for hold in tracker.holds] == [
+            "full table scan",
+            f"{THREAD_PREFIX}<lambda>",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_hold_on_another_tracker_suppresses_nothing(
+        self, tracker: RecordingProgressTracker
+    ) -> None:
+        """A declared hold can only govern the attempt it was declared on.
+
+        If the tracker is rebound between the declaration and the offload, the
+        declared hold belongs to the previous attempt — it vouches for nothing
+        here, so suppressing on it would leave this attempt's offload unvouched.
+        """
+        other = RecordingProgressTracker()
+
+        async with holding_progress("full table scan", timeout=7200):
+            with bind_progress_tracker(other):
+                await run_in_thread(_echo, "different attempt")
+
+        assert [hold.label for hold in other.holds] == [f"{THREAD_PREFIX}_echo"]
+        assert [hold.label for hold in tracker.holds] == ["full table scan"]
+
+    @pytest.mark.asyncio
+    async def test_a_lapsed_declared_hold_still_suppresses(self) -> None:
+        """Suppression tracks the token being *open*, not the hold still vouching.
+
+        Once a declared allowance lapses the watchdog is meant to resume and fire
+        one budget later. If the auto-hold re-armed at that moment it would vouch
+        unboundedly again and defeat the allowance a second time — so an offload
+        started after the lapse, while the block is still open, must stay
+        suppressed.
+        """
+        clock = _FakeClock()
+        recording = RecordingProgressTracker(clock=clock)
+
+        with bind_progress_tracker(recording):
+            async with holding_progress("full table scan", timeout=600):
+                clock.advance(900)  # the declared allowance lapses
+
+                assert recording.held() is False, "the lapsed hold stops vouching"
+                await run_in_thread(_echo, "after the lapse")
+
+                # No auto-hold was added, so the watchdog stays free to fire.
+                assert recording.held() is False
+
+        assert [hold.label for hold in recording.holds] == ["full table scan"]
+
+    @pytest.mark.asyncio
     async def test_nested_declared_blocks_restore_one_level_at_a_time(
         self, tracker: RecordingProgressTracker
     ) -> None:
