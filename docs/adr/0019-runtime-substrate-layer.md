@@ -69,10 +69,13 @@ application_sdk/_runtime/
 ```
 
 **The rule for a `_runtime` module:** it may import the standard library,
-third-party packages, and `application_sdk.observability.logger_adaptor`.
-Nothing else from `application_sdk`. In particular not `contracts`,
+third-party packages, `application_sdk.observability.logger_adaptor`, and its
+siblings in this package (`offload.py` reads `progress.py` — that is what makes the
+offload auto-holds work). Nothing else from `application_sdk`: not `contracts`,
 `credentials`, `storage`, `execution` or `app` — each of those reaches
-`storage.ops` transitively, which re-creates the cycle.
+`storage.ops` transitively, which re-creates the cycle. The boundary is *upward*,
+not lateral: a sibling import stays inside the bottom layer, so it cannot reach a
+layer above and cannot re-create the cycle.
 
 Two consequences follow from that rule.
 
