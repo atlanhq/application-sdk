@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import obstore
 import pytest
 
+from application_sdk.storage import batch as batch_module
 from application_sdk.storage.batch import (
     delete_prefix,
     download_prefix,
@@ -16,7 +19,7 @@ from application_sdk.storage.batch import (
     upload_prefix,
 )
 from application_sdk.storage.errors import StorageError
-from application_sdk.storage.factory import create_memory_store
+from application_sdk.storage.factory import create_local_store, create_memory_store
 from application_sdk.storage.ops import _get_bytes, _put
 
 
@@ -78,6 +81,36 @@ class TestListKeys:
 # ---------------------------------------------------------------------------
 
 
+class _ForeignBaseError(BaseException):
+    """A leaf ``ops.delete``'s ``except Exception`` cannot wrap.
+
+    Not ``SystemExit`` / ``KeyboardInterrupt``: asyncio re-raises those directly
+    into the event loop, so they never reach the TaskGroup's ExceptionGroup and
+    would not exercise the branch under test.
+    """
+
+
+def _bulk_delete_raising_not_found(vanished_key: str):
+    """Side effect where the bulk (list) delete reports *vanished_key* as gone.
+
+    Single-key deletes still reach the real store, so ``delete_prefix``'s
+    per-key fallback behaves as it would against GCS or Azure.  Patching
+    ``batch.obstore.delete_async`` patches the shared obstore module, which
+    ``ops.delete`` calls too — hence the passthrough rather than a blanket raise.
+    """
+    real_delete_async = obstore.delete_async
+
+    async def side_effect(target, paths):
+        if isinstance(paths, str):
+            return await real_delete_async(target, paths)
+        raise FileNotFoundError(
+            f"Object at location {vanished_key} not found: "
+            "Error performing DeleteObjects request"
+        )
+
+    return side_effect
+
+
 class TestDeletePrefix:
     async def test_deletes_all_under_prefix(self, store) -> None:
         await _put("p/a.txt", b"1", store, normalize=False)
@@ -96,12 +129,12 @@ class TestDeletePrefix:
         assert n == 0
 
     async def test_delete_async_failure_raises_storage_error(self, store) -> None:
-        """If obstore.delete_async raises (e.g. GCS 404 on concurrent modification),
+        """A genuine bulk-delete failure (not a vanished key) stays fatal:
         delete_prefix wraps it as StorageError rather than swallowing or retrying."""
         await _put("q/a.txt", b"1", store, normalize=False)
 
         async def boom(*args, **kwargs):
-            raise RuntimeError("simulated GCS not-found")
+            raise RuntimeError("connection reset by peer")
 
         with (
             patch(
@@ -111,6 +144,130 @@ class TestDeletePrefix:
         ):
             await delete_prefix("q/", store, normalize=False)
         assert "Failed to delete" in str(exc_info.value)
+
+    async def test_vanished_key_during_bulk_delete_is_benign(self, store) -> None:
+        """FND-341: a key that disappears between the listing and the bulk delete
+        must not fail the caller — the end state it wants is already true.
+
+        The per-key fallback also has to finish the job: obstore stops the bulk
+        delete at the first per-key failure, so the keys behind it are still
+        there and the prefix would otherwise be left half-deleted.
+        """
+        await _put("s/a.txt", b"1", store, normalize=False)
+        await _put("s/b.txt", b"2", store, normalize=False)
+
+        with patch(
+            "application_sdk.storage.batch.obstore.delete_async",
+            side_effect=_bulk_delete_raising_not_found("s/a.txt"),
+        ):
+            n = await delete_prefix("s/", store, normalize=False)
+
+        assert n == 2  # both keys still existed; the per-key pass removed them
+        assert await _get_bytes("s/a.txt", store, normalize=False) is None
+        assert await _get_bytes("s/b.txt", store, normalize=False) is None
+
+    async def test_vanished_key_is_not_counted_as_deleted(self, tmp_path) -> None:
+        """FND-341: the returned count reflects objects this call removed, so a
+        key the race already took is excluded.
+
+        Uses a LocalStore rather than the MemoryStore fixture: only stores that
+        report a missing key (local, GCS, Azure) can show the exclusion — S3 and
+        MemoryStore treat deleting a gone key as success, so ``ops.delete``
+        legitimately counts it.  The head probe is pinned to the Windows
+        LocalStore directory-stat response (see below) so the test fails on
+        every OS if the root-marker probe stops recognising a directory
+        collision as "no marker".
+        """
+        store = create_local_store(tmp_path / "store")
+        await _put("t/gone.txt", b"1", store, normalize=False)
+        await _put("t/here.txt", b"2", store, normalize=False)
+
+        real_delete_async = obstore.delete_async
+
+        async def bulk_deletes_one_then_hits_a_vanished_key(target, paths):
+            if isinstance(paths, str):
+                return await real_delete_async(target, paths)
+            # Emulate a partially-applied bulk delete: "t/gone.txt" is removed by
+            # the concurrent writer we are racing, then the store reports it.
+            await real_delete_async(target, "t/gone.txt")
+            raise FileNotFoundError(
+                "Object at location t/gone.txt not found: "
+                "Error performing DeleteObjects request"
+            )
+
+        # The root-marker probe for "t/" is the bare key "t", which the local
+        # store maps onto the *directory* holding the two keys.  POSIX reports
+        # that stat as not-found, but the Windows LocalStore raises a
+        # GenericError "Unable to open file …: Access is denied" — a directory
+        # can never be an object, so the probe must read it as "no marker" on
+        # every OS.  Pin that exact response so this regression is exercised
+        # everywhere.
+        real_head_async = obstore.head_async
+
+        async def head_reports_directory_as_denied(target, path):
+            if path == "t":
+                raise obstore.exceptions.GenericError(
+                    "Generic LocalFileSystem error: Unable to open file "
+                    f"{tmp_path / 'store' / 't'}: Access is denied. (os error 5)"
+                )
+            return await real_head_async(target, path)
+
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.delete_async",
+                side_effect=bulk_deletes_one_then_hits_a_vanished_key,
+            ),
+            patch(
+                "application_sdk.storage.batch.obstore.head_async",
+                side_effect=head_reports_directory_as_denied,
+            ),
+        ):
+            n = await delete_prefix("t/", store, normalize=False)
+
+        assert n == 1  # only "t/here.txt" was actually removed by this call
+        assert await _get_bytes("t/here.txt", store, normalize=False) is None
+
+    async def test_vanished_key_is_reported_as_a_warning(self, store) -> None:
+        """FND-341: the 'two apps share this prefix' signal is kept — as a
+        WARNING naming the prefix, not as an exception."""
+        await _put("u/a.txt", b"1", store, normalize=False)
+
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.delete_async",
+                side_effect=_bulk_delete_raising_not_found("u/a.txt"),
+            ),
+            patch.object(batch_module.logger, "warning") as warn,
+        ):
+            await delete_prefix("u/", store, normalize=False)
+
+        assert warn.call_count == 1
+        message, *args = warn.call_args.args
+        assert "vanished" in message
+        assert "u/" in args
+        assert "u/a.txt" in str(args[-1])
+
+    async def test_genuine_failure_in_per_key_fallback_still_raises(
+        self, store
+    ) -> None:
+        """The fallback is idempotent, not forgiving: a real error during the
+        per-key pass surfaces as StorageError."""
+        await _put("v/a.txt", b"1", store, normalize=False)
+
+        async def not_found_then_denied(target, paths):
+            if isinstance(paths, str):
+                raise RuntimeError("permission denied")
+            raise FileNotFoundError("Object at location v/a.txt not found")
+
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.delete_async",
+                side_effect=not_found_then_denied,
+            ),
+            pytest.raises(StorageError) as exc_info,
+        ):
+            await delete_prefix("v/", store, normalize=False)
+        assert "Failed to delete key" in str(exc_info.value)
 
     async def test_head_probe_non404_raises_storage_error(self, store) -> None:
         """If head_async raises a non-404 error during root-marker probe,
@@ -125,6 +282,110 @@ class TestDeletePrefix:
             pytest.raises(StorageError) as exc_info,
         ):
             await delete_prefix("r", store)
+        assert "Failed to check root marker" in str(exc_info.value)
+
+    async def test_foreign_failure_in_fallback_is_not_demoted_to_a_cause(
+        self, store
+    ) -> None:
+        """Unwrapping the ExceptionGroup is only safe when every leaf is a
+        StorageError. A leaf that is not (here a BaseException, which
+        ``ops.delete``'s ``except Exception`` does not wrap) must reach the
+        caller as the group — demoting it to ``__cause__`` would leave it
+        reachable in a traceback but invisible to an ``except`` clause.
+        """
+        await _put("x/a.txt", b"1", store, normalize=False)
+
+        async def not_found_then_foreign(target, paths):
+            if isinstance(paths, str):
+                raise _ForeignBaseError("not an Exception subclass")
+            raise FileNotFoundError("Object at location x/a.txt not found")
+
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.delete_async",
+                side_effect=not_found_then_foreign,
+            ),
+            pytest.raises(BaseExceptionGroup) as exc_info,
+        ):
+            await delete_prefix("x/", store, normalize=False)
+
+        assert [type(leaf) for leaf in exc_info.value.exceptions] == [_ForeignBaseError]
+
+    async def test_fallback_awaits_sibling_cancellation_before_raising(
+        self, store
+    ) -> None:
+        """FND-341: the per-key fallback must not leave a delete in flight.
+
+        A delete that completes server-side *after* the caller has seen the
+        failure can land on a prefix the caller's retry has already rewritten, so
+        cancellation has to be awaited, not merely requested — the difference
+        between a TaskGroup and ``gather``.  Pinned by observing that the
+        surviving sibling has finished unwinding before the error propagates:
+        under ``gather`` the ``finally`` below would not have run yet.
+        """
+        await _put("w/bad.txt", b"1", store, normalize=False)
+        await _put("w/slow.txt", b"2", store, normalize=False)
+
+        unwound: list[str] = []
+        never_set = asyncio.Event()  # the sibling can only end via cancellation
+
+        async def one_fails_one_hangs(target, paths):
+            if not isinstance(paths, str):
+                raise FileNotFoundError("Object at location w/bad.txt not found")
+            if paths == "w/bad.txt":
+                raise RuntimeError("permission denied")
+            try:
+                await never_set.wait()
+            finally:
+                unwound.append(paths)
+
+        # wait_for bounds the whole call: if cancellation ever stops being
+        # delivered, this fails in seconds with a TimeoutError instead of
+        # parking the suite on the sibling.
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.delete_async",
+                side_effect=one_fails_one_hangs,
+            ),
+            pytest.raises(StorageError),
+        ):
+            await asyncio.wait_for(
+                delete_prefix("w/", store, normalize=False), timeout=5
+            )
+
+        assert unwound == ["w/slow.txt"]
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            obstore.exceptions.GenericError("Access is denied. (os error 5)"),
+            PermissionError("Access is denied"),
+        ],
+        ids=["obstore-generic", "builtin-permissionerror"],
+    )
+    async def test_head_probe_plain_access_denied_still_raises(
+        self, store, exc
+    ) -> None:
+        """The directory-collision relaxation is conjunctive: a *plain*
+        "Access is denied" (no "Unable to open file …" directory-stat shape)
+        is a permission failure, not a missing marker, and must stay fatal.
+
+        Covers both shapes it can arrive in: an obstore ``GenericError`` carrying
+        the OS message, and a bare built-in ``PermissionError`` — the latter is an
+        ``OSError``, so nothing about its class makes it look missing either.
+        """
+        await _put("r2/a.txt", b"1", store, normalize=False)
+
+        async def denied(*args, **kwargs):
+            raise exc
+
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.head_async", side_effect=denied
+            ),
+            pytest.raises(StorageError) as exc_info,
+        ):
+            await delete_prefix("r2", store)
         assert "Failed to check root marker" in str(exc_info.value)
 
 
