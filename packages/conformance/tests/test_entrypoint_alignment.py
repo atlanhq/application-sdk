@@ -665,9 +665,14 @@ def test_p016_single_mode_bare_override_is_recognised_as_a_route(
     paths = _write_py(
         tmp_path,
         {
+            # The bare local node carries app_name="app" in the manifest, so the
+            # code app must name itself "app" too: locality is proven by an
+            # app_name match, not by the pooled-target heuristic that previously
+            # let a mismatched app_name pass.
             "app/connector.py": dedent("""\
                 from application_sdk.app import App, entrypoint
                 class MyApp(App):
+                    name = "app"
                     @entrypoint(name="extract-metadata")
                     async def extract_metadata(self, input: Input) -> Output: ...
                     @entrypoint(name="keifu", workflow_type="KeifuWorkflow")
@@ -798,3 +803,90 @@ def test_p016_non_literal_workflow_type_does_not_rescue(tmp_path: Path) -> None:
     findings = scan_all(paths, tmp_path)
     msgs = [f.message for f in findings if f.rule_id == "P016"]
     assert len(msgs) == 1 and "keifu" in msgs[0]
+
+
+def test_p016_app_nameless_bare_node_on_shared_queue_still_routes(
+    tmp_path: Path,
+) -> None:
+    """A bare node carrying no app_name routes via the shared local queue.
+
+    This is the legitimate shape the queue arm exists for: the DAG node names
+    no owning app, so the shared task queue is the only locality signal.
+    """
+    import json
+
+    gen = tmp_path / "app" / "generated"
+    gen.mkdir(parents=True)
+    manifest = {
+        "dag": {
+            "local": {
+                "workflow_type": "app:extract-metadata",
+                "inputs": {"app_name": "app", "task_queue": "shared-queue"},
+            },
+            "override": {
+                "workflow_type": "OverrideWorkflow",
+                "inputs": {"task_queue": "shared-queue"},
+            },
+        }
+    }
+    (gen / "manifest.json").write_text(json.dumps(manifest))
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                class MyApp(App):
+                    name = "app"
+                    @entrypoint(name="extract-metadata")
+                    async def extract_metadata(self, input: Input) -> Output: ...
+                    @entrypoint(name="keifu", workflow_type="OverrideWorkflow")
+                    async def keifu(self, input: Input) -> Output: ...
+            """)
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    assert _p016_ids(findings) == []
+
+
+def test_p016_foreign_bare_node_on_shared_queue_does_not_route(tmp_path: Path) -> None:
+    """A foreign bare node that shares the local task queue is still foreign.
+
+    The queue arm proves locality only when the node carries no ``app_name``;
+    a node that names another app must not satisfy the override even when its
+    ``task_queue`` matches a local route's queue, or P016 goes silent on a
+    genuinely unrouted entry point.
+    """
+    import json
+
+    gen = tmp_path / "app" / "generated"
+    gen.mkdir(parents=True)
+    manifest = {
+        "dag": {
+            "local": {
+                "workflow_type": "app:extract-metadata",
+                "inputs": {"app_name": "app", "task_queue": "shared-queue"},
+            },
+            "foreign": {
+                "workflow_type": "OverrideWorkflow",
+                "inputs": {"app_name": "other-app", "task_queue": "shared-queue"},
+            },
+        }
+    }
+    (gen / "manifest.json").write_text(json.dumps(manifest))
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                class MyApp(App):
+                    name = "app"
+                    @entrypoint(name="extract-metadata")
+                    async def extract_metadata(self, input: Input) -> Output: ...
+                    @entrypoint(name="rogue", workflow_type="OverrideWorkflow")
+                    async def rogue(self, input: Input) -> Output: ...
+            """)
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    msgs = [f.message for f in findings if f.rule_id == "P016"]
+    assert len(msgs) == 1 and "rogue" in msgs[0]

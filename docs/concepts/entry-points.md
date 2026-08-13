@@ -204,6 +204,8 @@ What does **not** move: `?entrypoint=` still selects by entry-point name, task a
 
 Use it only to preserve an existing wire contract. For a new entry point, take the canonical name. Worker startup fails if two apps claim the same type, an app claims an SDK-reserved `sdr:*` handler type, or two types in one module collapse to the same generated class name (`-` and `:` both become `_`).
 
+> **The workflow-type namespace is global across workers.** An override may be colon-qualified (for example `teradata-app:crawler`) — that is the shape a migrating app preserves, and it does not make the type canonical. Two apps on *different* workers that register the same type are not caught at startup (collision checks are per-worker); raw Temporal dispatch by type name then lands on whichever worker registered it. Treat overrides as globally unique: coordinate them across apps the same way you coordinate any shared Temporal type.
+
 ### HTTP dispatch
 
 Trigger a specific entry point via the `?entrypoint=` query parameter on `POST /workflows/v1/start`:
@@ -223,6 +225,13 @@ curl -X POST 'http://localhost:8000/workflows/v1/start?entrypoint=mine-queries' 
 When `?entrypoint=` is omitted the SDK resolves the default entry point automatically — see [Default entrypoint resolution](#default-entrypoint-resolution) below. Pass `?entrypoint=<name>` to target a specific entry point explicitly.
 
 > **Transitional fallback:** The body field `workflow_type` is accepted for backward compatibility with legacy Heracles callers. Query param takes precedence if both are provided. The body field will be removed in a future release.
+
+The two surfaces resolve a selector in opposite orders, and either form falls back to the other namespace:
+
+- **`?entrypoint=` (canonical)** resolves **name-first**, then falls back to a registered workflow type.
+- **body `workflow_type` (deprecated)** resolves **type-first**, then falls back to an entry-point name.
+
+So a string that is one entry point's `name` *and* a sibling entry point's override `workflow_type` selects differently depending on which surface carried it: `?entrypoint=` picks the name match, body `workflow_type` picks the type match. This asymmetry is pinned by a test (`test_name_equals_type_selector_precedence_is_pinned`) so any future convergence is a deliberate, test-breaking change. Avoid reusing one string as both a name and a type on the same app.
 
 ### Default entrypoint resolution
 

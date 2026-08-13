@@ -532,6 +532,15 @@ subdirs). A code `@entrypoint` the DAG never routes to is flagged. When the mani
 declares no such routes (legacy), the check falls back to permitting at most one
 `@entrypoint`.
 
+* **`workflow_type` overrides (CNCT-199):** an `@entrypoint` that pins `workflow_type=`
+is routed by that verbatim string, not by a colon-qualified `"<app>:<wire>"` route. A
+bare (colon-free) DAG node whose `workflow_type` equals the override counts as a route
+**only when it is provably local**: its `app_name` equals the entry point's app, or —
+when the node carries no `app_name` at all — its `task_queue` matches a queue this app's
+own routes use. A bare node that names a *different* app is foreign even on a shared
+queue and does not route the override (a same-named foreign platform node such as
+`PublishWorkflow` must not launder an unrouted entry point).
+
 * **Non-literal `name=`:** a `@entrypoint(name=variable)` that cannot be statically
 resolved is flagged as unverifiable.
 

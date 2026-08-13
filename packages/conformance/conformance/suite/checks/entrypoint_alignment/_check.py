@@ -63,8 +63,15 @@ def _override_is_routed(
         candidate_type == workflow_type
         and (
             candidate_app == app_name
-            or (candidate_app is not None and candidate_app in local_targets)
-            or (candidate_queue is not None and candidate_queue in local_targets)
+            # The queue arm proves locality only for a node that carries no
+            # app_name at all: a foreign node keeps its own app_name, so a
+            # shared task queue must not route it (it would silence P016 on a
+            # genuinely unrouted entry point).
+            or (
+                candidate_app is None
+                and candidate_queue is not None
+                and candidate_queue in local_targets
+            )
         )
         for candidate_type, candidate_app, candidate_queue in contract.workflow_targets
     )

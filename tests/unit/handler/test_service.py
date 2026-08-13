@@ -1385,6 +1385,79 @@ class TestStartWorkflowRouting:
         finally:
             patcher.stop()
 
+    def test_name_equals_type_selector_precedence_is_pinned(self) -> None:
+        """Pin selector precedence when one string is both a name and a type.
+
+        ``?entrypoint=`` resolves name-first with workflow-type fallback; the
+        deprecated body ``workflow_type`` resolves type-first with name fallback.
+        So a string equal to one entry point's name AND a sibling's override
+        workflow_type selects different entry points depending on the surface.
+        This pins that asymmetry so a future "convergence" refactor is a
+        deliberate, test-breaking choice rather than a silent behaviour change.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _CollisionApp(App):
+            # 'keifu' is BOTH this entry point's name...
+            @entrypoint(name="keifu")
+            async def keifu(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            # ...AND the override workflow_type of this sibling entry point.
+            @entrypoint(name="extract", workflow_type="keifu")
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        handler = _TestHandler()
+        svc = create_app_handler_service(
+            handler,
+            app_name="selector-collision",
+            app_class=_CollisionApp,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.id = "wf-coll"
+        mock_handle.result_run_id = "run-coll"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        tc = TestClient(svc, raise_server_exceptions=False)
+        try:
+            # Canonical surface: ?entrypoint=keifu resolves name-first → the
+            # entry point NAMED 'keifu' (canonical type ends ':keifu').
+            r1 = tc.post("/workflows/v1/start?entrypoint=keifu", json={"name": "x"})
+            assert r1.status_code == 200
+            started1 = mock_client.start_workflow.call_args[0][0]
+            assert started1.endswith(
+                ":keifu"
+            ), f"?entrypoint=keifu must pick the name match, got {started1!r}"
+
+            mock_client.start_workflow.reset_mock()
+
+            # Deprecated surface: body workflow_type=keifu resolves type-first →
+            # the entry point whose OVERRIDE type is 'keifu' (the 'extract' EP).
+            import warnings as _w
+
+            with _w.catch_warnings():
+                _w.simplefilter("ignore", DeprecationWarning)
+                r2 = tc.post("/workflows/v1/start", json={"workflow_type": "keifu"})
+            assert r2.status_code == 200
+            started2 = mock_client.start_workflow.call_args[0][0]
+            # The override is primary, so dispatch uses the bare type 'keifu',
+            # not the canonical ':extract' form.
+            assert started2.split(":")[-1] == "keifu" and not started2.endswith(
+                ":keifu"
+            ), f"body workflow_type=keifu must pick the type match, got {started2!r}"
+        finally:
+            patcher.stop()
+
     def test_unknown_entrypoint_query_param_returns_400(self) -> None:
         """Providing an unrecognised ?entrypoint= returns 400 without leaking names."""
         from application_sdk.app.base import App

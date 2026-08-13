@@ -351,6 +351,15 @@ def _validate_workflow_type_override(ep_name: str, workflow_type: str) -> None:
     Temporal UI. A type with no alphanumeric content at all folds to an
     indistinguishable run of underscores. A leading digit is fine — the type is
     embedded in ``_Workflow_<segment>``.
+
+    A ``:`` is deliberately accepted. The cross-worker Temporal workflow-type
+    namespace is intentionally global, and a colon-qualified override such as
+    ``teradata-app:crawler`` is exactly the shape a migrating app must preserve
+    (a colon does not make a type canonical — only the ``{app}:{ep}``
+    *convention* does, and an override exists precisely to sit outside it).
+    Same-worker collisions are rejected at startup by
+    :func:`build_workflow_type_index`; cross-worker duplication is a deployment
+    concern, not something a per-app validator can or should police.
     """
     if not isinstance(workflow_type, str):
         raise EntryPointContractError(
