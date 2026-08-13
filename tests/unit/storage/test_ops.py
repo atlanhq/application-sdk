@@ -503,10 +503,11 @@ class TestIsLocalDirCollision:
             is True
         )
 
-    def test_unreadable_file_is_not_a_collision(self, tmp_path) -> None:
-        """The case a message match would get wrong: an inaccessible *file* at
-        the key. It is a real permission failure and must stay fatal, even
-        though the error is worded exactly like the directory stat."""
+    def test_regular_file_is_not_a_collision(self, tmp_path) -> None:
+        """A regular *file* at the key is not a directory collision, even
+        though the error is worded exactly like the directory stat. ``is_dir``
+        is ``False`` for a file, so the probe leaves the failure fatal — this
+        pins the dangerous ``is_dir() == True`` regression direction."""
         from application_sdk.storage.ops import _is_local_dir_collision
 
         store = create_local_store(tmp_path)
