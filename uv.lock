@@ -389,7 +389,7 @@ requires-dist = [
     { name = "pyarrow", marker = "extra == 'incremental'", specifier = ">=23.0.1,<24.0.0" },
     { name = "pyarrow", marker = "extra == 'pandas'", specifier = ">=23.0.1,<24.0.0" },
     { name = "pyarrow", marker = "extra == 'sql'", specifier = ">=23.0.1,<24.0.0" },
-    { name = "pyatlan", specifier = ">=9,<10" },
+    { name = "pyatlan", specifier = ">=10,<11" },
     { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
     { name = "pytest-order", marker = "extra == 'tests'", specifier = ">=1.3.0,<2.0.0" },
     { name = "python-dotenv", specifier = ">=1.1.0,<2.0.0" },
@@ -3942,7 +3942,7 @@ wheels = [
 
 [[package]]
 name = "pyatlan"
-version = "9.11.0"
+version = "10.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "authlib" },
@@ -3958,9 +3958,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9c/76/dda7c3da75ff70a4223037b050f9b9bacac01685b2e9010cf55dadcc4ca9/pyatlan-9.11.0.tar.gz", hash = "sha256:5f9a0026eb437b8014bd60c5b9ef2b3c20589d6a7dce58f0d917f50d3345e40b", size = 3618783, upload-time = "2026-07-29T11:25:01.147Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9c/7f/c7811fb72b055e1985554af74b508893eab083b4294182ac0edb179445ab/pyatlan-10.0.0.tar.gz", hash = "sha256:7be5e6d50ef4c035308c163e13b4bfea27651e16c4723055cde5fd4b3dae4252", size = 3631403, upload-time = "2026-08-13T09:46:01.638Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/aa/7b/79f24a24687f89b041b9bac9c5f3f19e8ed684ee70b9fcd5d60f732b7d0c/pyatlan-9.11.0-py3-none-any.whl", hash = "sha256:7aa7bcaff5979775c8629cc5f8fc4ada07bdec92fe4934410478416e07ba3433", size = 5546792, upload-time = "2026-07-29T11:24:58.559Z" },
+    { url = "https://files.pythonhosted.org/packages/26/ef/58d2539179b1824cbe32dfb5dc219752af0154ccae5a63e7715dff0bd769/pyatlan-10.0.0-py3-none-any.whl", hash = "sha256:63ec10f7f2eb95108562122e5e2dc1833585b21a03959df2b4d802b843b46ce0", size = 5567733, upload-time = "2026-08-13T09:45:59.68Z" },
 ]
 
 [[package]]
