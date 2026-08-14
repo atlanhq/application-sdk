@@ -35,6 +35,23 @@ FLAGS = {
 # check — that is a separate lever with no prerequisite here (FND-347).
 TRISTATE_FLAGS = ("enforce", "conformance_blocking", "renovate_automerge")
 
+# Presence flags: no value, "true" when present and "false" otherwise. Declared
+# here rather than stripped from argv by the caller (the way ``--json`` is)
+# because these change what bootstrap *writes*, not how it reports — so the
+# module that owns argv validation should be the one that rejects
+# ``--resync=1``.
+#
+# ``--resync`` is deliberately one blanket flag rather than a per-file
+# ``--resync-<name>`` or a target list: it covers every write-if-absent
+# scaffold whose canonical can be re-rendered from values read back off the
+# file itself, and both current members (tests.yaml, renovate.json) carry the
+# same risk profile, so there is nothing for a caller to choose between. The
+# two write-if-absent files it does NOT cover are excluded structurally, not
+# by omission — see ``_sync_gitignore`` and ``_sync_contract_ledger``.
+PRESENCE_FLAGS = {
+    "--resync": "resync",
+}
+
 _DEST_TO_FLAG = {dest: flag for flag, dest in FLAGS.items()}
 
 
@@ -57,11 +74,16 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",
+        **dict.fromkeys(PRESENCE_FLAGS.values(), "false"),
     }
     i = 0
     while i < len(argv):
         arg = argv[i]
         consumed = False
+        if arg in PRESENCE_FLAGS:
+            result[PRESENCE_FLAGS[arg]] = "true"
+            i += 1
+            continue
         for flag, dest in FLAGS.items():
             if arg == flag and i + 1 < len(argv):
                 result[dest] = argv[i + 1]
@@ -136,7 +158,8 @@ and .github/scripts/build_conformance_args.py that conformance-reusable.yaml nee
 disk in every caller repo. All of these always overwrite (re-running eradicates drift).
 tests.yaml, renovate.json, and contract_schema.lock.json are write-if-absent by default;
 pass --enforce true|false (or --renovate-automerge true|false) to also update
-renovate.json's enforcement mode.
+renovate.json's enforcement mode, and --resync to pull the resyncable scaffolds'
+structure forward without disturbing their per-repo values.
 
 The tests gate is not one of these levers. `tests / Tests Gate` becoming a required,
 unbypassable status check on the default branch is a GitHub branch-protection setting
@@ -186,6 +209,35 @@ options:
                               alone; omit to take the --enforce value (explicit or
                               detected). Passing it explicitly force-updates
                               renovate.json, exactly as --enforce does.
+  --resync                    re-render the resyncable write-if-absent scaffolds from
+                              their canonical templates, so structural catch-up lands
+                              in a repo scaffolded by an older bootstrap. Covers
+                              tests.yaml and renovate.json. Off by default: these are
+                              write-if-absent precisely so apps can customise them, and
+                              a bare re-run must never clobber that.
+                              Each re-render reuses the per-repo values read back off
+                              the existing file — NOT the flags or autodetection — so
+                              it cannot silently flip a repo that turned e2e off, that
+                              deliberately left its services-script line commented out,
+                              or that runs Renovate in soft mode. To CHANGE a value,
+                              use its own flag (--enforce/--renovate-automerge) or edit
+                              the file; those win over --resync for the file they own.
+                              Anything hand-edited outside the recognised values is
+                              replaced, with the previous content kept alongside as
+                              <name>.bak (gitignored) so the edit can be reapplied.
+                              A file whose identity can't be read back — a tests.yaml
+                              with no parseable app-name, a renovate.json that isn't
+                              valid JSON — is skipped with a message rather than
+                              rewritten from guessed defaults.
+                              No-op on a file that is already canonical, judged by the
+                              same comparison C002 uses, so this rewrites exactly what
+                              C002 flags as drift and never churns a file it calls
+                              clean.
+                              Deliberately NOT covered: .gitignore (C003 remediates it
+                              additively per missing entry; a re-render would delete an
+                              app's own ignores) and contract_schema.lock.json
+                              (append-only, owned by `gen-contract-ledger`, with B005/
+                              B006 tracking its drift).
   --json                       after the normal output, print one final JSON line:
                               {"skipped": bool, "touched": [...], "unchanged": [...]}.
                               `touched` lists every path this invocation actually wrote

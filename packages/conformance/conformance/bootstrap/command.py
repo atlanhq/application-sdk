@@ -14,9 +14,15 @@ from __future__ import annotations
 import json
 import pathlib
 import tomllib
+from collections.abc import Callable
 
 from conformance.bootstrap.args import BOOTSTRAP_USAGE, parse_bootstrap_args
 from conformance.bootstrap.autodetect import apply_bootstrap_autodetection
+from conformance.bootstrap.extract import (
+    extract_renovate_automerge,
+    extract_tests_yaml_params,
+    strip_action_pins,
+)
 from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
 
 _PACKAGE_NAME = "atlan-application-sdk-conformance"
@@ -94,11 +100,24 @@ def _is_inside_conformance_repo(start: pathlib.Path) -> bool:
 
 
 def _sync_tests_yaml(
-    root: pathlib.Path, kwargs: dict[str, str]
+    root: pathlib.Path, kwargs: dict[str, str], resync: bool
 ) -> list[tuple[pathlib.Path, str]]:
     """tests.yaml — write-if-absent scaffold; apps customise freely.
 
-    C002 tracks drift at WARN only. Delete + re-run to force-regenerate.
+    C002 tracks drift at WARN only.  With *resync* (``--resync``) an existing
+    file is re-rendered from the canonical template so a repo scaffolded by an
+    older bootstrap catches up structurally.
+
+    The re-render deliberately ignores *kwargs* and reads its params back off
+    the existing file instead.  kwargs' tests.yaml values come from flags and
+    autodetection, neither of which reflects what this file actually says:
+    ``enable_e2e`` is never autodetected at all (it defaults to ``"true"``),
+    so rendering from kwargs would silently switch e2e back on in a repo that
+    turned it off, and ``services_script`` is detected from the script merely
+    *existing* on disk, so it would activate a line a repo deliberately left
+    commented out.  Reading them off the file — via the same extractor C002
+    uses to decide the file drifted — keeps every per-repo choice and makes
+    the written bytes exactly the canonical the checker compares against.
 
     Returns the ``(path, status)`` pairs this call wrote or left alone, for
     ``main()``'s ``--json`` touched-files manifest.
@@ -109,21 +128,124 @@ def _sync_tests_yaml(
         tests_dest.write_text(render("tests.yaml", **kwargs), encoding="utf-8")
         print(f"scaffolded: {tests_dest}")
         return [(tests_dest, "scaffolded")]
-    print(f"ok (exists): {tests_dest}  (edit freely; C002 tracks drift at WARN)")
+    if resync:
+        return _resync_scaffold(tests_dest, "tests.yaml", _tests_yaml_resync_params)
+    print(
+        f"ok (exists): {tests_dest}"
+        "  (edit freely; C002 tracks drift at WARN — pass"
+        " --resync to re-render from the canonical)"
+    )
     return [(tests_dest, "exists")]
 
 
+def _tests_yaml_resync_params(text: str) -> dict[str, str] | None:
+    """Params to re-render *text* (a tests.yaml) with, or ``None`` to skip.
+
+    ``app_name`` is identity-defining: it names the app in every downstream CI
+    input and derives ``app-image-name``.  If it can't be read back, ``render``
+    would fall back to ``"app"`` and the resync would quietly rename the app's
+    own workflow inputs while reporting success.  Skip rather than guess — a
+    file that drifted past its own name needs a human, not a re-render.
+    """
+    params = extract_tests_yaml_params(text)
+    return params if params.get("app_name") else None
+
+
+def _renovate_json_resync_params(text: str) -> dict[str, str] | None:
+    """Params to re-render *text* (a renovate.json) with, or ``None`` to skip.
+
+    ``extract_renovate_automerge`` answers ``"true"`` for anything it cannot
+    parse.  That default is right for its other callers, but here it would
+    turn an unparseable soft-mode file into the auto-merge canonical — a
+    0-touch policy change (Renovate merging without a human) smuggled in under
+    a structural catch-up.  Only resync when the mode is genuinely read.
+    """
+    try:
+        json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return {"automerge": extract_renovate_automerge(text)}
+
+
+def _resync_scaffold(
+    dest: pathlib.Path,
+    template_name: str,
+    extract: Callable[[str], dict[str, str] | None],
+) -> list[tuple[pathlib.Path, str]]:
+    """Re-render an existing write-if-absent scaffold from its canonical.
+
+    One implementation for every ``--resync`` target: each differs only in
+    which template it renders and how its per-repo values are read back, so
+    the guards below — the identity check, the C002-identical comparison, the
+    backup — cannot end up applied to one target and forgotten on another.
+
+    *extract* returns the render params read off the on-disk content, or
+    ``None`` when they can't be read confidently enough to rewrite the file.
+
+    Returns the ``(path, status)`` pairs for ``main()``'s ``--json`` manifest.
+    """
+    try:
+        existing = dest.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"skipped: {dest} is unreadable ({exc}); left untouched")
+        return [(dest, "exists")]
+
+    params = extract(existing)
+    if params is None:
+        print(
+            f"skipped: {dest} has drifted too far to re-render safely"
+            " (its per-repo values can't be read back); left untouched"
+        )
+        return [(dest, "exists")]
+
+    target = render(template_name, **params)
+
+    # Pin-insensitive, matching C002's own comparison: --resync must rewrite
+    # exactly what C002 calls drift and nothing else. Comparing raw bytes
+    # instead would rewrite (and back up) a file on every run whenever an
+    # action pin differs from the template's — churn on a file the checker
+    # already considers clean.
+    if strip_action_pins(existing) == strip_action_pins(target):
+        print(f"ok (up to date): {dest}")
+        return [(dest, "unchanged")]
+
+    # Unconditional backup, unlike the --enforce force-overwrite path below —
+    # which skips it when the existing content is one of the two canonical
+    # renders. There is no equivalent recognisable set here: the
+    # overwhelmingly common case is a file that was pristine for an *older*
+    # conformance version, and old templates aren't available to recognise it.
+    # So assume the difference might be a hand edit and always leave it
+    # recoverable. `*.bak` is in the bootstrap-managed .gitignore, so this
+    # never lands in a commit, and GitHub only parses .yml/.yaml under
+    # .github/workflows/ so a backed-up workflow can't register as a second
+    # workflow either.
+    bak = dest.with_suffix(dest.suffix + ".bak")
+    bak.write_text(existing, encoding="utf-8")
+    print(f"backed up: {bak}  (previous content; reapply any hand edits from it)")
+    dest.write_text(target, encoding="utf-8")
+    print(f"updated: {dest}")
+    return [(bak, "backed_up"), (dest, "updated")]
+
+
 def _sync_renovate_json(
-    root: pathlib.Path, kwargs: dict[str, str], force_renovate: bool
+    root: pathlib.Path, kwargs: dict[str, str], force_renovate: bool, resync: bool
 ) -> list[tuple[pathlib.Path, str]]:
     """renovate.json — write-if-absent normally; force-overwrite when
     ``--enforce`` or ``--renovate-automerge`` is passed explicitly so
     re-running with ``--enforce true`` (or ``--renovate-automerge true``)
     upgrades a soft-mode repo without needing to delete the file first.
 
+    *force_renovate* and *resync* are different operations on the same file
+    and are checked in that order: the former CHANGES the enforcement mode to
+    what was asked for, the latter PRESERVES whatever mode the file already
+    declares and fixes only its structure.  So an explicit mode flag wins —
+    passing it alongside ``--resync`` is an intentional mode change, and
+    having the resync's read-back-off-disk value quietly override it would
+    make the explicit flag a no-op.
+
     Returns the ``(path, status)`` pairs this call wrote or left alone —
     possibly two entries (the ``.bak`` backup plus the updated file itself)
-    when a customised ``renovate.json`` is force-overwritten.
+    when a customised ``renovate.json`` is force-overwritten or resynced.
     """
     renovate_dest = root / "renovate.json"
     if not renovate_dest.exists():
@@ -148,10 +270,14 @@ def _sync_renovate_json(
         print(f"updated: {renovate_dest}")
         results.append((renovate_dest, "updated"))
         return results
+    if resync:
+        return _resync_scaffold(
+            renovate_dest, "renovate.json", _renovate_json_resync_params
+        )
     print(
         f"ok (exists): {renovate_dest}"
         "  (edit freely; pass --enforce or --renovate-automerge to update"
-        " enforcement mode)"
+        " enforcement mode, or --resync to fix structural drift while keeping it)"
     )
     return [(renovate_dest, "exists")]
 
@@ -264,6 +390,10 @@ def main(argv: list[str]) -> int:
     # this file, so passing it and having the file left alone would be a no-op
     # flag.
     force_renovate = bool(kwargs["enforce"] or kwargs["renovate_automerge"])
+    # Popped before autodetection and the render-kwargs derivation below: it is
+    # a write-mode toggle, not a template variable, and render() takes an exact
+    # keyword set.
+    resync = kwargs.pop("resync") == "true"
     apply_bootstrap_autodetection(kwargs, root)
 
     # Resolve the two 0-touch levers, each independently expressible:
@@ -319,9 +449,9 @@ def main(argv: list[str]) -> int:
         dest = root / dest_rel
         _record(dest, _bootstrap_file(dest, render(template_name)))
 
-    for path, status in _sync_tests_yaml(root, kwargs):
+    for path, status in _sync_tests_yaml(root, kwargs, resync):
         _record(path, status)
-    for path, status in _sync_renovate_json(root, kwargs, force_renovate):
+    for path, status in _sync_renovate_json(root, kwargs, force_renovate, resync):
         _record(path, status)
     for path, status in _sync_ci_system_deps(root, kwargs["system_deps"]):
         _record(path, status)

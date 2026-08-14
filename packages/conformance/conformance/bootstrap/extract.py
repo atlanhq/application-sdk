@@ -55,6 +55,65 @@ _SHELL_OPERATOR_RE = re.compile(r"[;&|]")
 _COMMENT_LINE_RE = re.compile(r"^[ \t]*#.*$", re.MULTILINE)
 
 
+# Matches a pinned SHA (40 lowercase hex chars) and its optional trailing version
+# comment. Example: "@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3" →
+# "@<pinned>".
+_ACTION_PIN_RE = re.compile(r"@[0-9a-f]{40}(?:[ \t]+#[^\n]*)?")
+
+# tests.yaml's per-repo customised values, read back off a scaffolded file.
+# Anchored like _SERVICES_SCRIPT_RE below so a *commented-out* line (the shape
+# a renamed app most often leaves behind) can't satisfy the read-back — the
+# --resync identity guard in particular must skip rather than re-render from a
+# value the file no longer declares.
+_APP_NAME_RE = re.compile(r'^\s+app-name:\s+"([^"]+)"\s*$', re.MULTILINE)
+_APP_IMAGE_NAME_RE = re.compile(r'^\s+app-image-name:\s+"([^"]+)"\s*$', re.MULTILINE)
+_ENABLE_E2E_RE = re.compile(r"enable-e2e:\s+(true|false)")
+# Matches an *uncommented* services-script line (quoted value) in the with: block.
+_SERVICES_SCRIPT_RE = re.compile(r'^\s+services-script:\s+"([^"]+)"$', re.MULTILINE)
+
+
+def strip_action_pins(text: str) -> str:
+    """Return *text* with every pinned action SHA normalised to ``@<pinned>``.
+
+    Single source of truth for "compare two renders of a managed file while
+    ignoring which SHA an action is pinned at". The C002 checker uses it so
+    an automated pin bump doesn't read as drift; ``bootstrap``'s
+    ``--resync`` uses it to decide whether a re-render would
+    change anything C002 cares about, so the flag rewrites exactly the files
+    C002 flags and no others.
+    """
+    return _ACTION_PIN_RE.sub("@<pinned>", text)
+
+
+def extract_tests_yaml_params(text: str) -> dict[str, str]:
+    """Extract the per-repo customised values from a scaffolded tests.yaml.
+
+    Returns only the keys that were found; callers should pass these as kwargs
+    to ``render("tests.yaml", ...)`` so defaults apply for any that are absent.
+
+    Single source of truth for the tests.yaml scaffold's parameters — the C002
+    checker extracts them to decide what "structural drift" means for this
+    file, and ``bootstrap --resync`` extracts them to re-render it.
+    Sharing one implementation is what makes the flag's write byte-identical
+    to the canonical the checker compares against; two copies could drift into
+    a resync that leaves the finding standing.
+    """
+    params: dict[str, str] = {}
+    m = _APP_NAME_RE.search(text)
+    if m:
+        params["app_name"] = m.group(1)
+    m = _APP_IMAGE_NAME_RE.search(text)
+    if m:
+        params["app_image_name"] = m.group(1)
+    m = _ENABLE_E2E_RE.search(text)
+    if m:
+        params["enable_e2e"] = m.group(1)
+    m = _SERVICES_SCRIPT_RE.search(text)
+    if m:
+        params["services_script"] = m.group(1).strip()
+    return params
+
+
 def extract_field(text: str, field: str) -> str:
     """Return the value of ``field: <value>`` in *text*, or ``""`` if absent.
 

@@ -2,8 +2,10 @@
 # and drift-tracked at WARN by conformance check C002.
 #
 # Edit it freely — drift NEVER blocks CI (C002 is WARN-only, not BLOCK).
-# To force-regenerate this file from canonical, delete it and re-run bootstrap:
-#   atlan-application-sdk-conformance bootstrap --app-name <your-app-name>
+# To pull structural updates from canonical, re-run bootstrap with --resync:
+#   atlan-application-sdk-conformance bootstrap --resync
+# (--resync preserves this file's per-repo values; pass --app-name etc. only
+#  to deliberately CHANGE them.)
 name: Tests
 
 # Unified workflow — unit + integration (testcontainers), and full-DAG e2e.
