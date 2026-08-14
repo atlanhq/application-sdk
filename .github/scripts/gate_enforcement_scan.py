@@ -39,8 +39,21 @@ publish the claim reported 69/77 repos as permitting direct pushes — which was
 exactly the set of repos whose classic protection was unreadable, i.e. a
 restatement of the token's own blind spot dressed as a fleet finding. So this
 scanner now reports only what rulesets prove
-(``enforcement.rulesetRequiresPullRequest``) and leaves the direct-push question
-to a consumer that holds ``administration: read``.
+(``enforcement.rulesetRequiresPullRequest``).
+
+The resolution is **not** to widen this token — the fleet App will never hold
+``administration: read``. It is to move the state somewhere readable: every
+connector app migrates off classic branch protection onto rulesets, which
+``/repos/{repo}/rulesets`` returns in full at plain repo-read. That makes the
+migration self-measuring, since ``rulesetRequiresPullRequest`` climbing across
+the fleet *is* the completion signal, and it needs no new privilege.
+
+Note the direction of the residual error, because it is the forgiving one: an
+unreadable classic protection can only make this scanner *understate* how
+protected a repo is (it reports "no ruleset requires a PR" on a repo that classic
+protection may well be gating). It can never overstate it. The retracted field
+was therefore a false alarm rather than a false green — which is still worth
+retracting, but is the opposite of the ``bypass_actors`` failure above.
 
 Enumerating the fleet here (rather than having each repo self-report) is the
 whole point: a repo that has lost enforcement is *present in the output* with
