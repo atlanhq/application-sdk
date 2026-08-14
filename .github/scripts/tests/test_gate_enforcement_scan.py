@@ -28,7 +28,6 @@ from gate_enforcement_scan import (  # noqa: E402
     ARRIVAL_UNKNOWN,
     DEFAULT_NAME_PATTERN,
     DEFAULT_REQUIRED_CONTEXT,
-    FINDING_DIRECT_PUSH,
     FINDING_NOT_ARRIVING,
     FINDING_NOT_REQUIRED,
     FINDING_UNPRODUCIBLE,
@@ -185,7 +184,7 @@ def test_no_rulesets_at_all():
     record = _evaluate(rulesets=[])
     assert record["status"] == STATUS_NOT_GATED
     assert record["enforcement"]["requiredContexts"] == []
-    assert FINDING_DIRECT_PUSH in _finding_ids(record)
+    assert record["enforcement"]["rulesetRequiresPullRequest"] is False
 
 
 # --- bypass is not claimed --------------------------------------------------
@@ -255,23 +254,50 @@ def test_the_record_reads_identically_with_and_without_visible_bypass_actors():
     assert admin_view == fleet_view
 
 
-def test_no_pull_request_requirement_is_still_reported():
-    """The one bypass-shaped hole this token CAN see: it comes from `rules`,
-    which plain repo-read returns in full. With no PR required there is no pull
-    request for the check to attach to, so the requirement never applies."""
+def test_absent_pull_request_rule_is_reported_as_a_ruleset_fact_only():
+    """What `rules` shows, and nothing beyond it.
+
+    A missing `pull_request` rule means no *ruleset* requires a PR here. It does
+    NOT mean a direct push is permitted — classic branch protection is the other
+    enforcement mechanism, it is admin-gated, and this token cannot read it. So
+    the field is named for its scope and no finding is raised: an unprovable
+    claim is left unmade.
+    """
     record = _evaluate(rulesets=[_ruleset(with_pull_request=False)])
-    assert record["enforcement"]["directPushPermitted"] is True
+    assert record["enforcement"]["rulesetRequiresPullRequest"] is False
     assert record["status"] == STATUS_GATED  # still required — a separate fact
-    assert FINDING_DIRECT_PUSH in _finding_ids(record)
+    assert record["findings"] == []
+
+
+def test_the_retracted_direct_push_claim_is_not_reported_anywhere():
+    """Regression guard for the second false green (schema 3.0).
+
+    `directPushPermitted` was `not requires_pr`, published as a fleet finding on
+    69 of 77 repos — which was exactly the set whose classic branch protection
+    the token could not read. GitHub returns 404 for both "no classic protection"
+    (`"Branch not protected"`) and "you may not look" (`"Not Found"`), so the
+    field could only ever restate the token's blind spot.
+
+    Same shape of mistake as `bypass_actors`, so it gets the same guard: assert
+    the payload makes no direct-push claim at all, under the exact input that
+    used to produce one.
+    """
+    record = _evaluate(rulesets=[_ruleset(with_pull_request=False)])
+    assert "directPushPermitted" not in record["enforcement"]
+    assert not any("directpush" in key.lower() for key in record["enforcement"])
+    assert not any(
+        "direct-push" in finding["id"] or "direct push" in finding["message"]
+        for finding in record["findings"]
+    )
 
 
 def test_pull_request_rule_may_live_on_a_second_ruleset():
     """PR-required and checks-required are commonly split across rulesets;
-    requiring both on one object would report a false direct-push hole."""
+    requiring both on one object would understate PR coverage."""
     checks_only = _ruleset(ruleset_id=1, with_pull_request=False)
     pr_only = _ruleset(ruleset_id=2, contexts=None, with_pull_request=True)
     record = _evaluate(rulesets=[checks_only, pr_only])
-    assert record["enforcement"]["directPushPermitted"] is False
+    assert record["enforcement"]["rulesetRequiresPullRequest"] is True
     assert record["findings"] == []
 
 
@@ -835,7 +861,10 @@ def test_build_fleet_counts_the_headline_binary():
     fleet = build_fleet(records, GATE)
     assert fleet["fleetSize"] == 4
     assert fleet["gated"] == 2
-    assert fleet["directPushPermitted"] == 2  # the ungated repo also has no PR rule
+    # Only repo `a` has a ruleset with a `pull_request` rule: `b` was built
+    # without one and `c` has no rulesets, while `d` is unreadable and carries no
+    # enforcement object at all.
+    assert fleet["rulesetRequiresPullRequest"] == 1
     assert fleet["notGated"] == 1
     assert fleet["unknown"] == 1
     assert len(fleet["repos"]) == 4
