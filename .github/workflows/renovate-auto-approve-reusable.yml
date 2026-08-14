@@ -48,7 +48,9 @@
 #      pyproject.toml, the Pkl toolkit pin + lock (contract/PklProject[.deps.json]),
 #      or the regenerated contract artifacts (app/generated/**, atlan.yaml, app.yaml)
 #   5. All ruleset-required checks are green (gh pr checks --required exits 0)
-#   6. atlan-ci has not already posted an APPROVED review with this signature
+#   6. Renovate's own renovate/artifacts status is green — see the step comment;
+#      this is what stops a failed post-upgrade task from auto-merging
+#   7. atlan-ci has not already posted an APPROVED review with this signature
 #
 # Trigger rationale lives in the caller — each consumer lists the workflow names
 # that produce its required status checks, which differ per repo.
@@ -251,7 +253,37 @@ jobs:
             fi
             echo "PR #${PR_NUM}: all required checks are green."
 
-            # f. Idempotency: skip if atlan-ci already has an APPROVED review
+            # f. Renovate's artifact status must be green.
+            #    A failed postUpgradeTasks command does NOT stop Renovate: it
+            #    commits whatever its own artifact update produced, raises the PR,
+            #    and still enables platform automerge (getPlatformPrOptions never
+            #    consults artifactErrors — only Renovate's own *branch* automerge
+            #    is gated on them, and this fleet uses automergeType=pr). For the
+            #    fleet preset's release-age-bounded `uv lock` that means an
+            #    UNBOUNDED uv.lock would sail through on this approval, silently
+            #    defeating the cooldown on the one lane it covers. Same for a
+            #    pkl-sync failure, which would land stale generated contract
+            #    artifacts. So this gate is the enforcement point.
+            #
+            #    The preset sets statusCheckWhen.artifactError=always so the
+            #    context is published green on healthy branches too — that is what
+            #    lets "missing" be read as not-green rather than as "fine". Fail
+            #    closed: anything other than success withholds approval, including
+            #    an API error. Renovate only sets this status on runs where it
+            #    commits to the branch, so PRs already open when this shipped
+            #    acquire it on their next rebase; until then they are not
+            #    auto-approved, and the caller's workflow_dispatch can re-evaluate
+            #    one on demand.
+            ARTIFACT_STATE=$(gh api "repos/${REPO}/commits/${EVAL_SHA}/status" \
+              --jq '[.statuses[] | select(.context=="renovate/artifacts") | .state] | first // "missing"' \
+              2>/dev/null || echo "missing")
+            if [ "$ARTIFACT_STATE" != "success" ]; then
+              echo "PR #${PR_NUM}: renovate/artifacts is '${ARTIFACT_STATE}', not 'success' — skipping."
+              continue
+            fi
+            echo "PR #${PR_NUM}: renovate/artifacts is green."
+
+            # g. Idempotency: skip if atlan-ci already has an APPROVED review
             #    bearing our signature. Push-dismissed reviews have state
             #    DISMISSED (not APPROVED) so they won't match here — a fresh
             #    approval is correctly posted on the next green run.
