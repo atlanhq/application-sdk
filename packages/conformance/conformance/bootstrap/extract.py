@@ -70,6 +70,30 @@ _APP_IMAGE_NAME_RE = re.compile(r'^\s+app-image-name:\s+"([^"]+)"\s*$', re.MULTI
 _ENABLE_E2E_RE = re.compile(r"enable-e2e:\s+(true|false)")
 # Matches an *uncommented* services-script line (quoted value) in the with: block.
 _SERVICES_SCRIPT_RE = re.compile(r'^\s+services-script:\s+"([^"]+)"$', re.MULTILINE)
+# tests-reusable.yaml's `unit-coverage-fail-under` input, quoted or bare. Anchored
+# and uncommented-only for the same reason as the lines above. The quote pair is
+# matched as a unit (`"(\d+)"` or `\d+`, never a lone leading/trailing quote) so a
+# half-quoted line — which the YAML parser would reject anyway — can't read back
+# as a valid declaration.
+_UNIT_COVERAGE_FAIL_UNDER_RE = re.compile(
+    r'^\s+unit-coverage-fail-under:\s+(?:"(\d+)"|(\d+))\s*$', re.MULTILINE
+)
+
+# The floor `tests-reusable.yaml` applies when a caller says nothing — its
+# ``unit-coverage-fail-under`` input default. An app may raise its own floor
+# above this and keep it (see ``extract_tests_yaml_params``); it may not drop
+# below it, because that would use the app's own workflow to opt out of a bar
+# the SDK sets for the whole fleet.
+#
+# Duplicated here rather than read from the workflow because this package ships
+# standalone into consumer repos, where application-sdk's workflow files are not
+# on disk. ``test_bootstrap`` pins the constant against the real input default in
+# the monorepo, so the two cannot drift apart unnoticed.
+#
+# Note the division of labour: whether the resulting floor is high enough to
+# ever fail a run is T014 (CoverageGateDisabled)'s question, not C002's. C002
+# only decides whether a per-app value is a preserved choice or drift.
+SDK_UNIT_COVERAGE_FLOOR = 0
 
 
 def strip_action_pins(text: str) -> str:
@@ -97,6 +121,15 @@ def extract_tests_yaml_params(text: str) -> dict[str, str]:
     Sharing one implementation is what makes the flag's write byte-identical
     to the canonical the checker compares against; two copies could drift into
     a resync that leaves the finding standing.
+
+    ``unit_coverage_fail_under`` is the one value that is only *conditionally*
+    preserved: it is kept when it is at or above ``SDK_UNIT_COVERAGE_FLOOR``
+    (an app raising its own coverage bar — a choice C002 must not flag) and
+    dropped when it is below (an app using its workflow to undercut the
+    fleet-wide floor — which stays drift, and which ``--resync`` then fixes by
+    removing the line so the app inherits the SDK floor again). A value equal
+    to the floor is kept rather than flagged: it weakens nothing, and deleting
+    a redundant-but-honest declaration is churn, not remediation.
     """
     params: dict[str, str] = {}
     m = _APP_NAME_RE.search(text)
@@ -111,7 +144,61 @@ def extract_tests_yaml_params(text: str) -> dict[str, str]:
     m = _SERVICES_SCRIPT_RE.search(text)
     if m:
         params["services_script"] = m.group(1).strip()
+    declared = extract_declared_unit_coverage_fail_under(text)
+    if declared and int(declared) >= SDK_UNIT_COVERAGE_FLOOR:
+        params["unit_coverage_fail_under"] = declared
     return params
+
+
+def rejected_unit_coverage_fail_under(text: str) -> str:
+    """Return the coverage floor *text* declares but this module refuses to
+    preserve — i.e. one below ``SDK_UNIT_COVERAGE_FLOOR`` — else ``""``.
+
+    The single reader of the "is this value preservable?" comparison, so the
+    C002 checker's explanation of the resulting finding and
+    ``extract_tests_yaml_params``' decision to drop the value cannot disagree
+    about which values are which.
+    """
+    declared = extract_declared_unit_coverage_fail_under(text)
+    if declared and int(declared) < SDK_UNIT_COVERAGE_FLOOR:
+        return declared
+    return ""
+
+
+def extract_declared_unit_coverage_fail_under(text: str) -> str:
+    """Return the unit-coverage floor *text* (a tests.yaml) declares, or ``""``.
+
+    Reports the value as written, *without* the at-or-above-the-SDK-floor filter
+    ``extract_tests_yaml_params`` applies — so a caller can tell "this file
+    declares nothing" apart from "this file declares a floor we refused to
+    preserve". The C002 checker uses that distinction to explain the resulting
+    finding in terms of the coverage line, instead of leaving an app owner to
+    guess which of their edits counted as structural drift and then watching
+    ``--resync`` delete it.
+    """
+    m = _UNIT_COVERAGE_FAIL_UNDER_RE.search(text)
+    # Quoted and bare forms capture into different groups; exactly one is set.
+    return next((g for g in m.groups() if g is not None), "") if m else ""
+
+
+def extract_use_ghcr_base(text: str) -> str:
+    """Return ``"true"`` when *text* (a ``build-and-publish.yaml``) opts into the
+    GHCR base redirect, else ``""``.
+
+    The opt-in is a per-repo choice on an *always-overwrite* managed shim, so it
+    needs both halves of the round-trip or it cannot survive: ``bootstrap``'s
+    autodetection reads it here so a bare re-run re-renders the line instead of
+    deleting it, and the C002 checker reads it here so a repo that opted in is
+    not reported as drifted. The default stays ``false`` in the SDK's reusable
+    workflow until the whole fleet has soaked, which is exactly why apps have to
+    be able to self-select ahead of that flip.
+
+    Anything other than a literal ``true`` returns ``""`` ("say nothing, take the
+    SDK default"), including ``false``: rendering an explicit ``use_ghcr_base:
+    false`` would be a second spelling of the default and would read as drift on
+    every repo that spells it the other way.
+    """
+    return "true" if extract_field(text, "use_ghcr_base") == "true" else ""
 
 
 def extract_field(text: str, field: str) -> str:

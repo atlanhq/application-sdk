@@ -10,6 +10,20 @@ For parameterised templates the per-repo custom values are *extracted from the
 on-disk file* before comparing, so intentional per-repo choices (app-name,
 package_name, etc.) are not flagged as drift — only structural changes are caught.
 
+Two of those choices are app-owned opt-*ups* rather than plain identity values,
+and are allowed for that reason:
+
+- ``tests.yaml``'s ``unit-coverage-fail-under`` — an app raising its unit-test
+  coverage floor above the SDK's own (``SDK_UNIT_COVERAGE_FLOOR``). Allowed at or
+  above that floor; a value below it stays drift, since that would use the app's
+  own workflow to duck under a fleet-wide bar.
+- ``build-and-publish.yaml``'s ``use_ghcr_base`` — an app self-selecting the GHCR
+  base-image redirect ahead of the SDK-side default flipping, which will be a
+  long time coming for the whole fleet.
+
+Neither should make a connector look non-conformant in drift reporting for doing
+the better thing, which is what flagging them amounted to.
+
 **Two drift tracks:**
 
 1. **Managed shims** (``MANAGED_WORKFLOWS`` — 14 files): always-overwrite.
@@ -29,12 +43,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# The coverage floor is read as a module attribute (``bootstrap_extract.
+# SDK_UNIT_COVERAGE_FLOOR``) rather than imported by value: a `from ... import`
+# copy is fixed at import time, which would leave this checker's explanation of
+# a sub-floor value quoting a different floor than the extractor actually
+# applied whenever the constant is moved for a test — and the sub-floor branch
+# can only be exercised by moving it, since the real floor is 0 and nothing can
+# sit below it yet.
+from conformance.bootstrap import extract as bootstrap_extract
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     extract_apt_packages,
     extract_field,
     extract_renovate_automerge,
     extract_tests_yaml_params,
+    extract_use_ghcr_base,
     resolve_renovate_fallback_exit_zero,
     strip_action_pins,
 )
@@ -214,6 +237,13 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
         kwargs["package_name"] = _extract_package_name(on_disk)
     elif name == "build-and-publish.yaml":
         kwargs["unit_tests_workflow"] = _extract_unit_tests_workflow(on_disk)
+        # The GHCR base redirect is opt-in per app while the SDK-side default is
+        # still false, and the fleet won't be ready to flip that default for a
+        # long time. So an app that self-selects it is making a per-repo value
+        # choice like any other here — not drift. Without this the opt-in reads
+        # as a permanent C002 finding whose only "fix" (re-run bootstrap) sends
+        # the app back to Harbor.
+        kwargs["use_ghcr_base"] = extract_use_ghcr_base(on_disk)
     elif name == "conformance.yaml":
         kwargs["exit_zero"] = _extract_exit_zero(on_disk, root)
     elif name == "checks.yml":
@@ -323,7 +353,8 @@ def _scan_tests_yaml(path: Path, root: Path) -> list[Finding]:
         return []
 
     # Extract per-repo customised values so structural drift is caught while
-    # legitimate param choices (app-name, enable-e2e, services-script) are not.
+    # legitimate param choices (app-name, enable-e2e, services-script, a
+    # unit-coverage floor at or above the SDK's) are not.
     params = extract_tests_yaml_params(on_disk)
     canonical = render(_TESTS_WORKFLOW, **params)
 
@@ -341,10 +372,37 @@ def _scan_tests_yaml(path: Path, root: Path) -> list[Finding]:
                 "(structural changes detected; param customizations are not flagged). "
                 f"Run `{_CLI_CMD} --resync` to re-render it from the "
                 "canonical, reusing the app-name/app-image-name/enable-e2e/"
-                "services-script values read back off this file. Any other hand "
-                "edit is replaced (kept as tests.yaml.bak). If --resync reports "
-                "it skipped (no parseable app-name, so its identity can't be "
-                "read back), it needs a manual fix. " + _warn_only
+                "services-script/unit-coverage-fail-under values read back off this "
+                "file. Any other hand edit is replaced (kept as tests.yaml.bak). "
+                "If --resync reports it skipped (no parseable app-name, so its "
+                "identity can't be read back), it needs a manual fix. "
+                + _below_floor_coverage_note(on_disk)
+                + _warn_only
             ),
         )
     ]
+
+
+def _below_floor_coverage_note(on_disk: str) -> str:
+    """Return an explanation when *on_disk* declares a sub-floor coverage value.
+
+    A per-app ``unit-coverage-fail-under`` at or above ``SDK_UNIT_COVERAGE_FLOOR``
+    is preserved and never reaches this message. One *below* it is the single
+    param value this checker deliberately refuses to preserve, which makes it
+    the one case where the generic "structural drift, run --resync" text is
+    actively misleading: nothing about the file's structure is wrong, and
+    ``--resync`` will resolve the finding by deleting the app's own line. Name
+    it here so that outcome is a stated consequence rather than a surprise.
+    """
+    declared = bootstrap_extract.rejected_unit_coverage_fail_under(on_disk)
+    if not declared:
+        return ""
+    return (
+        f"Note: this file's `unit-coverage-fail-under: {declared}` is BELOW the "
+        "SDK's own floor of "
+        f"{bootstrap_extract.SDK_UNIT_COVERAGE_FLOOR}, so it is not preserved — "
+        "apps may raise their unit-coverage floor above the SDK's, not duck under "
+        "it. --resync therefore drops that line and the app inherits the SDK "
+        "floor; raise the value to at or above the floor instead if the intent "
+        "was an app-specific bar. "
+    )

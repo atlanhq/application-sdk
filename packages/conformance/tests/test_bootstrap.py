@@ -12,6 +12,7 @@ import pathlib
 import re
 
 import pytest
+from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.args import BOOTSTRAP_USAGE, FLAGS, parse_bootstrap_args
 from conformance.bootstrap.autodetect import derive_app_name_from_dir
 from conformance.bootstrap.command import _bootstrap_file
@@ -103,6 +104,11 @@ def test_parse_bootstrap_args_defaults() -> None:
         "enable_e2e": "true",
         "services_script": "",
         "system_deps": "",
+        # "" = inherit the SDK's own floor / registry default, i.e. render no
+        # line at all — so an app that never opted up is byte-identical to the
+        # canonical and C002 stays silent.
+        "unit_coverage_fail_under": "",
+        "use_ghcr_base": "",
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",
@@ -568,7 +574,8 @@ def test_parse_bootstrap_args_granular_levers(flag: str, dest: str, value: str) 
 
 
 @pytest.mark.parametrize(
-    "flag", ["--conformance-blocking", "--renovate-automerge", "--enforce"]
+    "flag",
+    ["--conformance-blocking", "--renovate-automerge", "--enforce", "--use-ghcr-base"],
 )
 def test_parse_bootstrap_args_tristate_invalid_names_its_own_flag(
     flag: str, capsys: pytest.CaptureFixture[str]
@@ -589,7 +596,8 @@ def test_parse_bootstrap_args_tristate_invalid_names_its_own_flag(
 
 
 @pytest.mark.parametrize(
-    "flag", ["--conformance-blocking", "--renovate-automerge", "--enforce"]
+    "flag",
+    ["--conformance-blocking", "--renovate-automerge", "--enforce", "--use-ghcr-base"],
 )
 def test_parse_bootstrap_args_tristate_missing_value(
     flag: str, capsys: pytest.CaptureFixture[str]
@@ -2385,3 +2393,218 @@ def test_managed_action_template_matches_canonical_source(
 def test_derive_falls_back_to_app_for_bare_atlan(tmp_path: pathlib.Path) -> None:
     # "atlan-app" → strip prefix → "app" → strip suffix ("app" doesn't end with "-app") → "app"
     assert derive_app_name_from_dir(tmp_path / "atlan-app") == "app"
+
+
+# ---------------------------------------------------------------------------
+# App-owned overrides that C002 must allow (FND-361)
+#
+# Two per-app opt-*ups*: a raised unit-coverage floor in tests.yaml, and the
+# GHCR base-image redirect in build-and-publish.yaml. Both were being reported
+# as drift, which made a connector doing the stricter/newer thing look
+# non-conformant — and in the use_ghcr_base case a bare re-run silently
+# reverted the opt-in, because that shim is always-overwrite.
+# ---------------------------------------------------------------------------
+
+
+def _bp_workflow(root: pathlib.Path) -> pathlib.Path:
+    return root / ".github" / "workflows" / "build-and-publish.yaml"
+
+
+def test_use_ghcr_base_flag_renders_the_opt_in(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--use-ghcr-base", "true"])
+    assert "      use_ghcr_base: true\n" in _bp_workflow(tmp_path).read_text()
+
+
+def test_bare_rerun_preserves_the_ghcr_base_opt_in(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regression that made the opt-in unusable.
+
+    build-and-publish.yaml is always-overwrite, so before the value was read
+    back off the file, every subsequent bootstrap run deleted the app's opt-in
+    and sent its image build back to Harbor.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--use-ghcr-base", "true"])
+    _cmd_bootstrap([])
+    assert "use_ghcr_base: true" in _bp_workflow(tmp_path).read_text()
+
+
+def test_bare_rerun_preserves_a_hand_written_ghcr_base_opt_in(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shape the first adopter actually wrote: the line under a comment.
+
+    The comment itself is replaced by the re-render (this file is managed), but
+    the opt-in it documents must survive — that is the value, and losing it is
+    a silent registry change nobody asked for.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    bp = _bp_workflow(tmp_path)
+    bp.write_text(
+        bp.read_text().replace(
+            "    secrets: inherit",
+            "      # Canary for the GHCR base-image redirect.\n"
+            "      use_ghcr_base: true\n    secrets: inherit",
+        )
+    )
+    _cmd_bootstrap([])
+    assert "use_ghcr_base: true" in bp.read_text()
+
+
+def test_explicit_false_removes_the_ghcr_base_opt_in(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Autodetection preserves; an explicit flag decides. Otherwise there is no
+    way back to Harbor short of hand-editing a managed file."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--use-ghcr-base", "true"])
+    _cmd_bootstrap(["--use-ghcr-base", "false"])
+    assert "use_ghcr_base" not in _bp_workflow(tmp_path).read_text()
+
+
+def test_ghcr_base_opt_in_leaves_no_c002_finding(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The property the ticket is about: opting up is not drift."""
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--use-ghcr-base", "true"])
+    assert scan_path(_bp_workflow(tmp_path), tmp_path) == []
+
+
+def test_unit_coverage_flag_renders_the_floor(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--unit-coverage-fail-under", "90"])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    assert '      unit-coverage-fail-under: "90"\n' in wf.read_text()
+
+
+def test_unit_coverage_flag_rejects_a_non_numeric_value(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        _cmd_bootstrap(["--unit-coverage-fail-under", "high"])
+    assert exc.value.code == 2
+
+
+def test_unit_coverage_flag_rejects_a_value_above_100(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Coverage is a percent — 101+ is nonsensical, not a stricter bar."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        _cmd_bootstrap(["--unit-coverage-fail-under", "101"])
+    assert exc.value.code == 2
+
+
+def test_unit_coverage_flag_accepts_100(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """100 is the highest meaningful percent — the upper bound is inclusive."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--unit-coverage-fail-under", "100"])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    assert '      unit-coverage-fail-under: "100"\n' in wf.read_text()
+
+
+def test_unit_coverage_flag_rejects_a_value_below_the_sdk_floor(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Writing a sub-floor value would scaffold a file C002 immediately flags,
+    whose only remediation deletes the line the caller just asked for."""
+    monkeypatch.setattr(extract_mod, "SDK_UNIT_COVERAGE_FLOOR", 40)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        _cmd_bootstrap(["--unit-coverage-fail-under", "20"])
+    assert exc.value.code == 2
+    assert "below the SDK's own floor" in capsys.readouterr().err
+
+
+def test_resync_preserves_a_raised_coverage_floor(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the ticket: --resync must not silently un-raise the bar.
+
+    The structural catch-up has to land while the app's stricter floor stays —
+    before this, --resync fixed the drift by dropping the line, so running the
+    remediation cost the app its coverage gate.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(
+        _drifted_tests_yaml(app_name="app").replace(
+            '      app-name: "app"\n',
+            '      unit-coverage-fail-under: "90"\n      app-name: "app"\n',
+        )
+    )
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == render(
+        "tests.yaml", app_name="app", unit_coverage_fail_under="90"
+    )
+
+
+def test_resync_drops_a_coverage_floor_below_the_sdk_floor(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one value --resync deliberately does not carry forward.
+
+    An app may raise its coverage floor above the SDK's, not use its own
+    workflow to duck under it — so the re-render drops the line and the app
+    inherits the SDK floor. The C002 message says this will happen.
+    """
+    monkeypatch.setattr(extract_mod, "SDK_UNIT_COVERAGE_FLOOR", 40)
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(
+        _drifted_tests_yaml(app_name="app").replace(
+            '      app-name: "app"\n',
+            '      unit-coverage-fail-under: "20"\n      app-name: "app"\n',
+        )
+    )
+    _cmd_bootstrap(["--resync"])
+    assert "unit-coverage-fail-under" not in wf.read_text()
+
+
+# ---------------------------------------------------------------------------
+# Premise pin: the SDK's own floor
+# ---------------------------------------------------------------------------
+
+
+def test_sdk_unit_coverage_floor_matches_the_reusable_workflow_default() -> None:
+    """``SDK_UNIT_COVERAGE_FLOOR`` must equal tests-reusable.yaml's own default.
+
+    The constant is a copy — this package ships standalone into consumer repos,
+    where application-sdk's workflows aren't on disk — so the copy is pinned
+    against the real input default here, in the monorepo where both exist. If
+    the SDK raises its floor and this constant isn't moved with it, apps could
+    keep declaring a floor below the fleet-wide bar with no finding at all.
+    Skipped when the monorepo tree isn't checked out (isolated sdist build),
+    matching the vendored-template guard above.
+    """
+    workflow = _MONOREPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
+    if not workflow.exists():
+        pytest.skip(f"monorepo source not checked out: {workflow}")
+    text = workflow.read_text(encoding="utf-8")
+    block = text.split("unit-coverage-fail-under:", 1)
+    assert len(block) == 2, "tests-reusable.yaml no longer declares the input"
+    m = re.search(r'default:\s*"?(\d+)"?', block[1])
+    assert m is not None, "the input no longer declares a numeric default"
+    assert int(m.group(1)) == extract_mod.SDK_UNIT_COVERAGE_FLOOR, (
+        "tests-reusable.yaml's unit-coverage-fail-under default has moved to "
+        f"{m.group(1)} — update SDK_UNIT_COVERAGE_FLOOR in "
+        "conformance/bootstrap/extract.py to match, or C002 will keep "
+        "preserving per-app floors below the SDK's own."
+    )

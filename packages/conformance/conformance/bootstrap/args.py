@@ -9,6 +9,13 @@ from __future__ import annotations
 
 import sys
 
+# The coverage floor is read as a module attribute rather than imported by
+# value, for the same reason the C002 checker does it (see its import comment):
+# a `from ... import` copy is fixed at import time, so this validation and the
+# extractor that applies the floor would disagree whenever the constant is
+# moved — and moving it is the only way to exercise the below-floor branch
+# while the real floor is 0.
+from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.extract import APT_PACKAGE_RE
 
 FLAGS = {
@@ -19,6 +26,8 @@ FLAGS = {
     "--enable-e2e": "enable_e2e",
     "--services-script": "services_script",
     "--system-deps": "system_deps",
+    "--unit-coverage-fail-under": "unit_coverage_fail_under",
+    "--use-ghcr-base": "use_ghcr_base",
     "--enforce": "enforce",
     "--conformance-blocking": "conformance_blocking",
     "--renovate-automerge": "renovate_automerge",
@@ -29,11 +38,24 @@ FLAGS = {
 # "true"/"false" are otherwise accepted. Validated together so a new one can't
 # be added to FLAGS with its validation quietly forgotten.
 #
-# ``--enforce`` is the shorthand; the other two are the individual 0-touch
-# levers it expands to. Neither of them, and not ``--enforce`` either, has any
-# bearing on whether ``tests / Tests Gate`` is a required branch-protection
-# check — that is a separate lever with no prerequisite here (FND-347).
-TRISTATE_FLAGS = ("enforce", "conformance_blocking", "renovate_automerge")
+# ``--enforce`` is the shorthand; ``--conformance-blocking`` and
+# ``--renovate-automerge`` are the individual 0-touch levers it expands to.
+# Neither of them, and not ``--enforce`` either, has any bearing on whether
+# ``tests / Tests Gate`` is a required branch-protection check — that is a
+# separate lever with no prerequisite here (FND-347).
+#
+# ``--use-ghcr-base`` is tri-state for a different reason: it is not a 0-touch
+# lever and ``--enforce`` does not expand to it, but it does need the same
+# "" = defer-to-autodetection slot, because the file it writes
+# (build-and-publish.yaml) is always-overwrite and a bare re-run must re-render
+# an existing opt-in rather than drop it. Explicit ``false`` therefore means
+# "remove the opt-in", not "leave whatever is there".
+TRISTATE_FLAGS = (
+    "enforce",
+    "conformance_blocking",
+    "renovate_automerge",
+    "use_ghcr_base",
+)
 
 # Presence flags: no value, "true" when present and "false" otherwise. Declared
 # here rather than stripped from argv by the caller (the way ``--json`` is)
@@ -70,7 +92,9 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         "enable_e2e": "true",
         "services_script": "",
         "system_deps": "",
+        "unit_coverage_fail_under": "",
         # "" = not explicitly set; "true"/"false" = explicit. See TRISTATE_FLAGS.
+        "use_ghcr_base": "",
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",
@@ -119,8 +143,46 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
             sys.exit(2)
 
     result["system_deps"] = normalize_system_deps(result["system_deps"])
+    validate_unit_coverage_fail_under(result["unit_coverage_fail_under"])
 
     return result
+
+
+def validate_unit_coverage_fail_under(value: str) -> None:
+    """Exit 2 unless *value* is empty or a percent at/above the SDK floor.
+
+    Rejecting a below-floor value here rather than rendering it is deliberate:
+    the C002 checker treats such a line as drift (see
+    ``extract_tests_yaml_params``), so bootstrap writing one would scaffold a
+    file that its own drift check immediately flags — and the only remediation
+    (``--resync``) would delete the line the caller just asked for. An app may
+    raise its floor above the SDK's; it may not use this flag to duck under it.
+    """
+    if not value:
+        return
+    if not value.isdigit():
+        print(
+            "error: --unit-coverage-fail-under must be a whole coverage percent"
+            f" (e.g. 40), got {value!r}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if int(value) > 100:
+        print(
+            "error: --unit-coverage-fail-under is a coverage percent, so it"
+            f" cannot exceed 100, got {value!r}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if int(value) < extract_mod.SDK_UNIT_COVERAGE_FLOOR:
+        print(
+            f"error: --unit-coverage-fail-under {value} is below the SDK's own"
+            f" floor of {extract_mod.SDK_UNIT_COVERAGE_FLOOR} — apps may raise their unit"
+            " coverage floor, not lower it. Omit the flag to inherit the SDK"
+            " floor.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
 
 def normalize_system_deps(value: str) -> str:
@@ -191,6 +253,24 @@ options:
                               preserves both instead of deleting the step — checks.yml
                               is always-overwrite. To drop it, delete the step from
                               checks.yml and the txt file, then re-run.
+  --unit-coverage-fail-under N
+                              this app's own unit-test coverage floor, rendered into
+                              tests.yaml as tests-reusable.yaml's
+                              unit-coverage-fail-under input. Omit to inherit the SDK's
+                              floor (no line). Must be at or above that floor — apps may
+                              raise their bar, not duck under it — and a value that is
+                              stays out of C002 entirely, on the scaffold and across
+                              --resync alike. (Whether the resulting floor is high enough
+                              to ever fail a run is T014's question, not C002's.)
+  --use-ghcr-base true|false  resolve the SDK base image from GHCR instead of Harbor,
+                              rendered into build-and-publish.yaml as the reusable
+                              workflow's use_ghcr_base input. Apps self-select this while
+                              the SDK-side default is still false; C002 does not read an
+                              opt-in as drift. Omit to auto-detect from an existing
+                              build-and-publish.yaml, so a bare re-run preserves the
+                              opt-in instead of reverting it to Harbor — that file is
+                              always-overwrite. Pass false explicitly to REMOVE the
+                              opt-in.
   --enforce true|false        0-touch shorthand: sets BOTH granular levers below at
                               once. Omit to auto-detect from an existing
                               conformance.yaml (else hard-gate). Pass explicitly (either
@@ -219,7 +299,8 @@ options:
                               the existing file — NOT the flags or autodetection — so
                               it cannot silently flip a repo that turned e2e off, that
                               deliberately left its services-script line commented out,
-                              or that runs Renovate in soft mode. To CHANGE a value,
+                              that raised its own unit-coverage floor, or that runs
+                              Renovate in soft mode. To CHANGE a value,
                               use its own flag (--enforce/--renovate-automerge) or edit
                               the file; those win over --resync for the file they own.
                               Anything hand-edited outside the recognised values is

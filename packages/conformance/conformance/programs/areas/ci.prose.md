@@ -92,8 +92,9 @@ it isn't safe to assume a C002 finding already triggered it:
    `bootstrap` auto-detects every per-repo customization itself — `--app-name`
    and `--package-name` from `atlan.yaml`/an existing
    `docstring-coverage.yaml` (else the repo directory name/`"app"`),
-   `--unit-tests-workflow` from an existing `build-and-publish.yaml` (else
-   `"tests.yaml"`), `--services-script` from an existing
+   `--unit-tests-workflow` and `--use-ghcr-base` from an existing
+   `build-and-publish.yaml` (else `"tests.yaml"` and the SDK default),
+   `--services-script` from an existing
    `.github/test/setup-services.sh`, and `--enforce` from an existing
    `conformance.yaml`'s `exit-zero` mode (else hard-gate) — which the two
    granular 0-touch levers (`--conformance-blocking`, `--renovate-automerge`)
@@ -149,9 +150,14 @@ it isn't safe to assume a C002 finding already triggered it:
 
   That re-renders both files from their canonicals while reusing the values
   read back off each existing file — `tests.yaml`'s recognized param set
-  (app-name, app-image-name, enable-e2e, services-script) and `renovate.json`'s
-  declared auto-merge mode — so the structural catch-up lands without resetting
-  any of them. Strictly less destructive than the delete-and-regenerate this
+  (app-name, app-image-name, enable-e2e, services-script, and a
+  unit-coverage-fail-under at or above the SDK's own floor) and
+  `renovate.json`'s declared auto-merge mode — so the structural catch-up lands
+  without resetting any of them. One exception is worth quoting in the residue
+  entry when it applies, because `--resync` resolves it by *deleting* the app's
+  line: a `unit-coverage-fail-under` BELOW the SDK floor is not preserved (an
+  app may raise its coverage bar, not duck under it), and the C002 message says
+  so and names the value whenever that is the case. Strictly less destructive than the delete-and-regenerate this
   used to advise for `tests.yaml`, and it does NOT require choosing an
   enforcement mode for `renovate.json` the way `--enforce` /
   `--renovate-automerge` do: those two CHANGE the mode (a repo-policy decision
