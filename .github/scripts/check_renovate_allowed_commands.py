@@ -5,10 +5,11 @@ authorized by the self-hosted runner's allowedCommands allowlist.
 renovate-config/default.json (repo-settable) declares the commands;
 renovate-config/self-hosted.js (admin-only) declares the regexes that authorize
 them. Renovate silently skips a command the allowlist does not match — it logs a
-line and carries on, producing a PR that looks normal. For the uv release-age
-bound that means an unbounded uv.lock auto-merging with no visible failure, i.e.
-the fleet's cooldown lapsing invisibly. The two files sit in different languages
-and are edited independently, so the pairing gets a test rather than a comment.
+line and carries on, producing a PR that looks normal, so the drift is invisible
+at exactly the moment it matters (FND-367: a command dropped this way refreshed a
+lock with none of the constraints it was supposed to carry, and nothing went red).
+The two files sit in different languages and are edited independently, so the
+pairing gets a test rather than a comment.
 
 Assumes the allowlist entries are regexes valid in both JS and Python (the
 current ones are plain anchored literals with alternation). Keep them that way.

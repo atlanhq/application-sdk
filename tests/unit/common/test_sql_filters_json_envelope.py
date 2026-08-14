@@ -76,7 +76,13 @@ class TestUnparseableEnvelopeIsMalformedNotUnsafe:
         assert _verdict(lambda: prepare_filters(value, "{}")) == MALFORMED
 
     def test_message_names_the_parse_position(self) -> None:
-        with pytest.raises(ValueError, match=r"Malformed JSON.*line 1 column 6"):
+        # The behaviour under test is that the message CARRIES a position, so the
+        # operator reading it can find the offending character. The exact column
+        # is the decoder's to choose, not ours: orjson 3.12.0 moved this one from
+        # 6 to 5 (it now points at the backslash rather than the character after
+        # it), which reddened all twelve unit-test jobs on a lockfile refresh.
+        # Pinning the number tested orjson, not us.
+        with pytest.raises(ValueError, match=r"Malformed JSON.*line 1 column \d+"):
             validate_filter_no_sql_injection(PRODUCTION_INCLUDE_FILTER)
 
 
