@@ -163,11 +163,17 @@ on:
           discover_e2e_suites.py's DEFAULT_CLOUDS — deliberately NOT restated
           here, so adding a fourth CSP is one edit rather than one per repo, and
           so an app forwarding an untouched dispatch input doesn't opt out of
-          the matrix by accident.
+          the matrix by accident — intersected with the clouds the tenant secret
+          actually carries (FND-354). Removing a cloud's entry from
+          E2E_TENANT_MATRIX_JSON is therefore the fleet-wide way to take it out
+          of the rotation while its tenant is down: one secret edit, no PR,
+          effective next run, and warned about in the log of every run it
+          narrows. A cloud named HERE is never narrowed away — it reaches the
+          per-leg resolver and fails there, because naming it asserts it should
+          run.
 
           Narrow it to re-run one cloud ("aws"), or pass "none" to collapse back
-          to the single legacy tenant — the escape hatch when a tenant is down
-          and the fleet should not be blocked on it. Forced to "none" when
+          to the single legacy tenant. Forced to "none" when
           E2E_TENANT_MATRIX_JSON is not shared with the calling repo, which is
           what keeps un-onboarded repos on their existing behaviour.
       timeout-minutes:
@@ -935,11 +941,52 @@ jobs:
         with:
           persist-credentials: false
 
+      # ── Which clouds the secret actually carries (FND-354) ─────────────────
+      # Sparse-checked-out rather than folded into the discover action, and
+      # `ref: job.workflow_sha` rather than @main, for the reason the source-
+      # credential export gives at length: an action pinned @main cannot see a
+      # change until it lands, whereas a script pulled at the workflow's own SHA
+      # is testable on the branch that changes it. `repository:` stays hardcoded
+      # so the executed payload's provenance is pinned; application-sdk is
+      # public, so the caller's default token reads it when ORG_PAT_GITHUB is
+      # not shared.
+      - name: Fetch SDK CI scripts (tenant-matrix cloud keys)
+        if: env.HAS_TENANT_MATRIX != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          token: ${{ secrets.ORG_PAT_GITHUB || github.token }}
+          persist-credentials: false
+
+      # The KEY LIST, never the blob: the credentials stay with the per-leg
+      # resolver, which is the only thing that needs them. Skipped without the
+      # secret, and a skipped step's output is "" — which discovery reads as
+      # "not known" and narrows nothing, the same as before FND-354.
+      - name: Read the tenant matrix's cloud keys
+        id: matrix-clouds
+        if: env.HAS_TENANT_MATRIX != ''
+        env:
+          E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_matrix_clouds.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
+
       - name: Discover suites
         id: discover
         uses: atlanhq/application-sdk/.github/actions/discover-e2e-suites@main
         with:
           test-dir: ${{ inputs.e2e-test-path }}
+          # Narrows the DEFAULTED cloud list to what the secret carries, so
+          # dropping a cloud from E2E_TENANT_MATRIX_JSON takes it out of the
+          # rotation fleet-wide instead of reding one leg in every repo that
+          # runs e2e. A cloud named explicitly in e2e-clouds is NOT narrowed —
+          # it reaches the resolver and still fails there. FND-354.
+          available-clouds: ${{ steps.matrix-clouds.outputs.clouds }}
           # The cloud dimension is only meaningful when the tenant map exists;
           # without it every leg would resolve the same fallback tenant, so N
           # identical runs would masquerade as N clouds of coverage. Collapsing
@@ -969,6 +1016,11 @@ jobs:
         with:
           clouds-only: "true"
           clouds: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
+          # Same narrowing as the full matrix above, from the same step output:
+          # prepare-tenant must install onto exactly the clouds the legs then
+          # run against, and a cloud it prepared but no leg used (or vice versa)
+          # is the drift the duplicated `clouds` expression already guards.
+          available-clouds: ${{ steps.matrix-clouds.outputs.clouds }}
 
       # A repo that has not been granted the tenant-matrix secret silently gets
       # one cloud's worth of coverage from a workflow that asked for three.
