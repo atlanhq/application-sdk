@@ -117,6 +117,61 @@ def test_history_merge_is_append_only_and_deduplicated(tmp_path):
     assert {json.loads(ln)["date"] for ln in lines} == {"2026-08-13", "2026-08-14"}
 
 
+def test_a_changed_entry_replaces_that_day_rather_than_doubling_it(tmp_path):
+    """The date is the key, not the line.
+
+    Deduplicating on whole-line identity only collapses a byte-identical rerun.
+    A repo that gets gated at noon, or an entry whose shape changed between
+    runs, would keep BOTH lines for the day — two contradicting points on the
+    same x, with no rule saying which wins. Concretely: the first published
+    history carried a `gated-unbypassable` status that the schema no longer
+    has, and it must not survive alongside the corrected line for that date.
+    """
+    key = f"{BUCKET}/{PREFIX}/history/slug.jsonl"
+    stale = json.dumps(
+        {"date": "2026-08-14", "status": "gated-unbypassable", "unbypassable": True}
+    )
+    s3 = FakeS3({key: stale + "\n"})
+    local = tmp_path / "history_slug.jsonl"
+    local.write_text(json.dumps({"date": "2026-08-14", "status": "gated"}) + "\n")
+
+    merge_history(local, PREFIX, "slug", tmp_path, run=s3)
+
+    lines = [ln for ln in s3.objects[key].splitlines() if ln.strip()]
+    assert len(lines) == 1
+    assert json.loads(lines[0])["status"] == "gated"  # the fresh line wins
+
+
+def test_unparseable_history_lines_are_carried_not_dropped(tmp_path):
+    """Deleting data we cannot interpret is worse than carrying it."""
+    key = f"{BUCKET}/{PREFIX}/history/slug.jsonl"
+    s3 = FakeS3({key: "not json at all\n" + json.dumps({"date": "2026-08-13"}) + "\n"})
+    local = tmp_path / "history_slug.jsonl"
+    local.write_text(json.dumps({"date": "2026-08-14"}) + "\n")
+
+    merge_history(local, PREFIX, "slug", tmp_path, run=s3)
+
+    lines = [ln for ln in s3.objects[key].splitlines() if ln.strip()]
+    assert lines[0] == "not json at all"
+    assert [json.loads(ln)["date"] for ln in lines[1:]] == ["2026-08-13", "2026-08-14"]
+
+
+def test_history_stays_ordered_by_date(tmp_path):
+    """Entries arrive newest-last but must be stored oldest-first, so a consumer
+    can read the series without sorting it."""
+    key = f"{BUCKET}/{PREFIX}/history/slug.jsonl"
+    s3 = FakeS3({key: json.dumps({"date": "2026-08-20"}) + "\n"})
+    local = tmp_path / "history_slug.jsonl"
+    local.write_text(json.dumps({"date": "2026-08-14"}) + "\n")
+
+    merge_history(local, PREFIX, "slug", tmp_path, run=s3)
+
+    dates = [
+        json.loads(ln)["date"] for ln in s3.objects[key].splitlines() if ln.strip()
+    ]
+    assert dates == ["2026-08-14", "2026-08-20"]
+
+
 def test_single_repo_mode_never_touches_the_fleet_aggregate(tmp_path):
     """A one-repo scan has no fleet view; publishing one would read as the
     fleet collapsing to a single repo."""
