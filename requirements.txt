@@ -32,10 +32,10 @@ azure-core==1.41.0
     # via azure-identity
 azure-identity==1.25.3
     # via atlan-application-sdk
-boto3==1.43.71
+boto3==1.43.72
     # via atlan-application-sdk
-boto3-stubs==1.43.71
-botocore==1.43.71
+boto3-stubs==1.43.72
+botocore==1.43.72
     # via
     #   boto3
     #   s3transfer
@@ -127,7 +127,7 @@ httpx-retries==0.6.0
     # via
     #   atlan-application-sdk
     #   pyatlan
-hypothesis==6.165.7
+hypothesis==6.165.8
 identify==2.6.19
     # via pre-commit
 idna==3.18
@@ -240,7 +240,7 @@ opentelemetry-util-http==0.62b1
     # via
     #   opentelemetry-instrumentation-asgi
     #   opentelemetry-instrumentation-fastapi
-orjson==3.11.9
+orjson==3.12.0
     # via atlan-application-sdk
 packaging==26.3
     # via
