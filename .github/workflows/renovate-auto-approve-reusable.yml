@@ -39,7 +39,7 @@
 #   approvals posted here. Human comments do not auto-dismiss this approval;
 #   freshness is guaranteed by the ruleset's dismiss_stale_reviews_on_push.
 #
-# Approval conditions (ALL must hold — see step comments in the bash below):
+# Approval conditions (ALL must hold):
 #   1. PR author is a Renovate bot: atlan-app-fleet[bot] (self-hosted fleet
 #      runner) or renovate[bot] (Mend — still used by application-sdk itself)
 #   2. PR is open and not a draft
@@ -48,9 +48,20 @@
 #      pyproject.toml, the Pkl toolkit pin + lock (contract/PklProject[.deps.json]),
 #      or the regenerated contract artifacts (app/generated/**, atlan.yaml, app.yaml)
 #   5. All ruleset-required checks are green (gh pr checks --required exits 0)
-#   6. Renovate's own renovate/artifacts status is green — see the step comment;
-#      this is what stops a failed post-upgrade task from auto-merging
+#   6. Renovate's own renovate/artifacts status is green — this is what stops a
+#      failed post-upgrade task from auto-merging
 #   7. atlan-ci has not already posted an APPROVED review with this signature
+#
+# Where that logic lives:
+#   .github/scripts/renovate_approval_conditions.py, unit-tested by
+#   .github/scripts/tests/test_renovate_approval_conditions.py — per
+#   docs/standards/ci.md, branching logic does not belong in a `run:` block
+#   because it cannot be regression-tested there. That matters more here than
+#   the line count suggests: this is the code-owner approval for every Renovate
+#   PR in the fleet, consumers pin it at @main, and a wrong condition does not
+#   fail loudly — it approves something it should not. The full rationale for
+#   each condition, and for the fail-closed defaults, is in that script's
+#   docstrings (FND-372).
 #
 # Trigger rationale lives in the caller — each consumer lists the workflow names
 # that produce its required status checks, which differ per repo.
@@ -88,10 +99,11 @@ on:
           Optional extra ERE alternation of repo-specific dependency file paths
           to treat as auto-approvable, appended to the built-in allowlist (which
           already covers .github/ and lock/manifest/contract files). Each branch
-          is whole-line matched (grep -vxE), so anchor to full workspace-relative
-          paths, e.g. 'packages/conformance/.../templates/.+\.ya?ml'. This is how
-          a repo declares its OWN dep-managed source paths without hard-coding any
-          app-specific path into this shared workflow.
+          is whole-path matched, so anchor to full workspace-relative paths,
+          e.g. 'packages/conformance/.../templates/.+\.ya?ml'. This is how a repo
+          declares its OWN dep-managed source paths without hard-coding any
+          app-specific path into this shared workflow. A pattern that does not
+          compile fails the step rather than widening the allowlist.
         required: false
         default: ""
         type: string
@@ -128,6 +140,33 @@ jobs:
       group: renovate-auto-approve-${{ inputs.head_sha || inputs.pr_number }}
       cancel-in-progress: false
     steps:
+      # A `uses:` reusable workflow does NOT bring its own repo's files into the
+      # caller's checkout, so the consumer repo has no copy of the gate script.
+      # Same .sdk-scripts pattern as renovate-pkl-sync.yaml / release-version-bump.yaml
+      # (docs/standards/ci.md, "Reusing scripts from a reusable workflow").
+      # Nothing else is checked out: the gate reads the PR entirely through the
+      # API and never touches the consumer's working tree.
+      #
+      # `ref: main` is a literal on purpose. Do NOT replace it with
+      # `${{ github.job_workflow_sha }}` — that is documented as the commit of
+      # the reusable workflow file the caller resolved, which looks like exactly
+      # the right way to keep this script in step with this YAML, but it renders
+      # EMPTY (it is an OIDC claim, not a usable expression value). checkout then
+      # treats `ref` as unsupplied and takes the default branch, so the step goes
+      # green having fetched a different commit's script. See docs/standards/ci.md.
+      #
+      # Every caller pins this reusable at @main, so `main` is the matching ref.
+      # To pilot a change to the gate from a consumer repo, temporarily point both
+      # this ref and the caller's `uses:` at the branch, and revert before merge.
+      - name: Fetch approval-gate script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: .sdk-scripts
+
       - name: Auto-approve if Renovate dep-only PR and all required checks are green
         env:
           # secrets.org_pat: old explicit-passthrough callers. secrets.ORG_PAT_GITHUB:
@@ -138,182 +177,7 @@ jobs:
           RUN_SHA: ${{ inputs.head_sha }}
           DISPATCH_PR: ${{ inputs.pr_number }}
           EXTRA_DEP_PATTERN: ${{ inputs.extra_dep_file_pattern }}
-        run: |
-          set -euo pipefail
-
-          # ── 1. Resolve candidate PR number(s) and the SHA to evaluate ────────
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            EVAL_SHA=$(gh api "repos/${REPO}/pulls/${DISPATCH_PR}" --jq '.head.sha')
-            PR_NUMBERS="$DISPATCH_PR"
-          else
-            EVAL_SHA="$RUN_SHA"
-            # A single commit can be the HEAD of multiple PRs in rare cases;
-            # handle them all.
-            #
-            # Gate the assignment on exit code — a non-2xx gh api response
-            # writes the JSON error body to stdout, which would otherwise
-            # populate PR_NUMBERS with garbage tokens.
-            if ! PR_NUMBERS=$(gh api "repos/${REPO}/commits/${EVAL_SHA}/pulls" \
-                --jq '.[] | select(.state == "open") | .number' 2>/dev/null); then
-              PR_NUMBERS=""
-            fi
-          fi
-
-          if [ -z "$PR_NUMBERS" ]; then
-            echo "No open PRs found for SHA ${EVAL_SHA} — nothing to do."
-            exit 0
-          fi
-
-          # ── 2. Evaluate each candidate PR ────────────────────────────────────
-          for PR_NUM in $PR_NUMBERS; do
-            echo "--- Evaluating PR #${PR_NUM} ---"
-
-            # Fetch all relevant PR metadata in one API call.
-            PR_META=$(gh api "repos/${REPO}/pulls/${PR_NUM}" \
-              --jq '{author: .user.login, state: .state, draft: .draft, head_sha: .head.sha}')
-            AUTHOR=$(printf '%s' "$PR_META"   | jq -r .author)
-            STATE=$(printf '%s'  "$PR_META"   | jq -r .state)
-            DRAFT=$(printf '%s'  "$PR_META"   | jq -r .draft)
-            HEAD_SHA=$(printf '%s' "$PR_META" | jq -r .head_sha)
-
-            # a. Author must be a Renovate bot. Keep BOTH: atlan-app-fleet[bot]
-            #    is the self-hosted fleet runner; renovate[bot] is the Mend-hosted
-            #    app, which application-sdk itself still uses for its own
-            #    workflow-action updates. Do not drop renovate[bot] while
-            #    application-sdk remains on Mend.
-            if [ "$AUTHOR" != "atlan-app-fleet[bot]" ] && [ "$AUTHOR" != "renovate[bot]" ]; then
-              echo "PR #${PR_NUM}: author is '${AUTHOR}', not a Renovate bot — skipping."
-              continue
-            fi
-
-            # b. PR must be open and not a draft.
-            if [ "$STATE" != "open" ] || [ "$DRAFT" = "true" ]; then
-              echo "PR #${PR_NUM}: state='${STATE}' draft='${DRAFT}' — skipping."
-              continue
-            fi
-
-            # c. Race guard: bail if HEAD moved since this event fired.
-            if [ "$HEAD_SHA" != "$EVAL_SHA" ]; then
-              echo "PR #${PR_NUM}: HEAD moved (${EVAL_SHA} → ${HEAD_SHA}). Skipping — a later run will re-evaluate."
-              continue
-            fi
-
-            # d. All changed files must be dependency-related.
-            #    Allowed: anything under .github/, or lock/manifest files at
-            #    any depth: uv.lock, package-lock.json, requirements.txt,
-            #    pyproject.toml — plus everything a Renovate app-contract-toolkit
-            #    bump touches: the Pkl pin + lock (contract/PklProject,
-            #    contract/PklProject.deps.json) and the artifacts that
-            #    renovate-pkl-sync regenerates from them (app/generated/**,
-            #    atlan.yaml, app.yaml). The generated artifacts are a
-            #    deterministic function of the contract and the (already
-            #    auto-merged) toolkit version, so they ride the same gate.
-            #    The (.*/)? prefix lets the lock/manifest and contract/PklProject
-            #    patterns match workspace-relative paths too (e.g.
-            #    packages/conformance/uv.lock, a monorepo apps/*/contract/...).
-            #    The generated artifacts are matched root-only (no prefix):
-            #    renovate-pkl-sync only ever writes them at the repo root, so an
-            #    unrelated app.yaml/atlan.yaml elsewhere in a consumer tree must
-            #    NOT ride this gate.
-            FILENAMES=$(gh api "repos/${REPO}/pulls/${PR_NUM}/files" \
-              --paginate --jq '.[].filename')
-            if [ -z "$FILENAMES" ]; then
-              echo "PR #${PR_NUM}: no changed files found — skipping."
-              continue
-            fi
-
-            #    A caller may extend the allowlist with its own dep-managed
-            #    source paths via extra_dep_file_pattern (kept out of this shared
-            #    workflow so no app-specific path is hard-coded here).
-            DEP_FILE_RE='(.*/)?uv\.lock|(.*/)?package-lock\.json|(.*/)?requirements\.txt|(.*/)?pyproject\.toml|(.*/)?contract/PklProject|(.*/)?contract/PklProject\.deps\.json|app/generated/.*|atlan\.yaml|app\.yaml'
-            if [ -n "${EXTRA_DEP_PATTERN:-}" ]; then
-              DEP_FILE_RE="${DEP_FILE_RE}|${EXTRA_DEP_PATTERN}"
-            fi
-            NON_DEP_FILES=$(echo "$FILENAMES" \
-              | grep -v '^\.github/' \
-              | grep -vxE "$DEP_FILE_RE" \
-              || true)
-            if [ -n "$NON_DEP_FILES" ]; then
-              echo "PR #${PR_NUM}: contains non-dependency files:"
-              echo "$NON_DEP_FILES" | sed 's/^/  /'
-              echo "Skipping."
-              continue
-            fi
-            echo "PR #${PR_NUM}: all changed files are dependency-related."
-
-            # e. All ruleset-required checks must be green.
-            #    `gh pr checks --required` exits 0 iff every required check is
-            #    passing or skipping. Non-required failures are correctly excluded.
-            #    Pending required checks produce a non-zero exit; a later
-            #    workflow_run completion will re-fire.
-            echo "PR #${PR_NUM}: checking required CI status..."
-            if ! gh pr checks "${PR_NUM}" --repo "${REPO}" --required; then
-              echo "PR #${PR_NUM}: required checks not yet all green — skipping."
-              continue
-            fi
-            echo "PR #${PR_NUM}: all required checks are green."
-
-            # f. Renovate's artifact status must be green.
-            #    A failed postUpgradeTasks command does NOT stop Renovate: it
-            #    commits whatever its own artifact update produced, raises the PR,
-            #    and still enables platform automerge (getPlatformPrOptions never
-            #    consults artifactErrors — only Renovate's own *branch* automerge
-            #    is gated on them, and this fleet uses automergeType=pr). So the
-            #    PR merges on the strength of the checks it did pass, with nothing
-            #    red to show for the part that did not happen: a pkl-sync failure
-            #    lands a toolkit bump whose generated contract artifacts do not
-            #    match it, and a lock refresh that could not resolve lands a lock
-            #    inconsistent with the change it claims to make. Worse, a command
-            #    the runner's allowedCommands allowlist does not match is skipped
-            #    with a log line and nothing else — "did not run" and "ran clean"
-            #    are indistinguishable without this status. So this gate is the
-            #    enforcement point.
-            #
-            #    The preset sets statusCheckWhen.artifactError=always so the
-            #    context is published green on healthy branches too — that is what
-            #    lets "missing" be read as not-green rather than as "fine". Fail
-            #    closed: anything other than success withholds approval, including
-            #    an API error. Renovate only sets this status on runs where it
-            #    commits to the branch, so PRs already open when this shipped
-            #    acquire it on their next rebase; until then they are not
-            #    auto-approved, and the caller's workflow_dispatch can re-evaluate
-            #    one on demand.
-            ARTIFACT_STATE=$(gh api "repos/${REPO}/commits/${EVAL_SHA}/status" \
-              --jq '[.statuses[] | select(.context=="renovate/artifacts") | .state] | first // "missing"' \
-              2>/dev/null || echo "missing")
-            if [ "$ARTIFACT_STATE" != "success" ]; then
-              echo "PR #${PR_NUM}: renovate/artifacts is '${ARTIFACT_STATE}', not 'success' — skipping."
-              continue
-            fi
-            echo "PR #${PR_NUM}: renovate/artifacts is green."
-
-            # g. Idempotency: skip if atlan-ci already has an APPROVED review
-            #    bearing our signature. Push-dismissed reviews have state
-            #    DISMISSED (not APPROVED) so they won't match here — a fresh
-            #    approval is correctly posted on the next green run.
-            EXISTING=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" --paginate \
-              --jq '[.[] | select(.user.login == "atlan-ci"
-                                   and .state == "APPROVED"
-                                   and ((.body // "") | startswith("**Renovate auto-approval:**")))] | length')
-            if [ "$EXISTING" != "0" ]; then
-              echo "PR #${PR_NUM}: atlan-ci has already approved with the Renovate signature — skipping."
-              continue
-            fi
-
-            # ── 3. Post the atlan-ci code-owner approval ──────────────────────
-            # NOTE: the leading line is a STABLE SIGNATURE used by the idempotency
-            # guard above. Keep it in sync with that check if it ever changes.
-            APPROVE_BODY=$(printf '%s\n' \
-              "**Renovate auto-approval:** all required CI checks passed." \
-              "" \
-              "This is an automated code-owner approval posted by \`atlan-ci\` for a" \
-              "dependency-only Renovate PR. It is automatically dismissed on any new" \
-              "push (\`dismiss_stale_reviews_on_push\`) and re-posted once the new" \
-              "HEAD's required checks are green." \
-              "")
-            gh pr review "${PR_NUM}" --repo "${REPO}" --approve --body "$APPROVE_BODY"
-            echo "✅ Approved PR #${PR_NUM} as atlan-ci (Renovate auto-approval)."
-          done
+        run: python3 .sdk-scripts/.github/scripts/renovate_approval_conditions.py
 
       - name: Mint fleet App token for dashboard dispatch
         if: always()

@@ -191,6 +191,39 @@ sparse-checkout it into a side path and invoke from there — the
 The driver runs from the consumer's working directory, so it acts on the
 consumer's files; `.sdk-scripts` only holds SDK code and must never be staged.
 
+### Do not try to derive the ref from `github.job_workflow_sha`
+
+`ref: main` above is deliberate and is the default answer. Every consumer pins
+these reusables at `@main`, and several checkouts of this repo pin `main` for a
+stronger reason — they fetch *content* that must reflect `main` whatever ref the
+caller is on (`trivy-container.yaml`'s base allowlist,
+`vuln-reconcile-on-release.yml`'s scan baseline,
+`contract-toolkit-publish.yml`'s published content). Those carry their reasoning
+inline; leave them as they are.
+
+The tempting "improvement" is to derive the ref so the script always matches the
+workflow that resolved it. `${{ github.job_workflow_sha }}` is documented in the
+`github` context as exactly that — the commit of the reusable workflow file the
+caller resolved. **It renders empty.** It is an OIDC token claim, not a usable
+expression value.
+
+The failure is silent and the wrong way round: `actions/checkout` treats an
+empty `ref` as *not supplied* and takes the default branch, so the step goes
+**green having fetched a different commit's script than the workflow the caller
+pinned** — the wrong version of every code path, with nothing red to show for
+it. FND-372 hit this; it only surfaced because the script did not exist on
+`main` yet, so the *next* step died on a missing file.
+
+Generalising: never let a `with:` value that must not be blank come from an
+expression that can evaluate to empty. Prefer a shape where "unset" cannot be
+expressed over a guard that checks for it after the fact — a declared input with
+a default, or a literal.
+
+**When verifying any change to a workflow like this, read the checkout step's
+logged `ref:` rather than concluding from a green tick.** A step that fetched the
+wrong ref still passes; it is the next step that fails, and only if what it
+wanted happens to be absent from the fallback.
+
 ## `concurrency:` is not a lock, and not a queue
 
 **Rule:** never use a `concurrency:` group to protect a shared external resource
