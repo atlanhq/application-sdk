@@ -1811,7 +1811,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
         with:
-          version: "0.12.3"
+          version: "0.12.4"
           enable-cache: true
 
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
@@ -2143,7 +2143,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
         with:
-          version: "0.12.3"
+          version: "0.12.4"
           enable-cache: true
 
       # Both downloads are best-effort: unit always uploads its artifact, but
