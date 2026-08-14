@@ -52,12 +52,18 @@ name: tests-reusable
 #   A caller-supplied `test-paths` scopes the INTEGRATION job only; the unit job
 #   always runs tests/unit/.
 #
-# GitHub check name hierarchy (caller → tests-reusable):
+# GitHub check name hierarchy as the UI displays it (caller → tests-reusable):
 #   Tests / tests / Unit         (every event)
 #   Tests / tests / Integration  (merge queue if the base branch has one, else
 #                                 on the PR; skipped when there is no suite)
 #   Tests / tests / End-to-end   (label / dispatch)
 #   Tests / tests / Tests Gate   (aggregator — the required check)
+#
+# Branch protection does NOT use those display strings. A ruleset's
+# required_status_checks `context` is the check-run name, which omits the
+# workflow name: require `tests / Tests Gate` — the caller's job id, then this
+# job's name. (Verified against atlan-mysql-app's live `main` ruleset, which
+# also carries `suite / Conformance Gate`; an inline job is a single segment.)
 #
 # Nested reusable depth: caller → tests-reusable = 2 (GitHub max is 4).
 # secrets: inherit chains from the caller; the inlined e2e job reads secrets.*.

@@ -93,7 +93,9 @@ it isn't safe to assume a C002 finding already triggered it:
    `--unit-tests-workflow` from an existing `build-and-publish.yaml` (else
    `"tests.yaml"`), `--services-script` from an existing
    `.github/test/setup-services.sh`, and `--enforce` from an existing
-   `conformance.yaml`'s `exit-zero` mode (else hard-gate). No extraction step
+   `conformance.yaml`'s `exit-zero` mode (else hard-gate) — which the two
+   granular 0-touch levers (`--conformance-blocking`, `--renovate-automerge`)
+   then inherit, since neither was named on this invocation. No extraction step
    is needed here; re-running with no flags never resets a customized value
    to a default. `--json` doesn't change any of that — it only appends one
    trailing JSON line to stdout, after the normal human-readable output.
@@ -142,8 +144,9 @@ it isn't safe to assume a C002 finding already triggered it:
   whether the drift is stale structure (safe to delete + regenerate) or an
   intentional customization worth preserving as-is.
 - **`renovate.json` drift** (file exists but content diverged) — fixing it
-  requires choosing the intended enforcement mode (`--enforce true|false`),
-  a repo-policy decision the model must not make unilaterally.
+  requires choosing the intended enforcement mode (`--enforce true|false`, or
+  `--renovate-automerge true|false` to move this file's lever alone), a
+  repo-policy decision the model must not make unilaterally.
   `classification = "judgment"`.
 
 ---

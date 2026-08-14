@@ -16,6 +16,14 @@ name: Tests
 #                 Triggered by the 'e2e' PR label or workflow_dispatch.
 #   Tests Gate  — aggregator gate; the single required check for branch
 #                 protection.  tests must pass; e2e can be skipped.
+#                 Make it required as soon as this file is merged — it does not
+#                 wait on a coverage target or on every tier being wired up.
+#                 The exact context string to require is:
+#                   tests / Tests Gate
+#                 i.e. the `tests:` job below (which calls the reusable), then
+#                 the gate's own job name. The workflow name is NOT part of it,
+#                 even though the UI's checks list displays it. Rename the
+#                 `tests:` job and the context changes with it.
 
 on:
   push:
