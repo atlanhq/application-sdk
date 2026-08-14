@@ -146,11 +146,21 @@ jobs:
       # (docs/standards/ci.md, "Reusing scripts from a reusable workflow").
       # Nothing else is checked out: the gate reads the PR entirely through the
       # API and never touches the consumer's working tree.
+      #
+      # ref is job_workflow_sha — the commit of THIS reusable workflow file, not
+      # a hardcoded `main`. The two must move together: the conditions live in
+      # the script and the wiring lives in this YAML, so fetching the script from
+      # a different commit than the workflow the caller resolved is a skew we do
+      # not want to be able to express. It also makes the ref the caller pins the
+      # single switch — a consumer can point its `uses:` at a branch to pilot a
+      # change to the gate end to end, which a hardcoded ref makes impossible.
+      # If the expression were ever empty, checkout falls back to the default
+      # branch, i.e. exactly the old `main` behaviour.
       - name: Fetch approval-gate script
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: main
+          ref: ${{ github.job_workflow_sha }}
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: .sdk-scripts
