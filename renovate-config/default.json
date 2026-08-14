@@ -2,7 +2,7 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
     "Atlan fleet upgrade policy for atlan-*-app repos. Extend via: {\"extends\": [\"github>atlanhq/application-sdk//renovate-config/default.json\"]}",
-    "statusCheckWhen.artifactError is flipped from Renovate's default of `failed` to `always`, so the renovate/artifacts context is published on every branch — green when the artifacts updated cleanly, red when they did not. The default publishes it ONLY on failure, which leaves a consumer unable to distinguish 'no artifact errors' from 'Renovate never evaluated this branch', and therefore unable to fail closed. renovate-auto-approve-reusable.yml depends on that distinction: it withholds the atlan-ci code-owner approval unless the context is green, which is what stops a failed release-age-bounded lock (see lockFileMaintenance below) from auto-merging un-bounded. Renovate sets this status only on runs where it actually commits to the branch, so every branch it creates or updates from now on carries it; Renovate PRs already open when this shipped acquire it on their next rebase, and until then they are simply not auto-approved.",
+    "statusCheckWhen.artifactError is flipped from Renovate's default of `failed` to `always`, so the renovate/artifacts context is published on every branch — green when the artifacts updated cleanly, red when they did not. The default publishes it ONLY on failure, which leaves a consumer unable to distinguish 'no artifact errors' from 'Renovate never evaluated this branch', and therefore unable to fail closed. renovate-auto-approve-reusable.yml depends on that distinction: it withholds the atlan-ci code-owner approval unless the context is green, which is what stops a branch whose artifacts failed to update — a lock refresh that could not resolve, a pkl-sync that did not run — from auto-merging on the strength of the checks it did pass. Renovate sets this status only on runs where it actually commits to the branch, so every branch it creates or updates from now on carries it; Renovate PRs already open when this shipped acquire it on their next rebase, and until then they are simply not auto-approved.",
     "rebaseWhen is pinned to behind-base-branch rather than left at the `auto` default. `auto` resolves to behind-base-branch ONLY when a rule requires the branch to be up to date (branch protection, or automerge on that branch). Fleet repos have neither: branch protection is absent org-wide (GET /branches/main/protection 404s), and soft-mode repos set automerge:false. So `auto` silently degraded to `conflicted` on every repo — the runner log reads `Converting rebaseWhen=auto to rebaseWhen=conflicted because no rule for behind-base-branch applies`. A non-conflicted stale branch was then reused as-is (`reuseExistingBranch: true`), recomputed to `No package files need updating`, produced no commit, and PR creation 422'd with 'no commits between main and branch' — leaving the branch in place to repeat the cycle forever. Open PRs hit the same wall from the other side: never rebased, so never re-resolved, frozen on whatever version was latest when they were opened. Set at the TOP LEVEL deliberately: the degradation is a repo-level decision affecting every branch (observed on renovate/app-contract-toolkit as well as renovate/lock-file-maintenance), so scoping it under lockFileMaintenance would leave the other managers broken. Cost is extra rebases/CI on branches that fall behind main; that is the price of having no branch protection to make `auto` work unaided."
   ],
   "extends": [
@@ -32,7 +32,7 @@
     "github-actions[bot]@users.noreply.github.com"
   ],
   "lockFileMaintenance": {
-    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green. This lane's rung on the prPriority ladder is set by a packageRule below (matchUpdateTypes: lockFileMaintenance), NOT here: prPriority is only honoured inside packageRules, so setting it in this object is silently ignored — it sat here until FND-359 and the lane ran at the default priority the whole time. COOLDOWN: Renovate cannot apply minimumReleaseAge to a lockFileMaintenance update — it delegates the entire resolution to the package manager, and unlike npm (which gets `--before=<date>`) uv is not passed a release-age bound (renovatebot/renovate#41652). That matters more here than anywhere else: measured across recent fleet PRs, this lane is the ONLY channel through which third-party and transitive versions actually move (every other lane is either first-party or edits pyproject.toml), so leaving it unbounded would make the cooldown packageRule below decorative. The bound is therefore applied where the resolution happens, via uv's own --exclude-newer P7D in postUpgradeTasks, with the two Atlan-distributed packages exempted through --exclude-newer-package=P0D so they still land the moment they ship. uv accepts relative durations, so the command is a static string with no ${VARS} — required both by the allowedCommands allowlist and because Renovate does not shell-expand post-upgrade commands. Renovate's own lock refresh runs first and this re-locks over it; `--upgrade` re-resolves from scratch, so the bound applies to the whole tree rather than only to what changed. Runs ONLY under self-hosted Renovate (allowedCommands is admin-only), so it is an inert no-op under any hosted app. Two residual notes: if the re-lock fails, Renovate raises the PR with an artifact-error note in the body but still enables platform automerge, so the control fails open with a warning rather than blocking the merge; and the single-package update-lockfile lanes (SDK, conformance) can still pull a fresh transitive as a side effect of the one package they bump — a small reviewable diff, unlike a full refresh.",
+    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green. This lane's rung on the prPriority ladder is set by a packageRule below (matchUpdateTypes: lockFileMaintenance), NOT here: prPriority is only honoured inside packageRules, so setting it in this object is silently ignored — it sat here until FND-359 and the lane ran at the default priority the whole time. NO RELEASE-AGE BOUND, deliberately (FND-367). A 7-day cooldown was tried here twice and removed: Renovate cannot age-check a lockFileMaintenance update at all (it delegates resolution to uv, and uv is not passed a bound — renovatebot/renovate#41652), so the bound had to be expressed in uv itself, and uv records its resolver settings into uv.lock under `[options]`, where every consumer that validates the lock compares them against its own. Passed as a postUpgradeTasks flag it produced locks that `uv sync --locked` rejected fleet-wide; declared in each repo's `[tool.uv]` it worked, but only at the cost of a per-repo stanza in every connector. The decisive argument was not mechanical though: this fleet fixes vulnerabilities by keeping dependencies continuously current, so a release-age bound on this lane is a delay on every security fix, in exchange for a supply-chain window that no plausible duration meaningfully closes. Note what this does NOT protect against, so nobody reintroduces the bound expecting it to: a release published minutes ago can land here, and if it changes behaviour our tests must catch it. When that happens the fix is the test, not a wait — the case that prompted all this was a test asserting a third-party parser's exact error column.",
     "enabled": true,
     "schedule": [
       "at any time"
@@ -42,20 +42,11 @@
     "platformAutomerge": true,
     "addLabels": [
       "update:lock-maintenance"
-    ],
-    "postUpgradeTasks": {
-      "commands": [
-        "uv lock --upgrade --exclude-newer P7D --exclude-newer-package atlan-application-sdk=P0D --exclude-newer-package atlan-application-sdk-conformance=P0D"
-      ],
-      "fileFilters": [
-        "uv.lock"
-      ],
-      "executionMode": "branch"
-    }
+    ]
   },
   "packageRules": [
     {
-      "description": "SDK: disable major bumps \u2014 these are opt-in manual migrations.",
+      "description": "SDK: disable major bumps — these are opt-in manual migrations.",
       "matchPackageNames": [
         "atlan-application-sdk"
       ],
@@ -65,7 +56,7 @@
       "enabled": false
     },
     {
-      "description": "SDK lane: give atlan-application-sdk bumps their own uv.lock-only PR (rangeStrategy update-lockfile, mirroring the conformance-package rule) instead of riding the batched lockFileMaintenance refresh \u2014 a stale lock-refresh branch that is not behind main never re-resolves, so it can sit pinned one SDK release behind indefinitely. prPriority 10: when prConcurrentLimit is contended, the SDK PR is created before every other dependency PR (Renovate cannot exempt a package from the limit; priority ordering + the bounded lanes below are the substitute). Deliberately NOT auto-merged \u2014 runtime SDK bumps stay human-reviewed, matching the python-dep policy. The sdk-package-update label is the fleet scanner's classification signal.",
+      "description": "SDK lane: give atlan-application-sdk bumps their own uv.lock-only PR (rangeStrategy update-lockfile, mirroring the conformance-package rule) instead of riding the batched lockFileMaintenance refresh — a stale lock-refresh branch that is not behind main never re-resolves, so it can sit pinned one SDK release behind indefinitely. prPriority 10: when prConcurrentLimit is contended, the SDK PR is created before every other dependency PR (Renovate cannot exempt a package from the limit; priority ordering + the bounded lanes below are the substitute). Deliberately NOT auto-merged — runtime SDK bumps stay human-reviewed, matching the python-dep policy. The sdk-package-update label is the fleet scanner's classification signal.",
       "matchPackageNames": [
         "atlan-application-sdk"
       ],
@@ -199,7 +190,7 @@
       ]
     },
     {
-      "description": "Trivy CLI version (version: in with: blocks): disable auto-updates. The scanner version is pinned deliberately \u2014 scan results drift when Trivy's vuln DB schema or detection logic changes, so bumps must be a conscious decision.",
+      "description": "Trivy CLI version (version: in with: blocks): disable auto-updates. The scanner version is pinned deliberately — scan results drift when Trivy's vuln DB schema or detection logic changes, so bumps must be a conscious decision.",
       "matchPackageNames": [
         "aquasecurity/trivy"
       ],
@@ -207,29 +198,6 @@
         "github-actions"
       ],
       "enabled": false
-    },
-    {
-      "description": "Supply-chain cooldown (org security baseline §5): a third-party version must have been public for 7 days before Renovate raises it. Fleet-wide here rather than per-repo — every consumer extends this preset, so no connector repo needs to restate it. Scoped to the datasources that carry third-party code AND expose a registry-supplied release timestamp: pypi (uv deps) and github-tags (GitHub Action pins, Pkl packages). The timestamp must come from the registry, not the publisher, or the check is not a control at all — which is also why docker is deliberately OUT: its timestamp is the publisher-controlled org.opencontainers.image.created annotation, and base-image rebuilds are mostly CVE patches, so holding them a week is a net security loss. matchUpdateTypes is an allowlist, not an oversight: major/minor/patch are the only update types Renovate documents as reliably carrying a release timestamp (see the support matrix in docs/usage/key-concepts/minimum-release-age.md). pin, bump, rollback, replacement, lockfileUpdate and lockFileMaintenance carry none at all, and digest/pinDigest carry one only for some datasources. Since Renovate 42 defaults minimumReleaseAgeBehaviour to timestamp-required — a missing timestamp counts as 'not yet aged' — matching those types here would not delay them by 7 days, it would suppress them permanently and silently. Upstream's own security:minimumReleaseAge* presets solve this with the inverse (blanket match plus minimumReleaseAge:null carve-outs per unsupported type); the allowlist is the same policy expressed positively, and it trades coverage for safety in the right direction — when Renovate adds timestamp support for another update type, that type is merely not yet cooled down (add it here) rather than silently frozen. The lane that matters most is not left uncovered as a result: lockFileMaintenance is where third-party and transitive versions actually move for this fleet, and it is bounded by uv's own --exclude-newer instead (see that lane's description above). Treat the two as one control — this rule catches out-of-range direct bumps that edit pyproject.toml, the uv bound catches everything that arrives through the lock. internalChecksFilter is pinned to strict (also the current default) so an in-cooldown version yields no branch and no PR — not an open PR parked on a pending renovate/stability-days check. Nothing is lost: Renovate re-evaluates on every run and raises the update once it ages past 7 days. Note that with dependencyDashboard:false there is no visible trace of a suppressed update while it waits. Vulnerability-fix PRs are exempt by Renovate's own vulnerabilityAlerts defaults (minimumReleaseAge:null), matching the baseline's rule that security fixes outrank the cooldown.",
-      "matchDatasources": [
-        "pypi",
-        "github-tags"
-      ],
-      "matchUpdateTypes": [
-        "major",
-        "minor",
-        "patch"
-      ],
-      "minimumReleaseAge": "7 days",
-      "internalChecksFilter": "strict"
-    },
-    {
-      "description": "Cooldown exemption for Atlan's own published artifacts — they must reach the fleet the moment they ship, and the cooldown's rationale (an unvetted third-party publisher, a package that can be yanked or turn out to be malicious) does not apply to what we publish ourselves. atlan-application-sdk and atlan-application-sdk-conformance are the two PyPI packages the fleet distributes: tag-and-publish.yaml / contract-toolkit-publish.yml dispatch the fleet runner immediately after a publish, so a 7-day hold would stall the fleet's own release loop — and for the conformance package it would hold back the checks that gate every app's CI. atlanhq/** covers the github-tags side: the app-contract-toolkit Pkl package (packageName atlanhq/application-sdk, via the customManager below) and the shared composite actions app repos consume from this repo. Must come after the cooldown rule — later packageRules win.",
-      "matchPackageNames": [
-        "atlan-application-sdk",
-        "atlan-application-sdk-conformance",
-        "atlanhq/**"
-      ],
-      "minimumReleaseAge": null
     },
     {
       "description": "Fleet-wide update-type labels — applied to every PR so the Renovate dashboard scanner can classify without title-parsing. Renovate auto-creates these labels per repo; no per-repo manual setup needed.",

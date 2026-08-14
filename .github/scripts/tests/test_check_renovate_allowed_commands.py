@@ -10,17 +10,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import check_renovate_allowed_commands as guard
 
-UV_BOUND = (
-    "uv lock --upgrade --exclude-newer P7D "
-    "--exclude-newer-package atlan-application-sdk=P0D "
-    "--exclude-newer-package atlan-application-sdk-conformance=P0D"
-)
+# A synthetic second command, not one the preset actually declares: these tests
+# exercise the pairing logic, and pinning them to whatever command happens to be
+# configured today would make them re-fail every time a lane is added or removed.
+# The real preset and admin config are checked against each other separately, in
+# TestUnauthorizedCommands.test_clean_against_the_real_preset_and_admin_config.
+SECOND_COMMAND = "fleet-tool --mode strict --window P7D --scope all"
 
 SELF_HOSTED_WITH_BOUND = (
     "module.exports = {\n"
     "  allowedCommands: [\n"
     '    "^renovate-pkl-sync --contract-dir contract --regenerate (true|false) --no-commit$",\n'
-    f'    "^{UV_BOUND}$",\n'
+    f'    "^{SECOND_COMMAND}$",\n'
     "  ],\n"
     "};\n"
 )
@@ -44,10 +45,12 @@ def preset(*commands: str, nest: str = "lockFileMaintenance") -> str:
 
 class TestPresetCommands:
     def test_finds_commands_under_lock_file_maintenance(self):
-        assert guard.preset_commands(preset(UV_BOUND)) == [UV_BOUND]
+        assert guard.preset_commands(preset(SECOND_COMMAND)) == [SECOND_COMMAND]
 
     def test_finds_commands_at_the_top_level(self):
-        assert guard.preset_commands(preset(UV_BOUND, nest="")) == [UV_BOUND]
+        assert guard.preset_commands(preset(SECOND_COMMAND, nest="")) == [
+            SECOND_COMMAND
+        ]
 
     def test_finds_commands_inside_package_rules(self):
         text = json.dumps(
@@ -67,7 +70,7 @@ class TestAllowedPatterns:
     def test_extracts_every_entry(self):
         patterns = guard.allowed_patterns(SELF_HOSTED_WITH_BOUND)
         assert len(patterns) == 2
-        assert patterns[1] == f"^{UV_BOUND}$"
+        assert patterns[1] == f"^{SECOND_COMMAND}$"
 
     def test_empty_when_allowlist_is_absent(self):
         assert guard.allowed_patterns("module.exports = { platform: 'github' };") == []
@@ -76,26 +79,27 @@ class TestAllowedPatterns:
 class TestUnauthorizedCommands:
     def test_flags_command_the_allowlist_does_not_cover(self):
         assert guard.unauthorized_commands(
-            preset(UV_BOUND), SELF_HOSTED_WITHOUT_BOUND
-        ) == [UV_BOUND]
+            preset(SECOND_COMMAND), SELF_HOSTED_WITHOUT_BOUND
+        ) == [SECOND_COMMAND]
 
     def test_clean_when_allowlist_covers_the_command(self):
         assert (
-            guard.unauthorized_commands(preset(UV_BOUND), SELF_HOSTED_WITH_BOUND) == []
+            guard.unauthorized_commands(preset(SECOND_COMMAND), SELF_HOSTED_WITH_BOUND)
+            == []
         )
 
     def test_flags_a_command_that_drifts_by_one_character(self):
         # The failure this guard exists for: the allowlist is anchored, so
         # editing the duration in the preset alone silently disables the bound.
-        drifted = UV_BOUND.replace("P7D", "P3D")
+        drifted = SECOND_COMMAND.replace("P7D", "P3D")
         assert guard.unauthorized_commands(preset(drifted), SELF_HOSTED_WITH_BOUND) == [
             drifted
         ]
 
     def test_missing_allowlist_authorizes_nothing(self):
         assert guard.unauthorized_commands(
-            preset(UV_BOUND), "module.exports = {};"
-        ) == [UV_BOUND]
+            preset(SECOND_COMMAND), "module.exports = {};"
+        ) == [SECOND_COMMAND]
 
     def test_clean_against_the_real_preset_and_admin_config(self):
         assert (
@@ -112,7 +116,7 @@ class TestMain:
 
     def test_exits_nonzero_when_a_command_is_unauthorized(self, monkeypatch, tmp_path):
         preset_path = tmp_path / "default.json"
-        preset_path.write_text(preset(UV_BOUND))
+        preset_path.write_text(preset(SECOND_COMMAND))
         admin_path = tmp_path / "self-hosted.js"
         admin_path.write_text(SELF_HOSTED_WITHOUT_BOUND)
 
