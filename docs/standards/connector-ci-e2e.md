@@ -554,6 +554,45 @@ Single-pipeline apps invoking the action remotely (`@main`) never hit this code 
 4. **Tests**: unit + integration tests under `tests/unit/` and `tests/integration/`; full-DAG e2e under `tests/e2e/` (`SQLAppE2EFullTest` subclass).
 5. **Repo secrets**: set the 7 entries from the table above.
 6. **SDK matrix**: add `<connector>-app` to the `DEFAULT_MATRIX` in apps-sdk's `matrix-builder` job (`pull_request.yaml`) so `connector-tests` fans out to your connector automatically.
+7. **Required check**: make `tests / Tests Gate` a required, unbypassable status check on the default branch, and remove any stale required checks left over from older workflows (`unit-tests`, `tests-passed`, …). Do this as soon as step 2 is merged — see below.
+
+### The tests gate does not wait on the coverage bar
+
+The exact `required_status_checks` context is **`tests / Tests Gate`** — the
+caller's job **id** (`tests:` in the scaffolded `tests.yaml`), then the gate
+job's name. The workflow name is not part of it, even though the UI's checks
+list displays it as a leading segment; verified against the live `main` rulesets
+on `atlanhq/atlan-mysql-app` (`tests / Tests Gate`, `suite / Conformance Gate`)
+and `atlanhq/application-sdk` (inline jobs are a single segment, e.g. `SDK
+Gate`). A context that matches no check protects nothing, so get this string
+right before rolling it out.
+
+Making it required is its **own** lever, with no prerequisite
+beyond the check running something real. It is **not** gated on the four-tier
+test bar, the 85% coverage target, or every tier being wired up — pytest already
+exits non-zero when it collects nothing, so a vacuous pass is not possible, and
+the gate's verdict comes from a tested driver
+([`verify-test-gate`](../../.github/actions/verify-test-gate/action.yaml)) rather
+than from a job's own exit status. Turn it on with a thin suite and grow the
+suite behind it; a suite nothing enforces has no authority and degrades under
+pressure.
+
+The bar belongs to the *other* lever — **0-touch**, meaning conformance findings
+block CI and Renovate merges its own PRs without a human. That is what
+`atlan-application-sdk-conformance bootstrap --enforce true` sets, and it is the
+one an app graduates to once its tests are meaningful. The two halves of 0-touch
+are separately expressible too, for a repo that wants one without the other:
+
+| Lever | Flag | Prerequisite |
+|---|---|---|
+| `tests / Tests Gate` is a required check | none — a GitHub branch-protection setting; no bootstrap flag governs it | none |
+| Conformance findings block CI | `--conformance-blocking true\|false` | meaningful automated tests (four-tier bar) |
+| Renovate merges without a human | `--renovate-automerge true\|false` | meaningful automated tests (four-tier bar) |
+| Both of the above at once | `--enforce true\|false` (shorthand) | as above |
+
+Coverage stays warn-only at the publish-time certification gate as well — see
+[`app-certification.md`](app-certification.md#enforcement), where unit-test
+pass/fail already blocks publish while the 85% threshold only annotates.
 
 ## Reference
 

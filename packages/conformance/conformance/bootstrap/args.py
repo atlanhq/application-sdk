@@ -20,7 +20,22 @@ FLAGS = {
     "--services-script": "services_script",
     "--system-deps": "system_deps",
     "--enforce": "enforce",
+    "--conformance-blocking": "conformance_blocking",
+    "--renovate-automerge": "renovate_automerge",
 }
+
+# Tri-state flags: "" means "not explicitly set on this invocation" (defer to
+# autodetection, then to the shorthand, then to the hard default), and only
+# "true"/"false" are otherwise accepted. Validated together so a new one can't
+# be added to FLAGS with its validation quietly forgotten.
+#
+# ``--enforce`` is the shorthand; the other two are the individual 0-touch
+# levers it expands to. Neither of them, and not ``--enforce`` either, has any
+# bearing on whether ``tests / Tests Gate`` is a required branch-protection
+# check — that is a separate lever with no prerequisite here (FND-347).
+TRISTATE_FLAGS = ("enforce", "conformance_blocking", "renovate_automerge")
+
+_DEST_TO_FLAG = {dest: flag for flag, dest in FLAGS.items()}
 
 
 def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
@@ -38,7 +53,10 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         "enable_e2e": "true",
         "services_script": "",
         "system_deps": "",
-        "enforce": "",  # "" = not explicitly set; "true"/"false" = explicit
+        # "" = not explicitly set; "true"/"false" = explicit. See TRISTATE_FLAGS.
+        "enforce": "",
+        "conformance_blocking": "",
+        "renovate_automerge": "",
     }
     i = 0
     while i < len(argv):
@@ -69,12 +87,14 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         )
         sys.exit(2)
 
-    if result["enforce"] not in ("", "true", "false"):
-        print(
-            f"error: --enforce must be 'true' or 'false', got {result['enforce']!r}",
-            file=sys.stderr,
-        )
-        sys.exit(2)
+    for dest in TRISTATE_FLAGS:
+        if result[dest] not in ("", "true", "false"):
+            flag = _DEST_TO_FLAG[dest]
+            print(
+                f"error: {flag} must be 'true' or 'false', got {result[dest]!r}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
 
     result["system_deps"] = normalize_system_deps(result["system_deps"])
 
@@ -115,7 +135,17 @@ Write .claude/skills/remediate/SKILL.md + all standard CI workflow shims into
 and .github/scripts/build_conformance_args.py that conformance-reusable.yaml needs on
 disk in every caller repo. All of these always overwrite (re-running eradicates drift).
 tests.yaml, renovate.json, and contract_schema.lock.json are write-if-absent by default;
-pass --enforce true|false to also update renovate.json's enforcement mode.
+pass --enforce true|false (or --renovate-automerge true|false) to also update
+renovate.json's enforcement mode.
+
+The tests gate is not one of these levers. `tests / Tests Gate` becoming a required,
+unbypassable status check on the default branch is a GitHub branch-protection setting
+that nothing here writes, and it has no prerequisite beyond the check running something
+real: it does NOT wait on the four-tier bar or the 85% coverage target, and no flag
+below turns it on or off. Make it required as soon as tests.yaml is wired (the
+scaffolded tests.yaml names the exact context string in its header). What the flags
+below govern is 0-touch — conformance blocking CI, and Renovate merging without a
+human — which is what the four-tier bar is a prerequisite for.
 
 options:
   --package-name NAME         docstring-coverage package; omit to auto-detect from an
@@ -138,13 +168,24 @@ options:
                               preserves both instead of deleting the step — checks.yml
                               is always-overwrite. To drop it, delete the step from
                               checks.yml and the txt file, then re-run.
-  --enforce true|false        enforcement mode; omit to auto-detect from an existing
+  --enforce true|false        0-touch shorthand: sets BOTH granular levers below at
+                              once. Omit to auto-detect from an existing
                               conformance.yaml (else hard-gate). Pass explicitly (either
                               value) to also force-update renovate.json.
                               true  — hard gate: conformance blocks on violations,
                                       Renovate auto-merges when CI is green.
                               false — soft/observe: conformance tracks without blocking,
                                       Renovate raises PRs but humans must merge.
+  --conformance-blocking true|false
+                              whether conformance findings block CI (conformance.yaml's
+                              exit-zero). Overrides --enforce for this lever alone;
+                              omit to take the --enforce value (explicit or detected).
+  --renovate-automerge true|false
+                              whether Renovate merges its own PRs on green
+                              (renovate.json). Overrides --enforce for this lever
+                              alone; omit to take the --enforce value (explicit or
+                              detected). Passing it explicitly force-updates
+                              renovate.json, exactly as --enforce does.
   --json                       after the normal output, print one final JSON line:
                               {"skipped": bool, "touched": [...], "unchanged": [...]}.
                               `touched` lists every path this invocation actually wrote

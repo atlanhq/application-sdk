@@ -117,7 +117,8 @@ def _sync_renovate_json(
     root: pathlib.Path, kwargs: dict[str, str], force_renovate: bool
 ) -> list[tuple[pathlib.Path, str]]:
     """renovate.json — write-if-absent normally; force-overwrite when
-    ``--enforce`` is passed explicitly so re-running with ``--enforce true``
+    ``--enforce`` or ``--renovate-automerge`` is passed explicitly so
+    re-running with ``--enforce true`` (or ``--renovate-automerge true``)
     upgrades a soft-mode repo without needing to delete the file first.
 
     Returns the ``(path, status)`` pairs this call wrote or left alone —
@@ -149,7 +150,8 @@ def _sync_renovate_json(
         return results
     print(
         f"ok (exists): {renovate_dest}"
-        "  (edit freely; pass --enforce to update enforcement mode)"
+        "  (edit freely; pass --enforce or --renovate-automerge to update"
+        " enforcement mode)"
     )
     return [(renovate_dest, "exists")]
 
@@ -254,21 +256,37 @@ def main(argv: list[str]) -> int:
             print(json.dumps({"skipped": True, "touched": [], "unchanged": []}))
         return 0
 
-    # force_renovate must reflect only an *explicit* --enforce on this
-    # invocation, captured before autodetection fills kwargs["enforce"] in
-    # from an existing conformance.yaml -- renovate.json stays write-if-absent
-    # on a bare re-run even though conformance.yaml's enforcement mode is now
-    # auto-detected.
-    force_renovate = bool(kwargs["enforce"])
+    # force_renovate must reflect only an *explicit* flag on this invocation,
+    # captured before autodetection fills kwargs["enforce"] in from an existing
+    # conformance.yaml -- renovate.json stays write-if-absent on a bare re-run
+    # even though conformance.yaml's enforcement mode is now auto-detected.
+    # --renovate-automerge counts too: it is the lever that governs exactly
+    # this file, so passing it and having the file left alone would be a no-op
+    # flag.
+    force_renovate = bool(kwargs["enforce"] or kwargs["renovate_automerge"])
     apply_bootstrap_autodetection(kwargs, root)
 
-    # Derive the two render variables from --enforce (explicit or detected).
+    # Resolve the two 0-touch levers, each independently expressible:
+    #
+    #   --conformance-blocking → exit_zero  (conformance.yaml)
+    #   --renovate-automerge   → automerge  (renovate.json)
+    #
+    # --enforce is the shorthand that sets both at once, so an explicit
+    # granular flag wins over it and an omitted one inherits it. enforce
+    # itself is explicit-or-detected here (autodetection ran above);
     # enforce="" (never set, nothing to detect) → hard defaults.
-    # enforce="false" → soft/observe mode.
-    # enforce="true"  → hard mode.
+    #
+    # Neither lever, and not --enforce either, touches the tests gate: whether
+    # `tests / Tests Gate` is a required, unbypassable check is a GitHub
+    # branch-protection setting with no prerequisite here, deliberately kept
+    # out of this derivation so the gate never waits on the 0-touch bar
+    # (FND-347).
     enforce = kwargs.pop("enforce")
-    kwargs["exit_zero"] = "true" if enforce == "false" else "false"
-    kwargs["automerge"] = "false" if enforce == "false" else "true"
+    shorthand = "false" if enforce == "false" else "true"
+    conformance_blocking = kwargs.pop("conformance_blocking") or shorthand
+    renovate_automerge = kwargs.pop("renovate_automerge") or shorthand
+    kwargs["exit_zero"] = "false" if conformance_blocking == "true" else "true"
+    kwargs["automerge"] = renovate_automerge
 
     # Structured record of every path this invocation touched or left
     # unchanged, for --json below. Populated alongside (never instead of) the

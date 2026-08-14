@@ -93,7 +93,9 @@ it isn't safe to assume a C002 finding already triggered it:
    `--unit-tests-workflow` from an existing `build-and-publish.yaml` (else
    `"tests.yaml"`), `--services-script` from an existing
    `.github/test/setup-services.sh`, and `--enforce` from an existing
-   `conformance.yaml`'s `exit-zero` mode (else hard-gate). No extraction step
+   `conformance.yaml`'s `exit-zero` mode (else hard-gate) — which the two
+   granular 0-touch levers (`--conformance-blocking`, `--renovate-automerge`)
+   then inherit, since neither was named on this invocation. No extraction step
    is needed here; re-running with no flags never resets a customized value
    to a default. `--json` doesn't change any of that — it only appends one
    trailing JSON line to stdout, after the normal human-readable output.
@@ -108,8 +110,8 @@ it isn't safe to assume a C002 finding already triggered it:
    CLI's own code decides each entry, not the model reading prefixed prose
    lines) and how it drives `detect-fix-recheck`'s revert scope if this fix
    is later rejected by a gate. This no-flags procedure never produces a
-   `renovate.json.bak` entry itself (that only happens when `--enforce` is
-   passed explicitly), but capture it if present in `touched` rather than
+   `renovate.json.bak` entry itself (that only happens when `--enforce` or
+   `--renovate-automerge` is passed explicitly), but capture it if present in `touched` rather than
    assuming a fixed set of paths is exhaustive here too. `orthogonal_gate =
    "skip"` on both C002 and C003 (set on the rule definitions) — the Python
    test suite is skipped entirely, not just for this fix: a
@@ -142,8 +144,9 @@ it isn't safe to assume a C002 finding already triggered it:
   whether the drift is stale structure (safe to delete + regenerate) or an
   intentional customization worth preserving as-is.
 - **`renovate.json` drift** (file exists but content diverged) — fixing it
-  requires choosing the intended enforcement mode (`--enforce true|false`),
-  a repo-policy decision the model must not make unilaterally.
+  requires choosing the intended enforcement mode (`--enforce true|false`, or
+  `--renovate-automerge true|false` to move this file's lever alone), a
+  repo-policy decision the model must not make unilaterally.
   `classification = "judgment"`.
 
 ---

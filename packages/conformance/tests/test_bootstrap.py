@@ -11,7 +11,7 @@ import json
 import pathlib
 
 import pytest
-from conformance.bootstrap.args import parse_bootstrap_args
+from conformance.bootstrap.args import BOOTSTRAP_USAGE, FLAGS, parse_bootstrap_args
 from conformance.bootstrap.autodetect import derive_app_name_from_dir
 from conformance.bootstrap.command import _bootstrap_file
 from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
@@ -103,6 +103,8 @@ def test_parse_bootstrap_args_defaults() -> None:
         "services_script": "",
         "system_deps": "",
         "enforce": "",
+        "conformance_blocking": "",
+        "renovate_automerge": "",
     }
 
 
@@ -529,6 +531,73 @@ def test_parse_bootstrap_args_enforce_invalid(
     assert "--enforce" in capsys.readouterr().err
 
 
+# ---------------------------------------------------------------------------
+# The two granular 0-touch levers (--conformance-blocking /
+# --renovate-automerge), which --enforce is the shorthand for. See FND-347:
+# the tests gate being a required check is a third, separate lever that none
+# of these three flags governs.
+# ---------------------------------------------------------------------------
+
+
+def test_every_flag_is_documented_in_usage() -> None:
+    """Each flag must appear in --help.
+
+    BOOTSTRAP_USAGE is the authoritative flag documentation (the parser's own
+    docstring says so), and a lever nobody can find in --help is not
+    separately expressible in any useful sense.
+    """
+    undocumented = [flag for flag in FLAGS if flag not in BOOTSTRAP_USAGE]
+    assert not undocumented
+
+
+@pytest.mark.parametrize(
+    "flag,dest",
+    [
+        ("--conformance-blocking", "conformance_blocking"),
+        ("--renovate-automerge", "renovate_automerge"),
+    ],
+)
+@pytest.mark.parametrize("value", ["true", "false"])
+def test_parse_bootstrap_args_granular_levers(flag: str, dest: str, value: str) -> None:
+    assert parse_bootstrap_args([flag, value])[dest] == value
+    assert parse_bootstrap_args([f"{flag}={value}"])[dest] == value
+
+
+@pytest.mark.parametrize(
+    "flag", ["--conformance-blocking", "--renovate-automerge", "--enforce"]
+)
+def test_parse_bootstrap_args_tristate_invalid_names_its_own_flag(
+    flag: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A bad value must be reported against the flag that carried it.
+
+    The three tri-state flags share one validation loop, so a shared error
+    message that always said ``--enforce`` would misdirect anyone who passed
+    a granular lever — the exact confusion these separate names exist to
+    prevent.
+    """
+    with pytest.raises(SystemExit) as exc_info:
+        parse_bootstrap_args([flag, "maybe"])
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert flag in err
+    assert "'maybe'" in err
+
+
+@pytest.mark.parametrize(
+    "flag", ["--conformance-blocking", "--renovate-automerge", "--enforce"]
+)
+def test_parse_bootstrap_args_tristate_missing_value(
+    flag: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        parse_bootstrap_args([flag])
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert flag in err
+    assert "requires a value" in err
+
+
 _EXIT_ZERO_SCHEDULE_PREFIX = (
     "exit-zero: ${{ github.event_name == 'schedule' "
     "|| github.event_name == 'workflow_dispatch' || "
@@ -896,6 +965,126 @@ def test_cmd_bootstrap_enforce_true_force_overwrites_existing_renovate(
     _cmd_bootstrap(["--enforce", "true"])
     content = rj.read_text()
     assert '"automerge": false' not in content  # overrides removed
+
+
+# ---------------------------------------------------------------------------
+# Granular levers, end to end: each moves exactly one of the two files, and
+# --enforce still moves both (FND-347)
+# ---------------------------------------------------------------------------
+
+
+def _conformance_text(root: pathlib.Path) -> str:
+    return (root / ".github" / "workflows" / "conformance.yaml").read_text()
+
+
+def test_cmd_bootstrap_conformance_blocking_false_leaves_renovate_hard(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--conformance-blocking false stops conformance blocking and nothing else.
+
+    This is the state --enforce could not express: observe-mode conformance
+    with Renovate auto-merge still on.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--conformance-blocking", "false"])
+    assert _EXIT_ZERO_SOFT in _conformance_text(tmp_path)
+    assert '"automerge": false' not in (tmp_path / "renovate.json").read_text()
+
+
+def test_cmd_bootstrap_renovate_automerge_false_leaves_conformance_blocking(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--renovate-automerge false takes the human back into the merge, and
+    leaves conformance blocking CI."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--renovate-automerge", "false"])
+    assert _EXIT_ZERO_HARD in _conformance_text(tmp_path)
+    assert '"automerge": false' in (tmp_path / "renovate.json").read_text()
+
+
+def test_cmd_bootstrap_granular_lever_overrides_enforce_shorthand(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit granular lever wins over the shorthand for that lever only."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false", "--renovate-automerge", "true"])
+    # Shorthand still governs the lever that wasn't named explicitly.
+    assert _EXIT_ZERO_SOFT in _conformance_text(tmp_path)
+    assert '"automerge": false' not in (tmp_path / "renovate.json").read_text()
+
+
+def test_cmd_bootstrap_granular_lever_inherits_detected_enforce(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lever left unset inherits the *detected* --enforce, not the hard default.
+
+    Passing only --renovate-automerge on a soft-mode repo must not silently
+    flip conformance back to blocking: the unnamed lever keeps whatever the
+    repo's existing conformance.yaml says.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    _cmd_bootstrap(["--renovate-automerge", "true"])
+    assert _EXIT_ZERO_SOFT in _conformance_text(tmp_path)
+    assert '"automerge": false' not in (tmp_path / "renovate.json").read_text()
+
+
+def test_cmd_bootstrap_renovate_automerge_force_updates_existing_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--renovate-automerge force-updates an existing renovate.json.
+
+    renovate.json is write-if-absent, so without this the flag that governs
+    exactly that file would be a no-op on every repo that already has one.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    rj = tmp_path / "renovate.json"
+    assert '"automerge": false' not in rj.read_text()
+    _cmd_bootstrap(["--renovate-automerge", "false"])
+    assert '"automerge": false' in rj.read_text()
+
+
+def test_cmd_bootstrap_conformance_blocking_does_not_force_renovate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--conformance-blocking must not rewrite renovate.json.
+
+    It governs the other file, and renovate.json is write-if-absent — a
+    customised one stays customised.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    rj = tmp_path / "renovate.json"
+    rj.write_text('{"customised": true}\n')
+    _cmd_bootstrap(["--conformance-blocking", "false"])
+    assert rj.read_text() == '{"customised": true}\n'
+    assert not (tmp_path / "renovate.json.bak").exists()
+
+
+def test_cmd_bootstrap_no_lever_touches_the_tests_gate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No enforcement lever changes tests.yaml (FND-347).
+
+    The tests gate becoming a required check is a branch-protection setting
+    with no prerequisite here; if any of these flags started rendering
+    tests.yaml differently, the gate milestone would once again be behind the
+    0-touch bar.
+    """
+    monkeypatch.chdir(tmp_path)
+    canonical = render("tests.yaml", app_name=tmp_path.name)
+    for flags in (
+        ["--enforce", "false"],
+        ["--enforce", "true"],
+        ["--conformance-blocking", "false"],
+        ["--renovate-automerge", "false"],
+    ):
+        wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+        if wf.exists():
+            wf.unlink()
+        _cmd_bootstrap(flags)
+        assert wf.read_text() == canonical, f"tests.yaml varied with {flags}"
 
 
 # ---------------------------------------------------------------------------
