@@ -12,6 +12,16 @@ no await anywhere in the loop, so its hold scales with the source table.
 Both tests drive the real method while a ticker coroutine counts how often the
 loop got to run something else, so they assert the property that matters rather
 than which callable was handed to ``run_in_thread``.
+
+The tick count on its own measures how much CPU the loop thread got, not
+whether the body offloaded: a *correctly* offloaded block scores 27 ticks on an
+idle machine and 4 with a handful of unrelated GIL-holding threads in the
+process, with wall-clock elapsed unchanged either way. An absolute threshold
+therefore fails on a loaded shared runner with nothing wrong (FND-360). Each
+test instead measures a known-good offload of the same length on the same
+runner, moments away, and requires the subject to reach ``MIN_TICK_RATIO`` of
+it — runner noise moves both numbers together, while a body that blocks the
+loop scores ~0 against whatever the control scored.
 """
 
 from __future__ import annotations
@@ -40,7 +50,16 @@ T = TypeVar("T")
 
 BLOCK_SECONDS = 0.3
 TICK_SECONDS = 0.01
-MIN_TICKS = 5
+
+#: Share of the control's ticks a non-blocking body must reach. Half leaves room
+#: for the runner's load to drift between the two measurements while staying far
+#: above what a body that holds the loop can score.
+MIN_TICK_RATIO = 0.5
+
+#: Below this the control itself could not schedule enough ticks to tell a
+#: healthy body from a blocking one, so the run says so rather than passing
+#: vacuously or failing on the runner's behalf.
+MIN_CONTROL_TICKS = 4
 
 
 class _FakeSqlClient(BaseSQLClient):
@@ -113,6 +132,38 @@ async def count_ticks_during(work: Callable[[], Awaitable[T]]) -> tuple[T, int]:
     return result, ticks
 
 
+async def control_ticks() -> int:
+    """Ticks a correctly-offloaded block of the same length gets on this runner.
+
+    Deliberately stdlib — ``asyncio.to_thread``, never the SDK's
+    ``run_in_thread`` — so that a regression *inside* the SDK's own offload path
+    collapses the subject's ticks without also collapsing the baseline it is
+    measured against.
+    """
+    _, ticks = await count_ticks_during(
+        lambda: asyncio.to_thread(time.sleep, BLOCK_SECONDS)
+    )
+    return ticks
+
+
+def assert_loop_stayed_live(*, method: str, ticks: int, control: int) -> None:
+    """Fail if *method* left the loop less responsive than a known-good offload."""
+    if control < MIN_CONTROL_TICKS:
+        pytest.skip(
+            f"runner too starved to measure: a stdlib offload of "
+            f"{BLOCK_SECONDS}s scored only {control} ticks, so no threshold "
+            "distinguishes a healthy body from a blocking one"
+        )
+
+    floor = control * MIN_TICK_RATIO
+    assert ticks >= floor, (
+        f"{method} stalled the event loop: {ticks} ticks against {control} for "
+        f"an offload of the same length on this runner (floor {floor:.1f}) — a "
+        "starved loop cannot run the auto-heartbeat, which is what gets healthy "
+        "activities killed on heartbeat_timeout"
+    )
+
+
 def _extract_input(tmp_path: Path) -> ExtractionTaskInput:
     return ExtractionTaskInput(
         workflow_id="wf-test",
@@ -157,6 +208,7 @@ async def test_transform_entity_does_not_block_the_loop(
             f.write(orjson.dumps({"database_name": name}))
             f.write(b"\n")
 
+    control = await control_ticks()
     result, ticks = await count_ticks_during(
         lambda: app._transform_entity(
             entity_type="database",
@@ -167,11 +219,7 @@ async def test_transform_entity_does_not_block_the_loop(
 
     assert result.total_record_count == 2
     assert app.mapped == 2, "the mapper never ran"
-    assert ticks >= MIN_TICKS, (
-        f"_transform_entity stalled the event loop ({ticks} ticks) — a starved "
-        "loop cannot run the auto-heartbeat, which is what gets healthy "
-        "activities killed on heartbeat_timeout"
-    )
+    assert_loop_stayed_live(method="_transform_entity", ticks=ticks, control=control)
 
 
 async def test_extract_entity_does_not_block_the_loop(
@@ -189,6 +237,10 @@ async def test_extract_entity_does_not_block_the_loop(
 
     monkeypatch.setattr("application_sdk.templates.sql_app.orjson.dumps", _slow_dumps)
 
+    # Measured after the patch and immediately before the subject: the control
+    # never serialises, so it cannot spend the one-shot cost above, and the two
+    # measurements sit close enough together to see the same runner load.
+    control = await control_ticks()
     result, ticks = await count_ticks_during(
         lambda: app._extract_entity(
             entity_type="database",
@@ -199,10 +251,7 @@ async def test_extract_entity_does_not_block_the_loop(
 
     assert result.total_record_count == 2
     assert slowed["done"], "the serialise path never ran"
-    assert ticks >= MIN_TICKS, (
-        f"_extract_entity stalled the event loop ({ticks} ticks) — a starved "
-        "loop cannot run the auto-heartbeat"
-    )
+    assert_loop_stayed_live(method="_extract_entity", ticks=ticks, control=control)
 
 
 async def test_extract_entity_never_hands_the_file_handle_to_a_thread(
