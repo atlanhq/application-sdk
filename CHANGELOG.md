@@ -1,5 +1,35 @@
 # Changelog
 
+## v3.28.0 (August 14, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.27.2...v3.28.0
+
+### Features
+
+- ProgressTracker — progress token, keyed holds, injected clock (FND-283) (#3145) (by @cmgrote in [819fdb9](https://github.com/atlanhq/application-sdk/commit/819fdb9))
+- stall watchdog in the auto-heartbeat loop (FND-286) (#3147) (by @cmgrote in [e8ea495](https://github.com/atlanhq/application-sdk/commit/e8ea495))
+- reach the ProgressTracker from anywhere in the attempt (FND-287) (#3148) (by @cmgrote in [5c3c000](https://github.com/atlanhq/application-sdk/commit/5c3c000))
+- framework mark_progress() hooks on the writer, emission and transfer loops (FND-288) (#3150) (by @cmgrote in [f7dc005](https://github.com/atlanhq/application-sdk/commit/f7dc005))
+- holding_progress() — one context manager for opaque calls (FND-291) (#3157) (by @cmgrote in [b736afc](https://github.com/atlanhq/application-sdk/commit/b736afc))
+- validate transfer integrity on both sides of every file transfer (FND-306) (#3171) (by @cmgrote in [cbb7c8b](https://github.com/atlanhq/application-sdk/commit/cbb7c8b))
+- auto-hold every blocking offload so the watchdog never false-kills (FND-290) (#3158) (by @cmgrote in [04093bc](https://github.com/atlanhq/application-sdk/commit/04093bc))
+- TaskStalledError and the stall branch in the cancellation handler (FND-289) (#3160) (by @cmgrote in [5313082](https://github.com/atlanhq/application-sdk/commit/5313082))
+- warn-mode telemetry — the two shapes and the per-app work-list (FND-292) (#3177) (by @cmgrote in [c85bf51](https://github.com/atlanhq/application-sdk/commit/c85bf51))
+- progress hooks, holds, allowances and the upgrade story (FND-295) (#3187) (by @cmgrote in [85b492e](https://github.com/atlanhq/application-sdk/commit/85b492e))
+- bound the retry product, and alert on run length (FND-294) (#3198) (by @cmgrote in [a05d012](https://github.com/atlanhq/application-sdk/commit/a05d012))
+- warn by default, with the 24h backstop in the same release (FND-296) (#3200) (by @cmgrote in [463ab03](https://github.com/atlanhq/application-sdk/commit/463ab03))
+
+### Bug Fixes
+
+- route the remaining event-loop starvation sites through run_in_thread (FND-282) (#3146) (by @cmgrote in [ba88c42](https://github.com/atlanhq/application-sdk/commit/ba88c42))
+- close the two cancellation races in the offloaded parquet paths (FND-315) (#3179) (by @cmgrote in [3f0533b](https://github.com/atlanhq/application-sdk/commit/3f0533b))
+- stage writer output and publish it at close (FND-317) (#3182) (by @cmgrote in [945c927](https://github.com/atlanhq/application-sdk/commit/945c927))
+- report an exhausted Dapr sidecar wait as unreachable, not a cold-start race (CONNECT-841) (#3173) (by @fyzanshaik-atlan in [39ea699](https://github.com/atlanhq/application-sdk/commit/39ea699))
+- strip the source prefix when downloading state trees (FND-340) (#3193) (by @cmgrote in [3a71507](https://github.com/atlanhq/application-sdk/commit/3a71507))
+- atomic artifact writes + typed disk-full error (FND-318) (#3188) (by @cmgrote in [9bf7371](https://github.com/atlanhq/application-sdk/commit/9bf7371))
+- treat a key that vanishes mid-delete as benign in delete_prefix (FND-341) (#3194) (by @cmgrote in [c6e0968](https://github.com/atlanhq/application-sdk/commit/c6e0968))
+
+
 ## v3.27.2 (August 12, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.27.1...v3.27.2

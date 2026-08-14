@@ -14,9 +14,10 @@ This closes that hole by answering three questions per repo, on the same cadence
 as every other fleet finding:
 
 1. Is the gate context a **required** status check on the default branch?
-2. Does the default branch **require a pull request at all**? Without one there
-   is no PR for the check to attach to, so a direct push lands unchecked and the
-   requirement is decorative.
+2. Does a **ruleset** require a pull request on that branch? Without one, no
+   ruleset stands between a write-access push and the default branch — though
+   see the `rulesetRequiresPullRequest` note below for what that does *not*
+   establish.
 3. Is the check **actually arriving** on pull requests, or configured-but-never-
    reporting? That third state blocks every PR with nothing red to point at, and
    the pressure it creates is to *remove* the requirement — so it has to be
@@ -27,6 +28,19 @@ GitHub omits the field entirely for a non-admin caller, so with a fleet-scoped
 token "no bypass" and "cannot see bypass" are the same bytes, and the repo reads
 as clean either way. An unanswerable question is left unanswered rather than
 answered wrongly.
+
+**Nor is "a direct push is permitted"** — schema 3.0 retracted it, for the same
+reason one layer down. Rulesets are only one of two enforcement mechanisms;
+classic branch protection is the other, it is admin-gated, and this token does
+not have admin. Worse, GitHub does not distinguish the two answers: a repo with
+no classic protection returns 404 ``"Branch not protected"``, and a repo whose
+protection we may not read returns 404 ``"Not Found"``. The first sweep to
+publish the claim reported 69/77 repos as permitting direct pushes — which was
+exactly the set of repos whose classic protection was unreadable, i.e. a
+restatement of the token's own blind spot dressed as a fleet finding. So this
+scanner now reports only what rulesets prove
+(``enforcement.rulesetRequiresPullRequest``) and leaves the direct-push question
+to a consumer that holds ``administration: read``.
 
 Enumerating the fleet here (rather than having each repo self-report) is the
 whole point: a repo that has lost enforcement is *present in the output* with
@@ -102,7 +116,7 @@ REPO_LIST_LIMIT = 5000
 _REQUIRED_STATUS_CHECKS_RULE = "required_status_checks"
 _PULL_REQUEST_RULE = "pull_request"
 
-SCHEMA_VERSION = "2.0"
+SCHEMA_VERSION = "3.0"
 
 # Per-repo verdict. Three values, not a boolean, because "we could not read it"
 # must never collapse into "it is not gated" (that would make an outage look
@@ -114,8 +128,10 @@ SCHEMA_VERSION = "2.0"
 # pull-requests read by design, so absent and none are indistinguishable to it,
 # and a repo with standing admin bypass reads as clean. That is the precise
 # false green this scanner exists to prevent, so the claim is not made at all
-# rather than made unreliably. `enforcement.directPushPermitted` is the one
-# bypass-shaped signal this token *can* see, and it is derived from `rules`.
+# rather than made unreliably. The same test retired `directPushPermitted` in
+# schema 3.0: see the module docstring. What is left is
+# `enforcement.rulesetRequiresPullRequest`, which claims only what `rules`
+# actually shows and names the mechanism it is scoped to.
 STATUS_GATED = "gated"
 STATUS_NOT_GATED = "not-gated"
 STATUS_UNKNOWN = "unknown"
@@ -129,7 +145,10 @@ ARRIVAL_UNKNOWN = "unknown"
 
 # Finding ids. Stable strings — connector-pulse groups on them.
 FINDING_NOT_REQUIRED = "gate-not-required"
-FINDING_DIRECT_PUSH = "gate-direct-push-permitted"
+# `gate-direct-push-permitted` was removed in schema 3.0 along with the field it
+# reported on. Not reused for anything else — connector-pulse groups findings by
+# these strings, and recycling a retired id would silently merge two different
+# claims in any stored snapshot's `byFinding` rollup.
 FINDING_NOT_ARRIVING = "gate-not-arriving"
 FINDING_UNPRODUCIBLE = "gate-context-unproducible"
 FINDING_UNREADABLE = "gate-state-unreadable"
@@ -355,12 +374,6 @@ def evaluate_repo(
         requires_pr = requires_pr or has_rule(ruleset, _PULL_REQUEST_RULE)
 
     gated = bool(matched_rulesets)
-    # Not a bypass *actor* — a structural hole, and the one this token can
-    # actually see. With no ruleset requiring a pull request, anyone with write
-    # access lands on the default branch without a PR for the check to attach
-    # to, so the requirement never applies. Derived from the `pull_request` rule,
-    # which is part of `rules` and therefore visible at plain repo-read.
-    direct_push = not requires_pr
 
     arrival_status, sampled, with_context, truncated = classify_arrival(
         arrival_samples or []
@@ -405,15 +418,6 @@ def evaluate_repo(
                     "nothing red to fix",
                 )
             )
-    if direct_push:
-        findings.append(
-            _finding(
-                FINDING_DIRECT_PUSH,
-                "error" if gated else "warning",
-                f"no active ruleset requires a pull request on {default_branch}, so a "
-                "direct push bypasses every required check",
-            )
-        )
     return {
         "schemaVersion": SCHEMA_VERSION,
         "repo": repo,
@@ -427,8 +431,12 @@ def evaluate_repo(
             "source": "ruleset" if gated else "none",
             "rulesets": matched_rulesets,
             "requiredContexts": sorted(set(all_contexts)),
-            "requiresPullRequest": requires_pr,
-            "directPushPermitted": direct_push,
+            # Scoped to rulesets in the name, because rulesets are the only
+            # mechanism this token can read. False means "no ruleset requires a
+            # PR here" — NOT "a direct push is permitted": classic branch
+            # protection could be requiring one invisibly. See the module
+            # docstring for why the stronger claim was retracted in 3.0.
+            "rulesetRequiresPullRequest": requires_pr,
             "strictRequiredStatusChecksPolicy": strict,
         },
         "arrival": {
@@ -479,10 +487,14 @@ def build_fleet(records: list, required_context: str) -> dict:
         "withTestsWorkflowFile": sum(
             1 for r in records if r.get("hasTestsWorkflowFile")
         ),
-        "directPushPermitted": sum(
+        # Counted the way it reads: how many repos a ruleset requires a PR on.
+        # The old `directPushPermitted` counted the inverse and called it a
+        # bypass count, which turned "no ruleset PR rule" into a claim about
+        # classic branch protection that this token cannot see.
+        "rulesetRequiresPullRequest": sum(
             1
             for r in records
-            if (r.get("enforcement") or {}).get("directPushPermitted")
+            if (r.get("enforcement") or {}).get("rulesetRequiresPullRequest")
         ),
         "byStatus": by_status,
         "byArrival": by_arrival,
@@ -911,7 +923,7 @@ def write_outputs(records: list, fleet: dict, out_dir: Path) -> None:
         "gated": fleet["gated"],
         "notGated": fleet["notGated"],
         "unknown": fleet["unknown"],
-        "directPushPermitted": fleet["directPushPermitted"],
+        "rulesetRequiresPullRequest": fleet["rulesetRequiresPullRequest"],
     }
     with (out_dir / "history_fleet.jsonl").open("a") as fh:
         fh.write(json.dumps(fleet_entry) + "\n")
@@ -978,7 +990,8 @@ def main(argv: Optional[list] = None) -> int:
     print(
         f"Fleet: {fleet['gated']}/{fleet['fleetSize']} gated, "
         f"{fleet['notGated']} not gated, {fleet['unknown']} unknown; "
-        f"{fleet['directPushPermitted']} permit a direct push to the default branch",
+        f"a ruleset requires a pull request on "
+        f"{fleet['rulesetRequiresPullRequest']}/{fleet['fleetSize']}",
         file=sys.stderr,
     )
     return 0
