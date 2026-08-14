@@ -79,14 +79,48 @@ def _is_not_found(stderr: str) -> bool:
     return "(404)" in stderr and "HeadObject" in stderr
 
 
+def _dedupe_by_date(lines: list) -> list:
+    """One entry per ``date``, last writer winning; unparseable lines preserved.
+
+    Deduplicating on the whole line — the original ``sort -u`` — only collapses a
+    rerun whose output is byte-identical. Anything that changes the line for a
+    date already written keeps *both*: a repo that gets gated at noon, a value
+    that moves between two runs on one day, or a schema change to the entry
+    shape. The series then carries two contradicting points on the same x, and
+    the newer one does not obviously win.
+
+    Since these files are daily snapshots, the date is the key. Callers pass
+    stored lines first and the fresh line last, so the fresh one wins.
+
+    Lines that are not JSON objects with a ``date`` are not part of the series;
+    they are kept verbatim ahead of it rather than dropped, because deleting
+    data we cannot interpret is worse than carrying it.
+    """
+    by_date: dict = {}
+    preserved: list = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            preserved.append(line)
+            continue
+        date = entry.get("date") if isinstance(entry, dict) else None
+        if not isinstance(date, str):
+            preserved.append(line)
+            continue
+        by_date[date] = line
+    return preserved + [by_date[d] for d in sorted(by_date)]
+
+
 def merge_history(
     local: Path, prefix: str, slug: str, tmp_dir: Path, run: RunFn = _run_aws
 ) -> None:
-    """Append ``local``'s lines to the stored history for ``slug``, deduplicated.
+    """Merge ``local``'s lines into the stored history for ``slug``.
 
-    Download → concatenate → sort -u → re-upload. ``sort -u`` is what makes a
-    same-day rerun idempotent, and it is why history lines must stay
-    byte-identical for an unchanged day.
+    Download → merge one-entry-per-date → re-upload. See ``_dedupe_by_date`` for
+    why the date rather than the whole line is the key.
     """
     existing = tmp_dir / f"existing_{slug}.jsonl"
     key = _key(prefix, "history", f"{slug}.jsonl")
@@ -102,7 +136,7 @@ def merge_history(
     lines.extend(local.read_text().splitlines())
 
     merged = tmp_dir / f"merged_{slug}.jsonl"
-    merged.write_text("\n".join(sorted({ln for ln in lines if ln.strip()})) + "\n")
+    merged.write_text("\n".join(_dedupe_by_date(lines)) + "\n")
     upload(merged, prefix, "history", f"{slug}.jsonl", run=run)
 
 
