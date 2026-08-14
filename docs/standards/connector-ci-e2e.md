@@ -268,8 +268,8 @@ three clouds and got one must not look identical to one that got three.
 That degradation is honest for a repo that only *runs legs against* a tenant, and
 insufficient for one that *installs onto* one. The single-tenant fallback supplies
 `SDR_TEST_TENANT` plus credentials and an API key, and no `tenant_id` — there is no
-matrix entry to carry one. So on `install-app-to-tenant: true` the missing secret
-is fatal, not a warning.
+matrix entry to carry one. So on the install path the missing secret is fatal, not
+a warning.
 
 Failing rather than skipping the install, deliberately. Skipping would leave
 `prepare-tenant` green having done nothing, the tenant on whatever version it was
@@ -278,15 +278,17 @@ confusing failure per leg in place of one clear failure. Heracles re-fetches the
 manifest from the tenant-deployed pod at AE submit, so running the legs against an
 install that did not happen tests the version already on the tenant while
 reporting on the PR's — the exact bug `install-app-to-tenant` exists to remove.
-And since `install-app-to-tenant` is opt-in, a caller that has opted in without a
-`tenant_id` is misconfigured rather than on a supported path.
+A caller on the install path without a resolvable `tenant_id` is misconfigured
+rather than on a supported path, and since FND-128 made the install path the
+default, the supported way to decline it is `install-app-to-tenant: false` — not a
+tenant the install cannot be scoped to.
 
 **The same precondition, checked twice.** "A `tenant_id` can be resolved" is
 knowable in two halves at two different times, so it is checked at both (FND-203):
 
 | Where | Sees | Catches | Costs |
 | --- | --- | --- | --- |
-| `discover-e2e` → *Require the tenant matrix on the install path* | whether `E2E_TENANT_MATRIX_JSON` exists at all | `install-app-to-tenant: true` on a repo the secret was never shared with | seconds |
+| `discover-e2e` → *Require the tenant matrix on the install path* | whether `E2E_TENANT_MATRIX_JSON` exists at all | the install path — the default since FND-128 — on a repo the secret was never shared with | seconds |
 | `prepare-tenant` → *Require a tenant ID before publishing anything* | the resolved `E2E_TENANT_ID` for **this** cloud | matrix present, this cloud's entry missing `tenant_id` | after two per-arch image builds and the manifest merge |
 
 The early check exists because the late one is expensive to reach: the install
@@ -364,7 +366,35 @@ side benefit.
 > is what executes (`processAutomationEngineWorkflow`); the harness's local
 > `manifest_path` seed DAG establishes the workflow record, not the graph. So the
 > DAG contract a full-DAG e2e exercises is whatever version is installed on that
-> tenant. Until FND-31 lands, that is whatever was last hand-deployed there.
+> tenant. With `install-app-to-tenant: false`, that is whatever was last
+> hand-deployed there.
+
+### Adoption: on by default (FND-128)
+
+`install-app-to-tenant` defaults to **true**. No app repo has to opt in, and none
+should need a PR to get the behaviour.
+
+It shipped opt-in under FND-31 for one reason: the install cannot resolve a tenant
+without `E2E_TENANT_MATRIX_JSON`, and that secret was shared with a handful of
+repos. Once it went org-wide, the opt-in stopped protecting anything and started
+costing something — an un-adopted repo still fanned out across every cloud in the
+matrix (the fan-out is gated on the secret, not on this input) and each leg tested
+whatever version that cloud's tenant already served. Three legs of wrong-version
+green in place of one.
+
+**Opting out.** Set `install-app-to-tenant: false` in the app's `tests.yaml` when
+the app genuinely cannot be installed onto the e2e tenants — not published to GM,
+or a tenant carrying an orphan that fails every install (FND-131). Every job on
+the install path is gated on the input, so opting out restores the previous
+behaviour exactly: per-leg builds, no lease, no install, legs against whatever the
+tenant runs. It reinstates the wrong-version risk along with it, so fixing the
+tenant is the better move where there is a choice.
+
+**What a first run tells you.** The install path is a hygiene report for that app's
+footprint on each tenant. `prepare-tenant` names offending images in its log, so a
+dirty tenant produces a precise cleanup list rather than a blanket "install
+failed". Expect the FND-131 shapes: an unpullable orphan, an `Evicted` straggler,
+a TWD version skew.
 
 ### Multi-arch on the install path
 
