@@ -28,7 +28,7 @@
     "github-actions[bot]@users.noreply.github.com"
   ],
   "lockFileMaintenance": {
-    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green. prPriority 5: the lock-refresh lane is created ahead of the non-critical crowd but after the SDK / conformance / toolkit lanes (see the lane-model packageRules below).",
+    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green. prPriority 5: the lock-refresh lane is created ahead of the non-critical crowd but after the SDK / conformance / toolkit lanes (see the lane-model packageRules below). KNOWN GAP: this lane is NOT covered by the 7-day cooldown packageRule below — Renovate cannot age-check a lockFileMaintenance update because it delegates the whole resolution to the package manager, and unlike npm (which gets `--before=<date>`) uv is not yet passed a release-age bound (renovatebot/renovate#41652). So an unattended lock refresh can pull a transitive dependency published minutes ago. Closing it needs an `--exclude-newer` bound on the uv invocation, which only the self-hosted runner can supply; until then this is the fleet's residual release-age exposure, held in check by the required CI gates rather than by the cooldown.",
     "enabled": true,
     "schedule": [
       "at any time"
@@ -188,6 +188,29 @@
         "github-actions"
       ],
       "enabled": false
+    },
+    {
+      "description": "Supply-chain cooldown (org security baseline §5): a third-party version must have been public for 7 days before Renovate raises it. Fleet-wide here rather than per-repo — every consumer extends this preset, so no connector repo needs to restate it. Scoped to the datasources that carry third-party code AND expose a registry-supplied release timestamp: pypi (uv deps) and github-tags (GitHub Action pins, Pkl packages). The timestamp must come from the registry, not the publisher, or the check is not a control at all — which is also why docker is deliberately OUT: its timestamp is the publisher-controlled org.opencontainers.image.created annotation, and base-image rebuilds are mostly CVE patches, so holding them a week is a net security loss. matchUpdateTypes is an allowlist, not an oversight: major/minor/patch are the only update types Renovate documents as reliably carrying a release timestamp (see the support matrix in docs/usage/key-concepts/minimum-release-age.md). pin, bump, rollback, replacement, lockfileUpdate and lockFileMaintenance carry none at all, and digest/pinDigest carry one only for some datasources. Since Renovate 42 defaults minimumReleaseAgeBehaviour to timestamp-required — a missing timestamp counts as 'not yet aged' — matching those types here would not delay them by 7 days, it would suppress them permanently and silently. Upstream's own security:minimumReleaseAge* presets solve this with the inverse (blanket match plus minimumReleaseAge:null carve-outs per unsupported type); the allowlist is the same policy expressed positively, and it trades coverage for safety in the right direction — when Renovate adds timestamp support for another update type, that type is merely not yet cooled down (add it here) rather than silently frozen. internalChecksFilter is pinned to strict (also the current default) so an in-cooldown version yields no branch and no PR — not an open PR parked on a pending renovate/stability-days check. Nothing is lost: Renovate re-evaluates on every run and raises the update once it ages past 7 days. Note that with dependencyDashboard:false there is no visible trace of a suppressed update while it waits. Vulnerability-fix PRs are exempt by Renovate's own vulnerabilityAlerts defaults (minimumReleaseAge:null), matching the baseline's rule that security fixes outrank the cooldown.",
+      "matchDatasources": [
+        "pypi",
+        "github-tags"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "minimumReleaseAge": "7 days",
+      "internalChecksFilter": "strict"
+    },
+    {
+      "description": "Cooldown exemption for Atlan's own published artifacts — they must reach the fleet the moment they ship, and the cooldown's rationale (an unvetted third-party publisher, a package that can be yanked or turn out to be malicious) does not apply to what we publish ourselves. atlan-application-sdk and atlan-application-sdk-conformance are the two PyPI packages the fleet distributes: tag-and-publish.yaml / contract-toolkit-publish.yml dispatch the fleet runner immediately after a publish, so a 7-day hold would stall the fleet's own release loop — and for the conformance package it would hold back the checks that gate every app's CI. atlanhq/** covers the github-tags side: the app-contract-toolkit Pkl package (packageName atlanhq/application-sdk, via the customManager below) and the shared composite actions app repos consume from this repo. Must come after the cooldown rule — later packageRules win.",
+      "matchPackageNames": [
+        "atlan-application-sdk",
+        "atlan-application-sdk-conformance",
+        "atlanhq/**"
+      ],
+      "minimumReleaseAge": null
     },
     {
       "description": "Fleet-wide update-type labels — applied to every PR so the Renovate dashboard scanner can classify without title-parsing. Renovate auto-creates these labels per repo; no per-repo manual setup needed.",
