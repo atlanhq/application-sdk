@@ -32,7 +32,7 @@
     "github-actions[bot]@users.noreply.github.com"
   ],
   "lockFileMaintenance": {
-    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green. prPriority 5: the lock-refresh lane is created ahead of the non-critical crowd but after the SDK / conformance / toolkit lanes (see the lane-model packageRules below). COOLDOWN: Renovate cannot apply minimumReleaseAge to a lockFileMaintenance update — it delegates the entire resolution to the package manager, and unlike npm (which gets `--before=<date>`) uv is not passed a release-age bound (renovatebot/renovate#41652). That matters more here than anywhere else: measured across recent fleet PRs, this lane is the ONLY channel through which third-party and transitive versions actually move (every other lane is either first-party or edits pyproject.toml), so leaving it unbounded would make the cooldown packageRule below decorative. The bound is therefore applied where the resolution happens, via uv's own --exclude-newer P7D in postUpgradeTasks, with the two Atlan-distributed packages exempted through --exclude-newer-package=P0D so they still land the moment they ship. uv accepts relative durations, so the command is a static string with no ${VARS} — required both by the allowedCommands allowlist and because Renovate does not shell-expand post-upgrade commands. Renovate's own lock refresh runs first and this re-locks over it; `--upgrade` re-resolves from scratch, so the bound applies to the whole tree rather than only to what changed. Runs ONLY under self-hosted Renovate (allowedCommands is admin-only), so it is an inert no-op under any hosted app. Two residual notes: if the re-lock fails, Renovate raises the PR with an artifact-error note in the body but still enables platform automerge, so the control fails open with a warning rather than blocking the merge; and the single-package update-lockfile lanes (SDK, conformance) can still pull a fresh transitive as a side effect of the one package they bump — a small reviewable diff, unlike a full refresh.",
+    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green. This lane's rung on the prPriority ladder is set by a packageRule below (matchUpdateTypes: lockFileMaintenance), NOT here: prPriority is only honoured inside packageRules, so setting it in this object is silently ignored — it sat here until FND-359 and the lane ran at the default priority the whole time. COOLDOWN: Renovate cannot apply minimumReleaseAge to a lockFileMaintenance update — it delegates the entire resolution to the package manager, and unlike npm (which gets `--before=<date>`) uv is not passed a release-age bound (renovatebot/renovate#41652). That matters more here than anywhere else: measured across recent fleet PRs, this lane is the ONLY channel through which third-party and transitive versions actually move (every other lane is either first-party or edits pyproject.toml), so leaving it unbounded would make the cooldown packageRule below decorative. The bound is therefore applied where the resolution happens, via uv's own --exclude-newer P7D in postUpgradeTasks, with the two Atlan-distributed packages exempted through --exclude-newer-package=P0D so they still land the moment they ship. uv accepts relative durations, so the command is a static string with no ${VARS} — required both by the allowedCommands allowlist and because Renovate does not shell-expand post-upgrade commands. Renovate's own lock refresh runs first and this re-locks over it; `--upgrade` re-resolves from scratch, so the bound applies to the whole tree rather than only to what changed. Runs ONLY under self-hosted Renovate (allowedCommands is admin-only), so it is an inert no-op under any hosted app. Two residual notes: if the re-lock fails, Renovate raises the PR with an artifact-error note in the body but still enables platform automerge, so the control fails open with a warning rather than blocking the merge; and the single-package update-lockfile lanes (SDK, conformance) can still pull a fresh transitive as a side effect of the one package they bump — a small reviewable diff, unlike a full refresh.",
     "enabled": true,
     "schedule": [
       "at any time"
@@ -40,7 +40,6 @@
     "automerge": true,
     "automergeType": "pr",
     "platformAutomerge": true,
-    "prPriority": 5,
     "addLabels": [
       "update:lock-maintenance"
     ],
@@ -140,6 +139,13 @@
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
+    },
+    {
+      "description": "Lock-refresh lane's rung on the prPriority ladder: created ahead of the non-critical crowd (0) but after the SDK (10) and conformance/toolkit (9) lanes. It has to live in packageRules — prPriority declares parents: ['packageRules'], so Renovate ignores it anywhere else and only says so as a config warning. It sat inside the lockFileMaintenance object from the lane's introduction until FND-359, which means the ladder this preset documents was never fully in effect: the lock refresh ran at the default priority 0, tied with the non-critical group it was supposed to outrank. Only observable under contention, since prConcurrentLimit (8) is what makes creation order matter at all — which is why it went unnoticed, along with nothing validating this preset until FND-359 added renovate-config-validator to pre-commit.",
+      "matchUpdateTypes": [
+        "lockFileMaintenance"
+      ],
+      "prPriority": 5
     },
     {
       "description": "Lane model: group every OTHER PyPI dependency's non-major updates into ONE rolling PR. With bounded lanes — SDK (1) + conformance (1) + contract-toolkit (1) + lock maintenance (1) + this group (1) + github-actions (1) — the crowd occupies a single prConcurrentLimit slot and can never starve the critical lanes, which soft-mode repos previously hit: 5 human-review dep PRs squatting every slot meant an SDK bump PR was simply never created. Excludes the packages with dedicated lanes above.",
