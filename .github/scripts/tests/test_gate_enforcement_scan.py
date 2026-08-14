@@ -573,6 +573,94 @@ def test_nulls_along_the_walk_are_a_legitimate_skip_not_an_error():
         assert parse_arrival_nodes(_arrival_payload(pr_node), GATE) == []
 
 
+@pytest.mark.parametrize(
+    "ctx_node",
+    [
+        pytest.param(
+            {"__typename": "CheckRun", "name": ["unexpected"]}, id="name-list"
+        ),
+        pytest.param({"__typename": "CheckRun", "name": {"x": 1}}, id="name-dict"),
+        pytest.param({"__typename": "CheckRun", "name": 5}, id="name-int"),
+        pytest.param({"__typename": "CheckRun", "name": True}, id="name-bool"),
+        pytest.param(
+            {"__typename": "StatusContext", "context": ["unexpected"]},
+            id="context-list",
+        ),
+    ],
+)
+def test_a_non_string_context_leaf_raises_gh_error(ctx_node):
+    """The leaf analogue of the container guards.
+
+    An unhashable `name`/`context` (list/dict) raises an uncaught TypeError in
+    `names.add(...)` — which `scan_repo` does not catch — and a hashable scalar
+    (int/bool) never matches the required-context string, silently reading as
+    `found: False`. Either way a malformed body must surface as GhError so the
+    one repo degrades to `unknown` instead of aborting the fleet sweep.
+    """
+    pr_node = {
+        "number": 1,
+        "commits": {
+            "nodes": [
+                {
+                    "commit": {
+                        "statusCheckRollup": {
+                            "contexts": {"totalCount": 1, "nodes": [ctx_node]}
+                        }
+                    }
+                }
+            ]
+        },
+    }
+    with pytest.raises(GhError, match="malformed arrival payload"):
+        parse_arrival_nodes(_arrival_payload(pr_node), GATE)
+
+
+def test_scan_repo_reports_unknown_when_an_arrival_leaf_is_malformed():
+    """Pin the downstream effect: a wrong-typed `name`/`context` leaf reaches
+    `scan_repo` as a caught GhError, not an uncaught TypeError — so the repo
+    degrades to `unknown` (fail-loud) instead of aborting the fleet sweep.
+    The ruleset-detail read also fails here so the whole record, not just the
+    arrival facet, lands on `unknown`."""
+
+    def run(args: list) -> str:
+        if args[1] == f"repos/{REPO}":
+            return json.dumps({"b": "main"})
+        if args[1].startswith(f"repos/{REPO}/rulesets?"):
+            return json.dumps([[{"id": 1}]])
+        if args[1] == "graphql":
+            return json.dumps(
+                _arrival_payload(
+                    {
+                        "number": 1,
+                        "commits": {
+                            "nodes": [
+                                {
+                                    "commit": {
+                                        "statusCheckRollup": {
+                                            "contexts": {
+                                                "totalCount": 1,
+                                                "nodes": [
+                                                    {
+                                                        "__typename": "CheckRun",
+                                                        "name": ["unexpected"],
+                                                    }
+                                                ],
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        },
+                    }
+                )
+            )
+        raise GhError("gh api failed: HTTP 429", status=429)
+
+    record = scan_repo(REPO, GATE, sample_size=5, run=run)
+    assert record["status"] == STATUS_UNKNOWN
+    assert _finding_ids(record) == {FINDING_UNREADABLE}
+
+
 def test_repeated_contexts_on_one_commit_are_not_truncation():
     """A commit routinely carries the same context several times — a bot PR
     stacks 5-7 gate runs on one SHA, all but the newest cancelled by the
