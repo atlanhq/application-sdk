@@ -16,11 +16,21 @@ Tasks support heartbeating for long-running operations:
 """
 
 import inspect
+import math
 import re
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast, get_type_hints, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    NoReturn,
+    TypeVar,
+    cast,
+    get_type_hints,
+    overload,
+)
 
 from application_sdk.common._env import env_int
 from application_sdk.contracts.base import Input, Output
@@ -29,6 +39,7 @@ from application_sdk.errors.leaves import InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
+    from application_sdk.execution.progress import ProgressWatchdogMode
     from application_sdk.execution.retry import RetryPolicy
 
 logger = get_logger(__name__)
@@ -38,11 +49,105 @@ F = TypeVar("F", bound=Callable[..., Any])
 # Sentinel for "use default" - allows None to mean "disable"
 _USE_DEFAULT = object()
 
+#: The ``start_to_close`` backstop, in seconds (ADR-0018 → *Rollout* step 3).
+#:
+#: 24 hours, and deliberately not a number anyone is meant to tune. Before this,
+#: the default was 600s and every app overrode it with a guess — 2h, 6h, a
+#: "weight class" — because the question it asks (*how long should this whole
+#: activity take?*) scales with tenant size and is unanswerable at the desk. A
+#: backstop asks nothing: it is the last-resort bound for an attempt that
+#: something else should already have caught.
+#:
+#: What makes it safe to raise is the stall watchdog landing in the same
+#: release: a wedged-but-alive attempt is now *detected* one
+#: ``max_no_progress_seconds`` in, and killed there wherever an app enforces.
+#: The regression this accepts, in warn mode, is that a wedge is contained by an
+#: alert and a human rather than by the small ceiling that used to kill it
+#: accidentally — see ADR-0018 → *Migration*.
+_START_TO_CLOSE_BACKSTOP_SECONDS = 86_400
+
 # Env-var-driven defaults for @task timeouts. Read once at import time so the
 # value is stable for the process lifetime (same pattern as constants.py).
 # Apps that need a different per-task value pass it explicitly to @task().
 _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: int = env_int("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60)
-_DEFAULT_TIMEOUT_SECONDS: int = env_int("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", 600)
+_DEFAULT_TIMEOUT_SECONDS: int = env_int(
+    "ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", _START_TO_CLOSE_BACKSTOP_SECONDS
+)
+
+
+def _validate_watchdog_declaration(
+    progress_watchdog: "ProgressWatchdogMode | str | None",
+    max_no_progress_seconds: float | None,
+) -> "tuple[ProgressWatchdogMode | None, float | None]":
+    """Validate an explicitly declared watchdog mode and allowance.
+
+    Only reached when the author passed one, which is what lets this module stay
+    free of an ``application_sdk.execution`` import at module scope: ``app/``
+    sits *below* ``execution/`` in the import graph (``execution/__init__`` →
+    ``_temporal`` → ``app.registry`` → ``app.base`` → this module), so importing
+    the enum eagerly here deadlocks the very first import of the SDK. Undeclared
+    tasks carry ``None`` all the way to the activity, which resolves the
+    fleet-wide default in a layer that *can* see the enum — see
+    :func:`~application_sdk.execution.progress.resolve_watchdog_mode`.
+
+    Args:
+        progress_watchdog: The declared mode — a :class:`ProgressWatchdogMode`,
+            or one of its string values.
+        max_no_progress_seconds: The declared allowance in seconds.
+
+    Returns:
+        The pair, with the mode coerced to a :class:`ProgressWatchdogMode`.
+
+    Raises:
+        TaskContractError: If either value is unusable. Raised at *decoration*
+            time rather than swallowed, unlike the env-var readers next door: a
+            typo in one deployment manifest must not stop a worker booting, but
+            a typo in an app's own source is a bug its author should see at
+            import.
+    """
+    from application_sdk.execution.progress import (  # noqa: PLC0415 — app/ cannot import execution/ at module scope; see the docstring
+        ProgressWatchdogMode,
+    )
+
+    mode: ProgressWatchdogMode | None = None
+    if progress_watchdog is not None:
+        try:
+            mode = ProgressWatchdogMode(progress_watchdog)
+        except ValueError:
+            raise TaskContractError(
+                f"progress_watchdog={progress_watchdog!r} is not a valid mode. "
+                f"Use one of {', '.join(repr(m.value) for m in ProgressWatchdogMode)} "
+                "(or the ProgressWatchdogMode enum). Omit it to inherit the "
+                "fleet-wide default from ATLAN_PROGRESS_WATCHDOG."
+            ) from None
+
+    budget: float | None = None
+    if max_no_progress_seconds is not None:
+
+        def _reject_allowance() -> NoReturn:
+            """Both ways an allowance can be unusable get the same message.
+
+            A closure rather than a pre-built exception because
+            ``TaskContractError.__init__`` warns on construction, and rather than
+            a NaN sentinel threaded to a later branch because a non-numeric
+            allowance should visibly raise where it is detected.
+            """
+            raise TaskContractError(
+                f"max_no_progress_seconds={max_no_progress_seconds!r} must be a "
+                "finite positive number of seconds. A zero or negative allowance "
+                "makes every attempt stall on its first watchdog tick; pass "
+                "progress_watchdog='off' to disable the watchdog deliberately, or "
+                "omit this to inherit the fleet-wide allowance."
+            ) from None
+
+        try:
+            budget = float(max_no_progress_seconds)
+        except (TypeError, ValueError):
+            _reject_allowance()
+        if not math.isfinite(budget) or budget <= 0:
+            _reject_allowance()
+
+    return mode, budget
 
 
 def _load_default_schedule_to_close_seconds() -> int | None:
@@ -143,7 +248,13 @@ class TaskMetadata:
 
     timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS
     """Default timeout for this task. Defaults to ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS
-    env var, or 600s (10 minutes) if unset.
+    env var, or 86400s (24 hours) if unset.
+
+    A **backstop**, not a duration budget (ADR-0018): the last-resort bound on an
+    attempt that the stall watchdog should already have caught. Do not tune it —
+    the question it asks scales with tenant size, which is what made it
+    unguessable. To bound a wedge in *minutes* rather than at the backstop,
+    declare holds and set :attr:`progress_watchdog` to ``enforce``.
 
     Bounds ONE attempt. The retry policy multiplies it — see
     :attr:`schedule_to_close_seconds` for the ceiling on the product."""
@@ -192,6 +303,30 @@ class TaskMetadata:
     Set to None to disable auto-heartbeating (use manual heartbeats only).
     Should be less than heartbeat_timeout_seconds (recommended: 1/6 of timeout).
     Default: 10 seconds."""
+
+    progress_watchdog: "ProgressWatchdogMode | None" = None
+    """How the stall watchdog reacts to a no-progress gap on this task.
+
+    ``None`` — the default — means *this task declares nothing*, and the
+    fleet-wide default applies: ``warn`` unless ``ATLAN_PROGRESS_WATCHDOG`` says
+    otherwise. It is deliberately not ``ProgressWatchdogMode.WARN`` here: the
+    absence of a declaration and a declaration of ``warn`` are different facts,
+    and only the first one follows an operator turning the fleet ``off``.
+
+    Resolved against the process-wide setting by
+    :func:`~application_sdk.execution.progress.resolve_watchdog_mode` in the
+    activity, which is the layer that runs the watchdog and therefore the layer
+    whose env the kill-switch has to read."""
+
+    max_no_progress_seconds: float | None = None
+    """How long this task may go without an observable progress signal, in seconds.
+
+    ``None`` inherits the fleet-wide allowance (``ATLAN_MAX_NO_PROGRESS_SECONDS``,
+    900s by default). Roughly app-independent on purpose: it answers *"how long
+    may this attempt be silent?"*, not *"how much data does this tenant have?"* —
+    so a task that legitimately goes quiet for a long time wants a hold at that
+    call site (:func:`~application_sdk.execution.progress.holding_progress`),
+    not a bigger number here."""
 
 
 def _validate_task_signature(
@@ -307,6 +442,8 @@ def task(
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
     pool: str | None = None,
+    progress_watchdog: "ProgressWatchdogMode | str | None" = None,
+    max_no_progress_seconds: float | None = None,
 ) -> Callable[[F], F]: ...
 
 
@@ -323,6 +460,8 @@ def task(
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
     pool: str | None = None,
+    progress_watchdog: "ProgressWatchdogMode | str | None" = None,
+    max_no_progress_seconds: float | None = None,
 ) -> F | Callable[[F], F]:
     """Decorator to mark a method as a task (Temporal activity).
 
@@ -382,11 +521,14 @@ def task(
         func: The function to decorate (when used without parentheses).
         name: Override the task name (defaults to function name).
         description: Human-readable description.
-        timeout_seconds: Activity timeout in seconds — the ``start_to_close``
-            budget for **one attempt**, which the retry policy then multiplies.
+        timeout_seconds: Activity ``start_to_close`` bound in seconds — the
+            **backstop** on one attempt, which the retry policy then multiplies.
             Defaults to ``ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS`` env var, or
-            600 s (10 min) if unset. Explicit values take precedence over the
-            env var.
+            86400 s (24 h) if unset. Explicit values take precedence over the
+            env var, but ADR-0018's position is that this is no longer a number
+            worth tuning: a wedged-but-alive attempt is caught by the stall
+            watchdog in minutes, and a legitimately long one should not die at a
+            guessed ceiling.
         schedule_to_close_seconds: Ceiling on the task's **total** time across
             every attempt, in seconds. ``None`` — the default — leaves the retry
             product unbounded, so the real worst case is
@@ -424,6 +566,26 @@ def task(
             mixed or upper case would create a lookup mismatch. Unset tasks run
             on the workflow's own task queue (default, backward-compatible
             behavior).
+        progress_watchdog: How the stall watchdog reacts to a no-progress gap on
+            this task — ``"off"``, ``"warn"`` or ``"enforce"``, or the
+            :class:`~application_sdk.execution.progress.ProgressWatchdogMode`
+            enum. ``None`` — the default — inherits the fleet-wide setting
+            (``ATLAN_PROGRESS_WATCHDOG``, ``warn`` when unset). Declare
+            ``"enforce"`` once this task's remaining gaps are inside declared
+            holds or under budget, **verified against a large-tenant profile**:
+            a small run hides the tail gaps, and a stall kill retries, so an
+            under-instrumented task burns the same wasted work up to three times
+            before failing.
+        max_no_progress_seconds: How long this task may be silent before the
+            watchdog calls it stalled. ``None`` inherits the fleet-wide
+            allowance (``ATLAN_MAX_NO_PROGRESS_SECONDS``, 900 s when unset).
+            This is not the beat interval (that is ``auto_heartbeat_seconds``,
+            and it is unconditional) and not a duration budget — it measures the
+            *gap* between progress signals, so a nine-hour task writing a batch
+            every thirty seconds never approaches it. A single step that goes
+            quiet for longer wants
+            :func:`~application_sdk.execution.progress.holding_progress` at that
+            call site, not a bigger number here.
 
     Returns:
         The decorated function with task metadata attached.
@@ -478,6 +640,16 @@ def task(
             "before it started."
         )
 
+    # Only touched when the author declared one of the two, which keeps the
+    # `application_sdk.execution` import out of the SDK's own import-time
+    # decorations in `app/base.py` — see _validate_watchdog_declaration.
+    resolved_watchdog: "ProgressWatchdogMode | None" = None
+    resolved_no_progress: float | None = None
+    if progress_watchdog is not None or max_no_progress_seconds is not None:
+        resolved_watchdog, resolved_no_progress = _validate_watchdog_declaration(
+            progress_watchdog, max_no_progress_seconds
+        )
+
     def decorator(fn: F) -> F:
         task_name = name or getattr(fn, "__name__", repr(fn))
 
@@ -500,6 +672,8 @@ def task(
             retry_max_interval_seconds=retry_max_interval_seconds,
             heartbeat_timeout_seconds=resolved_heartbeat_timeout,
             auto_heartbeat_seconds=resolved_auto_heartbeat,
+            progress_watchdog=resolved_watchdog,
+            max_no_progress_seconds=resolved_no_progress,
         )
 
         return fn

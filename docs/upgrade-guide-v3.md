@@ -1026,11 +1026,7 @@ guess.
 
 **There is no migration task here.** This step exists to tell you that, precisely.
 
-> The progress signals the watchdog reads are already live. The settings that act on
-> them — `progress_watchdog` and `max_no_progress_seconds` — arrive together with the
-> 24h backstop, in the release that turns the watchdog on fleet-wide in `warn`.
-
-### On upgrade, nothing fails differently
+### On upgrade, no failure *semantics* change (the default timeout and telemetry do)
 
 - You land in **`warn` mode**, which cannot fail an activity. It observes and reports.
 - `heartbeat_timeout_seconds` keeps its meaning and its 60s default. Crash, OOM and
@@ -1049,9 +1045,29 @@ Two histograms and the occasional INFO log line. Warn-mode findings are delibera
 **never** WARNING-level — a stall observation under a fleet-wide default is an expected
 observation, not an alert.
 
-If you need even that gone, `progress_watchdog="off"` is the kill-switch. It makes the
-whole mechanism inert. It is not the normal state, and it also switches off the report
-you would otherwise use later.
+If you need most of that gone, `ATLAN_PROGRESS_WATCHDOG=off` — or
+`progress_watchdog="off"` on a single `@task` — is the kill-switch: no gap is reported
+and nothing is ever failed. It is not the normal state, and it also switches off the
+report you would otherwise use later. Note it is not *completely* inert — hold
+observations still record, since those are a work-list entry rather than a watchdog
+action — and it does not shorten a wedged attempt, which is bounded by
+`timeout_seconds` either way.
+
+### One knob did change value: `timeout_seconds`
+
+`ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` now defaults to **86400** (24 h) instead of 600.
+Nothing changes for a task that passes `timeout_seconds=` explicitly — which, if your app
+weight-classed its tasks, is most of them. Those explicit numbers are now the thing worth
+deleting: they are the guesses ADR-0018 exists to remove, and with the backstop in place
+a legitimately long attempt no longer needs one to survive. Delete them at your own pace;
+nothing forces it.
+
+The one consequence to be aware of is on the other side of the trade: a *wedged* attempt
+is no longer killed by a small ceiling, so while your app is in `warn` its containment is
+the `AtlanAppTaskStalled` alert plus a human rather than an automatic kill. Detection
+improves — a wedge is now visible one budget in, where before it was only ever killed by
+luck. See [ADR-0018 → Migration](adr/0018-progress-aware-heartbeat.md#migration--backward-compatibility--what-if-i-do-nothing)
+for why that trade is the one being made.
 
 ### Declaring holds is an eventual optimisation, not an upgrade task
 

@@ -159,14 +159,16 @@ There is no `@auto_heartbeater` decorator in v3. Heartbeating is declarative.
 
 ### Process-wide timeout defaults via env vars
 
-When no explicit value is passed to `@task`, the framework reads two env vars at
+When no explicit value is passed to `@task`, the framework reads these env vars at
 process startup:
 
 | Env var | Default | Controls |
 |---|---|---|
-| `ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` | `600` (10 min) | `timeout_seconds` — Temporal kills the activity attempt after this many seconds |
+| `ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` | `86400` (24 h) | `timeout_seconds` — Temporal kills the activity attempt after this many seconds |
 | `ATLAN_HEARTBEAT_TIMEOUT_SECONDS` | `60` | `heartbeat_timeout_seconds` — Temporal restarts the activity if no heartbeat is received within this window |
 | `ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS` | unset | `schedule_to_close_seconds` — ceiling on the task's **total** time across every retry. Unset (or `0`) leaves the retry product unbounded |
+| `ATLAN_PROGRESS_WATCHDOG` | `warn` | `progress_watchdog` — the stall watchdog's mode. `off` is a kill-switch that beats a per-task declaration |
+| `ATLAN_MAX_NO_PROGRESS_SECONDS` | `900` | `max_no_progress_seconds` — how long an attempt may be silent before the watchdog reports a gap |
 
 Set these in `atlan.yaml` (or your deployment env) to apply a fleet-wide default
 without touching every `@task` decorator:
@@ -191,11 +193,11 @@ question each one answers:
 |---|---|---|---|
 | `heartbeat_timeout_seconds` | 60s | *"Is anything beating at all?"* — crash, OOM kill, node loss, a fully blocked event loop | No |
 | `max_no_progress_seconds` | 900s | *"How long may this attempt be silent before it counts as stalled?"* — wedged-but-alive | Rarely |
-| `timeout_seconds` (`start_to_close`) | 600s today; a 24h backstop once the stall watchdog ships | *"What is the absolute ceiling on one attempt?"* | No — it becomes a backstop, not a budget |
+| `timeout_seconds` (`start_to_close`) | a 24h backstop | *"What is the absolute ceiling on one attempt?"* | No — it is a backstop, not a budget |
 
-`max_no_progress_seconds` and the `progress_watchdog` mode arrive with the release that
-raises `timeout_seconds` to its backstop value; the progress signals they act on are
-already live.
+There is a fourth setting, `progress_watchdog` (`off` / `warn` / `enforce`, defaulting
+to `warn` fleet-wide), which decides what the watchdog *does* with a gap rather than how
+long a gap may be.
 
 `max_no_progress_seconds` is **not** the beat interval (that is `auto_heartbeat_seconds`,
 and it is unconditional) and **not** a duration budget — it measures the *gap* between
@@ -217,7 +219,7 @@ whole product:
 worst case per dispatch = retry_max_attempts x timeout_seconds
 ```
 
-At the defaults that is 30 minutes. Against a 24-hour backstop it is 72 hours.
+At the defaults — three attempts against the 24-hour backstop — that is 72 hours.
 The SDK leaves that product unbounded on purpose ([ADR-0018](../adr/0018-progress-aware-heartbeat.md)
 → *Bounding total time*) — picking a total duration up front is the guess the
 whole design removes — so the ceiling is a declaration, available three ways:

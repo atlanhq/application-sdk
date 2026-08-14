@@ -12,19 +12,23 @@ and still be wrong in production:
    eviction won that race the attempt would be re-dispatched by the
    workflow-side eviction-retry loop *outside* the normal retry budget, so the
    matrix of (stall, shutting down) is pinned in all four corners.
-3. **What is wired, and what deliberately is not.** The handler is injected now;
-   the mode and the budget that make the watchdog act are FND-296's, so on this
-   branch the watchdog is inert and the behaviour change is zero. A test asserts
-   that absence rather than trusting it.
+3. **What the activity supplies to the watchdog.** Since FND-296 the mode and the
+   budget are resolved in the activity and passed to the loop, and a task that
+   declares nothing arrives in ``warn`` — the fleet default, with no opt-in.
+   Resolution happens on the activity side so ``off`` in the worker's
+   environment is a real kill-switch, and so a run dispatched before these
+   fields existed lands on the default rather than on nothing. All of that is
+   asserted rather than trusted.
 
 The end-to-end test drives the *real* watchdog inside the *real* activity body,
-with only the enforce config injected — no patched clock (an asyncio loop shares
-``time.monotonic``), just a 10 ms tick against a 50 ms budget.
+with only the enforce config overridden — no patched clock (an asyncio loop
+shares ``time.monotonic``), just a 10 ms tick against a 50 ms budget.
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 from unittest import mock
@@ -37,20 +41,30 @@ from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.leaves import WORKER_EVICTED_TYPE, TaskStalledError
 from application_sdk.errors.wire import FailureDetails
+from application_sdk.execution import progress as progress_module
+from application_sdk.execution import progress_telemetry as telemetry_module
 from application_sdk.execution import shutdown as shutdown_module
 from application_sdk.execution._temporal import activities as activities_module
 from application_sdk.execution._temporal.activities import (
+    _WATCHDOG_ONLY_TICK_SECONDS,
     TaskContext,
     create_activity_from_task,
 )
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.execution.heartbeat import (
+    NoopHeartbeatController,
+    TemporalHeartbeatController,
+)
+from application_sdk.execution.heartbeat import (
     auto_heartbeat_loop as _real_auto_heartbeat_loop,
 )
 from application_sdk.execution.progress import (
+    ClosedHold,
     ProgressTracker,
     ProgressWatchdogMode,
     current_progress_tracker,
+    holding_progress,
+    resolve_watchdog_mode,
 )
 
 _HEARTBEAT_LOOP = "application_sdk.execution.heartbeat.auto_heartbeat_loop"
@@ -75,36 +89,57 @@ def _activity_for(app_name: str, task_name: str) -> ActivityFn:
     )
 
 
+_HEARTBEAT_DEFAULT = object()
+
+
 def _task_context(
-    app_name: str, task_name: str, *, heartbeating: bool = True
+    app_name: str,
+    task_name: str,
+    *,
+    heartbeating: bool = True,
+    heartbeat_timeout_seconds: int | None | object = _HEARTBEAT_DEFAULT,
+    auto_heartbeat_seconds: int | None | object = _HEARTBEAT_DEFAULT,
+    progress_watchdog: ProgressWatchdogMode | None = None,
+    max_no_progress_seconds: float | None = None,
 ) -> TaskContext:
     return TaskContext(
         app_name=app_name,
         task_name=task_name,
         run_id="run-1",
-        heartbeat_timeout_seconds=60 if heartbeating else None,
-        auto_heartbeat_seconds=10 if heartbeating else None,
+        heartbeat_timeout_seconds=(
+            (60 if heartbeating else None)
+            if heartbeat_timeout_seconds is _HEARTBEAT_DEFAULT
+            else cast("int | None", heartbeat_timeout_seconds)
+        ),
+        auto_heartbeat_seconds=(
+            (10 if heartbeating else None)
+            if auto_heartbeat_seconds is _HEARTBEAT_DEFAULT
+            else cast("int | None", auto_heartbeat_seconds)
+        ),
+        progress_watchdog=progress_watchdog,
+        max_no_progress_seconds=max_no_progress_seconds,
     )
 
 
 def _enforcing_watchdog(
     *, budget_seconds: float = 0.05, tick_seconds: float = 0.01
 ) -> Callable[..., Awaitable[None]]:
-    """The real auto-heartbeat loop, with the config FND-296 will supply.
+    """The real auto-heartbeat loop, sped up and pinned to ``enforce``.
 
     Everything under test stays real — the tick, the gap arithmetic, the
-    ``on_stall`` call, the loop returning immediately after enforcing. Only
-    ``watchdog_mode`` and ``max_no_progress_seconds`` are injected, since
-    ``activities.py`` has nothing to read them from yet.
+    ``on_stall`` call, the loop returning immediately after enforcing. The three
+    values ``activities.py`` supplies are *overridden* rather than added: since
+    FND-296 it does pass a mode and a budget, and a test that waited for the
+    fleet default (``warn``, 900s) would neither enforce nor finish this decade.
+    That the real wiring passes the resolved pair at all is asserted separately,
+    in :meth:`TestWatchdogWiring.test_the_activity_supplies_the_resolved_config`.
     """
 
     async def loop(**kwargs: Any) -> None:
         kwargs["interval_seconds"] = tick_seconds
-        await _real_auto_heartbeat_loop(
-            **kwargs,
-            max_no_progress_seconds=budget_seconds,
-            watchdog_mode=ProgressWatchdogMode.ENFORCE,
-        )
+        kwargs["max_no_progress_seconds"] = budget_seconds
+        kwargs["watchdog_mode"] = ProgressWatchdogMode.ENFORCE
+        await _real_auto_heartbeat_loop(**kwargs)
 
     return loop
 
@@ -441,42 +476,175 @@ class TestWatchdogWiring:
         assert seen["progress"] is from_body[0]
         assert callable(seen["on_stall"])
 
-    async def test_the_watchdog_config_is_left_to_the_flag(self) -> None:
-        """No mode and no budget, so the watchdog is inert on this branch.
+    async def test_the_activity_supplies_the_resolved_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A task that declares nothing still arrives at the loop in warn mode.
 
-        This is what makes the claim "zero behaviour change" checkable rather
-        than argued: the handler is injected, and turning the watchdog on is a
-        config change (FND-296), not another seam.
+        The whole of FND-296 in one assertion: no opt-in, no per-app step, and
+        the mode reaching the watchdog is the fleet default rather than ``OFF``.
+        The budget comes with it, since a mode with no allowance is inert.
+
+        Both constants are pinned rather than read from the environment: a worker
+        started with ``ATLAN_PROGRESS_WATCHDOG=enforce`` (or a custom allowance)
+        would otherwise make this assert a non-default.
         """
+        monkeypatch.setattr(
+            progress_module, "PROGRESS_WATCHDOG_MODE", ProgressWatchdogMode.WARN
+        )
+        monkeypatch.setattr(progress_module, "MAX_NO_PROGRESS_SECONDS", 900.0)
         seen: dict[str, Any] = {}
 
-        class _InertApp(App):
-            @task(timeout_seconds=600)
-            async def inert(self, input: _StallIn) -> _StallOut:
+        class _InheritingApp(App):
+            @task
+            async def inherits(self, input: _StallIn) -> _StallOut:
                 return _StallOut(msg="ok")
 
             async def run(self, input: _StallIn) -> _StallOut:
-                return await self.inert(input)
+                return await self.inherits(input)
 
         async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
             seen.update(kwargs)
             await stop_event.wait()
 
-        _InertApp()
-        activity_fn = _activity_for("_inert-app", "inert")
+        _InheritingApp()
+        activity_fn = _activity_for("_inheriting-app", "inherits")
 
         with mock.patch(_HEARTBEAT_LOOP, new=loop):
-            await activity_fn(_task_context("_inert-app", "inert"), _StallIn())
+            await activity_fn(_task_context("_inheriting-app", "inherits"), _StallIn())
 
-        assert "watchdog_mode" not in seen
-        assert "max_no_progress_seconds" not in seen
+        assert seen["watchdog_mode"] is ProgressWatchdogMode.WARN
+        assert seen["max_no_progress_seconds"] == 900.0
 
-    async def test_no_heartbeat_loop_means_no_watchdog(self) -> None:
-        """A task with heartbeating disabled runs no loop, so nothing can stall it.
+    async def test_the_hold_observer_gets_the_resolved_allowance(self) -> None:
+        """A declared ``max_no_progress_seconds`` reaches the hold observer too.
 
-        Recorded rather than asserted as desirable: the tracker is bound for such
-        a task, but the watchdog lives in the auto-heartbeat loop, so today the
-        duration backstop is that task's only bound.
+        The observer's ``budget_seconds`` is the floor above which an unbounded
+        hold is worth naming; left at the default it would ignore the task's own
+        allowance, under-reporting holds past a smaller budget and over-reporting
+        ones under a larger one.
+        """
+        built: dict[str, Any] = {}
+
+        def observer(task_name: str, *, budget_seconds: float) -> None:
+            built["task_name"] = task_name
+            built["budget_seconds"] = budget_seconds
+            return None
+
+        class _DeclaringApp(App):
+            @task(max_no_progress_seconds=42)
+            async def declares(self, input: _StallIn) -> _StallOut:
+                return _StallOut(msg="ok")
+
+            async def run(self, input: _StallIn) -> _StallOut:
+                return await self.declares(input)
+
+        async def loop(*, stop_event: asyncio.Event, **_kwargs: Any) -> None:
+            await stop_event.wait()
+
+        _DeclaringApp()
+        activity_fn = _activity_for("_declaring-app", "declares")
+
+        # ``closed_hold_observer`` is imported function-locally from
+        # ``progress_telemetry`` (a circular-import workaround), so the patch has
+        # to land on the source module, not on ``activities``.
+        with (
+            mock.patch(_HEARTBEAT_LOOP, new=loop),
+            mock.patch.object(
+                telemetry_module, "closed_hold_observer", side_effect=observer
+            ),
+        ):
+            await activity_fn(
+                _task_context(
+                    "_declaring-app", "declares", max_no_progress_seconds=42.0
+                ),
+                _StallIn(),
+            )
+
+        assert built["budget_seconds"] == 42.0
+
+    async def test_a_declaration_on_the_wire_reaches_the_loop(self) -> None:
+        """What an app flips in rollout step 6, arriving from the dispatch side."""
+        seen: dict[str, Any] = {}
+
+        class _EnforcingApp(App):
+            @task(progress_watchdog="enforce", max_no_progress_seconds=42)
+            async def strict(self, input: _StallIn) -> _StallOut:
+                return _StallOut(msg="ok")
+
+            async def run(self, input: _StallIn) -> _StallOut:
+                return await self.strict(input)
+
+        async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
+            seen.update(kwargs)
+            await stop_event.wait()
+
+        _EnforcingApp()
+        activity_fn = _activity_for("_enforcing-app", "strict")
+
+        with mock.patch(_HEARTBEAT_LOOP, new=loop):
+            await activity_fn(
+                _task_context(
+                    "_enforcing-app",
+                    "strict",
+                    progress_watchdog=ProgressWatchdogMode.ENFORCE,
+                    max_no_progress_seconds=42.0,
+                ),
+                _StallIn(),
+            )
+
+        assert seen["watchdog_mode"] is ProgressWatchdogMode.ENFORCE
+        assert seen["max_no_progress_seconds"] == 42.0
+
+    async def test_the_kill_switch_is_read_on_the_worker(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``off`` in the activity worker's environment beats a per-task ``enforce``.
+
+        Resolution happens here rather than on the workflow side precisely so an
+        operator can throw the switch without every in-flight run needing to be
+        re-dispatched to notice. A resolved ``off`` starts no loop at all — the
+        one mode that is genuinely inert for no-progress *detection*.
+        """
+        loop_calls: list[dict[str, Any]] = []
+
+        class _PinnedApp(App):
+            @task(progress_watchdog="enforce")
+            async def pinned(self, input: _StallIn) -> _StallOut:
+                return _StallOut(msg="ok")
+
+            async def run(self, input: _StallIn) -> _StallOut:
+                return await self.pinned(input)
+
+        async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
+            loop_calls.append(kwargs)
+            await stop_event.wait()
+
+        _PinnedApp()
+        activity_fn = _activity_for("_pinned-app", "pinned")
+        monkeypatch.setattr(
+            progress_module, "PROGRESS_WATCHDOG_MODE", ProgressWatchdogMode.OFF
+        )
+
+        with mock.patch(_HEARTBEAT_LOOP, new=loop):
+            await activity_fn(
+                _task_context(
+                    "_pinned-app",
+                    "pinned",
+                    progress_watchdog=ProgressWatchdogMode.ENFORCE,
+                ),
+                _StallIn(),
+            )
+
+        assert loop_calls == []
+
+    async def test_no_heartbeat_still_runs_the_watchdog(self) -> None:
+        """A task with heartbeating disabled is exactly the one the watchdog protects.
+
+        The seam gates on the resolved mode, not the heartbeat config: with the
+        fleet default (``warn``) and no heartbeat, the loop still starts — riding
+        a NoopHeartbeatController beat that emits no Temporal heartbeat — so a
+        wedge is observed rather than left to the duration backstop alone.
         """
         loop_calls: list[dict[str, Any]] = []
 
@@ -488,8 +656,9 @@ class TestWatchdogWiring:
             async def run(self, input: _StallIn) -> _StallOut:
                 return await self.nobeat(input)
 
-        async def loop(**kwargs: Any) -> None:
+        async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
             loop_calls.append(kwargs)
+            await stop_event.wait()
 
         activity_fn = _activity_for("_no-beat-app", "nobeat")
 
@@ -499,4 +668,302 @@ class TestWatchdogWiring:
             )
 
         assert result.msg == "ok"
+        # One loop, in the inherited warn mode, ticking on the watchdog-only beat
+        # (no heartbeat interval to reuse) and heartbeating through a Noop beat —
+        # so nothing reaches Temporal, but a gap is still observed.
+        assert len(loop_calls) == 1
+        assert loop_calls[0]["watchdog_mode"] is ProgressWatchdogMode.WARN
+        assert loop_calls[0]["interval_seconds"] == _WATCHDOG_ONLY_TICK_SECONDS
+        assert isinstance(
+            loop_calls[0]["heartbeat_fn"].__self__, NoopHeartbeatController
+        )
+
+    async def test_manual_heartbeats_get_no_automatic_keepalive(self) -> None:
+        """Manual-heartbeat tasks opted out of auto-heartbeats, watchdog or not.
+
+        The seam must not widen: ``heartbeat_timeout_seconds`` set with
+        ``auto_heartbeat_seconds=None`` means *manual* heartbeating — the task's
+        own ``heartbeat()`` calls, on the real Temporal controller — and the
+        loop the watchdog rides must not add automatic keepalives the author
+        disabled. So the loop ticks through a Noop beat while the controller
+        handed to the task stays Temporal.
+        """
+        loop_calls: list[dict[str, Any]] = []
+
+        class _ManualApp(App):
+            @task(timeout_seconds=600)
+            async def manual(self, input: _StallIn) -> _StallOut:
+                return _StallOut(msg="ok")
+
+            async def run(self, input: _StallIn) -> _StallOut:
+                return await self.manual(input)
+
+        async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
+            loop_calls.append(kwargs)
+            await stop_event.wait()
+
+        _ManualApp()
+        activity_fn = _activity_for("_manual-app", "manual")
+
+        with mock.patch(_HEARTBEAT_LOOP, new=loop):
+            result = await activity_fn(
+                _task_context(
+                    "_manual-app",
+                    "manual",
+                    heartbeat_timeout_seconds=60,
+                    auto_heartbeat_seconds=None,
+                ),
+                _StallIn(),
+            )
+
+        assert result.msg == "ok"
+        # One loop — the watchdog still runs in the inherited warn mode — but
+        # ticking on the watchdog-only beat through a Noop heartbeat, so no
+        # automatic Temporal keepalive is emitted for a task that asked for
+        # none.
+        assert len(loop_calls) == 1
+        assert loop_calls[0]["watchdog_mode"] is ProgressWatchdogMode.WARN
+        assert loop_calls[0]["interval_seconds"] == _WATCHDOG_ONLY_TICK_SECONDS
+        assert isinstance(
+            loop_calls[0]["heartbeat_fn"].__self__, NoopHeartbeatController
+        )
+
+    async def test_auto_heartbeat_keeps_the_temporal_beat(self) -> None:
+        """The ordinary path is untouched: auto-heartbeating rides the real beat.
+
+        With an auto-heartbeat interval configured the loop must keep emitting
+        keepalives through the task's own Temporal controller — the beat is the
+        crash detector, and selecting the Noop here would silently blind it.
+        """
+        loop_calls: list[dict[str, Any]] = []
+
+        class _BeatApp(App):
+            @task(timeout_seconds=600)
+            async def beat(self, input: _StallIn) -> _StallOut:
+                return _StallOut(msg="ok")
+
+            async def run(self, input: _StallIn) -> _StallOut:
+                return await self.beat(input)
+
+        async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
+            loop_calls.append(kwargs)
+            await stop_event.wait()
+
+        _BeatApp()
+        activity_fn = _activity_for("_beat-app", "beat")
+
+        with mock.patch(_HEARTBEAT_LOOP, new=loop):
+            result = await activity_fn(
+                _task_context(
+                    "_beat-app",
+                    "beat",
+                    heartbeat_timeout_seconds=60,
+                    auto_heartbeat_seconds=10,
+                ),
+                _StallIn(),
+            )
+
+        assert result.msg == "ok"
+        assert len(loop_calls) == 1
+        assert loop_calls[0]["interval_seconds"] == 10
+        assert isinstance(
+            loop_calls[0]["heartbeat_fn"].__self__, TemporalHeartbeatController
+        )
+
+
+class TestDeclarationReachesTheWire:
+    """The dispatch half: a ``@task`` declaration has to survive the trip.
+
+    ``TaskMetadata`` → ``_create_task_activity_wrapper`` → ``TaskContext`` →
+    (Temporal) → the activity. The activity end is covered above; this is
+    everything before it.
+    """
+
+    async def _dispatched_context(
+        self,
+        *,
+        progress_watchdog: ProgressWatchdogMode | None = None,
+        max_no_progress_seconds: float | None = None,
+    ) -> TaskContext:
+        from application_sdk.app.base import (  # noqa: PLC0415 — private dispatch seam, imported where it is used
+            _create_task_activity_wrapper,
+        )
+
+        with mock.patch(
+            "application_sdk.execution._temporal.eviction_retry."
+            "execute_activity_with_eviction_retry",
+            new_callable=mock.AsyncMock,
+        ) as dispatched:
+            dispatched.return_value = mock.MagicMock()
+            wrapper = _create_task_activity_wrapper(
+                app_name="_dispatch-app",
+                task_name="extract",
+                timeout_seconds=600,
+                retry_max_attempts=3,
+                retry_max_interval_seconds=30,
+                output_type=_StallOut,
+                context_data={"run_id": "r1"},
+                progress_watchdog=progress_watchdog,
+                max_no_progress_seconds=max_no_progress_seconds,
+            )
+            await wrapper(mock.MagicMock())
+
+        return cast("TaskContext", dispatched.call_args.kwargs["args"][0])
+
+    async def test_a_task_that_declares_nothing_sends_nothing(self) -> None:
+        """``None`` on the wire, not a resolved ``warn``.
+
+        The distinction is the kill-switch: a resolved mode baked in at dispatch
+        would make an operator's ``off`` on the worker a no-op for every run
+        already in flight.
+        """
+        context = await self._dispatched_context()
+
+        assert context.progress_watchdog is None
+        assert context.max_no_progress_seconds is None
+
+    async def test_a_declaration_is_carried_verbatim(self) -> None:
+        context = await self._dispatched_context(
+            progress_watchdog=ProgressWatchdogMode.ENFORCE,
+            max_no_progress_seconds=42.0,
+        )
+
+        assert context.progress_watchdog is ProgressWatchdogMode.ENFORCE
+        assert context.max_no_progress_seconds == 42.0
+
+    async def test_the_declaration_survives_the_converter(self) -> None:
+        """Pinned against the real converter, not assumed.
+
+        A ``StrEnum`` on an activity argument is a new shape for ``TaskContext``,
+        and every dispatch would fail on decode if it did not round-trip.
+        """
+        from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path, imported where it is used
+            create_data_converter,
+        )
+
+        converter = create_data_converter()
+        context = TaskContext(
+            app_name="a",
+            task_name="t",
+            run_id="r",
+            progress_watchdog=ProgressWatchdogMode.ENFORCE,
+            max_no_progress_seconds=42.0,
+        )
+
+        payloads = await converter.encode([context])
+        decoded = await converter.decode(payloads, [TaskContext])
+
+        assert decoded[0].progress_watchdog is ProgressWatchdogMode.ENFORCE
+        assert decoded[0].max_no_progress_seconds == 42.0
+
+    async def test_a_dispatch_from_before_these_fields_lands_on_the_default(
+        self,
+    ) -> None:
+        """A run in flight across the upgrade decodes to "declares nothing".
+
+        Which is the whole reason the wire carries the declaration rather than
+        the resolved mode: that run starts producing warn-mode telemetry as soon
+        as the *worker* is upgraded, with no re-dispatch.
+        """
+        from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path, imported where it is used
+            create_data_converter,
+        )
+
+        @dataclasses.dataclass
+        class _OldTaskContext:
+            """``TaskContext`` as a worker from before FND-296 built it."""
+
+            app_name: str
+            task_name: str
+            run_id: str
+
+        converter = create_data_converter()
+        payloads = await converter.encode(
+            [_OldTaskContext(app_name="a", task_name="t", run_id="r")]
+        )
+        decoded = await converter.decode(payloads, [TaskContext])
+
+        assert decoded[0].progress_watchdog is None
+        assert resolve_watchdog_mode(decoded[0].progress_watchdog) is (
+            ProgressWatchdogMode.WARN
+        )
+
+
+class TestOffIsNotFullyInert:
+    """``off`` stops the watchdog, not every observation — and not the exposure.
+
+    Documented in three places (the enum, Progress & Stalls, the stalled-task
+    runbook) because it is the kind of claim an operator acts on mid-incident.
+    Pinned here so the docs and the code cannot drift apart: someone "fixing"
+    ``off`` to be genuinely inert would silently drop the hold work-list, and
+    someone reading ``off`` as a way to shorten a wedge would be reaching for a
+    lever that does not move.
+    """
+
+    async def _run_in_off_mode(self) -> tuple[list[dict[str, Any]], list[ClosedHold]]:
+        """Run one attempt in ``off`` mode; the task body takes and releases a hold.
+
+        Returns every call made to the heartbeat loop, and every hold observation
+        that actually reached the telemetry layer.
+        """
+        loop_calls: list[dict[str, Any]] = []
+        observed: list[ClosedHold] = []
+
+        class _OffApp(App):
+            @task
+            async def quiet_step(self, input: _StallIn) -> _StallOut:
+                # The shape every `run_in_thread` offload produces: one hold,
+                # entered and released inside the attempt.
+                async with holding_progress("vendor.export", timeout=None):
+                    pass
+                return _StallOut(msg="ok")
+
+            async def run(self, input: _StallIn) -> _StallOut:
+                return await self.quiet_step(input)
+
+        async def loop(*, stop_event: asyncio.Event, **kwargs: Any) -> None:
+            loop_calls.append(kwargs)
+            await stop_event.wait()
+
+        _OffApp()
+        activity_fn = _activity_for("_off-app", "quiet_step")
+
+        with (
+            mock.patch(_HEARTBEAT_LOOP, new=loop),
+            mock.patch.object(
+                telemetry_module,
+                "record_closed_hold",
+                side_effect=lambda closed, **_kw: observed.append(closed),
+            ),
+        ):
+            await activity_fn(
+                _task_context(
+                    "_off-app", "quiet_step", progress_watchdog=ProgressWatchdogMode.OFF
+                ),
+                _StallIn(),
+            )
+
+        return loop_calls, observed
+
+    async def test_the_watchdog_never_acts(self) -> None:
+        """``off`` starts no watchdog loop at all, so no gap is ever measured and
+        ``on_stall`` can never be called.
+
+        The seam gates on the resolved mode now, not the heartbeat config: a
+        resolved ``off`` is the one mode that starts nothing, which is what makes
+        it a real kill-switch for no-progress *detection*."""
+        loop_calls, _ = await self._run_in_off_mode()
+
         assert loop_calls == []
+
+    async def test_hold_telemetry_still_records(self) -> None:
+        """The observer is attached at ``bind_progress_tracker``, not gated on mode.
+
+        So ``task_hold_duration_seconds`` keeps recording once per released hold
+        — once per ``run_in_thread`` offload — which is why ``off`` is not
+        byte-identical to pre-ADR-0018 behaviour, and why the docs no longer say
+        it is.
+        """
+        _, observed = await self._run_in_off_mode()
+
+        assert [h.label for h in observed] == ["vendor.export"]

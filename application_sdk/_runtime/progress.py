@@ -81,11 +81,12 @@ logger = get_logger(__name__)
 #: may this attempt be silent?", not "how much data does this tenant have?".
 #:
 #: One number with two uses, deliberately not two numbers. The stall watchdog
-#: takes it as ``max_no_progress_seconds`` (the per-task flag that carries it is
-#: FND-296's), and the warn-mode hold report takes it as the floor above which a
-#: hold is worth naming in the log — a hold longer than the budget is exactly a
-#: hold that *would* have tripped the watchdog had it not been vouched for,
-#: which is the work-list criterion.
+#: takes it as ``max_no_progress_seconds`` — this is the fallback beneath
+#: ``ATLAN_MAX_NO_PROGRESS_SECONDS`` and ``@task(max_no_progress_seconds=...)``,
+#: both resolved in :mod:`application_sdk.execution.progress` — and the warn-mode
+#: hold report takes it as the floor above which a hold is worth naming in the
+#: log: a hold longer than the budget is exactly a hold that *would* have tripped
+#: the watchdog had it not been vouched for, which is the work-list criterion.
 DEFAULT_MAX_NO_PROGRESS_SECONDS = 900.0
 
 

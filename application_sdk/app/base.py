@@ -87,6 +87,7 @@ from application_sdk.observability.logger_adaptor import (
 from application_sdk.observability.observability import AtlanObservability
 
 if TYPE_CHECKING:
+    from application_sdk.execution.progress import ProgressWatchdogMode
     from application_sdk.validation import AssetValidationReport
 
 _task_logger = get_logger(__name__)
@@ -2413,6 +2414,8 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     task_meta.retry_policy,
                     pool=task_meta.pool,
                     schedule_to_close_seconds=task_meta.schedule_to_close_seconds,
+                    progress_watchdog=task_meta.progress_watchdog,
+                    max_no_progress_seconds=task_meta.max_no_progress_seconds,
                 )
                 setattr(app_instance, attr_name, wrapper)
 
@@ -2431,6 +2434,8 @@ def _create_task_activity_wrapper(
     *,
     pool: str | None = None,
     schedule_to_close_seconds: int | None = None,
+    progress_watchdog: "ProgressWatchdogMode | None" = None,
+    max_no_progress_seconds: float | None = None,
 ) -> Any:
     """Create a wrapper that executes a task as a Temporal activity.
 
@@ -2456,6 +2461,13 @@ def _create_task_activity_wrapper(
             and leaves the retry product unbounded — ``retry_max_attempts ×
             timeout_seconds``. Resolved against ``timeout_seconds`` by
             :func:`~application_sdk.execution.retry.resolve_activity_time_bounds`.
+        progress_watchdog: The task's declared stall-watchdog mode, or ``None``
+            to inherit the fleet-wide setting. Forwarded verbatim onto the
+            ``TaskContext``; the activity side resolves it, so this path holds
+            no opinion about what the default is.
+        max_no_progress_seconds: The task's declared no-progress allowance in
+            seconds, or ``None`` to inherit the fleet-wide one. Forwarded
+            verbatim, for the same reason.
 
     Returns:
         Async function that executes the task as an activity.
@@ -2518,6 +2530,13 @@ def _create_task_activity_wrapper(
             # Sourced from history rather than a clock, so a replayed run
             # measures its real age instead of restarting the clock.
             run_started_at_epoch=_run_started_at_epoch(),
+            # The task's own declaration, unresolved. Both are `None` for the
+            # overwhelming majority of tasks, which is the point: nothing here
+            # has to know that the fleet default is `warn` (ADR-0018), and an
+            # operator changing it on the worker does not need every workflow to
+            # be re-dispatched to take effect.
+            progress_watchdog=progress_watchdog,
+            max_no_progress_seconds=max_no_progress_seconds,
         )
 
         # Build heartbeat timeout if enabled
