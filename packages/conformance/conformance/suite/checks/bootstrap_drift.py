@@ -287,7 +287,8 @@ def _scan_renovate_json(path: Path, root: Path) -> list[Finding]:
                 "mode this file already declares — pass --enforce or "
                 "--renovate-automerge instead only to deliberately CHANGE that mode. "
                 "Any other hand edit is replaced (kept as renovate.json.bak). "
-                + _warn_only
+                "If --resync reports it skipped (the file isn't valid JSON, so "
+                "its mode can't be read back), it needs a manual fix. " + _warn_only
             ),
         )
     ]
@@ -341,7 +342,9 @@ def _scan_tests_yaml(path: Path, root: Path) -> list[Finding]:
                 f"Run `{_CLI_CMD} --resync` to re-render it from the "
                 "canonical, reusing the app-name/app-image-name/enable-e2e/"
                 "services-script values read back off this file. Any other hand "
-                "edit is replaced (kept as tests.yaml.bak). " + _warn_only
+                "edit is replaced (kept as tests.yaml.bak). If --resync reports "
+                "it skipped (no parseable app-name, so its identity can't be "
+                "read back), it needs a manual fix. " + _warn_only
             ),
         )
     ]

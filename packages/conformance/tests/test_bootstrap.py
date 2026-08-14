@@ -1473,6 +1473,30 @@ def test_resync_skips_tests_yaml_with_no_readable_app_name(
     assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
 
 
+def test_resync_skips_tests_yaml_with_only_a_commented_app_name(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A commented-out `app-name:` must not satisfy the identity guard.
+
+    That is the most common shape of a renamed app — the old line left
+    commented out. An unanchored extractor would read the stale value off the
+    comment and rewrite every downstream CI input to it while reporting
+    success; the anchored one treats the file as having no parseable app-name
+    and skips instead.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    renamed = "\n".join(
+        f"# {line}" if "app-name:" in line else line
+        for line in render("tests.yaml", app_name="widget").splitlines()
+    )
+    wf.write_text(renamed)
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == renamed
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
+
+
 # ---------------------------------------------------------------------------
 # tests.yaml template fidelity
 # ---------------------------------------------------------------------------

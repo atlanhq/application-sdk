@@ -61,8 +61,12 @@ _COMMENT_LINE_RE = re.compile(r"^[ \t]*#.*$", re.MULTILINE)
 _ACTION_PIN_RE = re.compile(r"@[0-9a-f]{40}(?:[ \t]+#[^\n]*)?")
 
 # tests.yaml's per-repo customised values, read back off a scaffolded file.
-_APP_NAME_RE = re.compile(r'app-name:\s+"([^"]+)"')
-_APP_IMAGE_NAME_RE = re.compile(r'app-image-name:\s+"([^"]+)"')
+# Anchored like _SERVICES_SCRIPT_RE below so a *commented-out* line (the shape
+# a renamed app most often leaves behind) can't satisfy the read-back — the
+# --resync identity guard in particular must skip rather than re-render from a
+# value the file no longer declares.
+_APP_NAME_RE = re.compile(r'^\s+app-name:\s+"([^"]+)"\s*$', re.MULTILINE)
+_APP_IMAGE_NAME_RE = re.compile(r'^\s+app-image-name:\s+"([^"]+)"\s*$', re.MULTILINE)
 _ENABLE_E2E_RE = re.compile(r"enable-e2e:\s+(true|false)")
 # Matches an *uncommented* services-script line (quoted value) in the with: block.
 _SERVICES_SCRIPT_RE = re.compile(r'^\s+services-script:\s+"([^"]+)"$', re.MULTILINE)
