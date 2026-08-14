@@ -107,18 +107,6 @@ on:
         required: false
         default: ""
         type: string
-      sdk_ref:
-        description: >
-          application-sdk ref to fetch the approval-gate script from. Consumers
-          should leave this at the default: it must match the ref they pin this
-          reusable at in `uses:`, and everything pins @main. Override it only to
-          pilot a change to the gate — point `uses:` and this input at the same
-          branch and the run exercises the real gate end to end before the change
-          is on main. There is no way to derive this automatically; see the
-          comment on the checkout step for why.
-        required: false
-        default: "main"
-        type: string
     secrets:
       org_pat:
         description: >
@@ -159,20 +147,22 @@ jobs:
       # Nothing else is checked out: the gate reads the PR entirely through the
       # API and never touches the consumer's working tree.
       #
-      # The ref is an explicit input defaulting to `main`, NOT an expression that
-      # can evaluate to nothing. `${{ github.job_workflow_sha }}` looks like the
-      # right answer — it is documented as the commit of the reusable workflow
-      # file the caller resolved — but it renders EMPTY in this context (it is an
-      # OIDC claim, not a usable expression value). checkout then silently omits
-      # `ref` and takes the default branch, so the step goes green having fetched
-      # a different commit's script than the workflow the caller pinned. An input
-      # with a default has no such mode: an unset value is impossible and a bad
-      # one fails the checkout outright.
+      # `ref: main` is a literal on purpose. Do NOT replace it with
+      # `${{ github.job_workflow_sha }}` — that is documented as the commit of
+      # the reusable workflow file the caller resolved, which looks like exactly
+      # the right way to keep this script in step with this YAML, but it renders
+      # EMPTY (it is an OIDC claim, not a usable expression value). checkout then
+      # treats `ref` as unsupplied and takes the default branch, so the step goes
+      # green having fetched a different commit's script. See docs/standards/ci.md.
+      #
+      # Every caller pins this reusable at @main, so `main` is the matching ref.
+      # To pilot a change to the gate from a consumer repo, temporarily point both
+      # this ref and the caller's `uses:` at the branch, and revert before merge.
       - name: Fetch approval-gate script
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: ${{ inputs.sdk_ref }}
+          ref: main
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: .sdk-scripts

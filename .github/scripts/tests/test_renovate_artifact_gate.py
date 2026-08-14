@@ -94,31 +94,31 @@ class TestWorkflowWiring:
                 keyword not in run
             ), f"conditional shell ({keyword!r}) is back in the run: block"
 
-    def test_script_checkout_ref_cannot_evaluate_to_empty(self):
+    def test_script_checkout_ref_is_a_literal_that_cannot_be_empty(self):
         # Regression, found by piloting this gate from a consumer repo before
-        # merge: `ref: ${{ github.job_workflow_sha }}` renders EMPTY here, so
-        # checkout omitted the input entirely and fetched the default branch —
-        # a GREEN step that silently checked out a different commit's script
-        # than the workflow the caller pinned. It only surfaced because the
-        # script did not exist on main yet; after merge it would have run the
-        # wrong version quietly.
+        # merge: `ref: ${{ github.job_workflow_sha }}` renders EMPTY, so
+        # actions/checkout treated the input as unsupplied and fetched the
+        # default branch — a GREEN step that silently checked out a different
+        # commit's script than the workflow the caller pinned. It only surfaced
+        # because the script did not exist on main yet; after merge that mode
+        # would have run the wrong version quietly.
         #
-        # So the ref must come from a declared input with a default, which has
-        # no unset mode. Assert both halves: the expression, and the default
-        # that keeps every existing @main caller on today's behaviour.
+        # `main` is the right literal because every caller pins the reusable at
+        # @main. The assertion that matters is the second one: the ref must not
+        # come from an expression at all, since any expression can evaluate to
+        # empty and checkout reads empty as "not supplied".
         workflow = yaml.safe_load(_WORKFLOW.read_text())
         steps = workflow["jobs"]["renovate-auto-approve"]["steps"]
         checkout = next(
             s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@")
         )
-        assert checkout["with"]["ref"] == "${{ inputs.sdk_ref }}"
+        ref = checkout["with"]["ref"]
+        assert ref == "main"
+        assert "${{" not in str(ref), (
+            "the checkout ref must be a literal — an expression that evaluates "
+            "to empty makes checkout silently take the default branch"
+        )
         assert checkout["with"]["path"] == ".sdk-scripts"
-
-        # `on` parses as a bool key in YAML 1.1, hence the lookup dance.
-        triggers = workflow.get("on") or workflow[True]
-        sdk_ref = triggers["workflow_call"]["inputs"]["sdk_ref"]
-        assert sdk_ref["default"] == "main"
-        assert sdk_ref["required"] is False
 
     def test_driver_path_resolves(self):
         # The reusable sparse-checks-out the SDK scripts into .sdk-scripts, so
