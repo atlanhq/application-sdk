@@ -55,16 +55,22 @@ module.exports = {
   // match is skipped with a log line and nothing else, so the failure is silent
   // — .github/scripts/check_renovate_allowed_commands.py guards the pairing.
   //
-  // The fleet's 7-day dependency cooldown deliberately does NOT live here. It was
-  // briefly a `uv lock --exclude-newer` entry in this list (FND-367) and that
-  // failed in both directions: where the command ran, uv wrote the bound into
-  // uv.lock's `[options]` and every `uv sync --locked` consumer rejected the lock;
-  // where the allowlist did not match — a config-resolution race on the very run
-  // that introduced it — the lock refreshed unbounded and pulled a package
-  // published three minutes earlier, with no red check from Renovate to show for
-  // it. Silent-skip semantics make this list a bad home for a security control.
-  // The bound is now `[tool.uv] exclude-newer` in each repo's pyproject.toml,
-  // where the uv that Renovate shells out to reads it unprompted.
+  // A `uv lock --exclude-newer` entry briefly lived in this list (FND-367), to
+  // enforce a 7-day dependency cooldown on the lock-refresh lane. It is gone, and
+  // nothing should replace it. Two reasons, in increasing order of importance.
+  //
+  // Mechanically, this list is a bad home for a security control: a command the
+  // allowlist does not match is skipped with a log line and nothing else, so when
+  // a config-resolution race meant the entry was not yet live, the lock refreshed
+  // unbounded and pulled a package published three minutes earlier — with no red
+  // check anywhere to show for it. A control whose failure mode is silent is not
+  // a control.
+  //
+  // Substantively, the cooldown itself was dropped fleet-wide. This fleet fixes
+  // vulnerabilities by keeping dependencies continuously current, so any
+  // release-age bound on this lane is a delay on every security fix — paid in
+  // exchange for a supply-chain window that no plausible duration meaningfully
+  // closes. See the lockFileMaintenance description in default.json.
   allowedCommands: [
     "^renovate-pkl-sync --contract-dir contract --regenerate (true|false) --no-commit$",
   ],

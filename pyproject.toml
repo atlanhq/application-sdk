@@ -162,10 +162,7 @@ test = [
     "coverage>=7.6.1,<8.0.0",
     "pytest-asyncio>=1.4.0,<2.0.0",
     "pytest-timeout>=2.3.0,<3.0.0",
-    # Reverted from >=16.5,<16.6 (#3185, merged 34h after 16.5 published): the
-    # cooldown below cannot satisfy a floor that only a 1-day-old release meets.
-    # Renovate re-raises the bump once 16.5 ages past 7 days.
-    "pytest-rerunfailures>=16.4,<16.5",
+    "pytest-rerunfailures>=16.5,<16.6",
     "pytest-socket>=0.7.0,<1.0.0",
     "hypothesis>=6.114.0,<7.0.0",
     "trustme>=1.2.1,<2.0.0",
@@ -367,50 +364,6 @@ extend-select = [
 
 [tool.uv]
 default-groups = ["dev", "test"]
-
-# Supply-chain cooldown (org security baseline §5): a version must have been
-# public for 7 days before any resolution here can pick it up. Declared as
-# CONFIG rather than passed as `uv lock --exclude-newer` on the command line,
-# and that distinction is the whole point: uv records its resolver settings
-# into uv.lock under `[options]`, and every consumer that validates the lock
-# (`uv sync --locked` in the app Dockerfiles, `uv lock --check`) compares its
-# OWN settings against that block. A bound supplied only to the locking
-# command therefore produces a lock that nothing else can validate — FND-367,
-# where it reddened the scan lane fleet-wide. Config is read by producer and
-# consumer alike, so both agree.
-#
-# It also makes the bound apply to whoever re-locks, with no coordination:
-# Renovate's lockFileMaintenance lane shells out to uv and inherits it (uv is
-# not passed a release-age bound by Renovate itself — renovatebot/renovate#41652),
-# as does a human running `uv lock` or `uv add`. Note the cooldown only DELAYS
-# a release; it is not a substitute for a test that survives the version
-# landing seven days later.
-#
-# Relative durations require a uv new enough to accept them; an older uv treats
-# the key as unknown, warns, and then fails the lock check for the mismatch it
-# just caused. Vulnerability fixes are exempt by policy — drop the bound
-# deliberately for those rather than waiting the week out.
-exclude-newer = "P7D"
-
-# Atlan's own published artifacts land the moment they ship: the cooldown's
-# rationale (an unvetted third-party publisher, a package that can be yanked or
-# turn out to be malicious) does not apply to what we publish ourselves, and a
-# 7-day hold would stall the fleet's own release loop. atlan-application-sdk
-# and atlan-application-sdk-conformance are inert in THIS repo — the SDK is not
-# a dependency of itself, and conformance resolves through [tool.uv.sources] as
-# a local path — but are kept here so the fleet has one stanza to copy and
-# audit rather than two.
-#
-# pyatlan is NOT decorative: it is pinned `>=10,<11` and 10.0.0 published on
-# 2026-08-13, so a blanket bound made the whole project unresolvable rather
-# than merely stale ("Because pyatlan>9.11.0 was published after the exclude
-# newer time ... your project's requirements are unsatisfiable"). That is the
-# general hazard of a global bound — it applies to the floor a pin REQUIRES,
-# not just to the ceiling an upgrade would reach — and any repo whose pin can
-# only be satisfied by a fresh release hits it. It fails loudly at resolution,
-# so it is detectable rather than silent.
-exclude-newer-package = { atlan-application-sdk = "P0D", atlan-application-sdk-conformance = "P0D", pyatlan = "P0D" }
-
 constraint-dependencies = [
     "python-multipart>=0.0.26",  # CVE-2026-24486, CVE-2026-40347
     "protobuf>=6.33.5",          # CVE-2026-0994

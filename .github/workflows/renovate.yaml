@@ -127,11 +127,6 @@ jobs:
 
       # Provides `uv`/`uvx` — used by Renovate's native uv manager to refresh
       # uv.lock AND by the driver's `uvx ruff` formatting of generated Python.
-      # The pin is also what makes the fleet's 7-day cooldown expressible: it is
-      # declared as `[tool.uv] exclude-newer = "P7D"` in each repo's
-      # pyproject.toml and this uv reads it when Renovate shells out. Relative
-      # durations need a recent uv; an older one treats the key as unknown, warns,
-      # and refreshes the lock unbounded. Do not float this version downward.
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.4"
