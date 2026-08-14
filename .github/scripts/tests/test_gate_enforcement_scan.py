@@ -484,6 +484,11 @@ def test_parse_arrival_nodes_raises_on_a_structurally_malformed_body():
         parse_arrival_nodes({"data": {}}, GATE)
     with pytest.raises(GhError, match="malformed arrival payload"):
         parse_arrival_nodes({"data": {"repository": None}}, GATE)
+    with pytest.raises(GhError, match="malformed arrival payload"):
+        # a truthy non-dict pullRequests must raise GhError, not AttributeError
+        parse_arrival_nodes(
+            {"data": {"repository": {"pullRequests": "unexpected"}}}, GATE
+        )
 
 
 def test_scan_repo_reports_unknown_when_a_ruleset_detail_fails():

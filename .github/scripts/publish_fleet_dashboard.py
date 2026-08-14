@@ -69,6 +69,16 @@ def upload(local: Path, prefix: str, *parts: str, run: RunFn = _run_aws) -> None
         raise RuntimeError(f"failed to upload {local} to {_key(prefix, *parts)}")
 
 
+def _is_not_found(stderr: str) -> bool:
+    """True only when the aws CLI reports a genuine missing-object 404.
+
+    Matched on the ``(404)`` + ``HeadObject`` signature rather than the bare
+    ``does not exist`` substring, so a contrived non-404 error that happens to
+    embed that phrase is not misclassified as a first publish.
+    """
+    return "(404)" in stderr and "HeadObject" in stderr
+
+
 def merge_history(
     local: Path, prefix: str, slug: str, tmp_dir: Path, run: RunFn = _run_aws
 ) -> None:
@@ -86,7 +96,7 @@ def merge_history(
     # would merge only today's line and re-upload it over the stored history,
     # silently truncating the trend line the dashboard depends on.
     code, _, stderr = run(["s3", "cp", key, str(existing)])
-    if code != 0 and "does not exist" not in stderr:
+    if code != 0 and not _is_not_found(stderr):
         raise RuntimeError(f"failed to download {key}: {stderr.strip() or 'no stderr'}")
     lines = existing.read_text().splitlines() if existing.exists() else []
     lines.extend(local.read_text().splitlines())

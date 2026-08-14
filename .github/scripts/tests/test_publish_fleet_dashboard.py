@@ -38,8 +38,13 @@ class FakeS3:
             src, dst = args[2], args[3]
             if src.startswith(BUCKET):
                 if src not in self.objects:
-                    # a missing object: first publish
-                    return 1, "", "fatal error: An error occurred (404): does not exist"
+                    # a missing object: first publish (the real aws CLI signature)
+                    return (
+                        1,
+                        "",
+                        "fatal error: An error occurred (404) when calling the "
+                        'HeadObject operation: Key "..." does not exist',
+                    )
                 Path(dst).write_text(self.objects[src])
                 return 0, "", ""
             self.objects[dst] = Path(src).read_text()
@@ -207,5 +212,32 @@ def test_history_download_failure_aborts_before_upload(tmp_path):
 
     with pytest.raises(RuntimeError, match="failed to download"):
         merge_history(local, PREFIX, "slug", tmp_path, run=denied)
+
+    assert s3.objects[key] == stored  # history untouched
+
+
+def test_history_download_non_404_with_not_found_phrase_is_not_first_publish(tmp_path):
+    """A non-404 error whose stderr happens to embed "does not exist" must NOT
+    be misclassified as a first publish — only the (404)+HeadObject signature
+    is. This guards the tightened NotFound predicate."""
+    key = f"{BUCKET}/{PREFIX}/history/slug.jsonl"
+    stored = json.dumps({"date": "2026-08-13", "gated": False}) + "\n"
+    s3 = FakeS3({key: stored})
+
+    def throttled(args: list) -> tuple:
+        if args[:2] == ["s3", "cp"] and args[2].startswith(BUCKET):
+            # a 503 SlowDown that mentions a key that "does not exist" — not a 404
+            return (
+                1,
+                "",
+                "fatal error: An error occurred (503) SlowDown: the requested key does not exist",
+            )
+        return s3(args)
+
+    local = tmp_path / "history_slug.jsonl"
+    local.write_text(json.dumps({"date": "2026-08-14", "gated": True}) + "\n")
+
+    with pytest.raises(RuntimeError, match="failed to download"):
+        merge_history(local, PREFIX, "slug", tmp_path, run=throttled)
 
     assert s3.objects[key] == stored  # history untouched

@@ -731,8 +731,11 @@ def parse_arrival_nodes(payload: dict, required_context: str) -> list:
     multiply that by the sample size for no extra signal.
     """
     repository = ((payload or {}).get("data") or {}).get("repository")
-    if not isinstance(repository, dict) or not isinstance(
-        (repository.get("pullRequests") or {}).get("nodes"), list
+    pull_requests = (
+        repository.get("pullRequests") if isinstance(repository, dict) else None
+    )
+    if not isinstance(pull_requests, dict) or not isinstance(
+        pull_requests.get("nodes"), list
     ):
         # A structurally malformed body (schema drift, a null repository) must
         # surface as arrival `unknown` — coercing it to zero samples would read
@@ -741,7 +744,7 @@ def parse_arrival_nodes(payload: dict, required_context: str) -> list:
             "malformed arrival payload: expected "
             "data.repository.pullRequests.nodes to be a list"
         )
-    nodes = repository["pullRequests"]["nodes"]
+    nodes = pull_requests["nodes"]
     samples: list = []
     for pr in nodes:
         if not isinstance(pr, dict):
