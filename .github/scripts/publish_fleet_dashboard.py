@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""Publish a fleet-scan output directory to the Kryptonite dashboard store.
+
+The upload half of the fleet-dashboard pattern: per-repo documents, a manifest
+of every repo present in the bucket, append-only per-repo history, and — on
+full-fleet runs only — the fleet aggregate and its history.
+
+Extracted from an inlined ``run:`` block per docs/standards/ci.md. The shell
+version carried a loop, an if, and a download → merge → re-upload sequence whose
+failure mode is silent: without a ``touch`` of the not-yet-existing history file,
+``cat`` exits 1, ``pipefail`` kills the step *after* the per-repo document has
+already uploaded, and the repo gets a summary in S3 but never a history line.
+That is exactly the class of branch YAML cannot regression-test, so it lives
+here and is covered in tests/test_publish_fleet_dashboard.py.
+
+Single-repo mode deliberately skips ``fleet.json`` and the fleet history: a scan
+of one repo has no fleet aggregate to publish, and writing one would replace the
+real fleet view with a one-repo view that reads as a catastrophic regression.
+
+Environment:
+    AWS credentials must already be configured (the caller assumes the
+    kryptonite-store role via OIDC before invoking this).
+
+Usage:
+    publish_fleet_dashboard.py --dir /tmp/gate-enforcement \\
+        --prefix gate-enforcement-dashboard
+    publish_fleet_dashboard.py --dir /tmp/gate-enforcement \\
+        --prefix gate-enforcement-dashboard --single-repo
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Callable, Optional
+
+BUCKET = "s3://kryptonite-store"
+
+# (args) -> (returncode, stdout). Not raising on failure: a missing history
+# object is a routine first-publish, and the caller distinguishes that from a
+# real error by which command failed.
+RunFn = Callable[[list], tuple]
+
+FLEET_SLUG = "fleet"
+
+
+def _run_aws(args: list) -> tuple:
+    result = subprocess.run(["aws", *args], capture_output=True, text=True)
+    if result.returncode != 0 and result.stderr:
+        print(
+            f"::debug::aws {' '.join(args[:2])}: {result.stderr.strip()}",
+            file=sys.stderr,
+        )
+    return result.returncode, result.stdout
+
+
+def _key(prefix: str, *parts: str) -> str:
+    return f"{BUCKET}/{prefix}/" + "/".join(parts)
+
+
+def upload(local: Path, prefix: str, *parts: str, run: RunFn = _run_aws) -> None:
+    code, _ = run(["s3", "cp", str(local), _key(prefix, *parts)])
+    if code != 0:
+        raise RuntimeError(f"failed to upload {local} to {_key(prefix, *parts)}")
+
+
+def merge_history(
+    local: Path, prefix: str, slug: str, tmp_dir: Path, run: RunFn = _run_aws
+) -> None:
+    """Append ``local``'s lines to the stored history for ``slug``, deduplicated.
+
+    Download → concatenate → sort -u → re-upload. ``sort -u`` is what makes a
+    same-day rerun idempotent, and it is why history lines must stay
+    byte-identical for an unchanged day.
+    """
+    existing = tmp_dir / f"existing_{slug}.jsonl"
+    # A missing object is the first publish for this repo, not an error — the
+    # download simply leaves no file behind, and an empty one stands in.
+    run(["s3", "cp", _key(prefix, "history", f"{slug}.jsonl"), str(existing)])
+    lines = existing.read_text().splitlines() if existing.exists() else []
+    lines.extend(local.read_text().splitlines())
+
+    merged = tmp_dir / f"merged_{slug}.jsonl"
+    merged.write_text("\n".join(sorted({ln for ln in lines if ln.strip()})) + "\n")
+    upload(merged, prefix, "history", f"{slug}.jsonl", run=run)
+
+
+def refresh_manifest(prefix: str, tmp_dir: Path, run: RunFn = _run_aws) -> list:
+    """Rewrite ``repos.json`` from what is actually in the bucket.
+
+    Listing the bucket rather than the local scan output on purpose: in
+    single-repo mode the local directory holds one file, and a manifest built
+    from it would hide every other repo from the dashboard.
+    """
+    code, stdout = run(["s3", "ls", _key(prefix, "repos", "")])
+    if code != 0:
+        raise RuntimeError(f"failed to list {_key(prefix, 'repos', '')}")
+    names = sorted(
+        line.split()[-1]
+        for line in stdout.splitlines()
+        if line.strip().endswith(".json")
+    )
+    manifest = tmp_dir / "repos.json"
+    manifest.write_text(json.dumps(names))
+    upload(manifest, prefix, "repos.json", run=run)
+    return names
+
+
+def publish(
+    scan_dir: Path,
+    prefix: str,
+    single_repo: bool,
+    tmp_dir: Path,
+    run: RunFn = _run_aws,
+) -> dict:
+    """Upload one scan directory. Returns a counts summary for the run log."""
+    repo_docs = sorted((scan_dir / "repos").glob("*.json"))
+    if not repo_docs:
+        raise RuntimeError(f"no per-repo documents in {scan_dir / 'repos'}")
+
+    for doc in repo_docs:
+        upload(doc, prefix, "repos", doc.name, run=run)
+
+    manifest = refresh_manifest(prefix, tmp_dir, run=run)
+
+    histories = 0
+    for history in sorted(scan_dir.glob("history_*.jsonl")):
+        slug = history.stem[len("history_") :]
+        if slug == FLEET_SLUG:
+            continue
+        merge_history(history, prefix, slug, tmp_dir, run=run)
+        histories += 1
+
+    fleet_published = False
+    if not single_repo:
+        fleet = scan_dir / "fleet.json"
+        if not fleet.exists():
+            raise RuntimeError(
+                f"{fleet} is missing on a full-fleet run — refusing to publish "
+                "per-repo data without the aggregate the dashboard reads"
+            )
+        upload(fleet, prefix, "fleet.json", run=run)
+        fleet_history = scan_dir / f"history_{FLEET_SLUG}.jsonl"
+        if fleet_history.exists():
+            merge_history(fleet_history, prefix, FLEET_SLUG, tmp_dir, run=run)
+        fleet_published = True
+
+    return {
+        "repoDocs": len(repo_docs),
+        "manifestEntries": len(manifest),
+        "historiesMerged": histories,
+        "fleetPublished": fleet_published,
+    }
+
+
+def main(argv: Optional[list] = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--dir", required=True, type=Path, help="scan output directory")
+    parser.add_argument(
+        "--prefix", required=True, help="S3 key prefix, e.g. gate-enforcement-dashboard"
+    )
+    parser.add_argument(
+        "--single-repo",
+        action="store_true",
+        help="scan covered one repo: skip fleet.json and the fleet history",
+    )
+    args = parser.parse_args(argv)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        summary = publish(args.dir, args.prefix, args.single_repo, Path(tmp))
+
+    print(
+        f"Published {summary['repoDocs']} repo docs, {summary['historiesMerged']} "
+        f"histories, manifest of {summary['manifestEntries']} "
+        f"(fleet aggregate: {'yes' if summary['fleetPublished'] else 'skipped'}) "
+        f"to {BUCKET}/{args.prefix}/",
+        file=sys.stderr,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
