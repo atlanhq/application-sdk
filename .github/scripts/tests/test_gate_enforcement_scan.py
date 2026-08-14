@@ -582,6 +582,11 @@ def test_nulls_along_the_walk_are_a_legitimate_skip_not_an_error():
         pytest.param({"__typename": "CheckRun", "name": {"x": 1}}, id="name-dict"),
         pytest.param({"__typename": "CheckRun", "name": 5}, id="name-int"),
         pytest.param({"__typename": "CheckRun", "name": True}, id="name-bool"),
+        # Falsy wrong-typed leaves: an `or`-chain would collapse these to the
+        # fallback/`None` and skip them as "absent", reading as a clean miss.
+        pytest.param({"__typename": "CheckRun", "name": 0}, id="name-zero"),
+        pytest.param({"__typename": "CheckRun", "name": False}, id="name-false"),
+        pytest.param({"__typename": "CheckRun", "name": []}, id="name-empty-list"),
         pytest.param(
             {"__typename": "StatusContext", "context": ["unexpected"]},
             id="context-list",
@@ -594,7 +599,9 @@ def test_a_non_string_context_leaf_raises_gh_error(ctx_node):
     An unhashable `name`/`context` (list/dict) raises an uncaught TypeError in
     `names.add(...)` — which `scan_repo` does not catch — and a hashable scalar
     (int/bool) never matches the required-context string, silently reading as
-    `found: False`. Either way a malformed body must surface as GhError so the
+    `found: False`. Falsy wrong-typed values (`0`/`False`/`[]`) are the same
+    escape one branch down: selected by truthiness they collapse to "absent"
+    and are skipped. Either way a malformed body must surface as GhError so the
     one repo degrades to `unknown` instead of aborting the fleet sweep.
     """
     pr_node = {
@@ -659,6 +666,59 @@ def test_scan_repo_reports_unknown_when_an_arrival_leaf_is_malformed():
     record = scan_repo(REPO, GATE, sample_size=5, run=run)
     assert record["status"] == STATUS_UNKNOWN
     assert _finding_ids(record) == {FINDING_UNREADABLE}
+
+
+def test_scan_repo_marks_arrival_no_data_when_a_leaf_is_malformed():
+    """The arrival facet's degradation, pinned in isolation: with healthy
+    ruleset reads, a malformed context leaf surfaces as a caught GhError, so
+    the arrival facet reads `no-data` — never `never-arriving` — while the
+    ruleset evidence still evaluates. The facet failure must not be masked by,
+    or confused with, an unrelated read error, and must not aggregate into a
+    false `NOT_ARRIVING` finding."""
+
+    def run(args: list) -> str:
+        if args[1] == f"repos/{REPO}":
+            return json.dumps({"b": "main"})
+        if args[1].startswith(f"repos/{REPO}/rulesets?"):
+            return json.dumps([[{"id": 1}]])
+        if args[1] == f"repos/{REPO}/rulesets/1":
+            return json.dumps(_ruleset())
+        if args[1] == "graphql":
+            return json.dumps(
+                _arrival_payload(
+                    {
+                        "number": 1,
+                        "commits": {
+                            "nodes": [
+                                {
+                                    "commit": {
+                                        "statusCheckRollup": {
+                                            "contexts": {
+                                                "totalCount": 1,
+                                                "nodes": [
+                                                    {
+                                                        "__typename": "CheckRun",
+                                                        "name": ["unexpected"],
+                                                    }
+                                                ],
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        },
+                    }
+                )
+            )
+        return json.dumps("ok")
+
+    record = scan_repo(REPO, GATE, sample_size=5, run=run)
+    # The ruleset read succeeded, so the repo still evaluates clean on that
+    # evidence; only the arrival facet carries the read failure.
+    assert record["status"] == STATUS_UNBYPASSABLE
+    assert record["arrival"]["status"] == ARRIVAL_NO_DATA
+    assert record["arrival"]["prsSampled"] == 0
+    assert FINDING_NOT_ARRIVING not in _finding_ids(record)
 
 
 def test_repeated_contexts_on_one_commit_are_not_truncation():
