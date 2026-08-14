@@ -41,15 +41,31 @@ module.exports = {
   // on merge). A disabled manager never extracts, so no workflow file is touched.
   "github-actions": { enabled: false },
 
-  // Authorize ONLY the pkl-sync driver as a post-upgrade command. (This option
-  // was renamed from `allowedPostUpgradeCommands` to `allowedCommands`.) It is
-  // matched against the raw command string in the shared preset's
-  // postUpgradeTasks. The command is a bare PATH executable with NO ${VARS}:
-  // Renovate does not shell-expand post-upgrade commands, so any ${VAR} would be
-  // passed literally (the pilot caught exactly that). The workflow installs the
-  // driver as /usr/local/bin/renovate-pkl-sync. Child processes the driver
+  // Authorize exactly two post-upgrade commands, nothing else. (This option was
+  // renamed from `allowedPostUpgradeCommands` to `allowedCommands`.)
+  //
+  // The first is the pkl-sync driver: a bare PATH executable with NO ${VARS},
+  // because Renovate does not shell-expand post-upgrade commands, so any ${VAR}
+  // would be passed literally (the pilot caught exactly that). The workflow
+  // installs it as /usr/local/bin/renovate-pkl-sync. Child processes the driver
   // spawns (pkl, uvx ruff, git) need no entry — only top-level commands are vetted.
+  //
+  // The second is the release-age bound on the uv.lock refresh lane. It is
+  // the only place the fleet's 7-day cooldown can be enforced for third-party and
+  // transitive versions: Renovate cannot age-check a lockFileMaintenance update
+  // (it delegates resolution to uv, and uv is not passed a bound —
+  // renovatebot/renovate#41652), and that lane is where third-party versions
+  // actually move. The two Atlan-distributed packages are exempted per-package so
+  // they still land immediately. Durations are relative, so the command is static
+  // — no ${VARS}, which post-upgrade commands would not expand anyway.
+  //
+  // Both entries are matched against the raw command strings in the shared
+  // preset's postUpgradeTasks; keep them in step. A command the allowlist does not
+  // match is skipped with a log line and nothing else, so for the uv bound that
+  // would mean unbounded locks auto-merging with no visible failure —
+  // .github/scripts/check_renovate_allowed_commands.py guards the pairing.
   allowedCommands: [
     "^renovate-pkl-sync --contract-dir contract --regenerate (true|false) --no-commit$",
+    "^uv lock --upgrade --exclude-newer P7D --exclude-newer-package atlan-application-sdk=P0D --exclude-newer-package atlan-application-sdk-conformance=P0D$",
   ],
 };

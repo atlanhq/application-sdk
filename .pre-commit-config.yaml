@@ -41,6 +41,30 @@ repos:
         language: system
         files: ^(uv\.lock|requirements\.txt)$
         pass_filenames: false
+  - repo: https://github.com/renovatebot/pre-commit-hooks
+    # Pinned to the SAME renovate version the fleet runner installs
+    # (.github/workflows/renovate.yaml), so a config that validates here cannot
+    # fail on the runner: this tag's additional_dependencies is renovate@<rev>.
+    # Parity is enforced by .github/scripts/tests/test_renovate_validator_pin.py.
+    # language_version is `lts` upstream, so pre-commit provisions its own node
+    # rather than depending on whatever the runner image ships.
+    rev: 43.265.3
+    hooks:
+      - id: renovate-config-validator
+        # Why this hook exists: nothing validated these files until FND-359, and
+        # they are read by every repo in the fleet — a malformed shared preset
+        # breaks Renovate everywhere at once. The silent failures matter more
+        # than the loud ones: an option set in the wrong object is a *warning*
+        # that this validator exits 1 on, but that Renovate itself only logs.
+        # prPriority sat inside lockFileMaintenance being ignored from the lane's
+        # introduction until FND-359 for exactly that reason.
+        #
+        # The upstream file filter only matches renovate.json / .renovaterc, so
+        # widen it to the two files that carry the fleet-wide blast radius: the
+        # shared preset every repo extends, and the runner's admin config. The
+        # validator accepts the JS one too.
+        files: ^(renovate\.json|renovate-config/(default\.json|self-hosted\.js))$
+
   - repo: https://github.com/RobertCraigie/pyright-python
     rev: v1.1.410
     hooks:
