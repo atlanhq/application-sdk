@@ -160,6 +160,12 @@ runs:
     # invoke another action under a conditional `uses:` — the curl install is
     # the simplest fallback that doesn't pin a runner image.
     #
+    # The uv version must stay in step with setup-deps (0.12.4): pyproject.toml
+    # declares `[tool.uv] exclude-newer = "P7D"` (the fleet's 7-day dependency
+    # cooldown), and only a uv new enough to parse relative durations honours
+    # it — an older one treats the key as unknown, warns, and re-locks
+    # UNBOUNDED, which is the exact fail-open FND-367 was about.
+    #
     # The script is shared from the sibling action rather than copied a third
     # time. Reaching across action dirs with `../` is the established pattern
     # here (see connector-unit-tests/action.yaml, which reads
@@ -176,7 +182,7 @@ runs:
         if ! command -v uv >/dev/null 2>&1; then
           echo "Installing uv for the pre-build re-lock..."
           "${{ github.action_path }}/../../scripts/with-retry.sh" \
-            bash -c "curl -LsSf https://astral.sh/uv/0.7.3/install.sh | sh"
+            bash -c "curl -LsSf https://astral.sh/uv/0.12.4/install.sh | sh"
           export PATH="$HOME/.local/bin:$PATH"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         fi
