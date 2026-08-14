@@ -14,12 +14,19 @@ This closes that hole by answering three questions per repo, on the same cadence
 as every other fleet finding:
 
 1. Is the gate context a **required** status check on the default branch?
-2. Is it **bypassable** — bypass actors on the ruleset, or a default branch that
-   does not require a pull request at all (direct push skips the check)?
+2. Does the default branch **require a pull request at all**? Without one there
+   is no PR for the check to attach to, so a direct push lands unchecked and the
+   requirement is decorative.
 3. Is the check **actually arriving** on pull requests, or configured-but-never-
    reporting? That third state blocks every PR with nothing red to point at, and
    the pressure it creates is to *remove* the requirement — so it has to be
    distinguishable from healthy enforcement rather than lumped in with it.
+
+**Bypass actors are deliberately not reported** — see the STATUS_* block below.
+GitHub omits the field entirely for a non-admin caller, so with a fleet-scoped
+token "no bypass" and "cannot see bypass" are the same bytes, and the repo reads
+as clean either way. An unanswerable question is left unanswered rather than
+answered wrongly.
 
 Enumerating the fleet here (rather than having each repo self-report) is the
 whole point: a repo that has lost enforcement is *present in the output* with
@@ -29,9 +36,8 @@ is itself reported.
 
 Reads, never writes. ``/repos/{repo}/rulesets`` is not administration-gated —
 ``detect_merge_queue.py`` has relied on exactly that in every consumer's CI — so
-the ruleset path needs no new privilege. Classic branch protection *is* admin-
-gated; a 403 there is recorded as ``unknown`` rather than silently folded into
-"not protected", because those two mean opposite things.
+the ruleset path needs no new privilege. Every field this scanner reads comes
+from ``rules``, which that same plain repo-read returns in full.
 
 **Fail-loud, unlike detect_merge_queue.py.** That script fails open because a
 misdetection there costs a redundant test run. Here a misdetection would report
@@ -96,18 +102,21 @@ REPO_LIST_LIMIT = 5000
 _REQUIRED_STATUS_CHECKS_RULE = "required_status_checks"
 _PULL_REQUEST_RULE = "pull_request"
 
-# GitHub's `bypass_actors[].actor_type` for a GitHub App installation. Called
-# out separately because "no bot can bypass the gate" is an explicit assertion
-# of this milestone, and an App bypass is invisible among role-based entries.
-_INTEGRATION_ACTOR = "Integration"
+SCHEMA_VERSION = "2.0"
 
-SCHEMA_VERSION = "1.0"
-
-# Per-repo verdict. Four values, not a boolean, because "we could not read it"
+# Per-repo verdict. Three values, not a boolean, because "we could not read it"
 # must never collapse into "it is not gated" (that would make an outage look
 # like a regression) nor into "it is gated" (a false green).
-STATUS_UNBYPASSABLE = "gated-unbypassable"
-STATUS_BYPASSABLE = "gated-bypassable"
+#
+# Deliberately NOT reporting bypassability. GitHub *omits* the `bypass_actors`
+# key entirely — not an empty list, not a 403 — for any caller without admin on
+# the repo, while still returning `rules`. The fleet App token holds contents +
+# pull-requests read by design, so absent and none are indistinguishable to it,
+# and a repo with standing admin bypass reads as clean. That is the precise
+# false green this scanner exists to prevent, so the claim is not made at all
+# rather than made unreliably. `enforcement.directPushPermitted` is the one
+# bypass-shaped signal this token *can* see, and it is derived from `rules`.
+STATUS_GATED = "gated"
 STATUS_NOT_GATED = "not-gated"
 STATUS_UNKNOWN = "unknown"
 
@@ -120,8 +129,6 @@ ARRIVAL_UNKNOWN = "unknown"
 
 # Finding ids. Stable strings — connector-pulse groups on them.
 FINDING_NOT_REQUIRED = "gate-not-required"
-FINDING_BYPASSABLE = "gate-bypassable"
-FINDING_BOT_BYPASS = "gate-bot-bypass"
 FINDING_DIRECT_PUSH = "gate-direct-push-permitted"
 FINDING_NOT_ARRIVING = "gate-not-arriving"
 FINDING_UNPRODUCIBLE = "gate-context-unproducible"
@@ -135,10 +142,6 @@ FINDING_UNREADABLE = "gate-state-unreadable"
 # fleet do exactly that from differently-named files. Observed arrival on real
 # pull requests is the authoritative signal; this path only corroborates it.
 TESTS_WORKFLOW_PATH = ".github/workflows/tests.yaml"
-
-# Classic-branch-protection states that mean "we could not see it", as opposed
-# to `absent` (a genuine 404) or `present`.
-_CLASSIC_UNREADABLE = frozenset({"forbidden", "unknown"})
 
 
 # ---------------------------------------------------------------------------
@@ -247,29 +250,6 @@ def strict_policy(ruleset: dict) -> bool:
     return False
 
 
-def bypass_actors(ruleset: dict) -> list:
-    """Normalise a ruleset's ``bypass_actors`` to the wire shape.
-
-    ``bypass_mode`` matters as much as the actor: ``always`` is a standing
-    exemption, ``pull_request`` only lets the actor skip the rule via a PR that
-    itself still has to satisfy everything else. Both are carried through rather
-    than flattened to a boolean.
-    """
-    out: list = []
-    for actor in ruleset.get("bypass_actors") or []:
-        if not isinstance(actor, dict):
-            continue
-        out.append(
-            {
-                "rulesetId": ruleset.get("id"),
-                "actorType": actor.get("actor_type"),
-                "actorId": actor.get("actor_id"),
-                "bypassMode": actor.get("bypass_mode"),
-            }
-        )
-    return out
-
-
 def classify_arrival(samples: list) -> tuple:
     """Reduce per-PR context sightings to an arrival verdict.
 
@@ -310,7 +290,6 @@ def evaluate_repo(
     repo: str,
     default_branch: str,
     rulesets: list,
-    classic_protection: str,
     arrival_samples: Optional[list],
     has_tests_workflow_file: Optional[bool],
     required_context: str,
@@ -320,7 +299,6 @@ def evaluate_repo(
 
     ``rulesets`` are *expanded* ruleset objects (the list endpoint omits rules,
     so each must be fetched individually before it reaches here).
-    ``classic_protection`` is one of ``absent`` / ``present`` / ``forbidden``.
     """
     collected_at = _now()
 
@@ -335,10 +313,8 @@ def evaluate_repo(
             "defaultBranch": default_branch,
             "requiredContext": required_context,
             "gated": None,
-            "unbypassable": None,
             "status": STATUS_UNKNOWN,
             "enforcement": None,
-            "bypass": None,
             "arrival": {
                 "status": ARRIVAL_UNKNOWN,
                 "prsSampled": 0,
@@ -362,7 +338,6 @@ def evaluate_repo(
 
     all_contexts: list = []
     matched_rulesets: list = []
-    actors: list = []
     requires_pr = False
     strict = False
     for ruleset in governing:
@@ -375,26 +350,17 @@ def evaluate_repo(
                     "sourceType": ruleset.get("source_type"),
                 }
             )
-            # Only the rulesets that carry the gate contribute bypass actors.
-            # A bypass on some unrelated ruleset does not exempt anyone from
-            # this check, and counting it would overstate bypassability.
-            actors.extend(bypass_actors(ruleset))
             strict = strict or strict_policy(ruleset)
         all_contexts.extend(contexts)
         requires_pr = requires_pr or has_rule(ruleset, _PULL_REQUEST_RULE)
 
     gated = bool(matched_rulesets)
-    bot_actors = [a for a in actors if a.get("actorType") == _INTEGRATION_ACTOR]
-    # Direct push is the bypass nobody configures: with no ruleset requiring a
-    # pull request, anyone with write access lands on the default branch without
-    # a PR for the check to attach to.
+    # Not a bypass *actor* — a structural hole, and the one this token can
+    # actually see. With no ruleset requiring a pull request, anyone with write
+    # access lands on the default branch without a PR for the check to attach
+    # to, so the requirement never applies. Derived from the `pull_request` rule,
+    # which is part of `rules` and therefore visible at plain repo-read.
     direct_push = not requires_pr
-    # An unreadable classic-protection state cannot rule out an admin
-    # enforcement exemption, so it cannot support the strongest claim. It
-    # downgrades `gated-unbypassable` to `gated-bypassable`, never to
-    # `not-gated` — the ruleset evidence for "required" was read successfully.
-    classic_unreadable = classic_protection in _CLASSIC_UNREADABLE
-    bypassable = bool(actors) or direct_push or classic_unreadable
 
     arrival_status, sampled, with_context, truncated = classify_arrival(
         arrival_samples or []
@@ -416,24 +382,6 @@ def evaluate_repo(
             )
         )
     else:
-        if actors:
-            findings.append(
-                _finding(
-                    FINDING_BYPASSABLE,
-                    "warning",
-                    f"{len(actors)} bypass actor(s) can skip the ruleset carrying "
-                    f"{required_context!r}",
-                )
-            )
-        if bot_actors:
-            findings.append(
-                _finding(
-                    FINDING_BOT_BYPASS,
-                    "error",
-                    f"{len(bot_actors)} GitHub App bypass actor(s) on the ruleset "
-                    "carrying the gate — automation can merge without it",
-                )
-            )
         if arrival_status in (ARRIVAL_NEVER, ARRIVAL_INTERMITTENT):
             findings.append(
                 _finding(
@@ -466,24 +414,6 @@ def evaluate_repo(
                 "direct push bypasses every required check",
             )
         )
-    if classic_unreadable:
-        findings.append(
-            _finding(
-                FINDING_UNREADABLE,
-                "warning",
-                "classic branch protection could not be read (it is admin-gated) — "
-                "reported as unreadable rather than assumed absent, so this repo "
-                "cannot be certified unbypassable",
-            )
-        )
-
-    if not gated:
-        status = STATUS_NOT_GATED
-    elif bypassable:
-        status = STATUS_BYPASSABLE
-    else:
-        status = STATUS_UNBYPASSABLE
-
     return {
         "schemaVersion": SCHEMA_VERSION,
         "repo": repo,
@@ -491,22 +421,15 @@ def evaluate_repo(
         "defaultBranch": default_branch,
         "requiredContext": required_context,
         "gated": gated,
-        "unbypassable": gated and not bypassable,
-        "status": status,
+        "status": STATUS_GATED if gated else STATUS_NOT_GATED,
         "enforcement": {
             "required": gated,
             "source": "ruleset" if gated else "none",
             "rulesets": matched_rulesets,
             "requiredContexts": sorted(set(all_contexts)),
             "requiresPullRequest": requires_pr,
-            "strictRequiredStatusChecksPolicy": strict,
-            "classicProtection": classic_protection,
-        },
-        "bypass": {
-            "bypassable": bypassable,
-            "actors": actors,
-            "botActors": bot_actors,
             "directPushPermitted": direct_push,
+            "strictRequiredStatusChecksPolicy": strict,
         },
         "arrival": {
             "status": arrival_status,
@@ -537,7 +460,7 @@ def build_fleet(records: list, required_context: str) -> dict:
         for finding in record.get("findings") or []:
             by_finding[finding["id"]] = by_finding.get(finding["id"], 0) + 1
 
-    gated = by_status.get(STATUS_UNBYPASSABLE, 0) + by_status.get(STATUS_BYPASSABLE, 0)
+    gated = by_status.get(STATUS_GATED, 0)
     unknown = by_status.get(STATUS_UNKNOWN, 0)
     # Denominator excludes unreadable repos: a percentage that silently absorbs
     # an auth outage is exactly the reassuring-but-meaningless number this issue
@@ -550,25 +473,23 @@ def build_fleet(records: list, required_context: str) -> dict:
         "requiredContext": required_context,
         "fleetSize": len(records),
         "gated": gated,
-        "gatedUnbypassable": by_status.get(STATUS_UNBYPASSABLE, 0),
-        "gatedBypassable": by_status.get(STATUS_BYPASSABLE, 0),
         "notGated": by_status.get(STATUS_NOT_GATED, 0),
         "unknown": unknown,
         "gatedPct": round(100.0 * gated / known, 1) if known else 0.0,
         "withTestsWorkflowFile": sum(
             1 for r in records if r.get("hasTestsWorkflowFile")
         ),
+        "directPushPermitted": sum(
+            1
+            for r in records
+            if (r.get("enforcement") or {}).get("directPushPermitted")
+        ),
         "byStatus": by_status,
         "byArrival": by_arrival,
         "byFinding": by_finding,
         # Inlined so the binary count and its per-repo breakdown are one fetch.
         "repos": [
-            {
-                "repo": r["repo"],
-                "status": r["status"],
-                "gated": r["gated"],
-                "unbypassable": r["unbypassable"],
-            }
+            {"repo": r["repo"], "status": r["status"], "gated": r["gated"]}
             for r in records
         ],
     }
@@ -664,23 +585,11 @@ def fetch_rulesets(repo: str, run: RunFn = _run_gh) -> list:
     return expanded
 
 
-def fetch_classic_protection(repo: str, branch: str, run: RunFn = _run_gh) -> str:
-    """``absent`` | ``present`` | ``forbidden``.
-
-    A 404 genuinely means unprotected. A 403 means the token cannot see it, and
-    is kept distinct — collapsing the two would let an admin-gated read report
-    as "no protection here", which is a false negative in the safe-looking
-    direction.
-    """
-    try:
-        run(["api", f"repos/{repo}/branches/{branch}/protection", "--jq", ".url"])
-    except GhError as exc:
-        if exc.status == 404:
-            return "absent"
-        if exc.status == 403:
-            return "forbidden"
-        raise
-    return "present"
+# Classic branch protection is deliberately not consulted. It is admin-gated,
+# so this token gets a 403 on every repo and could never distinguish "no
+# protection" from "cannot see it" — and a sweep of the fleet found no consumer
+# using it at all (every repo 404s), which detect_merge_queue.py documents from
+# the same finding. Rulesets are the only live mechanism.
 
 
 def fetch_has_tests_workflow_file(repo: str, run: RunFn = _run_gh) -> bool:
@@ -897,14 +806,14 @@ def scan_repo(
 ) -> dict:
     """Collect every input for one repo, then evaluate it.
 
-    Each fetch is guarded separately so one unreadable facet (e.g. admin-gated
-    classic protection) degrades that field alone instead of discarding the
-    ruleset evidence that was read successfully.
+    The two reads that establish `gated` — default branch and rulesets — are
+    fatal: failing either sends the repo to `unknown` rather than letting it be
+    evaluated on partial evidence. The corroborating reads below are guarded
+    individually, so one unreadable facet degrades that field alone.
     """
     errors: list = []
     default_branch = "main"
     rulesets: list = []
-    classic = "absent"
     has_tests: Optional[bool] = None
     samples: Optional[list] = None
 
@@ -920,13 +829,6 @@ def scan_repo(
             errors.append(str(exc))
 
     if not errors:
-        try:
-            classic = fetch_classic_protection(repo, default_branch, run=run)
-        except GhError as exc:
-            # Non-fatal: the ruleset read already carries the load-bearing
-            # answer, and no fleet repo has been observed on classic protection.
-            classic = "unknown"
-            print(f"::warning::{repo}: {exc}", file=sys.stderr)
         try:
             has_tests = fetch_has_tests_workflow_file(repo, run=run)
         except GhError as exc:
@@ -945,7 +847,6 @@ def scan_repo(
         repo=repo,
         default_branch=default_branch,
         rulesets=rulesets,
-        classic_protection=classic,
         arrival_samples=samples,
         has_tests_workflow_file=has_tests,
         required_context=required_context,
@@ -977,7 +878,6 @@ def write_outputs(records: list, fleet: dict, out_dir: Path) -> None:
             "repo": record["repo"],
             "status": record["status"],
             "gated": record["gated"],
-            "unbypassable": record["unbypassable"],
             "arrival": (record.get("arrival") or {}).get("status"),
         }
         with (out_dir / f"history_{slug}.jsonl").open("a") as fh:
@@ -988,9 +888,9 @@ def write_outputs(records: list, fleet: dict, out_dir: Path) -> None:
         "date": fleet["collectedAt"][:10],
         "fleetSize": fleet["fleetSize"],
         "gated": fleet["gated"],
-        "gatedUnbypassable": fleet["gatedUnbypassable"],
         "notGated": fleet["notGated"],
         "unknown": fleet["unknown"],
+        "directPushPermitted": fleet["directPushPermitted"],
     }
     with (out_dir / "history_fleet.jsonl").open("a") as fh:
         fh.write(json.dumps(fleet_entry) + "\n")
@@ -1055,10 +955,9 @@ def main(argv: Optional[list] = None) -> int:
     write_outputs(records, fleet, args.out)
 
     print(
-        f"Fleet: {fleet['gated']}/{fleet['fleetSize']} gated "
-        f"({fleet['gatedUnbypassable']} unbypassable, "
-        f"{fleet['gatedBypassable']} bypassable), "
-        f"{fleet['notGated']} not gated, {fleet['unknown']} unknown",
+        f"Fleet: {fleet['gated']}/{fleet['fleetSize']} gated, "
+        f"{fleet['notGated']} not gated, {fleet['unknown']} unknown; "
+        f"{fleet['directPushPermitted']} permit a direct push to the default branch",
         file=sys.stderr,
     )
     return 0

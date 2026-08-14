@@ -2,8 +2,7 @@
 
 `gh` is stubbed through the module's single `run` seam (per the testability-seam
 convention in docs/standards/ci.md), so every branch — gated, ungated,
-bypassable, unreadable, and each arrival verdict — is exercised without network
-access.
+unreadable, and each arrival verdict — is exercised without network access.
 
 The load-bearing assertion in here is the *fail-loud* one: an unreadable repo
 must never produce the same record as a readable-but-ungated repo, and must
@@ -29,23 +28,18 @@ from gate_enforcement_scan import (  # noqa: E402
     ARRIVAL_UNKNOWN,
     DEFAULT_NAME_PATTERN,
     DEFAULT_REQUIRED_CONTEXT,
-    FINDING_BOT_BYPASS,
-    FINDING_BYPASSABLE,
     FINDING_DIRECT_PUSH,
     FINDING_NOT_ARRIVING,
     FINDING_NOT_REQUIRED,
     FINDING_UNPRODUCIBLE,
     FINDING_UNREADABLE,
-    STATUS_BYPASSABLE,
+    STATUS_GATED,
     STATUS_NOT_GATED,
-    STATUS_UNBYPASSABLE,
     STATUS_UNKNOWN,
     GhError,
     build_fleet,
-    bypass_actors,
     classify_arrival,
     evaluate_repo,
-    fetch_classic_protection,
     list_fleet_repos,
     parse_arrival_nodes,
     required_contexts,
@@ -104,7 +98,6 @@ def _evaluate(**overrides) -> dict:
         "repo": REPO,
         "default_branch": "main",
         "rulesets": [_ruleset()],
-        "classic_protection": "absent",
         "arrival_samples": [{"found": True, "truncated": False}],
         "has_tests_workflow_file": True,
         "required_context": GATE,
@@ -154,11 +147,10 @@ def test_required_contexts_ignores_other_rule_types():
 # --- enforcement -----------------------------------------------------------
 
 
-def test_gated_unbypassable_is_the_only_clean_state():
+def test_gated_with_no_findings_is_the_clean_state():
     record = _evaluate()
     assert record["gated"] is True
-    assert record["unbypassable"] is True
-    assert record["status"] == STATUS_UNBYPASSABLE
+    assert record["status"] == STATUS_GATED
     assert record["findings"] == []
 
 
@@ -196,11 +188,51 @@ def test_no_rulesets_at_all():
     assert FINDING_DIRECT_PUSH in _finding_ids(record)
 
 
-# --- bypass ----------------------------------------------------------------
+# --- bypass is not claimed --------------------------------------------------
 
 
-def test_bypass_actor_downgrades_to_bypassable():
+def test_bypass_actors_are_never_reported_even_when_present():
+    """The regression guard for the false green that shipped once.
+
+    GitHub *omits* `bypass_actors` entirely — not an empty list, not a 403 — for
+    any caller without admin on the repo, while still returning `rules`. Under a
+    fleet-scoped token "has standing admin bypass" and "has none" are therefore
+    the same bytes. The first CI run reported all five gated repos unbypassable;
+    four of them had bypass actors an admin token could see.
+
+    So the claim is not made at all. This asserts the payload carries no
+    bypassability verdict even when the actors ARE visible — because a field
+    that is only correct under one token is worse than no field.
+    """
     record = _evaluate(
+        rulesets=[
+            _ruleset(
+                bypass=[
+                    {
+                        "actor_id": 5,
+                        "actor_type": "RepositoryRole",
+                        "bypass_mode": "always",
+                    },
+                    {
+                        "actor_id": 62283865,
+                        "actor_type": "Integration",
+                        "bypass_mode": "always",
+                    },
+                ]
+            )
+        ]
+    )
+    assert record["status"] == STATUS_GATED
+    assert "bypass" not in record
+    assert "unbypassable" not in record
+    assert not any("bypass" in key.lower() for key in record["enforcement"])
+    assert record["findings"] == []
+
+
+def test_the_record_reads_identically_with_and_without_visible_bypass_actors():
+    """Same repo, admin token vs fleet token. If these ever diverge, the scanner
+    has started making a claim whose truth depends on who asked."""
+    admin_view = _evaluate(
         rulesets=[
             _ruleset(
                 bypass=[
@@ -213,52 +245,23 @@ def test_bypass_actor_downgrades_to_bypassable():
             )
         ]
     )
-    assert record["gated"] is True
-    assert record["unbypassable"] is False
-    assert record["status"] == STATUS_BYPASSABLE
-    assert _finding_ids(record) == {FINDING_BYPASSABLE}
-    assert record["bypass"]["actors"][0]["bypassMode"] == "always"
+    # The fleet token's view: the key is absent, not empty.
+    fleet_ruleset = _ruleset()
+    del fleet_ruleset["bypass_actors"]
+    fleet_view = _evaluate(rulesets=[fleet_ruleset])
+
+    for view in (admin_view, fleet_view):
+        view.pop("collectedAt")
+    assert admin_view == fleet_view
 
 
-def test_app_bypass_is_called_out_separately():
-    """'No bot can bypass the gate' is an explicit assertion of this milestone,
-    and an App entry is invisible among role-based ones without its own finding."""
-    record = _evaluate(
-        rulesets=[
-            _ruleset(
-                bypass=[
-                    {
-                        "actor_id": 62283865,
-                        "actor_type": "Integration",
-                        "bypass_mode": "always",
-                    }
-                ]
-            )
-        ]
-    )
-    assert FINDING_BOT_BYPASS in _finding_ids(record)
-    assert len(record["bypass"]["botActors"]) == 1
-
-
-def test_bypass_on_an_unrelated_ruleset_does_not_count():
-    """A bypass only exempts the ruleset it sits on. Attributing an unrelated
-    ruleset's bypass to the gate would overstate bypassability."""
-    unrelated = _ruleset(
-        ruleset_id=2,
-        contexts=("pre-commit",),
-        bypass=[
-            {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}
-        ],
-    )
-    record = _evaluate(rulesets=[_ruleset(), unrelated])
-    assert record["status"] == STATUS_UNBYPASSABLE
-    assert record["bypass"]["actors"] == []
-
-
-def test_no_pull_request_requirement_means_direct_push_bypasses_everything():
+def test_no_pull_request_requirement_is_still_reported():
+    """The one bypass-shaped hole this token CAN see: it comes from `rules`,
+    which plain repo-read returns in full. With no PR required there is no pull
+    request for the check to attach to, so the requirement never applies."""
     record = _evaluate(rulesets=[_ruleset(with_pull_request=False)])
-    assert record["bypass"]["directPushPermitted"] is True
-    assert record["status"] == STATUS_BYPASSABLE
+    assert record["enforcement"]["directPushPermitted"] is True
+    assert record["status"] == STATUS_GATED  # still required — a separate fact
     assert FINDING_DIRECT_PUSH in _finding_ids(record)
 
 
@@ -268,40 +271,8 @@ def test_pull_request_rule_may_live_on_a_second_ruleset():
     checks_only = _ruleset(ruleset_id=1, with_pull_request=False)
     pr_only = _ruleset(ruleset_id=2, contexts=None, with_pull_request=True)
     record = _evaluate(rulesets=[checks_only, pr_only])
-    assert record["bypass"]["directPushPermitted"] is False
-    assert record["status"] == STATUS_UNBYPASSABLE
-
-
-@pytest.mark.parametrize("classic", ["forbidden", "unknown"])
-def test_unreadable_classic_protection_blocks_the_unbypassable_claim(classic):
-    """Downgrades the claim, never the fact: the repo stays `gated`."""
-    record = _evaluate(classic_protection=classic)
-    assert record["gated"] is True
-    assert record["status"] == STATUS_BYPASSABLE
-    assert FINDING_UNREADABLE in _finding_ids(record)
-
-
-def test_bypass_actors_normalisation_carries_the_mode():
-    actors = bypass_actors(
-        _ruleset(
-            ruleset_id=9,
-            bypass=[
-                {
-                    "actor_id": 1,
-                    "actor_type": "OrganizationAdmin",
-                    "bypass_mode": "pull_request",
-                }
-            ],
-        )
-    )
-    assert actors == [
-        {
-            "rulesetId": 9,
-            "actorType": "OrganizationAdmin",
-            "actorId": 1,
-            "bypassMode": "pull_request",
-        }
-    ]
+    assert record["enforcement"]["directPushPermitted"] is False
+    assert record["findings"] == []
 
 
 # --- arrival ---------------------------------------------------------------
@@ -340,7 +311,7 @@ def test_a_truncated_sample_that_found_the_gate_still_counts():
 
 def test_required_but_never_arriving_is_a_finding():
     record = _evaluate(arrival_samples=[{"found": False, "truncated": False}] * 5)
-    assert record["status"] == STATUS_UNBYPASSABLE
+    assert record["status"] == STATUS_GATED
     assert FINDING_NOT_ARRIVING in _finding_ids(record)
     assert record["arrival"]["prsWithContext"] == 0
 
@@ -629,7 +600,7 @@ def test_unreadable_repo_is_unknown_not_ungated():
     record = _evaluate(errors=["gh api failed: HTTP 401"])
     assert record["status"] == STATUS_UNKNOWN
     assert record["gated"] is None
-    assert record["unbypassable"] is None
+    assert record["enforcement"] is None
     assert _finding_ids(record) == {FINDING_UNREADABLE}
     assert "HTTP 401" in record["findings"][0]["message"]
 
@@ -659,7 +630,7 @@ def test_scan_repo_survives_a_failed_arrival_probe():
         return json.dumps("ok")
 
     record = scan_repo(REPO, GATE, sample_size=5, run=run)
-    assert record["status"] == STATUS_UNBYPASSABLE
+    assert record["status"] == STATUS_GATED
     assert record["arrival"]["status"] == ARRIVAL_NO_DATA
 
 
@@ -674,34 +645,16 @@ def test_scan_repo_reads_a_gated_repo_end_to_end():
             return json.dumps([[{"id": 1}]])
         if args[1] == f"repos/{REPO}/rulesets/1":
             return json.dumps(_ruleset())
-        if args[1].endswith("/protection"):
-            raise GhError("gh api failed: HTTP 404", status=404)
         return json.dumps("sha")
 
     record = scan_repo(REPO, GATE, sample_size=0, run=run)
-    assert record["status"] == STATUS_UNBYPASSABLE
-    assert record["enforcement"]["classicProtection"] == "absent"
+    assert record["status"] == STATUS_GATED
     assert record["hasTestsWorkflowFile"] is True
     assert f"repos/{REPO}/rulesets?includes_parents=true" in calls
-
-
-@pytest.mark.parametrize("status,expected", [(404, "absent"), (403, "forbidden")])
-def test_classic_protection_distinguishes_404_from_403(status, expected):
-    """404 means unprotected; 403 means we cannot see it. Collapsing them would
-    let an admin-gated read report as 'no protection here'."""
-
-    def run(args: list) -> str:
-        raise GhError("boom", status=status)
-
-    assert fetch_classic_protection(REPO, "main", run=run) == expected
-
-
-def test_classic_protection_reraises_unexpected_failures():
-    def run(args: list) -> str:
-        raise GhError("boom", status=500)
-
-    with pytest.raises(GhError):
-        fetch_classic_protection(REPO, "main", run=run)
+    # Classic branch protection is admin-gated, so it could never be read with
+    # this token and is not consulted at all. Probing it would spend an API call
+    # per repo to learn nothing.
+    assert not any(str(c).endswith("/protection") for c in calls)
 
 
 # --- discovery + rollup ----------------------------------------------------
@@ -727,28 +680,14 @@ def test_list_fleet_repos_filters_by_name_pattern():
 def test_build_fleet_counts_the_headline_binary():
     records = [
         _evaluate(repo="atlanhq/a"),
-        _evaluate(
-            repo="atlanhq/b",
-            rulesets=[
-                _ruleset(
-                    bypass=[
-                        {
-                            "actor_id": 5,
-                            "actor_type": "RepositoryRole",
-                            "bypass_mode": "always",
-                        }
-                    ]
-                )
-            ],
-        ),
+        _evaluate(repo="atlanhq/b", rulesets=[_ruleset(with_pull_request=False)]),
         _evaluate(repo="atlanhq/c", rulesets=[]),
         _evaluate(repo="atlanhq/d", errors=["HTTP 500"]),
     ]
     fleet = build_fleet(records, GATE)
     assert fleet["fleetSize"] == 4
     assert fleet["gated"] == 2
-    assert fleet["gatedUnbypassable"] == 1
-    assert fleet["gatedBypassable"] == 1
+    assert fleet["directPushPermitted"] == 2  # the ungated repo also has no PR rule
     assert fleet["notGated"] == 1
     assert fleet["unknown"] == 1
     assert len(fleet["repos"]) == 4
@@ -776,7 +715,7 @@ def test_write_outputs_layout(tmp_path):
     assert json.loads((tmp_path / "fleet.json").read_text())["gated"] == 1
 
     history = (tmp_path / "history_atlanhq_atlan-mysql-app.jsonl").read_text().strip()
-    assert json.loads(history)["status"] == STATUS_UNBYPASSABLE
+    assert json.loads(history)["status"] == STATUS_GATED
     assert (
         json.loads((tmp_path / "history_fleet.jsonl").read_text().strip())["gated"] == 1
     )
