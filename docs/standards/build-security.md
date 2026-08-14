@@ -51,6 +51,14 @@ reference is the public interface, and it stays put. Callers of
 `build-and-publish-app.yaml` opt in with `use_ghcr_base: true`, and a BuildKit named
 context rewrites *where the layers come from* without changing what is built.
 
+Each app self-selects, on its own schedule — the input's default stays `false` until the
+fleet has soaked. The opt-in is safe to keep in an app's `build-and-publish.yaml` even
+though `bootstrap` fully manages that file: the value is read back off the file on every
+re-run (or set with `atlan-application-sdk-conformance bootstrap --use-ghcr-base true`),
+so a re-sync preserves it instead of reverting the app to Harbor, and conformance C002
+does not report an opted-in app as drifted. To go back to Harbor, delete the line or pass
+`--use-ghcr-base false`.
+
 The opt-in runs `.github/scripts/resolve_base_redirect.py` first, which fails the
 build rather than let the redirect fail quietly:
 

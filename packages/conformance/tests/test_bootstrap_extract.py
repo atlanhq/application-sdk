@@ -7,11 +7,16 @@ without creating a cycle -- see bootstrap/extract.py's module docstring.
 
 from __future__ import annotations
 
+import pytest
+from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     extract_apt_packages,
+    extract_declared_unit_coverage_fail_under,
     extract_field,
     extract_renovate_automerge,
+    extract_tests_yaml_params,
+    extract_use_ghcr_base,
     resolve_renovate_fallback_exit_zero,
 )
 from conformance.bootstrap.render import render
@@ -202,3 +207,131 @@ def test_resolve_renovate_fallback_exit_zero_hard_mode() -> None:
 
 def test_resolve_renovate_fallback_exit_zero_unparseable_defaults_hard() -> None:
     assert resolve_renovate_fallback_exit_zero("not json") == "false"
+
+
+# ---------------------------------------------------------------------------
+# tests.yaml's unit-coverage-fail-under (an app raising its own coverage floor)
+# ---------------------------------------------------------------------------
+
+
+def _raise_floor(monkeypatch: pytest.MonkeyPatch, floor: int) -> None:
+    """Move ``SDK_UNIT_COVERAGE_FLOOR`` for the duration of one test.
+
+    The floor is 0 today, so nothing can be *below* it and the reject branch
+    would be untestable at the real value — and a test that only holds while
+    the constant is 0 would silently stop covering the branch the day the SDK
+    raises its floor. Patched on the module (both readers resolve the global at
+    call time) so it moves for the extractor and the checker alike.
+    """
+    monkeypatch.setattr(extract_mod, "SDK_UNIT_COVERAGE_FLOOR", floor)
+
+
+def test_extract_tests_yaml_params_keeps_coverage_floor_above_sdk() -> None:
+    params = extract_tests_yaml_params(
+        render("tests.yaml", app_name="widget", unit_coverage_fail_under="40")
+    )
+    assert params["unit_coverage_fail_under"] == "40"
+
+
+def test_extract_tests_yaml_params_keeps_coverage_floor_equal_to_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A value equal to the floor weakens nothing, so it is preserved.
+
+    Deleting a redundant-but-honest declaration would be churn, not
+    remediation — and it would make C002 flag a file whose only sin is being
+    explicit about the floor it already inherits.
+    """
+    _raise_floor(monkeypatch, 40)
+    params = extract_tests_yaml_params(
+        render("tests.yaml", app_name="widget", unit_coverage_fail_under="40")
+    )
+    assert params["unit_coverage_fail_under"] == "40"
+
+
+def test_extract_tests_yaml_params_drops_coverage_floor_below_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Below the SDK floor is not a preserved choice — apps may only raise it.
+
+    Dropping it is what keeps the finding standing (the canonical then has no
+    line) and what makes ``--resync`` remove the line so the app inherits the
+    SDK floor again.
+    """
+    _raise_floor(monkeypatch, 40)
+    params = extract_tests_yaml_params(
+        render("tests.yaml", app_name="widget", unit_coverage_fail_under="20")
+    )
+    assert "unit_coverage_fail_under" not in params
+
+
+def test_extract_tests_yaml_params_reads_bare_coverage_value() -> None:
+    """Hand-written without quotes is the same declaration."""
+    text = 'jobs:\n  tests:\n    with:\n      app-name: "w"\n      unit-coverage-fail-under: 55\n'
+    assert extract_tests_yaml_params(text)["unit_coverage_fail_under"] == "55"
+
+
+def test_extract_tests_yaml_params_ignores_commented_coverage_value() -> None:
+    """A commented-out line names a floor the repo chose NOT to apply.
+
+    Extracting it would render a line the on-disk file doesn't have, leaving
+    C002 drift no re-run could clear — the same trap the services-script and
+    apt-package extractors are anchored against.
+    """
+    text = 'jobs:\n  tests:\n    with:\n      app-name: "w"\n      # unit-coverage-fail-under: "55"\n'
+    assert "unit_coverage_fail_under" not in extract_tests_yaml_params(text)
+
+
+def test_extract_tests_yaml_params_ignores_non_numeric_coverage_value() -> None:
+    text = 'jobs:\n  tests:\n    with:\n      app-name: "w"\n      unit-coverage-fail-under: "high"\n'
+    assert "unit_coverage_fail_under" not in extract_tests_yaml_params(text)
+
+
+def test_extract_declared_coverage_reports_a_sub_floor_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The unfiltered reader sees what the filtered one refuses to preserve.
+
+    This is the distinction the C002 message needs: "declares nothing" and
+    "declares a floor we dropped" produce the same params dict, and only the
+    second should be explained in terms of the coverage line.
+    """
+    _raise_floor(monkeypatch, 40)
+    text = 'jobs:\n  tests:\n    with:\n      unit-coverage-fail-under: "20"\n'
+    assert extract_declared_unit_coverage_fail_under(text) == "20"
+
+
+def test_extract_declared_coverage_empty_when_absent() -> None:
+    assert extract_declared_unit_coverage_fail_under(render("tests.yaml")) == ""
+
+
+# ---------------------------------------------------------------------------
+# build-and-publish.yaml's use_ghcr_base (an app self-selecting the redirect)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_use_ghcr_base_round_trips_through_render() -> None:
+    """The write side and the read side must agree, or the opt-in is deleted by
+    the next bare re-run of an always-overwrite shim."""
+    rendered = render("build-and-publish.yaml", use_ghcr_base="true")
+    assert extract_use_ghcr_base(rendered) == "true"
+
+
+def test_extract_use_ghcr_base_empty_when_absent() -> None:
+    assert extract_use_ghcr_base(render("build-and-publish.yaml")) == ""
+
+
+def test_extract_use_ghcr_base_empty_for_explicit_false() -> None:
+    """``false`` is a second spelling of the default, so it renders no line.
+
+    Returning ``"false"`` here would make the checker render an explicit
+    ``use_ghcr_base: false`` and then report every repo that spells the default
+    the other way (i.e. by saying nothing) as drifted.
+    """
+    text = "jobs:\n  build:\n    with:\n      use_ghcr_base: false\n"
+    assert extract_use_ghcr_base(text) == ""
+
+
+def test_extract_use_ghcr_base_ignores_commented_opt_in() -> None:
+    text = "jobs:\n  build:\n    with:\n      # use_ghcr_base: true\n"
+    assert extract_use_ghcr_base(text) == ""

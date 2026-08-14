@@ -106,6 +106,8 @@ def render(
     system_deps: str = "",
     exit_zero: str = "false",
     automerge: str = "true",
+    unit_coverage_fail_under: str = "",
+    use_ghcr_base: str = "",
 ) -> str:
     """Render template *name* with the given substitution variables.
 
@@ -113,6 +115,12 @@ def render(
     Parameterised templates:
 
     - ``build-and-publish.yaml``: ``unit_tests_workflow`` (default ``"tests.yaml"``)
+      and ``use_ghcr_base`` (default ``""`` — no line, so the SDK's own default
+      applies; ``"true"`` renders the opt-in as a bare
+      ``use_ghcr_base: true``). Same same-line ``<% if %>`` hugging as
+      ``checks.yml`` below, for the same reason: an un-taken block on its own
+      lines would leave a blank line and read as C002 drift in every repo that
+      hasn't opted in.
     - ``conformance.yaml``: ``exit_zero`` (default ``"false"``; set to ``"true"``
       for soft-enforcement rollouts where violations are tracked but do not block
       merges — flip to ``"false"`` when the app is ready for hard gating).
@@ -133,7 +141,16 @@ def render(
     - ``tests.yaml``: ``app_name`` (default ``"app"``), ``app_image_name``
       (default derived as ``"atlan-<app_name>-app"``), ``enable_e2e``
       (default ``"true"``), ``services_script`` (default ``""`` — renders the
-      services-script line commented out; supply a path to render it active).
+      services-script line commented out; supply a path to render it active),
+      ``unit_coverage_fail_under`` (default ``""`` — no line, so the SDK's own
+      floor applies; supply a percent to render this app's higher floor, hugged
+      onto the same line as its ``<% if %>`` tags like ``checks.yml``'s step so
+      the no-override render is unchanged). The coverage line renders bare and
+      as the first entry of the ``with:`` block — deliberately the exact shape
+      the apps that already raised their floor hand-wrote, so those files match
+      this canonical instead of reporting C002 drift for having opted up. A
+      surrounding explanatory comment, or any other position, would guarantee
+      the mismatch.
     - ``.gitignore``: static template, no substitution.
 
     All other keyword arguments are accepted but unused, so callers can pass
@@ -158,4 +175,6 @@ def render(
         system_deps=system_deps,
         exit_zero=exit_zero,
         automerge=automerge,
+        unit_coverage_fail_under=unit_coverage_fail_under,
+        use_ghcr_base=use_ghcr_base,
     )
