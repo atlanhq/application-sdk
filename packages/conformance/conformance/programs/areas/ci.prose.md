@@ -110,8 +110,8 @@ it isn't safe to assume a C002 finding already triggered it:
    CLI's own code decides each entry, not the model reading prefixed prose
    lines) and how it drives `detect-fix-recheck`'s revert scope if this fix
    is later rejected by a gate. This no-flags procedure never produces a
-   `renovate.json.bak` entry itself (that only happens when `--enforce` is
-   passed explicitly), but capture it if present in `touched` rather than
+   `renovate.json.bak` entry itself (that only happens when `--enforce` or
+   `--renovate-automerge` is passed explicitly), but capture it if present in `touched` rather than
    assuming a fixed set of paths is exhaustive here too. `orthogonal_gate =
    "skip"` on both C002 and C003 (set on the rule definitions) — the Python
    test suite is skipped entirely, not just for this fix: a
