@@ -7,10 +7,21 @@ name: Release Gate
 # All other PRs pass this check immediately — it exists solely to gate the
 # auto-created bump-version PRs without requiring `e2e` on every PR.
 #
-# Branch-protection targets: "Release Gate / Release Gate"
-# Add this alongside "Tests / Tests Gate" in branch protection so that:
+# Branch-protection target: "Release Gate"
+# Add this alongside "tests / Tests Gate" in branch protection so that:
 # (a) this check blocks release PRs missing the label, and (b) the
 # Tests Gate check enforces that unit, integration, and e2e tests all pass.
+#
+# Those two strings are shaped differently because a ruleset's
+# required_status_checks `context` is the check-run name, which never includes
+# the workflow name:
+#   * an inline job  → just the job's `name:`               ("Release Gate")
+#   * a job that `uses:` a reusable → "<caller job id> / <called job name>"
+#     ("tests / Tests Gate" — `tests:` is the job in tests.yaml that calls
+#     tests-reusable.yaml, whose gate job is named "Tests Gate")
+# The UI's checks list shows the workflow name as an extra leading segment;
+# that display form is not what the API matches on, and a context that matches
+# no check silently protects nothing.
 
 on:
   pull_request:
@@ -46,4 +57,4 @@ jobs:
           fi
 
           echo "Release PR has both 'release' and 'e2e' labels — gate passes."
-          echo "Test pass/fail is enforced separately by 'Tests / Tests Gate'."
+          echo "Test pass/fail is enforced separately by 'tests / Tests Gate'."

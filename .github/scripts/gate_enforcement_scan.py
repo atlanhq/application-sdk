@@ -735,10 +735,31 @@ def parse_arrival_nodes(payload: dict, required_context: str) -> list:
             ctx = _expect_object(ctx_node, f"{where}.contexts.nodes[{ctx_index}]")
             if ctx is None:
                 continue
-            # CheckRun exposes `name`, StatusContext exposes `context`.
-            name = ctx.get("name") or ctx.get("context")
-            if name is not None:
-                names.add(name)
+            # CheckRun exposes `name`, StatusContext exposes `context`. Select
+            # by *presence*, not truthiness: an `or`-chain would collapse a
+            # present-but-falsy leaf (`0`, `False`, `[]`, `{}`) to the fallback
+            # or to `None`, skipping it as "absent" — a wrong-typed leaf then
+            # silently reads as `found: False`, the false clean negative the
+            # fail-loud contract forbids.
+            name = ctx.get("name")
+            if name is None:
+                name = ctx.get("context")
+            if name is None:
+                continue
+            if not isinstance(name, str):
+                # The leaf analogue of the container guards above: a present-
+                # but-wrong-typed `name`/`context` is schema drift, and must
+                # reach the caller as GhError rather than aborting the sweep
+                # (an unhashable list/dict raises an uncaught TypeError in
+                # `names.add`, which `scan_repo` does not catch) or silently
+                # misclassifying (a hashable int/bool never matches the
+                # required-context string, reading as a false `found: False`).
+                raise GhError(
+                    f"malformed arrival payload: expected "
+                    f"{where}.contexts.nodes[{ctx_index}].name/context to be a "
+                    f"string, got {type(name).__name__}"
+                )
+            names.add(name)
 
         total = (contexts or {}).get("totalCount")
         if total is None:

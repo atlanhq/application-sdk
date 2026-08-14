@@ -174,7 +174,10 @@ One secret rather than four per cloud because a `strategy.matrix` value cannot
 index the `secrets` context, and the reusable workflows declare their
 `workflow_call` secrets explicitly — so per-cloud names would have to be
 re-declared for every cloud ever added. Adding a fourth CSP is a secret edit and
-a one-line change to `DEFAULT_CLOUDS`; no app repo changes at all.
+a one-line change to `DEFAULT_CLOUDS`; no app repo changes at all. Both halves
+are needed to *add* one — the narrowing below is an intersection, never a union,
+so a key appearing in the secret does not widen the fleet's fan-out behind
+`DEFAULT_CLOUDS`'s back. Removing a cloud needs only the secret edit.
 
 `"tenant_id"` is the tenant's **vcluster instance name** (`markeznp37`, `home-mt`)
 — *not* its hostname, which is what `"tenant"` holds. It is required only by the
@@ -250,18 +253,42 @@ on each app's `tests.yaml`:
 
 | Value | Meaning |
 |---|---|
-| `""` (default) | The SDK's current list — `DEFAULT_CLOUDS` in `discover_e2e_suites.py`. Deliberately not "no clouds": an untouched GitHub input arrives as `""`, and that must not silently opt a repo out. |
-| `aws` (or any subset) | Just those clouds. Use this to re-run one cloud, or to keep the fleet moving while one tenant is down. |
+| `""` (default) | The SDK's current list — `DEFAULT_CLOUDS` in `discover_e2e_suites.py` — **intersected with the clouds `E2E_TENANT_MATRIX_JSON` actually carries**. Deliberately not "no clouds": an untouched GitHub input arrives as `""`, and that must not silently opt a repo out. |
+| `aws` (or any subset) | Just those clouds, for re-running one cloud on one repo. Exact, and never narrowed: a named cloud the secret does not carry fails its leg. |
 | `none` | No cloud dimension — one leg against the single fallback tenant. |
 
 Every cloud is a **required** leg: the matrix is `fail-fast: false` and the Tests
 Gate reads `needs.e2e.result`, the matrix aggregate, so any cloud failing reds the
-gate. Narrowing `e2e-clouds` is the escape hatch, and trimming the secret to one
-key is the org-wide one.
+gate.
+
+### Taking a cloud out of the rotation
+
+**Remove its entry from `E2E_TENANT_MATRIX_JSON`.** That is the whole hatch: one
+secret edit, fleet-wide, effective on the next run, no connector PR and no SDK
+PR. The `Discover e2e suites` job reads the secret's *keys* (never its values —
+`e2e_tenant_matrix_clouds.py` emits a key list and nothing else), hands them to
+discovery, and the defaulted fan-out narrows to the intersection with a
+`::warning::` naming every cloud it dropped. A run that got two clouds when the
+SDK ships three says so in its own log.
+
+Defaulted narrows; **named does not**. `e2e-clouds: aws,azure` naming a cloud the
+secret does not carry still reaches `resolve_e2e_tenant.py` and still exits
+non-zero — somebody asserted that cloud should run, and skipping it silently
+would be a coverage hole rather than a narrowing. The asymmetry is deliberate and
+is pinned by `test_a_defaulted_absent_cloud_is_dropped_with_a_warning` /
+`test_a_named_absent_cloud_still_reaches_the_resolver`; it is the kind of
+distinction a later reader flattens on the grounds that both paths "just check
+the cloud list" (FND-354).
+
+Narrowing to *nothing* is an error, not an empty matrix: a secret carrying none
+of `DEFAULT_CLOUDS` fails discovery rather than emitting zero legs, which would
+green the gate having run no e2e at all.
 
 When the secret is not available to a repo, `clouds` is forced to `none` and the
 `Discover e2e suites` job emits a `::warning::` saying so — a run that asked for
-three clouds and got one must not look identical to one that got three.
+three clouds and got one must not look identical to one that got three. The same
+applies when the payload cannot be parsed: the key read degrades to "not known",
+narrowing is skipped, and the per-leg resolver still reports the real defect.
 
 ### Requiring a tenant ID on the install path
 
@@ -554,6 +581,45 @@ Single-pipeline apps invoking the action remotely (`@main`) never hit this code 
 4. **Tests**: unit + integration tests under `tests/unit/` and `tests/integration/`; full-DAG e2e under `tests/e2e/` (`SQLAppE2EFullTest` subclass).
 5. **Repo secrets**: set the 7 entries from the table above.
 6. **SDK matrix**: add `<connector>-app` to the `DEFAULT_MATRIX` in apps-sdk's `matrix-builder` job (`pull_request.yaml`) so `connector-tests` fans out to your connector automatically.
+7. **Required check**: make `tests / Tests Gate` a required, unbypassable status check on the default branch, and remove any stale required checks left over from older workflows (`unit-tests`, `tests-passed`, …). Do this as soon as step 2 is merged — see below.
+
+### The tests gate does not wait on the coverage bar
+
+The exact `required_status_checks` context is **`tests / Tests Gate`** — the
+caller's job **id** (`tests:` in the scaffolded `tests.yaml`), then the gate
+job's name. The workflow name is not part of it, even though the UI's checks
+list displays it as a leading segment; verified against the live `main` rulesets
+on `atlanhq/atlan-mysql-app` (`tests / Tests Gate`, `suite / Conformance Gate`)
+and `atlanhq/application-sdk` (inline jobs are a single segment, e.g. `SDK
+Gate`). A context that matches no check protects nothing, so get this string
+right before rolling it out.
+
+Making it required is its **own** lever, with no prerequisite
+beyond the check running something real. It is **not** gated on the four-tier
+test bar, the 85% coverage target, or every tier being wired up — pytest already
+exits non-zero when it collects nothing, so a vacuous pass is not possible, and
+the gate's verdict comes from a tested driver
+([`verify-test-gate`](../../.github/actions/verify-test-gate/action.yaml)) rather
+than from a job's own exit status. Turn it on with a thin suite and grow the
+suite behind it; a suite nothing enforces has no authority and degrades under
+pressure.
+
+The bar belongs to the *other* lever — **0-touch**, meaning conformance findings
+block CI and Renovate merges its own PRs without a human. That is what
+`atlan-application-sdk-conformance bootstrap --enforce true` sets, and it is the
+one an app graduates to once its tests are meaningful. The two halves of 0-touch
+are separately expressible too, for a repo that wants one without the other:
+
+| Lever | Flag | Prerequisite |
+|---|---|---|
+| `tests / Tests Gate` is a required check | none — a GitHub branch-protection setting; no bootstrap flag governs it | none |
+| Conformance findings block CI | `--conformance-blocking true\|false` | meaningful automated tests (four-tier bar) |
+| Renovate merges without a human | `--renovate-automerge true\|false` | meaningful automated tests (four-tier bar) |
+| Both of the above at once | `--enforce true\|false` (shorthand) | as above |
+
+Coverage stays warn-only at the publish-time certification gate as well — see
+[`app-certification.md`](app-certification.md#enforcement), where unit-test
+pass/fail already blocks publish while the 85% threshold only annotates.
 
 ## Reference
 

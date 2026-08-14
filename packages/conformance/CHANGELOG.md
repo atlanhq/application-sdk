@@ -2,6 +2,26 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.19.0] - 2026-08-14
+
+### Features
+
+- add bootstrap --resync for scaffold drift (FND-356) (#3210) ([42b5a53](https://github.com/atlanhq/application-sdk/commit/42b5a53))
+- add granular 0-touch levers under --enforce (FND-347) (#3206) ([ee37002](https://github.com/atlanhq/application-sdk/commit/ee37002))
+- lane-model fleet preset + per-PR delivered-deps in the fleet scanner (#3129) ([893c6ba](https://github.com/atlanhq/application-sdk/commit/893c6ba))
+
+### Bug fixes
+
+- update dependency @openprose/reactor-devtools to ^0.3.0 (#3167) ([17d2774](https://github.com/atlanhq/application-sdk/commit/17d2774))
+- update github/codeql-action digest to ff2f1c6 (#3196) ([c79c926](https://github.com/atlanhq/application-sdk/commit/c79c926))
+- make CI toolchain downloads survive a CDN outage (FND-287) (#3176) ([e28e9f8](https://github.com/atlanhq/application-sdk/commit/e28e9f8))
+
+### Other changes
+
+- refactor(runtime): move the offload and progress seams to a dependency-neutral substrate (FND-316) (#3189) ([55bda27](https://github.com/atlanhq/application-sdk/commit/55bda27))
+- chore(contract-toolkit): release v0.21.1 (#3144) ([b6a467e](https://github.com/atlanhq/application-sdk/commit/b6a467e))
+- chore(contract-toolkit): release v0.21.0 (#3126) ([f87e56b](https://github.com/atlanhq/application-sdk/commit/f87e56b))
+
 ## [0.18.0] - 2026-08-11
 
 ### Features

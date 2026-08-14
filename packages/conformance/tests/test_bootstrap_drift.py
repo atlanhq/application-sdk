@@ -433,10 +433,17 @@ def test_tests_yaml_finding_is_warn_never_block(tmp_path: pathlib.Path) -> None:
     assert rule.tier == EnforcementTier.WARN
 
 
-def test_tests_yaml_finding_message_mentions_delete_and_bootstrap(
+def test_tests_yaml_drift_message_names_the_resync_flag(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Drift message tells users to delete + re-run bootstrap to remediate."""
+    """Drift message points at the flag that actually fixes it.
+
+    The remediation used to be "delete the file and re-run", which discards
+    every per-repo customisation to land a structural catch-up.
+    ``--resync`` preserves them, so the message must name it — a
+    finding whose stated fix is more destructive than necessary is one people
+    reasonably refuse to act on.
+    """
     wf_dir = tmp_path / ".github" / "workflows"
     wf_dir.mkdir(parents=True)
     wf = wf_dir / "tests.yaml"
@@ -444,8 +451,27 @@ def test_tests_yaml_finding_message_mentions_delete_and_bootstrap(
     findings = scan_path(wf, tmp_path)
     assert len(findings) == 1
     msg = findings[0].message
-    assert "delete" in msg.lower() or "regenerate" in msg.lower()
+    assert "--resync" in msg
     assert "bootstrap" in msg
+    assert "delete" not in msg.lower()
+
+
+def test_tests_yaml_absent_message_does_not_name_the_resync_flag(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An absent tests.yaml is scaffolded by a bare re-run — no flag needed.
+
+    Separate message from the drift case: there is nothing on disk to
+    preserve, so telling the user to pass a preservation flag would imply the
+    bare re-run is unsafe when it is exactly the right command.
+    """
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    findings = scan_path(wf_dir / "tests.yaml", tmp_path)
+    assert len(findings) == 1
+    msg = findings[0].message
+    assert "absent" in msg.lower()
+    assert "--resync" not in msg
 
 
 # ---------------------------------------------------------------------------
@@ -491,17 +517,24 @@ def test_renovate_json_finding_is_warn_never_block(tmp_path: pathlib.Path) -> No
     assert get_rule("C002").tier == EnforcementTier.WARN
 
 
-def test_renovate_json_finding_mentions_delete_and_bootstrap(
+def test_renovate_json_drift_message_names_the_resync_flag(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Drift message tells users to delete + re-run bootstrap to remediate."""
+    """Drift message points at the flag that actually fixes it.
+
+    Mirrors the tests.yaml case: the old advice was "delete and re-run", which
+    discards the file wholesale. It must also keep --resync distinct from the
+    mode flags — those CHANGE the auto-merge policy, which is not what a
+    structural catch-up should do.
+    """
     rj = tmp_path / "renovate.json"
     rj.write_text("{}\n")
     findings = scan_path(rj, tmp_path)
     assert len(findings) == 1
     msg = findings[0].message
-    assert "delete" in msg.lower() or "regenerate" in msg.lower()
+    assert "--resync" in msg
     assert "bootstrap" in msg
+    assert "delete" not in msg.lower()
 
 
 def test_all_scaffolds_clean_after_bootstrap(tmp_path: pathlib.Path) -> None:

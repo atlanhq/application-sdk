@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 
 import pytest
-from conformance.bootstrap.args import parse_bootstrap_args
+from conformance.bootstrap.args import BOOTSTRAP_USAGE, FLAGS, parse_bootstrap_args
 from conformance.bootstrap.autodetect import derive_app_name_from_dir
 from conformance.bootstrap.command import _bootstrap_file
 from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
@@ -103,6 +104,11 @@ def test_parse_bootstrap_args_defaults() -> None:
         "services_script": "",
         "system_deps": "",
         "enforce": "",
+        "conformance_blocking": "",
+        "renovate_automerge": "",
+        # Presence flag: "false" unless --resync is passed, so a bare
+        # re-run never rewrites the write-if-absent tests.yaml scaffold.
+        "resync": "false",
     }
 
 
@@ -529,6 +535,73 @@ def test_parse_bootstrap_args_enforce_invalid(
     assert "--enforce" in capsys.readouterr().err
 
 
+# ---------------------------------------------------------------------------
+# The two granular 0-touch levers (--conformance-blocking /
+# --renovate-automerge), which --enforce is the shorthand for. See FND-347:
+# the tests gate being a required check is a third, separate lever that none
+# of these three flags governs.
+# ---------------------------------------------------------------------------
+
+
+def test_every_flag_is_documented_in_usage() -> None:
+    """Each flag must appear in --help.
+
+    BOOTSTRAP_USAGE is the authoritative flag documentation (the parser's own
+    docstring says so), and a lever nobody can find in --help is not
+    separately expressible in any useful sense.
+    """
+    undocumented = [flag for flag in FLAGS if flag not in BOOTSTRAP_USAGE]
+    assert not undocumented
+
+
+@pytest.mark.parametrize(
+    "flag,dest",
+    [
+        ("--conformance-blocking", "conformance_blocking"),
+        ("--renovate-automerge", "renovate_automerge"),
+    ],
+)
+@pytest.mark.parametrize("value", ["true", "false"])
+def test_parse_bootstrap_args_granular_levers(flag: str, dest: str, value: str) -> None:
+    assert parse_bootstrap_args([flag, value])[dest] == value
+    assert parse_bootstrap_args([f"{flag}={value}"])[dest] == value
+
+
+@pytest.mark.parametrize(
+    "flag", ["--conformance-blocking", "--renovate-automerge", "--enforce"]
+)
+def test_parse_bootstrap_args_tristate_invalid_names_its_own_flag(
+    flag: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A bad value must be reported against the flag that carried it.
+
+    The three tri-state flags share one validation loop, so a shared error
+    message that always said ``--enforce`` would misdirect anyone who passed
+    a granular lever — the exact confusion these separate names exist to
+    prevent.
+    """
+    with pytest.raises(SystemExit) as exc_info:
+        parse_bootstrap_args([flag, "maybe"])
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert flag in err
+    assert "'maybe'" in err
+
+
+@pytest.mark.parametrize(
+    "flag", ["--conformance-blocking", "--renovate-automerge", "--enforce"]
+)
+def test_parse_bootstrap_args_tristate_missing_value(
+    flag: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        parse_bootstrap_args([flag])
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert flag in err
+    assert "requires a value" in err
+
+
 _EXIT_ZERO_SCHEDULE_PREFIX = (
     "exit-zero: ${{ github.event_name == 'schedule' "
     "|| github.event_name == 'workflow_dispatch' || "
@@ -899,6 +972,126 @@ def test_cmd_bootstrap_enforce_true_force_overwrites_existing_renovate(
 
 
 # ---------------------------------------------------------------------------
+# Granular levers, end to end: each moves exactly one of the two files, and
+# --enforce still moves both (FND-347)
+# ---------------------------------------------------------------------------
+
+
+def _conformance_text(root: pathlib.Path) -> str:
+    return (root / ".github" / "workflows" / "conformance.yaml").read_text()
+
+
+def test_cmd_bootstrap_conformance_blocking_false_leaves_renovate_hard(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--conformance-blocking false stops conformance blocking and nothing else.
+
+    This is the state --enforce could not express: observe-mode conformance
+    with Renovate auto-merge still on.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--conformance-blocking", "false"])
+    assert _EXIT_ZERO_SOFT in _conformance_text(tmp_path)
+    assert '"automerge": false' not in (tmp_path / "renovate.json").read_text()
+
+
+def test_cmd_bootstrap_renovate_automerge_false_leaves_conformance_blocking(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--renovate-automerge false takes the human back into the merge, and
+    leaves conformance blocking CI."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--renovate-automerge", "false"])
+    assert _EXIT_ZERO_HARD in _conformance_text(tmp_path)
+    assert '"automerge": false' in (tmp_path / "renovate.json").read_text()
+
+
+def test_cmd_bootstrap_granular_lever_overrides_enforce_shorthand(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit granular lever wins over the shorthand for that lever only."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false", "--renovate-automerge", "true"])
+    # Shorthand still governs the lever that wasn't named explicitly.
+    assert _EXIT_ZERO_SOFT in _conformance_text(tmp_path)
+    assert '"automerge": false' not in (tmp_path / "renovate.json").read_text()
+
+
+def test_cmd_bootstrap_granular_lever_inherits_detected_enforce(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lever left unset inherits the *detected* --enforce, not the hard default.
+
+    Passing only --renovate-automerge on a soft-mode repo must not silently
+    flip conformance back to blocking: the unnamed lever keeps whatever the
+    repo's existing conformance.yaml says.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    _cmd_bootstrap(["--renovate-automerge", "true"])
+    assert _EXIT_ZERO_SOFT in _conformance_text(tmp_path)
+    assert '"automerge": false' not in (tmp_path / "renovate.json").read_text()
+
+
+def test_cmd_bootstrap_renovate_automerge_force_updates_existing_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--renovate-automerge force-updates an existing renovate.json.
+
+    renovate.json is write-if-absent, so without this the flag that governs
+    exactly that file would be a no-op on every repo that already has one.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    rj = tmp_path / "renovate.json"
+    assert '"automerge": false' not in rj.read_text()
+    _cmd_bootstrap(["--renovate-automerge", "false"])
+    assert '"automerge": false' in rj.read_text()
+
+
+def test_cmd_bootstrap_conformance_blocking_does_not_force_renovate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--conformance-blocking must not rewrite renovate.json.
+
+    It governs the other file, and renovate.json is write-if-absent — a
+    customised one stays customised.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    rj = tmp_path / "renovate.json"
+    rj.write_text('{"customised": true}\n')
+    _cmd_bootstrap(["--conformance-blocking", "false"])
+    assert rj.read_text() == '{"customised": true}\n'
+    assert not (tmp_path / "renovate.json.bak").exists()
+
+
+def test_cmd_bootstrap_no_lever_touches_the_tests_gate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No enforcement lever changes tests.yaml (FND-347).
+
+    The tests gate becoming a required check is a branch-protection setting
+    with no prerequisite here; if any of these flags started rendering
+    tests.yaml differently, the gate milestone would once again be behind the
+    0-touch bar.
+    """
+    monkeypatch.chdir(tmp_path)
+    canonical = render("tests.yaml", app_name=tmp_path.name)
+    for flags in (
+        ["--enforce", "false"],
+        ["--enforce", "true"],
+        ["--conformance-blocking", "false"],
+        ["--renovate-automerge", "false"],
+    ):
+        wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+        if wf.exists():
+            wf.unlink()
+        _cmd_bootstrap(flags)
+        assert wf.read_text() == canonical, f"tests.yaml varied with {flags}"
+
+
+# ---------------------------------------------------------------------------
 # tests.yaml scaffold — write-if-absent semantics
 # ---------------------------------------------------------------------------
 
@@ -940,6 +1133,368 @@ def test_cmd_bootstrap_tests_yaml_recreated_when_deleted(
     _cmd_bootstrap([])
     assert wf.exists()
     assert wf.read_text() == render("tests.yaml", app_name="myapp")
+
+
+# ---------------------------------------------------------------------------
+# Write-if-absent scaffolds — --resync
+#
+# These scaffolds are write-if-absent so apps can customise them, which left
+# their C002 drift with no proportionate remediation: the only way to pull an
+# old repo's structure forward was to delete the file and re-scaffold,
+# discarding every per-repo value with it. These lock the flag that closes
+# that gap — and, just as importantly, lock what it must NOT change.
+# ---------------------------------------------------------------------------
+
+
+def _drifted_tests_yaml(**params: str) -> str:
+    """Return a canonical tests.yaml with a structural line removed.
+
+    Deleting a line (rather than adding one) reproduces the real drift shape:
+    a repo scaffolded by an older bootstrap is *missing* what newer templates
+    added, which is exactly what C002 reports across the fleet.
+    """
+    canonical = render("tests.yaml", **params)
+    lines = canonical.splitlines(keepends=True)
+    return "".join(line for line in lines if "secrets: inherit" not in line)
+
+
+def test_resync_restores_the_canonical(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_drifted_tests_yaml(app_name="app"))
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == render("tests.yaml", app_name="app")
+
+
+def test_resync_clears_the_c002_finding(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The end-to-end property the flag exists for.
+
+    Asserted through the checker rather than by comparing bytes to a render:
+    a resync that produced a file the checker still called drifted would be
+    worse than useless, and only C002 itself can rule that out.
+    """
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_drifted_tests_yaml(app_name="app"))
+    assert scan_path(wf, tmp_path), "fixture is not actually drifted"
+    _cmd_bootstrap(["--resync"])
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_resync_preserves_per_repo_params(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Params are read off the file, not off the flags/autodetection.
+
+    ``enable_e2e`` is the sharp case: it is never autodetected, so a resync
+    that rendered from kwargs would silently switch e2e back on in a repo
+    that turned it off — re-enabling a live-tenant suite nobody asked for.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    params = {
+        "app_name": "widget",
+        "app_image_name": "atlan-custom-widget-app",
+        "enable_e2e": "false",
+    }
+    wf.write_text(_drifted_tests_yaml(**params))
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == render("tests.yaml", **params)
+
+
+def test_resync_backs_up_the_previous_content(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hand edit outside the extracted params is replaced, but recoverable."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    drifted = _drifted_tests_yaml(app_name="app") + "\n# a hand-added comment\n"
+    wf.write_text(drifted)
+    _cmd_bootstrap(["--resync"])
+    assert "# a hand-added comment" not in wf.read_text()
+    assert (
+        tmp_path / ".github" / "workflows" / "tests.yaml.bak"
+    ).read_text() == drifted
+
+
+def test_resync_backup_is_gitignored(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The backup must never be committable.
+
+    It lands inside .github/workflows/, so an un-ignored copy would show up in
+    every subsequent PR diff of a repo that ran the flag once.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    assert "*.bak" in (tmp_path / ".gitignore").read_text().splitlines()
+
+
+def test_resync_is_a_noop_when_already_canonical(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No drift → no write, and no stray .bak."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    before = wf.read_text()
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == before
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    [
+        ("canonical", lambda text: text),
+        ("structural-line-removed", lambda text: _drifted_tests_yaml(app_name="app")),
+        ("hand-added-comment", lambda text: text + "\n# hand-added\n"),
+        (
+            "repinned-action",
+            lambda text: re.sub(r"@[0-9a-f]{40}", "@" + "a" * 40, text),
+        ),
+    ],
+)
+def test_resync_writes_exactly_when_c002_flags(
+    label: str,
+    mutate: object,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The flag's trigger condition must be C002's finding condition.
+
+    Both sides go through ``strip_action_pins``, so a pin difference is drift
+    to neither — but the property that matters is the equivalence itself, not
+    which comparison implements it: a resync that wrote on something C002
+    calls clean would churn the file (and leave a .bak) on every run against
+    a finding nobody raised, and one that stayed silent on something C002
+    flags would leave the finding standing.
+    """
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(mutate(wf.read_text()))  # type: ignore[operator]
+    before = wf.read_text()
+
+    flagged = bool(scan_path(wf, tmp_path))
+    _cmd_bootstrap(["--resync"])
+    wrote = wf.read_text() != before
+
+    assert wrote == flagged, f"{label}: resync wrote={wrote}, C002 flagged={flagged}"
+    bak = tmp_path / ".github" / "workflows" / "tests.yaml.bak"
+    assert bak.exists() == flagged
+
+
+def test_bare_rerun_never_resyncs(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The flag is opt-in — the write-if-absent contract is unchanged without it."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_drifted_tests_yaml(app_name="app"))
+    drifted = wf.read_text()
+    _cmd_bootstrap([])
+    assert wf.read_text() == drifted
+
+
+def test_resync_scaffolds_when_absent(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Passing the flag on a repo with no tests.yaml still just scaffolds it."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--resync"])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    assert wf.read_text() == render(
+        "tests.yaml", app_name=derive_app_name_from_dir(tmp_path)
+    )
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
+
+
+def test_resync_rejects_a_value(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It is a presence flag; `--resync=true` is an error, not a silent no-op."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        _cmd_bootstrap(["--resync=true"])
+    assert exc.value.code == 2
+
+
+def test_resync_reported_in_json_manifest(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Both writes reach touched_files, so a remediation pass can scope a revert."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_drifted_tests_yaml(app_name="app"))
+    capsys.readouterr()
+    _cmd_bootstrap(["--resync", "--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert ".github/workflows/tests.yaml" in payload["touched"]
+    assert ".github/workflows/tests.yaml.bak" in payload["touched"]
+
+
+# --- --resync's second target: renovate.json -------------------------------
+
+
+def _drifted_renovate_json(automerge: str) -> str:
+    """Return a canonical renovate.json with a structural key removed.
+
+    Drops `$schema` specifically: it is a key newer templates added, so its
+    absence is the real "repo scaffolded by an older bootstrap" shape, and it
+    is not the key the auto-merge mode is read from — so the fixture exercises
+    structural drift without also destroying the value the resync must
+    preserve.
+    """
+    payload = json.loads(render("renovate.json", automerge=automerge))
+    payload.pop("$schema")
+    return json.dumps(payload, indent=2) + "\n"
+
+
+def test_drifted_renovate_json_fixture_is_actually_drifted() -> None:
+    """Guard the fixture itself.
+
+    A re-serialised canonical can round-trip byte-identical, which would make
+    every test below vacuously pass by resyncing a file that was never
+    drifted.
+    """
+    for automerge in ("true", "false"):
+        assert _drifted_renovate_json(automerge) != render(
+            "renovate.json", automerge=automerge
+        )
+
+
+@pytest.mark.parametrize("automerge", ["true", "false"])
+def test_resync_restores_renovate_json_keeping_its_mode(
+    automerge: str, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The auto-merge mode is read off the file, never re-decided.
+
+    Parametrised over both modes because getting this wrong in the soft
+    direction is the expensive one: silently flipping a repo to auto-merge
+    turns a human-gated dependency lane into a 0-touch one.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([f"--renovate-automerge={automerge}"])
+    dest = tmp_path / "renovate.json"
+    dest.write_text(_drifted_renovate_json(automerge))
+    _cmd_bootstrap(["--resync"])
+    assert dest.read_text() == render("renovate.json", automerge=automerge)
+
+
+def test_resync_clears_the_renovate_json_c002_finding(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    dest = tmp_path / "renovate.json"
+    dest.write_text(_drifted_renovate_json("true"))
+    assert scan_path(dest, tmp_path), "fixture is not actually drifted"
+    _cmd_bootstrap(["--resync"])
+    assert scan_path(dest, tmp_path) == []
+
+
+def test_explicit_mode_flag_beats_resync(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--renovate-automerge` CHANGES the mode; `--resync` PRESERVES it.
+
+    Passing both is an intentional mode change, so the explicit flag must win
+    — otherwise the resync's read-back-off-disk value would silently make the
+    explicit flag a no-op.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--renovate-automerge=false"])
+    dest = tmp_path / "renovate.json"
+    dest.write_text(_drifted_renovate_json("false"))
+    _cmd_bootstrap(["--renovate-automerge=true", "--resync"])
+    assert dest.read_text() == render("renovate.json", automerge="true")
+
+
+# --- identity guards: skip rather than rewrite from guessed defaults --------
+
+
+def test_resync_skips_renovate_json_that_is_not_valid_json(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreadable mode must not resolve to the auto-merge canonical.
+
+    `extract_renovate_automerge` answers "true" for anything it can't parse —
+    right for its other callers, but here it would turn an unparseable
+    soft-mode file into a repo where Renovate merges without a human.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--renovate-automerge=false"])
+    dest = tmp_path / "renovate.json"
+    dest.write_text("{ this is not json\n")
+    _cmd_bootstrap(["--resync"])
+    assert dest.read_text() == "{ this is not json\n"
+    assert not (tmp_path / "renovate.json.bak").exists()
+
+
+def test_resync_skips_tests_yaml_with_no_readable_app_name(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file drifted past its own name gets a human, not a rename.
+
+    Without the guard, `render` falls back to app_name="app" and the resync
+    quietly renames the app in every downstream CI input while reporting
+    success.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    nameless = "\n".join(
+        line
+        for line in render("tests.yaml", app_name="widget").splitlines()
+        if "app-name:" not in line
+    )
+    wf.write_text(nameless)
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == nameless
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
+
+
+def test_resync_skips_tests_yaml_with_only_a_commented_app_name(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A commented-out `app-name:` must not satisfy the identity guard.
+
+    That is the most common shape of a renamed app — the old line left
+    commented out. An unanchored extractor would read the stale value off the
+    comment and rewrite every downstream CI input to it while reporting
+    success; the anchored one treats the file as having no parseable app-name
+    and skips instead.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    renamed = "\n".join(
+        f"# {line}" if "app-name:" in line else line
+        for line in render("tests.yaml", app_name="widget").splitlines()
+    )
+    wf.write_text(renamed)
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == renamed
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
 
 
 # ---------------------------------------------------------------------------
