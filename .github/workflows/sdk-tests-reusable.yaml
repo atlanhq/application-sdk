@@ -23,7 +23,14 @@ jobs:
   unit:
     name: Unit Tests
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    # 15, matching the integration jobs below. Measured over 92 Windows unit
+    # legs, they run p50 447s / p90 527s against what was a 600s cap — a p90 at
+    # 88% of the ceiling, so an ordinarily-slow runner crosses it. Two legs were
+    # killed mid-suite that way; the job reports `cancelled`, not `failure`,
+    # which reads as CI noise rather than as a timeout. In the merge queue that
+    # ejects the PR. Linux and macOS sit near 350s and have never been close.
+    # This is headroom, not a fix — why Windows is slower is FND-346.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
