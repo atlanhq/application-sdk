@@ -2,10 +2,22 @@
 
 `renovate-auto-approve-reusable.yml` withholds the atlan-ci code-owner approval
 unless Renovate's own `renovate/artifacts` commit status is green. That gate is
-the only thing stopping a failed post-upgrade task from auto-merging: Renovate
-commits and raises the PR regardless, and platform automerge never consults
-`artifactErrors`, so a failed release-age-bounded `uv lock` would otherwise land
-an unbounded lock file unattended.
+the only thing stopping a branch whose artifacts failed to update from
+auto-merging: Renovate records the error, then commits and raises the PR
+regardless, and platform automerge never consults `artifactErrors` — so the PR
+merges on the strength of the checks it did pass, with nothing red to show for
+the part that did not happen. The contract-toolkit lane is the live case: if the
+renovate-pkl-sync driver fails or is skipped, the PR lands a toolkit version bump
+whose regenerated `app/generated/**` does not match it.
+
+Note the failure this has to survive is a silent one. A post-upgrade command the
+runner's admin-only `allowedCommands` allowlist does not match is skipped with a
+log line and nothing else, so "the command did not run" and "the command ran
+clean" are indistinguishable without this status.
+
+(The gate was built for a 7-day release-age bound on the uv.lock lane, which was
+removed fleet-wide in FND-367 — the reasoning above never depended on it. Do not
+retire this alongside anything cooldown-shaped; see FND-359 if it returns.)
 
 The classification is one `gh api --jq` line, and every interesting failure mode
 lives inside it — an empty match must read as "missing" (jq emits nothing for
