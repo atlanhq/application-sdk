@@ -2496,6 +2496,26 @@ def test_unit_coverage_flag_rejects_a_non_numeric_value(
     assert exc.value.code == 2
 
 
+def test_unit_coverage_flag_rejects_a_value_above_100(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Coverage is a percent — 101+ is nonsensical, not a stricter bar."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        _cmd_bootstrap(["--unit-coverage-fail-under", "101"])
+    assert exc.value.code == 2
+
+
+def test_unit_coverage_flag_accepts_100(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """100 is the highest meaningful percent — the upper bound is inclusive."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--unit-coverage-fail-under", "100"])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    assert '      unit-coverage-fail-under: "100"\n' in wf.read_text()
+
+
 def test_unit_coverage_flag_rejects_a_value_below_the_sdk_floor(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,

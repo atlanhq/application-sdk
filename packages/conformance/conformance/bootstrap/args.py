@@ -167,6 +167,13 @@ def validate_unit_coverage_fail_under(value: str) -> None:
             file=sys.stderr,
         )
         sys.exit(2)
+    if int(value) > 100:
+        print(
+            "error: --unit-coverage-fail-under is a coverage percent, so it"
+            f" cannot exceed 100, got {value!r}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     if int(value) < extract_mod.SDK_UNIT_COVERAGE_FLOOR:
         print(
             f"error: --unit-coverage-fail-under {value} is below the SDK's own"

@@ -287,6 +287,17 @@ def test_extract_tests_yaml_params_ignores_non_numeric_coverage_value() -> None:
     assert "unit_coverage_fail_under" not in extract_tests_yaml_params(text)
 
 
+def test_extract_tests_yaml_params_ignores_a_left_quote_only_coverage_value() -> None:
+    """Half-quoted is malformed YAML, not a bare declaration in disguise."""
+    text = 'jobs:\n  tests:\n    with:\n      app-name: "w"\n      unit-coverage-fail-under: "55\n'
+    assert "unit_coverage_fail_under" not in extract_tests_yaml_params(text)
+
+
+def test_extract_tests_yaml_params_ignores_a_right_quote_only_coverage_value() -> None:
+    text = 'jobs:\n  tests:\n    with:\n      app-name: "w"\n      unit-coverage-fail-under: 55"\n'
+    assert "unit_coverage_fail_under" not in extract_tests_yaml_params(text)
+
+
 def test_extract_declared_coverage_reports_a_sub_floor_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -71,9 +71,12 @@ _ENABLE_E2E_RE = re.compile(r"enable-e2e:\s+(true|false)")
 # Matches an *uncommented* services-script line (quoted value) in the with: block.
 _SERVICES_SCRIPT_RE = re.compile(r'^\s+services-script:\s+"([^"]+)"$', re.MULTILINE)
 # tests-reusable.yaml's `unit-coverage-fail-under` input, quoted or bare. Anchored
-# and uncommented-only for the same reason as the lines above.
+# and uncommented-only for the same reason as the lines above. The quote pair is
+# matched as a unit (`"(\d+)"` or `\d+`, never a lone leading/trailing quote) so a
+# half-quoted line — which the YAML parser would reject anyway — can't read back
+# as a valid declaration.
 _UNIT_COVERAGE_FAIL_UNDER_RE = re.compile(
-    r'^\s+unit-coverage-fail-under:\s+"?(\d+)"?\s*$', re.MULTILINE
+    r'^\s+unit-coverage-fail-under:\s+(?:"(\d+)"|(\d+))\s*$', re.MULTILINE
 )
 
 # The floor `tests-reusable.yaml` applies when a caller says nothing — its
@@ -174,7 +177,8 @@ def extract_declared_unit_coverage_fail_under(text: str) -> str:
     ``--resync`` delete it.
     """
     m = _UNIT_COVERAGE_FAIL_UNDER_RE.search(text)
-    return m.group(1) if m else ""
+    # Quoted and bare forms capture into different groups; exactly one is set.
+    return next((g for g in m.groups() if g is not None), "") if m else ""
 
 
 def extract_use_ghcr_base(text: str) -> str:
