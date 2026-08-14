@@ -476,6 +476,35 @@ def test_parse_arrival_nodes_skips_commits_with_no_checks():
     assert parse_arrival_nodes(payload, GATE) == []
 
 
+def test_parse_arrival_nodes_raises_on_a_structurally_malformed_body():
+    """`{"data": {}}` or `repository: null` is GraphQL schema/response drift,
+    not "no PRs had the context" — coercing it to zero samples would read as a
+    clean `no-data` instead of `unknown`."""
+    with pytest.raises(GhError, match="malformed arrival payload"):
+        parse_arrival_nodes({"data": {}}, GATE)
+    with pytest.raises(GhError, match="malformed arrival payload"):
+        parse_arrival_nodes({"data": {"repository": None}}, GATE)
+
+
+def test_scan_repo_reports_unknown_when_a_ruleset_detail_fails():
+    """A ruleset-detail GET that fails must not read as "no gate here" — the
+    repo must go `unknown`, never be evaluated on a partially-expanded list."""
+
+    def run(args: list) -> str:
+        if args[1] == f"repos/{REPO}":
+            return json.dumps({"b": "main"})
+        if args[1].startswith(f"repos/{REPO}/rulesets?"):
+            return json.dumps([[{"id": 1}, {"id": 2}]])
+        if args[1] == f"repos/{REPO}/rulesets/1":
+            return json.dumps(_ruleset(ruleset_id=1))
+        raise GhError("gh api failed: HTTP 429", status=429)
+
+    record = scan_repo(REPO, GATE, sample_size=0, run=run)
+    assert record["status"] == STATUS_UNKNOWN
+    assert record["gated"] is None
+    assert _finding_ids(record) == {FINDING_UNREADABLE}
+
+
 # --- fail-loud -------------------------------------------------------------
 
 

@@ -649,10 +649,18 @@ def fetch_rulesets(repo: str, run: RunFn = _run_gh) -> list:
     expanded: list = []
     for entry in listing:
         if not isinstance(entry, dict) or entry.get("id") is None:
-            continue
+            raise GhError(f"malformed ruleset list entry for {repo}: {entry!r}")
         detail = _load_json(run(["api", f"repos/{repo}/rulesets/{entry['id']}"]))
-        if isinstance(detail, dict):
-            expanded.append(detail)
+        if not isinstance(detail, dict):
+            # A failed or malformed detail read must not read as "this ruleset
+            # does not exist": evaluating the repo on a partially-expanded list
+            # is the false green this scanner exists to prevent. Propagate so
+            # scan_repo records the repo `unknown`.
+            raise GhError(
+                f"could not expand ruleset {entry['id']} for {repo}: "
+                "detail fetch failed or returned a non-object"
+            )
+        expanded.append(detail)
     return expanded
 
 
@@ -722,8 +730,18 @@ def parse_arrival_nodes(payload: dict, required_context: str) -> list:
     already O(repos) on the REST side, and fanning arrival out per PR would
     multiply that by the sample size for no extra signal.
     """
-    repository = ((payload or {}).get("data") or {}).get("repository") or {}
-    nodes = ((repository.get("pullRequests") or {}).get("nodes")) or []
+    repository = ((payload or {}).get("data") or {}).get("repository")
+    if not isinstance(repository, dict) or not isinstance(
+        (repository.get("pullRequests") or {}).get("nodes"), list
+    ):
+        # A structurally malformed body (schema drift, a null repository) must
+        # surface as arrival `unknown` — coercing it to zero samples would read
+        # as a clean "no PRs had the context" instead of "we could not read it".
+        raise GhError(
+            "malformed arrival payload: expected "
+            "data.repository.pullRequests.nodes to be a list"
+        )
+    nodes = repository["pullRequests"]["nodes"]
     samples: list = []
     for pr in nodes:
         if not isinstance(pr, dict):

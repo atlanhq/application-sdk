@@ -40,9 +40,10 @@ from typing import Callable, Optional
 
 BUCKET = "s3://kryptonite-store"
 
-# (args) -> (returncode, stdout). Not raising on failure: a missing history
-# object is a routine first-publish, and the caller distinguishes that from a
-# real error by which command failed.
+# (args) -> (returncode, stdout, stderr). Not raising on failure: a missing
+# history object is a routine first-publish, and the caller distinguishes that
+# from a real error by the download's stderr — which is why stderr is carried
+# here rather than only logged.
 RunFn = Callable[[list], tuple]
 
 FLEET_SLUG = "fleet"
@@ -55,7 +56,7 @@ def _run_aws(args: list) -> tuple:
             f"::debug::aws {' '.join(args[:2])}: {result.stderr.strip()}",
             file=sys.stderr,
         )
-    return result.returncode, result.stdout
+    return result.returncode, result.stdout, result.stderr
 
 
 def _key(prefix: str, *parts: str) -> str:
@@ -63,7 +64,7 @@ def _key(prefix: str, *parts: str) -> str:
 
 
 def upload(local: Path, prefix: str, *parts: str, run: RunFn = _run_aws) -> None:
-    code, _ = run(["s3", "cp", str(local), _key(prefix, *parts)])
+    code, _, _ = run(["s3", "cp", str(local), _key(prefix, *parts)])
     if code != 0:
         raise RuntimeError(f"failed to upload {local} to {_key(prefix, *parts)}")
 
@@ -78,9 +79,15 @@ def merge_history(
     byte-identical for an unchanged day.
     """
     existing = tmp_dir / f"existing_{slug}.jsonl"
-    # A missing object is the first publish for this repo, not an error — the
-    # download simply leaves no file behind, and an empty one stands in.
-    run(["s3", "cp", _key(prefix, "history", f"{slug}.jsonl"), str(existing)])
+    key = _key(prefix, "history", f"{slug}.jsonl")
+    # A missing object is the first publish for this repo — proceed with an
+    # empty stand-in. Any *other* download failure (AccessDenied, throttling,
+    # timeout) must abort BEFORE the upload: treating it as "no history yet"
+    # would merge only today's line and re-upload it over the stored history,
+    # silently truncating the trend line the dashboard depends on.
+    code, _, stderr = run(["s3", "cp", key, str(existing)])
+    if code != 0 and "does not exist" not in stderr:
+        raise RuntimeError(f"failed to download {key}: {stderr.strip() or 'no stderr'}")
     lines = existing.read_text().splitlines() if existing.exists() else []
     lines.extend(local.read_text().splitlines())
 
@@ -96,7 +103,7 @@ def refresh_manifest(prefix: str, tmp_dir: Path, run: RunFn = _run_aws) -> list:
     single-repo mode the local directory holds one file, and a manifest built
     from it would hide every other repo from the dashboard.
     """
-    code, stdout = run(["s3", "ls", _key(prefix, "repos", "")])
+    code, stdout, _ = run(["s3", "ls", _key(prefix, "repos", "")])
     if code != 0:
         raise RuntimeError(f"failed to list {_key(prefix, 'repos', '')}")
     names = sorted(

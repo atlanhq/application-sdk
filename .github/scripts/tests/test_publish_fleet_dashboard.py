@@ -38,18 +38,19 @@ class FakeS3:
             src, dst = args[2], args[3]
             if src.startswith(BUCKET):
                 if src not in self.objects:
-                    return 1, ""  # a missing object: first publish
+                    # a missing object: first publish
+                    return 1, "", "fatal error: An error occurred (404): does not exist"
                 Path(dst).write_text(self.objects[src])
-                return 0, ""
+                return 0, "", ""
             self.objects[dst] = Path(src).read_text()
-            return 0, ""
+            return 0, "", ""
         if args[:2] == ["s3", "ls"]:
             listing = "".join(
                 f"2026-08-14 12:00:00       1234 {key.rsplit('/', 1)[-1]}\n"
                 for key in sorted(self.objects)
                 if key.startswith(args[2])
             )
-            return 0, listing
+            return 0, listing, ""
         raise AssertionError(f"unexpected aws call: {args}")
 
 
@@ -175,8 +176,8 @@ def test_missing_fleet_aggregate_on_a_full_run_is_refused(tmp_path):
 def test_upload_failure_is_not_swallowed(tmp_path):
     def failing(args: list) -> tuple:
         if args[:2] == ["s3", "cp"] and not args[2].startswith(BUCKET):
-            return 1, ""
-        return 0, ""
+            return 1, "", "fatal error: upload failed"
+        return 0, "", ""
 
     with pytest.raises(RuntimeError, match="failed to upload"):
         publish(
@@ -186,3 +187,25 @@ def test_upload_failure_is_not_swallowed(tmp_path):
             tmp_dir=tmp_path,
             run=failing,
         )
+
+
+def test_history_download_failure_aborts_before_upload(tmp_path):
+    """A non-NotFound download failure (AccessDenied, throttling, timeout) must
+    NOT be treated as "no history yet": merging only today's line and uploading
+    it over the stored history would silently truncate the trend line."""
+    key = f"{BUCKET}/{PREFIX}/history/slug.jsonl"
+    stored = json.dumps({"date": "2026-08-13", "gated": False}) + "\n"
+    s3 = FakeS3({key: stored})
+
+    def denied(args: list) -> tuple:
+        if args[:2] == ["s3", "cp"] and args[2].startswith(BUCKET):
+            return 1, "", "fatal error: An error occurred (AccessDenied)"
+        return s3(args)
+
+    local = tmp_path / "history_slug.jsonl"
+    local.write_text(json.dumps({"date": "2026-08-14", "gated": True}) + "\n")
+
+    with pytest.raises(RuntimeError, match="failed to download"):
+        merge_history(local, PREFIX, "slug", tmp_path, run=denied)
+
+    assert s3.objects[key] == stored  # history untouched
