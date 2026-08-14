@@ -491,6 +491,117 @@ def test_parse_arrival_nodes_raises_on_a_structurally_malformed_body():
         )
 
 
+def _arrival_payload(pr_node) -> dict:
+    return {"data": {"repository": {"pullRequests": {"nodes": [pr_node]}}}}
+
+
+@pytest.mark.parametrize(
+    "pr_node",
+    [
+        pytest.param({"number": 1, "commits": "unexpected"}, id="commits"),
+        pytest.param(
+            {"number": 1, "commits": {"nodes": ["unexpected"]}}, id="commits.nodes[0]"
+        ),
+        pytest.param(
+            {"number": 1, "commits": {"nodes": [{"commit": "unexpected"}]}},
+            id="commit",
+        ),
+        pytest.param(
+            {
+                "number": 1,
+                "commits": {"nodes": [{"commit": {"statusCheckRollup": "unexpected"}}]},
+            },
+            id="statusCheckRollup",
+        ),
+        pytest.param(
+            {
+                "number": 1,
+                "commits": {
+                    "nodes": [
+                        {"commit": {"statusCheckRollup": {"contexts": "unexpected"}}}
+                    ]
+                },
+            },
+            id="contexts",
+        ),
+        pytest.param("unexpected", id="pullRequests.nodes[0]"),
+    ],
+)
+def test_a_truthy_non_dict_anywhere_in_the_walk_raises_gh_error(pr_node):
+    """Every nested level, not just the spine.
+
+    `(value or {}).get(...)` raises AttributeError on a truthy non-dict, and
+    `scan_repo` catches only GhError — so one malformed body would abort the
+    whole fleet sweep instead of marking that one repo `unknown`. That is the
+    same false-green-by-abort the top-level guard prevents, one level down.
+    """
+    with pytest.raises(GhError, match="malformed arrival payload"):
+        parse_arrival_nodes(_arrival_payload(pr_node), GATE)
+
+
+def test_a_non_integer_total_count_raises_rather_than_comparing():
+    """`total > len(...)` against a string is a TypeError, uncaught, mid-sweep."""
+    payload = _arrival_payload(
+        {
+            "number": 1,
+            "commits": {
+                "nodes": [
+                    {
+                        "commit": {
+                            "statusCheckRollup": {
+                                "contexts": {"totalCount": "many", "nodes": []}
+                            }
+                        }
+                    }
+                ]
+            },
+        }
+    )
+    with pytest.raises(GhError, match="totalCount"):
+        parse_arrival_nodes(payload, GATE)
+
+
+def test_nulls_along_the_walk_are_a_legitimate_skip_not_an_error():
+    """GraphQL returns every requested field, so a null is the schema's own
+    "nothing here" — distinct from a wrong-typed value, which is drift."""
+    for pr_node in (
+        None,
+        {"number": 1, "commits": None},
+        {"number": 1, "commits": {"nodes": None}},
+        {"number": 1, "commits": {"nodes": [{"commit": None}]}},
+    ):
+        assert parse_arrival_nodes(_arrival_payload(pr_node), GATE) == []
+
+
+def test_repeated_contexts_on_one_commit_are_not_truncation():
+    """A commit routinely carries the same context several times — a bot PR
+    stacks 5-7 gate runs on one SHA, all but the newest cancelled by the
+    concurrency group. Measuring truncation against the *deduplicated* names
+    marked every busy repo truncated, which silently converted real
+    never-arriving evidence into `unknown`."""
+    nodes = [{"__typename": "CheckRun", "name": GATE} for _ in range(3)]
+    nodes += [{"__typename": "CheckRun", "name": "tests / Unit"} for _ in range(4)]
+    payload = _arrival_payload(
+        {
+            "number": 1,
+            "commits": {
+                "nodes": [
+                    {
+                        "commit": {
+                            "statusCheckRollup": {
+                                "contexts": {"totalCount": len(nodes), "nodes": nodes}
+                            }
+                        }
+                    }
+                ]
+            },
+        }
+    )
+    sample = parse_arrival_nodes(payload, GATE)[0]
+    assert sample["found"] is True
+    assert sample["truncated"] is False  # 7 returned of 7 — nothing was cut off
+
+
 def test_scan_repo_reports_unknown_when_a_ruleset_detail_fails():
     """A ruleset-detail GET that fails must not read as "no gate here" — the
     repo must go `unknown`, never be evaluated on a partially-expanded list."""

@@ -723,52 +723,135 @@ query($owner: String!, $name: String!, $base: String!, $first: Int!) {
 """
 
 
+def _expect_object(value, path: str, *, required: bool = False) -> Optional[dict]:
+    """The value at ``path`` as a dict, or ``None`` for a JSON null.
+
+    GraphQL returns every field it was asked for, so a *null* is the schema's
+    own "nothing here" and a legitimate skip at the nested levels (a pull
+    request with no commits, a commit with no checks). ``required=True`` is for
+    the spine of the response, where a null means the read failed.
+
+    A present-but-wrong-typed value is schema drift, and it must raise here.
+    Walking it with ``(value or {}).get(...)`` instead raises ``AttributeError``
+    deep in the chain — which ``scan_repo`` does not catch, so one malformed
+    body would abort the entire fleet sweep rather than marking that one repo
+    ``unknown``. That is the same false-green-by-abort the fail-loud contract
+    exists to prevent, one level down.
+    """
+    if value is None:
+        if required:
+            raise GhError(f"malformed arrival payload: {path} is null")
+        return None
+    if not isinstance(value, dict):
+        raise GhError(
+            f"malformed arrival payload: expected {path} to be an object, "
+            f"got {type(value).__name__}"
+        )
+    return value
+
+
+def _expect_list(value, path: str, *, required: bool = False) -> list:
+    """The value at ``path`` as a list; ``[]`` for a JSON null. See _expect_object."""
+    if value is None:
+        if required:
+            raise GhError(f"malformed arrival payload: {path} is null")
+        return []
+    if not isinstance(value, list):
+        raise GhError(
+            f"malformed arrival payload: expected {path} to be a list, "
+            f"got {type(value).__name__}"
+        )
+    return value
+
+
 def parse_arrival_nodes(payload: dict, required_context: str) -> list:
     """Turn a GraphQL arrival response into ``{found, truncated}`` samples.
 
     One query per repo rather than one per pull request: the fleet sweep is
     already O(repos) on the REST side, and fanning arrival out per PR would
     multiply that by the sample size for no extra signal.
+
+    Every level is shape-checked on the way down, so "malformed" reaches the
+    caller as a ``GhError`` — and therefore as arrival ``unknown`` for that one
+    repo — structurally, rather than depending on each level remembering to
+    guard itself.
     """
-    repository = ((payload or {}).get("data") or {}).get("repository")
-    pull_requests = (
-        repository.get("pullRequests") if isinstance(repository, dict) else None
+    root = _expect_object(payload, "response", required=True)
+    data = _expect_object(root.get("data"), "data", required=True)
+    repository = _expect_object(
+        data.get("repository"), "data.repository", required=True
     )
-    if not isinstance(pull_requests, dict) or not isinstance(
-        pull_requests.get("nodes"), list
-    ):
-        # A structurally malformed body (schema drift, a null repository) must
-        # surface as arrival `unknown` — coercing it to zero samples would read
-        # as a clean "no PRs had the context" instead of "we could not read it".
-        raise GhError(
-            "malformed arrival payload: expected "
-            "data.repository.pullRequests.nodes to be a list"
-        )
-    nodes = pull_requests["nodes"]
+    pull_requests = _expect_object(
+        repository.get("pullRequests"), "data.repository.pullRequests", required=True
+    )
+    nodes = _expect_list(
+        pull_requests.get("nodes"),
+        "data.repository.pullRequests.nodes",
+        required=True,
+    )
+
     samples: list = []
-    for pr in nodes:
-        if not isinstance(pr, dict):
+    for index, node in enumerate(nodes):
+        where = f"pullRequests.nodes[{index}]"
+        pr = _expect_object(node, where)
+        if pr is None:
             continue
-        commits = ((pr.get("commits") or {}).get("nodes")) or []
-        if not commits:
+
+        commits = _expect_object(pr.get("commits"), f"{where}.commits")
+        commit_nodes = _expect_list(
+            commits.get("nodes") if commits else None, f"{where}.commits.nodes"
+        )
+        if not commit_nodes:
             continue
-        rollup = ((commits[0] or {}).get("commit") or {}).get("statusCheckRollup")
-        if not rollup:
+
+        head = _expect_object(commit_nodes[0], f"{where}.commits.nodes[0]")
+        commit = _expect_object(
+            head.get("commit") if head else None, f"{where}.commits.nodes[0].commit"
+        )
+        rollup = _expect_object(
+            commit.get("statusCheckRollup") if commit else None,
+            f"{where}.statusCheckRollup",
+        )
+        if rollup is None:
             # No checks ran on the head commit at all — carries no information
             # about whether the gate would have arrived.
             continue
-        contexts = rollup.get("contexts") or {}
-        names = {
-            (ctx.get("name") or ctx.get("context"))
-            for ctx in contexts.get("nodes") or []
-            if isinstance(ctx, dict)
-        }
-        total = contexts.get("totalCount") or 0
+
+        contexts = _expect_object(rollup.get("contexts"), f"{where}.contexts")
+        context_nodes = _expect_list(
+            contexts.get("nodes") if contexts else None, f"{where}.contexts.nodes"
+        )
+        names = set()
+        for ctx_index, ctx_node in enumerate(context_nodes):
+            ctx = _expect_object(ctx_node, f"{where}.contexts.nodes[{ctx_index}]")
+            if ctx is None:
+                continue
+            # CheckRun exposes `name`, StatusContext exposes `context`.
+            name = ctx.get("name") or ctx.get("context")
+            if name is not None:
+                names.add(name)
+
+        total = (contexts or {}).get("totalCount")
+        if total is None:
+            total = 0
+        if not isinstance(total, int) or isinstance(total, bool):
+            raise GhError(
+                f"malformed arrival payload: expected {where}.contexts.totalCount "
+                f"to be an integer, got {type(total).__name__}"
+            )
+
         samples.append(
             {
                 "number": pr.get("number"),
                 "found": required_context in names,
-                "truncated": total > len(names),
+                # Compare against the nodes actually returned, NOT the distinct
+                # names: a commit routinely carries the same context several
+                # times (a bot PR stacks 5-7 gate runs on one SHA, all but the
+                # newest cancelled), so the deduplicated set is smaller than
+                # totalCount even when nothing was truncated. Measuring against
+                # the set marked most busy repos truncated, which quietly
+                # converted real never-arriving evidence into `unknown`.
+                "truncated": total > len(context_nodes),
             }
         )
     return samples
