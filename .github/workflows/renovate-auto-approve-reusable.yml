@@ -258,12 +258,16 @@ jobs:
             #    commits whatever its own artifact update produced, raises the PR,
             #    and still enables platform automerge (getPlatformPrOptions never
             #    consults artifactErrors — only Renovate's own *branch* automerge
-            #    is gated on them, and this fleet uses automergeType=pr). For the
-            #    fleet preset's release-age-bounded `uv lock` that means an
-            #    UNBOUNDED uv.lock would sail through on this approval, silently
-            #    defeating the cooldown on the one lane it covers. Same for a
-            #    pkl-sync failure, which would land stale generated contract
-            #    artifacts. So this gate is the enforcement point.
+            #    is gated on them, and this fleet uses automergeType=pr). So the
+            #    PR merges on the strength of the checks it did pass, with nothing
+            #    red to show for the part that did not happen: a pkl-sync failure
+            #    lands a toolkit bump whose generated contract artifacts do not
+            #    match it, and a lock refresh that could not resolve lands a lock
+            #    inconsistent with the change it claims to make. Worse, a command
+            #    the runner's allowedCommands allowlist does not match is skipped
+            #    with a log line and nothing else — "did not run" and "ran clean"
+            #    are indistinguishable without this status. So this gate is the
+            #    enforcement point.
             #
             #    The preset sets statusCheckWhen.artifactError=always so the
             #    context is published green on healthy branches too — that is what
