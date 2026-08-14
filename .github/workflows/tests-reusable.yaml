@@ -1809,7 +1809,7 @@ jobs:
       # (SDK-PR dispatch); the plain-label path (empty ref) otherwise has no uv
       # and fails with `uv: command not found`. Install it unconditionally here.
       - name: Install uv
-        uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.4"
           enable-cache: true
@@ -2141,7 +2141,7 @@ jobs:
       contents: read
     steps:
       - name: Install uv
-        uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.4"
           enable-cache: true
