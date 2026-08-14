@@ -193,10 +193,14 @@ on:
           so the cloud is the only matrix dimension.
 
           Empty (the default) means the SDK's current cloud list, which lives in
-          discover_e2e_suites.py's DEFAULT_CLOUDS. Pass "none" to collapse back
-          to the single legacy tenant. Forced to "none" when
-          E2E_TENANT_MATRIX_JSON is not available to the calling repo, which
-          keeps un-onboarded repos on today's behaviour.
+          discover_e2e_suites.py's DEFAULT_CLOUDS, intersected with the clouds
+          E2E_TENANT_MATRIX_JSON actually carries — so dropping a cloud from the
+          secret takes it out of the rotation fleet-wide (FND-354). A cloud
+          named here explicitly is never narrowed away: it fails its leg, since
+          naming it asserts it should run. Pass "none" to collapse back to the
+          single legacy tenant. Forced to "none" when E2E_TENANT_MATRIX_JSON is
+          not available to the calling repo, which keeps un-onboarded repos on
+          today's behaviour.
         required: false
         type: string
         default: ""
@@ -259,11 +263,42 @@ jobs:
         with:
           persist-credentials: false
 
+      # ── Which clouds the secret actually carries (FND-354) ─────────────────
+      # See tests-reusable.yaml's equivalent pair for why this is a sparse
+      # checkout at `job.workflow_sha` rather than another @main action, and why
+      # only the KEY LIST crosses into discovery. No `token:` here: this
+      # workflow declares no ORG_PAT_GITHUB, and application-sdk is public, so
+      # the caller's default token reads it.
+      - name: Fetch SDK CI scripts (tenant-matrix cloud keys)
+        if: env.HAS_TENANT_MATRIX != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+
+      - name: Read the tenant matrix's cloud keys
+        id: matrix-clouds
+        if: env.HAS_TENANT_MATRIX != ''
+        env:
+          E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_matrix_clouds.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
+
       - name: Plan clouds
         id: plan
         uses: atlanhq/application-sdk/.github/actions/discover-e2e-suites@main
         with:
           clouds-only: "true"
+          # Narrows the DEFAULTED cloud list to what the secret carries, so a
+          # cloud removed from E2E_TENANT_MATRIX_JSON drops out of the rotation
+          # instead of reding its leg. An explicitly named cloud still fails.
+          available-clouds: ${{ steps.matrix-clouds.outputs.clouds }}
           # Without the tenant map every leg would resolve the same fallback
           # tenant, so N legs would masquerade as N clouds of coverage. Written
           # negated for the same reason as in tests-reusable.yaml: "" is falsy in

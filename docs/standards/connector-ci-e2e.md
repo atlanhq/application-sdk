@@ -174,7 +174,10 @@ One secret rather than four per cloud because a `strategy.matrix` value cannot
 index the `secrets` context, and the reusable workflows declare their
 `workflow_call` secrets explicitly — so per-cloud names would have to be
 re-declared for every cloud ever added. Adding a fourth CSP is a secret edit and
-a one-line change to `DEFAULT_CLOUDS`; no app repo changes at all.
+a one-line change to `DEFAULT_CLOUDS`; no app repo changes at all. Both halves
+are needed to *add* one — the narrowing below is an intersection, never a union,
+so a key appearing in the secret does not widen the fleet's fan-out behind
+`DEFAULT_CLOUDS`'s back. Removing a cloud needs only the secret edit.
 
 `"tenant_id"` is the tenant's **vcluster instance name** (`markeznp37`, `home-mt`)
 — *not* its hostname, which is what `"tenant"` holds. It is required only by the
@@ -250,18 +253,42 @@ on each app's `tests.yaml`:
 
 | Value | Meaning |
 |---|---|
-| `""` (default) | The SDK's current list — `DEFAULT_CLOUDS` in `discover_e2e_suites.py`. Deliberately not "no clouds": an untouched GitHub input arrives as `""`, and that must not silently opt a repo out. |
-| `aws` (or any subset) | Just those clouds. Use this to re-run one cloud, or to keep the fleet moving while one tenant is down. |
+| `""` (default) | The SDK's current list — `DEFAULT_CLOUDS` in `discover_e2e_suites.py` — **intersected with the clouds `E2E_TENANT_MATRIX_JSON` actually carries**. Deliberately not "no clouds": an untouched GitHub input arrives as `""`, and that must not silently opt a repo out. |
+| `aws` (or any subset) | Just those clouds, for re-running one cloud on one repo. Exact, and never narrowed: a named cloud the secret does not carry fails its leg. |
 | `none` | No cloud dimension — one leg against the single fallback tenant. |
 
 Every cloud is a **required** leg: the matrix is `fail-fast: false` and the Tests
 Gate reads `needs.e2e.result`, the matrix aggregate, so any cloud failing reds the
-gate. Narrowing `e2e-clouds` is the escape hatch, and trimming the secret to one
-key is the org-wide one.
+gate.
+
+### Taking a cloud out of the rotation
+
+**Remove its entry from `E2E_TENANT_MATRIX_JSON`.** That is the whole hatch: one
+secret edit, fleet-wide, effective on the next run, no connector PR and no SDK
+PR. The `Discover e2e suites` job reads the secret's *keys* (never its values —
+`e2e_tenant_matrix_clouds.py` emits a key list and nothing else), hands them to
+discovery, and the defaulted fan-out narrows to the intersection with a
+`::warning::` naming every cloud it dropped. A run that got two clouds when the
+SDK ships three says so in its own log.
+
+Defaulted narrows; **named does not**. `e2e-clouds: aws,azure` naming a cloud the
+secret does not carry still reaches `resolve_e2e_tenant.py` and still exits
+non-zero — somebody asserted that cloud should run, and skipping it silently
+would be a coverage hole rather than a narrowing. The asymmetry is deliberate and
+is pinned by `test_a_defaulted_absent_cloud_is_dropped_with_a_warning` /
+`test_a_named_absent_cloud_still_reaches_the_resolver`; it is the kind of
+distinction a later reader flattens on the grounds that both paths "just check
+the cloud list" (FND-354).
+
+Narrowing to *nothing* is an error, not an empty matrix: a secret carrying none
+of `DEFAULT_CLOUDS` fails discovery rather than emitting zero legs, which would
+green the gate having run no e2e at all.
 
 When the secret is not available to a repo, `clouds` is forced to `none` and the
 `Discover e2e suites` job emits a `::warning::` saying so — a run that asked for
-three clouds and got one must not look identical to one that got three.
+three clouds and got one must not look identical to one that got three. The same
+applies when the payload cannot be parsed: the key read degrades to "not known",
+narrowing is skipped, and the per-leg resolver still reports the real defect.
 
 ### Requiring a tenant ID on the install path
 
