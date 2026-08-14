@@ -2,6 +2,12 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.19.1] - 2026-08-14
+
+### Bug fixes
+
+- let apps own their coverage floor and GHCR base opt-in (FND-361) (#3215) ([6bef6a9](https://github.com/atlanhq/application-sdk/commit/6bef6a9))
+
 ## [0.19.0] - 2026-08-14
 
 ### Features
