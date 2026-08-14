@@ -119,20 +119,21 @@ def ref_matches(patterns: list, base_ref: str, default_branch: str) -> bool:
     return False
 
 
-def governs_branch(ruleset: dict, base_ref: str, default_branch: str) -> bool:
-    """Whether one *expanded* ruleset puts ``base_ref`` behind a merge queue."""
+def targets_branch(ruleset: dict, base_ref: str, default_branch: str) -> bool:
+    """Whether one *expanded* ruleset is live and applies to ``base_ref``.
+
+    The rule-type-agnostic half of ruleset matching: active enforcement, branch
+    target, and ``conditions.ref_name`` covering the branch. Callers add their
+    own rule-type test on top — ``governs_branch`` below asks for a merge queue;
+    ``gate_enforcement_scan.py`` asks for required status checks and pull
+    requests. Kept as one function so the two readers cannot drift on what
+    "this ruleset applies here" means.
+    """
     if not isinstance(ruleset, dict):
         return False
     if ruleset.get("enforcement") != _ACTIVE:
         return False
     if ruleset.get("target") != _BRANCH_TARGET:
-        return False
-
-    rules = ruleset.get("rules") or []
-    if not any(
-        isinstance(rule, dict) and rule.get("type") == _MERGE_QUEUE_RULE
-        for rule in rules
-    ):
         return False
 
     ref_name = ((ruleset.get("conditions") or {}).get("ref_name")) or {}
@@ -145,6 +146,18 @@ def governs_branch(ruleset: dict, base_ref: str, default_branch: str) -> bool:
     if ref_matches(exclude, base_ref, default_branch):
         return False
     return ref_matches(include, base_ref, default_branch)
+
+
+def governs_branch(ruleset: dict, base_ref: str, default_branch: str) -> bool:
+    """Whether one *expanded* ruleset puts ``base_ref`` behind a merge queue."""
+    if not targets_branch(ruleset, base_ref, default_branch):
+        return False
+
+    rules = ruleset.get("rules") or []
+    return any(
+        isinstance(rule, dict) and rule.get("type") == _MERGE_QUEUE_RULE
+        for rule in rules
+    )
 
 
 def _load(raw: str):

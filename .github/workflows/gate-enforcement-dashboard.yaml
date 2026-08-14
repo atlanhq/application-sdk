@@ -1,0 +1,129 @@
+# Update Gate Enforcement Dashboard — standalone scheduled workflow.
+#
+# Probes whether `tests / Tests Gate` is actually *enforced* on each fleet repo
+# and publishes the result to Kryptonite for connector-pulse to ingest.
+#
+# Why a central sweep rather than per-repo self-reporting (FND-349): enforcement
+# is a GitHub *setting*, not a file, so conformance detection cannot see it. If
+# each repo published its own state, a repo that lost enforcement — or whose CI
+# stopped running — would simply stop appearing, and silence would read exactly
+# like compliance. Enumerating the fleet from here means an ungated repo is
+# present in the output with `gated: false`, and a repo missing from the output
+# means discovery failed, which is itself reported.
+#
+# Read-only. The scanner calls no mutating endpoint; `/repos/{repo}/rulesets` is
+# not administration-gated (tests-reusable.yaml has relied on that in every
+# consumer via detect_merge_queue.py), so this needs no new privilege. Classic
+# branch protection IS admin-gated and a 403 there is recorded as unreadable
+# rather than assumed absent.
+#
+# Mirrors renovate-dashboard.yaml for the discovery + S3 deployment pattern, and
+# emits the same repos/<slug>.json + fleet.json + history_*.jsonl layout, so the
+# three fleet artifacts share one serialization convention.
+#
+# Two modes:
+#   Full-fleet (schedule / workflow_dispatch without repo input):
+#     Enumerates every atlan-*-app repo, updates per-repo data, fleet.json,
+#     the repos.json manifest, and all history files.
+#   Single-repo (workflow_dispatch with repo=<owner/name>):
+#     Scans only that repo. Skips fleet.json and fleet history so a partial
+#     scan never overwrites the full-fleet aggregate.
+name: Update Gate Enforcement Dashboard
+
+on:
+  schedule:
+    # Daily. Enforcement changes are rare and human-initiated, so a 6-hourly
+    # cadence would spend API budget to re-derive an unchanged answer; a day is
+    # short enough that a removed gate is caught long before the next release.
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: >
+          Single repo to scan (e.g. atlanhq/atlan-mysql-app).
+          Leave empty to scan the full fleet.
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  id-token: write # OIDC auth for aws-actions/configure-aws-credentials
+
+concurrency:
+  # Serialize: the history download → merge → upload sequence must never race
+  # itself, and a scheduled run overlapping a manual one would interleave writes
+  # to the same S3 objects.
+  group: gate-enforcement-dashboard
+  cancel-in-progress: false
+
+jobs:
+  gate-enforcement:
+    name: Update Gate Enforcement Dashboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout application-sdk
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
+      # The full-fleet / single-repo branch lives in two mutually-exclusive
+      # steps with `if:` conditions rather than an if/else inside one `run:`,
+      # per docs/standards/ci.md. Each step's shell is then straight-line.
+      - name: Scan gate enforcement state
+        if: inputs.repo == ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/gate_enforcement_scan.py \
+            --owner atlanhq \
+            --out /tmp/gate-enforcement
+
+      - name: Scan gate enforcement state (single repo)
+        if: inputs.repo != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SINGLE_REPO: ${{ inputs.repo }}
+        run: |
+          set -euo pipefail
+          printf '["%s"]' "$SINGLE_REPO" > /tmp/gate-repos.json
+          python3 .github/scripts/gate_enforcement_scan.py \
+            --repos-file /tmp/gate-repos.json \
+            --out /tmp/gate-enforcement
+
+      - name: Setup AWS Credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+        with:
+          aws-region: ap-south-1
+          role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
+
+      # Upload runs through a tested script rather than inline shell: the
+      # download → merge → re-upload history sequence has a silent failure mode
+      # (a first publish leaves no local file, `cat` exits 1 under pipefail, and
+      # the step dies *after* the per-repo document uploaded — data in S3, no
+      # trend line) that YAML cannot regression-test. See
+      # tests/test_publish_fleet_dashboard.py.
+      - name: Deploy to Kryptonite (gate enforcement)
+        if: inputs.repo == ''
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/publish_fleet_dashboard.py \
+            --dir /tmp/gate-enforcement \
+            --prefix gate-enforcement-dashboard
+
+      - name: Deploy to Kryptonite (gate enforcement, single repo)
+        if: inputs.repo != ''
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/publish_fleet_dashboard.py \
+            --dir /tmp/gate-enforcement \
+            --prefix gate-enforcement-dashboard \
+            --single-repo
